@@ -3,6 +3,8 @@
 //! Searches past session transcripts and returns focused summaries.
 //! Currently a placeholder - full implementation requires SQLite + LLM integration.
 
+use std::sync::Arc;
+use crate::database::Database;
 use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -69,49 +71,68 @@ fn get_session_search_state() -> &'static SessionSearchState {
 }
 
 /// Session Search Tool
-pub struct SessionSearchTool;
+pub struct SessionSearchTool {
+    database: Arc<Database>,
+}
 
 impl SessionSearchTool {
-    pub fn new() -> Self {
-        Self
+    pub fn new(database: Arc<Database>) -> Self {
+        Self { database }
     }
 
     /// List recent sessions (no query - returns metadata only)
     fn list_recent(&self, limit: usize) -> ToolResult {
-        let results: Vec<SessionMeta> = Vec::new();
+        match self.database.list_sessions(limit) {
+            Ok(sessions_db) => {
+                let sessions: Vec<SessionMeta> = sessions_db.into_iter().map(|s| SessionMeta {
+                    session_id: s.id,
+                    title: s.title,
+                    source: s.source,
+                    started_at: s.created_at,
+                    last_active: s.updated_at,
+                    message_count: s.message_count,
+                }).collect();
 
-        ToolResult::success(
-            "session_search",
-            serde_json::json!({
-                "success": true,
-                "mode": "recent",
-                "results": results,
-                "count": 0,
-                "message": "Session database not available. SQLite persistence (Phase 3) required for full functionality."
-            }),
-        )
+                ToolResult::success(
+                    "session_search",
+                    serde_json::json!({
+                        "success": true,
+                        "mode": "recent",
+                        "results": sessions,
+                        "count": sessions.len(),
+                        "message": "Recent sessions retrieved successfully."
+                    }),
+                )
+            }
+            Err(e) => ToolResult::error(
+                "session_search",
+                format!("Failed to list recent sessions: {}", e),
+            ),
+        }
     }
 
     /// Search sessions by query
     fn search(&self, query: &str, limit: usize) -> ToolResult {
         debug!("Session search: query={}, limit={}", query, limit);
 
-        // Placeholder - full implementation would:
-        // 1. Use SQLite FTS5 to search messages
-        // 2. Group by session
-        // 3. Use LLM to summarize matching sessions
-
-        ToolResult::success(
-            "session_search",
-            serde_json::json!({
-                "success": true,
-                "query": query,
-                "results": Vec::<SessionResult>::new(),
-                "count": 0,
-                "sessions_searched": 0,
-                "message": "Session search requires SQLite persistence (Phase 3). Currently showing recent sessions placeholder."
-            }),
-        )
+        match self.database.search_sessions(query, limit) {
+            Ok(results) => {
+                ToolResult::success(
+                    "session_search",
+                    serde_json::json!({
+                        "success": true,
+                        "query": query,
+                        "results": results,
+                        "count": results.len(),
+                        "sessions_searched": results.len(),
+                    }),
+                )
+            }
+            Err(e) => ToolResult::error(
+                "session_search",
+                format!("Database search failed: {}", e),
+            ),
+        }
     }
 }
 
@@ -145,6 +166,7 @@ impl HermesTool for SessionSearchTool {
             .get("role_filter")
             .and_then(|v| v.as_str())
             .map(|s| s.trim().to_string());
+            // TODO: Implement role filtering in search query
 
         let limit = args
             .get("limit")

@@ -3,27 +3,35 @@
 //! This module aggregates all built-in tools and provides a convenient
 //! function to register them all with a ToolRegistry.
 
+use std::path::PathBuf;
+use std::sync::Arc;
+use crate::database::Database;
 use crate::client::OpenAIClient;
 use crate::error::Result;
-use crate::tools::ToolRegistry;
+use crate::tools::{ToolRegistry, SessionSearchTool};
 
+pub use super::browser_tool::BrowserTool;
 pub use super::clarify_tool::ClarifyTool;
 pub use super::code_execution::CodeExecutionTool;
 pub use super::datetime_tool::{DateTimeTool, TimestampTool};
 pub use super::file_tools::{FileListTool, FileReadTool, FileSearchTool, FileWriteTool};
 pub use super::http_tool::HttpRequestTool;
+pub use super::image_generation_tool::ImageGenerationTool;
 pub use super::memory_tools::{MemoryRecallTool, MemorySearchTool, MemoryStoreTool};
+pub use super::notification_tool::{NotificationTool, ApprovalTool};
 pub use super::patch_tool::PatchTool;
 pub use super::skills_tool::{SkillsTool, SkillViewTool};
-pub use super::notification_tool::{NotificationTool, ApprovalTool};
 pub use super::sub_agent_tool::SubAgentTool;
 pub use super::terminal_tool::TerminalTool;
 pub use super::todo_tool::TodoTool;
+pub use super::tts_tool::TtsTool;
+pub use super::video_analysis_tool::VideoAnalysisTool;
 pub use super::vision_tool::VisionTool;
 pub use super::web_tools::{WebFetchTool, WebSearchTool};
 
 /// Register all built-in tools with a registry
-pub async fn register_builtin_tools(registry: &ToolRegistry) -> Result<()> {
+pub async fn register_builtin_tools(registry: &ToolRegistry, database: Arc<Database>) -> Result<()> {
+    registry.register(BrowserTool).await?;
     registry.register(FileReadTool).await?;
     registry.register(FileWriteTool).await?;
     registry.register(FileSearchTool).await?;
@@ -46,6 +54,10 @@ pub async fn register_builtin_tools(registry: &ToolRegistry) -> Result<()> {
     registry.register(SkillViewTool).await?;
     registry.register(NotificationTool).await?;
     registry.register(ApprovalTool).await?;
+    registry.register(ImageGenerationTool::new()).await?;
+    registry.register(TtsTool::new()).await?;
+    registry.register(VideoAnalysisTool::new()).await?;
+    registry.register(SessionSearchTool::new(database)).await?;
 
     Ok(())
 }
@@ -55,10 +67,11 @@ pub async fn register_builtin_tools_with_sub_agent(
     registry: &ToolRegistry,
     parent_client: &OpenAIClient,
     model: impl Into<String>,
+    database: Arc<Database>,
 ) -> Result<()> {
-    register_builtin_tools(registry).await?;
+    register_builtin_tools(registry, database.clone()).await?;
     registry
-        .register(SubAgentTool::new(parent_client, model.into(), 0, vec![]))
+        .register(SubAgentTool::new(parent_client, model.into(), 0, vec![], database))
         .await?;
     Ok(())
 }
@@ -96,7 +109,8 @@ mod tests {
     #[tokio::test]
     async fn test_register_all_builtin_tools() {
         let registry = ToolRegistry::new(Duration::from_secs(5));
-        register_builtin_tools(&registry).await.unwrap();
+        let database = Arc::new(Database::init(PathBuf::from("test_all.db")).unwrap());
+        register_builtin_tools(&registry, database).await.unwrap();
 
         let schemas = registry.get_schemas().await;
         assert_eq!(schemas.len() + 1, builtin_tool_names().len());
@@ -107,8 +121,9 @@ mod tests {
     async fn test_register_builtin_tools_with_sub_agent() {
         let registry = ToolRegistry::new(Duration::from_secs(5));
         let client = OpenAIClient::new(crate::client::ClientConfig::default());
+        let database = Arc::new(Database::init(PathBuf::from("test.db")).unwrap());
 
-        register_builtin_tools_with_sub_agent(&registry, &client, "gpt-4.1")
+        register_builtin_tools_with_sub_agent(&registry, &client, "gpt-4.1", database)
             .await
             .unwrap();
 

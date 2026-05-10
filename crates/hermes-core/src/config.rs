@@ -7,7 +7,7 @@ use crate::error::{Error, Result};
 
 static RUNTIME_CONFIG: OnceLock<RwLock<AppConfig>> = OnceLock::new();
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct AppConfig {
     pub client: ClientSettings,
@@ -19,6 +19,28 @@ pub struct AppConfig {
     pub skills: SkillsSettings,
     pub gateway: GatewaySettings,
     pub tools: ToolSettings,
+    pub database_path: PathBuf,
+}
+
+impl Default for AppConfig {
+    fn default() -> Self {
+        let database_path = dirs::home_dir()
+            .map(|h| h.join(".hermes").join("database.db"))
+            .unwrap_or_else(|| PathBuf::from("database.db"));
+
+        Self {
+            client: ClientSettings::default(),
+            agent: BehaviorSettings::default(),
+            autonomous: AutonomousSettings::default(),
+            logging: LoggingSettings::default(),
+            tui: TuiSettings::default(),
+            mcp: McpSettings::default(),
+            skills: SkillsSettings::default(),
+            gateway: GatewaySettings::default(),
+            tools: ToolSettings::default(),
+            database_path,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -275,6 +297,7 @@ impl Default for GatewaySettings {
 pub struct ToolSettings {
     pub registry_timeout_secs: u64,
     pub event_channel_size: usize,
+    pub browser_binary_path: Option<PathBuf>,
     pub web: WebToolSettings,
     pub http: HttpToolSettings,
     pub terminal: TerminalSettings,
@@ -286,6 +309,7 @@ impl Default for ToolSettings {
         Self {
             registry_timeout_secs: 30,
             event_channel_size: 100,
+            browser_binary_path: None,
             web: WebToolSettings::default(),
             http: HttpToolSettings::default(),
             terminal: TerminalSettings::default(),

@@ -14,12 +14,8 @@ Written entirely in Rust, `Hermes-RS` focuses on **Tolerant Parsing**, **Determi
 ---
 
 ## 🚩 The Problem: The "Loop Fragility" Gap
+Building a reliable agentic loop (Think $\to$ Act $\to$ Observe) is deceptively difficult in production. Standard parsers typically crash when LLMs produce malformed tool calls—such as unclosed XML tags or invalid JSON—leading to complete loop failure. Furthermore, the "Wait" bottleneck—waiting for a full LLM response before executing a tool—introduces massive latency. Finally, running agents in "Autonomous Mode" without strict validation gates often results in catastrophic workspace corruption when an agent misinterprets a command.
 
-Building a reliable agentic loop (Think $\to$ Act $\to$ Observe) is deceptively difficult in production:
-1. **Malformed Tool Calls**: LLMs often fail to close XML tags or produce invalid JSON, causing standard parsers to crash the entire loop.
-2. **The "Wait" Bottleneck**: Waiting for a full LLM response before executing a tool introduces massive latency.
-3. **Context Drift**: As loops iterate, the "observational" data can overwhelm the prompt, leading to "lost-in-the-middle" reasoning.
-4. **Autonomous Risk**: Running an agent in "Autonomous Mode" (24/7) without a strict validation gate leads to catastrophic workspace corruption.
 
 ## 💡 The Solution: A Hardened Orchestration Substrate
 
@@ -45,20 +41,17 @@ Implements a decoupled `ToolRegistry` that can dynamically load tools and genera
 
 ---
 
-## ✨ Engineering Highlights
+## Engineering Highlights
 
-### 🏗 System Architecture
-- **ReAct Loop**: A clean implementation of the Reason-Act cycle with early-exit and self-healing prompts.
-- **Zero-Cost Abstractions**: Leverages Rust's `async-trait` and `Tokio` for highly concurrent tool execution without runtime overhead.
-- **Unified Config**: A single TOML-based configuration model shared across the CLI and the Core library.
-- **Shared State**: Use of `Arc` and `Mutex` for thread-safe access to the Tool Registry and Session State.
+### Streaming-First "Tolerant" Parsing
+To eliminate loop fragility, I implemented a custom state-machine parser that detects tool calls **incrementally**. By identifying the intent as it streams from the LLM, the server can initiate tool execution before the response is even finished. This not only slashes perceived latency but also allows the parser to recover and execute intent even if the connection drops or the LLM fails to produce a closing tag.
 
-### 🛠 Technical Specifications
-- **Language**: Rust (Edition 2021)
-- **Async Runtime**: Tokio
-- **TUI**: Ratatui / Crossterm
-- **Networking**: Reqwest (Rustls-TLS)
-- **Serialization**: Serde / Schemars
+### The "Validated" Autonomous Loop
+The `hermes autonomous` mode transforms the agent into a disciplined developer through a strict **Plan $\to$ Implement $\to$ Validate $\to$ Push** cycle. To prevent workspace corruption, I implemented a hard validation gate: the agent is physically blocked from pushing changes to Git unless the configured `test_command` (e.g., `cargo test`) returns a success exit code. This ensures that autonomous agents cannot commit broken code to the repository.
+
+### Zero-Cost Orchestration in Rust
+By leveraging `async-trait` and `Tokio`, I built a high-concurrency orchestration substrate with minimal runtime overhead. The system uses a decoupled `ToolRegistry` to dynamically generate JSON Schemas at runtime, ensuring compatibility with the Model Context Protocol (MCP). The final binary is LTO-optimized and stripped, providing a production-grade core that remains stable and performant under heavy agentic load.
+
 
 ---
 
