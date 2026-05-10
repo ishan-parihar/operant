@@ -44,6 +44,7 @@ pub mod client;
 pub mod config;
 pub mod context;
 pub mod context_files;
+pub mod database;
 pub mod distillation;
 pub mod error;
 pub mod gateway;

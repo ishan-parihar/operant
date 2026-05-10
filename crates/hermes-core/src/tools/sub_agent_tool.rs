@@ -17,6 +17,7 @@ use serde_json::Value;
 use tokio::sync::Mutex;
 use tokio::time::timeout;
 
+use crate::database::Database;
 use crate::agent::{AgentConfig, HermesAgent};
 use crate::client::{ClientConfig, OpenAIClient};
 use crate::schema::ToolSchema;
@@ -111,6 +112,7 @@ pub struct SubAgentTool {
     parent_depth: u32,
     /// Parent's enabled toolsets
     parent_toolsets: Vec<String>,
+    database: Arc<Database>,
 }
 
 impl SubAgentTool {
@@ -119,6 +121,7 @@ impl SubAgentTool {
         model: impl Into<String>,
         parent_depth: u32,
         parent_toolsets: Vec<String>,
+        database: Arc<Database>,
     ) -> Self {
         Self {
             client_config: parent_client.config_clone(),
@@ -126,6 +129,7 @@ impl SubAgentTool {
             model: model.into(),
             parent_depth,
             parent_toolsets,
+            database,
         }
     }
 
@@ -194,7 +198,7 @@ impl SubAgentTool {
         // Register tools based on child toolsets (filtered)
         self.register_child_tools(&mut registry, &child_toolsets);
 
-        let agent = HermesAgent::new(config, client, registry);
+        let agent = HermesAgent::new(config, client, registry, self.database.clone());
 
         // Run with timeout
         let timeout_duration = Duration::from_secs(timeout_seconds.max(30));
@@ -257,6 +261,7 @@ impl SubAgentTool {
             model: self.model.clone(),
             parent_depth: self.parent_depth,
             parent_toolsets: self.parent_toolsets.clone(),
+            database: self.database.clone(),
         }
     }
 

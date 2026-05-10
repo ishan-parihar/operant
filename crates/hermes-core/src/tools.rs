@@ -5,6 +5,8 @@
 //! - `ToolRegistry` for managing and executing tools
 //! - Built-in tools for common operations
 
+pub mod browser_downloader;
+pub mod browser_tool;
 pub mod builtin;
 pub mod checkpoint_tool;
 pub mod clarify_tool;
@@ -12,6 +14,7 @@ pub mod code_execution;
 pub mod datetime_tool;
 pub mod file_tools;
 pub mod http_tool;
+pub mod image_generation_tool;
 pub mod memory_tools;
 pub mod notification_tool;
 pub mod patch_tool;
@@ -20,6 +23,8 @@ pub mod skills_tool;
 pub mod sub_agent_tool;
 pub mod terminal_tool;
 pub mod todo_tool;
+pub mod tts_tool;
+pub mod video_analysis_tool;
 pub mod vision_tool;
 pub mod web_tools;
 
@@ -27,13 +32,13 @@ pub mod web_tools;
 pub use builtin::{
     builtin_tool_names, register_builtin_tools, register_builtin_tools_with_sub_agent, ClarifyTool,
     CodeExecutionTool, DateTimeTool, FileListTool, FileReadTool, FileSearchTool, FileWriteTool,
-    HttpRequestTool, MemoryRecallTool, MemorySearchTool, MemoryStoreTool, PatchTool, SubAgentTool,
-    TerminalTool, TimestampTool, TodoTool, VisionTool, WebFetchTool, WebSearchTool,
+    HttpRequestTool, ImageGenerationTool, MemoryRecallTool, MemorySearchTool, MemoryStoreTool,
+    ApprovalTool, PatchTool, SubAgentTool, TerminalTool, TimestampTool, TodoTool, TtsTool,
+    VideoAnalysisTool, VisionTool, WebFetchTool, WebSearchTool,
 };
 pub use checkpoint_tool::{CheckpointTool, get_checkpoint_manager, CheckpointManager, CheckpointConfig, Checkpoint};
 pub use session_search_tool::{SessionSearchTool, SessionMeta, SessionResult};
 pub use skills_tool::{SkillsTool, SkillViewTool};
-pub use notification_tool::{NotificationTool, ApprovalTool};
 
 use std::collections::HashMap;
 use std::sync::Arc;

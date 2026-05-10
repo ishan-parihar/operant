@@ -15,6 +15,7 @@ use crate::client::{
 };
 use crate::config::{runtime_config, BehaviorSettings};
 use crate::context_files::{load_default_context_files, load_workspace_context};
+use crate::database::Database;
 use crate::distillation::distill_session_to_memory;
 use crate::error::{Error, Result};
 use crate::memory::MemoryManager;
@@ -94,11 +95,12 @@ pub struct HermesAgent {
     conversation: Arc<RwLock<Vec<Message>>>,
     event_tx: Option<mpsc::Sender<AgentEvent>>,
     memory_manager: Option<MemoryManager>,
+    database: Arc<Database>,
 }
 
 impl HermesAgent {
     /// Create a new Hermes agent
-    pub fn new(config: AgentConfig, client: OpenAIClient, registry: ToolRegistry) -> Self {
+    pub fn new(config: AgentConfig, client: OpenAIClient, registry: ToolRegistry, database: Arc<Database>) -> Self {
         Self {
             config,
             client,
@@ -106,6 +108,7 @@ impl HermesAgent {
             conversation: Arc::new(RwLock::new(Vec::new())),
             event_tx: None,
             memory_manager: None,
+            database,
         }
     }
 
@@ -114,6 +117,7 @@ impl HermesAgent {
         config: AgentConfig,
         client: OpenAIClient,
         registry: ToolRegistry,
+        database: Arc<Database>,
         event_tx: mpsc::Sender<AgentEvent>,
     ) -> Self {
         Self {
@@ -123,6 +127,7 @@ impl HermesAgent {
             conversation: Arc::new(RwLock::new(Vec::new())),
             event_tx: Some(event_tx),
             memory_manager: None,
+            database,
         }
     }
 
@@ -165,9 +170,24 @@ impl HermesAgent {
     #[instrument(skip(self), fields(model = % self.config.model))]
     pub async fn run(&self, user_query: String) -> Result<Message> {
         info!("Starting agent run");
-
+        
+        // Generate a session ID for this run if not already present
+        let session_id = format!("sess_{}", uuid::Uuid::new_v4());
+        
         // Add user message
         self.add_message(Message::user(&user_query)).await;
+        
+        // Persist user message
+        self.database.save_message(&session_id, "user", &user_query, &chrono::Utc::now().to_rfc3339()).map_err(|e| {
+            warn!(error = %e, "Failed to persist user message");
+            e
+        })?;
+        
+        // Save session metadata
+        self.database.save_session(&session_id, None, "agent", &chrono::Utc::now().to_rfc3339(), &chrono::Utc::now().to_rfc3339()).map_err(|e| {
+            warn!(error = %e, "Failed to save session metadata");
+            e
+        })?;
 
         // Build initial messages including system prompt
         let mut messages = self.build_messages().await?;
@@ -223,6 +243,10 @@ impl HermesAgent {
 
                     messages.push(assistant_msg.clone());
                     self.add_message(assistant_msg.clone()).await;
+                    
+                    // Persist assistant message
+                    let _ = self.database.save_message(&session_id, "assistant", &response_text, &chrono::Utc::now().to_rfc3339());
+                    self.database.save_session(&session_id, None, "agent", &chrono::Utc::now().to_rfc3339(), &chrono::Utc::now().to_rfc3339()).ok();
 
                     // If no tool calls, we're done
                     if tool_calls.is_empty() {
@@ -239,6 +263,9 @@ impl HermesAgent {
                     let tool_results = self.execute_tools(tool_calls).await?;
 
                     for result in &tool_results {
+                        // Persist tool result
+                        let _ = self.database.save_message(&session_id, "tool", &result.content, &chrono::Utc::now().to_rfc3339());
+                        self.database.save_session(&session_id, None, "agent", &chrono::Utc::now().to_rfc3339(), &chrono::Utc::now().to_rfc3339()).ok();
                         if result.success {
                             self.emit(AgentEvent::ToolComplete {
                                 result: result.clone(),
@@ -926,6 +953,7 @@ pub struct HermesAgentBuilder {
     client: Option<OpenAIClient>,
     registry: Option<ToolRegistry>,
     memory_manager: Option<MemoryManager>,
+    database: Option<Arc<Database>>,
 }
 
 impl HermesAgentBuilder {
@@ -935,6 +963,7 @@ impl HermesAgentBuilder {
             client: None,
             registry: None,
             memory_manager: None,
+            database: None,
         }
     }
 
@@ -986,6 +1015,12 @@ impl HermesAgentBuilder {
         self
     }
 
+    /// Set the database
+    pub fn database(mut self, database: Arc<Database>) -> Self {
+        self.database = Some(database);
+        self
+    }
+
     /// Set the long-term memory manager.
     pub fn memory_manager(mut self, memory_manager: MemoryManager) -> Self {
         self.memory_manager = Some(memory_manager);
@@ -1003,7 +1038,11 @@ impl HermesAgentBuilder {
             .registry
             .unwrap_or_else(|| ToolRegistry::new(self.config.tool_timeout));
 
-        let mut agent = HermesAgent::new(self.config, client, registry);
+        let database = self.database.ok_or_else(|| {
+            Error::Config("Database must be provided to the agent builder".to_string())
+        })?;
+
+        let mut agent = HermesAgent::new(self.config, client, registry, database);
         if let Some(memory_manager) = self.memory_manager {
             agent = agent.with_memory_manager(memory_manager);
         }
@@ -1050,10 +1089,12 @@ mod tests {
             )
             .await;
 
+        let db = Database::init(std::path::PathBuf::from("test_db.sqlite")).unwrap();
         let agent = HermesAgent::new(
             AgentConfig::default(),
             OpenAIClient::new(crate::client::ClientConfig::default()),
             ToolRegistry::new(Duration::from_secs(1)),
+            Arc::new(db),
         )
         .with_memory_manager(memory_manager);
 
@@ -1233,10 +1274,12 @@ mod tests {
 
     #[tokio::test]
     async fn process_response_parses_xml_tool_calls_in_non_stream_mode() {
+        let db = Database::init(std::path::PathBuf::from("test_db_resp.sqlite")).unwrap();
         let agent = HermesAgent::new(
             AgentConfig::default(),
             OpenAIClient::new(crate::client::ClientConfig::default()),
             ToolRegistry::new(Duration::from_secs(1)),
+            Arc::new(db),
         );
 
         let response = ChatResponse {

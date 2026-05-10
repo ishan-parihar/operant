@@ -42,6 +42,12 @@ lazy_static = "1.4"
 dirs = { workspace = true }
 shell-words = "1.1.1"
 base64 = "0.22"
+kokoro-tiny = "0.1.0"
+hound = "3.5"
+rusqlite = { version = "0.31", features = ["bundled"] }
+uuid = { version = "1.7", features = ["v4"] }
+chrono = "0.4"
+
 
 [dev-dependencies]
 tokio-test = "0.4"
