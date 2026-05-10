@@ -13,6 +13,7 @@ pub mod datetime_tool;
 pub mod file_tools;
 pub mod http_tool;
 pub mod memory_tools;
+pub mod notification_tool;
 pub mod patch_tool;
 pub mod session_search_tool;
 pub mod skills_tool;
@@ -32,6 +33,7 @@ pub use builtin::{
 pub use checkpoint_tool::{CheckpointTool, get_checkpoint_manager, CheckpointManager, CheckpointConfig, Checkpoint};
 pub use session_search_tool::{SessionSearchTool, SessionMeta, SessionResult};
 pub use skills_tool::{SkillsTool, SkillViewTool};
+pub use notification_tool::{NotificationTool, ApprovalTool};
 
 use std::collections::HashMap;
 use std::sync::Arc;
