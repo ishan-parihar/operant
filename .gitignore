@@ -24,4 +24,6 @@ target
 hermes-agent
 
 # kilo code user data
-.kilo
+.kilo.contexty
+.memsearch
+.hive
