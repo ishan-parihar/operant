@@ -40,6 +40,7 @@ regex = "1.10"
 lazy_static = "1.4"
 dirs = { workspace = true }
 shell-words = "1.1.1"
+base64 = "0.22"
 
 [dev-dependencies]
 tokio-test = "0.4"

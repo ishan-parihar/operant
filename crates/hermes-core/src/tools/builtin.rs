@@ -17,6 +17,7 @@ pub use super::patch_tool::PatchTool;
 pub use super::sub_agent_tool::SubAgentTool;
 pub use super::terminal_tool::TerminalTool;
 pub use super::todo_tool::TodoTool;
+pub use super::vision_tool::VisionTool;
 pub use super::web_tools::{WebFetchTool, WebSearchTool};
 
 /// Register all built-in tools with a registry
@@ -38,6 +39,7 @@ pub async fn register_builtin_tools(registry: &ToolRegistry) -> Result<()> {
     registry.register(TodoTool).await?;
     registry.register(ClarifyTool).await?;
     registry.register(PatchTool).await?;
+    registry.register(VisionTool).await?;
 
     Ok(())
 }
@@ -50,7 +52,7 @@ pub async fn register_builtin_tools_with_sub_agent(
 ) -> Result<()> {
     register_builtin_tools(registry).await?;
     registry
-        .register(SubAgentTool::new(parent_client, model.into()))
+        .register(SubAgentTool::new(parent_client, model.into(), 0, vec![]))
         .await?;
     Ok(())
 }
@@ -75,6 +77,7 @@ pub fn builtin_tool_names() -> Vec<&'static str> {
         "todo",
         "clarify",
         "patch",
+        "vision_analyze",
         "delegate_to_sub_agent",
     ]
 }
