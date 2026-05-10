@@ -14,6 +14,7 @@ pub use super::file_tools::{FileListTool, FileReadTool, FileSearchTool, FileWrit
 pub use super::http_tool::HttpRequestTool;
 pub use super::memory_tools::{MemoryRecallTool, MemorySearchTool, MemoryStoreTool};
 pub use super::patch_tool::PatchTool;
+pub use super::skills_tool::{SkillsTool, SkillViewTool};
 pub use super::sub_agent_tool::SubAgentTool;
 pub use super::terminal_tool::TerminalTool;
 pub use super::todo_tool::TodoTool;

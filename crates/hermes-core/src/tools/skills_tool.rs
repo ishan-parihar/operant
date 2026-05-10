@@ -1,0 +1,308 @@
+use async_trait::async_trait;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+use std::fs;
+use std::path::PathBuf;
+use tracing::{debug, warn};
+
+use crate::schema::ToolSchema;
+use crate::tools::{HermesTool, ToolContext, ToolResult};
+
+const MAX_NAME_LENGTH: usize = 64;
+const MAX_DESCRIPTION_LENGTH: usize = 1024;
+
+fn get_skills_dir() -> PathBuf {
+    let home = std::env::var("HERMES_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            dirs::home_dir()
+                .map(|h| h.join(".hermes"))
+                .unwrap_or_else(|| PathBuf::from("~/.hermes"))
+        });
+    home.join("skills")
+}
+
+fn parse_frontmatter(content: &str) -> (serde_json::Value, String) {
+    if !content.starts_with("---") {
+        return (serde_json::Value::Null, content.to_string());
+    }
+
+    let parts: Vec<&str> = content.splitn(3, "---").collect();
+    if parts.len() < 3 {
+        return (serde_json::Value::Null, content.to_string());
+    }
+
+    let yaml_str = parts[1].trim();
+    let body = parts[2].trim();
+
+    let frontmatter: serde_json::Value = serde_yaml::from_str(yaml_str)
+        .unwrap_or(serde_json::Value::Null);
+
+    (frontmatter, body.to_string())
+}
+
+fn find_skills_in_dir(skills_dir: &PathBuf) -> Vec<SkillMeta> {
+    let mut skills = Vec::new();
+
+    if !skills_dir.exists() {
+        return skills;
+    }
+
+    if let Ok(entries) = fs::read_dir(skills_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                let skill_md = path.join("SKILL.md");
+                if skill_md.exists() {
+                    if let Ok(content) = fs::read_to_string(&skill_md) {
+                        let (frontmatter, body) = parse_frontmatter(&content);
+                        let name = frontmatter
+                            .get("name")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or(&path.file_name().unwrap_or_default().to_string_lossy())
+                            .chars()
+                            .take(MAX_NAME_LENGTH)
+                            .collect::<String>();
+
+                        let description = frontmatter
+                            .get("description")
+                            .and_then(|v| v.as_str())
+                            .map(|s| {
+                                if s.len() > MAX_DESCRIPTION_LENGTH {
+                                    format!("{}...", &s[..MAX_DESCRIPTION_LENGTH - 3])
+                                } else {
+                                    s.to_string()
+                                }
+                            })
+                            .unwrap_or_else(|| {
+                                body.lines()
+                                    .find(|l| !l.trim().starts_with('#'))
+                                    .map(|l| l.trim().to_string())
+                                    .unwrap_or_default()
+                            });
+
+                        skills.push(SkillMeta {
+                            name,
+                            description,
+                            category: None,
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    skills.sort_by(|a, b| a.name.cmp(&b.name));
+    skills
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct SkillMeta {
+    name: String,
+    description: String,
+    category: Option<String>,
+}
+
+pub struct SkillsTool;
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct SkillsListArgs {
+    category: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct SkillViewArgs {
+    name: String,
+    file_path: Option<String>,
+}
+
+impl SkillsTool {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Default for SkillsTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait]
+impl HermesTool for SkillsTool {
+    fn name(&self) -> &str {
+        "skills_list"
+    }
+
+    fn description(&self) -> &str {
+        "List all available skills with metadata. Use skill_view to load full content."
+    }
+
+    fn schema(&self) -> ToolSchema {
+        ToolSchema::from_type::<SkillsListArgs>(
+            "skills_list",
+            "List all available skills with metadata (name, description, category)",
+        )
+    }
+
+    async fn execute(&self, args: Value, _context: ToolContext) -> ToolResult {
+        let skills_dir = get_skills_dir();
+
+        if !skills_dir.exists() {
+            if let Err(e) = fs::create_dir_all(&skills_dir) {
+                return ToolResult::error(
+                    "skills_list",
+                    format!("Failed to create skills directory: {}", e),
+                );
+            }
+            return ToolResult::success(
+                "skills_list",
+                json!({
+                    "success": true,
+                    "skills": [],
+                    "categories": [],
+                    "message": "No skills found. Skills directory created."
+                }),
+            );
+        }
+
+        let skills = find_skills_in_dir(&skills_dir);
+
+        if skills.is_empty() {
+            return ToolResult::success(
+                "skills_list",
+                json!({
+                    "success": true,
+                    "skills": [],
+                    "categories": [],
+                    "message": "No skills found in skills/ directory."
+                }),
+            );
+        }
+
+        let categories: Vec<String> = skills
+            .iter()
+            .filter_map(|s| s.category.clone())
+            .collect::<std::collections::HashSet<_>>()
+            .into_iter()
+            .collect();
+
+        ToolResult::success(
+            "skills_list",
+            json!({
+                "success": true,
+                "skills": skills,
+                "categories": categories,
+                "count": skills.len(),
+                "hint": "Use skill_view to see full content"
+            }),
+        )
+    }
+}
+
+pub struct SkillViewTool;
+
+#[async_trait]
+impl HermesTool for SkillViewTool {
+    fn name(&self) -> &str {
+        "skill_view"
+    }
+
+    fn description(&self) -> &str {
+        "View the full content of a skill by name"
+    }
+
+    fn schema(&self) -> ToolSchema {
+        ToolSchema::from_type::<SkillViewArgs>(
+            "skill_view",
+            "View the full content of a skill including instructions, tags, and linked files",
+        )
+    }
+
+    async fn execute(&self, args: Value, _context: ToolContext) -> ToolResult {
+        let name = match args.get("name").and_then(|v| v.as_str()) {
+            Some(n) => n,
+            None => {
+                return ToolResult::error("skill_view", "name is required");
+            }
+        };
+
+        let skills_dir = get_skills_dir();
+
+        if !skills_dir.exists() {
+            return ToolResult::error(
+                "skill_view",
+                "Skills directory does not exist. It will be created on first install.",
+            );
+        }
+
+        let skill_path = skills_dir.join(name);
+        let skill_md = if skill_path.is_dir() {
+            skill_path.join("SKILL.md")
+        } else {
+            skill_path.with_extension("md")
+        };
+
+        if !skill_md.exists() {
+            let available: Vec<String> = find_skills_in_dir(&skills_dir)
+                .iter()
+                .take(20)
+                .map(|s| s.name.clone())
+                .collect();
+
+            return ToolResult::error(
+                "skill_view",
+                format!(
+                    "Skill '{}' not found. Available: {:?}",
+                    name, available
+                ),
+            );
+        }
+
+        match fs::read_to_string(&skill_md) {
+            Ok(content) => {
+                let (frontmatter, body) = parse_frontmatter(&content);
+
+                let skill_name = frontmatter
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(name)
+                    .to_string();
+
+                let description = frontmatter
+                    .get("description")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+                    .unwrap_or_default();
+
+                let tags: Vec<String> = frontmatter
+                    .get("tags")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|t| t.as_str().map(String::from))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+
+                ToolResult::success(
+                    "skill_view",
+                    json!({
+                        "success": true,
+                        "name": skill_name,
+                        "description": description,
+                        "content": body,
+                        "tags": tags,
+                        "path": skill_md.to_string_lossy()
+                    }),
+                )
+            }
+            Err(e) => {
+                ToolResult::error("skill_view", format!("Failed to read skill: {}", e))
+            }
+        }
+    }
+}
