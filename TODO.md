@@ -24,6 +24,10 @@
 - `builtin_tool_names()` fixed to return all 30 registered tool names
 - CLI build_registry creates `CronDb` and `KanbanDb` alongside main database
 - All unregistered tools (checkpoint, cron, kanban) wired into built-in registry and compiled
+- Full RL training tool (`rl_training_tool.rs`) — PPO/GRPO curriculum training with mlx, wandb integration
+- Full Spotify control tool (`spotify_tool.rs`) — 7 action types (playback, queue, search, playlists, devices, library, repeat/shuffle)
+- Fixed 3 flaky/failing tests: test_agent_builder (missing DB), parse_args_rejects_empty_goal (whitespace validation), test_hermes_subdirs_are_children_of_home (env var race condition)
+- Comprehensive audit report generated (REPORT.md) with 285/285 tests passing
 
 ## Pending
 
