@@ -1070,13 +1070,18 @@ mod tests {
 
     #[tokio::test]
     async fn test_agent_builder() {
+        let db = Arc::new(Database::init(std::path::PathBuf::from("test_agent_builder.db")).unwrap());
         let _agent = HermesAgentBuilder::new()
             .model("gpt-3.5-turbo")
             .max_iterations(10)
+            .database(db)
             .build()
             .unwrap();
 
-        // If we reach here, the agent was created successfully
+        // Clean up test database
+        let _ = std::fs::remove_file("test_agent_builder.db");
+        let _ = std::fs::remove_file("test_agent_builder.db-wal");
+        let _ = std::fs::remove_file("test_agent_builder.db-shm");
     }
 
     #[tokio::test]

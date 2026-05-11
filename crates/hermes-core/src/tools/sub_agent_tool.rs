@@ -467,13 +467,28 @@ impl HermesTool for SubAgentTool {
 }
 
 fn parse_args(args: Value) -> Result<SubAgentArgs, String> {
-    match args {
+    let parsed: SubAgentArgs = match args {
         Value::String(s) => {
-            // Try as JSON string first
-            serde_json::from_str(&s).map_err(|e| format!("Invalid JSON: {}", e))
+            serde_json::from_str(&s).map_err(|e| format!("Invalid JSON: {}", e))?
         }
-        value => serde_json::from_value(value).map_err(|e| format!("Invalid arguments: {}", e)),
+        value => serde_json::from_value(value).map_err(|e| format!("Invalid arguments: {}", e))?,
+    };
+
+    if let Some(ref goal) = parsed.goal {
+        if goal.trim().is_empty() {
+            return Err("goal must not be empty".to_string());
+        }
     }
+
+    if let Some(ref tasks) = parsed.tasks {
+        for (i, task) in tasks.iter().enumerate() {
+            if task.goal.trim().is_empty() {
+                return Err(format!("tasks[{}].goal must not be empty", i));
+            }
+        }
+    }
+
+    Ok(parsed)
 }
 
 fn is_llama_model(model: &str) -> bool {

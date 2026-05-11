@@ -363,6 +363,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_hermes_subdirs_are_children_of_home() {
         let home = hermes_home();
         assert!(hermes_config_dir().starts_with(&home));
