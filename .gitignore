@@ -28,3 +28,9 @@ hermes-agent
 .memsearch
 .hive
 .sisyphus/
+
+# Metadata directories (AI agent session data, tool calls, plans)
+.hive/
+.memsearch/
+.contexty/
+.sisyphus/
