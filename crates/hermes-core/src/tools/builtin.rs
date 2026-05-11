@@ -17,6 +17,11 @@ pub use super::browser_dialog_tool::BrowserDialogTool;
 pub use super::browser_cdp_tool::BrowserCdpTool;
 pub use super::computer_use_tool::ComputerUseTool;
 pub use super::mixture_of_agents_tool::MixtureOfAgentsTool;
+pub use super::rl_training_tool::RlTrainingTool;
+pub use super::spotify_tool::{
+    SpotifyPlaybackTool, SpotifyDevicesTool, SpotifyQueueTool, SpotifySearchTool,
+    SpotifyPlaylistsTool, SpotifyAlbumsTool, SpotifyLibraryTool,
+};
 pub use super::checkpoint_tool::CheckpointTool;
 pub use super::clarify_tool::ClarifyTool;
 pub use super::code_execution::CodeExecutionTool;
@@ -89,6 +94,14 @@ pub async fn register_builtin_tools(
     registry.register(BrowserCdpTool).await?;
     registry.register(ComputerUseTool).await?;
     registry.register(MixtureOfAgentsTool).await?;
+    registry.register(RlTrainingTool).await?;
+    registry.register(SpotifyPlaybackTool).await?;
+    registry.register(SpotifyDevicesTool).await?;
+    registry.register(SpotifyQueueTool).await?;
+    registry.register(SpotifySearchTool).await?;
+    registry.register(SpotifyPlaylistsTool).await?;
+    registry.register(SpotifyAlbumsTool).await?;
+    registry.register(SpotifyLibraryTool).await?;
 
     Ok(())
 }
@@ -153,6 +166,14 @@ pub fn builtin_tool_names() -> Vec<&'static str> {
         "browser_cdp",
         "computer_use",
         "mixture_of_agents",
+        "rl",
+        "spotify_playback",
+        "spotify_devices",
+        "spotify_queue",
+        "spotify_search",
+        "spotify_playlists",
+        "spotify_albums",
+        "spotify_library",
     ]
 }
 

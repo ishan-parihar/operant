@@ -25,8 +25,11 @@ pub mod memory_tools;
 pub mod mixture_of_agents_tool;
 pub mod notification_tool;
 pub mod patch_tool;
+pub mod rl_training_tool;
 pub mod session_search_tool;
+pub mod send_message_tool;
 pub mod skills_tool;
+pub mod spotify_tool;
 pub mod sub_agent_tool;
 pub mod terminal_tool;
 pub mod todo_tool;
@@ -34,7 +37,6 @@ pub mod tts_tool;
 pub mod video_analysis_tool;
 pub mod vision_tool;
 pub mod web_tools;
-pub mod send_message_tool;
 pub mod feishu_tool;
 pub mod discord_tool;
 pub mod home_assistant_tool;
@@ -60,6 +62,11 @@ pub use browser_dialog_tool::BrowserDialogTool;
 pub use browser_cdp_tool::BrowserCdpTool;
 pub use computer_use_tool::ComputerUseTool;
 pub use mixture_of_agents_tool::MixtureOfAgentsTool;
+pub use rl_training_tool::RlTrainingTool;
+pub use spotify_tool::{
+    SpotifyPlaybackTool, SpotifyDevicesTool, SpotifyQueueTool, SpotifySearchTool,
+    SpotifyPlaylistsTool, SpotifyAlbumsTool, SpotifyLibraryTool,
+};
 
 use std::collections::HashMap;
 use std::sync::Arc;
