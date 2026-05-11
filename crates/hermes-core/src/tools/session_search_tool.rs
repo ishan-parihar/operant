@@ -189,6 +189,106 @@ impl HermesTool for SessionSearchTool {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static TEST_DB_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    fn create_test_db() -> Arc<Database> {
+        let counter = TEST_DB_COUNTER.fetch_add(1, Ordering::SeqCst);
+        let path = PathBuf::from(format!("/tmp/hermes_test_session_{}_{}.db", std::process::id(), counter));
+        let _ = std::fs::remove_file(&path);
+        Arc::new(Database::init(path).unwrap())
+    }
+
+    #[test]
+    fn test_session_search_name_and_description() {
+        let db = create_test_db();
+        let tool = SessionSearchTool::new(db);
+        assert_eq!(tool.name(), "session_search");
+        assert!(!tool.description().is_empty());
+    }
+
+    #[test]
+    fn test_session_search_schema() {
+        let db = create_test_db();
+        let schema = SessionSearchTool::new(db).schema();
+        assert_eq!(schema.name, "session_search");
+        let schema_json = serde_json::to_value(&schema).unwrap();
+        if let Some(props) = schema_json["inputSchema"]["properties"].as_object() {
+            assert!(props.contains_key("query"), "Schema should have 'query' property");
+            assert!(props.contains_key("limit"), "Schema should have 'limit' property");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_session_search_recent_mode() {
+        let db = create_test_db();
+        let tool = SessionSearchTool::new(db);
+        let result = tool.execute(
+            serde_json::json!({}),
+            ToolContext::default(),
+        ).await;
+        assert!(result.success);
+        let content: serde_json::Value = serde_json::from_str(&result.content).unwrap();
+        assert_eq!(content["mode"], "recent");
+    }
+
+    #[tokio::test]
+    async fn test_session_search_recent_with_empty_query() {
+        let db = create_test_db();
+        let tool = SessionSearchTool::new(db);
+        let result = tool.execute(
+            serde_json::json!({ "query": "" }),
+            ToolContext::default(),
+        ).await;
+        assert!(result.success);
+    }
+
+    #[tokio::test]
+    async fn test_session_search_with_query() {
+        let db = create_test_db();
+        let tool = SessionSearchTool::new(db);
+        let result = tool.execute(
+            serde_json::json!({ "query": "test query", "limit": 5 }),
+            ToolContext::default(),
+        ).await;
+        assert!(result.success);
+        let content: serde_json::Value = serde_json::from_str(&result.content).unwrap();
+        assert_eq!(content["query"], "test query");
+    }
+
+    #[tokio::test]
+    async fn test_session_search_limit_clamping() {
+        let db = create_test_db();
+        let tool = SessionSearchTool::new(db);
+        let result = tool.execute(
+            serde_json::json!({ "query": "test", "limit": 100 }),
+            ToolContext::default(),
+        ).await;
+        assert!(result.success);
+        let result = tool.execute(
+            serde_json::json!({ "query": "test", "limit": 0 }),
+            ToolContext::default(),
+        ).await;
+        assert!(result.success);
+    }
+
+    #[tokio::test]
+    async fn test_session_search_role_filter_accepted() {
+        let db = create_test_db();
+        let tool = SessionSearchTool::new(db);
+        let result = tool.execute(
+            serde_json::json!({ "query": "test", "role_filter": "user,assistant" }),
+            ToolContext::default(),
+        ).await;
+        assert!(result.success);
+    }
+}
+
 /// Register session search tool
 pub fn register_session_search_tool() -> impl FnOnce() -> Result<()> {
     || {

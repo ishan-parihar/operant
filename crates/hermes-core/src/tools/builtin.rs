@@ -5,18 +5,27 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use crate::cronjobs::CronDb;
 use crate::database::Database;
 use crate::client::OpenAIClient;
 use crate::error::Result;
+use crate::kanban::KanbanDb;
 use crate::tools::{ToolRegistry, SessionSearchTool};
 
 pub use super::browser_tool::BrowserTool;
+pub use super::browser_dialog_tool::BrowserDialogTool;
+pub use super::browser_cdp_tool::BrowserCdpTool;
+pub use super::computer_use_tool::ComputerUseTool;
+pub use super::mixture_of_agents_tool::MixtureOfAgentsTool;
+pub use super::checkpoint_tool::CheckpointTool;
 pub use super::clarify_tool::ClarifyTool;
 pub use super::code_execution::CodeExecutionTool;
+pub use super::cron_tool::CronTool;
 pub use super::datetime_tool::{DateTimeTool, TimestampTool};
 pub use super::file_tools::{FileListTool, FileReadTool, FileSearchTool, FileWriteTool};
 pub use super::http_tool::HttpRequestTool;
 pub use super::image_generation_tool::ImageGenerationTool;
+pub use super::kanban_tool::KanbanTool;
 pub use super::memory_tools::{MemoryRecallTool, MemorySearchTool, MemoryStoreTool};
 pub use super::notification_tool::{NotificationTool, ApprovalTool};
 pub use super::patch_tool::PatchTool;
@@ -28,10 +37,20 @@ pub use super::tts_tool::TtsTool;
 pub use super::video_analysis_tool::VideoAnalysisTool;
 pub use super::vision_tool::VisionTool;
 pub use super::web_tools::{WebFetchTool, WebSearchTool};
+pub use super::discord_tool::{DiscordAdminTool, DiscordTool};
+pub use super::feishu_tool::{FeishuDocTool, FeishuDriveTool};
+pub use super::home_assistant_tool::HomeAssistantTool;
+pub use super::send_message_tool::SendMessageTool;
 
 /// Register all built-in tools with a registry
-pub async fn register_builtin_tools(registry: &ToolRegistry, database: Arc<Database>) -> Result<()> {
+pub async fn register_builtin_tools(
+    registry: &ToolRegistry,
+    database: Arc<Database>,
+    cron_db: Arc<CronDb>,
+    kanban_db: Arc<KanbanDb>,
+) -> Result<()> {
     registry.register(BrowserTool).await?;
+    registry.register(CheckpointTool::new()).await?;
     registry.register(FileReadTool).await?;
     registry.register(FileWriteTool).await?;
     registry.register(FileSearchTool).await?;
@@ -40,6 +59,8 @@ pub async fn register_builtin_tools(registry: &ToolRegistry, database: Arc<Datab
     registry.register(WebSearchTool).await?;
     registry.register(WebFetchTool).await?;
     registry.register(CodeExecutionTool).await?;
+    registry.register(CronTool::new(cron_db)).await?;
+    registry.register(KanbanTool::new(kanban_db)).await?;
     registry.register(MemoryStoreTool).await?;
     registry.register(MemorySearchTool).await?;
     registry.register(MemoryRecallTool).await?;
@@ -58,6 +79,16 @@ pub async fn register_builtin_tools(registry: &ToolRegistry, database: Arc<Datab
     registry.register(TtsTool::new()).await?;
     registry.register(VideoAnalysisTool::new()).await?;
     registry.register(SessionSearchTool::new(database)).await?;
+    registry.register(SendMessageTool).await?;
+    registry.register(DiscordTool).await?;
+    registry.register(DiscordAdminTool).await?;
+    registry.register(FeishuDocTool::new()).await?;
+    registry.register(FeishuDriveTool::new()).await?;
+    registry.register(HomeAssistantTool::new()).await?;
+    registry.register(BrowserDialogTool).await?;
+    registry.register(BrowserCdpTool).await?;
+    registry.register(ComputerUseTool).await?;
+    registry.register(MixtureOfAgentsTool).await?;
 
     Ok(())
 }
@@ -68,8 +99,10 @@ pub async fn register_builtin_tools_with_sub_agent(
     parent_client: &OpenAIClient,
     model: impl Into<String>,
     database: Arc<Database>,
+    cron_db: Arc<CronDb>,
+    kanban_db: Arc<KanbanDb>,
 ) -> Result<()> {
-    register_builtin_tools(registry, database.clone()).await?;
+    register_builtin_tools(registry, database.clone(), cron_db, kanban_db).await?;
     registry
         .register(SubAgentTool::new(parent_client, model.into(), 0, vec![], database))
         .await?;
@@ -79,25 +112,47 @@ pub async fn register_builtin_tools_with_sub_agent(
 /// Get a list of all built-in tool names
 pub fn builtin_tool_names() -> Vec<&'static str> {
     vec![
-        "file_read",
-        "file_write",
-        "file_search",
-        "file_list",
-        "terminal",
-        "web_search",
-        "web_fetch",
+        "approval_request",
+        "browser",
+        "checkpoint",
+        "clarify",
         "code_execution",
-        "memory_store",
-        "memory_search",
-        "memory_recall",
-        "http_request",
+        "cron",
         "datetime",
+        "file_list",
+        "file_read",
+        "file_search",
+        "file_write",
+        "http_request",
+        "image_generate",
+        "kanban",
+        "memory_recall",
+        "memory_search",
+        "memory_store",
+        "notification",
+        "patch",
+        "session_search",
+        "skills_list",
+        "skill_view",
+        "terminal",
         "timestamp",
         "todo",
-        "clarify",
-        "patch",
+        "tts",
+        "video_analyze",
         "vision_analyze",
-        "delegate_to_sub_agent",
+        "web_fetch",
+        "web_search",
+        "send_message",
+        "discord",
+        "discord_admin",
+        "feishu_doc_read",
+        "feishu_drive",
+        "homeassistant",
+        "delegate_task",
+        "browser_dialog",
+        "browser_cdp",
+        "computer_use",
+        "mixture_of_agents",
     ]
 }
 
@@ -109,8 +164,12 @@ mod tests {
     #[tokio::test]
     async fn test_register_all_builtin_tools() {
         let registry = ToolRegistry::new(Duration::from_secs(5));
-        let database = Arc::new(Database::init(PathBuf::from("test_all.db")).unwrap());
-        register_builtin_tools(&registry, database).await.unwrap();
+        let database = Arc::new(Database::init(PathBuf::from("test_all_builtin.db")).unwrap());
+        let cron_db = Arc::new(CronDb::init(PathBuf::from("test_all_cron.db")).unwrap());
+        let kanban_db = Arc::new(KanbanDb::init(PathBuf::from("test_all_kanban.db")).unwrap());
+        register_builtin_tools(&registry, database, cron_db, kanban_db)
+            .await
+            .unwrap();
 
         let schemas = registry.get_schemas().await;
         assert_eq!(schemas.len() + 1, builtin_tool_names().len());
@@ -121,14 +180,16 @@ mod tests {
     async fn test_register_builtin_tools_with_sub_agent() {
         let registry = ToolRegistry::new(Duration::from_secs(5));
         let client = OpenAIClient::new(crate::client::ClientConfig::default());
-        let database = Arc::new(Database::init(PathBuf::from("test.db")).unwrap());
+        let database = Arc::new(Database::init(PathBuf::from("test_with_sub.db")).unwrap());
+        let cron_db = Arc::new(CronDb::init(PathBuf::from("test_with_sub_cron.db")).unwrap());
+        let kanban_db = Arc::new(KanbanDb::init(PathBuf::from("test_with_sub_kanban.db")).unwrap());
 
-        register_builtin_tools_with_sub_agent(&registry, &client, "gpt-4.1", database)
+        register_builtin_tools_with_sub_agent(&registry, &client, "gpt-4.1", database, cron_db, kanban_db)
             .await
             .unwrap();
 
         let schemas = registry.get_schemas().await;
         assert_eq!(schemas.len(), builtin_tool_names().len());
-        assert!(registry.contains("delegate_to_sub_agent").await);
+        assert!(registry.contains("delegate_task").await);
     }
 }

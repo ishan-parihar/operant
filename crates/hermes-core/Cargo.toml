@@ -20,6 +20,8 @@ pin-project = { workspace = true }
 
 # Networking
 reqwest = { workspace = true }
+url = { workspace = true }
+tokio-tungstenite = { workspace = true }
 
 # Serialization
 serde = { workspace = true }
@@ -47,7 +49,10 @@ hound = "3.5"
 rusqlite = { version = "0.31", features = ["bundled"] }
 uuid = { version = "1.7", features = ["v4"] }
 chrono = "0.4"
+cron = "0.12"
 
+[build-dependencies]
+cc = "1.0"
 
 [dev-dependencies]
 tokio-test = "0.4"

@@ -6,7 +6,7 @@ mod tui;
 use std::fs::OpenOptions;
 use std::io::{self, Write};
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -27,7 +27,9 @@ use tracing::Level;
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 use crate::tui::{LaunchMode, TuiApp};
+use hermes_core::cronjobs::CronDb;
 use hermes_core::database::Database;
+use hermes_core::kanban::KanbanDb;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LogTarget {
@@ -248,8 +250,16 @@ pub(crate) async fn build_registry(
     model: &str,
     database: Arc<Database>,
 ) -> Result<ToolRegistry> {
+    let db_dir = config
+        .database_path
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."));
+    let cron_path = db_dir.join("hermes_cron.db");
+    let kanban_path = db_dir.join("hermes_kanban.db");
+    let cron_db = Arc::new(CronDb::init(cron_path)?);
+    let kanban_db = Arc::new(KanbanDb::init(kanban_path)?);
     let registry = ToolRegistry::new(Duration::from_secs(config.tools.registry_timeout_secs));
-    hermes_core::tools::register_builtin_tools_with_sub_agent(&registry, client, model, database).await?;
+    hermes_core::tools::register_builtin_tools_with_sub_agent(&registry, client, model, database, cron_db, kanban_db).await?;
     registry.register(EchoTool::new()).await?;
     registry.register(CalculatorTool::new()).await?;
 

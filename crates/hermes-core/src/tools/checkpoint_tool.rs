@@ -459,6 +459,74 @@ impl HermesTool for CheckpointTool {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_checkpoint_name_and_description() {
+        let tool = CheckpointTool::new();
+        assert_eq!(tool.name(), "checkpoint");
+        assert!(!tool.description().is_empty());
+    }
+
+    #[test]
+    fn test_checkpoint_schema_has_action_and_working_dir() {
+        let schema = CheckpointTool::new().schema();
+        assert_eq!(schema.name, "checkpoint");
+        let schema_json = serde_json::to_value(&schema).unwrap();
+        if let Some(props) = schema_json["inputSchema"]["properties"].as_object() {
+            assert!(props.contains_key("action"), "Schema should have 'action' property");
+            assert!(props.contains_key("workingDir"), "Schema should have 'workingDir' property");
+            assert!(props.contains_key("commitHash"), "Schema should have 'commitHash' property");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_checkpoint_execute_unknown_action() {
+        let tool = CheckpointTool::new();
+        let result = tool.execute(
+            serde_json::json!({ "action": "invalid", "working_dir": "." }),
+            ToolContext::default(),
+        ).await;
+        assert!(!result.success);
+        let err = result.error.unwrap_or_default();
+        assert!(err.contains("Unknown action") || err.contains("invalid"));
+    }
+
+    #[tokio::test]
+    async fn test_checkpoint_list_with_defaults() {
+        let tool = CheckpointTool::new();
+        let result = tool.execute(
+            serde_json::json!({ "action": "list" }),
+            ToolContext::default(),
+        ).await;
+        assert!(result.success);
+        let content: serde_json::Value = serde_json::from_str(&result.content).unwrap();
+        assert_eq!(content["success"], true);
+    }
+
+    #[tokio::test]
+    async fn test_checkpoint_default_action_is_list() {
+        let tool = CheckpointTool::new();
+        let result = tool.execute(
+            serde_json::json!({}),
+            ToolContext::default(),
+        ).await;
+        assert!(result.success);
+    }
+
+    #[tokio::test]
+    async fn test_checkpoint_restore_missing_hash() {
+        let tool = CheckpointTool::new();
+        let result = tool.execute(
+            serde_json::json!({ "action": "restore", "working_dir": "." }),
+            ToolContext::default(),
+        ).await;
+        assert!(!result.success);
+    }
+}
+
 /// Register the checkpoint tool
 pub fn register_checkpoint_tool() -> impl FnOnce() -> Result<()> {
     || {
