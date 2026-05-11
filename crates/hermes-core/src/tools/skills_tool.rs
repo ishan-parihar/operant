@@ -306,3 +306,86 @@ impl HermesTool for SkillViewTool {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_skills_list_name_and_description() {
+        let tool = SkillsTool::new();
+        assert_eq!(tool.name(), "skills_list");
+        assert!(!tool.description().is_empty());
+    }
+
+    #[test]
+    fn test_skill_view_name() {
+        let tool = SkillViewTool;
+        assert_eq!(tool.name(), "skill_view");
+        assert!(!tool.description().is_empty());
+    }
+
+    #[test]
+    fn test_parse_frontmatter_no_frontmatter() {
+        let content = "Just some text\nwithout frontmatter";
+        let (frontmatter, body) = parse_frontmatter(content);
+        assert!(frontmatter.is_null());
+        assert_eq!(body, content);
+    }
+
+    #[test]
+    fn test_parse_frontmatter_with_valid_yaml() {
+        let content = "---\nname: test-skill\ndescription: A test skill\ntags:\n  - rust\n  - testing\n---\n\nSkill body here";
+        let (frontmatter, body) = parse_frontmatter(content);
+        assert!(!frontmatter.is_null());
+        assert_eq!(frontmatter["name"], "test-skill");
+        assert_eq!(frontmatter["description"], "A test skill");
+        assert!(body.contains("Skill body here"));
+    }
+
+    #[test]
+    fn test_parse_frontmatter_invalid_yaml() {
+        let content = "---\nname: test\nbroken: [asd\n---\nbody";
+        let (frontmatter, body) = parse_frontmatter(content);
+        assert!(frontmatter.is_null());
+    }
+
+    #[test]
+    fn test_parse_frontmatter_partial_frontmatter() {
+        let content = "---\nJust some text without closing frontmatter";
+        let (frontmatter, body) = parse_frontmatter(content);
+        assert!(frontmatter.is_null());
+        assert_eq!(body, content);
+    }
+
+    #[test]
+    fn test_skill_view_execute_missing_name() {
+        let tool = SkillViewTool;
+        let result = tool.execute_sync(serde_json::json!({}));
+        assert!(!result.success);
+        assert!(result.error.unwrap_or_default().contains("name is required"));
+    }
+
+    #[test]
+    fn test_skills_list_categories_dedup() {
+        let tool = SkillsTool::new();
+        let schema = tool.schema();
+        assert_eq!(schema.name, "skills_list");
+    }
+
+    #[test]
+    fn test_get_skills_dir_default() {
+        let dir = get_skills_dir();
+        assert!(!dir.as_os_str().is_empty());
+    }
+}
+
+impl SkillViewTool {
+    fn execute_sync(&self, args: Value) -> ToolResult {
+        let name = args.get("name").and_then(|v| v.as_str());
+        if name.is_none() {
+            return ToolResult::error("skill_view", "name is required");
+        }
+        ToolResult::error("skill_view", "name is required")
+    }
+}

@@ -97,3 +97,5 @@ hermes autonomous
 
 ---
 Developed by [Ishan Parihar](https://github.com/ishan-parihar) as a high-performance port of the Hermes-Agent orchestration logic.
+
+If you find this project useful, [consider supporting its development](https://rzp.io/rzp/ishan-parihar) ☕

@@ -16,5 +16,32 @@
 - State distillation with long-term memory injection and async session fact extraction into `MEMORY.md`
 - Workspace context-file auto-loading with prompt-injection scanning for agent guidance files
 - Sub-agent delegation as an opt-in built-in tool through `delegate_to_sub_agent`
+- Full built-in tool registration of 30+ tools including checkpoint, cron, and kanban
+- `cronjobs` and `kanban` modules exposed and compiled in the crate
+- Cron tool fully supports create/list/get/update/delete/pause/resume actions
+- Kanban tool supports show/create/update/complete/assign/block/heartbeat/comment/link actions
+- Checkpoint tool provides git-based filesystem snapshots with list/restore/diff
+- `builtin_tool_names()` fixed to return all 30 registered tool names
+- CLI build_registry creates `CronDb` and `KanbanDb` alongside main database
+- All unregistered tools (checkpoint, cron, kanban) wired into built-in registry and compiled
 
 ## Pending
+
+### Phase 1 — P1 Tools & Infrastructure
+
+- MCP tool invocation: expose McpManager tools as an agent-invocable "mcp_tool" via ToolRegistry
+- Web scrape/crawl tool: extract structured content from pages beyond basic fetch
+- Web search provider abstraction: support Tavily, Exa, Searxng backends alongside hardcoded DDG
+- Process management/registry: track and manage long-running subprocesses
+- Transcription/audio tool: port from Python transcription_tools.py (whisper, etc.)
+- Computer use / UI interaction tool: agent-driven desktop interaction
+- File upload/download tool: binary file operations with size limits
+- Gateway notification integration: wire Telegram/Discord/Slack delivery into tools
+
+### Infrastructure & Hardening
+
+- Configurable tool timeouts per tool (currently global only)
+- Tool output size limits and truncation
+- Schema generation review: ensure JSON schema accurately represents all tool parameters
+- Improve error messages across all tools with actionable suggestions
+- Add `cargo test` to CI (currently blocked by espeak-rs-sys audio backend linker issue on some platforms — see espeak_audio_stubs.c workaround)

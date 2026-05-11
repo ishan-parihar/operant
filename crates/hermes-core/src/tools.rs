@@ -5,17 +5,24 @@
 //! - `ToolRegistry` for managing and executing tools
 //! - Built-in tools for common operations
 
+pub mod browser_cdp_tool;
+pub mod browser_dialog_tool;
 pub mod browser_downloader;
 pub mod browser_tool;
 pub mod builtin;
+pub mod cdp_utils;
 pub mod checkpoint_tool;
 pub mod clarify_tool;
 pub mod code_execution;
+pub mod computer_use_tool;
+pub mod cron_tool;
 pub mod datetime_tool;
 pub mod file_tools;
 pub mod http_tool;
 pub mod image_generation_tool;
+pub mod kanban_tool;
 pub mod memory_tools;
+pub mod mixture_of_agents_tool;
 pub mod notification_tool;
 pub mod patch_tool;
 pub mod session_search_tool;
@@ -27,6 +34,10 @@ pub mod tts_tool;
 pub mod video_analysis_tool;
 pub mod vision_tool;
 pub mod web_tools;
+pub mod send_message_tool;
+pub mod feishu_tool;
+pub mod discord_tool;
+pub mod home_assistant_tool;
 
 // Re-export commonly used types
 pub use builtin::{
@@ -37,8 +48,18 @@ pub use builtin::{
     VideoAnalysisTool, VisionTool, WebFetchTool, WebSearchTool,
 };
 pub use checkpoint_tool::{CheckpointTool, get_checkpoint_manager, CheckpointManager, CheckpointConfig, Checkpoint};
+pub use cron_tool::CronTool;
+pub use kanban_tool::KanbanTool;
 pub use session_search_tool::{SessionSearchTool, SessionMeta, SessionResult};
 pub use skills_tool::{SkillsTool, SkillViewTool};
+pub use discord_tool::{DiscordAdminTool, DiscordTool};
+pub use feishu_tool::{FeishuDocTool, FeishuDriveTool};
+pub use home_assistant_tool::HomeAssistantTool;
+pub use send_message_tool::SendMessageTool;
+pub use browser_dialog_tool::BrowserDialogTool;
+pub use browser_cdp_tool::BrowserCdpTool;
+pub use computer_use_tool::ComputerUseTool;
+pub use mixture_of_agents_tool::MixtureOfAgentsTool;
 
 use std::collections::HashMap;
 use std::sync::Arc;

@@ -2,12 +2,14 @@
 //!
 //! This example demonstrates basic usage of the hermes-core library.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
 use hermes_core::{
     agent::{AgentConfig, HermesAgent},
     client::{ClientConfig, OpenAIClient},
+    database::Database,
     error::Result,
     schema::ToolSchema,
     tools::{HermesTool, ToolContext, ToolRegistry, ToolResult},
@@ -163,7 +165,8 @@ Use the echo tool to repeat information and the calculate tool for math."
         max_healing_attempts: 3,
     };
 
-    let agent = HermesAgent::new(agent_config, client, registry);
+    let database = Arc::new(Database::init(std::path::PathBuf::from("simple_agent.db"))?);
+    let agent = HermesAgent::new(agent_config, client, registry, database);
 
     // Run a query
     let query = "Please use the calculate tool to compute 15 + 27, then echo the result.";
