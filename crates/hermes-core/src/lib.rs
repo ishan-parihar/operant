@@ -54,6 +54,7 @@ pub mod mcp;
 pub mod memory;
 pub mod parser;
 pub mod platform;
+pub mod process_registry;
 pub mod schema;
 pub mod skills;
 pub mod tools;
@@ -65,7 +66,7 @@ pub use config::{
     install_runtime_config, load_app_config, runtime_config, AppConfig, AutonomousSettings,
     BehaviorSettings, ClientSettings, CodeExecutionSettings, GatewaySettings, HttpToolSettings,
     LoadedConfig, LoggingSettings, McpServerConfig, McpSettings, SkillsSettings, TerminalSettings,
-    ToolSettings, TuiSettings, WebToolSettings,
+    SttSettings, ToolSettings, TuiSettings, WebToolSettings,
 };
 pub use context::{estimate_tokens, ContextConfig, ContextManager};
 pub use context_files::{
@@ -75,6 +76,7 @@ pub use distillation::distill_session_to_memory;
 pub use error::{Error, Result};
 pub use gateway::{Gateway, GatewayConfig, PlatformAdapter};
 pub use mcp::{McpClient, McpStdioClient, McpTool, McpTransport};
+pub use process_registry::{ProcessRegistry, ProcessSession, ProcessStatus};
 pub use memory::{MemoryBlock, MemoryManager, Session, UserProfile};
 pub use parser::ToolCallParser;
 pub use platform::PlatformInfo;

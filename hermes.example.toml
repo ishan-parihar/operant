@@ -108,3 +108,9 @@ max_output_bytes = 1000000
 [tools.code_execution]
 default_timeout_secs = 60
 max_timeout_secs = 300
+
+[tools.stt]
+# groq_api_key = "..."
+# openai_api_key = "..."
+groq_model = "whisper-large-v3-turbo"
+openai_model = "whisper-1"

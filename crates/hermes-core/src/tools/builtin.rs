@@ -10,6 +10,8 @@ use crate::database::Database;
 use crate::client::OpenAIClient;
 use crate::error::Result;
 use crate::kanban::KanbanDb;
+use crate::mcp::McpManager;
+use crate::process_registry::ProcessRegistry;
 use crate::tools::{ToolRegistry, SessionSearchTool};
 
 pub use super::browser_tool::BrowserTool;
@@ -31,10 +33,13 @@ pub use super::file_tools::{FileListTool, FileReadTool, FileSearchTool, FileWrit
 pub use super::http_tool::HttpRequestTool;
 pub use super::image_generation_tool::ImageGenerationTool;
 pub use super::kanban_tool::KanbanTool;
+pub use super::mcp_tool::McpManagementTool;
 pub use super::memory_tools::{MemoryRecallTool, MemorySearchTool, MemoryStoreTool};
 pub use super::notification_tool::{NotificationTool, ApprovalTool};
 pub use super::patch_tool::PatchTool;
+pub use super::process_tool::ProcessTool;
 pub use super::skills_tool::{SkillsTool, SkillViewTool};
+pub use super::transcription_tool::TranscriptionTool;
 pub use super::sub_agent_tool::SubAgentTool;
 pub use super::terminal_tool::TerminalTool;
 pub use super::todo_tool::TodoTool;
@@ -53,6 +58,7 @@ pub async fn register_builtin_tools(
     database: Arc<Database>,
     cron_db: Arc<CronDb>,
     kanban_db: Arc<KanbanDb>,
+    mcp_manager: Option<McpManager>,
 ) -> Result<()> {
     registry.register(BrowserTool).await?;
     registry.register(CheckpointTool::new()).await?;
@@ -78,6 +84,7 @@ pub async fn register_builtin_tools(
     registry.register(VisionTool).await?;
     registry.register(SkillsTool).await?;
     registry.register(SkillViewTool).await?;
+    registry.register(ProcessTool::new(ProcessRegistry::new())).await?;
     registry.register(NotificationTool).await?;
     registry.register(ApprovalTool).await?;
     registry.register(ImageGenerationTool::new()).await?;
@@ -94,6 +101,7 @@ pub async fn register_builtin_tools(
     registry.register(BrowserCdpTool).await?;
     registry.register(ComputerUseTool).await?;
     registry.register(MixtureOfAgentsTool).await?;
+    registry.register(TranscriptionTool::new()).await?;
     registry.register(RlTrainingTool).await?;
     registry.register(SpotifyPlaybackTool).await?;
     registry.register(SpotifyDevicesTool).await?;
@@ -102,6 +110,11 @@ pub async fn register_builtin_tools(
     registry.register(SpotifyPlaylistsTool).await?;
     registry.register(SpotifyAlbumsTool).await?;
     registry.register(SpotifyLibraryTool).await?;
+
+    // Register MCP management tool if a manager reference is provided
+    if let Some(manager) = mcp_manager {
+        registry.register(McpManagementTool::new(manager)).await?;
+    }
 
     Ok(())
 }
@@ -114,8 +127,9 @@ pub async fn register_builtin_tools_with_sub_agent(
     database: Arc<Database>,
     cron_db: Arc<CronDb>,
     kanban_db: Arc<KanbanDb>,
+    mcp_manager: Option<McpManager>,
 ) -> Result<()> {
-    register_builtin_tools(registry, database.clone(), cron_db, kanban_db).await?;
+    register_builtin_tools(registry, database.clone(), cron_db, kanban_db, mcp_manager).await?;
     registry
         .register(SubAgentTool::new(parent_client, model.into(), 0, vec![], database))
         .await?;
@@ -139,17 +153,20 @@ pub fn builtin_tool_names() -> Vec<&'static str> {
         "http_request",
         "image_generate",
         "kanban",
+        "mcp_management",
         "memory_recall",
         "memory_search",
         "memory_store",
         "notification",
         "patch",
+        "process",
         "session_search",
         "skills_list",
         "skill_view",
         "terminal",
         "timestamp",
         "todo",
+        "transcribe_audio",
         "tts",
         "video_analyze",
         "vision_analyze",
@@ -188,12 +205,12 @@ mod tests {
         let database = Arc::new(Database::init(PathBuf::from("test_all_builtin.db")).unwrap());
         let cron_db = Arc::new(CronDb::init(PathBuf::from("test_all_cron.db")).unwrap());
         let kanban_db = Arc::new(KanbanDb::init(PathBuf::from("test_all_kanban.db")).unwrap());
-        register_builtin_tools(&registry, database, cron_db, kanban_db)
+        register_builtin_tools(&registry, database, cron_db, kanban_db, None)
             .await
             .unwrap();
 
         let schemas = registry.get_schemas().await;
-        assert_eq!(schemas.len() + 1, builtin_tool_names().len());
+        assert_eq!(schemas.len() + 2, builtin_tool_names().len());
         assert!(!registry.contains("delegate_to_sub_agent").await);
     }
 
@@ -205,12 +222,12 @@ mod tests {
         let cron_db = Arc::new(CronDb::init(PathBuf::from("test_with_sub_cron.db")).unwrap());
         let kanban_db = Arc::new(KanbanDb::init(PathBuf::from("test_with_sub_kanban.db")).unwrap());
 
-        register_builtin_tools_with_sub_agent(&registry, &client, "gpt-4.1", database, cron_db, kanban_db)
+        register_builtin_tools_with_sub_agent(&registry, &client, "gpt-4.1", database, cron_db, kanban_db, None)
             .await
             .unwrap();
 
         let schemas = registry.get_schemas().await;
-        assert_eq!(schemas.len(), builtin_tool_names().len());
+        assert_eq!(schemas.len() + 1, builtin_tool_names().len());
         assert!(registry.contains("delegate_task").await);
     }
 }

@@ -10,6 +10,9 @@ use serde_json::Value;
 use crate::config::runtime_config;
 use crate::schema::ToolSchema;
 use crate::tools::{HermesTool, ToolContext, ToolResult};
+use crate::tools::web_providers::{
+    DDGProvider, ExaProvider, SearXNGProvider, TavilyProvider, WebSearchProvider,
+};
 
 /// Tool for searching the web
 pub struct WebSearchTool;
@@ -47,56 +50,36 @@ impl HermesTool for WebSearchTool {
             .unwrap_or(settings.default_results)
             .min(settings.max_results);
 
-        let query_encoded = urlencoding::encode(&args.query);
-        let search_url = settings.search_url.replace("{query}", &query_encoded);
-
-        let client = match reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(settings.search_timeout_secs))
-            .user_agent(settings.user_agent)
-            .build()
-        {
-            Ok(c) => c,
-            Err(e) => {
-                return ToolResult::error(
-                    "web_search",
-                    format!("Failed to create HTTP client: {}", e),
-                )
+        let provider: Box<dyn WebSearchProvider> = match settings.preferred_provider.as_str() {
+            "tavily" => {
+                let key = settings.tavily_api_key.clone().unwrap_or_default();
+                Box::new(TavilyProvider::new(key))
             }
+            "exa" => {
+                let key = settings.exa_api_key.clone().unwrap_or_default();
+                Box::new(ExaProvider::new(key))
+            }
+            "searxng" => {
+                let base = settings.searxng_base_url.clone().unwrap_or_default();
+                Box::new(SearXNGProvider::new(base))
+            }
+            _ => Box::new(DDGProvider::new(
+                settings.search_url.clone(),
+                settings.user_agent.clone(),
+            )),
         };
 
-        match client.get(&search_url).send().await {
-            Ok(response) => {
-                if !response.status().is_success() {
-                    return ToolResult::success(
-                        "web_search",
-                        serde_json::json!({
-                            "query": args.query,
-                            "search_url": search_url,
-                            "results": [],
-                            "error": format!("Search returned status {}", response.status())
-                        }),
-                    );
-                }
-
-                match response.text().await {
-                    Ok(html) => {
-                        let results = parse_ddg_lite_results(&html, num_results);
-                        ToolResult::success(
-                            "web_search",
-                            serde_json::json!({
-                                "query": args.query,
-                                "num_results": results.len(),
-                                "results": results
-                            }),
-                        )
-                    }
-                    Err(e) => ToolResult::error(
-                        "web_search",
-                        format!("Failed to read search response: {}", e),
-                    ),
-                }
-            }
-            Err(e) => ToolResult::error("web_search", format!("Search request failed: {}", e)),
+        match provider.search(&args.query, num_results).await {
+            Ok(results) => ToolResult::success(
+                "web_search",
+                serde_json::json!({
+                    "query": args.query,
+                    "num_results": results.len(),
+                    "results": results,
+                    "provider": provider.name(),
+                }),
+            ),
+            Err(e) => ToolResult::error("web_search", format!("Search failed: {e}")),
         }
     }
 }
@@ -252,7 +235,7 @@ mod urlencoding {
 /// DDG Lite uses a simple table layout where each result has:
 /// - A link in an `<a>` tag with class "result-link"  
 /// - A snippet in a `<td>` with class "result-snippet"
-fn parse_ddg_lite_results(html: &str, max_results: usize) -> Vec<serde_json::Value> {
+pub(crate) fn parse_ddg_lite_results(html: &str, max_results: usize) -> Vec<serde_json::Value> {
     let mut results = Vec::new();
 
     // DDG Lite format: results are in <a class="result-link" href="URL">TITLE</a>

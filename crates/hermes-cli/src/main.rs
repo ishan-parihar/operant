@@ -245,7 +245,7 @@ fn agent_config(
 
 pub(crate) async fn build_registry(
     config: &AppConfig,
-    mcp_manager: &mut McpManager,
+    mcp_manager: &McpManager,
     client: &OpenAIClient,
     model: &str,
     database: Arc<Database>,
@@ -259,13 +259,13 @@ pub(crate) async fn build_registry(
     let cron_db = Arc::new(CronDb::init(cron_path)?);
     let kanban_db = Arc::new(KanbanDb::init(kanban_path)?);
     let registry = ToolRegistry::new(Duration::from_secs(config.tools.registry_timeout_secs));
-    hermes_core::tools::register_builtin_tools_with_sub_agent(&registry, client, model, database, cron_db, kanban_db).await?;
+    hermes_core::tools::register_builtin_tools_with_sub_agent(&registry, client, model, database, cron_db, kanban_db, Some(mcp_manager.clone())).await?;
     registry.register(EchoTool::new()).await?;
     registry.register(CalculatorTool::new()).await?;
 
     if config.mcp.autoload {
         for server in config.mcp.servers.iter().filter(|server| server.enabled) {
-            if mcp_manager.get(&server.name).is_none() {
+            if !mcp_manager.contains(&server.name).await {
                 connect_mcp_server(mcp_manager, server).await?;
             }
         }
@@ -278,7 +278,7 @@ pub(crate) async fn build_registry(
     Ok(registry)
 }
 
-async fn connect_mcp_server(mcp_manager: &mut McpManager, server: &McpServerConfig) -> Result<()> {
+async fn connect_mcp_server(mcp_manager: &McpManager, server: &McpServerConfig) -> Result<()> {
     match server.transport {
         McpTransportKind::Http => {
             let url = server
@@ -312,7 +312,7 @@ pub(crate) async fn create_runtime_agent(
     behavior: &BehaviorSettings,
     system_prompt: Option<&str>,
     event_tx: mpsc::Sender<AgentEvent>,
-    mcp_manager: &mut McpManager,
+    mcp_manager: &McpManager,
 ) -> Result<HermesAgent> {
     let client = OpenAIClient::new(client_config(config));
     let database = Arc::new(Database::init(config.database_path.clone())?);
@@ -329,7 +329,7 @@ pub(crate) async fn create_runtime_agent(
 async fn create_agent_without_events(
     config: &AppConfig,
     system_prompt: Option<&str>,
-    mcp_manager: &mut McpManager,
+    mcp_manager: &McpManager,
 ) -> Result<HermesAgent> {
     let client = OpenAIClient::new(client_config(config));
     let database = Arc::new(Database::init(config.database_path.clone())?);
@@ -356,16 +356,16 @@ async fn load_memory_manager(storage_dir: PathBuf) -> Result<MemoryManager> {
 }
 
 async fn run_non_tui(config: &AppConfig, system_prompt: Option<&str>, query: &str) -> Result<()> {
-    let mut mcp_manager = McpManager::new();
-    let agent = create_agent_without_events(config, system_prompt, &mut mcp_manager).await?;
+    let mcp_manager = McpManager::new();
+    let agent = create_agent_without_events(config, system_prompt, &mcp_manager).await?;
     let response = agent.run(query.to_string()).await?;
     println!("{}", response.content);
     Ok(())
 }
 
 async fn chat_non_tui(config: &AppConfig, system_prompt: Option<&str>) -> Result<()> {
-    let mut mcp_manager = McpManager::new();
-    let agent = create_agent_without_events(config, system_prompt, &mut mcp_manager).await?;
+    let mcp_manager = McpManager::new();
+    let agent = create_agent_without_events(config, system_prompt, &mcp_manager).await?;
 
     loop {
         print!("You: ");
@@ -396,10 +396,10 @@ async fn chat_non_tui(config: &AppConfig, system_prompt: Option<&str>) -> Result
 }
 
 async fn list_tools(config: &AppConfig, verbose: bool) -> Result<()> {
-    let mut mcp_manager = McpManager::new();
+    let mcp_manager = McpManager::new();
     let client = OpenAIClient::new(client_config(config));
     let database = Arc::new(Database::init(config.database_path.clone())?);
-    let registry = build_registry(config, &mut mcp_manager, &client, &config.agent.model, database).await?;
+    let registry = build_registry(config, &mcp_manager, &client, &config.agent.model, database).await?;
     let tools = registry.get_schemas().await;
 
     for tool in tools {
@@ -413,10 +413,10 @@ async fn list_tools(config: &AppConfig, verbose: bool) -> Result<()> {
 }
 
 async fn test_tool(config: &AppConfig, tool_name: &str, args: Option<&str>) -> Result<()> {
-    let mut mcp_manager = McpManager::new();
+    let mcp_manager = McpManager::new();
     let client = OpenAIClient::new(client_config(config));
     let database = Arc::new(Database::init(config.database_path.clone())?);
-    let registry = build_registry(config, &mut mcp_manager, &client, &config.agent.model, database).await?;
+    let registry = build_registry(config, &mcp_manager, &client, &config.agent.model, database).await?;
     let parsed_args: Value = if let Some(args) = args {
         serde_json::from_str(args).context("Failed to parse tool arguments as JSON")?
     } else {

@@ -270,7 +270,8 @@ impl McpClient {
 
         *self.tools.write().await = tools;
 
-        debug!(count = self.tools.read().await.len(), "Listed MCP tools");
+        let count = self.tools.read().await.len();
+        debug!(count, "Listed MCP tools");
         Ok(self
             .tools
             .read()
@@ -777,10 +778,10 @@ impl HermesTool for McpTool {
 }
 
 /// MCP server connection manager
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct McpManager {
     /// Connected servers (HTTP and stdio)
-    servers: HashMap<String, McpTransport>,
+    servers: Arc<RwLock<HashMap<String, McpTransport>>>,
 }
 
 impl McpManager {
@@ -791,7 +792,7 @@ impl McpManager {
 
     /// Add and connect to an HTTP MCP server
     pub async fn add_server(
-        &mut self,
+        &self,
         name: impl Into<String>,
         url: String,
         auth_token: Option<String>,
@@ -799,13 +800,13 @@ impl McpManager {
         let name = name.into();
         let client = McpClient::new(url, auth_token);
         client.connect().await?;
-        self.servers.insert(name, McpTransport::Http(client));
+        self.servers.write().await.insert(name, McpTransport::Http(client));
         Ok(())
     }
 
     /// Add and connect to a stdio MCP server (child process)
     pub async fn add_stdio_server(
-        &mut self,
+        &self,
         name: impl Into<String>,
         command: String,
         args: Vec<String>,
@@ -814,32 +815,43 @@ impl McpManager {
         let name = name.into();
         let client = McpStdioClient::new(command, args, env);
         client.connect().await?;
-        self.servers.insert(name, McpTransport::Stdio(client));
+        self.servers.write().await.insert(name, McpTransport::Stdio(client));
         Ok(())
     }
 
     /// Remove and disconnect a server
-    pub async fn remove_server(&mut self, name: &str) -> Result<()> {
-        if let Some(transport) = self.servers.remove(name) {
+    pub async fn remove_server(&self, name: &str) -> Result<()> {
+        if let Some(transport) = self.servers.write().await.remove(name) {
             transport.disconnect().await?;
         }
         Ok(())
     }
 
-    /// Get a server transport by name
-    pub fn get(&self, name: &str) -> Option<&McpTransport> {
-        self.servers.get(name)
+    /// Get a clone of a server transport by name
+    pub async fn get(&self, name: &str) -> Option<McpTransport> {
+        self.servers.read().await.get(name).cloned()
     }
 
-    /// Get all servers
-    pub fn servers(&self) -> &HashMap<String, McpTransport> {
-        &self.servers
+    /// Check if a server exists (async)
+    pub async fn contains(&self, name: &str) -> bool {
+        self.servers.read().await.contains_key(name)
+    }
+
+    /// Get all server names
+    pub async fn server_names(&self) -> Vec<String> {
+        self.servers.read().await.keys().cloned().collect()
+    }
+
+    /// Get a snapshot of all servers (HashMap clone)
+    pub async fn all_servers(&self) -> HashMap<String, McpTransport> {
+        self.servers.read().await.clone()
     }
 
     /// Get all tools from all servers
     pub async fn get_all_tools(&self) -> Vec<McpTool> {
         let mut tools = Vec::new();
-        for transport in self.servers.values() {
+        let servers = self.servers.read().await;
+        for transport in servers.values() {
             if transport.is_connected().await {
                 tools.extend(transport.get_tools().await);
             }
@@ -871,6 +883,6 @@ mod tests {
     #[tokio::test]
     async fn test_mcp_manager_empty() {
         let manager = McpManager::new();
-        assert!(manager.servers.is_empty());
+        assert!(manager.server_names().await.is_empty());
     }
 }

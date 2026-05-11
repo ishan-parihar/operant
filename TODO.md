@@ -27,20 +27,41 @@
 - Full RL training tool (`rl_training_tool.rs`) — PPO/GRPO curriculum training with mlx, wandb integration
 - Full Spotify control tool (`spotify_tool.rs`) — 7 action types (playback, queue, search, playlists, devices, library, repeat/shuffle)
 - Fixed 3 flaky/failing tests: test_agent_builder (missing DB), parse_args_rejects_empty_goal (whitespace validation), test_hermes_subdirs_are_children_of_home (env var race condition)
-- Comprehensive audit report generated (REPORT.md) with 285/285 tests passing
+- Comprehensive audit report generated (REPORT.md) with 291/291 tests passing
+- AUDIT.md generated with complete port mapping (58 HermesTool impls)
+- MCP management tool (`mcp_tool.rs`): add/remove/list MCP servers
+- Process management (`process_registry.rs`, `process_tool.rs`): long-running subprocess lifecycle
+- Transcription tool (`transcription_tool.rs`): Groq/OpenAI Whisper audio transcription
+- Web providers (`web_providers/`): Tavily, Exa, SearXNG, Brave, DuckDuckGo backends
+- McpManager→ToolRegistry auto-registration wiring (mcp.rs:754 McpTool)
 
 ## Pending
 
-### Phase 1 — P1 Tools & Infrastructure
+### Phase 2 — High Priority Unported Tools
 
-- MCP tool invocation: expose McpManager tools as an agent-invocable "mcp_tool" via ToolRegistry
-- Web scrape/crawl tool: extract structured content from pages beyond basic fetch
-- Web search provider abstraction: support Tavily, Exa, Searxng backends alongside hardcoded DDG
-- Process management/registry: track and manage long-running subprocesses
-- Transcription/audio tool: port from Python transcription_tools.py (whisper, etc.)
-- Computer use / UI interaction tool: agent-driven desktop interaction
-- File upload/download tool: binary file operations with size limits
-- Gateway notification integration: wire Telegram/Discord/Slack delivery into tools
+- **Skills ecosystem**: `skills_hub.py` (3,261 LOC) — community skills hub, the largest unported module
+- **MCP OAuth**: `mcp_oauth.py` + `mcp_oauth_manager.py` (1,239 LOC) — required for MCP servers with OAuth
+- **Security tools**: `tirith_security.py` (691 LOC) + `url_safety.py` (327 LOC) + `osv_check.py` (155 LOC)
+- **Voice mode**: `voice_mode.py` (1,017 LOC) — CLI voice interaction mode
+- **Skills guard**: `skills_guard.py` (932 LOC) — skill execution security policy
+- **Wire McpManager→ToolRegistry**: Bridge auto-discovery of MCP server tools into ToolRegistry
+
+### Phase 3 — Medium Priority
+
+- **Credential files**: `credential_files.py` (436 LOC)
+- **Skill usage tracking**: `skill_usage.py` (609 LOC)
+- **Skills sync**: `skills_sync.py` (431 LOC)
+- **Tool result storage**: `tool_result_storage.py` (232 LOC)
+- **Website policy**: `website_policy.py` (282 LOC)
+- **Browser Camofox**: `browser_camofox.py` (603 LOC)
+- **Managed tool gateway**: `managed_tool_gateway.py` (167 LOC)
+- **Gateway notification integration**: wire Telegram/Discord/Slack delivery into tools
+
+### Phase 4 — Environments & Enterprise
+
+- **Environments** (Python ~5,100 LOC): Docker, SSH, Modal, Daytona, Vercel Sandbox, Singularity sandboxing layer
+- **Microsoft Graph**: `microsoft_graph_auth.py` + `microsoft_graph_client.py` (653 LOC)
+- **Yuanbao**: `yuanbao_tools.py` (736 LOC) — Tencent integration
 
 ### Infrastructure & Hardening
 
