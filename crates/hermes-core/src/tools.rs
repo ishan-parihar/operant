@@ -21,7 +21,9 @@ pub mod file_tools;
 pub mod http_tool;
 pub mod image_generation_tool;
 pub mod kanban_tool;
+pub mod mcp_tool;
 pub mod memory_tools;
+pub mod process_tool;
 pub mod mixture_of_agents_tool;
 pub mod notification_tool;
 pub mod patch_tool;
@@ -33,10 +35,16 @@ pub mod spotify_tool;
 pub mod sub_agent_tool;
 pub mod terminal_tool;
 pub mod todo_tool;
+pub mod transcription_tool;
 pub mod tts_tool;
 pub mod video_analysis_tool;
 pub mod vision_tool;
 pub mod web_tools;
+pub mod web_providers;
+
+pub use web_providers::{
+    DDGProvider, ExaProvider, SearXNGProvider, TavilyProvider, WebSearchProvider, WebSearchResult,
+};
 pub mod feishu_tool;
 pub mod discord_tool;
 pub mod home_assistant_tool;
@@ -52,6 +60,9 @@ pub use builtin::{
 pub use checkpoint_tool::{CheckpointTool, get_checkpoint_manager, CheckpointManager, CheckpointConfig, Checkpoint};
 pub use cron_tool::CronTool;
 pub use kanban_tool::KanbanTool;
+pub use mcp_tool::McpManagementTool;
+pub use process_tool::ProcessTool;
+pub use transcription_tool::TranscriptionTool;
 pub use session_search_tool::{SessionSearchTool, SessionMeta, SessionResult};
 pub use skills_tool::{SkillsTool, SkillViewTool};
 pub use discord_tool::{DiscordAdminTool, DiscordTool};

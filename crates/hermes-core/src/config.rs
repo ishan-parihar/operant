@@ -302,6 +302,7 @@ pub struct ToolSettings {
     pub http: HttpToolSettings,
     pub terminal: TerminalSettings,
     pub code_execution: CodeExecutionSettings,
+    pub stt: SttSettings,
 }
 
 impl Default for ToolSettings {
@@ -314,6 +315,27 @@ impl Default for ToolSettings {
             http: HttpToolSettings::default(),
             terminal: TerminalSettings::default(),
             code_execution: CodeExecutionSettings::default(),
+            stt: SttSettings::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct SttSettings {
+    pub groq_api_key: Option<String>,
+    pub openai_api_key: Option<String>,
+    pub groq_model: String,
+    pub openai_model: String,
+}
+
+impl Default for SttSettings {
+    fn default() -> Self {
+        Self {
+            groq_api_key: None,
+            openai_api_key: None,
+            groq_model: "whisper-large-v3-turbo".to_string(),
+            openai_model: "whisper-1".to_string(),
         }
     }
 }
@@ -327,6 +349,10 @@ pub struct WebToolSettings {
     pub user_agent: String,
     pub default_results: usize,
     pub max_results: usize,
+    pub preferred_provider: String,
+    pub tavily_api_key: Option<String>,
+    pub exa_api_key: Option<String>,
+    pub searxng_base_url: Option<String>,
 }
 
 impl Default for WebToolSettings {
@@ -338,6 +364,10 @@ impl Default for WebToolSettings {
             user_agent: "Mozilla/5.0 (compatible; HermesAgent/0.1)".to_string(),
             default_results: 10,
             max_results: 20,
+            preferred_provider: "duckduckgo".to_string(),
+            tavily_api_key: None,
+            exa_api_key: None,
+            searxng_base_url: None,
         }
     }
 }

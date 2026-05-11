@@ -7,96 +7,109 @@
 | Metric | Value |
 |--------|-------|
 | Workspace crates | 2 (`hermes-core`, `hermes-cli`) |
-| Total Rust LOC | ~14,764 (core: ~11,964, cli: ~2,800) |
-| Source files | ~68 (core: 61, cli: 7) |
-| Registered tools | 41 (HEAD) / 49 (with uncommitted additions) |
+| Total Rust LOC | ~32,413 |
+| Source files | ~70+ (core: 60+, cli: 7) |
+| Registered tools | 58 `HermesTool` implementations (53 core, 2 examples, 2 CLI, 1 test) |
 | Dependencies | 90+ (core: serde, tokio, reqwest, tracing, sqlx, ratatui, etc.) |
-| Git commits | 30 commits, HEAD pinned to v0.1.3 tag |
+| Git commits | 30+ commits, HEAD at ed763e5 |
 
-## 2. Test Results: 285 PASSED, 0 FAILED ✅
+## 2. Test Results: 291 PASSED, 0 FAILED ✅
 
-All three previously failing tests were diagnosed and fixed:
+Previous test fixes (285 baseline):
+- `agent::tests::test_agent_builder` — Added `.database(db)` call with in-memory test DB
+- `tools::sub_agent_tool::tests::parse_args_rejects_empty_goal` — Added whitespace validation
+- `platform::tests::test_hermes_subdirs_are_children_of_home` — Added `#[serial_test::serial]`
 
-| Test | Issue | Fix Applied |
-|------|-------|-------------|
-| `agent::tests::test_agent_builder` | `build()` requires database but none was provided | Added `.database(db)` call with in-memory test DB |
-| `tools::sub_agent_tool::tests::parse_args_rejects_empty_goal` | `parse_args()` didn't validate whitespace-only goals | Added `trim().is_empty()` validation for `goal` and task goals |
-| `platform::tests::test_hermes_subdirs_are_children_of_home` | Race condition with `HERMES_HOME` env var mutation in parallel tests | Added `#[serial_test::serial]` to prevent parallel access |
+6 additional tests added with uncommitted tool implementations (MCP management, process, transcription, web providers).
 
 ## 3. Build Verification
 
 | Check | Result |
 |-------|--------|
-| `cargo check --workspace` | Passes (58 warnings: unused imports, dead code, private types in public API) |
-| `cargo test --workspace` | **285 passed, 0 failed** |
-| `cargo clippy --all-targets` | Fails in test compilation (105 errors: espeak-rs-sys C stubs in test mode) |
-| `cargo fmt` | Not verified |
+| `cargo check --workspace` | Passes |
+| `cargo test --workspace` | **291 passed, 0 failed** |
+| `cargo clippy --all-targets` | Fails in test compilation (espeak-rs-sys C stubs in test mode) |
+| `cargo fmt` | Passes |
 
-## 4. Cargo Warnings Summary (58 total)
+## 4. Uncommitted Changes (17 files)
 
-**Warnings by category:**
-- Unused imports (~15): `Serialize`, `tracing::*`, `std::path::*`, `tokio::sync::*`, `std::collections::*`, etc.
-- Dead code fields (~20+): struct fields never read (arises from serde-deserialized structs)
-- Private type in public API (~2): `SubAgentRole` enum in `SubAgentTool::call` / `::call_batch` signatures
-- Unused variables (~6): `output`, `summary`, `reason`, `body`, `args`, `tool`, `role_filter`, etc.
-- Redundant semicolon: `scheduler.rs:57`
-- Unused doc comment: `scanner.rs:41`
-- Unused constants: `SECRET_VAR_RE`, `DELEGATE_BLOCKED_TOOLS`
-- Static/function never used: `SESSION_SEARCH`, `SessionSearchState`, `get_session_search_state`
+```
+ M Cargo.lock                M crates/hermes-core/src/config.rs
+ M Cargo.toml                M crates/hermes-core/src/lib.rs
+ M crates/hermes-cli/src/autonomous.rs  M crates/hermes-core/src/mcp.rs
+ M crates/hermes-cli/src/main.rs        M crates/hermes-core/src/tools.rs
+ M crates/hermes-cli/src/tui/app.rs     M crates/hermes-core/src/tools/builtin.rs
+ M hermes.example.toml       M crates/hermes-core/src/tools/web_tools.rs
+?? crates/hermes-core/src/process_registry.rs
+?? crates/hermes-core/src/tools/mcp_tool.rs
+?? crates/hermes-core/src/tools/process_tool.rs
+?? crates/hermes-core/src/tools/transcription_tool.rs
+?? crates/hermes-core/src/tools/web_providers/
+```
 
-## 5. Tool Inventory (41 registered in HEAD, 49 with uncommitted)
+6 previously-claimed P1 tools are already implemented but uncommitted:
+- **McpManagementTool** (`mcp_tool.rs`): Add/remove/list MCP servers
+- **ProcessTool + ProcessRegistry** (`process_tool.rs`, `process_registry.rs`): Long-running subprocess management
+- **TranscriptionTool** (`transcription_tool.rs`): Groq/OpenAI Whisper transcription
+- **Web providers** (`web_providers/`): Tavily, Exa, SearXNG, Brave, DuckDuckGo backends
+- **Computer use** (`computer_use_tool.rs`): Already committed, 13-action CUA provider pattern
+
+## 5. Tool Inventory (58 HermesTool implementations)
 
 | Category | Tools | Count |
 |----------|-------|-------|
 | **Core FS/Terminal** | `read`, `write`, `glob`, `terminal`, `patch` | 5 |
 | **Web/HTTP** | `web_fetch`, `web_search`, `http` | 3 |
-| **Code/Dev** | `execute_code`, `checkpoint`, `sub_agent` | 3 |
+| **Code/Dev** | `execute_code`, `checkpoint`, `sub_agent`, `process` | 4 |
 | **Memory/Knowledge** | `memory_search`, `memory_store`, `session_search`, `skill_view` | 4 |
 | **DateTime** | `datetime`, `datetime_range` | 2 |
 | **Productivity** | `todo`, `cron`, `kanban`, `clarify` | 4 |
-| **Browser** | `browser`, `browser_cdp`, `browser_dialog`, `browser_download`, `vision` | 5 |
-| **Multimedia/AI** | `image_generation`, `text_to_speech`, `video_analysis`, `moa` | 4 |
+| **Browser** | `browser`, `browser_cdp`, `browser_dialog`, `browser_download`, `vision`, `computer_use` | 6 |
+| **Multimedia/AI** | `image_generation`, `text_to_speech`, `video_analysis`, `moa`, `transcription` | 5 |
 | **Communication** | `send_message`, `notify`, `approval_request`, `discord`, `discord_admin` | 5 |
-| **Integration** | `delegate_task`, `skills`, `rl_training`, `spotify_*` (7) | 10 |
+| **Integration** | `delegate_task`, `skills`, `rl_training`, `mcp_management`, `spotify_*` (7) | 11 |
 | **Enterprise** | `feishu_doc`, `feishu_drive`, `homeassistant`, `echo`, `calculate` | 5 |
-| **Total** | | **49** |
+| **Total** | | **58** |
 
 ## 6. Python Original vs Rust Port Coverage
 
-### Fully Ported Tools
-- `browser_tool`, `browser_cdp`, `browser_dialog`, `browser_downloader`
+### Fully Ported Tools (committed + uncommitted)
+- `browser_tool`, `browser_cdp`, `browser_dialog`
 - `checkpoint_tool`, `clarify_tool`, `code_execution`, `computer_use` (CUA provider pattern)
 - `cron_tool`, `datetime_tool`, `discord_tool`, `feishu_tool`
 - `file_tools` (read/write/glob/list/search), `home_assistant_tool`
 - `http_tool`, `image_generation_tool`, `kanban_tool`
+- `mcp_tool` (management) via `mcp_tool.rs`
 - `mixture_of_agents_tool`, `notification_tool`, `patch_tool`
+- `process_registry` + `process_tool` via `process_registry.rs`, `process_tool.rs`
 - `send_message_tool`, `skills_tool`, `sub_agent_tool`
-- `terminal_tool`, `todo_tool`, `tts_tool`
-- `video_analysis_tool`, `vision_tool`, `web_tools` (fetch + search)
+- `terminal_tool`, `todo_tool`, `transcription_tools` via `transcription_tool.rs`
+- `tts_tool`, `video_analysis_tool`, `vision_tool`
+- `web_tools` + `web_providers` (Tavily, Exa, SearXNG, Brave, DDG)
 - `memory_tools`, `session_search_tool`
-- **New:** `rl_training_tool` (RL training tool), `spotify_tool` (7 Spotify actions)
+- **New:** `rl_training_tool`, `spotify_tool` (7 actions)
 
-### Missing/Partial Ports (6 P1 Tools)
-| Python File | Lines | Rust Status | Notes |
-|------------|-------|-------------|-------|
-| `mcp_tool.py` | 3408 | **Not ported** | Expose MCP tools as agent-invocable tools |
-| `skills_hub.py` | 3261 | **Not ported** | Skills hub management |
-| `delegate_tool.py` | 2767 | **Partial** | Rust has basic sub-agent delegation, lacks orchestration features |
-| `web_providers/` | ~500 | **Not ported** | Tavily, Exa, Searxng backends; Rust hardcodes DuckDuckGo |
-| `transcription_tools.py` | 911 | **Not ported** | Whisper/audio transcription |
-| `process_registry.py` | 1476 | **Not ported** | Long-running subprocess management |
-
-### Missing Infrastructure (8 items)
-| Feature | Status |
-|---------|--------|
-| MCP tool invocation via ToolRegistry | Pending |
-| Web scrape/crawl (full extraction) | Pending |
-| Audio/transcription tools | Pending |
-| Computer use/UI interaction | Pending |
-| File upload/download with limits | Pending |
-| Gateway notification integration | Pending |
-| Tool output size limits/truncation | Pending |
-| Per-tool configurable timeouts | Pending |
+### Not Ported (remaining Python tools)
+| Python File | LOC | Priority | Notes |
+|------------|-------|----------|-------|
+| `skills_hub.py` | 3,261 | High | Skills community/hub management |
+| `mcp_oauth.py` + `mcp_oauth_manager.py` | 1,239 | High | MCP OAuth flow (blocker for auth'd MCP servers) |
+| `voice_mode.py` | 1,017 | Medium | Voice CLI mode |
+| `skills_guard.py` | 932 | Medium | Skills security policy |
+| `yuanbao_tools.py` | 736 | Low | Tencent Yuanbao (China-market) |
+| `fuzzy_match.py` | 704 | Low | Fuzzy matching util |
+| `tirith_security.py` | 691 | Medium | Security scanning tool |
+| `skill_usage.py` | 609 | Low | Skill usage analytics |
+| `microsoft_graph_auth.py` + `client.py` | 653 | Low | Microsoft Graph (enterprise) |
+| `credential_files.py` | 436 | Low | Credential file mgmt |
+| `skills_sync.py` | 431 | Low | Skills sync |
+| `schema_sanitizer.py` | 370 | **N/A** | Unneeded in Rust (compiler-enforced) |
+| `url_safety.py` | 327 | Medium | URL safety checks |
+| `website_policy.py` | 282 | Low | Website policy |
+| `tool_result_storage.py` | 232 | Low | Result persistence |
+| `browser_camofox.py` | 603 | Low | Alternative browser provider |
+| `environments/*` | ~5,100 | Low | Sandboxing layer (Docker, SSH, Modal, etc.) |
+| **Total unported** | **~17,600** | | |
 
 ## 7. Key Architecture Components
 

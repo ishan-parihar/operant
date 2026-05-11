@@ -418,7 +418,7 @@ impl TuiApp {
             &self.state.persistent.behavior,
             self.system_prompt.as_deref(),
             event_tx,
-            &mut self.mcp_manager,
+            &self.mcp_manager,
         )
         .await?;
         self.agent = Some(Arc::new(agent));
@@ -429,13 +429,18 @@ impl TuiApp {
     async fn refresh_mcp(&mut self) -> Result<()> {
         let mut items = Vec::new();
         for server in &self.state.persistent.config.mcp.servers {
-            let connected = match self.mcp_manager.get(&server.name) {
-                Some(transport) => transport.is_connected().await,
+            let transport = self.mcp_manager.get(&server.name).await;
+            let connected = match &transport {
+                Some(t) => t.is_connected().await,
                 None => false,
             };
-            let tool_count = match self.mcp_manager.get(&server.name) {
-                Some(transport) if connected => transport.get_tools().await.len(),
-                _ => 0,
+            let tool_count = if connected {
+                match &transport {
+                    Some(t) => t.get_tools().await.len(),
+                    None => 0,
+                }
+            } else {
+                0
             };
             items.push(McpServerItem {
                 name: server.name.clone(),
