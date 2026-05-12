@@ -3,6 +3,12 @@
 mod autonomous;
 pub(crate) mod config;
 mod tui;
+mod cmd_config;
+mod cmd_sessions;
+mod cmd_mcp;
+mod cmd_skills;
+mod cmd_model;
+mod cmd_completion;
 
 use std::fs::OpenOptions;
 use std::io::{self, Write};
@@ -13,8 +19,8 @@ use std::time::Duration;
 use crate::config::CliConfig;
 use anyhow::{Context, Result};
 use clap::{ArgAction, Parser, Subcommand};
-use hermes_core::agent::{AgentConfig, AgentEvent, HermesAgent};
 use hermes_core::agent::clients::openai::OpenAIModelClient;
+use hermes_core::agent::{AgentConfig, AgentEvent, HermesAgent};
 use hermes_core::client::{ClientConfig, OpenAIClient};
 use hermes_core::config::{
     install_runtime_config, load_app_config, AppConfig, BehaviorSettings, LoggingSettings,
@@ -121,6 +127,36 @@ enum Commands {
 
         #[arg(short, long)]
         args: Option<String>,
+    },
+    /// Manage configuration
+    Config {
+        #[command(subcommand)]
+        cmd: cmd_config::ConfigSubcommand,
+    },
+    /// Manage conversation sessions
+    Sessions {
+        #[command(subcommand)]
+        cmd: cmd_sessions::SessionsSubcommand,
+    },
+    /// Manage MCP servers
+    Mcp {
+        #[command(subcommand)]
+        cmd: cmd_mcp::McpSubcommand,
+    },
+    /// Manage installed skills
+    Skills {
+        #[command(subcommand)]
+        cmd: cmd_skills::SkillsSubcommand,
+    },
+    /// View or change the active model configuration
+    Model {
+        #[command(subcommand)]
+        cmd: cmd_model::ModelSubcommand,
+    },
+    /// Generate shell completion scripts
+    Completion {
+        #[command(subcommand)]
+        cmd: cmd_completion::CompletionSubcommand,
     },
 }
 
@@ -337,10 +373,14 @@ pub(crate) async fn create_runtime_agent(
     let agent_config = agent_config(config, behavior, system_prompt);
     let memory_manager = load_repo_memory_manager().await?;
 
-    Ok(
-        HermesAgent::with_events(agent_config, Box::new(OpenAIModelClient::new(raw_client)), registry, database, event_tx)
-            .with_memory_manager(memory_manager),
+    Ok(HermesAgent::with_events(
+        agent_config,
+        Box::new(OpenAIModelClient::new(raw_client)),
+        registry,
+        database,
+        event_tx,
     )
+    .with_memory_manager(memory_manager))
 }
 
 async fn create_agent_without_events(
@@ -361,8 +401,13 @@ async fn create_agent_without_events(
     let agent_config = agent_config(config, &config.agent, system_prompt);
     let memory_manager = load_repo_memory_manager().await?;
 
-    Ok(HermesAgent::new(agent_config, Box::new(OpenAIModelClient::new(raw_client)), registry, database)
-        .with_memory_manager(memory_manager))
+    Ok(HermesAgent::new(
+        agent_config,
+        Box::new(OpenAIModelClient::new(raw_client)),
+        registry,
+        database,
+    )
+    .with_memory_manager(memory_manager))
 }
 
 async fn load_repo_memory_manager() -> Result<MemoryManager> {
@@ -669,6 +714,25 @@ async fn main() -> Result<()> {
         }
         Commands::Test { tool_name, args } => {
             test_tool(&loaded.config, tool_name, args.as_deref()).await?;
+        }
+        Commands::Config { cmd } => {
+            cmd_config::handle_config_command(&loaded.config, cmd.clone()).await?;
+        }
+        Commands::Sessions { cmd } => {
+            cmd_sessions::handle_sessions_command(&loaded.config, cmd.clone()).await?;
+        }
+        Commands::Mcp { cmd } => {
+            let mcp_manager = hermes_core::mcp::McpManager::new();
+            cmd_mcp::handle_mcp_command(&loaded.config, &mcp_manager, cmd.clone()).await?;
+        }
+        Commands::Skills { cmd } => {
+            cmd_skills::handle_skills_command(&loaded.config, cmd.clone()).await?;
+        }
+        Commands::Model { cmd } => {
+            cmd_model::handle_model_command(&loaded.config, cmd.clone()).await?;
+        }
+        Commands::Completion { cmd } => {
+            cmd_completion::handle_completion_command(cmd.clone())?;
         }
     }
 
