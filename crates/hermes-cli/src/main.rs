@@ -27,6 +27,10 @@ mod cmd_uninstall;
 mod cmd_update;
 mod cmd_insights;
 mod cmd_pairing;
+mod cmd_webhook;
+mod cmd_hooks;
+mod cmd_debug;
+mod cmd_computer_use;
 
 use std::fs::OpenOptions;
 use std::io::{self, Write};
@@ -277,6 +281,26 @@ enum Commands {
     Pairing {
         #[command(subcommand)]
         cmd: cmd_pairing::PairingSubcommand,
+    },
+    /// Manage webhook subscriptions
+    Webhook {
+        #[command(subcommand)]
+        cmd: cmd_webhook::WebhookSubcommand,
+    },
+    /// Manage shell hooks
+    Hooks {
+        #[command(subcommand)]
+        cmd: cmd_hooks::HooksSubcommand,
+    },
+    /// Generate debug reports
+    Debug {
+        #[command(subcommand)]
+        cmd: cmd_debug::DebugSubcommand,
+    },
+    /// Manage the computer-use driver
+    ComputerUse {
+        #[command(subcommand)]
+        cmd: cmd_computer_use::ComputerUseSubcommand,
     },
 }
 
@@ -916,6 +940,18 @@ async fn main() -> Result<()> {
         }
         Commands::Pairing { cmd } => {
             cmd_pairing::handle_pairing_command(&loaded.config, cmd.clone()).await?;
+        }
+        Commands::Webhook { cmd } => {
+            cmd_webhook::handle_webhook_command(&loaded.config, cmd.clone()).await?;
+        }
+        Commands::Hooks { cmd } => {
+            cmd_hooks::handle_hooks_command(&loaded.config, cmd.clone()).await?;
+        }
+        Commands::Debug { cmd } => {
+            cmd_debug::handle_debug_command(&loaded.config, cmd.clone()).await?;
+        }
+        Commands::ComputerUse { cmd } => {
+            cmd_computer_use::handle_computer_use_command(&loaded.config, cmd.clone()).await?;
         }
     }
 
