@@ -273,3 +273,16 @@ impl HermesTool for CronTool {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_cron_schema() {
+        let schema = ToolSchema::from_type::<CronToolArgs>("cron", "test");
+        let json = serde_json::to_string(&schema).unwrap();
+        assert!(!json.is_empty());
+        assert_eq!(schema.name, "cron");
+    }
+}

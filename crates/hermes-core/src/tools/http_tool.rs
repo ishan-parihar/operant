@@ -157,3 +157,35 @@ impl HermesTool for HttpRequestTool {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_http_request_schema() {
+        let schema = HttpRequestTool.schema();
+        let json = serde_json::to_string(&schema).unwrap();
+        assert!(!json.is_empty());
+        assert_eq!(schema.name, "http_request");
+    }
+
+    #[tokio::test]
+    async fn test_http_request_invalid_url() {
+        let tool = HttpRequestTool;
+        let result = tool
+            .execute(json!({"url": ""}), ToolContext::default())
+            .await;
+        assert!(!result.success);
+    }
+
+    #[tokio::test]
+    async fn test_http_request_invalid_args() {
+        let tool = HttpRequestTool;
+        let result = tool
+            .execute(json!({"url": 123}), ToolContext::default())
+            .await;
+        assert!(!result.success);
+    }
+}

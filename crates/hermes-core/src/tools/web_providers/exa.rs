@@ -34,3 +34,14 @@ impl WebSearchProvider for ExaProvider {
         }).collect())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_exa_provider_name() {
+        let provider = ExaProvider::new("test-key".to_string());
+        assert_eq!(provider.name(), "exa");
+    }
+}

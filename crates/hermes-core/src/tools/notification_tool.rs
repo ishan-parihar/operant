@@ -106,3 +106,60 @@ impl HermesTool for ApprovalTool {
         )
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_notification_schema() {
+        let schema = NotificationTool.schema();
+        let json = serde_json::to_string(&schema).unwrap();
+        assert!(!json.is_empty());
+        assert_eq!(schema.name, "notify");
+    }
+
+    #[tokio::test]
+    async fn test_notification_success() {
+        let tool = NotificationTool;
+        let result = tool
+            .execute(json!({"message": "test message"}), ToolContext::default())
+            .await;
+        assert!(result.success);
+    }
+
+    #[tokio::test]
+    async fn test_notification_missing_message() {
+        let tool = NotificationTool;
+        let result = tool
+            .execute(json!({}), ToolContext::default())
+            .await;
+        assert!(!result.success);
+    }
+
+    #[test]
+    fn test_approval_schema() {
+        let schema = ApprovalTool.schema();
+        let json = serde_json::to_string(&schema).unwrap();
+        assert!(!json.is_empty());
+        assert_eq!(schema.name, "approval_request");
+    }
+
+    #[tokio::test]
+    async fn test_approval_success() {
+        let tool = ApprovalTool;
+        let result = tool
+            .execute(json!({"request": "approve this"}), ToolContext::default())
+            .await;
+        assert!(result.success);
+    }
+
+    #[tokio::test]
+    async fn test_approval_missing_request() {
+        let tool = ApprovalTool;
+        let result = tool
+            .execute(json!({}), ToolContext::default())
+            .await;
+        assert!(!result.success);
+    }
+}

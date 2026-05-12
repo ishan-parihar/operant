@@ -259,3 +259,36 @@ impl HermesTool for TranscriptionTool {
         ToolResult::success(self.name(), result)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_transcription_schema() {
+        let tool = TranscriptionTool::new();
+        let schema = tool.schema();
+        let json = serde_json::to_string(&schema).unwrap();
+        assert!(!json.is_empty());
+        assert_eq!(schema.name, "transcribe_audio");
+    }
+
+    #[tokio::test]
+    async fn test_transcription_invalid_args() {
+        let tool = TranscriptionTool::new();
+        let result = tool
+            .execute(json!({}), ToolContext::default())
+            .await;
+        assert!(!result.success);
+    }
+
+    #[tokio::test]
+    async fn test_transcription_file_not_found() {
+        let tool = TranscriptionTool::new();
+        let result = tool
+            .execute(json!({"filePath": "/nonexistent/file.mp3"}), ToolContext::default())
+            .await;
+        assert!(!result.success);
+    }
+}

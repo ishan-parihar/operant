@@ -8,6 +8,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use hermes_core::{
     agent::{AgentConfig, HermesAgent},
+    agent::clients::openai::OpenAIModelClient,
     client::{ClientConfig, OpenAIClient},
     database::Database,
     error::Result,
@@ -166,7 +167,7 @@ Use the echo tool to repeat information and the calculate tool for math."
     };
 
     let database = Arc::new(Database::init(std::path::PathBuf::from("simple_agent.db"))?);
-    let agent = HermesAgent::new(agent_config, client, registry, database);
+    let agent = HermesAgent::new(agent_config, Box::new(OpenAIModelClient::new(client)), registry, database);
 
     // Run a query
     let query = "Please use the calculate tool to compute 15 + 27, then echo the result.";

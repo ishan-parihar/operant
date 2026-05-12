@@ -123,3 +123,41 @@ impl BrowserDownloader {
             .ok_or_else(|| Error::Agent(format!("Could not find matching binary for {} on {}", arch, os)))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_find_matching_asset() {
+        let assets = vec![
+            GithubAsset {
+                name: "browser-linux-x86_64.tar.gz".to_string(),
+                browser_download_url: "https://example.com/linux.tar.gz".to_string(),
+            },
+            GithubAsset {
+                name: "browser-macos-x86_64.tar.gz".to_string(),
+                browser_download_url: "https://example.com/macos.tar.gz".to_string(),
+            },
+        ];
+
+        let os = std::env::consts::OS;
+        let result = BrowserDownloader::find_matching_asset(&assets);
+        // Should find some match depending on the current platform
+        if os == "linux" {
+            assert!(result.is_ok());
+            assert!(result.unwrap().name.contains("linux"));
+        }
+    }
+
+    #[test]
+    fn test_find_matching_asset_no_match() {
+        let assets = vec![GithubAsset {
+            name: "some-random-file.zip".to_string(),
+            browser_download_url: "https://example.com/file.zip".to_string(),
+        }];
+
+        let result = BrowserDownloader::find_matching_asset(&assets);
+        assert!(result.is_err());
+    }
+}

@@ -18,7 +18,8 @@ use tokio::sync::Mutex;
 use tokio::time::timeout;
 
 use crate::database::Database;
-use crate::agent::{AgentConfig, HermesAgent};
+use crate::agent::{AgentConfig, HermesAgent, ModelClient};
+use crate::agent::clients::openai::OpenAIModelClient;
 use crate::client::{ClientConfig, OpenAIClient};
 use crate::schema::ToolSchema;
 use crate::tools::{HermesTool, ToolContext, ToolRegistry, ToolResult};
@@ -180,10 +181,11 @@ impl SubAgentTool {
         // Determine effective toolsets based on role and parent toolsets
         let child_toolsets = self.compute_child_toolsets(effective_role);
 
-        let client = OpenAIClient::from_shared_http_client(
+        let raw_client = OpenAIClient::from_shared_http_client(
             self.client_config.clone(),
             self.http_client.clone(),
         );
+        let client: Box<dyn ModelClient> = Box::new(OpenAIModelClient::new(raw_client));
 
         let max_iters: usize = max_iterations.unwrap_or(50) as usize;
         let config = AgentConfig {

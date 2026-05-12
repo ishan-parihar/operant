@@ -330,3 +330,126 @@ fn parse_timezone_offset(tz: &str) -> i64 {
         _ => 0, // Unknown timezone, default to UTC
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_datetime_schema() {
+        let schema = DateTimeTool.schema();
+        let json = serde_json::to_string(&schema).unwrap();
+        assert!(!json.is_empty());
+        assert_eq!(schema.name, "datetime");
+    }
+
+    #[test]
+    fn test_timestamp_schema() {
+        let schema = TimestampTool.schema();
+        let json = serde_json::to_string(&schema).unwrap();
+        assert!(!json.is_empty());
+        assert_eq!(schema.name, "timestamp");
+    }
+
+    #[tokio::test]
+    async fn test_datetime_default_execution() {
+        let tool = DateTimeTool;
+        let result = tool
+            .execute(json!({}), ToolContext::default())
+            .await;
+        assert!(result.success);
+    }
+
+    #[tokio::test]
+    async fn test_datetime_with_format() {
+        let tool = DateTimeTool;
+        let result = tool
+            .execute(json!({"format": "%Y-%m-%d"}), ToolContext::default())
+            .await;
+        assert!(result.success);
+    }
+
+    #[tokio::test]
+    async fn test_datetime_with_timezone() {
+        let tool = DateTimeTool;
+        let result = tool
+            .execute(json!({"timezone": "PST"}), ToolContext::default())
+            .await;
+        assert!(result.success);
+    }
+
+    #[tokio::test]
+    async fn test_timestamp_default_execution() {
+        let tool = TimestampTool;
+        let result = tool
+            .execute(json!({}), ToolContext::default())
+            .await;
+        assert!(result.success);
+    }
+
+    #[tokio::test]
+    async fn test_timestamp_milliseconds() {
+        let tool = TimestampTool;
+        let result = tool
+            .execute(json!({"unit": "milliseconds"}), ToolContext::default())
+            .await;
+        assert!(result.success);
+    }
+
+    #[tokio::test]
+    async fn test_timestamp_invalid_args() {
+        let tool = TimestampTool;
+        let result = tool
+            .execute(json!({"unit": 123}), ToolContext::default())
+            .await;
+        assert!(!result.success);
+    }
+
+    #[test]
+    fn test_format_datetime() {
+        let formatted = format_datetime(0, 0, "%Y-%m-%d %H:%M:%S");
+        assert_eq!(formatted, "1970-01-01 00:00:00");
+    }
+
+    #[test]
+    fn test_parse_date_iso() {
+        let ts = parse_date("2024-01-15").unwrap();
+        assert!(ts > 0);
+    }
+
+    #[test]
+    fn test_parse_date_invalid() {
+        let result = parse_date("not-a-date");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_timezone_utc() {
+        assert_eq!(parse_timezone_offset("UTC"), 0);
+    }
+
+    #[test]
+    fn test_parse_timezone_pst() {
+        assert_eq!(parse_timezone_offset("PST"), -8 * 3600);
+    }
+
+    #[test]
+    fn test_parse_timezone_numeric() {
+        assert_eq!(parse_timezone_offset("+5.5"), (5 * 3600 + 1800) as i64);
+    }
+
+    #[test]
+    fn test_is_leap_year() {
+        assert!(is_leap_year(2000));
+        assert!(!is_leap_year(1900));
+        assert!(is_leap_year(2024));
+        assert!(!is_leap_year(2023));
+    }
+
+    #[test]
+    fn test_days_to_date() {
+        let (year, month, day) = days_to_date(0);
+        assert_eq!((year, month, day), (1970, 1, 1));
+    }
+}
