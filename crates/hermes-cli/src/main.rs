@@ -31,6 +31,13 @@ mod cmd_webhook;
 mod cmd_hooks;
 mod cmd_debug;
 mod cmd_computer_use;
+mod cmd_acp;
+mod cmd_claw;
+mod cmd_curator;
+mod cmd_dashboard;
+mod cmd_plugins;
+mod cmd_slack;
+mod cmd_whatsapp;
 
 use std::fs::OpenOptions;
 use std::io::{self, Write};
@@ -301,6 +308,41 @@ enum Commands {
     ComputerUse {
         #[command(subcommand)]
         cmd: cmd_computer_use::ComputerUseSubcommand,
+    },
+    /// Manage installed plugins
+    Plugins {
+        #[command(subcommand)]
+        cmd: cmd_plugins::PluginsSubcommand,
+    },
+    /// Manage the skill curator
+    Curator {
+        #[command(subcommand)]
+        cmd: cmd_curator::CuratorSubcommand,
+    },
+    /// Migrate from OpenClaw
+    Claw {
+        #[command(subcommand)]
+        cmd: cmd_claw::ClawSubcommand,
+    },
+    /// Generate a Slack app manifest
+    Slack {
+        #[command(subcommand)]
+        cmd: cmd_slack::SlackSubcommand,
+    },
+    /// Check WhatsApp status
+    Whatsapp {
+        #[command(subcommand)]
+        cmd: cmd_whatsapp::WhatsappSubcommand,
+    },
+    /// Run the ACP server
+    Acp {
+        #[command(subcommand)]
+        cmd: cmd_acp::AcpSubcommand,
+    },
+    /// Run the web dashboard
+    Dashboard {
+        #[command(subcommand)]
+        cmd: cmd_dashboard::DashboardSubcommand,
     },
 }
 
@@ -952,6 +994,27 @@ async fn main() -> Result<()> {
         }
         Commands::ComputerUse { cmd } => {
             cmd_computer_use::handle_computer_use_command(&loaded.config, cmd.clone()).await?;
+        }
+        Commands::Plugins { cmd } => {
+            cmd_plugins::handle_plugins_command(&loaded.config, cmd.clone()).await?;
+        }
+        Commands::Curator { cmd } => {
+            cmd_curator::handle_curator_command(&loaded.config, cmd.clone()).await?;
+        }
+        Commands::Claw { cmd } => {
+            cmd_claw::handle_claw_command(&loaded.config, cmd.clone()).await?;
+        }
+        Commands::Slack { cmd } => {
+            cmd_slack::handle_slack_command(&loaded.config, cmd.clone()).await?;
+        }
+        Commands::Whatsapp { cmd } => {
+            cmd_whatsapp::handle_whatsapp_command(&loaded.config, cmd.clone()).await?;
+        }
+        Commands::Acp { cmd } => {
+            cmd_acp::handle_acp_command(&loaded.config, cmd.clone()).await?;
+        }
+        Commands::Dashboard { cmd } => {
+            cmd_dashboard::handle_dashboard_command(&loaded.config, cmd.clone()).await?;
         }
     }
 
