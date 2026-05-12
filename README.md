@@ -16,13 +16,12 @@ Written entirely in Rust, `Hermes-RS` focuses on **Tolerant Parsing**, **Determi
 ## 🚩 The Problem: The "Loop Fragility" Gap
 Building a reliable agentic loop (Think $\to$ Act $\to$ Observe) is deceptively difficult in production. Standard parsers typically crash when LLMs produce malformed tool calls—such as unclosed XML tags or invalid JSON—leading to complete loop failure. Furthermore, the "Wait" bottleneck—waiting for a full LLM response before executing a tool—introduces massive latency. Finally, running agents in "Autonomous Mode" without strict validation gates often results in catastrophic workspace corruption when an agent misinterprets a command.
 
-
 ## 💡 The Solution: A Hardened Orchestration Substrate
 
-`Hermes-RS` solves these problems through four core engineering pillars:
+`Hermes-RS` solves these problems through five core engineering pillars:
 
 ### 1. Streaming-First "Tolerant" Parsing
-Instead of waiting for a complete response, `Hermes-RS` uses a custom state-machine parser that detects tool calls **incrementally**. If an LLM produces a ` <tool_call> ` but the connection drops before the closing tag, the parser can still recover the intent and initiate execution.
+Instead of waiting for a complete response, `Hermes-RS` uses a custom state-machine parser that detects tool calls **incrementally**. If an LLM produces a `<tool_call>` but the connection drops before the closing tag, the parser can still recover the intent and initiate execution.
 
 ### 2. The "Validated" Autonomous Loop
 The `hermes autonomous` mode transforms the agent into a disciplined developer. It follows a strict **Plan $\to$ Implement $\to$ Validate $\to$ Push** cycle:
@@ -30,28 +29,27 @@ The `hermes autonomous` mode transforms the agent into a disciplined developer. 
 - **Guardrails**: The agent *cannot* push to Git unless the configured `test_command` (e.g., `cargo test`) returns a success exit code.
 - **State Persistence**: Tracks progress in `autonomous-status.toml` to survive process restarts and avoid redundant work.
 
-### 3. High-Fidelity TUI (Terminal User Interface)
-Designed for "Human-in-the-Loop" monitoring, the Ratatui-based interface provides:
-- **Reasoning Rails**: Block-style rendering of model thinking.
-- **Activity Feed**: Compact, real-time logs of tool execution.
-- **Workspace Panes**: A multi-pane layout that allows the user to monitor the conversation and the agent's actions simultaneously.
+### 3. Cross-Platform Gateway Architecture
+To ensure total conversation continuity, `Hermes-RS` implements a centralized gateway process. This architecture bridges the core agent loop to multiple platforms (Telegram, Discord, Slack, etc.) through a single interface, allowing a user to start a task on the CLI and receive a completion notification via messaging without losing any state.
 
-### 4. Dynamic Tool Registry & MCP
-Implements a decoupled `ToolRegistry` that can dynamically load tools and generate JSON Schemas at runtime, making it compatible with the **Model Context Protocol (MCP)** for extended capability discovery.
+### 4. Kanban-Based Work Orchestration
+For complex, multi-agent collaboration, `Hermes-RS` provides a durable, SQLite-backed Kanban board. This allows tasks to be dispatched, claimed, and tracked across multiple profiles and worker agents, transforming the agent from a simple chatbot into a coordinated workforce.
+
+### 5. Scheduled Automations (Cron)
+Built-in cron scheduling allows for high-reliability, unattended tasks. From daily reports to nightly backups, the system handles natural-language schedules and delivers results to any connected messaging platform.
 
 ---
 
 ## Engineering Highlights
 
-### Streaming-First "Tolerant" Parsing
-To eliminate loop fragility, I implemented a custom state-machine parser that detects tool calls **incrementally**. By identifying the intent as it streams from the LLM, the server can initiate tool execution before the response is even finished. This not only slashes perceived latency but also allows the parser to recover and execute intent even if the connection drops or the LLM fails to produce a closing tag.
-
-### The "Validated" Autonomous Loop
-The `hermes autonomous` mode transforms the agent into a disciplined developer through a strict **Plan $\to$ Implement $\to$ Validate $\to$ Push** cycle. To prevent workspace corruption, I implemented a hard validation gate: the agent is physically blocked from pushing changes to Git unless the configured `test_command` (e.g., `cargo test`) returns a success exit code. This ensures that autonomous agents cannot commit broken code to the repository.
-
 ### Zero-Cost Orchestration in Rust
 By leveraging `async-trait` and `Tokio`, I built a high-concurrency orchestration substrate with minimal runtime overhead. The system uses a decoupled `ToolRegistry` to dynamically generate JSON Schemas at runtime, ensuring compatibility with the Model Context Protocol (MCP). The final binary is LTO-optimized and stripped, providing a production-grade core that remains stable and performant under heavy agentic load.
 
+### High-Fidelity TUI (Terminal User Interface)
+Designed for "Human-in-the-Loop" monitoring, the Ratatui-based interface provides:
+- **Reasoning Rails**: Block-style rendering of model thinking.
+- **Activity Feed**: Compact, real-time logs of tool execution.
+- **Workspace Panes**: A multi-pane layout that allows the user to monitor the conversation and the agent's actions simultaneously.
 
 ---
 

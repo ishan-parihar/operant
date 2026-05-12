@@ -26,6 +26,16 @@ pub enum ConfigSubcommand {
     Path,
     /// Validate the configuration for potential issues.
     Check,
+    /// Open the configuration file in the default editor.
+    Edit,
+    /// Print the path to the .env file.
+    EnvPath,
+    /// Check config version and migrate from older versions.
+    Migrate {
+        /// Actually perform the migration.
+        #[arg(long)]
+        apply: bool,
+    },
 }
 
 /// Dispatch and execute a config subcommand.
@@ -38,6 +48,9 @@ pub async fn handle_config_command(config: &AppConfig, cmd: ConfigSubcommand) ->
         ConfigSubcommand::Set { key, value } => handle_set(key, value),
         ConfigSubcommand::Path => handle_path(),
         ConfigSubcommand::Check => handle_check(config),
+        ConfigSubcommand::Edit => handle_edit(),
+        ConfigSubcommand::EnvPath => handle_env_path(),
+        ConfigSubcommand::Migrate { apply } => handle_migrate(apply),
     }
 }
 
@@ -223,6 +236,172 @@ fn handle_check(config: &AppConfig) -> Result<()> {
         for issue in &issues {
             println!("  • {}", issue);
         }
+    }
+
+    Ok(())
+}
+
+/// Open the configuration file in the default editor.
+///
+/// Uses `$EDITOR` (or `$VISUAL`) to open the config file. Falls back to
+/// `vim` on Linux/macOS and `notepad` on Windows, with `nano` as an
+/// additional secondary fallback. If no config file exists, a default one
+/// is created at the first default config path before opening.
+fn handle_edit() -> Result<()> {
+    let config_path = resolve_or_create_config_path()?;
+
+    let editor = std::env::var("VISUAL")
+        .or_else(|_| std::env::var("EDITOR"))
+        .unwrap_or_else(|_| {
+            if cfg!(target_os = "windows") {
+                "notepad".to_string()
+            } else {
+                "vim".to_string()
+            }
+        });
+
+    let status = std::process::Command::new(&editor)
+        .arg(&config_path)
+        .status()
+        .with_context(|| format!("Failed to launch editor '{}'", editor))?;
+
+    if !status.success() {
+        // Try nano as secondary fallback when the primary editor fails
+        if editor != "nano" {
+            eprintln!("Editor '{}' exited with error. Trying 'nano'…", editor);
+            let nano_status = std::process::Command::new("nano")
+                .arg(&config_path)
+                .status()
+                .with_context(|| "Failed to launch 'nano'")?;
+            if !nano_status.success() {
+                anyhow::bail!("Both '{}' and 'nano' failed. Check your $EDITOR.", editor);
+            }
+        } else {
+            anyhow::bail!("Editor '{}' exited with error.", editor);
+        }
+    }
+
+    println!("✔ Configuration file edited: {}", config_path.display());
+    Ok(())
+}
+
+/// Resolve the config file path, creating a default file if none exists.
+fn resolve_or_create_config_path() -> Result<PathBuf> {
+    if let Ok(path) = std::env::var("HERMES_CONFIG") {
+        let path = PathBuf::from(&path);
+        if !path.exists() {
+            write_default_config(&path)?;
+        }
+        return Ok(path);
+    }
+
+    let existing = hermes_core::config::default_config_paths()
+        .into_iter()
+        .find(|p| p.exists());
+
+    if let Some(path) = existing {
+        return Ok(path);
+    }
+
+    // No config exists — create a default at the first default search path.
+    let first = hermes_core::config::default_config_paths()
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| PathBuf::from("hermes.toml"));
+
+    write_default_config(&first)?;
+    println!("Created default configuration file at '{}'", first.display());
+    Ok(first)
+}
+
+/// Write a default `AppConfig` to the given path as TOML.
+fn write_default_config(path: &PathBuf) -> Result<()> {
+    let default_config = toml::to_string(&hermes_core::config::AppConfig::default())
+        .context("Failed to serialize default config")?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("Failed to create directory '{}'", parent.display()))?;
+    }
+    std::fs::write(path, &default_config)
+        .with_context(|| format!("Failed to write default config to '{}'", path.display()))?;
+    Ok(())
+}
+
+fn handle_env_path() -> Result<()> {
+    let env_path = if let Ok(config_dir) = std::env::var("HERMES_CONFIG") {
+        PathBuf::from(config_dir).join(".env")
+    } else if let Ok(config_dir) = std::env::var("HERMES_CONFIG_DIR") {
+        PathBuf::from(config_dir).join(".env")
+    } else if let Some(config_dir) = dirs::config_dir() {
+        config_dir.join("hermes").join(".env")
+    } else {
+        PathBuf::from("~/.config/hermes/.env")
+    };
+
+    if env_path.exists() {
+        let display = env_path.canonicalize().unwrap_or_else(|_| env_path.clone());
+        println!("{}", display.display());
+    } else {
+        println!("No .env file found.");
+    }
+    Ok(())
+}
+
+fn handle_migrate(apply: bool) -> Result<()> {
+    let config_path = if let Ok(path) = std::env::var("HERMES_CONFIG") {
+        PathBuf::from(&path)
+    } else {
+        hermes_core::config::default_config_paths()
+            .into_iter()
+            .find(|p| p.exists())
+            .unwrap_or_else(|| PathBuf::from("hermes.toml"))
+    };
+
+    println!("Config migration check");
+    println!("{}", "-".repeat(40));
+
+    if !config_path.exists() {
+        println!("No config file found at '{}'. Nothing to migrate.", config_path.display());
+        return Ok(());
+    }
+
+    let content = std::fs::read_to_string(&config_path)
+        .with_context(|| format!("Failed to read config file '{}'", config_path.display()))?;
+
+    let current_version = if content.contains("version") {
+        if content.contains("version = \"1\"") || content.contains("version = 1") {
+            Some(1)
+        } else {
+            Some(2)
+        }
+    } else {
+        None
+    };
+
+    println!("Config file: {}", config_path.display());
+    println!("Detected version: {:?}", current_version.unwrap_or(0));
+
+    println!();
+    println!("Available migrations:");
+    println!("  v0 -> v1: Initial version field addition");
+    println!("  v1 -> v2: MCP server configuration restructure");
+
+    let target_version = 2;
+
+    if let Some(v) = current_version {
+        if v >= target_version {
+            println!("  Config is already at the latest version (v{}).", target_version);
+        } else if apply {
+            println!("Applying migration from v{} to v{}...", v, target_version);
+            println!("(Migration logic not yet implemented)");
+        } else {
+            println!("Run with --apply to perform migration from v{} to v{}.", v, target_version);
+        }
+    } else if apply {
+        println!("Applying migration from v0 to v{}...", target_version);
+        println!("(Migration logic not yet implemented)");
+    } else {
+        println!("Run with --apply to perform migration from v0 to v{}.", target_version);
     }
 
     Ok(())

@@ -12,6 +12,7 @@ mod cmd_completion;
 mod cmd_cron;
 mod cmd_kanban;
 mod cmd_gateway;
+mod gateway_runner;
 mod cmd_checkpoints;
 mod cmd_memory;
 mod cmd_profile;
@@ -38,6 +39,8 @@ mod cmd_dashboard;
 mod cmd_plugins;
 mod cmd_slack;
 mod cmd_whatsapp;
+mod cmd_setup;
+mod cmd_tools;
 
 use std::fs::OpenOptions;
 use std::io::{self, Write};
@@ -142,9 +145,10 @@ enum Commands {
         #[arg(short, long)]
         system: Option<String>,
     },
+    /// List and manage available tools
     Tools {
-        #[arg(short, long)]
-        verbose: bool,
+        #[command(subcommand)]
+        cmd: cmd_tools::ToolsSubcommand,
     },
     Chat {
         #[arg(short, long)]
@@ -328,6 +332,17 @@ enum Commands {
     Slack {
         #[command(subcommand)]
         cmd: cmd_slack::SlackSubcommand,
+    },
+    /// Interactive setup wizard
+    Setup {
+        #[arg(long)]
+        non_interactive: bool,
+        #[arg(long)]
+        reset: bool,
+        #[arg(long)]
+        reconfigure: bool,
+        #[arg(long)]
+        quick: bool,
     },
     /// Check WhatsApp status
     Whatsapp {
@@ -892,8 +907,8 @@ async fn main() -> Result<()> {
                 chat_non_tui(&loaded.config, system.as_deref()).await?;
             }
         }
-        Commands::Tools { verbose } => {
-            list_tools(&loaded.config, *verbose).await?;
+        Commands::Tools { cmd } => {
+            cmd_tools::handle_tools_command(&loaded.config, cmd.clone()).await?;
         }
         Commands::Autonomous { system } => {
             autonomous::run_autonomous(loaded.config.clone(), system.clone()).await?;
@@ -1006,6 +1021,21 @@ async fn main() -> Result<()> {
         }
         Commands::Slack { cmd } => {
             cmd_slack::handle_slack_command(&loaded.config, cmd.clone()).await?;
+        }
+        Commands::Setup {
+            non_interactive,
+            reset,
+            reconfigure,
+            quick,
+        } => {
+            cmd_setup::handle_setup_command(
+                &loaded.config,
+                *non_interactive,
+                *reset,
+                *reconfigure,
+                *quick,
+            )
+            .await?;
         }
         Commands::Whatsapp { cmd } => {
             cmd_whatsapp::handle_whatsapp_command(&loaded.config, cmd.clone()).await?;

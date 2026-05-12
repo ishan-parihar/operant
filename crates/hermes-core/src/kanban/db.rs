@@ -131,6 +131,10 @@ impl KanbanDb {
         Ok(db)
     }
 
+    pub fn conn(&self) -> &Arc<Mutex<Connection>> {
+        &self.conn
+    }
+
     fn setup_schema(&self) -> Result<(), Error> {
         let conn = self.conn.lock().unwrap();
 
@@ -235,6 +239,13 @@ impl KanbanDb {
             CREATE INDEX IF NOT EXISTS idx_runs_task             ON task_runs(task_id, started_at);
             CREATE INDEX IF NOT EXISTS idx_runs_status           ON task_runs(status);
             CREATE INDEX IF NOT EXISTS idx_notify_task           ON kanban_notify_subs(task_id);
+
+            CREATE TABLE IF NOT EXISTS task_assignees (
+                task_id   TEXT NOT NULL,
+                assignee  TEXT NOT NULL,
+                PRIMARY KEY (task_id, assignee),
+                FOREIGN KEY(task_id) REFERENCES tasks(id)
+            );
         "#;
 
         conn.execute_batch(schema)
@@ -567,6 +578,53 @@ impl KanbanDb {
         )
         .map_err(|e| Error::Agent(format!("Failed to link tasks: {}", e)))?;
         Ok(())
+    }
+
+    pub fn unlink_tasks(&self, parent_id: &str, child_id: &str) -> Result<(), Error> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "DELETE FROM task_links WHERE parent_id = ?1 AND child_id = ?2",
+            params![parent_id, child_id],
+        )
+        .map_err(|e| Error::Agent(format!("Failed to unlink tasks: {}", e)))?;
+        Ok(())
+    }
+
+    pub fn add_assignee(&self, task_id: &str, assignee: &str) -> Result<(), Error> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT OR IGNORE INTO task_assignees (task_id, assignee) VALUES (?1, ?2)",
+            params![task_id, assignee],
+        )
+        .map_err(|e| Error::Agent(format!("Failed to add assignee: {}", e)))?;
+        Ok(())
+    }
+
+    pub fn remove_assignee(&self, task_id: &str, assignee: &str) -> Result<(), Error> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "DELETE FROM task_assignees WHERE task_id = ?1 AND assignee = ?2",
+            params![task_id, assignee],
+        )
+        .map_err(|e| Error::Agent(format!("Failed to remove assignee: {}", e)))?;
+        Ok(())
+    }
+
+    pub fn list_assignees(&self, task_id: &str) -> Result<Vec<String>, Error> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare("SELECT assignee FROM task_assignees WHERE task_id = ?1 ORDER BY assignee ASC")
+            .map_err(|e| Error::Agent(format!("Failed to prepare list_assignees: {}", e)))?;
+
+        let rows = stmt
+            .query_map(params![task_id], |row| row.get(0))
+            .map_err(|e| Error::Agent(format!("Query error: {}", e)))?;
+
+        let mut assignees = Vec::new();
+        for row in rows {
+            assignees.push(row.map_err(|e| Error::Agent(format!("Row error: {}", e)))?);
+        }
+        Ok(assignees)
     }
 
     pub fn list_comments(&self, tid: &str) -> Result<Vec<Comment>, Error> {

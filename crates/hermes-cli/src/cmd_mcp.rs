@@ -5,8 +5,9 @@
 
 use anyhow::{Context, Result};
 use clap::Subcommand;
-use hermes_core::config::{AppConfig, McpTransportKind};
+use hermes_core::config::{install_runtime_config, runtime_config, AppConfig, McpTransportKind};
 use hermes_core::mcp::McpManager;
+use serde_json::Value;
 
 /// Manage MCP (Model Context Protocol) servers
 #[derive(Debug, Clone, Subcommand)]
@@ -42,6 +43,34 @@ pub enum McpSubcommand {
     },
     /// Run Hermes as an MCP server (stub)
     Serve,
+    /// Login to an MCP server (OAuth flow)
+    Login {
+        /// MCP server name
+        name: String,
+        /// Auth URL (optional, for non-standard endpoints)
+        #[arg(long)]
+        auth_url: Option<String>,
+        /// Client ID for OAuth
+        #[arg(long)]
+        client_id: Option<String>,
+    },
+    /// Configure MCP server settings
+    Configure {
+        /// MCP server name
+        name: String,
+        /// Set the auth token
+        #[arg(long)]
+        auth_token: Option<String>,
+        /// Set the base URL
+        #[arg(long)]
+        url: Option<String>,
+        /// Set the command (for stdio servers)
+        #[arg(long)]
+        command: Option<String>,
+        /// Set args for stdio command (comma-separated)
+        #[arg(long)]
+        args: Option<String>,
+    },
 }
 
 /// Handle an MCP subcommand.
@@ -66,6 +95,18 @@ pub async fn handle_mcp_command(
         McpSubcommand::Remove { name } => handle_remove(name),
         McpSubcommand::Test { name } => handle_test(config, mcp_manager, name).await,
         McpSubcommand::Serve => handle_serve(),
+        McpSubcommand::Login {
+            name,
+            auth_url,
+            client_id,
+        } => handle_mcp_login(config, name, auth_url, client_id),
+        McpSubcommand::Configure {
+            name,
+            auth_token,
+            url,
+            command,
+            args,
+        } => handle_mcp_configure(config, name, auth_token, url, command, args),
     }
 }
 
@@ -322,5 +363,131 @@ async fn handle_test(
 
 fn handle_serve() -> Result<()> {
     println!("MCP server mode not yet implemented — use `hermes mcp serve` from the Python version");
+    Ok(())
+}
+
+/// Initiate OAuth login flow for an MCP server.
+///
+/// Since the OAuth flow requires browser interaction, this function prints
+/// instructions and optionally the auth URL for the user to visit.
+fn handle_mcp_login(
+    config: &AppConfig,
+    name: String,
+    auth_url: Option<String>,
+    client_id: Option<String>,
+) -> Result<()> {
+    let server = config.mcp.servers.iter().find(|s| s.name == name);
+
+    match server {
+        Some(srv) => {
+            println!("Initiating OAuth login for MCP server '{}' ...", name);
+            println!("  Server:       {}", srv.name);
+            println!("  Transport:    {:?}", srv.transport);
+
+            let url = auth_url.as_deref().unwrap_or(srv.url.as_deref().unwrap_or("unknown"));
+            println!();
+            println!("  To complete the OAuth flow:");
+            println!("    1. Visit: {}", url);
+            if let Some(ref cid) = client_id {
+                println!("    2. Use client ID: {}", cid);
+            }
+            println!();
+            println!("    3. After authorization, you will receive a callback with an auth code.");
+            println!("    4. Use `hermes mcp configure {} --auth-token <token>` to set the token.", name);
+        }
+        None => {
+            println!("MCP server '{}' is not configured.", name);
+            println!();
+            println!("  Add it first with `hermes mcp add {}`", name);
+            if let Some(ref url) = auth_url {
+                println!("  Or visit the auth URL directly: {}", url);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Update MCP server configuration in the runtime config.
+///
+/// Modifies settings for an existing server by name and re-installs the config
+/// so that changes take effect for the current session.
+fn handle_mcp_configure(
+    config: &AppConfig,
+    name: String,
+    auth_token: Option<String>,
+    url: Option<String>,
+    command: Option<String>,
+    args: Option<String>,
+) -> Result<()> {
+    // Check the server exists in config
+    if !config.mcp.servers.iter().any(|s| s.name == name) {
+        anyhow::bail!(
+            "No MCP server named '{}' found in config. Add it first.",
+            name
+        );
+    }
+
+    // Snapshot current runtime config, modify it, and re-install
+    let current = runtime_config();
+    let mut root =
+        serde_json::to_value(&current).context("Failed to serialise runtime config to JSON")?;
+
+    // Find the server index in the servers array
+    let servers = root
+        .get_mut("mcp")
+        .and_then(|m| m.get_mut("servers"))
+        .and_then(|s| s.as_array_mut())
+        .context("Failed to locate mcp.servers in runtime config")?;
+
+    let server_obj = servers
+        .iter_mut()
+        .find(|s| s.get("name").and_then(|n| n.as_str()) == Some(&name))
+        .context(format!("Server '{}' not found in runtime config", name))?;
+
+    let obj = server_obj
+        .as_object_mut()
+        .context("Server entry is not a JSON object")?;
+
+    let mut changed = Vec::new();
+
+    if let Some(token) = auth_token {
+        obj.insert("auth_token".to_string(), Value::String(token));
+        changed.push("auth_token");
+    }
+    if let Some(u) = url {
+        obj.insert("url".to_string(), Value::String(u));
+        changed.push("url");
+    }
+    if let Some(cmd) = command {
+        obj.insert("command".to_string(), Value::String(cmd));
+        changed.push("command");
+    }
+    if let Some(a) = args {
+        let parsed: Vec<String> = a.split(',').map(|s| s.trim().to_string()).collect();
+        let args_value: Value =
+            serde_json::to_value(&parsed).context("Failed to serialise args")?;
+        obj.insert("args".to_string(), args_value);
+        changed.push("args");
+    }
+
+    let updated: AppConfig =
+        serde_json::from_value(root).context("Failed to deserialise updated config")?;
+
+    install_runtime_config(updated);
+
+    if changed.is_empty() {
+        println!("No settings were provided to update.");
+        println!("  Usage: hermes mcp configure {} --auth-token <token> --url <url> --command <cmd> --args <args>", name);
+    } else {
+        println!("Updated MCP server '{}' configuration for this session:", name);
+        for setting in &changed {
+            println!("  • {}", setting);
+        }
+        println!();
+        println!("Note: Changes are applied to the runtime config for the current session.");
+        println!("      To make them permanent, edit your hermes.toml config file.");
+    }
+
     Ok(())
 }
