@@ -180,10 +180,7 @@ impl ContextCompressor {
         }
 
         let start = non_system.len() - max_messages;
-        let kept: Vec<Message> = non_system[start..]
-            .iter()
-            .map(|m| (*m).clone())
-            .collect();
+        let kept: Vec<Message> = non_system[start..].iter().map(|m| (*m).clone()).collect();
 
         system_messages.extend(kept);
         system_messages
@@ -287,10 +284,7 @@ mod tests {
         let result = compressor.compress(&messages);
 
         // All system messages preserved.
-        assert_eq!(
-            result.iter().filter(|m| m.role == Role::System).count(),
-            2
-        );
+        assert_eq!(result.iter().filter(|m| m.role == Role::System).count(), 2);
         // First two entries are system messages.
         assert_eq!(result[0].role, Role::System);
         assert_eq!(result[1].role, Role::System);
@@ -389,7 +383,11 @@ mod tests {
         assert!(result.len() < messages.len(), "expected truncation");
         // Last message preserved.
         assert!(
-            result.last().unwrap().content.contains("Long user message number 9"),
+            result
+                .last()
+                .unwrap()
+                .content
+                .contains("Long user message number 9"),
             "last message should be preserved"
         );
     }

@@ -1,10 +1,10 @@
 use async_trait::async_trait;
+use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::Value;
-use schemars::JsonSchema;
 
-use crate::tools::{HermesTool, ToolContext, ToolResult};
 use crate::schema::ToolSchema;
+use crate::tools::{HermesTool, ToolContext, ToolResult};
 
 pub struct BrowserDialogTool;
 
@@ -41,7 +41,10 @@ impl HermesTool for BrowserDialogTool {
         let cdp_url = match std::env::var("BROWSER_CDP_URL") {
             Ok(url) => url,
             Err(_) => {
-                return ToolResult::error(self.name(), "BROWSER_CDP_URL environment variable not set.");
+                return ToolResult::error(
+                    self.name(),
+                    "BROWSER_CDP_URL environment variable not set.",
+                );
             }
         };
 

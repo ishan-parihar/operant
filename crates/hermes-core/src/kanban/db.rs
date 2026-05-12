@@ -122,18 +122,18 @@ impl KanbanDb {
     pub fn init(path: PathBuf) -> Result<Self, Error> {
         let conn = Connection::open(path)
             .map_err(|e| Error::Agent(format!("Failed to open kanban database: {}", e)))?;
-        
+
         let db = Self {
             conn: Arc::new(Mutex::new(conn)),
         };
-        
+
         db.setup_schema()?;
         Ok(db)
     }
 
     fn setup_schema(&self) -> Result<(), Error> {
         let conn = self.conn.lock().unwrap();
-        
+
         let schema = r#"
             CREATE TABLE IF NOT EXISTS tasks (
                 id                   TEXT PRIMARY KEY,
@@ -239,58 +239,113 @@ impl KanbanDb {
 
         conn.execute_batch(schema)
             .map_err(|e| Error::Agent(format!("Failed to initialize kanban schema: {}", e)))?;
-        
+
         Ok(())
     }
 
     pub fn get_task(&self, id: &str) -> Result<Option<Task>, Error> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare("SELECT * FROM tasks WHERE id = ?1")
+        let mut stmt = conn
+            .prepare("SELECT * FROM tasks WHERE id = ?1")
             .map_err(|e| Error::Agent(format!("Failed to prepare get_task: {}", e)))?;
-        
-        let task = stmt.query_row(params![id], |row| {
-            let skills_raw: Option<String> = row.get("skills")?;
-            let skills = skills_raw.and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok());
-            
-            Ok(Task {
-                id: row.get("id")?,
-                title: row.get("title")?,
-                body: row.get("body")?,
-                assignee: row.get("assignee")?,
-                status: TaskStatus::from_str(&row.get::<_, String>("status")?).unwrap_or(TaskStatus::Todo),
-                priority: row.get("priority")?,
-                created_by: row.get("created_by")?,
-                created_at: row.get("created_at")?,
-                started_at: row.get("started_at")?,
-                completed_at: row.get("completed_at")?,
-                workspace_kind: row.get("workspace_kind")?,
-                workspace_path: row.get("workspace_path")?,
-                claim_lock: row.get("claim_lock")?,
-                claim_expires: row.get("claim_expires")?,
-                tenant: row.get("tenant")?,
-                result: row.get("result")?,
-                idempotency_key: row.get("idempotency_key")?,
-                consecutive_failures: row.get("consecutive_failures")?,
-                worker_pid: row.get("worker_pid")?,
-                last_failure_error: row.get("last_failure_error")?,
-                max_runtime_seconds: row.get("max_runtime_seconds")?,
-                last_heartbeat_at: row.get("last_heartbeat_at")?,
-                current_run_id: row.get("current_run_id")?,
-                workflow_template_id: row.get("workflow_template_id")?,
-                current_step_key: row.get("current_step_key")?,
-                skills,
-                max_retries: row.get("max_retries")?,
+
+        let task = stmt
+            .query_row(params![id], |row| {
+                let skills_raw: Option<String> = row.get("skills")?;
+                let skills = skills_raw.and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok());
+
+                Ok(Task {
+                    id: row.get("id")?,
+                    title: row.get("title")?,
+                    body: row.get("body")?,
+                    assignee: row.get("assignee")?,
+                    status: TaskStatus::from_str(&row.get::<_, String>("status")?)
+                        .unwrap_or(TaskStatus::Todo),
+                    priority: row.get("priority")?,
+                    created_by: row.get("created_by")?,
+                    created_at: row.get("created_at")?,
+                    started_at: row.get("started_at")?,
+                    completed_at: row.get("completed_at")?,
+                    workspace_kind: row.get("workspace_kind")?,
+                    workspace_path: row.get("workspace_path")?,
+                    claim_lock: row.get("claim_lock")?,
+                    claim_expires: row.get("claim_expires")?,
+                    tenant: row.get("tenant")?,
+                    result: row.get("result")?,
+                    idempotency_key: row.get("idempotency_key")?,
+                    consecutive_failures: row.get("consecutive_failures")?,
+                    worker_pid: row.get("worker_pid")?,
+                    last_failure_error: row.get("last_failure_error")?,
+                    max_runtime_seconds: row.get("max_runtime_seconds")?,
+                    last_heartbeat_at: row.get("last_heartbeat_at")?,
+                    current_run_id: row.get("current_run_id")?,
+                    workflow_template_id: row.get("workflow_template_id")?,
+                    current_step_key: row.get("current_step_key")?,
+                    skills,
+                    max_retries: row.get("max_retries")?,
+                })
             })
-        }).map_err(|e| Error::Agent(format!("Error fetching task: {}", e)))?;
-        
+            .map_err(|e| Error::Agent(format!("Error fetching task: {}", e)))?;
+
         Ok(Some(task))
     }
 
+    pub fn list_tasks(&self) -> Result<Vec<Task>, Error> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare("SELECT * FROM tasks ORDER BY created_at DESC")
+            .map_err(|e| Error::Agent(format!("Failed to prepare list_tasks: {}", e)))?;
+
+        let tasks = stmt
+            .query_map([], |row| {
+                let skills_raw: Option<String> = row.get("skills")?;
+                let skills = skills_raw.and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok());
+
+                Ok(Task {
+                    id: row.get("id")?,
+                    title: row.get("title")?,
+                    body: row.get("body")?,
+                    assignee: row.get("assignee")?,
+                    status: TaskStatus::from_str(&row.get::<_, String>("status")?)
+                        .unwrap_or(TaskStatus::Todo),
+                    priority: row.get("priority")?,
+                    created_by: row.get("created_by")?,
+                    created_at: row.get("created_at")?,
+                    started_at: row.get("started_at")?,
+                    completed_at: row.get("completed_at")?,
+                    workspace_kind: row.get("workspace_kind")?,
+                    workspace_path: row.get("workspace_path")?,
+                    claim_lock: row.get("claim_lock")?,
+                    claim_expires: row.get("claim_expires")?,
+                    tenant: row.get("tenant")?,
+                    result: row.get("result")?,
+                    idempotency_key: row.get("idempotency_key")?,
+                    consecutive_failures: row.get("consecutive_failures")?,
+                    worker_pid: row.get("worker_pid")?,
+                    last_failure_error: row.get("last_failure_error")?,
+                    max_runtime_seconds: row.get("max_runtime_seconds")?,
+                    last_heartbeat_at: row.get("last_heartbeat_at")?,
+                    current_run_id: row.get("current_run_id")?,
+                    workflow_template_id: row.get("workflow_template_id")?,
+                    current_step_key: row.get("current_step_key")?,
+                    skills,
+                    max_retries: row.get("max_retries")?,
+                })
+            })
+            .map_err(|e| Error::Agent(format!("Failed to query tasks: {}", e)))?;
+
+        let mut result = Vec::new();
+        for task in tasks {
+            result.push(task.map_err(|e| Error::Agent(format!("Error reading task row: {}", e)))?);
+        }
+        Ok(result)
+    }
+
     pub fn create_task(
-        &self, 
-        title: &str, 
-        body: Option<&str>, 
-        assignee: Option<&str>, 
+        &self,
+        title: &str,
+        body: Option<&str>,
+        assignee: Option<&str>,
         created_by: Option<&str>,
         workspace_kind: &str,
         workspace_path: Option<&str>,
@@ -304,19 +359,24 @@ impl KanbanDb {
         max_retries: Option<i32>,
     ) -> Result<String, Error> {
         let conn = self.conn.lock().unwrap();
-        
+
         if let Some(key) = idempotency_key {
-            let existing: Option<String> = conn.query_row(
-                "SELECT id FROM tasks WHERE idempotency_key = ?1 AND status != 'archived'",
-                params![key],
-                |row| row.get(0)
-            ).ok();
+            let existing: Option<String> = conn
+                .query_row(
+                    "SELECT id FROM tasks WHERE idempotency_key = ?1 AND status != 'archived'",
+                    params![key],
+                    |row| row.get(0),
+                )
+                .ok();
             if let Some(id) = existing {
                 return Ok(id);
             }
         }
 
-        let id = format!("t_{}", uuid::Uuid::new_v4().to_string()[..8].replace('-', ""));
+        let id = format!(
+            "t_{}",
+            uuid::Uuid::new_v4().to_string()[..8].replace('-', "")
+        );
         let created_at = chrono::Utc::now().timestamp();
         let status = if triage { "triage" } else { "todo" };
         let skills_json = skills.and_then(|s| serde_json::to_string(s).ok());
@@ -333,7 +393,8 @@ impl KanbanDb {
             conn.execute(
                 "INSERT INTO task_links (parent_id, child_id) VALUES (?1, ?2)",
                 params![parent, id],
-            ).map_err(|e| Error::Agent(format!("Failed to link task: {}", e)))?;
+            )
+            .map_err(|e| Error::Agent(format!("Failed to link task: {}", e)))?;
         }
 
         Ok(id)
@@ -349,52 +410,69 @@ impl KanbanDb {
         expected_run_id: Option<i64>,
     ) -> Result<bool, Error> {
         let conn = self.conn.lock().unwrap();
-        
+
         if let Some(run_id) = expected_run_id {
-            let current_run: Option<i64> = conn.query_row(
-                "SELECT current_run_id FROM tasks WHERE id = ?1",
-                params![tid],
-                |row| row.get(0),
-            ).ok();
+            let current_run: Option<i64> = conn
+                .query_row(
+                    "SELECT current_run_id FROM tasks WHERE id = ?1",
+                    params![tid],
+                    |row| row.get(0),
+                )
+                .ok();
             if current_run != Some(run_id) {
                 return Ok(false);
             }
         }
 
         let metadata_json = metadata.and_then(|m| serde_json::to_string(m).ok());
-        
+
         conn.execute(
             "UPDATE tasks SET status = 'done', completed_at = ?1, result = ?2 WHERE id = ?3",
             params![chrono::Utc::now().timestamp(), result, tid],
-        ).map_err(|e| Error::Agent(format!("Failed to complete task: {}", e)))?;
+        )
+        .map_err(|e| Error::Agent(format!("Failed to complete task: {}", e)))?;
 
         if let Some(cards) = created_cards {
             for card in cards {
                 conn.execute(
                     "INSERT INTO task_links (parent_id, child_id) VALUES (?1, ?2)",
                     params![tid, card],
-                ).map_err(|e| Error::Agent(format!("Failed to link created card: {}", e)))?;
+                )
+                .map_err(|e| Error::Agent(format!("Failed to link created card: {}", e)))?;
             }
         }
 
         conn.execute(
             "INSERT INTO task_events (task_id, run_id, kind, payload, created_at) 
              VALUES (?1, ?2, 'completed', ?3, ?4)",
-            params![tid, expected_run_id, metadata_json, chrono::Utc::now().timestamp()],
-        ).map_err(|e| Error::Agent(format!("Failed to record completion event: {}", e)))?;
+            params![
+                tid,
+                expected_run_id,
+                metadata_json,
+                chrono::Utc::now().timestamp()
+            ],
+        )
+        .map_err(|e| Error::Agent(format!("Failed to record completion event: {}", e)))?;
 
         Ok(true)
     }
 
-    pub fn block_task(&self, tid: &str, reason: &str, expected_run_id: Option<i64>) -> Result<bool, Error> {
+    pub fn block_task(
+        &self,
+        tid: &str,
+        reason: &str,
+        expected_run_id: Option<i64>,
+    ) -> Result<bool, Error> {
         let conn = self.conn.lock().unwrap();
-        
+
         if let Some(run_id) = expected_run_id {
-            let current_run: Option<i64> = conn.query_row(
-                "SELECT current_run_id FROM tasks WHERE id = ?1",
-                params![tid],
-                |row| row.get(0),
-            ).ok();
+            let current_run: Option<i64> = conn
+                .query_row(
+                    "SELECT current_run_id FROM tasks WHERE id = ?1",
+                    params![tid],
+                    |row| row.get(0),
+                )
+                .ok();
             if current_run != Some(run_id) {
                 return Ok(false);
             }
@@ -403,27 +481,42 @@ impl KanbanDb {
         conn.execute(
             "UPDATE tasks SET status = 'blocked' WHERE id = ?1",
             params![tid],
-        ).map_err(|e| Error::Agent(format!("Failed to block task: {}", e)))?;
+        )
+        .map_err(|e| Error::Agent(format!("Failed to block task: {}", e)))?;
 
-        let payload: Option<String> = serde_json::to_string(&serde_json::json!({"reason": reason})).ok();
+        let payload: Option<String> =
+            serde_json::to_string(&serde_json::json!({"reason": reason})).ok();
         conn.execute(
             "INSERT INTO task_events (task_id, run_id, kind, payload, created_at) 
              VALUES (?1, ?2, 'blocked', ?3, ?4)",
-            params![tid, expected_run_id, payload, chrono::Utc::now().timestamp()],
-        ).map_err(|e| Error::Agent(format!("Failed to record block event: {}", e)))?;
+            params![
+                tid,
+                expected_run_id,
+                payload,
+                chrono::Utc::now().timestamp()
+            ],
+        )
+        .map_err(|e| Error::Agent(format!("Failed to record block event: {}", e)))?;
 
         Ok(true)
     }
 
-    pub fn heartbeat_worker(&self, tid: &str, note: Option<&str>, expected_run_id: Option<i64>) -> Result<bool, Error> {
+    pub fn heartbeat_worker(
+        &self,
+        tid: &str,
+        note: Option<&str>,
+        expected_run_id: Option<i64>,
+    ) -> Result<bool, Error> {
         let conn = self.conn.lock().unwrap();
-        
+
         if let Some(run_id) = expected_run_id {
-            let current_run: Option<i64> = conn.query_row(
-                "SELECT current_run_id FROM tasks WHERE id = ?1",
-                params![tid],
-                |row| row.get(0),
-            ).ok();
+            let current_run: Option<i64> = conn
+                .query_row(
+                    "SELECT current_run_id FROM tasks WHERE id = ?1",
+                    params![tid],
+                    |row| row.get(0),
+                )
+                .ok();
             if current_run != Some(run_id) {
                 return Ok(false);
             }
@@ -432,7 +525,8 @@ impl KanbanDb {
         conn.execute(
             "UPDATE tasks SET last_heartbeat_at = ?1 WHERE id = ?2",
             params![chrono::Utc::now().timestamp(), tid],
-        ).map_err(|e| Error::Agent(format!("Failed to heartbeat task: {}", e)))?;
+        )
+        .map_err(|e| Error::Agent(format!("Failed to heartbeat task: {}", e)))?;
 
         let payload = note.map(|n| {
             serde_json::to_string(&serde_json::json!({ "note": n }))
@@ -442,8 +536,14 @@ impl KanbanDb {
         conn.execute(
             "INSERT INTO task_events (task_id, run_id, kind, payload, created_at) 
              VALUES (?1, ?2, 'heartbeat', ?3, ?4)",
-            params![tid, expected_run_id, payload, chrono::Utc::now().timestamp()],
-        ).map_err(|e| Error::Agent(format!("Failed to record heartbeat event: {}", e)))?;
+            params![
+                tid,
+                expected_run_id,
+                payload,
+                chrono::Utc::now().timestamp()
+            ],
+        )
+        .map_err(|e| Error::Agent(format!("Failed to record heartbeat event: {}", e)))?;
 
         Ok(true)
     }
@@ -453,8 +553,9 @@ impl KanbanDb {
         conn.execute(
             "INSERT INTO task_comments (task_id, author, body, created_at) VALUES (?1, ?2, ?3, ?4)",
             params![tid, author, body, chrono::Utc::now().timestamp()],
-        ).map_err(|e| Error::Agent(format!("Failed to add comment: {}", e)))?;
-        
+        )
+        .map_err(|e| Error::Agent(format!("Failed to add comment: {}", e)))?;
+
         Ok(conn.last_insert_rowid())
     }
 
@@ -463,7 +564,8 @@ impl KanbanDb {
         conn.execute(
             "INSERT INTO task_links (parent_id, child_id) VALUES (?1, ?2)",
             params![parent_id, child_id],
-        ).map_err(|e| Error::Agent(format!("Failed to link tasks: {}", e)))?;
+        )
+        .map_err(|e| Error::Agent(format!("Failed to link tasks: {}", e)))?;
         Ok(())
     }
 
@@ -471,17 +573,19 @@ impl KanbanDb {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare("SELECT id, task_id, author, body, created_at FROM task_comments WHERE task_id = ?1 ORDER BY created_at ASC")
             .map_err(|e| Error::Agent(format!("Failed to prepare list_comments: {}", e)))?;
-        
-        let rows = stmt.query_map(params![tid], |row| {
-            Ok(Comment {
-                id: row.get(0)?,
-                task_id: row.get(1)?,
-                author: row.get(2)?,
-                body: row.get(3)?,
-                created_at: row.get(4)?,
+
+        let rows = stmt
+            .query_map(params![tid], |row| {
+                Ok(Comment {
+                    id: row.get(0)?,
+                    task_id: row.get(1)?,
+                    author: row.get(2)?,
+                    body: row.get(3)?,
+                    created_at: row.get(4)?,
+                })
             })
-        }).map_err(|e| Error::Agent(format!("Query error: {}", e)))?;
-        
+            .map_err(|e| Error::Agent(format!("Query error: {}", e)))?;
+
         let mut comments = Vec::new();
         for row in rows {
             comments.push(row.map_err(|e| Error::Agent(format!("Row error: {}", e)))?);
@@ -493,21 +597,24 @@ impl KanbanDb {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare("SELECT id, task_id, kind, payload, created_at, run_id FROM task_events WHERE task_id = ?1 ORDER BY created_at ASC")
             .map_err(|e| Error::Agent(format!("Failed to prepare list_events: {}", e)))?;
-        
-        let rows = stmt.query_map(params![tid], |row| {
-            let payload_raw: Option<String> = row.get(3)?;
-            let payload = payload_raw.and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok());
-            
-            Ok(Event {
-                id: row.get(0)?,
-                task_id: row.get(1)?,
-                kind: row.get(2)?,
-                payload,
-                created_at: row.get(4)?,
-                run_id: row.get(5)?,
+
+        let rows = stmt
+            .query_map(params![tid], |row| {
+                let payload_raw: Option<String> = row.get(3)?;
+                let payload =
+                    payload_raw.and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok());
+
+                Ok(Event {
+                    id: row.get(0)?,
+                    task_id: row.get(1)?,
+                    kind: row.get(2)?,
+                    payload,
+                    created_at: row.get(4)?,
+                    run_id: row.get(5)?,
+                })
             })
-        }).map_err(|e| Error::Agent(format!("Query error: {}", e)))?;
-        
+            .map_err(|e| Error::Agent(format!("Query error: {}", e)))?;
+
         let mut events = Vec::new();
         for row in rows {
             events.push(row.map_err(|e| Error::Agent(format!("Row error: {}", e)))?);
@@ -517,33 +624,37 @@ impl KanbanDb {
 
     pub fn list_runs(&self, tid: &str) -> Result<Vec<Run>, Error> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare("SELECT * FROM task_runs WHERE task_id = ?1 ORDER BY started_at ASC")
+        let mut stmt = conn
+            .prepare("SELECT * FROM task_runs WHERE task_id = ?1 ORDER BY started_at ASC")
             .map_err(|e| Error::Agent(format!("Failed to prepare list_runs: {}", e)))?;
-        
-        let rows = stmt.query_map(params![tid], |row| {
-            let metadata_raw: Option<String> = row.get("metadata")?;
-            let metadata = metadata_raw.and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok());
-            
-            Ok(Run {
-                id: row.get("id")?,
-                task_id: row.get("task_id")?,
-                profile: row.get("profile")?,
-                step_key: row.get("step_key")?,
-                status: row.get("status")?,
-                claim_lock: row.get("claim_lock")?,
-                claim_expires: row.get("claim_expires")?,
-                worker_pid: row.get("worker_pid")?,
-                max_runtime_seconds: row.get("max_runtime_seconds")?,
-                last_heartbeat_at: row.get("last_heartbeat_at")?,
-                started_at: row.get("started_at")?,
-                ended_at: row.get("ended_at")?,
-                outcome: row.get("outcome")?,
-                summary: row.get("summary")?,
-                metadata,
-                error: row.get("error")?,
+
+        let rows = stmt
+            .query_map(params![tid], |row| {
+                let metadata_raw: Option<String> = row.get("metadata")?;
+                let metadata =
+                    metadata_raw.and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok());
+
+                Ok(Run {
+                    id: row.get("id")?,
+                    task_id: row.get("task_id")?,
+                    profile: row.get("profile")?,
+                    step_key: row.get("step_key")?,
+                    status: row.get("status")?,
+                    claim_lock: row.get("claim_lock")?,
+                    claim_expires: row.get("claim_expires")?,
+                    worker_pid: row.get("worker_pid")?,
+                    max_runtime_seconds: row.get("max_runtime_seconds")?,
+                    last_heartbeat_at: row.get("last_heartbeat_at")?,
+                    started_at: row.get("started_at")?,
+                    ended_at: row.get("ended_at")?,
+                    outcome: row.get("outcome")?,
+                    summary: row.get("summary")?,
+                    metadata,
+                    error: row.get("error")?,
+                })
             })
-        }).map_err(|e| Error::Agent(format!("Query error: {}", e)))?;
-        
+            .map_err(|e| Error::Agent(format!("Query error: {}", e)))?;
+
         let mut runs = Vec::new();
         for row in rows {
             runs.push(row.map_err(|e| Error::Agent(format!("Row error: {}", e)))?);
@@ -553,12 +664,14 @@ impl KanbanDb {
 
     pub fn parent_ids(&self, tid: &str) -> Result<Vec<String>, Error> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare("SELECT parent_id FROM task_links WHERE child_id = ?1")
+        let mut stmt = conn
+            .prepare("SELECT parent_id FROM task_links WHERE child_id = ?1")
             .map_err(|e| Error::Agent(format!("Failed to prepare parent_ids: {}", e)))?;
-        
-        let rows = stmt.query_map(params![tid], |row| row.get(0))
+
+        let rows = stmt
+            .query_map(params![tid], |row| row.get(0))
             .map_err(|e| Error::Agent(format!("Query error: {}", e)))?;
-        
+
         let mut parents = Vec::new();
         for row in rows {
             parents.push(row.map_err(|e| Error::Agent(format!("Row error: {}", e)))?);
@@ -568,12 +681,14 @@ impl KanbanDb {
 
     pub fn child_ids(&self, tid: &str) -> Result<Vec<String>, Error> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare("SELECT child_id FROM task_links WHERE parent_id = ?1")
+        let mut stmt = conn
+            .prepare("SELECT child_id FROM task_links WHERE parent_id = ?1")
             .map_err(|e| Error::Agent(format!("Failed to prepare child_ids: {}", e)))?;
-        
-        let rows = stmt.query_map(params![tid], |row| row.get(0))
+
+        let rows = stmt
+            .query_map(params![tid], |row| row.get(0))
             .map_err(|e| Error::Agent(format!("Query error: {}", e)))?;
-        
+
         let mut children = Vec::new();
         for row in rows {
             children.push(row.map_err(|e| Error::Agent(format!("Row error: {}", e)))?);
@@ -582,24 +697,37 @@ impl KanbanDb {
     }
 
     pub fn build_worker_context(&self, tid: &str) -> Result<String, Error> {
-        let task = self.get_task(tid)?.ok_or_else(|| Error::Agent(format!("Task {} not found", tid)))?;
+        let task = self
+            .get_task(tid)?
+            .ok_or_else(|| Error::Agent(format!("Task {} not found", tid)))?;
         let comments = self.list_comments(tid)?;
         let runs = self.list_runs(tid)?;
-        
-        let mut context = format!("Task ID: {}\nTitle: {}\nBody: {}\nAssignee: {:?}\nStatus: {:?}\n\n", 
-            task.id, task.title, task.body.as_deref().unwrap_or(""), task.assignee.as_deref().unwrap_or(""), task.status.as_str());
-        
+
+        let mut context = format!(
+            "Task ID: {}\nTitle: {}\nBody: {}\nAssignee: {:?}\nStatus: {:?}\n\n",
+            task.id,
+            task.title,
+            task.body.as_deref().unwrap_or(""),
+            task.assignee.as_deref().unwrap_or(""),
+            task.status.as_str()
+        );
+
         context.push_str("--- Comments ---\n");
         for c in comments {
-            context.push_str(&format!("**{}** ({}): {}\n", c.author, c.created_at, c.body));
+            context.push_str(&format!(
+                "**{}** ({}): {}\n",
+                c.author, c.created_at, c.body
+            ));
         }
-        
+
         context.push_str("\n--- Prior Attempts ---\n");
         for run in runs.iter().rev().take(10) {
-            context.push_str(&format!("Run {}: Status={}, Outcome={:?}, Summary={:?}\n", 
-                run.id, run.status, run.outcome, run.summary));
+            context.push_str(&format!(
+                "Run {}: Status={}, Outcome={:?}, Summary={:?}\n",
+                run.id, run.status, run.outcome, run.summary
+            ));
         }
-        
+
         Ok(context)
     }
 }

@@ -429,7 +429,8 @@ impl CredentialPool {
             cred.last_error_code = error_code;
             cred.last_error_reason = reason.map(|s| s.to_string());
             cred.last_error_message = message.map(|s| s.to_string());
-            cred.error_reset_at = Some(Utc::now() + chrono::Duration::seconds(EXHAUSTED_TTL_SECONDS as i64));
+            cred.error_reset_at =
+                Some(Utc::now() + chrono::Duration::seconds(EXHAUSTED_TTL_SECONDS as i64));
 
             info!(
                 provider = %self.provider,
@@ -513,7 +514,8 @@ impl CredentialPool {
         if value.trim().is_empty() {
             return None;
         }
-        let cred = PooledCredential::new(env_var, AuthType::ApiKey, &value, &format!("env:{env_var}"));
+        let cred =
+            PooledCredential::new(env_var, AuthType::ApiKey, &value, &format!("env:{env_var}"));
         let id = self.add(cred);
         debug!(provider = %self.provider, env_var = %env_var, "Seeded credential from env");
         Some(id)
@@ -698,10 +700,10 @@ impl schemars::JsonSchema for PooledCredential {
 /// Determine the appropriate exhaustion cooldown TTL based on HTTP status code.
 pub fn exhausted_ttl(error_code: Option<i32>) -> u64 {
     match error_code {
-        Some(401) => 300,   // 5 minutes — transient auth
-        Some(429) => 3600,  // 1 hour — rate limited
-        Some(402) => 3600,  // 1 hour — billing/quota
-        _ => 3600,          // 1 hour — default
+        Some(401) => 300,  // 5 minutes — transient auth
+        Some(429) => 3600, // 1 hour — rate limited
+        Some(402) => 3600, // 1 hour — billing/quota
+        _ => 3600,         // 1 hour — default
     }
 }
 
@@ -832,7 +834,13 @@ mod tests {
             let all = pool.list();
             all[0].id.clone()
         };
-        let next = pool.invalidate(&id, Some(429), Some("rate_limited"), Some("Too many requests"), true);
+        let next = pool.invalidate(
+            &id,
+            Some(429),
+            Some("rate_limited"),
+            Some("Too many requests"),
+            true,
+        );
         assert!(next.is_some());
         assert_eq!(next.unwrap().name, "key-2");
     }
@@ -879,13 +887,31 @@ mod tests {
 
     #[test]
     fn test_strategy_from_str() {
-        assert_eq!(PoolStrategy::from_str("fill_first"), PoolStrategy::FillFirst);
-        assert_eq!(PoolStrategy::from_str("fill-first"), PoolStrategy::FillFirst);
-        assert_eq!(PoolStrategy::from_str("round_robin"), PoolStrategy::RoundRobin);
-        assert_eq!(PoolStrategy::from_str("round-robin"), PoolStrategy::RoundRobin);
+        assert_eq!(
+            PoolStrategy::from_str("fill_first"),
+            PoolStrategy::FillFirst
+        );
+        assert_eq!(
+            PoolStrategy::from_str("fill-first"),
+            PoolStrategy::FillFirst
+        );
+        assert_eq!(
+            PoolStrategy::from_str("round_robin"),
+            PoolStrategy::RoundRobin
+        );
+        assert_eq!(
+            PoolStrategy::from_str("round-robin"),
+            PoolStrategy::RoundRobin
+        );
         assert_eq!(PoolStrategy::from_str("random"), PoolStrategy::Random);
-        assert_eq!(PoolStrategy::from_str("least_used"), PoolStrategy::LeastUsed);
-        assert_eq!(PoolStrategy::from_str("least-used"), PoolStrategy::LeastUsed);
+        assert_eq!(
+            PoolStrategy::from_str("least_used"),
+            PoolStrategy::LeastUsed
+        );
+        assert_eq!(
+            PoolStrategy::from_str("least-used"),
+            PoolStrategy::LeastUsed
+        );
         assert_eq!(PoolStrategy::from_str("unknown"), PoolStrategy::FillFirst);
     }
 
@@ -999,8 +1025,16 @@ mod tests {
     #[test]
     fn test_create_pool_from_entries() {
         let entries = vec![
-            ("key-a".to_string(), "val-a".to_string(), "env:A".to_string()),
-            ("key-b".to_string(), "val-b".to_string(), "env:B".to_string()),
+            (
+                "key-a".to_string(),
+                "val-a".to_string(),
+                "env:A".to_string(),
+            ),
+            (
+                "key-b".to_string(),
+                "val-b".to_string(),
+                "env:B".to_string(),
+            ),
         ];
         let pool = create_pool_from_entries("test", PoolStrategy::Random, entries);
         assert_eq!(pool.len(), 2);

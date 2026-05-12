@@ -36,7 +36,10 @@ pub struct ProcessSession {
 impl ProcessSession {
     fn new(command: String, cwd: Option<String>) -> Self {
         Self {
-            id: format!("proc_{}", &Uuid::new_v4().to_string().replace('-', "")[..12]),
+            id: format!(
+                "proc_{}",
+                &Uuid::new_v4().to_string().replace('-', "")[..12]
+            ),
             command,
             cwd,
             pid: None,
@@ -89,7 +92,11 @@ impl ProcessRegistry {
         }
     }
 
-    pub async fn spawn(&self, command: String, cwd: Option<String>) -> std::io::Result<ProcessSession> {
+    pub async fn spawn(
+        &self,
+        command: String,
+        cwd: Option<String>,
+    ) -> std::io::Result<ProcessSession> {
         let mut session = ProcessSession::new(command.clone(), cwd.clone());
         let sid = session.id.clone();
 
@@ -127,7 +134,8 @@ impl ProcessRegistry {
                                 let mut out = out_reader.write().await;
                                 out.push_str(&text);
                                 if out.len() > MAX_OUTPUT_CHARS {
-                                    *out = out[out.len().saturating_sub(MAX_OUTPUT_CHARS)..].to_string();
+                                    *out = out[out.len().saturating_sub(MAX_OUTPUT_CHARS)..]
+                                        .to_string();
                                 }
                                 drop(out);
                                 sleep(Duration::from_millis(1)).await;
@@ -149,7 +157,8 @@ impl ProcessRegistry {
                                 let mut out = out_reader.write().await;
                                 out.push_str(&text);
                                 if out.len() > MAX_OUTPUT_CHARS {
-                                    *out = out[out.len().saturating_sub(MAX_OUTPUT_CHARS)..].to_string();
+                                    *out = out[out.len().saturating_sub(MAX_OUTPUT_CHARS)..]
+                                        .to_string();
                                 }
                                 drop(out);
                                 sleep(Duration::from_millis(1)).await;
@@ -209,9 +218,15 @@ impl ProcessRegistry {
         None
     }
 
-    pub async fn wait(&self, session_id: &str, timeout_secs: Option<u64>) -> Option<ProcessSession> {
+    pub async fn wait(
+        &self,
+        session_id: &str,
+        timeout_secs: Option<u64>,
+    ) -> Option<ProcessSession> {
         let start = Instant::now();
-        let timeout = timeout_secs.map(Duration::from_secs).unwrap_or(Duration::from_secs(300));
+        let timeout = timeout_secs
+            .map(Duration::from_secs)
+            .unwrap_or(Duration::from_secs(300));
         loop {
             {
                 let fin_map = self.finished.read().await;
@@ -252,7 +267,8 @@ impl ProcessRegistry {
                 #[cfg(windows)]
                 {
                     let result = std::process::Command::new("taskkill")
-                        .arg("/PID").arg(pid.to_string())
+                        .arg("/PID")
+                        .arg(pid.to_string())
                         .arg("/F")
                         .output();
                     if let Err(e) = result {
@@ -284,7 +300,11 @@ impl ProcessRegistry {
             let fin_map = self.finished.read().await;
             sessions.extend(fin_map.values().cloned());
         }
-        sessions.sort_by(|a, b| b.started_at.partial_cmp(&a.started_at).unwrap_or(std::cmp::Ordering::Equal));
+        sessions.sort_by(|a, b| {
+            b.started_at
+                .partial_cmp(&a.started_at)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         sessions
     }
 
@@ -306,7 +326,10 @@ mod tests {
     #[tokio::test]
     async fn test_spawn_and_poll() {
         let registry = ProcessRegistry::new();
-        let session = registry.spawn("echo hello world".to_string(), None).await.unwrap();
+        let session = registry
+            .spawn("echo hello world".to_string(), None)
+            .await
+            .unwrap();
         assert!(session.id.starts_with("proc_"));
         assert!(session.pid.is_some());
         sleep(Duration::from_millis(500)).await;
@@ -330,8 +353,14 @@ mod tests {
     #[tokio::test]
     async fn test_list_processes() {
         let registry = ProcessRegistry::new();
-        registry.spawn("echo first".to_string(), None).await.unwrap();
-        registry.spawn("echo second".to_string(), None).await.unwrap();
+        registry
+            .spawn("echo first".to_string(), None)
+            .await
+            .unwrap();
+        registry
+            .spawn("echo second".to_string(), None)
+            .await
+            .unwrap();
         sleep(Duration::from_millis(500)).await;
         let sessions = registry.list().await;
         assert!(sessions.len() >= 2);

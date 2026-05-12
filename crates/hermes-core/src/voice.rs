@@ -185,7 +185,10 @@ pub trait AudioRecorder: Send + Sync {
     fn current_rms(&self) -> f64;
 
     /// Start recording with an optional silence callback
-    async fn start(&mut self, on_silence_stop: Option<Box<dyn FnOnce() + Send>>) -> Result<(), VoiceError>;
+    async fn start(
+        &mut self,
+        on_silence_stop: Option<Box<dyn FnOnce() + Send>>,
+    ) -> Result<(), VoiceError>;
 
     /// Stop recording and return path to audio file, or None if no audio captured
     async fn stop(&mut self) -> Result<Option<PathBuf>, VoiceError>;
@@ -242,7 +245,10 @@ impl AudioRecorder for FFmpegRecorder {
         0.0 // subprocess-based; we don't have live audio data
     }
 
-    async fn start(&mut self, on_silence_stop: Option<Box<dyn FnOnce() + Send>>) -> Result<(), VoiceError> {
+    async fn start(
+        &mut self,
+        on_silence_stop: Option<Box<dyn FnOnce() + Send>>,
+    ) -> Result<(), VoiceError> {
         if self.recording {
             return Ok(()); // already recording
         }
@@ -255,7 +261,10 @@ impl AudioRecorder for FFmpegRecorder {
             .map_err(|e| VoiceError::Recording(format!("Failed to create temp dir: {e}")))?;
 
         let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
-        let output_path = self.config.temp_dir.join(format!("recording_{timestamp}.wav"));
+        let output_path = self
+            .config
+            .temp_dir
+            .join(format!("recording_{timestamp}.wav"));
 
         // Detect available recorder: ffmpeg, arecord, or sox
         let recorder_cmd = Self::detect_recorder();
@@ -324,7 +333,10 @@ impl AudioRecorder for FFmpegRecorder {
             return Ok(None);
         }
 
-        info!("Voice recording stopped ({elapsed:.1}s, {} bytes)", metadata.len());
+        info!(
+            "Voice recording stopped ({elapsed:.1}s, {} bytes)",
+            metadata.len()
+        );
         Ok(Some(path))
     }
 
@@ -352,41 +364,75 @@ impl FFmpegRecorder {
     /// Returns (command_name, base_args_without_output_path).
     fn detect_recorder() -> (String, Vec<String>) {
         for (cmd, args) in &[
-            ("ffmpeg", vec![
-                "-f", "alsa", "-i", "default",
-                "-ar", &SAMPLE_RATE.to_string(),
-                "-ac", &CHANNELS.to_string(),
-                "-sample_fmt", "s16",
-                "-y",
-            ]),
-            ("arecord", vec![
-                "-r", &SAMPLE_RATE.to_string(),
-                "-c", &CHANNELS.to_string(),
-                "-f", "S16_LE",
-                "-t", "wav",
-                "-q",
-            ]),
-            ("sox", vec![
-                "-r", &SAMPLE_RATE.to_string(),
-                "-c", &CHANNELS.to_string(),
-                "-b", "16",
-                "-e", "signed-integer",
-                "-d",
-            ]),
+            (
+                "ffmpeg",
+                vec![
+                    "-f",
+                    "alsa",
+                    "-i",
+                    "default",
+                    "-ar",
+                    &SAMPLE_RATE.to_string(),
+                    "-ac",
+                    &CHANNELS.to_string(),
+                    "-sample_fmt",
+                    "s16",
+                    "-y",
+                ],
+            ),
+            (
+                "arecord",
+                vec![
+                    "-r",
+                    &SAMPLE_RATE.to_string(),
+                    "-c",
+                    &CHANNELS.to_string(),
+                    "-f",
+                    "S16_LE",
+                    "-t",
+                    "wav",
+                    "-q",
+                ],
+            ),
+            (
+                "sox",
+                vec![
+                    "-r",
+                    &SAMPLE_RATE.to_string(),
+                    "-c",
+                    &CHANNELS.to_string(),
+                    "-b",
+                    "16",
+                    "-e",
+                    "signed-integer",
+                    "-d",
+                ],
+            ),
         ] {
             if which::which(cmd).is_ok() {
-                return (cmd.to_string(), args.iter().map(|s| s.to_string()).collect());
+                return (
+                    cmd.to_string(),
+                    args.iter().map(|s| s.to_string()).collect(),
+                );
             }
         }
         // Default to ffmpeg even if not found (will fail with a clear error)
-        ("ffmpeg".to_string(), vec![
-            "-f".to_string(), "alsa".to_string(),
-            "-i".to_string(), "default".to_string(),
-            "-ar".to_string(), SAMPLE_RATE.to_string(),
-            "-ac".to_string(), CHANNELS.to_string(),
-            "-sample_fmt".to_string(), "s16".to_string(),
-            "-y".to_string(),
-        ])
+        (
+            "ffmpeg".to_string(),
+            vec![
+                "-f".to_string(),
+                "alsa".to_string(),
+                "-i".to_string(),
+                "default".to_string(),
+                "-ar".to_string(),
+                SAMPLE_RATE.to_string(),
+                "-ac".to_string(),
+                CHANNELS.to_string(),
+                "-sample_fmt".to_string(),
+                "s16".to_string(),
+                "-y".to_string(),
+            ],
+        )
     }
 }
 
@@ -429,20 +475,28 @@ impl AudioRecorder for TermuxRecorder {
         0.0
     }
 
-    async fn start(&mut self, _on_silence_stop: Option<Box<dyn FnOnce() + Send>>) -> Result<(), VoiceError> {
+    async fn start(
+        &mut self,
+        _on_silence_stop: Option<Box<dyn FnOnce() + Send>>,
+    ) -> Result<(), VoiceError> {
         if self.recording {
             return Ok(());
         }
 
         // Check Termux:API availability
-        let mic_cmd = which::which("termux-microphone-record")
-            .map_err(|_| VoiceError::Recording(
+        let mic_cmd = which::which("termux-microphone-record").map_err(|_| {
+            VoiceError::Recording(
                 "Termux voice capture requires termux-api package. \
-                 Install: pkg install termux-api".to_string()
-            ))?;
+                 Install: pkg install termux-api"
+                    .to_string(),
+            )
+        })?;
 
         let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
-        let output_path = self.config.temp_dir.join(format!("recording_{timestamp}.aac"));
+        let output_path = self
+            .config
+            .temp_dir
+            .join(format!("recording_{timestamp}.aac"));
 
         tokio::fs::create_dir_all(&self.config.temp_dir)
             .await
@@ -450,11 +504,16 @@ impl AudioRecorder for TermuxRecorder {
 
         let status = Command::new(&mic_cmd)
             .args([
-                "-f", &output_path.to_string_lossy(),
-                "-l", "0",
-                "-e", "aac",
-                "-r", &SAMPLE_RATE.to_string(),
-                "-c", &CHANNELS.to_string(),
+                "-f",
+                &output_path.to_string_lossy(),
+                "-l",
+                "0",
+                "-e",
+                "aac",
+                "-r",
+                &SAMPLE_RATE.to_string(),
+                "-c",
+                &CHANNELS.to_string(),
             ])
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::piped())
@@ -579,9 +638,7 @@ pub fn detect_audio_environment() -> AudioEnvironment {
     }
 
     // Container detection
-    if Path::new("/.dockerenv").exists()
-        || std::env::var("KUBERNETES_SERVICE_HOST").is_ok()
-    {
+    if Path::new("/.dockerenv").exists() || std::env::var("KUBERNETES_SERVICE_HOST").is_ok() {
         warnings.push("Running inside container -- no audio devices".to_string());
     }
 
@@ -694,7 +751,11 @@ pub struct SttResult {
 }
 
 impl SttResult {
-    pub fn success(transcript: impl Into<String>, provider: impl Into<String>, model: impl Into<String>) -> Self {
+    pub fn success(
+        transcript: impl Into<String>,
+        provider: impl Into<String>,
+        model: impl Into<String>,
+    ) -> Self {
         Self {
             success: true,
             transcript: transcript.into(),
@@ -705,7 +766,11 @@ impl SttResult {
         }
     }
 
-    pub fn filtered(transcript: impl Into<String>, provider: impl Into<String>, model: impl Into<String>) -> Self {
+    pub fn filtered(
+        transcript: impl Into<String>,
+        provider: impl Into<String>,
+        model: impl Into<String>,
+    ) -> Self {
         Self {
             success: true,
             transcript: transcript.into(),
@@ -716,7 +781,11 @@ impl SttResult {
         }
     }
 
-    pub fn error(provider: impl Into<String>, model: impl Into<String>, error: impl Into<String>) -> Self {
+    pub fn error(
+        provider: impl Into<String>,
+        model: impl Into<String>,
+        error: impl Into<String>,
+    ) -> Self {
         Self {
             success: false,
             transcript: String::new(),
@@ -778,7 +847,13 @@ impl SttEngine for WhisperEngine {
 
         // Build multipart form
         let file_part = reqwest::multipart::Part::bytes(audio_bytes)
-            .file_name(audio_path.file_name().unwrap_or_default().to_string_lossy().to_string())
+            .file_name(
+                audio_path
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string(),
+            )
             .mime_str("audio/wav")
             .map_err(|e| VoiceError::Stt(format!("Failed to create multipart: {e}")))?;
 
@@ -818,10 +893,18 @@ impl SttEngine for WhisperEngine {
         // Apply hallucination filter
         if is_whisper_hallucination(&transcript) {
             info!("Filtered Whisper hallucination: {transcript:?}");
-            return Ok(SttResult::filtered("", self.provider().as_str(), &self.model));
+            return Ok(SttResult::filtered(
+                "",
+                self.provider().as_str(),
+                &self.model,
+            ));
         }
 
-        Ok(SttResult::success(&transcript, self.provider().as_str(), &self.model))
+        Ok(SttResult::success(
+            &transcript,
+            self.provider().as_str(),
+            &self.model,
+        ))
     }
 
     fn provider(&self) -> SttProvider {
@@ -910,7 +993,11 @@ impl SttEngine for GoogleSttEngine {
             .map(|a| a.transcript)
             .unwrap_or_default();
 
-        Ok(SttResult::success(&transcript, self.provider().as_str(), "latest_short"))
+        Ok(SttResult::success(
+            &transcript,
+            self.provider().as_str(),
+            "latest_short",
+        ))
     }
 
     fn provider(&self) -> SttProvider {
@@ -953,7 +1040,10 @@ impl SttEngine for AzureSttEngine {
             .client
             .post(&url)
             .header("Ocp-Apim-Subscription-Key", &self.api_key)
-            .header("Content-Type", "audio/wav; codecs=audio/pcm; samplerate=16000")
+            .header(
+                "Content-Type",
+                "audio/wav; codecs=audio/pcm; samplerate=16000",
+            )
             .body(audio_bytes)
             .send()
             .await
@@ -979,7 +1069,11 @@ impl SttEngine for AzureSttEngine {
             .map_err(|e| VoiceError::Stt(format!("Failed to parse Azure STT response: {e}")))?;
 
         let transcript = resp.DisplayText.unwrap_or_default();
-        Ok(SttResult::success(&transcript, self.provider().as_str(), "azure-stt"))
+        Ok(SttResult::success(
+            &transcript,
+            self.provider().as_str(),
+            "azure-stt",
+        ))
     }
 
     fn provider(&self) -> SttProvider {
@@ -1067,7 +1161,9 @@ impl SttEngine for AssemblyAIEngine {
 
         loop {
             if start.elapsed() > timeout {
-                return Err(VoiceError::Stt("AssemblyAI transcription timed out".to_string()));
+                return Err(VoiceError::Stt(
+                    "AssemblyAI transcription timed out".to_string(),
+                ));
             }
 
             let poll_resp = self
@@ -1093,7 +1189,11 @@ impl SttEngine for AssemblyAIEngine {
             match poll.status.as_str() {
                 "completed" => {
                     let transcript = poll.text.unwrap_or_default();
-                    return Ok(SttResult::success(&transcript, self.provider().as_str(), "assemblyai"));
+                    return Ok(SttResult::success(
+                        &transcript,
+                        self.provider().as_str(),
+                        "assemblyai",
+                    ));
                 }
                 "error" => {
                     return Err(VoiceError::Stt(format!(
@@ -1184,7 +1284,11 @@ impl SttEngine for DeepgramEngine {
             .map(|a| a.transcript)
             .unwrap_or_default();
 
-        Ok(SttResult::success(&transcript, self.provider().as_str(), "nova-2"))
+        Ok(SttResult::success(
+            &transcript,
+            self.provider().as_str(),
+            "nova-2",
+        ))
     }
 
     fn provider(&self) -> SttProvider {
@@ -1202,7 +1306,8 @@ impl SttEngine for LocalSttEngine {
     async fn transcribe(&self, _audio_path: &Path) -> Result<SttResult, VoiceError> {
         Err(VoiceError::Stt(
             "Local STT not yet implemented in Rust. \
-             Use a remote provider or the Python hermes-agent".to_string(),
+             Use a remote provider or the Python hermes-agent"
+                .to_string(),
         ))
     }
 
@@ -1246,9 +1351,9 @@ pub fn create_stt_engine(config: &VoiceConfig) -> Result<Box<dyn SttEngine>, Voi
             Ok(Box::new(AzureSttEngine::new(key, region)))
         }
         SttProvider::AssemblyAI => {
-            let key = config
-                .resolve_assemblyai_key()
-                .ok_or_else(|| VoiceError::Stt("AssemblyAI requires ASSEMBLYAI_API_KEY".to_string()))?;
+            let key = config.resolve_assemblyai_key().ok_or_else(|| {
+                VoiceError::Stt("AssemblyAI requires ASSEMBLYAI_API_KEY".to_string())
+            })?;
             Ok(Box::new(AssemblyAIEngine::new(key)))
         }
         SttProvider::Deepgram => {
@@ -1333,14 +1438,12 @@ pub async fn transcribe_recording(
     let result = engine.transcribe(audio_path).await?;
 
     // Double-check even if engine didn't filter
-    if result.success && !result.transcript.is_empty() && is_whisper_hallucination(&result.transcript)
+    if result.success
+        && !result.transcript.is_empty()
+        && is_whisper_hallucination(&result.transcript)
     {
         info!("Filtered Whisper hallucination: {:?}", result.transcript);
-        return Ok(SttResult::filtered(
-            "",
-            result.provider,
-            result.model,
-        ));
+        return Ok(SttResult::filtered("", result.provider, result.model));
     }
 
     Ok(result)
@@ -1426,10 +1529,7 @@ impl ElevenLabsEngine {
 #[async_trait::async_trait]
 impl TtsEngine for ElevenLabsEngine {
     async fn synthesize(&self, text: &str) -> Result<Vec<u8>, VoiceError> {
-        let url = format!(
-            "https://api.elevenlabs.io/v1/text-to-speech/{}",
-            self.voice
-        );
+        let url = format!("https://api.elevenlabs.io/v1/text-to-speech/{}", self.voice);
 
         let body = serde_json::json!({
             "text": text,
@@ -1508,9 +1608,12 @@ impl TtsEngine for EdgeTtsEngine {
 
             let status = Command::new(&edge_tts)
                 .args([
-                    "--text", text,
-                    "--voice", &self.voice,
-                    "--write-media", &output_path.to_string_lossy(),
+                    "--text",
+                    text,
+                    "--voice",
+                    &self.voice,
+                    "--write-media",
+                    &output_path.to_string_lossy(),
                 ])
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
@@ -1870,10 +1973,12 @@ impl TtsEngine for LocalTtsEngine {
                 .map_err(|e| VoiceError::Tts(format!("Failed to create WAV writer: {e}")))?;
             for &sample in &f32_samples {
                 let s = (sample * i16::MAX as f32).clamp(i16::MIN as f32, i16::MAX as f32) as i16;
-                writer.write_sample(s)
+                writer
+                    .write_sample(s)
                     .map_err(|e| VoiceError::Tts(format!("Failed to write sample: {e}")))?;
             }
-            writer.finalize()
+            writer
+                .finalize()
                 .map_err(|e| VoiceError::Tts(format!("Failed to finalize WAV: {e}")))?;
         }
         Ok(cursor.into_inner())
@@ -1891,29 +1996,45 @@ pub fn create_tts_engine(config: &VoiceConfig) -> Result<Box<dyn TtsEngine>, Voi
     let provider = TtsProvider::from_str(&config.tts_provider);
     match provider {
         TtsProvider::ElevenLabs => {
-            let key = config
-                .resolve_elevenlabs_key()
-                .ok_or_else(|| VoiceError::Tts("ElevenLabs requires ELEVENLABS_API_KEY".to_string()))?;
-            Ok(Box::new(ElevenLabsEngine::new(key, config.tts_voice.clone())))
+            let key = config.resolve_elevenlabs_key().ok_or_else(|| {
+                VoiceError::Tts("ElevenLabs requires ELEVENLABS_API_KEY".to_string())
+            })?;
+            Ok(Box::new(ElevenLabsEngine::new(
+                key,
+                config.tts_voice.clone(),
+            )))
         }
         TtsProvider::Google => {
             let key = config
                 .resolve_google_key()
                 .ok_or_else(|| VoiceError::Tts("Google TTS requires GOOGLE_API_KEY".to_string()))?;
-            Ok(Box::new(GoogleTtsEngine::new(key, config.tts_voice.clone())))
+            Ok(Box::new(GoogleTtsEngine::new(
+                key,
+                config.tts_voice.clone(),
+            )))
         }
         TtsProvider::Azure => {
             let key = config
                 .resolve_azure_key()
                 .ok_or_else(|| VoiceError::Tts("Azure TTS requires AZURE_API_KEY".to_string()))?;
-            let region = config.azure_region.clone().unwrap_or_else(|| "westus".to_string());
-            Ok(Box::new(AzureTtsEngine::new(key, region, config.tts_voice.clone())))
+            let region = config
+                .azure_region
+                .clone()
+                .unwrap_or_else(|| "westus".to_string());
+            Ok(Box::new(AzureTtsEngine::new(
+                key,
+                region,
+                config.tts_voice.clone(),
+            )))
         }
         TtsProvider::OpenAI => {
             let key = config
                 .resolve_openai_key()
                 .ok_or_else(|| VoiceError::Tts("OpenAI TTS requires OPENAI_API_KEY".to_string()))?;
-            Ok(Box::new(OpenaiTtsEngine::new(key, config.tts_voice.clone())))
+            Ok(Box::new(OpenaiTtsEngine::new(
+                key,
+                config.tts_voice.clone(),
+            )))
         }
         TtsProvider::Edge => Ok(Box::new(EdgeTtsEngine::new(config.tts_voice.clone()))),
         TtsProvider::Custom => {
@@ -1981,7 +2102,13 @@ pub struct VoiceSession {
     event_rx: Option<mpsc::Receiver<VoiceEvent>>,
     state_change: Arc<Notify>,
     /// Callback invoked when transcription is complete
-    on_transcription: Option<Arc<dyn Fn(SttResult) -> Pin<Box<dyn std::future::Future<Output = ()> + Send>> + Send + Sync>>,
+    on_transcription: Option<
+        Arc<
+            dyn Fn(SttResult) -> Pin<Box<dyn std::future::Future<Output = ()> + Send>>
+                + Send
+                + Sync,
+        >,
+    >,
 }
 
 impl VoiceSession {
@@ -2060,7 +2187,10 @@ impl VoiceSession {
     /// This processes events and manages state transitions. Call this in a
     /// spawned task or directly in an async context.
     pub async fn run(&mut self) {
-        let mut event_rx = self.event_rx.take().expect("VoiceSession event receiver already taken");
+        let mut event_rx = self
+            .event_rx
+            .take()
+            .expect("VoiceSession event receiver already taken");
         let state = self.state.clone();
         let state_change = self.state_change.clone();
 
@@ -2345,15 +2475,14 @@ pub fn read_wav_samples(path: &Path) -> Result<(Vec<f32>, u32), VoiceError> {
                 .filter_map(|s| s.ok())
                 .map(|s| s as f32 / 2147483648.0)
                 .collect(),
-            _ => return Err(VoiceError::Recording(format!(
-                "Unsupported bits per sample: {}",
-                spec.bits_per_sample
-            ))),
+            _ => {
+                return Err(VoiceError::Recording(format!(
+                    "Unsupported bits per sample: {}",
+                    spec.bits_per_sample
+                )))
+            }
         },
-        hound::SampleFormat::Float => reader
-            .samples::<f32>()
-            .filter_map(|s| s.ok())
-            .collect(),
+        hound::SampleFormat::Float => reader.samples::<f32>().filter_map(|s| s.ok()).collect(),
     };
 
     Ok((samples, spec.sample_rate))
@@ -2419,7 +2548,10 @@ pub enum VoiceError {
 // ---------------------------------------------------------------------------
 
 /// Remove old temporary voice recording files
-pub async fn cleanup_temp_recordings(temp_dir: &Path, max_age_seconds: u64) -> std::io::Result<u64> {
+pub async fn cleanup_temp_recordings(
+    temp_dir: &Path,
+    max_age_seconds: u64,
+) -> std::io::Result<u64> {
     if !tokio::fs::try_exists(temp_dir).await.unwrap_or(false) {
         return Ok(0);
     }

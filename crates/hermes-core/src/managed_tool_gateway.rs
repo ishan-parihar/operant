@@ -261,12 +261,7 @@ impl ManagedToolGateway {
     /// * `tool_name` — The tool to target.
     /// * `action`    — The endpoint action (e.g. `"query"`, `"execute"`).
     /// * `params`    — JSON body to send.
-    pub async fn call_tool(
-        &self,
-        tool_name: &str,
-        action: &str,
-        params: Value,
-    ) -> Result<Value> {
+    pub async fn call_tool(&self, tool_name: &str, action: &str, params: Value) -> Result<Value> {
         let url = self.resolve_url(tool_name, action);
         let mut req = self.client.post(&url).json(&params);
 
@@ -361,9 +356,7 @@ impl ManagedToolGateway {
         let status = resp.status();
         if !status.is_success() {
             let body = resp.text().await.unwrap_or_default();
-            anyhow::bail!(
-                "Failed to get tool info for '{tool_name}': {status} — {body}"
-            );
+            anyhow::bail!("Failed to get tool info for '{tool_name}': {status} — {body}");
         }
 
         resp.json()
@@ -410,9 +403,7 @@ impl ManagedToolGateway {
         }
 
         // Fall back to configured api_key for well-known names
-        if token_name.eq_ignore_ascii_case("default")
-            || token_name.eq_ignore_ascii_case("api")
-        {
+        if token_name.eq_ignore_ascii_case("default") || token_name.eq_ignore_ascii_case("api") {
             if let Some(ref key) = self.config.api_key {
                 return Ok(key.clone());
             }
@@ -509,11 +500,12 @@ pub fn read_nous_access_token(gateway: &ManagedToolGateway) -> Result<String> {
     }
 
     // 2. Fall back to gateway's configured API key
-    gateway
-        .config
-        .api_key
-        .clone()
-        .ok_or_else(|| anyhow::anyhow!("No Nous access token available: {} not set and no api_key configured", TOOL_GATEWAY_USER_TOKEN_ENV))
+    gateway.config.api_key.clone().ok_or_else(|| {
+        anyhow::anyhow!(
+            "No Nous access token available: {} not set and no api_key configured",
+            TOOL_GATEWAY_USER_TOKEN_ENV
+        )
+    })
 }
 
 /// Resolve a full `ManagedToolGateway` configuration for a given vendor.
@@ -638,10 +630,7 @@ mod tests {
     #[tokio::test]
     async fn test_check_health_failure() {
         let mut server = Server::new_async().await;
-        let mock = server
-            .mock("GET", "/health")
-            .with_status(503)
-            .create();
+        let mock = server.mock("GET", "/health").with_status(503).create();
 
         let gateway = mock_gateway(&server);
         let healthy = gateway.check_health().await.unwrap();

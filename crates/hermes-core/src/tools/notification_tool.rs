@@ -43,7 +43,7 @@ impl HermesTool for NotificationTool {
         };
 
         let title = args.get("title").and_then(|v| v.as_str());
-        
+
         info!(message = %message, title = ?title, "Sending notification");
 
         ToolResult::success(
@@ -131,9 +131,7 @@ mod tests {
     #[tokio::test]
     async fn test_notification_missing_message() {
         let tool = NotificationTool;
-        let result = tool
-            .execute(json!({}), ToolContext::default())
-            .await;
+        let result = tool.execute(json!({}), ToolContext::default()).await;
         assert!(!result.success);
     }
 
@@ -157,9 +155,7 @@ mod tests {
     #[tokio::test]
     async fn test_approval_missing_request() {
         let tool = ApprovalTool;
-        let result = tool
-            .execute(json!({}), ToolContext::default())
-            .await;
+        let result = tool.execute(json!({}), ToolContext::default()).await;
         assert!(!result.success);
     }
 }

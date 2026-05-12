@@ -94,10 +94,7 @@ impl HermesTool for OpenRouterTool {
         let args: OpenRouterArgs = match serde_json::from_value(args) {
             Ok(a) => a,
             Err(e) => {
-                return ToolResult::error(
-                    "openrouter_query",
-                    format!("Invalid arguments: {}", e),
-                )
+                return ToolResult::error("openrouter_query", format!("Invalid arguments: {}", e))
             }
         };
 
@@ -156,10 +153,7 @@ impl HermesTool for OpenRouterTool {
         {
             Ok(r) => r,
             Err(e) => {
-                return ToolResult::error(
-                    "openrouter_query",
-                    format!("Request failed: {}", e),
-                )
+                return ToolResult::error("openrouter_query", format!("Request failed: {}", e))
             }
         };
 
@@ -187,7 +181,8 @@ impl HermesTool for OpenRouterTool {
         if let Some(err) = response_body.error {
             return ToolResult::error(
                 "openrouter_query",
-                err.message.unwrap_or_else(|| "Unknown API error".to_string()),
+                err.message
+                    .unwrap_or_else(|| "Unknown API error".to_string()),
             );
         }
 

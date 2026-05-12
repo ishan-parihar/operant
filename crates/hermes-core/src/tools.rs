@@ -26,70 +26,72 @@ pub mod http_tool;
 pub mod image_generation_tool;
 pub mod kanban_tool;
 pub mod mcp_tool;
-pub mod neutts_synth;
 pub mod memory_tools;
-pub mod process_tool;
 pub mod mixture_of_agents_tool;
+pub mod neutts_synth;
 pub mod notification_tool;
 pub mod openrouter_client;
 pub mod osv_check;
 pub mod patch_tool;
+pub mod process_tool;
 pub mod rl_training_tool;
-pub mod session_search_tool;
 pub mod send_message_tool;
-pub mod slash_confirm;
+pub mod session_search_tool;
 pub mod skills_tool;
+pub mod slash_confirm;
 pub mod spotify_tool;
-pub mod tool_backend_helpers;
-pub mod tool_output_limits;
 pub mod sub_agent_tool;
 pub mod terminal_tool;
 pub mod todo_tool;
+pub mod tool_backend_helpers;
+pub mod tool_output_limits;
 pub mod transcription_tool;
 pub mod tts_tool;
 pub mod video_analysis_tool;
 pub mod vision_tool;
-pub mod web_tools;
 pub mod web_providers;
+pub mod web_tools;
 pub mod xai_http;
 
 pub use web_providers::{
     DDGProvider, ExaProvider, SearXNGProvider, TavilyProvider, WebSearchProvider, WebSearchResult,
 };
-pub mod feishu_tool;
 pub mod discord_tool;
+pub mod feishu_tool;
 pub mod home_assistant_tool;
 
 // Re-export commonly used types
+pub use browser_cdp_tool::BrowserCdpTool;
+pub use browser_dialog_tool::BrowserDialogTool;
 pub use builtin::{
-    builtin_tool_names, register_builtin_tools, register_builtin_tools_with_sub_agent, ClarifyTool,
-    CodeExecutionTool, DateTimeTool, FileListTool, FileReadTool, FileSearchTool, FileWriteTool,
-    HttpRequestTool, ImageGenerationTool, MemoryRecallTool, MemorySearchTool, MemoryStoreTool,
-    ApprovalTool, PatchTool, SubAgentTool, TerminalTool, TimestampTool, TodoTool, TtsTool,
-    VideoAnalysisTool, VisionTool, WebFetchTool, WebSearchTool,
+    builtin_tool_names, register_builtin_tools, register_builtin_tools_with_sub_agent,
+    ApprovalTool, ClarifyTool, CodeExecutionTool, DateTimeTool, FileListTool, FileReadTool,
+    FileSearchTool, FileWriteTool, HttpRequestTool, ImageGenerationTool, MemoryRecallTool,
+    MemorySearchTool, MemoryStoreTool, PatchTool, SubAgentTool, TerminalTool, TimestampTool,
+    TodoTool, TtsTool, VideoAnalysisTool, VisionTool, WebFetchTool, WebSearchTool,
 };
-pub use checkpoint_tool::{CheckpointTool, get_checkpoint_manager, CheckpointManager, CheckpointConfig, Checkpoint};
+pub use checkpoint_tool::{
+    get_checkpoint_manager, Checkpoint, CheckpointConfig, CheckpointManager, CheckpointTool,
+};
+pub use computer_use_tool::ComputerUseTool;
 pub use cron_tool::CronTool;
-pub use kanban_tool::KanbanTool;
-pub use mcp_tool::McpManagementTool;
-pub use process_tool::ProcessTool;
-pub use transcription_tool::TranscriptionTool;
-pub use session_search_tool::{SessionSearchTool, SessionMeta, SessionResult};
-pub use skills_tool::{SkillsTool, SkillViewTool};
 pub use discord_tool::{DiscordAdminTool, DiscordTool};
 pub use feishu_tool::{FeishuDocTool, FeishuDriveTool};
 pub use home_assistant_tool::HomeAssistantTool;
-pub use send_message_tool::SendMessageTool;
-pub use osv_check::OsvCheckTool;
-pub use browser_dialog_tool::BrowserDialogTool;
-pub use browser_cdp_tool::BrowserCdpTool;
-pub use computer_use_tool::ComputerUseTool;
+pub use kanban_tool::KanbanTool;
+pub use mcp_tool::McpManagementTool;
 pub use mixture_of_agents_tool::MixtureOfAgentsTool;
+pub use osv_check::OsvCheckTool;
+pub use process_tool::ProcessTool;
 pub use rl_training_tool::RlTrainingTool;
+pub use send_message_tool::SendMessageTool;
+pub use session_search_tool::{SessionMeta, SessionResult, SessionSearchTool};
+pub use skills_tool::{SkillViewTool, SkillsTool};
 pub use spotify_tool::{
-    SpotifyPlaybackTool, SpotifyDevicesTool, SpotifyQueueTool, SpotifySearchTool,
-    SpotifyPlaylistsTool, SpotifyAlbumsTool, SpotifyLibraryTool,
+    SpotifyAlbumsTool, SpotifyDevicesTool, SpotifyLibraryTool, SpotifyPlaybackTool,
+    SpotifyPlaylistsTool, SpotifyQueueTool, SpotifySearchTool,
 };
+pub use transcription_tool::TranscriptionTool;
 
 use std::collections::HashMap;
 use std::sync::Arc;

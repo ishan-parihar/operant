@@ -346,9 +346,8 @@ async fn auto_install_tirith() -> Result<PathBuf> {
     })?;
 
     let archive_name = format!("tirith-{target}.tar.gz");
-    let archive_url = format!(
-        "https://github.com/sheeki03/tirith/releases/latest/download/{archive_name}"
-    );
+    let archive_url =
+        format!("https://github.com/sheeki03/tirith/releases/latest/download/{archive_name}");
 
     let dest_dir = platform::hermes_data_dir().join("bin");
     tokio::fs::create_dir_all(&dest_dir).await?;
@@ -405,9 +404,8 @@ async fn auto_install_tirith() -> Result<PathBuf> {
     }
 
     // Find the tirith binary
-    let binary = find_tirith_in_dir(&extract_dir).ok_or_else(|| {
-        Error::Agent("tirith binary not found in extracted archive".into())
-    })?;
+    let binary = find_tirith_in_dir(&extract_dir)
+        .ok_or_else(|| Error::Agent("tirith binary not found in extracted archive".into()))?;
 
     // Copy to destination and make executable
     let dest_path = dest_dir.join("tirith");
@@ -463,9 +461,8 @@ fn find_tirith_in_dir(dir: &Path) -> Option<PathBuf> {
 ///   hostname itself is on the always-blocked list.
 /// - `Err` — DNS resolution failed (fail-closed).
 pub async fn check_url_safety(url: &str) -> Result<bool> {
-    let parsed = url::Url::parse(url).map_err(|e| {
-        Error::InvalidUrl(format!("failed to parse URL '{url}': {e}"))
-    })?;
+    let parsed = url::Url::parse(url)
+        .map_err(|e| Error::InvalidUrl(format!("failed to parse URL '{url}': {e}")))?;
 
     let hostname = parsed
         .host_str()
@@ -489,12 +486,10 @@ pub async fn check_url_safety(url: &str) -> Result<bool> {
 
     // Resolve the hostname to socket addresses.
     let addr_str = format!("{hostname}:0");
-    let addrs = tokio::net::lookup_host(&addr_str)
-        .await
-        .map_err(|e| {
-            warn!(hostname = %hostname, error = %e, "DNS resolution failed for URL safety check");
-            Error::Io(e)
-        })?;
+    let addrs = tokio::net::lookup_host(&addr_str).await.map_err(|e| {
+        warn!(hostname = %hostname, error = %e, "DNS resolution failed for URL safety check");
+        Error::Io(e)
+    })?;
 
     for addr in addrs {
         if is_blocked_ip(addr.ip()) {
@@ -636,7 +631,11 @@ async fn do_check_osv(package_name: &str, version: &str) -> Result<Vec<OsvAdviso
                         .unwrap_or(false)
                 })
                 .map(|v| OsvAdvisory {
-                    id: v.get("id").and_then(|id| id.as_str()).unwrap_or("").to_string(),
+                    id: v
+                        .get("id")
+                        .and_then(|id| id.as_str())
+                        .unwrap_or("")
+                        .to_string(),
                     summary: v
                         .get("summary")
                         .and_then(|s| s.as_str())
@@ -722,17 +721,23 @@ mod tests {
 
     #[test]
     fn test_is_blocked_ip_v6_loopback() {
-        assert!(is_blocked_ip(IpAddr::V6(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1))));
+        assert!(is_blocked_ip(IpAddr::V6(Ipv6Addr::new(
+            0, 0, 0, 0, 0, 0, 0, 1
+        ))));
     }
 
     #[test]
     fn test_is_blocked_ip_v6_private() {
-        assert!(is_blocked_ip(IpAddr::V6(Ipv6Addr::new(0xfd00, 0, 0, 0, 0, 0, 0, 1))));
+        assert!(is_blocked_ip(IpAddr::V6(Ipv6Addr::new(
+            0xfd00, 0, 0, 0, 0, 0, 0, 1
+        ))));
     }
 
     #[test]
     fn test_is_blocked_ip_v6_public() {
-        assert!(!is_blocked_ip(IpAddr::V6(Ipv6Addr::new(0x2001, 0x4860, 0x4860, 0, 0, 0, 0, 0x8888))));
+        assert!(!is_blocked_ip(IpAddr::V6(Ipv6Addr::new(
+            0x2001, 0x4860, 0x4860, 0, 0, 0, 0, 0x8888
+        ))));
     }
 
     // ---- tirith_security tests ---------------------------------------------
@@ -887,9 +892,7 @@ mod tests {
 
     #[test]
     fn test_find_tirith_in_dir_nonexistent() {
-        assert!(
-            find_tirith_in_dir(Path::new("/tmp/nonexistent_dir_xyz_123_test")).is_none()
-        );
+        assert!(find_tirith_in_dir(Path::new("/tmp/nonexistent_dir_xyz_123_test")).is_none());
     }
 
     #[test]
@@ -902,8 +905,7 @@ mod tests {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&binary_path, std::fs::Permissions::from_mode(0o755))
-                .unwrap();
+            std::fs::set_permissions(&binary_path, std::fs::Permissions::from_mode(0o755)).unwrap();
         }
 
         let found = find_tirith_in_dir(&dir);
@@ -931,11 +933,7 @@ mod tests {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(
-                &binary_path,
-                std::fs::Permissions::from_mode(0o755),
-            )
-            .unwrap();
+            std::fs::set_permissions(&binary_path, std::fs::Permissions::from_mode(0o755)).unwrap();
         }
 
         let old_path = std::env::var_os("PATH");

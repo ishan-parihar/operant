@@ -388,7 +388,11 @@ impl SendMessageTool {
 
                     // Slack returns 200 even for application-level errors.
                     let slack_resp: Value = resp.json().await.unwrap_or_default();
-                    if slack_resp.get("ok").and_then(|v| v.as_bool()).unwrap_or(false) {
+                    if slack_resp
+                        .get("ok")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false)
+                    {
                         results.push(json!({"chunk": chunk, "status": "sent"}));
                     } else {
                         let err = slack_resp
@@ -427,7 +431,10 @@ impl SendMessageTool {
         if reqwest::Url::parse(url).is_err() {
             return ToolResult::error(
                 "send_message",
-                format!("Invalid webhook URL: '{}'. Must be a valid HTTP or HTTPS URL.", url),
+                format!(
+                    "Invalid webhook URL: '{}'. Must be a valid HTTP or HTTPS URL.",
+                    url
+                ),
             );
         }
 
@@ -620,7 +627,8 @@ mod tests {
 
     #[test]
     fn test_chunk_message_roundtrip() {
-        let original = "Hello, this is a test message that should be split into chunks! ".repeat(50);
+        let original =
+            "Hello, this is a test message that should be split into chunks! ".repeat(50);
         let chunks = SendMessageTool::chunk_message(&original, 500);
         let mut reconstructed = String::new();
         for chunk in &chunks {

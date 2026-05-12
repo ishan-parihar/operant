@@ -3,65 +3,65 @@
 //! This module aggregates all built-in tools and provides a convenient
 //! function to register them all with a ToolRegistry.
 
-use std::path::PathBuf;
-use std::sync::Arc;
+use crate::client::OpenAIClient;
 use crate::cronjobs::CronDb;
 use crate::database::Database;
-use crate::client::OpenAIClient;
 use crate::error::Result;
 use crate::kanban::KanbanDb;
 use crate::mcp::McpManager;
 use crate::process_registry::ProcessRegistry;
-use crate::tools::{ToolRegistry, SessionSearchTool};
+use crate::tools::{SessionSearchTool, ToolRegistry};
+use std::path::PathBuf;
+use std::sync::Arc;
 
 pub use super::binary_extensions::BinaryExtensionsTool;
 pub use super::browser_camofox_state::CamofoxStateTool;
-pub use super::browser_tool::BrowserTool;
-pub use super::browser_dialog_tool::BrowserDialogTool;
 pub use super::browser_cdp_tool::BrowserCdpTool;
-pub use super::computer_use_tool::ComputerUseTool;
-pub use super::mixture_of_agents_tool::MixtureOfAgentsTool;
-pub use super::rl_training_tool::RlTrainingTool;
-pub use super::spotify_tool::{
-    SpotifyPlaybackTool, SpotifyDevicesTool, SpotifyQueueTool, SpotifySearchTool,
-    SpotifyPlaylistsTool, SpotifyAlbumsTool, SpotifyLibraryTool,
-};
+pub use super::browser_dialog_tool::BrowserDialogTool;
+pub use super::browser_tool::BrowserTool;
 pub use super::checkpoint_tool::CheckpointTool;
 pub use super::clarify_tool::ClarifyTool;
 pub use super::code_execution::CodeExecutionTool;
+pub use super::computer_use_tool::ComputerUseTool;
 pub use super::cron_tool::CronTool;
 pub use super::datetime_tool::{DateTimeTool, TimestampTool};
 pub use super::debug_helpers::{EnvVarTool, InspectJsonTool, SystemInfoTool};
+pub use super::discord_tool::{DiscordAdminTool, DiscordTool};
+pub use super::feishu_tool::{FeishuDocTool, FeishuDriveTool};
 pub use super::file_state::FileStateTool;
 pub use super::file_tools::{FileListTool, FileReadTool, FileSearchTool, FileWriteTool};
+pub use super::home_assistant_tool::HomeAssistantTool;
 pub use super::http_tool::HttpRequestTool;
 pub use super::image_generation_tool::ImageGenerationTool;
 pub use super::kanban_tool::KanbanTool;
 pub use super::mcp_tool::McpManagementTool;
 pub use super::memory_tools::{MemoryRecallTool, MemorySearchTool, MemoryStoreTool};
+pub use super::mixture_of_agents_tool::MixtureOfAgentsTool;
 pub use super::neutts_synth::NeuttsSynthTool;
-pub use super::notification_tool::{NotificationTool, ApprovalTool};
+pub use super::notification_tool::{ApprovalTool, NotificationTool};
 pub use super::openrouter_client::OpenRouterTool;
 pub use super::osv_check::OsvCheckTool;
 pub use super::patch_tool::PatchTool;
 pub use super::process_tool::ProcessTool;
-pub use super::skills_tool::{SkillsTool, SkillViewTool};
+pub use super::rl_training_tool::RlTrainingTool;
+pub use super::send_message_tool::SendMessageTool;
+pub use super::skills_tool::{SkillViewTool, SkillsTool};
 pub use super::slash_confirm::SlashConfirmTool;
-pub use super::transcription_tool::TranscriptionTool;
+pub use super::spotify_tool::{
+    SpotifyAlbumsTool, SpotifyDevicesTool, SpotifyLibraryTool, SpotifyPlaybackTool,
+    SpotifyPlaylistsTool, SpotifyQueueTool, SpotifySearchTool,
+};
 pub use super::sub_agent_tool::SubAgentTool;
 pub use super::terminal_tool::TerminalTool;
+pub use super::todo_tool::TodoTool;
 pub use super::tool_backend_helpers::ToolBackendTool;
 pub use super::tool_output_limits::TruncateOutputTool;
-pub use super::todo_tool::TodoTool;
+pub use super::transcription_tool::TranscriptionTool;
 pub use super::tts_tool::TtsTool;
 pub use super::video_analysis_tool::VideoAnalysisTool;
 pub use super::vision_tool::VisionTool;
 pub use super::web_tools::{WebFetchTool, WebSearchTool};
 pub use super::xai_http::XaiHttpTool;
-pub use super::discord_tool::{DiscordAdminTool, DiscordTool};
-pub use super::feishu_tool::{FeishuDocTool, FeishuDriveTool};
-pub use super::home_assistant_tool::HomeAssistantTool;
-pub use super::send_message_tool::SendMessageTool;
 
 /// Register all built-in tools with a registry
 pub async fn register_builtin_tools(
@@ -105,7 +105,9 @@ pub async fn register_builtin_tools(
     registry.register(SkillsTool).await?;
     registry.register(SkillViewTool).await?;
     registry.register(SlashConfirmTool).await?;
-    registry.register(ProcessTool::new(ProcessRegistry::new())).await?;
+    registry
+        .register(ProcessTool::new(ProcessRegistry::new()))
+        .await?;
     registry.register(NotificationTool).await?;
     registry.register(ApprovalTool).await?;
     registry.register(OpenRouterTool).await?;
@@ -155,7 +157,13 @@ pub async fn register_builtin_tools_with_sub_agent(
 ) -> Result<()> {
     register_builtin_tools(registry, database.clone(), cron_db, kanban_db, mcp_manager).await?;
     registry
-        .register(SubAgentTool::new(parent_client, model.into(), 0, vec![], database))
+        .register(SubAgentTool::new(
+            parent_client,
+            model.into(),
+            0,
+            vec![],
+            database,
+        ))
         .await?;
     Ok(())
 }
@@ -259,9 +267,11 @@ mod tests {
         let cron_db = Arc::new(CronDb::init(PathBuf::from("test_with_sub_cron.db")).unwrap());
         let kanban_db = Arc::new(KanbanDb::init(PathBuf::from("test_with_sub_kanban.db")).unwrap());
 
-        register_builtin_tools_with_sub_agent(&registry, &client, "gpt-4.1", database, cron_db, kanban_db, None)
-            .await
-            .unwrap();
+        register_builtin_tools_with_sub_agent(
+            &registry, &client, "gpt-4.1", database, cron_db, kanban_db, None,
+        )
+        .await
+        .unwrap();
 
         let schemas = registry.get_schemas().await;
         assert_eq!(schemas.len() + 1, builtin_tool_names().len());

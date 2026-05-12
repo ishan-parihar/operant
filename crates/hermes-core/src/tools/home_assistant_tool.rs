@@ -32,15 +32,13 @@ use crate::tools::{HermesTool, ToolContext, ToolResult};
 /// Matches valid Home Assistant entity_id format: `domain.entity`
 /// Examples: `light.living_room`, `sensor.temperature_1`, `climate.thermostat`
 static ENTITY_ID_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^[a-z_][a-z0-9_]*\.[a-z0-9_]+$")
-        .expect("Failed to compile entity_id regex")
+    Regex::new(r"^[a-z_][a-z0-9_]*\.[a-z0-9_]+$").expect("Failed to compile entity_id regex")
 });
 
 /// Matches valid domain or service name: lowercase ASCII, digits, underscores.
 /// Prevents path-traversal payloads like `../../api/config` in URL segments.
 static SERVICE_NAME_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^[a-z][a-z0-9_]*$")
-        .expect("Failed to compile service/domain regex")
+    Regex::new(r"^[a-z][a-z0-9_]*$").expect("Failed to compile service/domain regex")
 });
 
 // ---------------------------------------------------------------------------
@@ -51,12 +49,12 @@ static SERVICE_NAME_RE: LazyLock<Regex> = LazyLock::new(|| {
 // access control, so safety must be enforced at our layer.
 
 const BLOCKED_DOMAINS: &[&str] = &[
-    "shell_command",  // arbitrary shell commands as root in HA container
-    "command_line",   // sensors/switches that execute shell commands
-    "python_script",  // sandboxed but can escalate via hass.services.call()
-    "pyscript",       // scripting integration with broader access
-    "hassio",         // addon control, host shutdown/reboot, stdin to containers
-    "rest_command",   // HTTP requests from HA server (SSRF vector)
+    "shell_command", // arbitrary shell commands as root in HA container
+    "command_line",  // sensors/switches that execute shell commands
+    "python_script", // sandboxed but can escalate via hass.services.call()
+    "pyscript",      // scripting integration with broader access
+    "hassio",        // addon control, host shutdown/reboot, stdin to containers
+    "rest_command",  // HTTP requests from HA server (SSRF vector)
 ];
 
 // ---------------------------------------------------------------------------
@@ -70,8 +68,8 @@ const BLOCKED_DOMAINS: &[&str] = &[
 /// - HASS_TOKEN is required (empty string if unset, will cause 401)
 /// - Trailing slash is stripped from URL
 fn get_config() -> (String, String) {
-    let url = std::env::var("HASS_URL")
-        .unwrap_or_else(|_| "http://homeassistant.local:8123".to_string());
+    let url =
+        std::env::var("HASS_URL").unwrap_or_else(|_| "http://homeassistant.local:8123".to_string());
     let token = std::env::var("HASS_TOKEN").unwrap_or_default();
     (url.trim_end_matches('/').to_string(), token)
 }
@@ -85,8 +83,7 @@ fn get_headers(token: &str) -> HeaderMap {
     let mut headers = HeaderMap::new();
     headers.insert(
         AUTHORIZATION,
-        HeaderValue::from_str(&format!("Bearer {}", token))
-            .expect("Invalid Bearer token format"),
+        HeaderValue::from_str(&format!("Bearer {}", token)).expect("Invalid Bearer token format"),
     );
     headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
     headers
@@ -113,10 +110,7 @@ fn filter_and_summarize(states: &[Value], domain: Option<&str>, area: Option<&st
     let entities: Vec<Value> = states
         .iter()
         .filter(|s| {
-            let entity_id = s
-                .get("entity_id")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
+            let entity_id = s.get("entity_id").and_then(|v| v.as_str()).unwrap_or("");
 
             // Filter by domain prefix
             if let Some(ref d) = domain_lower {
@@ -341,10 +335,7 @@ impl HomeAssistantTool {
         let entity_id = match args.get("entity_id").and_then(|v| v.as_str()) {
             Some(e) => e,
             None => {
-                return ToolResult::error(
-                    "ha_get_state",
-                    "Missing required parameter: entity_id",
-                );
+                return ToolResult::error("ha_get_state", "Missing required parameter: entity_id");
             }
         };
 
@@ -407,10 +398,7 @@ impl HomeAssistantTool {
             Err(e) => {
                 return ToolResult::error(
                     "ha_get_state",
-                    format!(
-                        "Failed to parse state response for '{}': {}",
-                        entity_id, e
-                    ),
+                    format!("Failed to parse state response for '{}': {}", entity_id, e),
                 );
             }
         };
@@ -458,10 +446,7 @@ impl HomeAssistantTool {
             Err(e) => {
                 return ToolResult::error(
                     "ha_list_services",
-                    format!(
-                        "Network error when fetching services from {}: {}",
-                        url, e
-                    ),
+                    format!("Network error when fetching services from {}: {}", url, e),
                 );
             }
         };
@@ -523,8 +508,7 @@ impl HomeAssistantTool {
                             );
 
                             // Include field descriptions if present
-                            if let Some(fields) =
-                                svc_info.get("fields").and_then(|v| v.as_object())
+                            if let Some(fields) = svc_info.get("fields").and_then(|v| v.as_object())
                             {
                                 let field_descriptions: serde_json::Map<String, Value> = fields
                                     .iter()
@@ -545,8 +529,10 @@ impl HomeAssistantTool {
                                     .collect();
 
                                 if !field_descriptions.is_empty() {
-                                    entry
-                                        .insert("fields".to_string(), Value::Object(field_descriptions));
+                                    entry.insert(
+                                        "fields".to_string(),
+                                        Value::Object(field_descriptions),
+                                    );
                                 }
                             }
 
@@ -583,20 +569,14 @@ impl HomeAssistantTool {
         let domain = match args.get("domain").and_then(|v| v.as_str()) {
             Some(d) => d,
             None => {
-                return ToolResult::error(
-                    "ha_call_service",
-                    "Missing required parameter: domain",
-                );
+                return ToolResult::error("ha_call_service", "Missing required parameter: domain");
             }
         };
 
         let service = match args.get("service").and_then(|v| v.as_str()) {
             Some(s) => s,
             None => {
-                return ToolResult::error(
-                    "ha_call_service",
-                    "Missing required parameter: service",
-                );
+                return ToolResult::error("ha_call_service", "Missing required parameter: service");
             }
         };
 
@@ -697,10 +677,7 @@ impl HomeAssistantTool {
             Err(e) => {
                 return ToolResult::error(
                     "ha_call_service",
-                    format!(
-                        "Network error when calling {}.{}: {}",
-                        domain, service, e
-                    ),
+                    format!("Network error when calling {}.{}: {}", domain, service, e),
                 );
             }
         };
@@ -870,30 +847,17 @@ mod tests {
         let tool = HomeAssistantTool::new();
         let result = tool.execute(json!({}), ToolContext::default()).await;
         assert!(!result.success);
-        assert!(
-            result
-                .error
-                .unwrap_or_default()
-                .contains("action")
-        );
+        assert!(result.error.unwrap_or_default().contains("action"));
     }
 
     #[tokio::test]
     async fn test_unknown_action_returns_error() {
         let tool = HomeAssistantTool::new();
         let result = tool
-            .execute(
-                json!({ "action": "nonexistent" }),
-                ToolContext::default(),
-            )
+            .execute(json!({ "action": "nonexistent" }), ToolContext::default())
             .await;
         assert!(!result.success);
-        assert!(
-            result
-                .error
-                .unwrap_or_default()
-                .contains("Unknown action")
-        );
+        assert!(result.error.unwrap_or_default().contains("Unknown action"));
     }
 
     // =======================================================================
@@ -1236,13 +1200,11 @@ mod tests {
 
     #[test]
     fn test_filter_no_matches() {
-        let states = vec![
-            json!({
-                "entity_id": "light.living_room",
-                "state": "on",
-                "attributes": { "friendly_name": "Living Room Light" }
-            }),
-        ];
+        let states = vec![json!({
+            "entity_id": "light.living_room",
+            "state": "on",
+            "attributes": { "friendly_name": "Living Room Light" }
+        })];
 
         let result = filter_and_summarize(&states, Some("climate"), None);
         assert_eq!(result["count"], 0);
@@ -1259,13 +1221,11 @@ mod tests {
 
     #[test]
     fn test_filter_missing_attributes() {
-        let states = vec![
-            json!({
-                "entity_id": "light.living_room",
-                "state": "on"
-                // No attributes key at all
-            }),
-        ];
+        let states = vec![json!({
+            "entity_id": "light.living_room",
+            "state": "on"
+            // No attributes key at all
+        })];
 
         // Should not panic, should return empty friendly_name
         let result = filter_and_summarize(&states, None, None);
@@ -1275,13 +1235,11 @@ mod tests {
 
     #[test]
     fn test_filter_by_area_no_match_friendly_name() {
-        let states = vec![
-            json!({
-                "entity_id": "light.living_room",
-                "state": "on",
-                "attributes": { "friendly_name": "LR Light" }
-            }),
-        ];
+        let states = vec![json!({
+            "entity_id": "light.living_room",
+            "state": "on",
+            "attributes": { "friendly_name": "LR Light" }
+        })];
 
         // "living" should match "Living Room Light" but not "LR Light"
         let result = filter_and_summarize(&states, None, Some("living"));
@@ -1355,7 +1313,10 @@ mod tests {
         assert_eq!(parsed["success"], true);
         assert_eq!(parsed["service"], "light.turn_on");
         assert_eq!(parsed["affected_entities"].as_array().unwrap().len(), 2);
-        assert_eq!(parsed["affected_entities"][0]["entity_id"], "light.living_room");
+        assert_eq!(
+            parsed["affected_entities"][0]["entity_id"],
+            "light.living_room"
+        );
         assert_eq!(parsed["affected_entities"][0]["state"], "on");
     }
 
@@ -1384,7 +1345,10 @@ mod tests {
             { "state": "on" },
         ]);
         let parsed = parse_service_response("light", "toggle", &ha_result);
-        assert_eq!(parsed["affected_entities"][0]["entity_id"], "light.living_room");
+        assert_eq!(
+            parsed["affected_entities"][0]["entity_id"],
+            "light.living_room"
+        );
         assert_eq!(parsed["affected_entities"][0]["state"], "");
         assert_eq!(parsed["affected_entities"][1]["entity_id"], "");
         assert_eq!(parsed["affected_entities"][1]["state"], "on");
@@ -1516,7 +1480,11 @@ mod tests {
         std::env::set_var("HASS_URL", "http://homeassistant.local:8123/");
 
         let (url, _) = get_config();
-        assert!(!url.ends_with('/'), "URL should not have trailing slash: {}", url);
+        assert!(
+            !url.ends_with('/'),
+            "URL should not have trailing slash: {}",
+            url
+        );
 
         if let Some(u) = prev_url {
             std::env::set_var("HASS_URL", u);

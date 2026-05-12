@@ -28,20 +28,14 @@ impl HermesTool for SlashConfirmTool {
     }
 
     fn schema(&self) -> ToolSchema {
-        ToolSchema::from_type::<SlashConfirmArgs>(
-            "slash_confirm",
-            "Request user confirmation",
-        )
+        ToolSchema::from_type::<SlashConfirmArgs>("slash_confirm", "Request user confirmation")
     }
 
     async fn execute(&self, args: Value, _context: ToolContext) -> ToolResult {
         let _args: SlashConfirmArgs = match serde_json::from_value(args) {
             Ok(a) => a,
             Err(e) => {
-                return ToolResult::error(
-                    "slash_confirm",
-                    format!("Invalid arguments: {}", e),
-                )
+                return ToolResult::error("slash_confirm", format!("Invalid arguments: {}", e))
             }
         };
 

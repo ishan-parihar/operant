@@ -3,12 +3,12 @@
 //! Searches past session transcripts and returns focused summaries.
 //! Currently a placeholder - full implementation requires SQLite + LLM integration.
 
-use std::sync::Arc;
 use crate::database::Database;
 use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::sync::Arc;
 use std::sync::OnceLock;
 use tracing::{debug, info};
 
@@ -84,14 +84,17 @@ impl SessionSearchTool {
     fn list_recent(&self, limit: usize) -> ToolResult {
         match self.database.list_sessions(limit) {
             Ok(sessions_db) => {
-                let sessions: Vec<SessionMeta> = sessions_db.into_iter().map(|s| SessionMeta {
-                    session_id: s.id,
-                    title: s.title,
-                    source: s.source,
-                    started_at: s.created_at,
-                    last_active: s.updated_at,
-                    message_count: s.message_count,
-                }).collect();
+                let sessions: Vec<SessionMeta> = sessions_db
+                    .into_iter()
+                    .map(|s| SessionMeta {
+                        session_id: s.id,
+                        title: s.title,
+                        source: s.source,
+                        started_at: s.created_at,
+                        last_active: s.updated_at,
+                        message_count: s.message_count,
+                    })
+                    .collect();
 
                 ToolResult::success(
                     "session_search",
@@ -116,22 +119,17 @@ impl SessionSearchTool {
         debug!("Session search: query={}, limit={}", query, limit);
 
         match self.database.search_sessions(query, limit) {
-            Ok(results) => {
-                ToolResult::success(
-                    "session_search",
-                    serde_json::json!({
-                        "success": true,
-                        "query": query,
-                        "results": results,
-                        "count": results.len(),
-                        "sessions_searched": results.len(),
-                    }),
-                )
-            }
-            Err(e) => ToolResult::error(
+            Ok(results) => ToolResult::success(
                 "session_search",
-                format!("Database search failed: {}", e),
+                serde_json::json!({
+                    "success": true,
+                    "query": query,
+                    "results": results,
+                    "count": results.len(),
+                    "sessions_searched": results.len(),
+                }),
             ),
+            Err(e) => ToolResult::error("session_search", format!("Database search failed: {}", e)),
         }
     }
 }
@@ -166,7 +164,7 @@ impl HermesTool for SessionSearchTool {
             .get("role_filter")
             .and_then(|v| v.as_str())
             .map(|s| s.trim().to_string());
-            // TODO: Implement role filtering in search query
+        // TODO: Implement role filtering in search query
 
         let limit = args
             .get("limit")
@@ -199,7 +197,11 @@ mod tests {
 
     fn create_test_db() -> Arc<Database> {
         let counter = TEST_DB_COUNTER.fetch_add(1, Ordering::SeqCst);
-        let path = PathBuf::from(format!("/tmp/hermes_test_session_{}_{}.db", std::process::id(), counter));
+        let path = PathBuf::from(format!(
+            "/tmp/hermes_test_session_{}_{}.db",
+            std::process::id(),
+            counter
+        ));
         let _ = std::fs::remove_file(&path);
         Arc::new(Database::init(path).unwrap())
     }
@@ -219,8 +221,14 @@ mod tests {
         assert_eq!(schema.name, "session_search");
         let schema_json = serde_json::to_value(&schema).unwrap();
         if let Some(props) = schema_json["inputSchema"]["properties"].as_object() {
-            assert!(props.contains_key("query"), "Schema should have 'query' property");
-            assert!(props.contains_key("limit"), "Schema should have 'limit' property");
+            assert!(
+                props.contains_key("query"),
+                "Schema should have 'query' property"
+            );
+            assert!(
+                props.contains_key("limit"),
+                "Schema should have 'limit' property"
+            );
         }
     }
 
@@ -228,10 +236,9 @@ mod tests {
     async fn test_session_search_recent_mode() {
         let db = create_test_db();
         let tool = SessionSearchTool::new(db);
-        let result = tool.execute(
-            serde_json::json!({}),
-            ToolContext::default(),
-        ).await;
+        let result = tool
+            .execute(serde_json::json!({}), ToolContext::default())
+            .await;
         assert!(result.success);
         let content: serde_json::Value = serde_json::from_str(&result.content).unwrap();
         assert_eq!(content["mode"], "recent");
@@ -241,10 +248,9 @@ mod tests {
     async fn test_session_search_recent_with_empty_query() {
         let db = create_test_db();
         let tool = SessionSearchTool::new(db);
-        let result = tool.execute(
-            serde_json::json!({ "query": "" }),
-            ToolContext::default(),
-        ).await;
+        let result = tool
+            .execute(serde_json::json!({ "query": "" }), ToolContext::default())
+            .await;
         assert!(result.success);
     }
 
@@ -252,10 +258,12 @@ mod tests {
     async fn test_session_search_with_query() {
         let db = create_test_db();
         let tool = SessionSearchTool::new(db);
-        let result = tool.execute(
-            serde_json::json!({ "query": "test query", "limit": 5 }),
-            ToolContext::default(),
-        ).await;
+        let result = tool
+            .execute(
+                serde_json::json!({ "query": "test query", "limit": 5 }),
+                ToolContext::default(),
+            )
+            .await;
         assert!(result.success);
         let content: serde_json::Value = serde_json::from_str(&result.content).unwrap();
         assert_eq!(content["query"], "test query");
@@ -265,15 +273,19 @@ mod tests {
     async fn test_session_search_limit_clamping() {
         let db = create_test_db();
         let tool = SessionSearchTool::new(db);
-        let result = tool.execute(
-            serde_json::json!({ "query": "test", "limit": 100 }),
-            ToolContext::default(),
-        ).await;
+        let result = tool
+            .execute(
+                serde_json::json!({ "query": "test", "limit": 100 }),
+                ToolContext::default(),
+            )
+            .await;
         assert!(result.success);
-        let result = tool.execute(
-            serde_json::json!({ "query": "test", "limit": 0 }),
-            ToolContext::default(),
-        ).await;
+        let result = tool
+            .execute(
+                serde_json::json!({ "query": "test", "limit": 0 }),
+                ToolContext::default(),
+            )
+            .await;
         assert!(result.success);
     }
 
@@ -281,10 +293,12 @@ mod tests {
     async fn test_session_search_role_filter_accepted() {
         let db = create_test_db();
         let tool = SessionSearchTool::new(db);
-        let result = tool.execute(
-            serde_json::json!({ "query": "test", "role_filter": "user,assistant" }),
-            ToolContext::default(),
-        ).await;
+        let result = tool
+            .execute(
+                serde_json::json!({ "query": "test", "role_filter": "user,assistant" }),
+                ToolContext::default(),
+            )
+            .await;
         assert!(result.success);
     }
 }

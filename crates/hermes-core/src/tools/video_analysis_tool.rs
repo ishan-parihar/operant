@@ -65,7 +65,12 @@ impl VideoAnalysisTool {
 
         let result: Value = match response.json().await {
             Ok(r) => r,
-            Err(e) => return ToolResult::error("video_analyze", format!("Failed to parse response: {}", e)),
+            Err(e) => {
+                return ToolResult::error(
+                    "video_analyze",
+                    format!("Failed to parse response: {}", e),
+                )
+            }
         };
 
         let analysis = result
@@ -73,11 +78,14 @@ impl VideoAnalysisTool {
             .and_then(|a| a.as_str())
             .unwrap_or("No analysis returned");
 
-        ToolResult::success("video_analyze", json!({
-            "success": true,
-            "analysis": analysis,
-            "video_url": args.video_url
-        }))
+        ToolResult::success(
+            "video_analyze",
+            json!({
+                "success": true,
+                "analysis": analysis,
+                "video_url": args.video_url
+            }),
+        )
     }
 }
 
@@ -98,7 +106,9 @@ impl HermesTool for VideoAnalysisTool {
     async fn execute(&self, args: Value, _context: ToolContext) -> ToolResult {
         let args: VideoAnalysisArgs = match serde_json::from_value(args) {
             Ok(a) => a,
-            Err(e) => return ToolResult::error("video_analyze", format!("Invalid arguments: {}", e)),
+            Err(e) => {
+                return ToolResult::error("video_analyze", format!("Invalid arguments: {}", e))
+            }
         };
         self.analyze_video(&args).await
     }
@@ -126,9 +136,7 @@ mod tests {
     #[tokio::test]
     async fn test_video_analysis_invalid_args() {
         let tool = VideoAnalysisTool::new();
-        let result = tool
-            .execute(json!({}), ToolContext::default())
-            .await;
+        let result = tool.execute(json!({}), ToolContext::default()).await;
         assert!(!result.success);
     }
 }

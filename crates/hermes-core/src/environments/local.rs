@@ -47,7 +47,10 @@ impl Environment for LocalEnvironment {
         let (stdout, stderr, exit_code) = run_command(&mut cmd, cmd_timeout).await;
         let duration_ms = start.elapsed().as_millis() as u64;
 
-        debug!(exit_code, duration_ms, "LocalEnvironment::execute completed");
+        debug!(
+            exit_code,
+            duration_ms, "LocalEnvironment::execute completed"
+        );
 
         EnvironmentResult {
             stdout,

@@ -444,9 +444,7 @@ mod tests {
     #[tokio::test]
     async fn test_file_read_missing_path() {
         let tool = FileReadTool;
-        let result = tool
-            .execute(json!({}), ToolContext::default())
-            .await;
+        let result = tool.execute(json!({}), ToolContext::default()).await;
         assert!(!result.success);
     }
 
@@ -454,7 +452,10 @@ mod tests {
     async fn test_file_read_nonexistent() {
         let tool = FileReadTool;
         let result = tool
-            .execute(json!({"path": "/nonexistent/path/file.txt"}), ToolContext::default())
+            .execute(
+                json!({"path": "/nonexistent/path/file.txt"}),
+                ToolContext::default(),
+            )
             .await;
         assert!(!result.success);
     }
@@ -462,27 +463,21 @@ mod tests {
     #[tokio::test]
     async fn test_file_write_missing_args() {
         let tool = FileWriteTool;
-        let result = tool
-            .execute(json!({}), ToolContext::default())
-            .await;
+        let result = tool.execute(json!({}), ToolContext::default()).await;
         assert!(!result.success);
     }
 
     #[tokio::test]
     async fn test_file_search_missing_args() {
         let tool = FileSearchTool;
-        let result = tool
-            .execute(json!({}), ToolContext::default())
-            .await;
+        let result = tool.execute(json!({}), ToolContext::default()).await;
         assert!(!result.success);
     }
 
     #[tokio::test]
     async fn test_file_list_missing_path() {
         let tool = FileListTool;
-        let result = tool
-            .execute(json!({}), ToolContext::default())
-            .await;
+        let result = tool.execute(json!({}), ToolContext::default()).await;
         assert!(!result.success);
     }
 }

@@ -1,13 +1,13 @@
 use async_trait::async_trait;
+use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{json, Value};
-use schemars::JsonSchema;
 use std::process::Stdio;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 
-use crate::tools::{HermesTool, ToolContext, ToolResult};
 use crate::schema::ToolSchema;
+use crate::tools::{HermesTool, ToolContext, ToolResult};
 
 pub struct ComputerUseTool;
 
@@ -213,11 +213,7 @@ impl ComputerUseTool {
             .unwrap_or("[]");
 
         let captured = if mode == "vision" {
-            Self::call_mcp_tool(
-                "screenshot",
-                json!({"format": "jpeg", "quality": 85}),
-            )
-            .await
+            Self::call_mcp_tool("screenshot", json!({"format": "jpeg", "quality": 85})).await
         } else {
             Self::call_mcp_tool("get_window_state", json!({})).await
         };
@@ -274,7 +270,10 @@ impl ComputerUseTool {
     }
 
     async fn handle_drag(&self, _args: &CuaArgs) -> ToolResult {
-        ToolResult::error(self.name(), "drag is not supported by the cua-driver backend")
+        ToolResult::error(
+            self.name(),
+            "drag is not supported by the cua-driver backend",
+        )
     }
 
     async fn handle_scroll(&self, args: &CuaArgs) -> ToolResult {
@@ -342,8 +341,14 @@ impl ComputerUseTool {
         };
 
         let parts: Vec<&str> = keys.split(|c| c == '+' || c == '-').collect();
-        let mod_names = ["cmd", "command", "shift", "option", "alt", "ctrl", "control", "fn"];
-        let modifiers: Vec<&str> = parts.iter().filter(|p| mod_names.contains(p)).copied().collect();
+        let mod_names = [
+            "cmd", "command", "shift", "option", "alt", "ctrl", "control", "fn",
+        ];
+        let modifiers: Vec<&str> = parts
+            .iter()
+            .filter(|p| mod_names.contains(p))
+            .copied()
+            .collect();
         let key = parts.iter().find(|p| !mod_names.contains(p)).copied();
 
         if modifiers.is_empty() {
@@ -431,7 +436,9 @@ impl ComputerUseTool {
 
         let lw_result = Self::call_mcp_tool("list_windows", json!({"on_screen_only": true})).await;
         match lw_result {
-            Ok(response) => ToolResult::success(self.name(), json!({"result": response, "app": app})),
+            Ok(response) => {
+                ToolResult::success(self.name(), json!({"result": response, "app": app}))
+            }
             Err(e) => ToolResult::error(self.name(), e),
         }
     }

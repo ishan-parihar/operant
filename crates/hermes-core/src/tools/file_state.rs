@@ -90,9 +90,7 @@ impl HermesTool for FileStateTool {
     async fn execute(&self, args: Value, _context: ToolContext) -> ToolResult {
         let args: FileStateArgs = match serde_json::from_value(args) {
             Ok(a) => a,
-            Err(e) => {
-                return ToolResult::error("file_state", format!("Invalid arguments: {}", e))
-            }
+            Err(e) => return ToolResult::error("file_state", format!("Invalid arguments: {}", e)),
         };
 
         match args.operation.as_str() {
@@ -113,9 +111,7 @@ impl HermesTool for FileStateTool {
 fn handle_check(path: &str) -> ToolResult {
     let snapshot = match get_file_metadata(path) {
         Ok(s) => s,
-        Err(e) => {
-            return ToolResult::error("file_state", format!("Check failed: {}", e))
-        }
+        Err(e) => return ToolResult::error("file_state", format!("Check failed: {}", e)),
     };
 
     ToolResult::success(
@@ -135,9 +131,7 @@ fn handle_check(path: &str) -> ToolResult {
 fn handle_watch(path: &str) -> ToolResult {
     let snapshot = match get_file_metadata(path) {
         Ok(s) => s,
-        Err(e) => {
-            return ToolResult::error("file_state", format!("Watch failed: {}", e))
-        }
+        Err(e) => return ToolResult::error("file_state", format!("Watch failed: {}", e)),
     };
 
     let mut states = FILE_STATES.lock().unwrap();
@@ -173,18 +167,13 @@ fn handle_diff(path: &str) -> ToolResult {
 
     let current = match get_file_metadata(path) {
         Ok(s) => s,
-        Err(e) => {
-            return ToolResult::error("file_state", format!("Diff failed: {}", e))
-        }
+        Err(e) => return ToolResult::error("file_state", format!("Diff failed: {}", e)),
     };
 
     let mut changes: Vec<String> = Vec::new();
 
     if stored.size != current.size {
-        changes.push(format!(
-            "size changed: {} -> {}",
-            stored.size, current.size
-        ));
+        changes.push(format!("size changed: {} -> {}", stored.size, current.size));
     }
     if stored.modified != current.modified {
         changes.push("modified time changed".to_string());
@@ -269,7 +258,9 @@ mod tests {
             "operation": "diff",
             "path": tmp_path
         });
-        let diff_result = tool.execute(diff_args.clone(), ToolContext::default()).await;
+        let diff_result = tool
+            .execute(diff_args.clone(), ToolContext::default())
+            .await;
         assert!(diff_result.success);
         let v: Value = serde_json::from_str(&diff_result.content).unwrap();
         assert_eq!(v["changed"], false);

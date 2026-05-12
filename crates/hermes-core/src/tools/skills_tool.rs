@@ -36,8 +36,8 @@ fn parse_frontmatter(content: &str) -> (serde_json::Value, String) {
     let yaml_str = parts[1].trim();
     let body = parts[2].trim();
 
-    let frontmatter: serde_json::Value = serde_yaml::from_str(yaml_str)
-        .unwrap_or(serde_json::Value::Null);
+    let frontmatter: serde_json::Value =
+        serde_yaml::from_str(yaml_str).unwrap_or(serde_json::Value::Null);
 
     (frontmatter, body.to_string())
 }
@@ -255,10 +255,7 @@ impl HermesTool for SkillViewTool {
 
             return ToolResult::error(
                 "skill_view",
-                format!(
-                    "Skill '{}' not found. Available: {:?}",
-                    name, available
-                ),
+                format!("Skill '{}' not found. Available: {:?}", name, available),
             );
         }
 
@@ -300,9 +297,7 @@ impl HermesTool for SkillViewTool {
                     }),
                 )
             }
-            Err(e) => {
-                ToolResult::error("skill_view", format!("Failed to read skill: {}", e))
-            }
+            Err(e) => ToolResult::error("skill_view", format!("Failed to read skill: {}", e)),
         }
     }
 }
@@ -363,7 +358,10 @@ mod tests {
         let tool = SkillViewTool;
         let result = tool.execute_sync(serde_json::json!({}));
         assert!(!result.success);
-        assert!(result.error.unwrap_or_default().contains("name is required"));
+        assert!(result
+            .error
+            .unwrap_or_default()
+            .contains("name is required"));
     }
 
     #[test]

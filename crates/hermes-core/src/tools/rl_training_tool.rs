@@ -6,8 +6,8 @@ use std::collections::HashMap;
 use std::sync::{OnceLock, RwLock};
 use tokio::process::Command;
 
-use crate::tools::{HermesTool, ToolContext, ToolResult};
 use crate::schema::ToolSchema;
+use crate::tools::{HermesTool, ToolContext, ToolResult};
 
 pub struct RlTrainingTool;
 
@@ -136,12 +136,14 @@ impl RlTrainingTool {
             if let Ok(entries) = std::fs::read_dir(&envs_dir) {
                 for entry in entries.flatten() {
                     let path = entry.path();
-                    if path.extension().map_or(false, |e| e == "yaml" || e == "yml") {
+                    if path
+                        .extension()
+                        .map_or(false, |e| e == "yaml" || e == "yml")
+                    {
                         if let Some(stem) = path.file_stem() {
                             let name = stem.to_string_lossy().to_string();
                             let config = std::fs::read_to_string(&path).ok();
-                            let config_val = config
-                                .and_then(|c| serde_yaml::from_str(&c).ok());
+                            let config_val = config.and_then(|c| serde_yaml::from_str(&c).ok());
                             envs.push(EnvironmentInfo {
                                 name,
                                 config: config_val,
@@ -180,10 +182,13 @@ impl RlTrainingTool {
         {
             let state = get_rl_state().read().unwrap();
             if !state.environments.is_empty() && envs.is_empty() {
-                return ToolResult::success(self.name(), json!({
-                    "environments": state.environments,
-                    "selected": state.selected_environment,
-                }));
+                return ToolResult::success(
+                    self.name(),
+                    json!({
+                        "environments": state.environments,
+                        "selected": state.selected_environment,
+                    }),
+                );
             }
         }
         {
@@ -194,10 +199,13 @@ impl RlTrainingTool {
             let state = get_rl_state().read().unwrap();
             state.selected_environment.clone()
         };
-        ToolResult::success(self.name(), json!({
-            "environments": envs,
-            "selected": selected,
-        }))
+        ToolResult::success(
+            self.name(),
+            json!({
+                "environments": envs,
+                "selected": selected,
+            }),
+        )
     }
 
     async fn handle_select_environment(&self, args: &RlArgs) -> ToolResult {
@@ -220,19 +228,25 @@ impl RlTrainingTool {
         if let Some(env) = state.environments.iter().find(|e| e.name == name) {
             state.current_config = env.config.clone();
         }
-        ToolResult::success(self.name(), json!({
-            "selected_environment": name,
-            "message": format!("Environment '{}' selected", name),
-        }))
+        ToolResult::success(
+            self.name(),
+            json!({
+                "selected_environment": name,
+                "message": format!("Environment '{}' selected", name),
+            }),
+        )
     }
 
     async fn handle_get_current_config(&self) -> ToolResult {
         let state = get_rl_state().read().unwrap();
         let config = state.current_config.clone().unwrap_or(json!({}));
-        ToolResult::success(self.name(), json!({
-            "config": config,
-            "environment": state.selected_environment,
-        }))
+        ToolResult::success(
+            self.name(),
+            json!({
+                "config": config,
+                "environment": state.selected_environment,
+            }),
+        )
     }
 
     async fn handle_edit_config(&self, args: &RlArgs) -> ToolResult {
@@ -264,10 +278,13 @@ impl RlTrainingTool {
             let _ = std::fs::write(&path, &yaml);
         }
 
-        ToolResult::success(self.name(), json!({
-            "config": config,
-            "saved_to": path,
-        }))
+        ToolResult::success(
+            self.name(),
+            json!({
+                "config": config,
+                "saved_to": path,
+            }),
+        )
     }
 
     async fn handle_start_training(&self, args: &RlArgs) -> ToolResult {
@@ -324,12 +341,15 @@ impl RlTrainingTool {
                     let mut state = get_rl_state().write().unwrap();
                     state.active_runs.push(run_info);
                 }
-                ToolResult::success(self.name(), json!({
-                    "run_id": run_id,
-                    "environment": env_name,
-                    "pid": pid,
-                    "message": "Training started in background",
-                }))
+                ToolResult::success(
+                    self.name(),
+                    json!({
+                        "run_id": run_id,
+                        "environment": env_name,
+                        "pid": pid,
+                        "message": "Training started in background",
+                    }),
+                )
             }
             Err(e) => ToolResult::error(self.name(), format!("Failed to start training: {}", e)),
         }
@@ -361,11 +381,14 @@ impl RlTrainingTool {
             {
                 Ok(resp) => {
                     if let Ok(data) = resp.json::<Value>().await {
-                        return ToolResult::success(self.name(), json!({
-                            "run_id": run_id,
-                            "status": "queried",
-                            "wandb_data": data,
-                        }));
+                        return ToolResult::success(
+                            self.name(),
+                            json!({
+                                "run_id": run_id,
+                                "status": "queried",
+                                "wandb_data": data,
+                            }),
+                        );
                     }
                 }
                 Err(_) => {}
@@ -375,11 +398,14 @@ impl RlTrainingTool {
         let state = get_rl_state().read().unwrap();
         let run = state.active_runs.iter().find(|r| r.id == run_id);
         match run {
-            Some(r) => ToolResult::success(self.name(), json!({
-                "run_id": run_id,
-                "status": r.status,
-                "environment": r.environment,
-            })),
+            Some(r) => ToolResult::success(
+                self.name(),
+                json!({
+                    "run_id": run_id,
+                    "status": r.status,
+                    "environment": r.environment,
+                }),
+            ),
             None => ToolResult::error(self.name(), format!("Run '{}' not found", run_id)),
         }
     }
@@ -400,11 +426,14 @@ impl RlTrainingTool {
             cmd.args(["environment", "stop_training", "--run-id", &run_id]);
             let _ = cmd.spawn();
 
-            ToolResult::success(self.name(), json!({
-                "run_id": run_id,
-                "status": "stopped",
-                "message": format!("Training run '{}' stopped", run_id),
-            }))
+            ToolResult::success(
+                self.name(),
+                json!({
+                    "run_id": run_id,
+                    "status": "stopped",
+                    "message": format!("Training run '{}' stopped", run_id),
+                }),
+            )
         } else {
             ToolResult::error(self.name(), format!("Run '{}' not found", run_id))
         }
@@ -447,11 +476,14 @@ impl RlTrainingTool {
             None
         };
 
-        ToolResult::success(self.name(), json!({
-            "run_id": run_id,
-            "run_info": run_info,
-            "wandb_results": wandb_results,
-        }))
+        ToolResult::success(
+            self.name(),
+            json!({
+                "run_id": run_id,
+                "run_info": run_info,
+                "wandb_results": wandb_results,
+            }),
+        )
     }
 
     async fn handle_list_runs(&self) -> ToolResult {
@@ -459,10 +491,13 @@ impl RlTrainingTool {
             let state = get_rl_state().read().unwrap();
             state.active_runs.clone()
         };
-        ToolResult::success(self.name(), json!({
-            "runs": runs,
-            "count": runs.len(),
-        }))
+        ToolResult::success(
+            self.name(),
+            json!({
+                "runs": runs,
+                "count": runs.len(),
+            }),
+        )
     }
 
     async fn handle_test_inference(&self, args: &RlArgs) -> ToolResult {
@@ -493,12 +528,15 @@ impl RlTrainingTool {
             Ok(output) => {
                 let stdout = String::from_utf8_lossy(&output.stdout).to_string();
                 let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-                ToolResult::success(self.name(), json!({
-                    "run_id": run_id,
-                    "stdout": stdout,
-                    "stderr": stderr,
-                    "success": output.status.success(),
-                }))
+                ToolResult::success(
+                    self.name(),
+                    json!({
+                        "run_id": run_id,
+                        "stdout": stdout,
+                        "stderr": stderr,
+                        "success": output.status.success(),
+                    }),
+                )
             }
             Err(e) => ToolResult::error(self.name(), format!("Test inference failed: {}", e)),
         }
@@ -526,7 +564,10 @@ mod tests {
     async fn test_rl_list_environments() {
         let tool = RlTrainingTool;
         let result = tool
-            .execute(json!({"action": "listEnvironments"}), ToolContext::default())
+            .execute(
+                json!({"action": "listEnvironments"}),
+                ToolContext::default(),
+            )
             .await;
         assert!(result.success);
         let v: Value = serde_json::from_str(&result.content).unwrap_or(json!({}));
@@ -537,7 +578,10 @@ mod tests {
     async fn test_rl_select_missing_name() {
         let tool = RlTrainingTool;
         let result = tool
-            .execute(json!({"action": "selectEnvironment"}), ToolContext::default())
+            .execute(
+                json!({"action": "selectEnvironment"}),
+                ToolContext::default(),
+            )
             .await;
         assert!(!result.success);
     }
@@ -546,7 +590,10 @@ mod tests {
     async fn test_rl_get_config() {
         let tool = RlTrainingTool;
         let result = tool
-            .execute(json!({"action": "getCurrentConfig"}), ToolContext::default())
+            .execute(
+                json!({"action": "getCurrentConfig"}),
+                ToolContext::default(),
+            )
             .await;
         assert!(result.success);
     }

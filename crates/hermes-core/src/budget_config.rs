@@ -95,14 +95,30 @@ pub struct BudgetConfig {
 }
 
 // Separate functions for serde defaults (needs fn pointers).
-fn default_max_tokens_per_turn() -> u64 { DEFAULT_MAX_TOKENS_PER_TURN }
-fn default_max_tokens_per_call() -> u64 { DEFAULT_MAX_TOKENS_PER_CALL }
-fn default_max_calls_per_turn() -> u32 { DEFAULT_MAX_CALLS_PER_TURN }
-fn default_max_output_size() -> u64 { DEFAULT_MAX_OUTPUT_SIZE }
-fn default_max_tool_result_size() -> u64 { DEFAULT_MAX_TOOL_RESULT_SIZE }
-fn default_max_tool_calls() -> u32 { DEFAULT_MAX_TOOL_CALLS }
-fn default_cooldown_seconds() -> u64 { DEFAULT_COOLDOWN_SECONDS }
-fn default_max_retries() -> u32 { DEFAULT_MAX_RETRIES }
+fn default_max_tokens_per_turn() -> u64 {
+    DEFAULT_MAX_TOKENS_PER_TURN
+}
+fn default_max_tokens_per_call() -> u64 {
+    DEFAULT_MAX_TOKENS_PER_CALL
+}
+fn default_max_calls_per_turn() -> u32 {
+    DEFAULT_MAX_CALLS_PER_TURN
+}
+fn default_max_output_size() -> u64 {
+    DEFAULT_MAX_OUTPUT_SIZE
+}
+fn default_max_tool_result_size() -> u64 {
+    DEFAULT_MAX_TOOL_RESULT_SIZE
+}
+fn default_max_tool_calls() -> u32 {
+    DEFAULT_MAX_TOOL_CALLS
+}
+fn default_cooldown_seconds() -> u64 {
+    DEFAULT_COOLDOWN_SECONDS
+}
+fn default_max_retries() -> u32 {
+    DEFAULT_MAX_RETRIES
+}
 
 impl Default for BudgetConfig {
     fn default() -> Self {
@@ -169,9 +185,7 @@ impl BudgetConfig {
     /// the first problem found.
     pub fn validate(&self) -> std::result::Result<(), String> {
         if self.max_tokens_per_call > self.max_tokens_per_turn {
-            return Err(
-                "max_tokens_per_call exceeds max_tokens_per_turn".to_string(),
-            );
+            return Err("max_tokens_per_call exceeds max_tokens_per_turn".to_string());
         }
         if self.max_calls_per_turn == 0 {
             return Err("max_calls_per_turn must be > 0".to_string());

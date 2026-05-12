@@ -162,7 +162,10 @@ impl HermesTool for OsvCheckTool {
     }
 
     fn schema(&self) -> ToolSchema {
-        ToolSchema::from_type::<OsvCheckArgs>("osv_check", "Check packages for known vulnerabilities via the OSV API")
+        ToolSchema::from_type::<OsvCheckArgs>(
+            "osv_check",
+            "Check packages for known vulnerabilities via the OSV API",
+        )
     }
 
     async fn execute(&self, args: Value, _context: ToolContext) -> ToolResult {

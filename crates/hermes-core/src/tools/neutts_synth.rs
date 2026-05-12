@@ -52,15 +52,12 @@ impl HermesTool for NeuttsSynthTool {
         let args: NeuttsSynthArgs = match serde_json::from_value(args) {
             Ok(a) => a,
             Err(e) => {
-                return ToolResult::error(
-                    "neutts_synthesize",
-                    format!("Invalid arguments: {}", e),
-                )
+                return ToolResult::error("neutts_synthesize", format!("Invalid arguments: {}", e))
             }
         };
 
-        let api_url = std::env::var("NEUTTS_API_URL")
-            .unwrap_or_else(|_| DEFAULT_NEUTTS_API_URL.to_string());
+        let api_url =
+            std::env::var("NEUTTS_API_URL").unwrap_or_else(|_| DEFAULT_NEUTTS_API_URL.to_string());
 
         let endpoint = format!("{}/synthesize", api_url.trim_end_matches('/'));
 
@@ -134,10 +131,7 @@ impl HermesTool for NeuttsSynthTool {
                     ),
                 }
             }
-            Err(e) => ToolResult::error(
-                "neutts_synthesize",
-                format!("TTS request failed: {}", e),
-            ),
+            Err(e) => ToolResult::error("neutts_synthesize", format!("TTS request failed: {}", e)),
         }
     }
 }

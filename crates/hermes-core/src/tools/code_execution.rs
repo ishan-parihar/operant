@@ -424,9 +424,7 @@ mod tests {
     #[tokio::test]
     async fn test_code_execution_invalid_args() {
         let tool = CodeExecutionTool;
-        let result = tool
-            .execute(json!({}), ToolContext::default())
-            .await;
+        let result = tool.execute(json!({}), ToolContext::default()).await;
         assert!(!result.success);
     }
 

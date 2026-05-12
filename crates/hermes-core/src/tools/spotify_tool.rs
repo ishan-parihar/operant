@@ -3,8 +3,8 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use crate::tools::{HermesTool, ToolContext, ToolResult};
 use crate::schema::ToolSchema;
+use crate::tools::{HermesTool, ToolContext, ToolResult};
 
 const SPOTIFY_API: &str = "https://api.spotify.com/v1";
 
@@ -30,15 +30,24 @@ impl SpotifyClient {
     fn headers(&self) -> reqwest::header::HeaderMap {
         let token = spotify_token().unwrap_or_default();
         let mut h = reqwest::header::HeaderMap::new();
-        h.insert(reqwest::header::AUTHORIZATION, format!("Bearer {}", token).parse().unwrap());
-        h.insert(reqwest::header::CONTENT_TYPE, "application/json".parse().unwrap());
+        h.insert(
+            reqwest::header::AUTHORIZATION,
+            format!("Bearer {}", token).parse().unwrap(),
+        );
+        h.insert(
+            reqwest::header::CONTENT_TYPE,
+            "application/json".parse().unwrap(),
+        );
         h
     }
 
     async fn get(&self, path: &str) -> ToolResult {
-        match self.client.get(&format!("{}{}", self.base, path))
+        match self
+            .client
+            .get(&format!("{}{}", self.base, path))
             .headers(self.headers())
-            .send().await
+            .send()
+            .await
         {
             Ok(r) => ToolResult::success("spotify", r.text().await.unwrap_or_default()),
             Err(e) => ToolResult::error("spotify", format!("API error: {}", e)),
@@ -46,9 +55,13 @@ impl SpotifyClient {
     }
 
     async fn post(&self, path: &str, body: Option<Value>) -> ToolResult {
-        let mut req = self.client.post(&format!("{}{}", self.base, path))
+        let mut req = self
+            .client
+            .post(&format!("{}{}", self.base, path))
             .headers(self.headers());
-        if let Some(b) = body { req = req.json(&b); }
+        if let Some(b) = body {
+            req = req.json(&b);
+        }
         match req.send().await {
             Ok(r) => ToolResult::success("spotify", r.text().await.unwrap_or_default()),
             Err(e) => ToolResult::error("spotify", format!("API error: {}", e)),
@@ -56,9 +69,13 @@ impl SpotifyClient {
     }
 
     async fn put(&self, path: &str, body: Option<Value>) -> ToolResult {
-        let mut req = self.client.put(&format!("{}{}", self.base, path))
+        let mut req = self
+            .client
+            .put(&format!("{}{}", self.base, path))
             .headers(self.headers());
-        if let Some(b) = body { req = req.json(&b); }
+        if let Some(b) = body {
+            req = req.json(&b);
+        }
         match req.send().await {
             Ok(r) => ToolResult::success("spotify", r.text().await.unwrap_or_default()),
             Err(e) => ToolResult::error("spotify", format!("API error: {}", e)),
@@ -66,9 +83,13 @@ impl SpotifyClient {
     }
 
     async fn delete(&self, path: &str, body: Option<Value>) -> ToolResult {
-        let mut req = self.client.delete(&format!("{}{}", self.base, path))
+        let mut req = self
+            .client
+            .delete(&format!("{}{}", self.base, path))
             .headers(self.headers());
-        if let Some(b) = body { req = req.json(&b); }
+        if let Some(b) = body {
+            req = req.json(&b);
+        }
         match req.send().await {
             Ok(r) => ToolResult::success("spotify", r.text().await.unwrap_or_default()),
             Err(e) => ToolResult::error("spotify", format!("API error: {}", e)),
@@ -112,7 +133,9 @@ enum PlaybackAction {
 
 #[async_trait]
 impl HermesTool for SpotifyPlaybackTool {
-    fn name(&self) -> &str { "spotify_playback" }
+    fn name(&self) -> &str {
+        "spotify_playback"
+    }
     fn description(&self) -> &str {
         "Control Spotify playback: get state, play/pause, next/previous, seek, repeat, shuffle, volume, transfer."
     }
@@ -121,7 +144,8 @@ impl HermesTool for SpotifyPlaybackTool {
     }
     async fn execute(&self, args: Value, _context: ToolContext) -> ToolResult {
         let p: PlaybackArgs = match serde_json::from_value(args) {
-            Ok(a) => a, Err(e) => return ToolResult::error(self.name(), format!("Invalid args: {}", e)),
+            Ok(a) => a,
+            Err(e) => return ToolResult::error(self.name(), format!("Invalid args: {}", e)),
         };
         let sc = match SpotifyClient::new() {
             Some(c) => c,
@@ -131,43 +155,73 @@ impl HermesTool for SpotifyPlaybackTool {
             PlaybackAction::Get => sc.get("/me/player").await,
             PlaybackAction::StartResume => {
                 let mut qs = String::new();
-                if let Some(ref d) = p.device_id { qs = format!("?device_id={}", d); }
+                if let Some(ref d) = p.device_id {
+                    qs = format!("?device_id={}", d);
+                }
                 let mut body = None;
-                if let Some(ref u) = p.uris { body = Some(json!({"uris": u})); }
-                else if let Some(ref c) = p.context_uri { body = Some(json!({"context_uri": c})); }
+                if let Some(ref u) = p.uris {
+                    body = Some(json!({"uris": u}));
+                } else if let Some(ref c) = p.context_uri {
+                    body = Some(json!({"context_uri": c}));
+                }
                 sc.put(&format!("/me/player/play{}", qs), body).await
             }
             PlaybackAction::Pause => {
-                let qs = p.device_id.as_ref().map(|d| format!("?device_id={}", d)).unwrap_or_default();
+                let qs = p
+                    .device_id
+                    .as_ref()
+                    .map(|d| format!("?device_id={}", d))
+                    .unwrap_or_default();
                 sc.put(&format!("/me/player/pause{}", qs), None).await
             }
             PlaybackAction::Next => {
-                let qs = p.device_id.as_ref().map(|d| format!("?device_id={}", d)).unwrap_or_default();
+                let qs = p
+                    .device_id
+                    .as_ref()
+                    .map(|d| format!("?device_id={}", d))
+                    .unwrap_or_default();
                 sc.post(&format!("/me/player/next{}", qs), None).await
             }
             PlaybackAction::Previous => {
-                let qs = p.device_id.as_ref().map(|d| format!("?device_id={}", d)).unwrap_or_default();
+                let qs = p
+                    .device_id
+                    .as_ref()
+                    .map(|d| format!("?device_id={}", d))
+                    .unwrap_or_default();
                 sc.post(&format!("/me/player/previous{}", qs), None).await
             }
             PlaybackAction::Seek => {
                 let ms = p.position_ms.unwrap_or(0);
-                sc.put(&format!("/me/player/seek?position_ms={}", ms), None).await
+                sc.put(&format!("/me/player/seek?position_ms={}", ms), None)
+                    .await
             }
             PlaybackAction::SetRepeat => {
-                let state = if p.state.unwrap_or(false) { "context" } else { "off" };
-                sc.put(&format!("/me/player/repeat?state={}", state), None).await
+                let state = if p.state.unwrap_or(false) {
+                    "context"
+                } else {
+                    "off"
+                };
+                sc.put(&format!("/me/player/repeat?state={}", state), None)
+                    .await
             }
             PlaybackAction::SetShuffle => {
-                let state = if p.state.unwrap_or(true) { "true" } else { "false" };
-                sc.put(&format!("/me/player/shuffle?state={}", state), None).await
+                let state = if p.state.unwrap_or(true) {
+                    "true"
+                } else {
+                    "false"
+                };
+                sc.put(&format!("/me/player/shuffle?state={}", state), None)
+                    .await
             }
             PlaybackAction::SetVolume => {
                 let vol = p.volume_percent.unwrap_or(50).min(100);
-                sc.put(&format!("/me/player/volume?volume_percent={}", vol), None).await
+                sc.put(&format!("/me/player/volume?volume_percent={}", vol), None)
+                    .await
             }
             PlaybackAction::Transfer => {
                 let device_id = p.device_id.unwrap_or_default();
-                sc.put("/me/player", Some(json!({"device_ids": [device_id]}))).await
+                sc.put("/me/player", Some(json!({"device_ids": [device_id]})))
+                    .await
             }
         }
     }
@@ -188,14 +242,19 @@ enum DevicesAction {
 
 #[async_trait]
 impl HermesTool for SpotifyDevicesTool {
-    fn name(&self) -> &str { "spotify_devices" }
-    fn description(&self) -> &str { "List available Spotify devices for playback." }
+    fn name(&self) -> &str {
+        "spotify_devices"
+    }
+    fn description(&self) -> &str {
+        "List available Spotify devices for playback."
+    }
     fn schema(&self) -> ToolSchema {
         ToolSchema::from_type::<DevicesArgs>(self.name(), self.description())
     }
     async fn execute(&self, args: Value, _context: ToolContext) -> ToolResult {
         let _p: DevicesArgs = match serde_json::from_value(args) {
-            Ok(a) => a, Err(e) => return ToolResult::error(self.name(), format!("Invalid args: {}", e)),
+            Ok(a) => a,
+            Err(e) => return ToolResult::error(self.name(), format!("Invalid args: {}", e)),
         };
         let sc = match SpotifyClient::new() {
             Some(c) => c,
@@ -225,14 +284,19 @@ enum QueueAction {
 
 #[async_trait]
 impl HermesTool for SpotifyQueueTool {
-    fn name(&self) -> &str { "spotify_queue" }
-    fn description(&self) -> &str { "View the playback queue or add items to it." }
+    fn name(&self) -> &str {
+        "spotify_queue"
+    }
+    fn description(&self) -> &str {
+        "View the playback queue or add items to it."
+    }
     fn schema(&self) -> ToolSchema {
         ToolSchema::from_type::<QueueArgs>(self.name(), self.description())
     }
     async fn execute(&self, args: Value, _context: ToolContext) -> ToolResult {
         let p: QueueArgs = match serde_json::from_value(args) {
-            Ok(a) => a, Err(e) => return ToolResult::error(self.name(), format!("Invalid args: {}", e)),
+            Ok(a) => a,
+            Err(e) => return ToolResult::error(self.name(), format!("Invalid args: {}", e)),
         };
         let sc = match SpotifyClient::new() {
             Some(c) => c,
@@ -242,7 +306,8 @@ impl HermesTool for SpotifyQueueTool {
             QueueAction::Get => sc.get("/me/player/queue").await,
             QueueAction::Add => {
                 let uri = p.uri.unwrap_or_default();
-                sc.post(&format!("/me/player/queue?uri={}", uri), None).await
+                sc.post(&format!("/me/player/queue?uri={}", uri), None)
+                    .await
             }
         }
     }
@@ -268,14 +333,19 @@ enum SearchAction {
 
 #[async_trait]
 impl HermesTool for SpotifySearchTool {
-    fn name(&self) -> &str { "spotify_search" }
-    fn description(&self) -> &str { "Search Spotify for tracks, albums, artists, or playlists." }
+    fn name(&self) -> &str {
+        "spotify_search"
+    }
+    fn description(&self) -> &str {
+        "Search Spotify for tracks, albums, artists, or playlists."
+    }
     fn schema(&self) -> ToolSchema {
         ToolSchema::from_type::<SearchArgs>(self.name(), self.description())
     }
     async fn execute(&self, args: Value, _context: ToolContext) -> ToolResult {
         let p: SearchArgs = match serde_json::from_value(args) {
-            Ok(a) => a, Err(e) => return ToolResult::error(self.name(), format!("Invalid args: {}", e)),
+            Ok(a) => a,
+            Err(e) => return ToolResult::error(self.name(), format!("Invalid args: {}", e)),
         };
         let sc = match SpotifyClient::new() {
             Some(c) => c,
@@ -284,7 +354,11 @@ impl HermesTool for SpotifySearchTool {
         let types = p.types.unwrap_or_else(|| "track".to_string());
         let limit = p.limit.unwrap_or(10).min(50);
         let encoded: String = urlencoding(&p.query);
-        sc.get(&format!("/search?q={}&type={}&limit={}", encoded, types, limit)).await
+        sc.get(&format!(
+            "/search?q={}&type={}&limit={}",
+            encoded, types, limit
+        ))
+        .await
     }
 }
 
@@ -331,14 +405,19 @@ enum PlaylistsAction {
 
 #[async_trait]
 impl HermesTool for SpotifyPlaylistsTool {
-    fn name(&self) -> &str { "spotify_playlists" }
-    fn description(&self) -> &str { "Manage Spotify playlists: list, view, create, add/remove tracks." }
+    fn name(&self) -> &str {
+        "spotify_playlists"
+    }
+    fn description(&self) -> &str {
+        "Manage Spotify playlists: list, view, create, add/remove tracks."
+    }
     fn schema(&self) -> ToolSchema {
         ToolSchema::from_type::<PlaylistsArgs>(self.name(), self.description())
     }
     async fn execute(&self, args: Value, _context: ToolContext) -> ToolResult {
         let p: PlaylistsArgs = match serde_json::from_value(args) {
-            Ok(a) => a, Err(e) => return ToolResult::error(self.name(), format!("Invalid args: {}", e)),
+            Ok(a) => a,
+            Err(e) => return ToolResult::error(self.name(), format!("Invalid args: {}", e)),
         };
         let sc = match SpotifyClient::new() {
             Some(c) => c,
@@ -362,14 +441,21 @@ impl HermesTool for SpotifyPlaylistsTool {
                 let id = p.playlist_id.unwrap_or_default();
                 let uris = p.uris.unwrap_or_default();
                 let mut body = json!({"uris": uris});
-                if let Some(pp) = p.position { body["position"] = json!(pp); }
-                sc.post(&format!("/playlists/{}/tracks", id), Some(body)).await
+                if let Some(pp) = p.position {
+                    body["position"] = json!(pp);
+                }
+                sc.post(&format!("/playlists/{}/tracks", id), Some(body))
+                    .await
             }
             PlaylistsAction::RemoveItems => {
                 let id = p.playlist_id.unwrap_or_default();
                 let uris = p.uris.unwrap_or_default();
                 let tracks: Vec<Value> = uris.iter().map(|u| json!({"uri": u})).collect();
-                sc.delete(&format!("/playlists/{}/tracks", id), Some(json!({"tracks": tracks}))).await
+                sc.delete(
+                    &format!("/playlists/{}/tracks", id),
+                    Some(json!({"tracks": tracks})),
+                )
+                .await
             }
         }
     }
@@ -396,14 +482,19 @@ enum AlbumsAction {
 
 #[async_trait]
 impl HermesTool for SpotifyAlbumsTool {
-    fn name(&self) -> &str { "spotify_albums" }
-    fn description(&self) -> &str { "Browse your saved albums or view album details and tracks." }
+    fn name(&self) -> &str {
+        "spotify_albums"
+    }
+    fn description(&self) -> &str {
+        "Browse your saved albums or view album details and tracks."
+    }
     fn schema(&self) -> ToolSchema {
         ToolSchema::from_type::<AlbumsArgs>(self.name(), self.description())
     }
     async fn execute(&self, args: Value, _context: ToolContext) -> ToolResult {
         let p: AlbumsArgs = match serde_json::from_value(args) {
-            Ok(a) => a, Err(e) => return ToolResult::error(self.name(), format!("Invalid args: {}", e)),
+            Ok(a) => a,
+            Err(e) => return ToolResult::error(self.name(), format!("Invalid args: {}", e)),
         };
         let sc = match SpotifyClient::new() {
             Some(c) => c,
@@ -421,7 +512,8 @@ impl HermesTool for SpotifyAlbumsTool {
             AlbumsAction::GetTracks => {
                 let id = p.album_id.unwrap_or_default();
                 let limit = p.limit.unwrap_or(20).min(50);
-                sc.get(&format!("/albums/{}/tracks?limit={}", id, limit)).await
+                sc.get(&format!("/albums/{}/tracks?limit={}", id, limit))
+                    .await
             }
         }
     }
@@ -448,14 +540,19 @@ enum LibraryAction {
 
 #[async_trait]
 impl HermesTool for SpotifyLibraryTool {
-    fn name(&self) -> &str { "spotify_library" }
-    fn description(&self) -> &str { "Access your Spotify library: saved tracks, albums, and check saved status." }
+    fn name(&self) -> &str {
+        "spotify_library"
+    }
+    fn description(&self) -> &str {
+        "Access your Spotify library: saved tracks, albums, and check saved status."
+    }
     fn schema(&self) -> ToolSchema {
         ToolSchema::from_type::<LibraryArgs>(self.name(), self.description())
     }
     async fn execute(&self, args: Value, _context: ToolContext) -> ToolResult {
         let p: LibraryArgs = match serde_json::from_value(args) {
-            Ok(a) => a, Err(e) => return ToolResult::error(self.name(), format!("Invalid args: {}", e)),
+            Ok(a) => a,
+            Err(e) => return ToolResult::error(self.name(), format!("Invalid args: {}", e)),
         };
         let sc = match SpotifyClient::new() {
             Some(c) => c,
@@ -472,7 +569,8 @@ impl HermesTool for SpotifyLibraryTool {
             }
             LibraryAction::CheckSaved => {
                 let ids = p.ids.clone().unwrap_or_default();
-                sc.get(&format!("/me/tracks/contains?ids={}", ids.join(","))).await
+                sc.get(&format!("/me/tracks/contains?ids={}", ids.join(",")))
+                    .await
             }
         }
     }
@@ -504,11 +602,19 @@ mod tests {
         assert_eq!(urlencoding("test"), "test");
     }
 
-    test_schema!(test_playback_schema, SpotifyPlaybackTool, "spotify_playback");
+    test_schema!(
+        test_playback_schema,
+        SpotifyPlaybackTool,
+        "spotify_playback"
+    );
     test_schema!(test_devices_schema, SpotifyDevicesTool, "spotify_devices");
     test_schema!(test_queue_schema, SpotifyQueueTool, "spotify_queue");
     test_schema!(test_search_schema, SpotifySearchTool, "spotify_search");
-    test_schema!(test_playlists_schema, SpotifyPlaylistsTool, "spotify_playlists");
+    test_schema!(
+        test_playlists_schema,
+        SpotifyPlaylistsTool,
+        "spotify_playlists"
+    );
     test_schema!(test_albums_schema, SpotifyAlbumsTool, "spotify_albums");
     test_schema!(test_library_schema, SpotifyLibraryTool, "spotify_library");
 }

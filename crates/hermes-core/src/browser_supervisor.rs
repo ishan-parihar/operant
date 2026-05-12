@@ -50,17 +50,17 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use chrono::Utc;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use schemars::JsonSchema;
 use tokio::sync::RwLock;
 use tracing::{debug, info, instrument, warn};
 use uuid::Uuid;
 
-use base64::Engine;
 use crate::error::{Error, Result};
 use crate::schema::ToolSchema;
 use crate::tools::{HermesTool, ToolContext, ToolResult};
+use base64::Engine;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -96,7 +96,9 @@ impl std::str::FromStr for CloudProvider {
             "firecrawl" => Ok(CloudProvider::Firecrawl),
             _ => Err(Error::InvalidToolArgs {
                 name: "cloud_provider".into(),
-                details: format!("Unknown cloud provider: {s}. Expected: browserbase, browser_use, firecrawl"),
+                details: format!(
+                    "Unknown cloud provider: {s}. Expected: browserbase, browser_use, firecrawl"
+                ),
             }),
         }
     }
@@ -267,9 +269,7 @@ impl CloudProviderClient for BrowserbaseClient {
             .or_else(|| data.get("sessionId"))
             .and_then(|v| v.as_str())
             .map(|s| s.to_string())
-            .ok_or_else(|| {
-                Error::ParseResponse("Browserbase response missing session ID".into())
-            })
+            .ok_or_else(|| Error::ParseResponse("Browserbase response missing session ID".into()))
     }
 
     async fn close_session(&self, session_id: &str) -> Result<()> {
@@ -304,9 +304,10 @@ impl CloudProviderClient for BrowserbaseClient {
             return Ok(SessionStatus::Error("Failed to fetch status".into()));
         }
 
-        let data: Value = resp.json().await.map_err(|e| {
-            Error::ParseResponse(format!("Browserbase status JSON: {e}"))
-        })?;
+        let data: Value = resp
+            .json()
+            .await
+            .map_err(|e| Error::ParseResponse(format!("Browserbase status JSON: {e}")))?;
 
         let status_str = data.get("status").and_then(|v| v.as_str()).unwrap_or("");
         Ok(match status_str {
@@ -389,13 +390,10 @@ impl CloudProviderClient for BrowserUseClient {
         Ok(vec![
             0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, // PNG header
             0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52, // IHDR chunk
-            0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
-            0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
-            0x89, 0x00, 0x00, 0x00, 0x0a, 0x49, 0x44, 0x41,
-            0x54, 0x78, 0x9c, 0x62, 0x00, 0x00, 0x00, 0x02,
-            0x00, 0x01, 0xe5, 0x27, 0xde, 0xfc, 0x00, 0x00,
-            0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42,
-            0x60, 0x82,
+            0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f,
+            0x15, 0xc4, 0x89, 0x00, 0x00, 0x00, 0x0a, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9c, 0x62,
+            0x00, 0x00, 0x00, 0x02, 0x00, 0x01, 0xe5, 0x27, 0xde, 0xfc, 0x00, 0x00, 0x00, 0x00,
+            0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
         ])
     }
 }
@@ -493,9 +491,10 @@ impl CloudProviderClient for FirecrawlClient {
             return Ok(SessionStatus::Error("Failed to poll crawl status".into()));
         }
 
-        let data: Value = resp.json().await.map_err(|e| {
-            Error::ParseResponse(format!("Firecrawl status JSON: {e}"))
-        })?;
+        let data: Value = resp
+            .json()
+            .await
+            .map_err(|e| Error::ParseResponse(format!("Firecrawl status JSON: {e}")))?;
 
         let status_str = data.get("status").and_then(|v| v.as_str()).unwrap_or("");
         Ok(match status_str {
@@ -523,7 +522,9 @@ impl CloudProviderClient for FirecrawlClient {
 // ---------------------------------------------------------------------------
 
 /// Create a cloud provider client from configuration.
-pub fn create_provider_client(config: &CloudProviderConfig) -> Result<Box<dyn CloudProviderClient>> {
+pub fn create_provider_client(
+    config: &CloudProviderConfig,
+) -> Result<Box<dyn CloudProviderClient>> {
     match config.provider_type {
         CloudProvider::Browserbase => {
             let key = config
@@ -531,7 +532,10 @@ pub fn create_provider_client(config: &CloudProviderConfig) -> Result<Box<dyn Cl
                 .clone()
                 .or_else(|| std::env::var("BROWSERBASE_API_KEY").ok())
                 .ok_or_else(|| Error::MissingApiKey)?;
-            Ok(Box::new(BrowserbaseClient::new(key, config.api_url.clone())))
+            Ok(Box::new(BrowserbaseClient::new(
+                key,
+                config.api_url.clone(),
+            )))
         }
         CloudProvider::BrowserUse => {
             let key = config
@@ -573,8 +577,8 @@ pub struct CDPSupervisor {
 impl CDPSupervisor {
     /// Create a new supervisor with the given cloud provider configuration.
     pub fn new(config: CloudProviderConfig) -> Self {
-        let client = create_provider_client(&config)
-            .expect("Failed to create cloud provider client");
+        let client =
+            create_provider_client(&config).expect("Failed to create cloud provider client");
         Self {
             sessions: Arc::new(RwLock::new(HashMap::new())),
             config,
@@ -615,10 +619,8 @@ impl CDPSupervisor {
             self.client.create_session(url.as_deref()).await?
         };
 
-        let mut session = BrowserSession::new(
-            provider.as_ref().unwrap_or(&self.config.provider_type),
-            url,
-        );
+        let mut session =
+            BrowserSession::new(provider.as_ref().unwrap_or(&self.config.provider_type), url);
         session.session_id = session_id;
 
         let id = session.session_id.clone();
@@ -672,11 +674,11 @@ impl CDPSupervisor {
     #[instrument(skip(self))]
     pub async fn keep_alive(&self, session_id: &str) -> Result<()> {
         let mut sessions = self.sessions.write().await;
-        let session = sessions.get_mut(session_id).ok_or_else(|| {
-            Error::ToolNotFound {
+        let session = sessions
+            .get_mut(session_id)
+            .ok_or_else(|| Error::ToolNotFound {
                 name: format!("session_{session_id}"),
-            }
-        })?;
+            })?;
         session.keep_alive();
         debug!(session = %session_id, "Session keep-alive refreshed");
         Ok(())
@@ -702,11 +704,7 @@ impl CDPSupervisor {
     ///
     /// This is a stub — real CDP JS injection is handled by the browser's
     /// CDP utils layer. Returns a success message.
-    pub async fn inject_dialog_bridge(
-        &self,
-        session_id: &str,
-        js_code: &str,
-    ) -> Result<String> {
+    pub async fn inject_dialog_bridge(&self, session_id: &str, js_code: &str) -> Result<String> {
         // Validate session exists
         let exists = {
             let sessions = self.sessions.read().await;
@@ -931,10 +929,7 @@ impl HermesTool for CdpNavigateTool {
             Err(e) => return ToolResult::error(self.name(), format!("Invalid args: {e}")),
         };
 
-        let wait = parsed
-            .wait_until
-            .as_deref()
-            .unwrap_or("load");
+        let wait = parsed.wait_until.as_deref().unwrap_or("load");
 
         ToolResult::success(
             self.name(),
@@ -1151,10 +1146,7 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(10)).await;
 
         supervisor.keep_alive(&session.session_id).await.unwrap();
-        let updated = supervisor
-            .get_session(&session.session_id)
-            .await
-            .unwrap();
+        let updated = supervisor.get_session(&session.session_id).await.unwrap();
 
         assert_ne!(original, updated.last_active);
     }
@@ -1237,9 +1229,7 @@ mod tests {
         for sid in &session_ids {
             let sup = supervisor.clone();
             let sid = sid.clone();
-            close_handles.push(tokio::spawn(async move {
-                sup.close_session(&sid).await
-            }));
+            close_handles.push(tokio::spawn(async move { sup.close_session(&sid).await }));
         }
 
         for handle in close_handles {
@@ -1368,7 +1358,10 @@ mod tests {
             .await;
 
         assert!(!result.success);
-        assert!(result.error.unwrap_or_default().contains("Missing session_id"));
+        assert!(result
+            .error
+            .unwrap_or_default()
+            .contains("Missing session_id"));
     }
 
     #[tokio::test]
@@ -1446,7 +1439,10 @@ mod tests {
     async fn test_browser_use_client_stub() {
         let client = BrowserUseClient::new("test".into());
 
-        let session_id = client.create_session(Some("https://example.com")).await.unwrap();
+        let session_id = client
+            .create_session(Some("https://example.com"))
+            .await
+            .unwrap();
         assert!(session_id.starts_with("browser_use_"));
 
         let status = client.get_session_status(&session_id).await.unwrap();
@@ -1489,7 +1485,9 @@ mod tests {
             region: None,
         };
         let supervisor = CDPSupervisor::new(config);
-        let result = supervisor.inject_dialog_bridge("no-such-session", "code").await;
+        let result = supervisor
+            .inject_dialog_bridge("no-such-session", "code")
+            .await;
         assert!(result.is_err());
     }
 }

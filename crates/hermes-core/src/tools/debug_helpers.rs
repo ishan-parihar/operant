@@ -38,10 +38,7 @@ impl HermesTool for InspectJsonTool {
         let args: InspectJsonArgs = match serde_json::from_value(args) {
             Ok(a) => a,
             Err(e) => {
-                return ToolResult::error(
-                    "debug_inspect_json",
-                    format!("Invalid arguments: {}", e),
-                )
+                return ToolResult::error("debug_inspect_json", format!("Invalid arguments: {}", e))
             }
         };
 
@@ -166,9 +163,7 @@ impl HermesTool for EnvVarTool {
     async fn execute(&self, args: Value, _context: ToolContext) -> ToolResult {
         let _args: EnvVarArgs = match serde_json::from_value(args) {
             Ok(a) => a,
-            Err(e) => {
-                return ToolResult::error("debug_env", format!("Invalid arguments: {}", e))
-            }
+            Err(e) => return ToolResult::error("debug_env", format!("Invalid arguments: {}", e)),
         };
 
         let mut vars: Vec<serde_json::Value> = Vec::new();
@@ -223,10 +218,7 @@ impl HermesTool for SystemInfoTool {
     }
 
     fn schema(&self) -> ToolSchema {
-        ToolSchema::from_type::<SystemInfoArgs>(
-            "debug_system",
-            "Get system information",
-        )
+        ToolSchema::from_type::<SystemInfoArgs>("debug_system", "Get system information")
     }
 
     async fn execute(&self, _args: Value, _context: ToolContext) -> ToolResult {

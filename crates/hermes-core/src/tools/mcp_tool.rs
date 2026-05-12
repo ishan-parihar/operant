@@ -109,23 +109,23 @@ impl HermesTool for McpManagementTool {
                 let transport = self.mcp_manager.get(&server_name).await;
                 match transport {
                     Some(t) => {
-                        let args = parsed.arguments.unwrap_or(Value::Object(Default::default()));
+                        let args = parsed
+                            .arguments
+                            .unwrap_or(Value::Object(Default::default()));
                         match t.call_tool(&tool_name, args).await {
                             Ok(result) => {
                                 let content = serde_json::to_string(&result)
                                     .unwrap_or_else(|_| "{}".to_string());
                                 ToolResult::success(self.name(), content)
                             }
-                            Err(e) => ToolResult::error(
-                                self.name(),
-                                format!("Tool call failed: {e}"),
-                            ),
+                            Err(e) => {
+                                ToolResult::error(self.name(), format!("Tool call failed: {e}"))
+                            }
                         }
                     }
-                    None => ToolResult::error(
-                        self.name(),
-                        format!("Server '{server_name}' not found"),
-                    ),
+                    None => {
+                        ToolResult::error(self.name(), format!("Server '{server_name}' not found"))
+                    }
                 }
             }
             McpManagementAction::AddServer => {
@@ -153,9 +153,7 @@ impl HermesTool for McpManagementTool {
                     .await
                 {
                     Ok(_) => ToolResult::success(self.name(), "Server added successfully"),
-                    Err(e) => {
-                        ToolResult::error(self.name(), format!("Failed to add server: {e}"))
-                    }
+                    Err(e) => ToolResult::error(self.name(), format!("Failed to add server: {e}")),
                 }
             }
             McpManagementAction::RemoveServer => {

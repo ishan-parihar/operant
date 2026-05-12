@@ -431,10 +431,7 @@ mod tests {
 
     #[test]
     fn test_save_creates_parent_directory() {
-        let dir = std::env::temp_dir().join(format!(
-            "hermes_usage_subdir_{}",
-            std::process::id()
-        ));
+        let dir = std::env::temp_dir().join(format!("hermes_usage_subdir_{}", std::process::id()));
         let path = dir.join("subdir").join(".usage.json");
         let mut telemetry = UsageTelemetry::new();
         telemetry.bump_use("test");

@@ -134,17 +134,12 @@ struct HardlineEntry {
 const HARDLINE_BLOCKLIST: &[HardlineEntry] = &[
     HardlineEntry {
         category: "WILDCARD_ABUSE",
-        patterns: &[
-            "rm -rf /*",
-            ":(){ :|:& };:",
-        ],
+        patterns: &["rm -rf /*", ":(){ :|:& };:"],
         is_regex: false,
     },
     HardlineEntry {
         category: "WILDCARD_ABUSE",
-        patterns: &[
-            r"(?i)^\s*rm\s+-[rR]f\s+/\s*$",
-        ],
+        patterns: &[r"(?i)^\s*rm\s+-[rR]f\s+/\s*$"],
         is_regex: true,
     },
     HardlineEntry {
@@ -201,34 +196,19 @@ const HARDLINE_BLOCKLIST: &[HardlineEntry] = &[
     },
     HardlineEntry {
         category: "EXPOSURE_RISK",
-        patterns: &[
-            "chmod 777 /",
-            "chmod 755 /",
-            "chmod +x /",
-        ],
+        patterns: &["chmod 777 /", "chmod 755 /", "chmod +x /"],
         is_regex: false,
     },
     HardlineEntry {
         category: "PRIVILEGE_ESCALATION",
         patterns: &[
-            "sudo !!",
-            "sudo su",
-            "su -",
-            "pkexec",
-            "doas",
-            "gksudo",
-            "kdesudo",
+            "sudo !!", "sudo su", "su -", "pkexec", "doas", "gksudo", "kdesudo",
         ],
         is_regex: false,
     },
     HardlineEntry {
         category: "PACKAGE_RISK",
-        patterns: &[
-            "rm -rf /etc",
-            "rm -rf /usr",
-            "rm -rf /bin",
-            "rm -rf /boot",
-        ],
+        patterns: &["rm -rf /etc", "rm -rf /usr", "rm -rf /bin", "rm -rf /boot"],
         is_regex: false,
     },
     HardlineEntry {
@@ -254,32 +234,17 @@ const HARDLINE_BLOCKLIST: &[HardlineEntry] = &[
     },
     HardlineEntry {
         category: "DATA_DESTRUCTION",
-        patterns: &[
-            "shred",
-            "wipefs",
-            "badblocks",
-            "hdparm",
-            "fdisk",
-            "parted",
-        ],
+        patterns: &["shred", "wipefs", "badblocks", "hdparm", "fdisk", "parted"],
         is_regex: false,
     },
     HardlineEntry {
         category: "INFRA_EXFIL",
-        patterns: &[
-            "kubectl port-forward",
-            "ssh -L",
-            "ssh -R",
-            "socat",
-        ],
+        patterns: &["kubectl port-forward", "ssh -L", "ssh -R", "socat"],
         is_regex: false,
     },
     HardlineEntry {
         category: "NETWORK_ABUSE",
-        patterns: &[
-            r"(?i)(?:^|;|&&|\|\||`)\s*nmap\s+",
-            "sqlmap",
-        ],
+        patterns: &[r"(?i)(?:^|;|&&|\|\||`)\s*nmap\s+", "sqlmap"],
         is_regex: true,
     },
 ];
@@ -667,21 +632,14 @@ pub fn check_tool_approval(
 /// - Other tools → just the tool name
 fn extract_command_from_args(tool_name: &str, args: &Value) -> String {
     match tool_name {
-        "terminal" | "code_execution" | "process" => {
-            args.get("command")
-                .and_then(|v| v.as_str())
-                .unwrap_or(tool_name)
-                .to_string()
-        }
+        "terminal" | "code_execution" | "process" => args
+            .get("command")
+            .and_then(|v| v.as_str())
+            .unwrap_or(tool_name)
+            .to_string(),
         "file_write" | "patch" => {
-            let path = args
-                .get("path")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            let content = args
-                .get("content")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
+            let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("");
+            let content = args.get("content").and_then(|v| v.as_str()).unwrap_or("");
             if content.len() > 100 {
                 format!("file_write: {} ({} bytes)", path, content.len())
             } else {
@@ -719,10 +677,7 @@ pub fn prompt_user_for_approval(
             warn!(tool = %tool_name, reason = %reason, "Blocked operation — no prompt shown");
             return false;
         }
-        ApprovalVerdict::RequiresApproval {
-            risk_level,
-            reason,
-        } => {
+        ApprovalVerdict::RequiresApproval { risk_level, reason } => {
             let risk_str = match risk_level {
                 RiskLevel::Low => "LOW",
                 RiskLevel::Medium => "MEDIUM",
@@ -730,11 +685,12 @@ pub fn prompt_user_for_approval(
                 RiskLevel::Critical => "CRITICAL",
             };
 
-            println!(
-                "\n⚠️  APPROVAL REQUIRED [{risk_str}] — Tool: {tool_name}"
-            );
+            println!("\n⚠️  APPROVAL REQUIRED [{risk_str}] — Tool: {tool_name}");
             println!("   Reason: {reason}");
-            println!("   Type 'y' to approve, anything else to deny (timeout: {}s):", timeout.as_secs());
+            println!(
+                "   Type 'y' to approve, anything else to deny (timeout: {}s):",
+                timeout.as_secs()
+            );
             print!("   > ");
 
             use std::io::{self, Write};
@@ -881,10 +837,7 @@ mod tests {
     fn test_mode_off_always_allows() {
         let guard = ApprovalGuard::new(ApprovalMode::Off);
         let ctx = ApprovalContext::default();
-        assert_eq!(
-            guard.check("rm -rf /", &ctx),
-            ApprovalVerdict::Allowed
-        );
+        assert_eq!(guard.check("rm -rf /", &ctx), ApprovalVerdict::Allowed);
     }
 
     #[test]
@@ -911,10 +864,7 @@ mod tests {
     fn test_mode_smart_allows_ls() {
         let guard = ApprovalGuard::new(ApprovalMode::Smart);
         let ctx = ApprovalContext::default();
-        assert_eq!(
-            guard.check("ls -la", &ctx),
-            ApprovalVerdict::Allowed
-        );
+        assert_eq!(guard.check("ls -la", &ctx), ApprovalVerdict::Allowed);
     }
 
     // ---- Dangerous Pattern Tests ----
@@ -1019,11 +969,8 @@ mod tests {
 
     #[test]
     fn test_check_tool_approval_terminal_safe() {
-        let result = check_tool_approval(
-            "terminal",
-            &serde_json::json!({"command": "ls -la"}),
-            None,
-        );
+        let result =
+            check_tool_approval("terminal", &serde_json::json!({"command": "ls -la"}), None);
         assert_eq!(result.verdict, "allowed");
     }
 
@@ -1166,10 +1113,7 @@ mod tests {
 
     #[test]
     fn test_verdict_allowed() {
-        assert_eq!(
-            ApprovalVerdict::Allowed,
-            ApprovalVerdict::Allowed
-        );
+        assert_eq!(ApprovalVerdict::Allowed, ApprovalVerdict::Allowed);
     }
 
     #[test]

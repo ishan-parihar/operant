@@ -28,9 +28,8 @@ impl Database {
     pub fn init(path: PathBuf) -> Result<Self> {
         // Ensure parent directory exists
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| {
-                Error::Agent(format!("Failed to create database directory: {}", e))
-            })?;
+            std::fs::create_dir_all(parent)
+                .map_err(|e| Error::Agent(format!("Failed to create database directory: {}", e)))?;
         }
 
         info!("Initializing database at {:?}", path);
@@ -38,10 +37,15 @@ impl Database {
             .map_err(|e| Error::Agent(format!("Failed to open database: {}", e)))?;
 
         // Enable WAL mode for better concurrent read/write performance
-        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON;")
-            .unwrap_or_else(|e| {
-                warn!("Failed to enable WAL mode, using default journal mode: {}", e);
-            });
+        conn.execute_batch(
+            "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON;",
+        )
+        .unwrap_or_else(|e| {
+            warn!(
+                "Failed to enable WAL mode, using default journal mode: {}",
+                e
+            );
+        });
 
         let db = Self {
             conn: Arc::new(Mutex::new(conn)),
@@ -416,11 +420,8 @@ impl Database {
     /// Delete a session and all its messages.
     pub fn delete_session(&self, session_id: &str) -> Result<()> {
         let conn = self.conn.lock().unwrap();
-        conn.execute(
-            "DELETE FROM sessions WHERE id = ?1",
-            params![session_id],
-        )
-        .map_err(|e| Error::Agent(format!("Failed to delete session: {}", e)))?;
+        conn.execute("DELETE FROM sessions WHERE id = ?1", params![session_id])
+            .map_err(|e| Error::Agent(format!("Failed to delete session: {}", e)))?;
         Ok(())
     }
 
@@ -498,17 +499,17 @@ impl Database {
     /// Delete a checkpoint.
     pub fn delete_checkpoint(&self, hash: &str) -> Result<()> {
         let conn = self.conn.lock().unwrap();
-        conn.execute(
-            "DELETE FROM checkpoints WHERE hash = ?1",
-            params![hash],
-        )
-        .map_err(|e| Error::Agent(format!("Failed to delete checkpoint: {}", e)))?;
+        conn.execute("DELETE FROM checkpoints WHERE hash = ?1", params![hash])
+            .map_err(|e| Error::Agent(format!("Failed to delete checkpoint: {}", e)))?;
         Ok(())
     }
 
     /// Get database file path (for testing/verification).
     pub fn path(&self) -> Option<PathBuf> {
-        self.conn.lock().ok().map(|c| PathBuf::from(c.path().unwrap_or("")))
+        self.conn
+            .lock()
+            .ok()
+            .map(|c| PathBuf::from(c.path().unwrap_or("")))
     }
 
     // === Session Metadata ===
@@ -549,7 +550,8 @@ impl Database {
             .map_err(|e| Error::Agent(format!("Metadata query error: {}", e)))?;
         let mut map = HashMap::new();
         for row in rows {
-            let (key, value) = row.map_err(|e| Error::Agent(format!("Metadata row error: {}", e)))?;
+            let (key, value) =
+                row.map_err(|e| Error::Agent(format!("Metadata row error: {}", e)))?;
             map.insert(key, value);
         }
         Ok(map)
@@ -686,7 +688,8 @@ impl Database {
             .map_err(|e| Error::Agent(format!("Session-by-tag query error: {}", e)))?;
         let mut sessions: Vec<SessionSummary> = Vec::new();
         for row in rows {
-            sessions.push(row.map_err(|e| Error::Agent(format!("Session-by-tag row error: {}", e)))?);
+            sessions
+                .push(row.map_err(|e| Error::Agent(format!("Session-by-tag row error: {}", e)))?);
         }
         self.enrich_session_tags(&conn, &mut sessions)?;
         Ok(sessions)
@@ -695,7 +698,12 @@ impl Database {
     // === Events ===
 
     /// Record an event for a session.
-    pub fn record_event(&self, session_id: &str, event_type: &str, event_data: &Value) -> Result<()> {
+    pub fn record_event(
+        &self,
+        session_id: &str,
+        event_type: &str,
+        event_data: &Value,
+    ) -> Result<()> {
         let data_json = serde_json::to_string(event_data)?;
         let now = chrono::Utc::now().to_rfc3339();
         let conn = self.conn.lock().unwrap();
@@ -708,7 +716,11 @@ impl Database {
     }
 
     /// Get events for a session.
-    pub fn get_session_events(&self, session_id: &str, limit: Option<u32>) -> Result<Vec<StoredEvent>> {
+    pub fn get_session_events(
+        &self,
+        session_id: &str,
+        limit: Option<u32>,
+    ) -> Result<Vec<StoredEvent>> {
         let conn = self.conn.lock().unwrap();
         let limit = limit.unwrap_or(50) as i64;
         let mut stmt = conn
@@ -723,7 +735,8 @@ impl Database {
         let rows = stmt
             .query_map(params![session_id, limit], |row| {
                 let event_data_str: String = row.get(3)?;
-                let event_data: Value = serde_json::from_str(&event_data_str).unwrap_or(Value::Null);
+                let event_data: Value =
+                    serde_json::from_str(&event_data_str).unwrap_or(Value::Null);
                 Ok(StoredEvent {
                     id: row.get(0)?,
                     session_id: row.get(1)?,
@@ -741,7 +754,11 @@ impl Database {
     }
 
     /// Get events by type across all sessions.
-    pub fn get_events_by_type(&self, event_type: &str, limit: Option<u32>) -> Result<Vec<StoredEvent>> {
+    pub fn get_events_by_type(
+        &self,
+        event_type: &str,
+        limit: Option<u32>,
+    ) -> Result<Vec<StoredEvent>> {
         let conn = self.conn.lock().unwrap();
         let limit = limit.unwrap_or(50) as i64;
         let mut stmt = conn
@@ -756,7 +773,8 @@ impl Database {
         let rows = stmt
             .query_map(params![event_type, limit], |row| {
                 let event_data_str: String = row.get(3)?;
-                let event_data: Value = serde_json::from_str(&event_data_str).unwrap_or(Value::Null);
+                let event_data: Value =
+                    serde_json::from_str(&event_data_str).unwrap_or(Value::Null);
                 Ok(StoredEvent {
                     id: row.get(0)?,
                     session_id: row.get(1)?,
@@ -929,7 +947,8 @@ impl Database {
             .map_err(|e| Error::Agent(format!("Recent sessions query error: {}", e)))?;
         let mut sessions = Vec::new();
         for row in rows {
-            sessions.push(row.map_err(|e| Error::Agent(format!("Recent sessions row error: {}", e)))?);
+            sessions
+                .push(row.map_err(|e| Error::Agent(format!("Recent sessions row error: {}", e)))?);
         }
         self.enrich_session_tags(&conn, &mut sessions)?;
         Ok(sessions)
@@ -965,7 +984,8 @@ impl Database {
             .map_err(|e| Error::Agent(format!("Active sessions query error: {}", e)))?;
         let mut sessions = Vec::new();
         for row in rows {
-            sessions.push(row.map_err(|e| Error::Agent(format!("Active sessions row error: {}", e)))?);
+            sessions
+                .push(row.map_err(|e| Error::Agent(format!("Active sessions row error: {}", e)))?);
         }
         self.enrich_session_tags(&conn, &mut sessions)?;
         Ok(sessions)
@@ -1017,7 +1037,11 @@ impl Database {
     }
 
     /// Enrich a list of SessionSummary with their tags (in-place).
-    fn enrich_session_tags(&self, conn: &Connection, sessions: &mut [SessionSummary]) -> Result<()> {
+    fn enrich_session_tags(
+        &self,
+        conn: &Connection,
+        sessions: &mut [SessionSummary],
+    ) -> Result<()> {
         for session in sessions.iter_mut() {
             let mut stmt = conn
                 .prepare("SELECT tag FROM session_tags WHERE session_id = ?1 ORDER BY tag")
@@ -1156,7 +1180,7 @@ fn contains_cjk(text: &str) -> bool {
             || (0x3040..=0x309F).contains(&range)   // Hiragana
             || (0x30A0..=0x30FF).contains(&range)   // Katakana
             || (0xFF00..=0xFFEF).contains(&range)   // Halfwidth/Fullwidth
-            || (0xAC00..=0xD7AF).contains(&range)   // Hangul Syllables
+            || (0xAC00..=0xD7AF).contains(&range) // Hangul Syllables
     })
 }
 
@@ -1171,13 +1195,19 @@ mod tests {
 
     fn test_db() -> Database {
         let counter = DB_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let path = std::env::temp_dir()
-            .join(format!("hermes_test_{}_{}.db", std::process::id(), counter));
+        let path =
+            std::env::temp_dir().join(format!("hermes_test_{}_{}.db", std::process::id(), counter));
         let _ = std::fs::remove_file(&path);
         let db = Database::init(path).expect("Failed to create test database");
         let id = "test-session";
-        db.save_session(id, Some("test"), "test", "2024-01-01T00:00:00Z", "2024-01-01T00:00:00Z")
-            .expect("Failed to create test session");
+        db.save_session(
+            id,
+            Some("test"),
+            "test",
+            "2024-01-01T00:00:00Z",
+            "2024-01-01T00:00:00Z",
+        )
+        .expect("Failed to create test session");
         db
     }
 
@@ -1196,8 +1226,10 @@ mod tests {
         let db = test_db();
         let session_id = "test-session";
 
-        db.set_session_metadata(session_id, "key1", "value1").unwrap();
-        db.set_session_metadata(session_id, "key2", "value2").unwrap();
+        db.set_session_metadata(session_id, "key1", "value1")
+            .unwrap();
+        db.set_session_metadata(session_id, "key2", "value2")
+            .unwrap();
         assert_eq!(
             db.get_session_metadata(session_id, "key1"),
             Some("value1".to_string())
@@ -1221,7 +1253,8 @@ mod tests {
         let state = serde_json::json!({"count": 42, "active": true});
 
         // Set
-        db.set_tool_state(session_id, "code_executor", &state).unwrap();
+        db.set_tool_state(session_id, "code_executor", &state)
+            .unwrap();
 
         // Get
         let retrieved = db.get_tool_state(session_id, "code_executor");
@@ -1233,12 +1266,14 @@ mod tests {
 
         // Update
         let new_state = serde_json::json!({"count": 99});
-        db.set_tool_state(session_id, "code_executor", &new_state).unwrap();
+        db.set_tool_state(session_id, "code_executor", &new_state)
+            .unwrap();
         let retrieved = db.get_tool_state(session_id, "code_executor").unwrap();
         assert_eq!(retrieved["count"], 99);
 
         // Clear single
-        db.set_tool_state(session_id, "other_tool", &serde_json::json!({"x": 1})).unwrap();
+        db.set_tool_state(session_id, "other_tool", &serde_json::json!({"x": 1}))
+            .unwrap();
         db.clear_tool_state(session_id, "other_tool").unwrap();
         assert!(db.get_tool_state(session_id, "other_tool").is_none());
         // First tool still exists
@@ -1286,10 +1321,18 @@ mod tests {
         let session_id = "test-session";
 
         // Record events
-        db.record_event(session_id, "tool_call", &serde_json::json!({"tool": "bash"}))
-            .unwrap();
-        db.record_event(session_id, "tool_result", &serde_json::json!({"exit_code": 0}))
-            .unwrap();
+        db.record_event(
+            session_id,
+            "tool_call",
+            &serde_json::json!({"tool": "bash"}),
+        )
+        .unwrap();
+        db.record_event(
+            session_id,
+            "tool_result",
+            &serde_json::json!({"exit_code": 0}),
+        )
+        .unwrap();
         db.record_event(session_id, "error", &serde_json::json!({"msg": "timeout"}))
             .unwrap();
 
@@ -1318,9 +1361,27 @@ mod tests {
         let session_id = "test-session";
 
         // Add messages with searchable content
-        db.save_message(session_id, "user", "Hello, how do I install Python?", "2024-01-01T00:00:00Z").unwrap();
-        db.save_message(session_id, "assistant", "You can install Python using apt-get", "2024-01-01T00:00:01Z").unwrap();
-        db.save_message(session_id, "user", "What about Rust installation?", "2024-01-01T00:00:02Z").unwrap();
+        db.save_message(
+            session_id,
+            "user",
+            "Hello, how do I install Python?",
+            "2024-01-01T00:00:00Z",
+        )
+        .unwrap();
+        db.save_message(
+            session_id,
+            "assistant",
+            "You can install Python using apt-get",
+            "2024-01-01T00:00:01Z",
+        )
+        .unwrap();
+        db.save_message(
+            session_id,
+            "user",
+            "What about Rust installation?",
+            "2024-01-01T00:00:02Z",
+        )
+        .unwrap();
 
         // Search with FTS5
         let results = db.search_messages_fts("Python", None, None).unwrap();
@@ -1328,11 +1389,15 @@ mod tests {
         assert!(results.iter().any(|r| r.content.contains("Python")));
 
         // Search with session filter
-        let filtered = db.search_messages_fts("install", Some(session_id), None).unwrap();
+        let filtered = db
+            .search_messages_fts("install", Some(session_id), None)
+            .unwrap();
         assert!(!filtered.is_empty());
 
         // Search with no results
-        let empty = db.search_messages_fts("xyznonexistent12345", None, None).unwrap();
+        let empty = db
+            .search_messages_fts("xyznonexistent12345", None, None)
+            .unwrap();
         assert!(empty.is_empty());
     }
 
@@ -1341,10 +1406,34 @@ mod tests {
         let db = test_db();
         let session_id = "test-session";
 
-        db.save_message(session_id, "user", "你好世界，这是一个测试", "2024-01-01T00:00:00Z").unwrap();
-        db.save_message(session_id, "user", "한글 테스트입니다", "2024-01-01T00:00:01Z").unwrap();
-        db.save_message(session_id, "user", "普通の日本語テキスト", "2024-01-01T00:00:02Z").unwrap();
-        db.save_message(session_id, "user", "English message for comparison", "2024-01-01T00:00:03Z").unwrap();
+        db.save_message(
+            session_id,
+            "user",
+            "你好世界，这是一个测试",
+            "2024-01-01T00:00:00Z",
+        )
+        .unwrap();
+        db.save_message(
+            session_id,
+            "user",
+            "한글 테스트입니다",
+            "2024-01-01T00:00:01Z",
+        )
+        .unwrap();
+        db.save_message(
+            session_id,
+            "user",
+            "普通の日本語テキスト",
+            "2024-01-01T00:00:02Z",
+        )
+        .unwrap();
+        db.save_message(
+            session_id,
+            "user",
+            "English message for comparison",
+            "2024-01-01T00:00:03Z",
+        )
+        .unwrap();
 
         // CJK search should use LIKE fallback
         let results = db.search_messages_fts("测试", None, None).unwrap();
@@ -1383,11 +1472,26 @@ mod tests {
         let source_id = "source-session";
 
         // Create two sessions
-        db.save_session(target_id, Some("target"), "test", "2024-01-01T00:00:00Z", "2024-01-01T00:00:00Z").unwrap();
-        db.save_session(source_id, Some("source"), "test", "2024-01-01T00:00:01Z", "2024-01-01T00:00:01Z").unwrap();
+        db.save_session(
+            target_id,
+            Some("target"),
+            "test",
+            "2024-01-01T00:00:00Z",
+            "2024-01-01T00:00:00Z",
+        )
+        .unwrap();
+        db.save_session(
+            source_id,
+            Some("source"),
+            "test",
+            "2024-01-01T00:00:01Z",
+            "2024-01-01T00:00:01Z",
+        )
+        .unwrap();
 
         // Add messages and tags to source
-        db.save_message(source_id, "user", "source message", "2024-01-01T00:00:02Z").unwrap();
+        db.save_message(source_id, "user", "source message", "2024-01-01T00:00:02Z")
+            .unwrap();
         db.add_session_tag(source_id, "source-tag").unwrap();
 
         // Merge
@@ -1458,9 +1562,11 @@ mod tests {
 
         // Add metadata, tool state, tags, events
         db.set_session_metadata(session_id, "k", "v").unwrap();
-        db.set_tool_state(session_id, "tool1", &serde_json::json!({"x": 1})).unwrap();
+        db.set_tool_state(session_id, "tool1", &serde_json::json!({"x": 1}))
+            .unwrap();
         db.add_session_tag(session_id, "mytag").unwrap();
-        db.record_event(session_id, "test_event", &serde_json::json!({"ok": true})).unwrap();
+        db.record_event(session_id, "test_event", &serde_json::json!({"ok": true}))
+            .unwrap();
 
         // Delete session
         db.delete_session(session_id).unwrap();

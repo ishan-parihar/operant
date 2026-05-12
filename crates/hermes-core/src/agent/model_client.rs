@@ -8,8 +8,8 @@ use async_trait::async_trait;
 use futures::stream::BoxStream;
 
 use crate::client::{ChatResponse, Message, ToolCall};
-use crate::schema::ToolSchema;
 use crate::error::Result;
+use crate::schema::ToolSchema;
 
 // ---------------------------------------------------------------------------
 // ChatRequest
@@ -136,8 +136,7 @@ mod tests {
             "Get weather for a city",
             serde_json::json!({ "type": "object" }),
         )];
-        let req = ChatRequest::new("gpt-4", vec![])
-            .with_tools(tools);
+        let req = ChatRequest::new("gpt-4", vec![]).with_tools(tools);
         assert_eq!(req.tools.len(), 1);
         assert_eq!(req.tools[0].name, "get_weather");
     }
@@ -153,8 +152,7 @@ mod tests {
 
     #[test]
     fn test_chat_request_clone() {
-        let req = ChatRequest::new("gpt-4", vec![Message::user("hi")])
-            .with_stream(true);
+        let req = ChatRequest::new("gpt-4", vec![Message::user("hi")]).with_stream(true);
         let cloned = req.clone();
         assert_eq!(cloned.model, req.model);
         assert_eq!(cloned.messages.len(), req.messages.len());

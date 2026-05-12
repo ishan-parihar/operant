@@ -41,10 +41,7 @@ impl HermesTool for ToolBackendTool {
     }
 
     fn schema(&self) -> ToolSchema {
-        ToolSchema::from_type::<ToolBackendArgs>(
-            "tool_backend",
-            "Query and manage tool backends",
-        )
+        ToolSchema::from_type::<ToolBackendArgs>("tool_backend", "Query and manage tool backends")
     }
 
     async fn execute(&self, args: Value, _context: ToolContext) -> ToolResult {
@@ -70,16 +67,14 @@ impl HermesTool for ToolBackendTool {
                     }),
                 )
             }
-            None => {
-                ToolResult::success(
-                    "tool_backend",
-                    serde_json::json!({
-                        "tool": tool_name,
-                        "available_backends": [],
-                        "current_backend": null
-                    }),
-                )
-            }
+            None => ToolResult::success(
+                "tool_backend",
+                serde_json::json!({
+                    "tool": tool_name,
+                    "available_backends": [],
+                    "current_backend": null
+                }),
+            ),
         }
     }
 }

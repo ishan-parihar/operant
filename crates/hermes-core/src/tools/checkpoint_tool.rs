@@ -154,7 +154,7 @@ impl CheckpointManager {
     /// Internal: take a checkpoint
     fn take_checkpoint(&self, working_dir: &str, reason: &str) -> bool {
         let store_dir = self.config.base_dir.join("store");
-        
+
         // Create store directory if needed
         if let Err(e) = std::fs::create_dir_all(&store_dir) {
             warn!("Failed to create checkpoint store: {}", e);
@@ -233,7 +233,7 @@ impl CheckpointManager {
     /// List available checkpoints for a directory
     pub fn list_checkpoints(&self, working_dir: &str) -> Vec<Checkpoint> {
         let working_path = PathBuf::from(working_dir);
-        
+
         // Get commit log
         let log_output = Command::new("git")
             .args(["log", "--format=%H|%h|%aI|%s", "-n", "20"])
@@ -268,7 +268,12 @@ impl CheckpointManager {
     }
 
     /// Restore files to a checkpoint state
-    pub fn restore(&self, working_dir: &str, commit_hash: &str, file_path: Option<&str>) -> Result<String> {
+    pub fn restore(
+        &self,
+        working_dir: &str,
+        commit_hash: &str,
+        file_path: Option<&str>,
+    ) -> Result<String> {
         let working_path = PathBuf::from(working_dir);
 
         let target = file_path.unwrap_or(".");
@@ -375,9 +380,9 @@ impl HermesTool for CheckpointTool {
                     .get("reason")
                     .and_then(|v| v.as_str())
                     .unwrap_or("manual checkpoint");
-                
+
                 let success = manager.ensure_checkpoint(working_dir);
-                
+
                 if success {
                     ToolResult::success(
                         "checkpoint_ensure",
@@ -410,10 +415,8 @@ impl HermesTool for CheckpointTool {
                     .get("commit_hash")
                     .and_then(|v| v.as_str())
                     .unwrap_or("");
-                
-                let file_path = args
-                    .get("file_path")
-                    .and_then(|v| v.as_str());
+
+                let file_path = args.get("file_path").and_then(|v| v.as_str());
 
                 match manager.restore(working_dir, commit_hash, file_path) {
                     Ok(msg) => ToolResult::success(
@@ -423,10 +426,7 @@ impl HermesTool for CheckpointTool {
                             "message": msg
                         }),
                     ),
-                    Err(e) => ToolResult::error(
-                        "checkpoint_restore",
-                        e.to_string(),
-                    ),
+                    Err(e) => ToolResult::error("checkpoint_restore", e.to_string()),
                 }
             }
             "diff" => {
@@ -445,15 +445,15 @@ impl HermesTool for CheckpointTool {
                             "diff": diff
                         }),
                     ),
-                    Err(e) => ToolResult::error(
-                        "checkpoint_diff",
-                        e.to_string(),
-                    ),
+                    Err(e) => ToolResult::error("checkpoint_diff", e.to_string()),
                 }
             }
             _ => ToolResult::error(
                 "checkpoint",
-                format!("Unknown action: {}. Use: ensure, list, restore, or diff", action),
+                format!(
+                    "Unknown action: {}. Use: ensure, list, restore, or diff",
+                    action
+                ),
             ),
         }
     }
@@ -476,19 +476,30 @@ mod tests {
         assert_eq!(schema.name, "checkpoint");
         let schema_json = serde_json::to_value(&schema).unwrap();
         if let Some(props) = schema_json["inputSchema"]["properties"].as_object() {
-            assert!(props.contains_key("action"), "Schema should have 'action' property");
-            assert!(props.contains_key("workingDir"), "Schema should have 'workingDir' property");
-            assert!(props.contains_key("commitHash"), "Schema should have 'commitHash' property");
+            assert!(
+                props.contains_key("action"),
+                "Schema should have 'action' property"
+            );
+            assert!(
+                props.contains_key("workingDir"),
+                "Schema should have 'workingDir' property"
+            );
+            assert!(
+                props.contains_key("commitHash"),
+                "Schema should have 'commitHash' property"
+            );
         }
     }
 
     #[tokio::test]
     async fn test_checkpoint_execute_unknown_action() {
         let tool = CheckpointTool::new();
-        let result = tool.execute(
-            serde_json::json!({ "action": "invalid", "working_dir": "." }),
-            ToolContext::default(),
-        ).await;
+        let result = tool
+            .execute(
+                serde_json::json!({ "action": "invalid", "working_dir": "." }),
+                ToolContext::default(),
+            )
+            .await;
         assert!(!result.success);
         let err = result.error.unwrap_or_default();
         assert!(err.contains("Unknown action") || err.contains("invalid"));
@@ -497,10 +508,12 @@ mod tests {
     #[tokio::test]
     async fn test_checkpoint_list_with_defaults() {
         let tool = CheckpointTool::new();
-        let result = tool.execute(
-            serde_json::json!({ "action": "list" }),
-            ToolContext::default(),
-        ).await;
+        let result = tool
+            .execute(
+                serde_json::json!({ "action": "list" }),
+                ToolContext::default(),
+            )
+            .await;
         assert!(result.success);
         let content: serde_json::Value = serde_json::from_str(&result.content).unwrap();
         assert_eq!(content["success"], true);
@@ -509,20 +522,21 @@ mod tests {
     #[tokio::test]
     async fn test_checkpoint_default_action_is_list() {
         let tool = CheckpointTool::new();
-        let result = tool.execute(
-            serde_json::json!({}),
-            ToolContext::default(),
-        ).await;
+        let result = tool
+            .execute(serde_json::json!({}), ToolContext::default())
+            .await;
         assert!(result.success);
     }
 
     #[tokio::test]
     async fn test_checkpoint_restore_missing_hash() {
         let tool = CheckpointTool::new();
-        let result = tool.execute(
-            serde_json::json!({ "action": "restore", "working_dir": "." }),
-            ToolContext::default(),
-        ).await;
+        let result = tool
+            .execute(
+                serde_json::json!({ "action": "restore", "working_dir": "." }),
+                ToolContext::default(),
+            )
+            .await;
         assert!(!result.success);
     }
 }

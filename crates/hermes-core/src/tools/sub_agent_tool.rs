@@ -17,10 +17,10 @@ use serde_json::Value;
 use tokio::sync::Mutex;
 use tokio::time::timeout;
 
-use crate::database::Database;
-use crate::agent::{AgentConfig, HermesAgent, ModelClient};
 use crate::agent::clients::openai::OpenAIModelClient;
+use crate::agent::{AgentConfig, HermesAgent, ModelClient};
 use crate::client::{ClientConfig, OpenAIClient};
+use crate::database::Database;
 use crate::schema::ToolSchema;
 use crate::tools::{HermesTool, ToolContext, ToolRegistry, ToolResult};
 
@@ -176,7 +176,13 @@ impl SubAgentTool {
         };
 
         // Build child system prompt based on role
-        let system_prompt = build_child_system_prompt(&goal, context.map(|c| c.into()).as_deref(), effective_role, child_depth, max_depth);
+        let system_prompt = build_child_system_prompt(
+            &goal,
+            context.map(|c| c.into()).as_deref(),
+            effective_role,
+            child_depth,
+            max_depth,
+        );
 
         // Determine effective toolsets based on role and parent toolsets
         let child_toolsets = self.compute_child_toolsets(effective_role);
@@ -227,11 +233,16 @@ impl SubAgentTool {
 
         for (goal, context, role, max_iterations, timeout_seconds) in tasks {
             let tool = self.clone_for_task();
-            let permit = semaphore.clone().acquire_owned().await.map_err(|e| e.to_string())?;
+            let permit = semaphore
+                .clone()
+                .acquire_owned()
+                .await
+                .map_err(|e| e.to_string())?;
 
             let handle = tokio::spawn(async move {
                 let _permit = permit;
-                tool.call(goal, context, role, max_iterations, timeout_seconds).await
+                tool.call(goal, context, role, max_iterations, timeout_seconds)
+                    .await
             });
             handles.push(handle);
         }
@@ -357,8 +368,14 @@ fn build_child_system_prompt(
                 + "Coordinate your workers' results and synthesize them before "
                 + "reporting back to your parent. You are responsible for the "
                 + "final summary, not your workers.\n\n"
-                + &format!("NOTE: You are at depth {}. The delegation tree ", child_depth)
-                + &format!("is capped at max_spawn_depth={}. {}", max_spawn_depth, child_note),
+                + &format!(
+                    "NOTE: You are at depth {}. The delegation tree ",
+                    child_depth
+                )
+                + &format!(
+                    "is capped at max_spawn_depth={}. {}",
+                    max_spawn_depth, child_note
+                ),
         );
     }
 
@@ -428,7 +445,9 @@ impl HermesTool for SubAgentTool {
                     .into_iter()
                     .map(|t| {
                         let role = parsed.role.unwrap_or(SubAgentRole::Leaf);
-                        let timeout = parsed.timeout_seconds.unwrap_or(DEFAULT_CHILD_TIMEOUT_SECONDS);
+                        let timeout = parsed
+                            .timeout_seconds
+                            .unwrap_or(DEFAULT_CHILD_TIMEOUT_SECONDS);
                         (t.goal, t.context, role, parsed.max_iterations, timeout)
                     })
                     .collect();
@@ -449,13 +468,23 @@ impl HermesTool for SubAgentTool {
             // Single mode: require goal
             let goal = match parsed.goal {
                 Some(g) => g,
-                None => return ToolResult::error(TOOL_NAME, "Either 'goal' or 'tasks' must be provided".to_string()),
+                None => {
+                    return ToolResult::error(
+                        TOOL_NAME,
+                        "Either 'goal' or 'tasks' must be provided".to_string(),
+                    )
+                }
             };
 
             let role = parsed.role.unwrap_or(SubAgentRole::Leaf);
-            let timeout = parsed.timeout_seconds.unwrap_or(DEFAULT_CHILD_TIMEOUT_SECONDS);
+            let timeout = parsed
+                .timeout_seconds
+                .unwrap_or(DEFAULT_CHILD_TIMEOUT_SECONDS);
 
-            match self.call(goal, parsed.context, role, parsed.max_iterations, timeout).await {
+            match self
+                .call(goal, parsed.context, role, parsed.max_iterations, timeout)
+                .await
+            {
                 Ok(content) => ToolResult {
                     tool_call_id: TOOL_NAME.to_string(),
                     success: true,
@@ -470,9 +499,7 @@ impl HermesTool for SubAgentTool {
 
 fn parse_args(args: Value) -> Result<SubAgentArgs, String> {
     let parsed: SubAgentArgs = match args {
-        Value::String(s) => {
-            serde_json::from_str(&s).map_err(|e| format!("Invalid JSON: {}", e))?
-        }
+        Value::String(s) => serde_json::from_str(&s).map_err(|e| format!("Invalid JSON: {}", e))?,
         value => serde_json::from_value(value).map_err(|e| format!("Invalid arguments: {}", e))?,
     };
 
@@ -521,7 +548,8 @@ mod tests {
     fn parse_args_accepts_object_argument() {
         let args = parse_args(serde_json::json!({
             "goal": "analyze this module"
-        })).unwrap();
+        }))
+        .unwrap();
         assert_eq!(args.goal, Some("analyze this module".to_string()));
     }
 
@@ -544,7 +572,8 @@ mod tests {
                 { "goal": "task 1" },
                 { "goal": "task 2", "context": "some context" }
             ]
-        })).unwrap();
+        }))
+        .unwrap();
         assert_eq!(args.tasks.unwrap().len(), 2);
     }
 
@@ -553,7 +582,8 @@ mod tests {
         let args = parse_args(serde_json::json!({
             "goal": "test",
             "role": "orchestrator"
-        })).unwrap();
+        }))
+        .unwrap();
         assert_eq!(args.role, Some(SubAgentRole::Orchestrator));
     }
 
@@ -571,7 +601,8 @@ mod tests {
 
     #[test]
     fn build_leaf_system_prompt_contains_goal() {
-        let prompt = build_child_system_prompt("Analyze this", Some("context"), SubAgentRole::Leaf, 1, 2);
+        let prompt =
+            build_child_system_prompt("Analyze this", Some("context"), SubAgentRole::Leaf, 1, 2);
         assert!(prompt.contains("Analyze this"));
         assert!(prompt.contains("context"));
         assert!(!prompt.contains("Orchestrator Role"));
@@ -579,7 +610,8 @@ mod tests {
 
     #[test]
     fn build_orchestrator_system_prompt_contains_delegation_info() {
-        let prompt = build_child_system_prompt("Analyze this", None, SubAgentRole::Orchestrator, 1, 2);
+        let prompt =
+            build_child_system_prompt("Analyze this", None, SubAgentRole::Orchestrator, 1, 2);
         assert!(prompt.contains("Orchestrator Role"));
         assert!(prompt.contains("delegate_task"));
     }

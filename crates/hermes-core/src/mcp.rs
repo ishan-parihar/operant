@@ -853,7 +853,10 @@ impl McpManager {
         let name = name.into();
         let client = McpClient::new(url, auth_token);
         client.connect().await?;
-        self.servers.write().await.insert(name, McpTransport::Http(client));
+        self.servers
+            .write()
+            .await
+            .insert(name, McpTransport::Http(client));
         Ok(())
     }
 
@@ -868,7 +871,10 @@ impl McpManager {
         let name = name.into();
         let client = McpStdioClient::new(command, args, env);
         client.connect().await?;
-        self.servers.write().await.insert(name, McpTransport::Stdio(client));
+        self.servers
+            .write()
+            .await
+            .insert(name, McpTransport::Stdio(client));
         Ok(())
     }
 
@@ -934,7 +940,11 @@ impl McpManager {
             for tool in transport.get_tools().await {
                 let namespaced = McpNamespacedTool::new(server_name, tool);
                 let name = namespaced.name().to_string();
-                if registry.register::<McpNamespacedTool>(namespaced).await.is_ok() {
+                if registry
+                    .register::<McpNamespacedTool>(namespaced)
+                    .await
+                    .is_ok()
+                {
                     prev_names.push(name);
                 }
             }

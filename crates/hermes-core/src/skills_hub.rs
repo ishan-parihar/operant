@@ -45,8 +45,7 @@ const INDEX_CACHE_DIR_NAME: &str = "index-cache";
 /// Cache TTL: 1 hour
 const INDEX_CACHE_TTL_SECS: u64 = 3600;
 /// Hermes centralized index URL
-const HERMES_INDEX_URL: &str =
-    "https://hermes-agent.nousresearch.com/docs/api/skills-index.json";
+const HERMES_INDEX_URL: &str = "https://hermes-agent.nousresearch.com/docs/api/skills-index.json";
 /// Hermes index TTL: 6 hours
 const HERMES_INDEX_TTL_SECS: u64 = 21_600;
 /// Max fetch redirects
@@ -208,7 +207,10 @@ fn normalize_bundle_path(path_value: &str, allow_nested: bool) -> Result<String>
         return Err(Error::Config(format!("Unsafe path (..): {path_value}")));
     }
     if parts[0].len() == 2
-        && parts[0].chars().next().map_or(false, |c| c.is_ascii_alphabetic())
+        && parts[0]
+            .chars()
+            .next()
+            .map_or(false, |c| c.is_ascii_alphabetic())
         && parts[0].ends_with(':')
     {
         return Err(Error::Config(format!("Unsafe path (drive): {path_value}")));
@@ -382,7 +384,7 @@ impl GitHubAuth {
 
     /// Get authorization headers for GitHub API requests.
     pub fn get_headers(&self) -> reqwest::header::HeaderMap {
-        use reqwest::header::{ACCEPT, AUTHORIZATION, HeaderMap, HeaderValue};
+        use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, AUTHORIZATION};
         let mut headers = HeaderMap::new();
         headers.insert(
             ACCEPT,
@@ -535,10 +537,7 @@ impl GitHubSource {
     }
 
     /// Get or fetch the git tree for a repo.
-    async fn get_repo_tree(
-        &self,
-        repo: &str,
-    ) -> Option<(String, Vec<GitTreeEntry>)> {
+    async fn get_repo_tree(&self, repo: &str) -> Option<(String, Vec<GitTreeEntry>)> {
         {
             let cache = self.tree_cache.read().await;
             if let Some(cached) = cache.get(repo) {
@@ -568,9 +567,8 @@ impl GitHubSource {
             .to_string();
 
         // Fetch recursive tree
-        let tree_url = format!(
-            "https://api.github.com/repos/{repo}/git/trees/{default_branch}?recursive=1"
-        );
+        let tree_url =
+            format!("https://api.github.com/repos/{repo}/git/trees/{default_branch}?recursive=1");
         let tree_resp = self
             .client
             .get(&tree_url)
@@ -584,7 +582,11 @@ impl GitHubSource {
         let tree_data: serde_json::Value = tree_resp.json().await.ok()?;
 
         // Skip truncated trees
-        if tree_data.get("truncated").and_then(|v| v.as_bool()).unwrap_or(false) {
+        if tree_data
+            .get("truncated")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
             debug!("Git tree truncated for {repo}, cannot cache");
             return None;
         }
@@ -687,9 +689,7 @@ impl GitHubSource {
                         let rel = entry_path
                             .strip_prefix(&format!("{path}/"))
                             .unwrap_or(&entry_path);
-                        let rel_path = rel
-                            .strip_prefix(path)
-                            .unwrap_or(rel);
+                        let rel_path = rel.strip_prefix(path).unwrap_or(rel);
                         files.insert(
                             if rel_path.contains('/') {
                                 rel_path.to_string()
@@ -722,8 +722,7 @@ impl GitHubSource {
         // Check index cache first
         let cache_key = format!("github_{repo}_{path}");
         if let Some(cached) = read_index_cache(&self.paths, &cache_key).await {
-            let skills: Vec<SkillMeta> =
-                serde_json::from_value(cached).unwrap_or_default();
+            let skills: Vec<SkillMeta> = serde_json::from_value(cached).unwrap_or_default();
             return skills;
         }
 
@@ -790,9 +789,7 @@ impl GitHubSource {
         };
         let yaml_text = &after_open[..close_pos];
         match serde_yaml::from_str::<serde_json::Value>(yaml_text) {
-            Ok(serde_json::Value::Object(map)) => {
-                map.into_iter().collect()
-            }
+            Ok(serde_json::Value::Object(map)) => map.into_iter().collect(),
             _ => HashMap::new(),
         }
     }
@@ -854,9 +851,7 @@ impl SkillSource for GitHubSource {
         let mut results = Vec::new();
 
         for tap in &self.taps {
-            let skills = self
-                .list_skills_in_repo(&tap.repo, &tap.path)
-                .await;
+            let skills = self.list_skills_in_repo(&tap.repo, &tap.path).await;
             for skill in skills {
                 let searchable = format!(
                     "{} {} {}",
@@ -872,14 +867,13 @@ impl SkillSource for GitHubSource {
         }
 
         // Deduplicate by name, preferring higher trust
-        let trust_rank =
-            |t: &str| -> i32 {
-                match t {
-                    "builtin" => 2,
-                    "trusted" => 1,
-                    _ => 0,
-                }
-            };
+        let trust_rank = |t: &str| -> i32 {
+            match t {
+                "builtin" => 2,
+                "trusted" => 1,
+                _ => 0,
+            }
+        };
         let mut seen: HashMap<String, SkillMeta> = HashMap::new();
         for r in results {
             let rank = trust_rank(&r.trust_level);
@@ -940,7 +934,11 @@ impl SkillSource for GitHubSource {
 
         let skill_name = Self::fm_string(&fm, "name");
         let skill_name = if skill_name.is_empty() {
-            skill_path.split('/').last().unwrap_or(skill_path).to_string()
+            skill_path
+                .split('/')
+                .last()
+                .unwrap_or(skill_path)
+                .to_string()
         } else {
             skill_name
         };
@@ -983,7 +981,11 @@ impl WellKnownSkillSource {
     }
 
     fn wrap_identifier(base_url: &str, skill_name: &str) -> String {
-        format!("well-known:{}/{}", base_url.trim_end_matches('/'), skill_name)
+        format!(
+            "well-known:{}/{}",
+            base_url.trim_end_matches('/'),
+            skill_name
+        )
     }
 
     async fn fetch_text(&self, url: &str) -> Option<String> {
@@ -1013,9 +1015,7 @@ impl SkillSource for WellKnownSkillSource {
     }
 
     async fn fetch(&self, identifier: &str) -> Option<SkillBundle> {
-        let ident = identifier
-            .strip_prefix("well-known:")
-            .unwrap_or(identifier);
+        let ident = identifier.strip_prefix("well-known:").unwrap_or(identifier);
         if !ident.starts_with("http://") && !ident.starts_with("https://") {
             return None;
         }
@@ -1026,7 +1026,9 @@ impl SkillSource for WellKnownSkillSource {
         let base_url = skill_url
             .rsplit_once('/')
             .map(|(base, _name)| base.to_string())?;
-        let skill_name_owned = skill_url.rsplit_once('/').map(|(_, name)| name.to_string())?;
+        let skill_name_owned = skill_url
+            .rsplit_once('/')
+            .map(|(_, name)| name.to_string())?;
 
         let md_url = format!("{skill_url}/SKILL.md");
         let text = self.fetch_text(&md_url).await?;
@@ -1045,9 +1047,7 @@ impl SkillSource for WellKnownSkillSource {
     }
 
     async fn inspect(&self, identifier: &str) -> Option<SkillMeta> {
-        let ident = identifier
-            .strip_prefix("well-known:")
-            .unwrap_or(identifier);
+        let ident = identifier.strip_prefix("well-known:").unwrap_or(identifier);
         if !ident.starts_with("http://") && !ident.starts_with("https://") {
             return None;
         }
@@ -1108,7 +1108,9 @@ impl UrlSource {
             return false;
         }
         // Don't steal well-known URLs
-        if ident.contains("/.well-known/skills/") || ident.trim_end_matches('/').ends_with("/index.json") {
+        if ident.contains("/.well-known/skills/")
+            || ident.trim_end_matches('/').ends_with("/index.json")
+        {
             return false;
         }
         // Only claim URLs ending in .md
@@ -1133,9 +1135,7 @@ impl UrlSource {
         let parts: Vec<&str> = path.split('/').filter(|p| !p.is_empty()).collect();
 
         // .../<name>/SKILL.md → <name>
-        if parts.len() >= 2
-            && parts.last().map(|p| p.to_lowercase()) == Some("skill.md".into())
-        {
+        if parts.len() >= 2 && parts.last().map(|p| p.to_lowercase()) == Some("skill.md".into()) {
             let candidate = parts[parts.len() - 2];
             if is_valid_skill_name(candidate) {
                 return Some(candidate.to_lowercase());
@@ -1204,7 +1204,15 @@ impl SkillSource for UrlSource {
 
         let mut metadata = HashMap::new();
         metadata.insert("url".into(), url.to_string());
-        metadata.insert("awaiting_name".into(), if skill_name.is_empty() { "true" } else { "false" }.into());
+        metadata.insert(
+            "awaiting_name".into(),
+            if skill_name.is_empty() {
+                "true"
+            } else {
+                "false"
+            }
+            .into(),
+        );
 
         Some(SkillBundle {
             name: skill_name,
@@ -1235,7 +1243,11 @@ impl SkillSource for UrlSource {
             identifier: url.to_string(),
             trust_level: "community".into(),
             repo: None,
-            path: if skill_name.is_empty() { None } else { Some(skill_name) },
+            path: if skill_name.is_empty() {
+                None
+            } else {
+                Some(skill_name)
+            },
             tags: GitHubSource::fm_tags(&fm),
             extra: {
                 let mut m = HashMap::new();
@@ -1295,14 +1307,13 @@ impl OptionalSkillSource {
 
         for skill_md_path in entries {
             let parent = skill_md_path.parent().unwrap();
-            let rel_parts = parent
-                .strip_prefix(&self.optional_dir)
-                .unwrap_or(parent);
+            let rel_parts = parent.strip_prefix(&self.optional_dir).unwrap_or(parent);
 
             // Skip hidden directories
-            if rel_parts.iter().any(|p| {
-                p.to_str().map_or(false, |s| s.starts_with('.'))
-            }) {
+            if rel_parts
+                .iter()
+                .any(|p| p.to_str().map_or(false, |s| s.starts_with('.')))
+            {
                 continue;
             }
 
@@ -1314,7 +1325,11 @@ impl OptionalSkillSource {
             let fm = Self::parse_frontmatter(&content);
             let name = GitHubSource::fm_string(&fm, "name");
             let skill_name = if name.is_empty() {
-                parent.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string()
+                parent
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("")
+                    .to_string()
             } else {
                 name
             };
@@ -1363,13 +1378,9 @@ impl SkillSource for OptionalSkillSource {
             if query_lower.is_empty() {
                 results.push(meta);
             } else {
-                let searchable = format!(
-                    "{} {} {}",
-                    meta.name,
-                    meta.description,
-                    meta.tags.join(" ")
-                )
-                .to_lowercase();
+                let searchable =
+                    format!("{} {} {}", meta.name, meta.description, meta.tags.join(" "))
+                        .to_lowercase();
                 if searchable.contains(&query_lower) {
                     results.push(meta);
                 }
@@ -1499,7 +1510,9 @@ impl HermesIndexSource {
                     if let Ok(age) = SystemTime::now().duration_since(modified) {
                         if age < Duration::from_secs(HERMES_INDEX_TTL_SECS) {
                             if let Ok(content) = std::fs::read_to_string(&cache_file) {
-                                if let Ok(data) = serde_json::from_str::<serde_json::Value>(&content) {
+                                if let Ok(data) =
+                                    serde_json::from_str::<serde_json::Value>(&content)
+                                {
                                     if data.get("skills").is_some() {
                                         return Some(data);
                                     }
@@ -1548,22 +1561,50 @@ impl HermesIndexSource {
 
     fn to_meta(entry: &serde_json::Value) -> SkillMeta {
         SkillMeta {
-            name: entry.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-            description: entry.get("description").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-            source: entry.get("source").and_then(|v| v.as_str()).unwrap_or("hermes-index").to_string(),
-            identifier: entry.get("identifier").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-            trust_level: entry.get("trust_level").and_then(|v| v.as_str()).unwrap_or("community").to_string(),
+            name: entry
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+            description: entry
+                .get("description")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+            source: entry
+                .get("source")
+                .and_then(|v| v.as_str())
+                .unwrap_or("hermes-index")
+                .to_string(),
+            identifier: entry
+                .get("identifier")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+            trust_level: entry
+                .get("trust_level")
+                .and_then(|v| v.as_str())
+                .unwrap_or("community")
+                .to_string(),
             repo: entry.get("repo").and_then(|v| v.as_str()).map(String::from),
             path: entry.get("path").and_then(|v| v.as_str()).map(String::from),
-            tags: entry.get("tags")
+            tags: entry
+                .get("tags")
                 .and_then(|v| v.as_array())
-                .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect()
+                })
                 .unwrap_or_default(),
             extra: HashMap::new(),
         }
     }
 
-    fn find_entry<'a>(identifier: &str, skills: &'a [serde_json::Value]) -> Option<&'a serde_json::Value> {
+    fn find_entry<'a>(
+        identifier: &str,
+        skills: &'a [serde_json::Value],
+    ) -> Option<&'a serde_json::Value> {
         // Exact identifier match
         for s in skills {
             if s.get("identifier").and_then(|v| v.as_str()) == Some(identifier) {
@@ -1789,7 +1830,10 @@ impl SkillSource for SkillsShSource {
                 _ => return vec![],
             };
 
-            let re = Regex::new(r#"href=["']/(?P<id>(?!agents/|_next/|api/)[^"'/]+/[^"'/]+/[^"'/]+)["']"#).unwrap();
+            let re = Regex::new(
+                r#"href=["']/(?P<id>(?!agents/|_next/|api/)[^"'/]+/[^"'/]+/[^"'/]+)["']"#,
+            )
+            .unwrap();
             let mut results = Vec::new();
             let mut seen = std::collections::HashSet::new();
 
@@ -1804,7 +1848,11 @@ impl SkillSource for SkillsShSource {
                 }
                 let repo = format!("{}/{}", parts[0], parts[1]);
                 let skill_path = parts[2];
-                let name = skill_path.split('/').last().unwrap_or(&skill_path).to_string();
+                let name = skill_path
+                    .split('/')
+                    .last()
+                    .unwrap_or(&skill_path)
+                    .to_string();
                 results.push(SkillMeta {
                     name,
                     description: format!("Featured on skills.sh from {repo}"),
@@ -1956,14 +2004,13 @@ impl ClawHubSource {
 
     fn normalize_tags(tags: &serde_json::Value) -> Vec<String> {
         match tags {
-            serde_json::Value::Array(arr) => {
-                arr.iter().filter_map(|v| v.as_str().map(String::from)).collect()
-            }
-            serde_json::Value::Object(map) => map
-                .keys()
-                .filter(|k| *k != "latest")
-                .cloned()
+            serde_json::Value::Array(arr) => arr
+                .iter()
+                .filter_map(|v| v.as_str().map(String::from))
                 .collect(),
+            serde_json::Value::Object(map) => {
+                map.keys().filter(|k| *k != "latest").cloned().collect()
+            }
             _ => vec![],
         }
     }
@@ -1993,30 +2040,52 @@ impl ClawHubSource {
 
         let mut score = 0i32;
 
-        if query_norm == identifier { score += 140; }
-        if query_norm == name { score += 130; }
-        if normalized_identifier == query_norm { score += 125; }
-        if normalized_name == query_norm { score += 120; }
-        if normalized_identifier.starts_with(&query_norm) { score += 95; }
-        if normalized_name.starts_with(&query_norm) { score += 90; }
+        if query_norm == identifier {
+            score += 140;
+        }
+        if query_norm == name {
+            score += 130;
+        }
+        if normalized_identifier == query_norm {
+            score += 125;
+        }
+        if normalized_name == query_norm {
+            score += 120;
+        }
+        if normalized_identifier.starts_with(&query_norm) {
+            score += 95;
+        }
+        if normalized_name.starts_with(&query_norm) {
+            score += 90;
+        }
         if query_terms.len() <= identifier_terms.len()
             && identifier_terms[..query_terms.len()] == query_terms
         {
             score += 70;
         }
-        if query_terms.len() <= name_terms.len()
-            && name_terms[..query_terms.len()] == query_terms
-        {
+        if query_terms.len() <= name_terms.len() && name_terms[..query_terms.len()] == query_terms {
             score += 65;
         }
-        if identifier.contains(&query_norm) { score += 40; }
-        if name.contains(&query_norm) { score += 35; }
-        if description.contains(&query_norm) { score += 10; }
+        if identifier.contains(&query_norm) {
+            score += 40;
+        }
+        if name.contains(&query_norm) {
+            score += 35;
+        }
+        if description.contains(&query_norm) {
+            score += 10;
+        }
 
         for term in &query_terms {
-            if identifier_terms.contains(term) { score += 15; }
-            if name_terms.contains(term) { score += 12; }
-            if description.contains(term) { score += 3; }
+            if identifier_terms.contains(term) {
+                score += 15;
+            }
+            if name_terms.contains(term) {
+                score += 12;
+            }
+            if description.contains(term) {
+                score += 3;
+            }
         }
 
         score
@@ -2121,15 +2190,8 @@ impl SkillSource for ClawHubSource {
         let slug = identifier.split('/').last().unwrap_or(identifier);
         let url = format!("https://clawhub.ai/api/v1/skills/{slug}");
 
-        let skill_data: serde_json::Value = self
-            .client
-            .get(&url)
-            .send()
-            .await
-            .ok()?
-            .json()
-            .await
-            .ok()?;
+        let skill_data: serde_json::Value =
+            self.client.get(&url).send().await.ok()?.json().await.ok()?;
 
         let payload = if let Some(nested) = skill_data.get("skill") {
             let mut merged = nested.clone();
@@ -2143,23 +2205,19 @@ impl SkillSource for ClawHubSource {
 
         // Try to find SKILL.md content in version data
         let versions_url = format!("https://clawhub.ai/api/v1/skills/{slug}/versions");
-        let versions_data: Vec<serde_json::Value> = match self
-            .client
-            .get(&versions_url)
-            .send()
-            .await
-        {
-            Ok(r) => r.json().await.unwrap_or_default(),
-            _ => vec![],
-        };
+        let versions_data: Vec<serde_json::Value> =
+            match self.client.get(&versions_url).send().await {
+                Ok(r) => r.json().await.unwrap_or_default(),
+                _ => vec![],
+            };
 
         let latest_version = payload
             .get("latestVersion")
             .and_then(|v| v.as_str())
             .or_else(|| {
-                versions_data.first().and_then(|v| {
-                    v.get("version").and_then(|v2| v2.as_str())
-                })
+                versions_data
+                    .first()
+                    .and_then(|v| v.get("version").and_then(|v2| v2.as_str()))
             })?;
 
         // Try ZIP download
@@ -2183,7 +2241,8 @@ impl SkillSource for ClawHubSource {
         let slug = identifier.split('/').last().unwrap_or(identifier);
         let url = format!("https://clawhub.ai/api/v1/skills/{slug}");
 
-        let mut data: serde_json::Value = self.client.get(&url).send().await.ok()?.json().await.ok()?;
+        let mut data: serde_json::Value =
+            self.client.get(&url).send().await.ok()?.json().await.ok()?;
 
         // Handle nested "skill" wrapper
         if let Some(nested) = data.get("skill").and_then(|v| v.as_object()) {
@@ -2215,7 +2274,11 @@ impl SkillSource for ClawHubSource {
             name: name.to_string(),
             description: desc.to_string(),
             source: "clawhub".into(),
-            identifier: data.get("slug").and_then(|v| v.as_str()).unwrap_or(slug).to_string(),
+            identifier: data
+                .get("slug")
+                .and_then(|v| v.as_str())
+                .unwrap_or(slug)
+                .to_string(),
             trust_level: "community".into(),
             repo: None,
             path: None,
@@ -2261,9 +2324,8 @@ impl ClaudeMarketplaceSource {
             }
         }
 
-        let url = format!(
-            "https://api.github.com/repos/{repo}/contents/.claude-plugin/marketplace.json"
-        );
+        let url =
+            format!("https://api.github.com/repos/{repo}/contents/.claude-plugin/marketplace.json");
         let mut headers = self.auth.get_headers();
         headers.insert(
             reqwest::header::ACCEPT,
@@ -2321,14 +2383,14 @@ impl SkillSource for ClaudeMarketplaceSource {
             let plugins = self.fetch_marketplace_index(marketplace_repo).await;
             for plugin in &plugins {
                 let name = plugin.get("name").and_then(|v| v.as_str()).unwrap_or("");
-                let description = plugin.get("description").and_then(|v| v.as_str()).unwrap_or("");
+                let description = plugin
+                    .get("description")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
                 let searchable = format!("{name} {description}").to_lowercase();
 
                 if searchable.contains(&query_lower) {
-                    let source_path = plugin
-                        .get("source")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("");
+                    let source_path = plugin.get("source").and_then(|v| v.as_str()).unwrap_or("");
                     let identifier = if source_path.starts_with("./") {
                         format!("{marketplace_repo}/{}", &source_path[2..])
                     } else if source_path.contains('/') {
@@ -2416,8 +2478,14 @@ impl LobeHubSource {
             .get("identifier")
             .and_then(|v| v.as_str())
             .unwrap_or("lobehub-agent");
-        let title = meta.get("title").and_then(|v| v.as_str()).unwrap_or(identifier);
-        let description = meta.get("description").and_then(|v| v.as_str()).unwrap_or("");
+        let title = meta
+            .get("title")
+            .and_then(|v| v.as_str())
+            .unwrap_or(identifier);
+        let description = meta
+            .get("description")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
         let tags = meta
             .get("tags")
             .and_then(|v| v.as_array())
@@ -2480,16 +2548,16 @@ impl SkillSource for LobeHubSource {
         let mut results = Vec::new();
         for agent in &agents {
             let meta = agent.get("meta").unwrap_or(agent);
-            let title = meta
-                .get("title")
+            let title = meta.get("title").and_then(|v| v.as_str()).unwrap_or(
+                agent
+                    .get("identifier")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(""),
+            );
+            let desc = meta
+                .get("description")
                 .and_then(|v| v.as_str())
-                .unwrap_or(
-                    agent
-                        .get("identifier")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or(""),
-                );
-            let desc = meta.get("description").and_then(|v| v.as_str()).unwrap_or("");
+                .unwrap_or("");
             let tags = meta
                 .get("tags")
                 .and_then(|v| v.as_array())
@@ -2519,7 +2587,11 @@ impl SkillSource for LobeHubSource {
                     tags: meta
                         .get("tags")
                         .and_then(|v| v.as_array())
-                        .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                        .map(|a| {
+                            a.iter()
+                                .filter_map(|v| v.as_str().map(String::from))
+                                .collect()
+                        })
                         .unwrap_or_default(),
                     extra: HashMap::new(),
                 });
@@ -2533,12 +2605,11 @@ impl SkillSource for LobeHubSource {
     }
 
     async fn fetch(&self, identifier: &str) -> Option<SkillBundle> {
-        let agent_id = identifier
-            .strip_prefix("lobehub/")
-            .unwrap_or(identifier);
+        let agent_id = identifier.strip_prefix("lobehub/").unwrap_or(identifier);
 
         let url = format!("https://chat-agents.lobehub.com/{agent_id}.json");
-        let agent_data: serde_json::Value = self.client.get(&url).send().await.ok()?.json().await.ok()?;
+        let agent_data: serde_json::Value =
+            self.client.get(&url).send().await.ok()?.json().await.ok()?;
 
         let skill_md = Self::convert_to_skill_md(&agent_data);
         let mut files = HashMap::new();
@@ -2555,9 +2626,7 @@ impl SkillSource for LobeHubSource {
     }
 
     async fn inspect(&self, identifier: &str) -> Option<SkillMeta> {
-        let agent_id = identifier
-            .strip_prefix("lobehub/")
-            .unwrap_or(identifier);
+        let agent_id = identifier.strip_prefix("lobehub/").unwrap_or(identifier);
 
         let index = self.fetch_index().await?;
         let agents = index
@@ -2570,7 +2639,11 @@ impl SkillSource for LobeHubSource {
                 let meta = agent.get("meta").unwrap_or(agent);
                 return Some(SkillMeta {
                     name: agent_id.to_string(),
-                    description: meta.get("description").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                    description: meta
+                        .get("description")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
                     source: "lobehub".into(),
                     identifier: format!("lobehub/{agent_id}"),
                     trust_level: "community".into(),
@@ -2579,7 +2652,11 @@ impl SkillSource for LobeHubSource {
                     tags: meta
                         .get("tags")
                         .and_then(|v| v.as_array())
-                        .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                        .map(|a| {
+                            a.iter()
+                                .filter_map(|v| v.as_str().map(String::from))
+                                .collect()
+                        })
                         .unwrap_or_default(),
                     extra: HashMap::new(),
                 });
@@ -2728,11 +2805,9 @@ impl TapsManager {
             return vec![];
         }
         match std::fs::read_to_string(&self.path) {
-            Ok(content) => {
-                serde_json::from_str::<TapsFile>(&content)
-                    .map(|t| t.taps)
-                    .unwrap_or_default()
-            }
+            Ok(content) => serde_json::from_str::<TapsFile>(&content)
+                .map(|t| t.taps)
+                .unwrap_or_default(),
             Err(_) => vec![],
         }
     }
@@ -2774,10 +2849,7 @@ impl TapsManager {
 
     /// List all configured taps as (repo, path) pairs.
     pub fn list_taps(&self) -> Vec<(String, String)> {
-        self.load()
-            .into_iter()
-            .map(|t| (t.repo, t.path))
-            .collect()
+        self.load().into_iter().map(|t| (t.repo, t.path)).collect()
     }
 }
 
@@ -2799,9 +2871,8 @@ pub fn append_audit_log(
         let _ = std::fs::create_dir_all(parent);
     }
     let timestamp = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ");
-    let line = format!(
-        "{timestamp} {action} {skill_name} {source}:{trust_level} {verdict} {extra}\n"
-    );
+    let line =
+        format!("{timestamp} {action} {skill_name} {source}:{trust_level} {verdict} {extra}\n");
     let _ = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
@@ -2835,7 +2906,10 @@ async fn write_index_cache(paths: &HubPaths, key: &str, data: &serde_json::Value
     // Ensure .ignore exists
     let ignore_file = paths.hub_dir.join(".ignore");
     if !ignore_file.exists() {
-        let _ = std::fs::write(&ignore_file, "# Exclude hub internals from search tools\n*\n");
+        let _ = std::fs::write(
+            &ignore_file,
+            "# Exclude hub internals from search tools\n*\n",
+        );
     }
 
     if let Ok(json) = serde_json::to_string(data) {
@@ -2908,10 +2982,7 @@ pub fn create_source_router(
     )));
 
     // Skills.sh
-    sources.push(Arc::new(SkillsShSource::new(
-        auth.clone(),
-        paths.clone(),
-    )));
+    sources.push(Arc::new(SkillsShSource::new(auth.clone(), paths.clone())));
 
     // Well-known source
     sources.push(Arc::new(WellKnownSkillSource::new(paths.clone())));
@@ -2951,11 +3022,7 @@ pub async fn parallel_search_sources(
     query: &str,
     per_source_limits: &HashMap<String, usize>,
     source_filter: &str,
-) -> (
-    Vec<SkillMeta>,
-    HashMap<String, usize>,
-    Vec<String>,
-) {
+) -> (Vec<SkillMeta>, HashMap<String, usize>, Vec<String>) {
     let mut active: Vec<Arc<dyn SkillSource>> = Vec::new();
 
     // Check if the Hermes index is available (skip external APIs if so)
@@ -2970,7 +3037,12 @@ pub async fn parallel_search_sources(
     }
 
     let api_source_ids = [
-        "github", "skills-sh", "clawhub", "claude-marketplace", "lobehub", "well-known",
+        "github",
+        "skills-sh",
+        "clawhub",
+        "claude-marketplace",
+        "lobehub",
+        "well-known",
     ];
 
     for src in sources {
@@ -3039,13 +3111,8 @@ pub async fn unified_search(
     per_source_limits.insert("claude-marketplace".into(), 100usize);
     per_source_limits.insert("lobehub".into(), 500usize);
 
-    let (all_results, _, _) = parallel_search_sources(
-        sources,
-        query,
-        &per_source_limits,
-        source_filter,
-    )
-    .await;
+    let (all_results, _, _) =
+        parallel_search_sources(sources, query, &per_source_limits, source_filter).await;
 
     // Deduplicate by name, preferring higher trust levels
     let trust_rank = |t: &str| -> i32 {
@@ -3075,13 +3142,10 @@ pub async fn unified_search(
 // ---------------------------------------------------------------------------
 
 /// Write a skill bundle to the quarantine directory for scanning.
-pub fn quarantine_bundle(
-    bundle: &SkillBundle,
-    paths: &HubPaths,
-) -> Result<PathBuf> {
-    paths.ensure_dirs().map_err(|e| {
-        Error::Config(format!("Failed to create hub dirs: {e}"))
-    })?;
+pub fn quarantine_bundle(bundle: &SkillBundle, paths: &HubPaths) -> Result<PathBuf> {
+    paths
+        .ensure_dirs()
+        .map_err(|e| Error::Config(format!("Failed to create hub dirs: {e}")))?;
 
     let skill_name = validate_skill_name(&bundle.name)?;
     let dest = paths.quarantine_dir.join(&skill_name);
@@ -3089,9 +3153,8 @@ pub fn quarantine_bundle(
     if dest.exists() {
         std::fs::remove_dir_all(&dest).ok();
     }
-    std::fs::create_dir_all(&dest).map_err(|e| {
-        Error::Config(format!("Failed to create quarantine dir {dest:?}: {e}"))
-    })?;
+    std::fs::create_dir_all(&dest)
+        .map_err(|e| Error::Config(format!("Failed to create quarantine dir {dest:?}: {e}")))?;
 
     for (rel_path, content) in &bundle.files {
         let safe_rel = validate_bundle_rel_path(rel_path)?;
@@ -3144,15 +3207,13 @@ pub fn install_from_quarantine(
     }
 
     if let Some(parent) = install_dir.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| {
-            Error::Config(format!("Failed to create install directory: {e}"))
-        })?;
+        std::fs::create_dir_all(parent)
+            .map_err(|e| Error::Config(format!("Failed to create install directory: {e}")))?;
     }
 
     // Move files from quarantine to install dir
-    copy_dir_all(quarantine_path, &install_dir).map_err(|e| {
-        Error::Config(format!("Failed to move skill to install dir: {e}"))
-    })?;
+    copy_dir_all(quarantine_path, &install_dir)
+        .map_err(|e| Error::Config(format!("Failed to move skill to install dir: {e}")))?;
 
     // Record in lock file
     let lock = HubLockFile::new(paths);
@@ -3338,7 +3399,9 @@ fn find_skill_md_files_recursive(
             let path = entry.path();
             if path.is_dir() {
                 find_skill_md_files_recursive(base, &path, depth + 1, max_depth, results);
-            } else if path.is_file() && path.file_name().and_then(|n| n.to_str()) == Some("SKILL.md") {
+            } else if path.is_file()
+                && path.file_name().and_then(|n| n.to_str()) == Some("SKILL.md")
+            {
                 results.push(path);
             }
         }
@@ -3407,10 +3470,7 @@ mod tests {
             normalize_bundle_path("my-skill", false).unwrap(),
             "my-skill"
         );
-        assert_eq!(
-            normalize_bundle_path("my-skill", true).unwrap(),
-            "my-skill"
-        );
+        assert_eq!(normalize_bundle_path("my-skill", true).unwrap(), "my-skill");
         assert_eq!(
             normalize_bundle_path("category/my-skill", true).unwrap(),
             "category/my-skill"

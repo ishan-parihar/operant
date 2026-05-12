@@ -12,10 +12,10 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::future::Future;
 use std::pin::Pin;
 use std::sync::OnceLock;
 use std::time::Duration;
-use std::future::Future;
 use tracing::warn;
 
 use crate::schema::ToolSchema;
@@ -50,27 +50,43 @@ fn channel_type_name(type_id: i64) -> &'static str {
 
 fn enrich_403(action: &str, body: &str) -> String {
     let hint = match action {
-        "pin_message" => "Bot lacks MANAGE_MESSAGES permission in this channel. \
+        "pin_message" => {
+            "Bot lacks MANAGE_MESSAGES permission in this channel. \
             Ask the server admin to grant the bot a role that has MANAGE_MESSAGES, \
-            or a per-channel overwrite.",
+            or a per-channel overwrite."
+        }
         "unpin_message" => "Bot lacks MANAGE_MESSAGES permission in this channel.",
-        "delete_message" => "Bot lacks MANAGE_MESSAGES permission in this channel, \
-            or cannot view the channel/message.",
+        "delete_message" => {
+            "Bot lacks MANAGE_MESSAGES permission in this channel, \
+            or cannot view the channel/message."
+        }
         "create_thread" => "Bot lacks CREATE_PUBLIC_THREADS in this channel, or cannot view it.",
-        "add_role" => "Either the bot lacks MANAGE_ROLES, or the target role sits higher \
+        "add_role" => {
+            "Either the bot lacks MANAGE_ROLES, or the target role sits higher \
             than the bot's highest role. Roles can only be assigned below the \
-            bot's own position in the role hierarchy.",
-        "remove_role" => "Either the bot lacks MANAGE_ROLES, or the target role sits higher \
-            than the bot's highest role.",
-        "fetch_messages" => "Bot cannot view this channel (missing VIEW_CHANNEL \
-            or READ_MESSAGE_HISTORY).",
-        "list_pins" => "Bot cannot view this channel (missing VIEW_CHANNEL \
-            or READ_MESSAGE_HISTORY).",
+            bot's own position in the role hierarchy."
+        }
+        "remove_role" => {
+            "Either the bot lacks MANAGE_ROLES, or the target role sits higher \
+            than the bot's highest role."
+        }
+        "fetch_messages" => {
+            "Bot cannot view this channel (missing VIEW_CHANNEL \
+            or READ_MESSAGE_HISTORY)."
+        }
+        "list_pins" => {
+            "Bot cannot view this channel (missing VIEW_CHANNEL \
+            or READ_MESSAGE_HISTORY)."
+        }
         "channel_info" => "Bot cannot view this channel (missing VIEW_CHANNEL).",
-        "search_members" => "Likely missing the Server Members privileged intent — enable it \
-            in the Discord Developer Portal under your bot's settings.",
-        "member_info" => "Bot cannot see this guild member (missing Server Members intent or \
-            insufficient permissions).",
+        "search_members" => {
+            "Likely missing the Server Members privileged intent — enable it \
+            in the Discord Developer Portal under your bot's settings."
+        }
+        "member_info" => {
+            "Bot cannot see this guild member (missing Server Members intent or \
+            insufficient permissions)."
+        }
         _ => "",
     };
     if hint.is_empty() {
@@ -240,10 +256,11 @@ struct DiscordArgs {
 // Action handler type and registry
 // ---------------------------------------------------------------------------
 
-type ActionHandler = for<'a> fn(
-    &'a str,
-    &'a DiscordArgs,
-) -> Pin<Box<dyn Future<Output = Result<Value, DiscordApiError>> + Send + 'a>>;
+type ActionHandler =
+    for<'a> fn(
+        &'a str,
+        &'a DiscordArgs,
+    ) -> Pin<Box<dyn Future<Output = Result<Value, DiscordApiError>> + Send + 'a>>;
 
 fn action_handler_registry() -> &'static HashMap<&'static str, ActionHandler> {
     static REGISTRY: OnceLock<HashMap<&'static str, ActionHandler>> = OnceLock::new();
@@ -319,10 +336,7 @@ async fn dispatch_action(
                 }
             }
         },
-        None => ToolResult::error(
-            handler_name,
-            format!("Unknown action: {action}"),
-        ),
+        None => ToolResult::error(handler_name, format!("Unknown action: {action}")),
     }
 }
 
@@ -333,7 +347,11 @@ async fn dispatch_action(
 fn get_bot_token() -> Option<String> {
     let token = std::env::var("DISCORD_BOT_TOKEN").unwrap_or_default();
     let trimmed = token.trim().to_string();
-    if trimmed.is_empty() { None } else { Some(trimmed) }
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -342,20 +360,56 @@ fn get_bot_token() -> Option<String> {
 
 const ACTION_MANIFEST: &[(&str, &str, &str)] = &[
     ("list_guilds", "()", "list servers the bot is in"),
-    ("server_info", "(guild_id)", "server details + member counts"),
-    ("list_channels", "(guild_id)", "all channels grouped by category"),
+    (
+        "server_info",
+        "(guild_id)",
+        "server details + member counts",
+    ),
+    (
+        "list_channels",
+        "(guild_id)",
+        "all channels grouped by category",
+    ),
     ("channel_info", "(channel_id)", "single channel details"),
     ("list_roles", "(guild_id)", "roles sorted by position"),
-    ("member_info", "(guild_id, user_id)", "lookup a specific member"),
-    ("search_members", "(guild_id, query)", "find members by name prefix"),
-    ("fetch_messages", "(channel_id)", "recent messages; optional before/after snowflakes"),
+    (
+        "member_info",
+        "(guild_id, user_id)",
+        "lookup a specific member",
+    ),
+    (
+        "search_members",
+        "(guild_id, query)",
+        "find members by name prefix",
+    ),
+    (
+        "fetch_messages",
+        "(channel_id)",
+        "recent messages; optional before/after snowflakes",
+    ),
     ("list_pins", "(channel_id)", "pinned messages in a channel"),
     ("pin_message", "(channel_id, message_id)", "pin a message"),
-    ("unpin_message", "(channel_id, message_id)", "unpin a message"),
-    ("delete_message", "(channel_id, message_id)", "delete a message"),
-    ("create_thread", "(channel_id, name)", "create a public thread; optional message_id anchor"),
+    (
+        "unpin_message",
+        "(channel_id, message_id)",
+        "unpin a message",
+    ),
+    (
+        "delete_message",
+        "(channel_id, message_id)",
+        "delete a message",
+    ),
+    (
+        "create_thread",
+        "(channel_id, name)",
+        "create a public thread; optional message_id anchor",
+    ),
     ("add_role", "(guild_id, user_id, role_id)", "assign a role"),
-    ("remove_role", "(guild_id, user_id, role_id)", "remove a role"),
+    (
+        "remove_role",
+        "(guild_id, user_id, role_id)",
+        "remove a role",
+    ),
 ];
 
 fn build_schema_description(tool_name: &str, actions: &[&str]) -> String {
@@ -457,17 +511,22 @@ fn handle_list_guilds<'a>(
 ) -> Pin<Box<dyn Future<Output = Result<Value, DiscordApiError>> + Send + 'a>> {
     Box::pin(async move {
         let resp = discord_request("GET", "/users/@me/guilds", token, None, None).await?;
-        let guilds = resp.as_array().map(|arr| {
-            arr.iter().map(|g| {
-                json!({
-                    "id": g["id"],
-                    "name": g["name"],
-                    "icon": g.get("icon"),
-                    "owner": g.get("owner").unwrap_or(&json!(false)),
-                    "permissions": g.get("permissions"),
-                })
-            }).collect::<Vec<_>>()
-        }).unwrap_or_default();
+        let guilds = resp
+            .as_array()
+            .map(|arr| {
+                arr.iter()
+                    .map(|g| {
+                        json!({
+                            "id": g["id"],
+                            "name": g["name"],
+                            "icon": g.get("icon"),
+                            "owner": g.get("owner").unwrap_or(&json!(false)),
+                            "permissions": g.get("permissions"),
+                        })
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
 
         Ok(json!({
             "guilds": guilds,
@@ -484,7 +543,14 @@ fn handle_server_info<'a>(
     Box::pin(async move {
         let mut params = HashMap::new();
         params.insert("with_counts".to_string(), "true".to_string());
-        let g = discord_request("GET", &format!("/guilds/{guild_id}"), token, Some(&params), None).await?;
+        let g = discord_request(
+            "GET",
+            &format!("/guilds/{guild_id}"),
+            token,
+            Some(&params),
+            None,
+        )
+        .await?;
 
         Ok(json!({
             "id": g["id"],
@@ -508,8 +574,18 @@ fn handle_list_channels<'a>(
 ) -> Pin<Box<dyn Future<Output = Result<Value, DiscordApiError>> + Send + 'a>> {
     let guild_id = args.guild_id.clone().unwrap_or_default();
     Box::pin(async move {
-        let channels = discord_request("GET", &format!("/guilds/{guild_id}/channels"), token, None, None).await?;
-        let channels_arr = channels.as_array().map(|a| a.as_slice()).unwrap_or_default();
+        let channels = discord_request(
+            "GET",
+            &format!("/guilds/{guild_id}/channels"),
+            token,
+            None,
+            None,
+        )
+        .await?;
+        let channels_arr = channels
+            .as_array()
+            .map(|a| a.as_slice())
+            .unwrap_or_default();
 
         // First pass: collect categories
         let mut categories: HashMap<String, Value> = HashMap::new();
@@ -541,7 +617,10 @@ fn handle_list_channels<'a>(
                 "topic": ch.get("topic"),
                 "nsfw": ch.get("nsfw").unwrap_or(&json!(false)),
             });
-            let parent_id = ch.get("parent_id").and_then(|v| v.as_str()).map(|s| s.to_string());
+            let parent_id = ch
+                .get("parent_id")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
             if let Some(ref pid) = parent_id {
                 if categories.contains_key(pid) {
                     if let Some(cat) = categories.get_mut(pid) {
@@ -582,9 +661,10 @@ fn handle_list_channels<'a>(
             }));
         }
 
-        let total: usize = result.iter().map(|g| {
-            g["channels"].as_array().map(|a| a.len()).unwrap_or(0)
-        }).sum();
+        let total: usize = result
+            .iter()
+            .map(|g| g["channels"].as_array().map(|a| a.len()).unwrap_or(0))
+            .sum();
 
         Ok(json!({
             "channel_groups": result,
@@ -599,7 +679,8 @@ fn handle_channel_info<'a>(
 ) -> Pin<Box<dyn Future<Output = Result<Value, DiscordApiError>> + Send + 'a>> {
     let channel_id = args.channel_id.clone().unwrap_or_default();
     Box::pin(async move {
-        let ch = discord_request("GET", &format!("/channels/{channel_id}"), token, None, None).await?;
+        let ch =
+            discord_request("GET", &format!("/channels/{channel_id}"), token, None, None).await?;
 
         Ok(json!({
             "id": ch["id"],
@@ -622,25 +703,35 @@ fn handle_list_roles<'a>(
 ) -> Pin<Box<dyn Future<Output = Result<Value, DiscordApiError>> + Send + 'a>> {
     let guild_id = args.guild_id.clone().unwrap_or_default();
     Box::pin(async move {
-        let roles = discord_request("GET", &format!("/guilds/{guild_id}/roles"), token, None, None).await?;
+        let roles = discord_request(
+            "GET",
+            &format!("/guilds/{guild_id}/roles"),
+            token,
+            None,
+            None,
+        )
+        .await?;
         let roles_arr = roles.as_array().map(|a| a.as_slice()).unwrap_or_default();
 
         let mut sorted: Vec<&Value> = roles_arr.iter().collect();
         sorted.sort_by_key(|r| -(r.get("position").and_then(|v| v.as_i64()).unwrap_or(0)));
 
-        let result: Vec<Value> = sorted.iter().map(|r| {
-            let color = r.get("color").and_then(|v| v.as_i64()).unwrap_or(0);
-            json!({
-                "id": r["id"],
-                "name": r["name"],
-                "color": if color != 0 { Some(format!("#{color:06x}")) } else { None },
-                "position": r.get("position").unwrap_or(&json!(0)),
-                "mentionable": r.get("mentionable").unwrap_or(&json!(false)),
-                "managed": r.get("managed").unwrap_or(&json!(false)),
-                "member_count": r.get("member_count"),
-                "hoist": r.get("hoist").unwrap_or(&json!(false)),
+        let result: Vec<Value> = sorted
+            .iter()
+            .map(|r| {
+                let color = r.get("color").and_then(|v| v.as_i64()).unwrap_or(0);
+                json!({
+                    "id": r["id"],
+                    "name": r["name"],
+                    "color": if color != 0 { Some(format!("#{color:06x}")) } else { None },
+                    "position": r.get("position").unwrap_or(&json!(0)),
+                    "mentionable": r.get("mentionable").unwrap_or(&json!(false)),
+                    "managed": r.get("managed").unwrap_or(&json!(false)),
+                    "member_count": r.get("member_count"),
+                    "hoist": r.get("hoist").unwrap_or(&json!(false)),
+                })
             })
-        }).collect();
+            .collect();
 
         Ok(json!({
             "roles": result,
@@ -656,7 +747,14 @@ fn handle_member_info<'a>(
     let guild_id = args.guild_id.clone().unwrap_or_default();
     let user_id = args.user_id.clone().unwrap_or_default();
     Box::pin(async move {
-        let m = discord_request("GET", &format!("/guilds/{guild_id}/members/{user_id}"), token, None, None).await?;
+        let m = discord_request(
+            "GET",
+            &format!("/guilds/{guild_id}/members/{user_id}"),
+            token,
+            None,
+            None,
+        )
+        .await?;
         let user = m.get("user");
 
         Ok(json!({
@@ -685,20 +783,32 @@ fn handle_search_members<'a>(
         params.insert("query".to_string(), query);
         params.insert("limit".to_string(), limit.to_string());
 
-        let members = discord_request("GET", &format!("/guilds/{guild_id}/members/search"), token, Some(&params), None).await?;
-        let result: Vec<Value> = members.as_array().map(|arr| {
-            arr.iter().map(|m| {
-                let user = m.get("user");
-                json!({
-                    "user_id": user.and_then(|u| u.get("id")),
-                    "username": user.and_then(|u| u.get("username")),
-                    "display_name": user.and_then(|u| u.get("global_name")),
-                    "nickname": m.get("nick"),
-                    "bot": user.and_then(|u| u.get("bot")).unwrap_or(&json!(false)),
-                    "roles": m.get("roles").unwrap_or(&json!([])),
-                })
-            }).collect()
-        }).unwrap_or_default();
+        let members = discord_request(
+            "GET",
+            &format!("/guilds/{guild_id}/members/search"),
+            token,
+            Some(&params),
+            None,
+        )
+        .await?;
+        let result: Vec<Value> = members
+            .as_array()
+            .map(|arr| {
+                arr.iter()
+                    .map(|m| {
+                        let user = m.get("user");
+                        json!({
+                            "user_id": user.and_then(|u| u.get("id")),
+                            "username": user.and_then(|u| u.get("username")),
+                            "display_name": user.and_then(|u| u.get("global_name")),
+                            "nickname": m.get("nick"),
+                            "bot": user.and_then(|u| u.get("bot")).unwrap_or(&json!(false)),
+                            "roles": m.get("roles").unwrap_or(&json!([])),
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
 
         Ok(json!({
             "members": result,
@@ -725,9 +835,19 @@ fn handle_fetch_messages<'a>(
             params.insert("after".to_string(), after);
         }
 
-        let messages = discord_request("GET", &format!("/channels/{channel_id}/messages"), token, Some(&params), None).await?;
-        let result: Vec<Value> = messages.as_array().map(|arr| {
-            arr.iter().map(|msg| {
+        let messages = discord_request(
+            "GET",
+            &format!("/channels/{channel_id}/messages"),
+            token,
+            Some(&params),
+            None,
+        )
+        .await?;
+        let result: Vec<Value> =
+            messages
+                .as_array()
+                .map(|arr| {
+                    arr.iter().map(|msg| {
                 let author = msg.get("author");
                 json!({
                     "id": msg["id"],
@@ -764,7 +884,8 @@ fn handle_fetch_messages<'a>(
                     "pinned": msg.get("pinned").unwrap_or(&json!(false)),
                 })
             }).collect()
-        }).unwrap_or_default();
+                })
+                .unwrap_or_default();
 
         Ok(json!({
             "messages": result,
@@ -779,20 +900,32 @@ fn handle_list_pins<'a>(
 ) -> Pin<Box<dyn Future<Output = Result<Value, DiscordApiError>> + Send + 'a>> {
     let channel_id = args.channel_id.clone().unwrap_or_default();
     Box::pin(async move {
-        let messages = discord_request("GET", &format!("/channels/{channel_id}/pins"), token, None, None).await?;
-        let result: Vec<Value> = messages.as_array().map(|arr| {
-            arr.iter().map(|msg| {
-                let author = msg.get("author");
-                let content = msg.get("content").and_then(|c| c.as_str()).unwrap_or("");
-                let truncated: String = content.chars().take(200).collect();
-                json!({
-                    "id": msg["id"],
-                    "content": truncated,
-                    "author": author.and_then(|a| a.get("username")),
-                    "timestamp": msg.get("timestamp"),
-                })
-            }).collect()
-        }).unwrap_or_default();
+        let messages = discord_request(
+            "GET",
+            &format!("/channels/{channel_id}/pins"),
+            token,
+            None,
+            None,
+        )
+        .await?;
+        let result: Vec<Value> = messages
+            .as_array()
+            .map(|arr| {
+                arr.iter()
+                    .map(|msg| {
+                        let author = msg.get("author");
+                        let content = msg.get("content").and_then(|c| c.as_str()).unwrap_or("");
+                        let truncated: String = content.chars().take(200).collect();
+                        json!({
+                            "id": msg["id"],
+                            "content": truncated,
+                            "author": author.and_then(|a| a.get("username")),
+                            "timestamp": msg.get("timestamp"),
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
 
         Ok(json!({
             "pinned_messages": result,
@@ -808,7 +941,14 @@ fn handle_pin_message<'a>(
     let channel_id = args.channel_id.clone().unwrap_or_default();
     let message_id = args.message_id.clone().unwrap_or_default();
     Box::pin(async move {
-        discord_request("PUT", &format!("/channels/{channel_id}/pins/{message_id}"), token, None, None).await?;
+        discord_request(
+            "PUT",
+            &format!("/channels/{channel_id}/pins/{message_id}"),
+            token,
+            None,
+            None,
+        )
+        .await?;
         Ok(json!({
             "success": true,
             "message": format!("Message {message_id} pinned."),
@@ -823,7 +963,14 @@ fn handle_unpin_message<'a>(
     let channel_id = args.channel_id.clone().unwrap_or_default();
     let message_id = args.message_id.clone().unwrap_or_default();
     Box::pin(async move {
-        discord_request("DELETE", &format!("/channels/{channel_id}/pins/{message_id}"), token, None, None).await?;
+        discord_request(
+            "DELETE",
+            &format!("/channels/{channel_id}/pins/{message_id}"),
+            token,
+            None,
+            None,
+        )
+        .await?;
         Ok(json!({
             "success": true,
             "message": format!("Message {message_id} unpinned."),
@@ -838,7 +985,14 @@ fn handle_delete_message<'a>(
     let channel_id = args.channel_id.clone().unwrap_or_default();
     let message_id = args.message_id.clone().unwrap_or_default();
     Box::pin(async move {
-        discord_request("DELETE", &format!("/channels/{channel_id}/messages/{message_id}"), token, None, None).await?;
+        discord_request(
+            "DELETE",
+            &format!("/channels/{channel_id}/messages/{message_id}"),
+            token,
+            None,
+            None,
+        )
+        .await?;
         Ok(json!({
             "success": true,
             "message": format!("Message {message_id} deleted."),
@@ -891,7 +1045,14 @@ fn handle_add_role<'a>(
     let user_id = args.user_id.clone().unwrap_or_default();
     let role_id = args.role_id.clone().unwrap_or_default();
     Box::pin(async move {
-        discord_request("PUT", &format!("/guilds/{guild_id}/members/{user_id}/roles/{role_id}"), token, None, None).await?;
+        discord_request(
+            "PUT",
+            &format!("/guilds/{guild_id}/members/{user_id}/roles/{role_id}"),
+            token,
+            None,
+            None,
+        )
+        .await?;
         Ok(json!({
             "success": true,
             "message": format!("Role {role_id} added to user {user_id}."),
@@ -907,7 +1068,14 @@ fn handle_remove_role<'a>(
     let user_id = args.user_id.clone().unwrap_or_default();
     let role_id = args.role_id.clone().unwrap_or_default();
     Box::pin(async move {
-        discord_request("DELETE", &format!("/guilds/{guild_id}/members/{user_id}/roles/{role_id}"), token, None, None).await?;
+        discord_request(
+            "DELETE",
+            &format!("/guilds/{guild_id}/members/{user_id}/roles/{role_id}"),
+            token,
+            None,
+            None,
+        )
+        .await?;
         Ok(json!({
             "success": true,
             "message": format!("Role {role_id} removed from user {user_id}."),
@@ -921,9 +1089,18 @@ fn handle_remove_role<'a>(
 
 const CORE_ACTIONS: &[&str] = &["fetch_messages", "search_members", "create_thread"];
 const ADMIN_ACTIONS: &[&str] = &[
-    "list_guilds", "server_info", "list_channels", "channel_info",
-    "list_roles", "member_info", "list_pins", "pin_message",
-    "unpin_message", "delete_message", "add_role", "remove_role",
+    "list_guilds",
+    "server_info",
+    "list_channels",
+    "channel_info",
+    "list_roles",
+    "member_info",
+    "list_pins",
+    "pin_message",
+    "unpin_message",
+    "delete_message",
+    "add_role",
+    "remove_role",
 ];
 
 /// Core Discord tool (read/participate actions only)
@@ -1031,10 +1208,12 @@ mod tests {
         let saved = std::env::var("DISCORD_BOT_TOKEN").ok();
         std::env::remove_var("DISCORD_BOT_TOKEN");
         let tool = DiscordTool;
-        let result = tool.execute(
-            json!({ "action": "fetch_messages", "channel_id": "123" }),
-            ToolContext::default(),
-        ).await;
+        let result = tool
+            .execute(
+                json!({ "action": "fetch_messages", "channel_id": "123" }),
+                ToolContext::default(),
+            )
+            .await;
         if let Some(token) = saved {
             std::env::set_var("DISCORD_BOT_TOKEN", token);
         }
@@ -1048,10 +1227,9 @@ mod tests {
         // Set a fake token so we get past the token check
         std::env::set_var("DISCORD_BOT_TOKEN", "test_token");
         let tool = DiscordTool;
-        let result = tool.execute(
-            json!({ "action": "nonexistent" }),
-            ToolContext::default(),
-        ).await;
+        let result = tool
+            .execute(json!({ "action": "nonexistent" }), ToolContext::default())
+            .await;
         assert!(!result.success);
         let err = result.error.unwrap();
         assert!(err.contains("Unknown action"));
@@ -1064,10 +1242,12 @@ mod tests {
     async fn test_discord_missing_params() {
         std::env::set_var("DISCORD_BOT_TOKEN", "test_token");
         let tool = DiscordTool;
-        let result = tool.execute(
-            json!({ "action": "fetch_messages" }),  // missing channel_id
-            ToolContext::default(),
-        ).await;
+        let result = tool
+            .execute(
+                json!({ "action": "fetch_messages" }), // missing channel_id
+                ToolContext::default(),
+            )
+            .await;
         assert!(!result.success);
         let err = result.error.unwrap();
         assert!(err.contains("Missing required parameters"));
@@ -1081,10 +1261,9 @@ mod tests {
         std::env::set_var("DISCORD_BOT_TOKEN", "test_token");
         // DiscordTool should reject an admin action
         let tool = DiscordTool;
-        let result = tool.execute(
-            json!({ "action": "list_guilds" }),
-            ToolContext::default(),
-        ).await;
+        let result = tool
+            .execute(json!({ "action": "list_guilds" }), ToolContext::default())
+            .await;
         assert!(!result.success);
         let err = result.error.unwrap();
         assert!(err.contains("Unknown action"));
@@ -1097,10 +1276,12 @@ mod tests {
         std::env::set_var("DISCORD_BOT_TOKEN", "test_token");
         // DiscordAdminTool should reject a core action
         let tool = DiscordAdminTool;
-        let result = tool.execute(
-            json!({ "action": "fetch_messages", "channel_id": "123" }),
-            ToolContext::default(),
-        ).await;
+        let result = tool
+            .execute(
+                json!({ "action": "fetch_messages", "channel_id": "123" }),
+                ToolContext::default(),
+            )
+            .await;
         assert!(!result.success);
         let err = result.error.unwrap();
         assert!(err.contains("Unknown action"));
