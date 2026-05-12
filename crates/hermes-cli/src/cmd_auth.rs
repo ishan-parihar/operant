@@ -9,7 +9,7 @@
 //! This module **never** prints full API keys.  Key values are always
 //! truncated to a short prefix hint (`sk-an...`) when displayed.
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use clap::Subcommand;
 use hermes_core::config::AppConfig;
 use hermes_core::credential_pool::{AuthType, CredentialPool, PooledCredential};

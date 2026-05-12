@@ -16,6 +16,17 @@ mod cmd_checkpoints;
 mod cmd_memory;
 mod cmd_profile;
 mod cmd_auth;
+mod cmd_version;
+mod cmd_doctor;
+mod cmd_status;
+mod cmd_dump;
+mod cmd_logs;
+mod cmd_backup;
+mod cmd_import;
+mod cmd_uninstall;
+mod cmd_update;
+mod cmd_insights;
+mod cmd_pairing;
 
 use std::fs::OpenOptions;
 use std::io::{self, Write};
@@ -209,6 +220,64 @@ enum Commands {
     Login,
     /// Logout
     Logout,
+    /// Show version information
+    Version {
+        #[arg(long)]
+        detailed: bool,
+    },
+    /// Check Hermes configuration and dependencies
+    Doctor {
+        /// Attempt to auto-fix common issues
+        #[arg(long)]
+        fix: bool,
+    },
+    /// Show system status overview
+    Status {
+        /// Show detailed status
+        #[arg(long)]
+        deep: bool,
+    },
+    /// Print a setup summary report
+    Dump {
+        /// Show all configuration keys as YAML
+        #[arg(long)]
+        all: bool,
+    },
+    /// View log files
+    Logs {
+        #[command(subcommand)]
+        cmd: cmd_logs::LogsSubcommand,
+    },
+    /// Backup Hermes configuration and data
+    Backup {
+        #[command(subcommand)]
+        cmd: cmd_backup::BackupSubcommand,
+    },
+    /// Import from a backup
+    Import {
+        #[command(subcommand)]
+        cmd: cmd_import::ImportSubcommand,
+    },
+    /// Uninstall Hermes data
+    Uninstall {
+        #[command(subcommand)]
+        cmd: cmd_uninstall::UninstallSubcommand,
+    },
+    /// Check for and apply updates
+    Update {
+        #[command(subcommand)]
+        cmd: cmd_update::UpdateSubcommand,
+    },
+    /// Show usage insights
+    Insights {
+        #[command(subcommand)]
+        cmd: cmd_insights::InsightsSubcommand,
+    },
+    /// Manage device pairing
+    Pairing {
+        #[command(subcommand)]
+        cmd: cmd_pairing::PairingSubcommand,
+    },
 }
 
 fn init_logging(
@@ -814,6 +883,39 @@ async fn main() -> Result<()> {
         }
         Commands::Logout => {
             cmd_auth::handle_logout(&loaded.config).await?;
+        }
+        Commands::Version { detailed } => {
+            cmd_version::handle_version_command(&loaded.config, *detailed).await?;
+        }
+        Commands::Doctor { fix } => {
+            cmd_doctor::handle_doctor_command(&loaded.config, *fix).await?;
+        }
+        Commands::Status { deep } => {
+            cmd_status::handle_status_command(&loaded.config, *deep).await?;
+        }
+        Commands::Dump { all } => {
+            cmd_dump::handle_dump_command(&loaded.config, *all).await?;
+        }
+        Commands::Logs { cmd } => {
+            cmd_logs::handle_logs_command(&loaded.config, cmd.clone()).await?;
+        }
+        Commands::Backup { cmd } => {
+            cmd_backup::handle_backup_command(&loaded.config, cmd.clone()).await?;
+        }
+        Commands::Import { cmd } => {
+            cmd_import::handle_import_command(&loaded.config, cmd.clone()).await?;
+        }
+        Commands::Uninstall { cmd } => {
+            cmd_uninstall::handle_uninstall_command(&loaded.config, cmd.clone()).await?;
+        }
+        Commands::Update { cmd } => {
+            cmd_update::handle_update_command(&loaded.config, cmd.clone()).await?;
+        }
+        Commands::Insights { cmd } => {
+            cmd_insights::handle_insights_command(&loaded.config, cmd.clone()).await?;
+        }
+        Commands::Pairing { cmd } => {
+            cmd_pairing::handle_pairing_command(&loaded.config, cmd.clone()).await?;
         }
     }
 
