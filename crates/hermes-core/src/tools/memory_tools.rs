@@ -282,9 +282,7 @@ mod tests {
     #[tokio::test]
     async fn test_memory_store_missing_args() {
         let tool = MemoryStoreTool;
-        let result = tool
-            .execute(json!({}), ToolContext::default())
-            .await;
+        let result = tool.execute(json!({}), ToolContext::default()).await;
         assert!(!result.success);
     }
 

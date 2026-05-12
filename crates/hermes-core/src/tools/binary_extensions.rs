@@ -13,17 +13,12 @@ use crate::tools::{HermesTool, ToolContext, ToolResult};
 
 /// Known binary file extensions
 const BINARY_EXTENSIONS: &[&str] = &[
-    ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".svg",
-    ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
-    ".zip", ".gz", ".bz2", ".xz", ".7z", ".rar", ".tar",
-    ".exe", ".dll", ".so", ".dylib", ".bin", ".dat",
-    ".class", ".pyc", ".o", ".a", ".lib", ".pdb",
-    ".mp3", ".mp4", ".avi", ".mov", ".wav", ".flac", ".ogg", ".webm", ".mkv",
-    ".woff", ".woff2", ".ttf", ".otf", ".eot",
-    ".ico", ".icns",
-    ".iso", ".img", ".dmg",
-    ".db", ".sqlite", ".sqlite3",
-    ".deb", ".rpm", ".apk", ".ipa",
+    ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".svg", ".pdf", ".doc", ".docx", ".xls",
+    ".xlsx", ".ppt", ".pptx", ".zip", ".gz", ".bz2", ".xz", ".7z", ".rar", ".tar", ".exe", ".dll",
+    ".so", ".dylib", ".bin", ".dat", ".class", ".pyc", ".o", ".a", ".lib", ".pdb", ".mp3", ".mp4",
+    ".avi", ".mov", ".wav", ".flac", ".ogg", ".webm", ".mkv", ".woff", ".woff2", ".ttf", ".otf",
+    ".eot", ".ico", ".icns", ".iso", ".img", ".dmg", ".db", ".sqlite", ".sqlite3", ".deb", ".rpm",
+    ".apk", ".ipa",
 ];
 
 /// Tool for checking whether a file path points to a binary file
@@ -59,10 +54,7 @@ impl HermesTool for BinaryExtensionsTool {
         let args: BinaryExtensionsArgs = match serde_json::from_value(args) {
             Ok(a) => a,
             Err(e) => {
-                return ToolResult::error(
-                    "check_binary_file",
-                    format!("Invalid arguments: {}", e),
-                )
+                return ToolResult::error("check_binary_file", format!("Invalid arguments: {}", e))
             }
         };
 

@@ -34,10 +34,7 @@ impl HermesTool for XaiHttpTool {
     }
 
     fn schema(&self) -> ToolSchema {
-        ToolSchema::from_type::<XaiHttpArgs>(
-            "xai_http_request",
-            "Make HTTP request to X.AI API",
-        )
+        ToolSchema::from_type::<XaiHttpArgs>("xai_http_request", "Make HTTP request to X.AI API")
     }
 
     async fn execute(&self, args: Value, _context: ToolContext) -> ToolResult {
@@ -49,8 +46,8 @@ impl HermesTool for XaiHttpTool {
         };
 
         // Determine base URL from env var or default
-        let base_url = std::env::var("XAI_BASE_URL")
-            .unwrap_or_else(|_| DEFAULT_XAI_BASE_URL.to_string());
+        let base_url =
+            std::env::var("XAI_BASE_URL").unwrap_or_else(|_| DEFAULT_XAI_BASE_URL.to_string());
 
         // Build the full URL
         let full_url = if args.url.starts_with("http://") || args.url.starts_with("https://") {
@@ -129,10 +126,7 @@ impl HermesTool for XaiHttpTool {
                     }),
                 )
             }
-            Err(e) => ToolResult::error(
-                "xai_http_request",
-                format!("Request failed: {}", e),
-            ),
+            Err(e) => ToolResult::error("xai_http_request", format!("Request failed: {}", e)),
         }
     }
 }
@@ -167,8 +161,10 @@ mod tests {
         // and the URL should include the base
         assert!(!result.success);
         // Check that it failed on connection, not on args
-        assert!(result.error.as_ref().unwrap().contains("Request failed")
-            || result.error.as_ref().unwrap().contains("error")
-            || result.error.as_ref().unwrap().contains("connect"));
+        assert!(
+            result.error.as_ref().unwrap().contains("Request failed")
+                || result.error.as_ref().unwrap().contains("error")
+                || result.error.as_ref().unwrap().contains("connect")
+        );
     }
 }

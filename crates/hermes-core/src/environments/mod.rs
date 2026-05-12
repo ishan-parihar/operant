@@ -8,20 +8,20 @@
 //! Daytona, Vercel) are stubs that return an error until their respective
 //! Rust SDK crates are available.
 
-pub mod local;
-pub mod docker;
-pub mod ssh;
-pub mod singularity;
-pub mod modal;
 pub mod daytona;
+pub mod docker;
+pub mod local;
+pub mod modal;
+pub mod singularity;
+pub mod ssh;
 pub mod vercel;
 
-pub use local::LocalEnvironment;
-pub use docker::DockerEnvironment;
-pub use ssh::SshEnvironment;
-pub use singularity::SingularityEnvironment;
-pub use modal::ModalEnvironment;
 pub use daytona::DaytonaEnvironment;
+pub use docker::DockerEnvironment;
+pub use local::LocalEnvironment;
+pub use modal::ModalEnvironment;
+pub use singularity::SingularityEnvironment;
+pub use ssh::SshEnvironment;
 pub use vercel::VercelSandboxEnvironment;
 
 use std::collections::HashMap;
@@ -241,11 +241,7 @@ async fn run_command(
         Some(d) => match tokio::time::timeout(d, cmd.output()).await {
             Ok(Ok(out)) => out,
             Ok(Err(e)) => {
-                return (
-                    String::new(),
-                    format!("Failed to spawn process: {}", e),
-                    -1,
-                );
+                return (String::new(), format!("Failed to spawn process: {}", e), -1);
             }
             Err(_elapsed) => {
                 return (
@@ -258,11 +254,7 @@ async fn run_command(
         None => match cmd.output().await {
             Ok(out) => out,
             Err(e) => {
-                return (
-                    String::new(),
-                    format!("Failed to spawn process: {}", e),
-                    -1,
-                );
+                return (String::new(), format!("Failed to spawn process: {}", e), -1);
             }
         },
     };

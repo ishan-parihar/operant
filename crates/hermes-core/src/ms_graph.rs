@@ -158,8 +158,8 @@ impl GraphCredentials {
             .map_err(|_| MicrosoftGraphError::Config("MSGRAPH_CLIENT_ID is not set".into()))?;
         let client_secret = std::env::var("MSGRAPH_CLIENT_SECRET")
             .map_err(|_| MicrosoftGraphError::Config("MSGRAPH_CLIENT_SECRET is not set".into()))?;
-        let scope = std::env::var("MSGRAPH_SCOPE")
-            .unwrap_or_else(|_| DEFAULT_GRAPH_SCOPE.to_string());
+        let scope =
+            std::env::var("MSGRAPH_SCOPE").unwrap_or_else(|_| DEFAULT_GRAPH_SCOPE.to_string());
         let authority_url = std::env::var("MSGRAPH_AUTHORITY_URL")
             .unwrap_or_else(|_| DEFAULT_GRAPH_AUTHORITY_URL.to_string());
 
@@ -417,9 +417,7 @@ impl MicrosoftGraphTokenProvider {
             .and_then(|v| v.as_str())
             .map(|s| s.to_string())
             .ok_or_else(|| {
-                MicrosoftGraphError::Token(
-                    "Token response did not include access_token".into(),
-                )
+                MicrosoftGraphError::Token("Token response did not include access_token".into())
             })?;
 
         let token_type = payload
@@ -428,11 +426,14 @@ impl MicrosoftGraphTokenProvider {
             .unwrap_or("Bearer")
             .to_string();
 
-        let expires_in = payload.get("expires_in").and_then(|v| v.as_u64()).ok_or_else(|| {
-            MicrosoftGraphError::Token(
-                "Token response did not include a valid expires_in".into(),
-            )
-        })?;
+        let expires_in = payload
+            .get("expires_in")
+            .and_then(|v| v.as_u64())
+            .ok_or_else(|| {
+                MicrosoftGraphError::Token(
+                    "Token response did not include a valid expires_in".into(),
+                )
+            })?;
 
         Ok(CachedAccessToken::new(access_token, token_type, expires_in))
     }
@@ -446,7 +447,14 @@ impl std::fmt::Debug for MicrosoftGraphTokenProvider {
             .field("scope", &self.credentials.scope)
             .field("timeout", &self.timeout)
             .field("skew_seconds", &self.skew_seconds)
-            .field("has_cache", &self.cached_token.try_read().map(|c| c.is_some()).unwrap_or(false))
+            .field(
+                "has_cache",
+                &self
+                    .cached_token
+                    .try_read()
+                    .map(|c| c.is_some())
+                    .unwrap_or(false),
+            )
             .finish()
     }
 }
@@ -576,11 +584,8 @@ async fn decode_json(response: Response) -> Result<Value> {
     let url = response.url().to_string();
 
     response.json::<Value>().await.map_err(|e| {
-        MicrosoftGraphError::Client(format!(
-            "Response was not valid JSON for {}: {}",
-            url, e
-        ))
-        .into()
+        MicrosoftGraphError::Client(format!("Response was not valid JSON for {}: {}", url, e))
+            .into()
     })
 }
 
@@ -683,7 +688,9 @@ impl MicrosoftGraphClient {
         params: Option<&[(&str, &str)]>,
         headers: Option<HeaderMap>,
     ) -> Result<Value> {
-        let response = self.request(Method::GET, path, None::<&Value>, params, headers).await?;
+        let response = self
+            .request(Method::GET, path, None::<&Value>, params, headers)
+            .await?;
         decode_json(response).await
     }
 
@@ -694,7 +701,9 @@ impl MicrosoftGraphClient {
         body: Option<&T>,
         headers: Option<HeaderMap>,
     ) -> Result<Value> {
-        let response = self.request(Method::POST, path, body, None, headers).await?;
+        let response = self
+            .request(Method::POST, path, body, None, headers)
+            .await?;
         decode_json(response).await
     }
 
@@ -707,7 +716,9 @@ impl MicrosoftGraphClient {
         body: Option<&T>,
         headers: Option<HeaderMap>,
     ) -> Result<Value> {
-        let response = self.request(Method::PATCH, path, body, None, headers).await?;
+        let response = self
+            .request(Method::PATCH, path, body, None, headers)
+            .await?;
         if response.status() == StatusCode::NO_CONTENT {
             return Ok(serde_json::json!({}));
         }
@@ -717,11 +728,7 @@ impl MicrosoftGraphClient {
     /// Issue a DELETE request.
     ///
     /// Returns `json!({"deleted": true, "status_code": 204})` on 204.
-    pub async fn delete_request(
-        &self,
-        path: &str,
-        headers: Option<HeaderMap>,
-    ) -> Result<Value> {
+    pub async fn delete_request(&self, path: &str, headers: Option<HeaderMap>) -> Result<Value> {
         let response = self
             .request::<Value>(Method::DELETE, path, None, None, headers)
             .await?;
@@ -828,10 +835,7 @@ impl MicrosoftGraphClient {
                     .as_ref()
                     .map_or(false, error_implies_expired_token);
 
-            let token = self
-                .token_provider
-                .get_access_token(force_refresh)
-                .await?;
+            let token = self.token_provider.get_access_token(force_refresh).await?;
 
             let mut request_headers = HeaderMap::new();
             request_headers.insert(
@@ -883,9 +887,8 @@ impl MicrosoftGraphClient {
                 let mut stream = response.bytes_stream();
                 use futures_util::StreamExt;
                 while let Some(chunk_result) = stream.next().await {
-                    let chunk = chunk_result.map_err(|e| {
-                        MicrosoftGraphError::Client(format!("Stream error: {}", e))
-                    })?;
+                    let chunk = chunk_result
+                        .map_err(|e| MicrosoftGraphError::Client(format!("Stream error: {}", e)))?;
                     use tokio::io::AsyncWriteExt;
                     file.write_all(&chunk).await?;
                 }
@@ -975,16 +978,14 @@ impl MicrosoftGraphClient {
                     .as_ref()
                     .map_or(false, error_implies_expired_token);
 
-            let token = self
-                .token_provider
-                .get_access_token(force_refresh)
-                .await?;
+            let token = self.token_provider.get_access_token(force_refresh).await?;
 
             let mut headers = HeaderMap::new();
             headers.insert(
                 AUTHORIZATION,
-                HeaderValue::from_str(&format!("Bearer {}", token))
-                    .map_err(|e| MicrosoftGraphError::Client(format!("Invalid auth header: {}", e)))?,
+                HeaderValue::from_str(&format!("Bearer {}", token)).map_err(|e| {
+                    MicrosoftGraphError::Client(format!("Invalid auth header: {}", e))
+                })?,
             );
             headers.insert(ACCEPT, HeaderValue::from_static("application/json"));
             headers.insert(USER_AGENT, HeaderValue::from_static(USER_AGENT_VALUE));
@@ -995,10 +996,7 @@ impl MicrosoftGraphClient {
                 headers.extend(extra.clone().into_iter());
             }
 
-            let mut req_builder = self
-                .client
-                .request(method.clone(), url)
-                .headers(headers);
+            let mut req_builder = self.client.request(method.clone(), url).headers(headers);
 
             if let Some(p) = params {
                 req_builder = req_builder.query(p);

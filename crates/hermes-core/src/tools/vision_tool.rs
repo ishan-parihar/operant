@@ -318,7 +318,9 @@ impl HermesTool for VisionTool {
                     }),
                 )
             }
-            Err(e) => ToolResult::error("vision_analyze", format!("Failed to download image: {}", e)),
+            Err(e) => {
+                ToolResult::error("vision_analyze", format!("Failed to download image: {}", e))
+            }
         }
     }
 }
@@ -329,11 +331,20 @@ mod tests {
 
     #[test]
     fn test_mime_from_extension() {
-        assert_eq!(mime_from_extension(&PathBuf::from("test.jpg")), "image/jpeg");
+        assert_eq!(
+            mime_from_extension(&PathBuf::from("test.jpg")),
+            "image/jpeg"
+        );
         assert_eq!(mime_from_extension(&PathBuf::from("test.png")), "image/png");
         assert_eq!(mime_from_extension(&PathBuf::from("test.gif")), "image/gif");
-        assert_eq!(mime_from_extension(&PathBuf::from("test.svg")), "image/svg+xml");
-        assert_eq!(mime_from_extension(&PathBuf::from("test.unknown")), "image/jpeg");
+        assert_eq!(
+            mime_from_extension(&PathBuf::from("test.svg")),
+            "image/svg+xml"
+        );
+        assert_eq!(
+            mime_from_extension(&PathBuf::from("test.unknown")),
+            "image/jpeg"
+        );
     }
 
     #[test]
@@ -348,14 +359,23 @@ mod tests {
     fn test_detect_mime_type() {
         // PNG header
         let png = vec![0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
-        assert_eq!(detect_mime_type(&png, &PathBuf::from("test")), Some("image/png"));
+        assert_eq!(
+            detect_mime_type(&png, &PathBuf::from("test")),
+            Some("image/png")
+        );
 
         // JPEG header
         let jpeg = vec![0xFF, 0xD8, 0xFF, 0xE0];
-        assert_eq!(detect_mime_type(&jpeg, &PathBuf::from("test")), Some("image/jpeg"));
+        assert_eq!(
+            detect_mime_type(&jpeg, &PathBuf::from("test")),
+            Some("image/jpeg")
+        );
 
         // GIF header
         let gif = b"GIF89a".to_vec();
-        assert_eq!(detect_mime_type(&gif, &PathBuf::from("test")), Some("image/gif"));
+        assert_eq!(
+            detect_mime_type(&gif, &PathBuf::from("test")),
+            Some("image/gif")
+        );
     }
 }

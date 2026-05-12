@@ -114,16 +114,26 @@ impl ImageGenerationTool {
             .await
         {
             Ok(r) => r,
-            Err(e) => return ToolResult::error("image_generate", format!("API request failed: {}", e)),
+            Err(e) => {
+                return ToolResult::error("image_generate", format!("API request failed: {}", e))
+            }
         };
 
         if !response.status().is_success() {
-            return ToolResult::error("image_generate", format!("API error: {}", response.status()));
+            return ToolResult::error(
+                "image_generate",
+                format!("API error: {}", response.status()),
+            );
         }
 
         let result: Value = match response.json().await {
             Ok(r) => r,
-            Err(e) => return ToolResult::error("image_generate", format!("Failed to parse response: {}", e)),
+            Err(e) => {
+                return ToolResult::error(
+                    "image_generate",
+                    format!("Failed to parse response: {}", e),
+                )
+            }
         };
 
         let images: Vec<String> = result
@@ -131,7 +141,11 @@ impl ImageGenerationTool {
             .and_then(|v| v.as_array())
             .map(|arr| {
                 arr.iter()
-                    .filter_map(|img| img.get("url").and_then(|u| u.as_str()).map(|s| s.to_string()))
+                    .filter_map(|img| {
+                        img.get("url")
+                            .and_then(|u| u.as_str())
+                            .map(|s| s.to_string())
+                    })
                     .collect()
             })
             .unwrap_or_default();
@@ -180,10 +194,13 @@ impl ImageGenerationTool {
             return Err(format!("Upscale API error: {}", response.status()));
         }
 
-        let result: Value = response.json().await
+        let result: Value = response
+            .json()
+            .await
             .map_err(|e| format!("Failed to parse upscale response: {}", e))?;
 
-        result.get("image")
+        result
+            .get("image")
             .and_then(|i| i.get("url"))
             .and_then(|u| u.as_str())
             .map(|s| s.to_string())
@@ -202,13 +219,18 @@ impl HermesTool for ImageGenerationTool {
     }
 
     fn schema(&self) -> ToolSchema {
-        ToolSchema::from_type::<ImageGenerationArgs>("image_generate", "Generate images from text prompts with AI models")
+        ToolSchema::from_type::<ImageGenerationArgs>(
+            "image_generate",
+            "Generate images from text prompts with AI models",
+        )
     }
 
     async fn execute(&self, args: Value, _context: ToolContext) -> ToolResult {
         let args: ImageGenerationArgs = match serde_json::from_value(args) {
             Ok(a) => a,
-            Err(e) => return ToolResult::error("image_generate", format!("Invalid arguments: {}", e)),
+            Err(e) => {
+                return ToolResult::error("image_generate", format!("Invalid arguments: {}", e))
+            }
         };
         self.generate(args).await
     }

@@ -9,10 +9,10 @@ use serde_json::Value;
 
 use crate::config::runtime_config;
 use crate::schema::ToolSchema;
-use crate::tools::{HermesTool, ToolContext, ToolResult};
 use crate::tools::web_providers::{
     DDGProvider, ExaProvider, SearXNGProvider, TavilyProvider, WebSearchProvider,
 };
+use crate::tools::{HermesTool, ToolContext, ToolResult};
 
 /// Tool for searching the web
 pub struct WebSearchTool;
@@ -413,9 +413,7 @@ mod tests {
     #[tokio::test]
     async fn test_web_search_invalid_args() {
         let tool = WebSearchTool;
-        let result = tool
-            .execute(json!({}), ToolContext::default())
-            .await;
+        let result = tool.execute(json!({}), ToolContext::default()).await;
         assert!(!result.success);
     }
 

@@ -48,12 +48,18 @@ impl KanbanTool {
 
     fn handle(&self, args: KanbanToolArgs) -> Result<String> {
         let action = args.action.to_lowercase();
-        
+
         match action.as_str() {
             "show" => {
-                let tid = args.task_id.clone().ok_or_else(|| Error::Agent("task_id is required".into()))?;
-                let task = self.db.get_task(&tid)?.ok_or_else(|| Error::Agent(format!("task {} not found", tid)))?;
-                
+                let tid = args
+                    .task_id
+                    .clone()
+                    .ok_or_else(|| Error::Agent("task_id is required".into()))?;
+                let task = self
+                    .db
+                    .get_task(&tid)?
+                    .ok_or_else(|| Error::Agent(format!("task {} not found", tid)))?;
+
                 let result = json!({
                     "task": task,
                     "parents": self.db.parent_ids(&tid)?,
@@ -66,54 +72,84 @@ impl KanbanTool {
                 Ok(serde_json::to_string_pretty(&result).unwrap())
             }
             "complete" => {
-                let tid = args.task_id.clone().ok_or_else(|| Error::Agent("task_id is required".into()))?;
+                let tid = args
+                    .task_id
+                    .clone()
+                    .ok_or_else(|| Error::Agent("task_id is required".into()))?;
                 let success = self.db.complete_task(
                     &tid,
                     args.result.as_deref(),
                     args.summary.as_deref(),
                     args.metadata.as_ref(),
                     args.created_cards.as_deref(),
-                    None
+                    None,
                 )?;
-                
+
                 if success {
                     Ok(json!({"ok": true, "task_id": tid}).to_string())
                 } else {
-                    Err(Error::Agent("Could not complete task (unknown id or already terminal)".into()))
+                    Err(Error::Agent(
+                        "Could not complete task (unknown id or already terminal)".into(),
+                    ))
                 }
             }
             "block" => {
-                let tid = args.task_id.clone().ok_or_else(|| Error::Agent("task_id is required".into()))?;
-                let reason = args.reason.clone().ok_or_else(|| Error::Agent("reason is required".into()))?;
+                let tid = args
+                    .task_id
+                    .clone()
+                    .ok_or_else(|| Error::Agent("task_id is required".into()))?;
+                let reason = args
+                    .reason
+                    .clone()
+                    .ok_or_else(|| Error::Agent("reason is required".into()))?;
                 let success = self.db.block_task(&tid, &reason, None)?;
-                
+
                 if success {
                     Ok(json!({"ok": true, "task_id": tid}).to_string())
                 } else {
-                    Err(Error::Agent("Could not block task (unknown id or not in running/ready)".into()))
+                    Err(Error::Agent(
+                        "Could not block task (unknown id or not in running/ready)".into(),
+                    ))
                 }
             }
             "heartbeat" => {
-                let tid = args.task_id.clone().ok_or_else(|| Error::Agent("task_id is required".into()))?;
+                let tid = args
+                    .task_id
+                    .clone()
+                    .ok_or_else(|| Error::Agent("task_id is required".into()))?;
                 let success = self.db.heartbeat_worker(&tid, args.note.as_deref(), None)?;
-                
+
                 if success {
                     Ok(json!({"ok": true, "task_id": tid}).to_string())
                 } else {
-                    Err(Error::Agent("Could not heartbeat task (unknown id or not running)".into()))
+                    Err(Error::Agent(
+                        "Could not heartbeat task (unknown id or not running)".into(),
+                    ))
                 }
             }
             "comment" => {
-                let tid = args.task_id.clone().ok_or_else(|| Error::Agent("task_id is required".into()))?;
-                let body = args.body.clone().ok_or_else(|| Error::Agent("body is required".into()))?;
+                let tid = args
+                    .task_id
+                    .clone()
+                    .ok_or_else(|| Error::Agent("task_id is required".into()))?;
+                let body = args
+                    .body
+                    .clone()
+                    .ok_or_else(|| Error::Agent("body is required".into()))?;
                 let author = "worker";
                 let cid = self.db.add_comment(&tid, author, &body)?;
                 Ok(json!({"ok": true, "task_id": tid, "comment_id": cid}).to_string())
             }
             "create" => {
-                let title = args.title.clone().ok_or_else(|| Error::Agent("title is required".into()))?;
-                let assignee = args.assignee.clone().ok_or_else(|| Error::Agent("assignee is required".into()))?;
-                
+                let title = args
+                    .title
+                    .clone()
+                    .ok_or_else(|| Error::Agent("title is required".into()))?;
+                let assignee = args
+                    .assignee
+                    .clone()
+                    .ok_or_else(|| Error::Agent("assignee is required".into()))?;
+
                 let id = self.db.create_task(
                     &title,
                     args.body.as_deref(),
@@ -133,8 +169,14 @@ impl KanbanTool {
                 Ok(json!({"ok": true, "task_id": id}).to_string())
             }
             "link" => {
-                let parent_id = args.parent_id.clone().ok_or_else(|| Error::Agent("parent_id is required".into()))?;
-                let child_id = args.child_id.clone().ok_or_else(|| Error::Agent("child_id is required".into()))?;
+                let parent_id = args
+                    .parent_id
+                    .clone()
+                    .ok_or_else(|| Error::Agent("parent_id is required".into()))?;
+                let child_id = args
+                    .child_id
+                    .clone()
+                    .ok_or_else(|| Error::Agent("child_id is required".into()))?;
                 self.db.link_tasks(&parent_id, &child_id)?;
                 Ok(json!({"ok": true, "parent_id": parent_id, "child_id": child_id}).to_string())
             }

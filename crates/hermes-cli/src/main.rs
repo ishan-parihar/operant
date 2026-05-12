@@ -9,6 +9,13 @@ mod cmd_mcp;
 mod cmd_skills;
 mod cmd_model;
 mod cmd_completion;
+mod cmd_cron;
+mod cmd_kanban;
+mod cmd_gateway;
+mod cmd_checkpoints;
+mod cmd_memory;
+mod cmd_profile;
+mod cmd_auth;
 
 use std::fs::OpenOptions;
 use std::io::{self, Write};
@@ -158,6 +165,50 @@ enum Commands {
         #[command(subcommand)]
         cmd: cmd_completion::CompletionSubcommand,
     },
+    /// Manage cron jobs
+    Cron {
+        #[command(subcommand)]
+        cmd: cmd_cron::CronSubcommand,
+    },
+    /// Manage kanban tasks
+    Kanban {
+        #[command(subcommand)]
+        cmd: cmd_kanban::KanbanSubcommand,
+    },
+    /// Manage gateway
+    Gateway {
+        #[command(subcommand)]
+        cmd: cmd_gateway::GatewaySubcommand,
+    },
+    /// Manage checkpoints
+    Checkpoints {
+        #[command(subcommand)]
+        cmd: cmd_checkpoints::CheckpointsSubcommand,
+    },
+    /// Manage memory
+    Memory {
+        #[command(subcommand)]
+        cmd: cmd_memory::MemorySubcommand,
+    },
+    /// Manage profiles
+    Profile {
+        #[command(subcommand)]
+        cmd: cmd_profile::ProfileSubcommand,
+    },
+    /// Manage auth credentials
+    Auth {
+        #[command(subcommand)]
+        cmd: cmd_auth::AuthSubcommand,
+    },
+    /// Manage fallback models
+    Fallback {
+        #[command(subcommand)]
+        cmd: cmd_auth::FallbackSubcommand,
+    },
+    /// Login to a provider
+    Login,
+    /// Logout
+    Logout,
 }
 
 fn init_logging(
@@ -733,6 +784,36 @@ async fn main() -> Result<()> {
         }
         Commands::Completion { cmd } => {
             cmd_completion::handle_completion_command(cmd.clone())?;
+        }
+        Commands::Cron { cmd } => {
+            cmd_cron::handle_cron_command(&loaded.config, cmd.clone()).await?;
+        }
+        Commands::Kanban { cmd } => {
+            cmd_kanban::handle_kanban_command(&loaded.config, cmd.clone()).await?;
+        }
+        Commands::Gateway { cmd } => {
+            cmd_gateway::handle_gateway_command(&loaded.config, cmd.clone()).await?;
+        }
+        Commands::Checkpoints { cmd } => {
+            cmd_checkpoints::handle_checkpoints_command(&loaded.config, cmd.clone()).await?;
+        }
+        Commands::Memory { cmd } => {
+            cmd_memory::handle_memory_command(&loaded.config, cmd.clone()).await?;
+        }
+        Commands::Profile { cmd } => {
+            cmd_profile::handle_profile_command(&loaded.config, cmd.clone()).await?;
+        }
+        Commands::Auth { cmd } => {
+            cmd_auth::handle_auth_command(&loaded.config, cmd.clone()).await?;
+        }
+        Commands::Fallback { cmd } => {
+            cmd_auth::handle_fallback_command(&loaded.config, cmd.clone()).await?;
+        }
+        Commands::Login => {
+            cmd_auth::handle_login(&loaded.config).await?;
+        }
+        Commands::Logout => {
+            cmd_auth::handle_logout(&loaded.config).await?;
         }
     }
 

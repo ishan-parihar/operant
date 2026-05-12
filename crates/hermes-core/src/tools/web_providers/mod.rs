@@ -8,9 +8,9 @@ pub use exa::ExaProvider;
 pub use searxng::SearXNGProvider;
 pub use tavily::TavilyProvider;
 
+use crate::error::Result;
 use async_trait::async_trait;
 use serde::Serialize;
-use crate::error::Result;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct WebSearchResult {

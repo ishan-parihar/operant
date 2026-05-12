@@ -271,7 +271,10 @@ fn server_hash(url: &str) -> String {
 /// Find an available TCP port on localhost.
 fn find_free_port() -> u16 {
     let listener = TcpListener::bind("127.0.0.1:0").expect("Failed to bind to 127.0.0.1:0");
-    listener.local_addr().expect("Failed to get local address").port()
+    listener
+        .local_addr()
+        .expect("Failed to get local address")
+        .port()
 }
 
 #[allow(dead_code)]
@@ -365,7 +368,11 @@ fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Option<T> {
 fn write_json<T: serde::Serialize>(path: &Path, data: &T) -> Result<()> {
     let parent = path.parent().unwrap_or(Path::new("."));
     std::fs::create_dir_all(parent).map_err(|e| {
-        Error::Agent(format!("Failed to create OAuth directory {}: {}", parent.display(), e))
+        Error::Agent(format!(
+            "Failed to create OAuth directory {}: {}",
+            parent.display(),
+            e
+        ))
     })?;
 
     // Tighten parent directory permissions
@@ -375,9 +382,8 @@ fn write_json<T: serde::Serialize>(path: &Path, data: &T) -> Result<()> {
         let _ = std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700));
     }
 
-    let json = serde_json::to_string_pretty(data).map_err(|e| {
-        Error::Agent(format!("Failed to serialize OAuth data: {}", e))
-    })?;
+    let json = serde_json::to_string_pretty(data)
+        .map_err(|e| Error::Agent(format!("Failed to serialize OAuth data: {}", e)))?;
 
     // Atomic write with temporary file
     let tmp = parent.join(format!(
@@ -388,7 +394,11 @@ fn write_json<T: serde::Serialize>(path: &Path, data: &T) -> Result<()> {
 
     {
         let mut file = std::fs::File::create(&tmp).map_err(|e| {
-            Error::Agent(format!("Failed to create temp file {}: {}", tmp.display(), e))
+            Error::Agent(format!(
+                "Failed to create temp file {}: {}",
+                tmp.display(),
+                e
+            ))
         })?;
 
         #[cfg(unix)]
@@ -430,8 +440,14 @@ fn urlencoding_decode(input: &str) -> String {
         match b {
             b'+' => result.push(' '),
             b'%' => {
-                let hi = bytes.next().and_then(|c| (c as char).to_digit(16)).unwrap_or(0);
-                let lo = bytes.next().and_then(|c| (c as char).to_digit(16)).unwrap_or(0);
+                let hi = bytes
+                    .next()
+                    .and_then(|c| (c as char).to_digit(16))
+                    .unwrap_or(0);
+                let lo = bytes
+                    .next()
+                    .and_then(|c| (c as char).to_digit(16))
+                    .unwrap_or(0);
                 result.push((hi as u8 * 16 + lo as u8) as char);
             }
             _ => result.push(b as char),
@@ -625,16 +641,22 @@ fn generate_code_verifier() -> String {
     #[cfg(unix)]
     {
         let mut f = std::fs::File::open("/dev/urandom").expect("Failed to open /dev/urandom");
-        f.read_exact(&mut bytes).expect("Failed to read /dev/urandom");
+        f.read_exact(&mut bytes)
+            .expect("Failed to read /dev/urandom");
     }
     #[cfg(not(unix))]
     {
         use std::time::{SystemTime, UNIX_EPOCH};
-        let seed = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos() as u64;
+        let seed = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos() as u64;
         // Simple pseudo-random fallback for non-Unix (e.g., Windows)
         let mut state = seed;
         for byte in bytes.iter_mut() {
-            state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             *byte = (state >> 32) as u8;
         }
     }
@@ -678,7 +700,9 @@ pub struct AuthCallbackResult {
 ///
 /// # Arguments
 /// * `port` - The TCP port to bind to (0 = auto-select).
-pub async fn start_localhost_server(port: u16) -> Result<(u16, oneshot::Receiver<AuthCallbackResult>)> {
+pub async fn start_localhost_server(
+    port: u16,
+) -> Result<(u16, oneshot::Receiver<AuthCallbackResult>)> {
     let actual_port: u16;
     let listener: TokioTcpListener;
 
@@ -762,7 +786,10 @@ pub async fn start_localhost_server(port: u16) -> Result<(u16, oneshot::Receiver
             "<html><body><h2>Authorization Successful</h2><p>You can close this tab and return to Hermes.</p></body></html>".to_string()
         } else {
             let err_msg = result.error.as_deref().unwrap_or("unknown");
-            format!("<html><body><h2>Authorization Failed</h2><p>Error: {}</p></body></html>", err_msg)
+            format!(
+                "<html><body><h2>Authorization Failed</h2><p>Error: {}</p></body></html>",
+                err_msg
+            )
         };
 
         let response = format!(
@@ -836,24 +863,42 @@ impl OAuthProvider {
         let client = reqwest::Client::new();
 
         for url in &prm_urls {
-            match client.get(url).timeout(Duration::from_secs(10)).send().await {
+            match client
+                .get(url)
+                .timeout(Duration::from_secs(10))
+                .send()
+                .await
+            {
                 Ok(resp) if resp.status().is_success() => {
                     if let Ok(json) = resp.json::<serde_json::Value>().await {
-                        if let Some(servers) = json.get("authorization_servers").and_then(|v| v.as_array()) {
+                        if let Some(servers) =
+                            json.get("authorization_servers").and_then(|v| v.as_array())
+                        {
                             if let Some(first) = servers.first().and_then(|v| v.as_str()) {
                                 auth_server_url = Some(first.to_string());
                                 debug!("MCP OAuth: PRM discovered auth_server={}", first);
                             }
                         }
                         // Also look for token_endpoint directly in PRM
-                        if let Some(token_endpoint) = json.get("token_endpoint").and_then(|v| v.as_str()) {
+                        if let Some(token_endpoint) =
+                            json.get("token_endpoint").and_then(|v| v.as_str())
+                        {
                             let meta = OAuthMetadata {
-                                issuer: json.get("issuer").and_then(|v| v.as_str()).map(String::from),
-                                authorization_endpoint: json.get("authorization_endpoint").and_then(|v| v.as_str()).map(String::from),
+                                issuer: json
+                                    .get("issuer")
+                                    .and_then(|v| v.as_str())
+                                    .map(String::from),
+                                authorization_endpoint: json
+                                    .get("authorization_endpoint")
+                                    .and_then(|v| v.as_str())
+                                    .map(String::from),
                                 token_endpoint: Some(token_endpoint.to_string()),
                             };
                             if meta.token_endpoint.is_some() {
-                                debug!("MCP OAuth: PRM discovery complete, token_endpoint={}", token_endpoint);
+                                debug!(
+                                    "MCP OAuth: PRM discovery complete, token_endpoint={}",
+                                    token_endpoint
+                                );
                                 return Ok(meta);
                             }
                         }
@@ -873,13 +918,27 @@ impl OAuthProvider {
         ];
 
         for url in &asm_urls {
-            match client.get(url).timeout(Duration::from_secs(10)).send().await {
+            match client
+                .get(url)
+                .timeout(Duration::from_secs(10))
+                .send()
+                .await
+            {
                 Ok(resp) if resp.status().is_success() => {
                     if let Ok(json) = resp.json::<serde_json::Value>().await {
                         let meta = OAuthMetadata {
-                            issuer: json.get("issuer").and_then(|v| v.as_str()).map(String::from),
-                            authorization_endpoint: json.get("authorization_endpoint").and_then(|v| v.as_str()).map(String::from),
-                            token_endpoint: json.get("token_endpoint").and_then(|v| v.as_str()).map(String::from),
+                            issuer: json
+                                .get("issuer")
+                                .and_then(|v| v.as_str())
+                                .map(String::from),
+                            authorization_endpoint: json
+                                .get("authorization_endpoint")
+                                .and_then(|v| v.as_str())
+                                .map(String::from),
+                            token_endpoint: json
+                                .get("token_endpoint")
+                                .and_then(|v| v.as_str())
+                                .map(String::from),
                         };
                         if meta.authorization_endpoint.is_some() || meta.token_endpoint.is_some() {
                             debug!("MCP OAuth: ASM discovery complete at {}", url);
@@ -896,7 +955,8 @@ impl OAuthProvider {
         Err(OAuthError::Discovery(format!(
             "Could not discover OAuth metadata for {}",
             server_url
-        )).into())
+        ))
+        .into())
     }
 
     // -- Client registration ----------------------------------------------
@@ -939,7 +999,10 @@ impl OAuthProvider {
                     Some("none".to_string())
                 },
                 client_name: Some(
-                    self.config.client_name.clone().unwrap_or_else(|| DEFAULT_CLIENT_NAME.to_string()),
+                    self.config
+                        .client_name
+                        .clone()
+                        .unwrap_or_else(|| DEFAULT_CLIENT_NAME.to_string()),
                 ),
                 scope: self.config.scope.clone(),
             };
@@ -950,7 +1013,10 @@ impl OAuthProvider {
             return Ok(info);
         }
 
-        Err(OAuthError::Config("No client_id configured and no cached client info available".to_string()).into())
+        Err(OAuthError::Config(
+            "No client_id configured and no cached client info available".to_string(),
+        )
+        .into())
     }
 
     // -- Authorization URL ------------------------------------------------
@@ -966,7 +1032,9 @@ impl OAuthProvider {
             } else {
                 drop(cached);
                 // Load from disk or discover
-                let meta = self.storage.load_metadata()
+                let meta = self
+                    .storage
+                    .load_metadata()
                     .or_else(|| {
                         // Try to discover
                         None
@@ -1002,14 +1070,18 @@ impl OAuthProvider {
             None => format!("{}/authorize", self.server_url.trim_end_matches('/')),
         };
 
-        let auth_url = Url::parse_with_params(&auth_endpoint, &[
-            ("response_type", "code"),
-            ("client_id", &client_info.client_id),
-            ("redirect_uri", &redirect_uri),
-            ("code_challenge", &code_challenge),
-            ("code_challenge_method", "S256"),
-            ("state", &state),
-        ]).map_err(|e| Error::Agent(format!("Failed to build authorization URL: {}", e)))?;
+        let auth_url = Url::parse_with_params(
+            &auth_endpoint,
+            &[
+                ("response_type", "code"),
+                ("client_id", &client_info.client_id),
+                ("redirect_uri", &redirect_uri),
+                ("code_challenge", &code_challenge),
+                ("code_challenge_method", "S256"),
+                ("state", &state),
+            ],
+        )
+        .map_err(|e| Error::Agent(format!("Failed to build authorization URL: {}", e)))?;
 
         // If we have a scope, add it
         let auth_url = if let Some(scope) = &self.config.scope {
@@ -1039,13 +1111,14 @@ impl OAuthProvider {
                 meta.clone()
             } else {
                 drop(cached);
-                let meta = self.storage.load_metadata().unwrap_or_else(|| {
-                    OAuthMetadata {
+                let meta = self
+                    .storage
+                    .load_metadata()
+                    .unwrap_or_else(|| OAuthMetadata {
                         issuer: None,
                         authorization_endpoint: None,
                         token_endpoint: None,
-                    }
-                });
+                    });
                 *self.metadata.write().await = Some(meta.clone());
                 meta
             }
@@ -1081,10 +1154,7 @@ impl OAuthProvider {
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            return Err(OAuthError::TokenExchange(format!(
-                "HTTP {}: {}",
-                status, body
-            )).into());
+            return Err(OAuthError::TokenExchange(format!("HTTP {}: {}", status, body)).into());
         }
 
         let token: OAuthToken = resp.json().await.map_err(|e| {
@@ -1110,13 +1180,14 @@ impl OAuthProvider {
                 meta.clone()
             } else {
                 drop(cached);
-                let meta = self.storage.load_metadata().unwrap_or_else(|| {
-                    OAuthMetadata {
+                let meta = self
+                    .storage
+                    .load_metadata()
+                    .unwrap_or_else(|| OAuthMetadata {
                         issuer: None,
                         authorization_endpoint: None,
                         token_endpoint: None,
-                    }
-                });
+                    });
                 *self.metadata.write().await = Some(meta.clone());
                 meta
             }
@@ -1124,7 +1195,10 @@ impl OAuthProvider {
 
         let client_info = self.get_or_create_client_info().await?;
 
-        let current_token = self.storage.get_tokens().await
+        let current_token = self
+            .storage
+            .get_tokens()
+            .await
             .ok_or_else(|| OAuthError::NoToken)?;
 
         let old_refresh_token = current_token.refresh_token.clone();
@@ -1159,10 +1233,7 @@ impl OAuthProvider {
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            return Err(OAuthError::RefreshFailed(format!(
-                "HTTP {}: {}",
-                status, body
-            )).into());
+            return Err(OAuthError::RefreshFailed(format!("HTTP {}: {}", status, body)).into());
         }
 
         let new_token: OAuthToken = resp.json().await.map_err(|e| {
@@ -1237,14 +1308,18 @@ impl OAuthProvider {
             None => format!("{}/authorize", self.server_url.trim_end_matches('/')),
         };
 
-        let mut auth_url = Url::parse_with_params(&auth_endpoint, &[
-            ("response_type", "code"),
-            ("client_id", &client_info.client_id),
-            ("redirect_uri", &redirect_uri),
-            ("code_challenge", &code_challenge),
-            ("code_challenge_method", "S256"),
-            ("state", &state),
-        ]).map_err(|e| Error::Agent(format!("Failed to build authorization URL: {}", e)))?;
+        let mut auth_url = Url::parse_with_params(
+            &auth_endpoint,
+            &[
+                ("response_type", "code"),
+                ("client_id", &client_info.client_id),
+                ("redirect_uri", &redirect_uri),
+                ("code_challenge", &code_challenge),
+                ("code_challenge_method", "S256"),
+                ("state", &state),
+            ],
+        )
+        .map_err(|e| Error::Agent(format!("Failed to build authorization URL: {}", e)))?;
 
         if let Some(scope) = &self.config.scope {
             auth_url.query_pairs_mut().append_pair("scope", scope);
@@ -1272,15 +1347,19 @@ impl OAuthProvider {
 
         // Step 6: Wait for callback
         let timeout = Duration::from_secs(self.config.timeout.unwrap_or(DEFAULT_TIMEOUT));
-        let result = tokio::time::timeout(timeout, rx).await
+        let result = tokio::time::timeout(timeout, rx)
+            .await
             .map_err(|_| OAuthError::Timeout(timeout.as_secs()))?
-            .map_err(|_| OAuthError::AuthFailed("Callback channel closed unexpectedly".to_string()))?;
+            .map_err(|_| {
+                OAuthError::AuthFailed("Callback channel closed unexpectedly".to_string())
+            })?;
 
         if let Some(error) = result.error {
             return Err(OAuthError::AuthFailed(error).into());
         }
 
-        let code = result.code
+        let code = result
+            .code
             .ok_or_else(|| OAuthError::AuthFailed("No authorization code received".to_string()))?;
 
         // Verify state
@@ -1291,9 +1370,14 @@ impl OAuthProvider {
         }
 
         // Step 7: Exchange code for tokens
-        let token = self.exchange_code(&code, &code_verifier, &client_info, &redirect_uri).await?;
+        let token = self
+            .exchange_code(&code, &code_verifier, &client_info, &redirect_uri)
+            .await?;
 
-        info!("MCP OAuth: authentication complete for {}", self.storage.hash());
+        info!(
+            "MCP OAuth: authentication complete for {}",
+            self.storage.hash()
+        );
         Ok(token)
     }
 
@@ -1451,10 +1535,12 @@ impl OAuthManager {
     }
 
     pub async fn refresh_token(&self, server_url: &str) -> Result<OAuthToken> {
-        let entry = self.get_entry(server_url)
+        let entry = self
+            .get_entry(server_url)
             .ok_or_else(|| Error::Agent(format!("No cached provider for {}", server_url)))?;
         let provider_guard = entry.provider.read().await;
-        let provider = provider_guard.as_ref()
+        let provider = provider_guard
+            .as_ref()
             .ok_or_else(|| Error::Agent(format!("No provider for {}", server_url)))?;
 
         provider.refresh_token().await
@@ -1538,7 +1624,10 @@ impl OAuthManager {
         let storage = TokenStorage::new(server_url);
         let _ = storage.remove();
 
-        info!("MCP OAuth: evicted from cache and removed from disk: {}", server_url);
+        info!(
+            "MCP OAuth: evicted from cache and removed from disk: {}",
+            server_url
+        );
     }
 }
 

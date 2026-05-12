@@ -13,6 +13,7 @@
 //! - Piper (local, free): OHF-Voice/piper1-gpl neural VITS
 
 use async_trait::async_trait;
+use kokoro_tiny::TtsEngine;
 use reqwest::Client;
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -20,7 +21,6 @@ use serde_json::{json, Value};
 use std::process::Command;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use kokoro_tiny::TtsEngine;
 
 use crate::schema::ToolSchema;
 use crate::tools::{HermesTool, ToolContext, ToolResult};
@@ -99,18 +99,25 @@ impl TtsTool {
     // Edge TTS (free, no API key)
     // =========================================================================
     async fn edge_tts(&self, args: &TtsArgs) -> ToolResult {
-        let voice = if args.voice.is_empty() { "en-US-AriaNeural" } else { &args.voice };
-        
+        let voice = if args.voice.is_empty() {
+            "en-US-AriaNeural"
+        } else {
+            &args.voice
+        };
+
         // Edge TTS requires the edge-tts crate which is complex - we'll simulate with a message
         // In production, you'd use the edge-tts Rust crate or call subprocess
-        ToolResult::success("text_to_speech", json!({
-            "success": true,
-            "message": "Edge TTS requires 'edge-tts' Python package. Install with: pip install edge-tts",
-            "provider": "edge",
-            "voice": voice,
-            "format": "mp3",
-            "note": "Edge TTS is free but requires Python dependency"
-        }))
+        ToolResult::success(
+            "text_to_speech",
+            json!({
+                "success": true,
+                "message": "Edge TTS requires 'edge-tts' Python package. Install with: pip install edge-tts",
+                "provider": "edge",
+                "voice": voice,
+                "format": "mp3",
+                "note": "Edge TTS is free but requires Python dependency"
+            }),
+        )
     }
 
     // =========================================================================
@@ -122,11 +129,18 @@ impl TtsTool {
         }
 
         let model = args.model.as_deref().unwrap_or("eleven_multilingual_v2");
-        let voice_id = if args.voice.is_empty() { "pNInz6obpgDQGcFmaJgB" } else { &args.voice };
+        let voice_id = if args.voice.is_empty() {
+            "pNInz6obpgDQGcFmaJgB"
+        } else {
+            &args.voice
+        };
 
         let response = match self
             .client
-            .post(&format!("https://api.elevenlabs.io/v1/text-to-speech/{}", voice_id))
+            .post(&format!(
+                "https://api.elevenlabs.io/v1/text-to-speech/{}",
+                voice_id
+            ))
             .header("xi-api-key", &self.elevenlabs_key)
             .header("Content-Type", "application/json")
             .json(&json!({
@@ -137,28 +151,39 @@ impl TtsTool {
             .await
         {
             Ok(r) => r,
-            Err(e) => return ToolResult::error("text_to_speech", format!("API request failed: {}", e)),
+            Err(e) => {
+                return ToolResult::error("text_to_speech", format!("API request failed: {}", e))
+            }
         };
 
         if !response.status().is_success() {
-            return ToolResult::error("text_to_speech", format!("ElevenLabs API error: {}", response.status()));
+            return ToolResult::error(
+                "text_to_speech",
+                format!("ElevenLabs API error: {}", response.status()),
+            );
         }
 
         let audio_bytes = match response.bytes().await {
             Ok(b) => b,
-            Err(e) => return ToolResult::error("text_to_speech", format!("Failed to read audio: {}", e)),
+            Err(e) => {
+                return ToolResult::error("text_to_speech", format!("Failed to read audio: {}", e))
+            }
         };
 
-        let audio_base64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &audio_bytes);
+        let audio_base64 =
+            base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &audio_bytes);
 
-        ToolResult::success("text_to_speech", json!({
-            "success": true,
-            "audio": audio_base64,
-            "format": "mp3",
-            "provider": "elevenlabs",
-            "voice": voice_id,
-            "model": model
-        }))
+        ToolResult::success(
+            "text_to_speech",
+            json!({
+                "success": true,
+                "audio": audio_base64,
+                "format": "mp3",
+                "provider": "elevenlabs",
+                "voice": voice_id,
+                "model": model
+            }),
+        )
     }
 
     // =========================================================================
@@ -170,7 +195,11 @@ impl TtsTool {
         }
 
         let model = args.model.as_deref().unwrap_or("gpt-4o-mini-tts");
-        let voice = if args.voice.is_empty() { "alloy" } else { &args.voice };
+        let voice = if args.voice.is_empty() {
+            "alloy"
+        } else {
+            &args.voice
+        };
 
         let response = match self
             .client
@@ -186,28 +215,39 @@ impl TtsTool {
             .await
         {
             Ok(r) => r,
-            Err(e) => return ToolResult::error("text_to_speech", format!("API request failed: {}", e)),
+            Err(e) => {
+                return ToolResult::error("text_to_speech", format!("API request failed: {}", e))
+            }
         };
 
         if !response.status().is_success() {
-            return ToolResult::error("text_to_speech", format!("OpenAI API error: {}", response.status()));
+            return ToolResult::error(
+                "text_to_speech",
+                format!("OpenAI API error: {}", response.status()),
+            );
         }
 
         let audio_bytes = match response.bytes().await {
             Ok(b) => b,
-            Err(e) => return ToolResult::error("text_to_speech", format!("Failed to read audio: {}", e)),
+            Err(e) => {
+                return ToolResult::error("text_to_speech", format!("Failed to read audio: {}", e))
+            }
         };
 
-        let audio_base64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &audio_bytes);
+        let audio_base64 =
+            base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &audio_bytes);
 
-        ToolResult::success("text_to_speech", json!({
-            "success": true,
-            "audio": audio_base64,
-            "format": "mp3",
-            "provider": "openai",
-            "model": model,
-            "voice": voice
-        }))
+        ToolResult::success(
+            "text_to_speech",
+            json!({
+                "success": true,
+                "audio": audio_base64,
+                "format": "mp3",
+                "provider": "openai",
+                "model": model,
+                "voice": voice
+            }),
+        )
     }
 
     // =========================================================================
@@ -218,7 +258,11 @@ impl TtsTool {
             return ToolResult::error("text_to_speech", "MINIMAX_API_KEY not set");
         }
 
-        let voice_id = if args.voice.is_empty() { "female-shaonv" } else { &args.voice };
+        let voice_id = if args.voice.is_empty() {
+            "female-shaonv"
+        } else {
+            &args.voice
+        };
 
         let response = match self
             .client
@@ -236,29 +280,46 @@ impl TtsTool {
             .await
         {
             Ok(r) => r,
-            Err(e) => return ToolResult::error("text_to_speech", format!("API request failed: {}", e)),
+            Err(e) => {
+                return ToolResult::error("text_to_speech", format!("API request failed: {}", e))
+            }
         };
 
         if !response.status().is_success() {
-            return ToolResult::error("text_to_speech", format!("MiniMax API error: {}", response.status()));
+            return ToolResult::error(
+                "text_to_speech",
+                format!("MiniMax API error: {}", response.status()),
+            );
         }
 
         let result: Value = match response.json().await {
             Ok(r) => r,
-            Err(e) => return ToolResult::error("text_to_speech", format!("Failed to parse response: {}", e)),
+            Err(e) => {
+                return ToolResult::error(
+                    "text_to_speech",
+                    format!("Failed to parse response: {}", e),
+                )
+            }
         };
 
         // MiniMax returns base64 audio
-        let audio_base64 = result.get("data").and_then(|d| d.get("audio")).and_then(|a| a.as_str()).unwrap_or("");
+        let audio_base64 = result
+            .get("data")
+            .and_then(|d| d.get("audio"))
+            .and_then(|a| a.as_str())
+            .unwrap_or("");
 
-        ToolResult::success("text_to_speech", json!({
-            "success": true,
-            "audio": audio_base64,
-            "format": "mp3",
-            "provider": "minimax",
-            "voice": voice_id,
-            "model": "speech-01"
-        }))
+        ToolResult::success(
+            "text_to_speech",
+            json!({
+                "success": true,
+                "audio": audio_base64,
+                "format": "mp3",
+                "provider": "minimax",
+                "voice": voice_id,
+                "model": "speech-01"
+            }),
+        )
     }
 
     // =========================================================================
@@ -269,7 +330,11 @@ impl TtsTool {
             return ToolResult::error("text_to_speech", "MISTRAL_API_KEY not set");
         }
 
-        let voice_id = if args.voice.is_empty() { "c69964a6-ab8b-4f8a-9465-ec0925096ec8" } else { &args.voice };
+        let voice_id = if args.voice.is_empty() {
+            "c69964a6-ab8b-4f8a-9465-ec0925096ec8"
+        } else {
+            &args.voice
+        };
 
         let response = match self
             .client
@@ -285,28 +350,39 @@ impl TtsTool {
             .await
         {
             Ok(r) => r,
-            Err(e) => return ToolResult::error("text_to_speech", format!("API request failed: {}", e)),
+            Err(e) => {
+                return ToolResult::error("text_to_speech", format!("API request failed: {}", e))
+            }
         };
 
         if !response.status().is_success() {
-            return ToolResult::error("text_to_speech", format!("Mistral API error: {}", response.status()));
+            return ToolResult::error(
+                "text_to_speech",
+                format!("Mistral API error: {}", response.status()),
+            );
         }
 
         let audio_bytes = match response.bytes().await {
             Ok(b) => b,
-            Err(e) => return ToolResult::error("text_to_speech", format!("Failed to read audio: {}", e)),
+            Err(e) => {
+                return ToolResult::error("text_to_speech", format!("Failed to read audio: {}", e))
+            }
         };
 
-        let audio_base64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &audio_bytes);
+        let audio_base64 =
+            base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &audio_bytes);
 
-        ToolResult::success("text_to_speech", json!({
-            "success": true,
-            "audio": audio_base64,
-            "format": "mp3",
-            "provider": "mistral",
-            "voice": voice_id,
-            "model": "voxtral-mini-tts-2603"
-        }))
+        ToolResult::success(
+            "text_to_speech",
+            json!({
+                "success": true,
+                "audio": audio_base64,
+                "format": "mp3",
+                "provider": "mistral",
+                "voice": voice_id,
+                "model": "voxtral-mini-tts-2603"
+            }),
+        )
     }
 
     // =========================================================================
@@ -317,7 +393,11 @@ impl TtsTool {
             return ToolResult::error("text_to_speech", "GEMINI_API_KEY not set");
         }
 
-        let voice = if args.voice.is_empty() { "Kore" } else { &args.voice };
+        let voice = if args.voice.is_empty() {
+            "Kore"
+        } else {
+            &args.voice
+        };
 
         let response = match self
             .client
@@ -349,12 +429,20 @@ impl TtsTool {
         };
 
         if !response.status().is_success() {
-            return ToolResult::error("text_to_speech", format!("Gemini API error: {}", response.status()));
+            return ToolResult::error(
+                "text_to_speech",
+                format!("Gemini API error: {}", response.status()),
+            );
         }
 
         let result: Value = match response.json().await {
             Ok(r) => r,
-            Err(e) => return ToolResult::error("text_to_speech", format!("Failed to parse response: {}", e)),
+            Err(e) => {
+                return ToolResult::error(
+                    "text_to_speech",
+                    format!("Failed to parse response: {}", e),
+                )
+            }
         };
 
         // Gemini returns base64 in candidates[0].content.parts[0].inlineData.data
@@ -371,14 +459,17 @@ impl TtsTool {
             .and_then(|a| a.as_str())
             .unwrap_or("");
 
-        ToolResult::success("text_to_speech", json!({
-            "success": true,
-            "audio": audio_base64,
-            "format": "mp3",
-            "provider": "gemini",
-            "voice": voice,
-            "model": "gemini-2.5-flash-preview-tts"
-        }))
+        ToolResult::success(
+            "text_to_speech",
+            json!({
+                "success": true,
+                "audio": audio_base64,
+                "format": "mp3",
+                "provider": "gemini",
+                "voice": voice,
+                "model": "gemini-2.5-flash-preview-tts"
+            }),
+        )
     }
 
     // =========================================================================
@@ -389,7 +480,11 @@ impl TtsTool {
             return ToolResult::error("text_to_speech", "XAI_API_KEY not set");
         }
 
-        let voice_id = if args.voice.is_empty() { "eve" } else { &args.voice };
+        let voice_id = if args.voice.is_empty() {
+            "eve"
+        } else {
+            &args.voice
+        };
 
         let response = match self
             .client
@@ -405,41 +500,62 @@ impl TtsTool {
             .await
         {
             Ok(r) => r,
-            Err(e) => return ToolResult::error("text_to_speech", format!("API request failed: {}", e)),
+            Err(e) => {
+                return ToolResult::error("text_to_speech", format!("API request failed: {}", e))
+            }
         };
 
         if !response.status().is_success() {
-            return ToolResult::error("text_to_speech", format!("xAI API error: {}", response.status()));
+            return ToolResult::error(
+                "text_to_speech",
+                format!("xAI API error: {}", response.status()),
+            );
         }
 
         let audio_bytes = match response.bytes().await {
             Ok(b) => b,
-            Err(e) => return ToolResult::error("text_to_speech", format!("Failed to read audio: {}", e)),
+            Err(e) => {
+                return ToolResult::error("text_to_speech", format!("Failed to read audio: {}", e))
+            }
         };
 
-        let audio_base64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &audio_bytes);
+        let audio_base64 =
+            base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &audio_bytes);
 
-        ToolResult::success("text_to_speech", json!({
-            "success": true,
-            "audio": audio_base64,
-            "format": "mp3",
-            "provider": "xai",
-            "voice": voice_id,
-            "model": "grok-tts"
-        }))
+        ToolResult::success(
+            "text_to_speech",
+            json!({
+                "success": true,
+                "audio": audio_base64,
+                "format": "mp3",
+                "provider": "xai",
+                "voice": voice_id,
+                "model": "grok-tts"
+            }),
+        )
     }
 
     // =========================================================================
     // NeuTTS (local, free - requires neutts binary)
     // =========================================================================
     async fn neutts_local(&self, args: &TtsArgs) -> ToolResult {
-        let voice = if args.voice.is_empty() { "neutral" } else { &args.voice };
-        let model = args.model.as_deref().unwrap_or("neuphonic/neutts-air-q4-gguf");
+        let voice = if args.voice.is_empty() {
+            "neutral"
+        } else {
+            &args.voice
+        };
+        let model = args
+            .model
+            .as_deref()
+            .unwrap_or("neuphonic/neutts-air-q4-gguf");
 
         // Check if neutts is available
         let check = Command::new("neutts").arg("--help").output();
         if check.is_err() {
-            return ToolResult::error("text_to_speech", "NeuTTS not installed. Install with: pip install neutts");
+            return ToolResult::error(
+                "text_to_speech",
+                "NeuTTS not installed. Install with: pip install neutts",
+            );
         }
 
         // Create temp file for output
@@ -463,17 +579,25 @@ impl TtsTool {
                 match std::fs::read(&output_path) {
                     Ok(audio_bytes) => {
                         let _ = std::fs::remove_file(&output_path);
-                        let audio_base64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &audio_bytes);
-                        ToolResult::success("text_to_speech", json!({
-                            "success": true,
-                            "audio": audio_base64,
-                            "format": "wav",
-                            "provider": "neutts",
-                            "voice": voice,
-                            "model": model
-                        }))
+                        let audio_base64 = base64::Engine::encode(
+                            &base64::engine::general_purpose::STANDARD,
+                            &audio_bytes,
+                        );
+                        ToolResult::success(
+                            "text_to_speech",
+                            json!({
+                                "success": true,
+                                "audio": audio_base64,
+                                "format": "wav",
+                                "provider": "neutts",
+                                "voice": voice,
+                                "model": model
+                            }),
+                        )
                     }
-                    Err(e) => ToolResult::error("text_to_speech", format!("Failed to read output: {}", e)),
+                    Err(e) => {
+                        ToolResult::error("text_to_speech", format!("Failed to read output: {}", e))
+                    }
                 }
             }
             Ok(output) => {
@@ -488,14 +612,22 @@ impl TtsTool {
     // KittenTTS (local, free - requires kittentts Python package)
     // =========================================================================
     async fn kittentts_local(&self, args: &TtsArgs) -> ToolResult {
-        let voice = if args.voice.is_empty() { "Jasper" } else { &args.voice };
-        let model = args.model.as_deref().unwrap_or("KittenML/kitten-tts-nano-0.8-int8");
+        let voice = if args.voice.is_empty() {
+            "Jasper"
+        } else {
+            &args.voice
+        };
+        let model = args
+            .model
+            .as_deref()
+            .unwrap_or("KittenML/kitten-tts-nano-0.8-int8");
 
         // Use Python to run kittentts
         let temp_dir = std::env::temp_dir();
         let output_path = temp_dir.join("kittentts_output.wav");
 
-        let python_code = format!(r#"
+        let python_code = format!(
+            r#"
 import sys
 try:
     from kittentts import KittenTTS
@@ -509,31 +641,38 @@ try:
 except Exception as e:
     print(f"ERROR: {{e}}", file=sys.stderr)
     sys.exit(1)
-"#, args.text.replace("\"", "\\\""), voice, output_path.display());
+"#,
+            args.text.replace("\"", "\\\""),
+            voice,
+            output_path.display()
+        );
 
-        let result = Command::new("python3")
-            .arg("-c")
-            .arg(&python_code)
-            .output();
+        let result = Command::new("python3").arg("-c").arg(&python_code).output();
 
         match result {
-            Ok(output) if output.status.success() => {
-                match std::fs::read(&output_path) {
-                    Ok(audio_bytes) => {
-                        let _ = std::fs::remove_file(&output_path);
-                        let audio_base64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &audio_bytes);
-                        ToolResult::success("text_to_speech", json!({
+            Ok(output) if output.status.success() => match std::fs::read(&output_path) {
+                Ok(audio_bytes) => {
+                    let _ = std::fs::remove_file(&output_path);
+                    let audio_base64 = base64::Engine::encode(
+                        &base64::engine::general_purpose::STANDARD,
+                        &audio_bytes,
+                    );
+                    ToolResult::success(
+                        "text_to_speech",
+                        json!({
                             "success": true,
                             "audio": audio_base64,
                             "format": "wav",
                             "provider": "kittentts",
                             "voice": voice,
                             "model": model
-                        }))
-                    }
-                    Err(e) => ToolResult::error("text_to_speech", format!("Failed to read output: {}", e)),
+                        }),
+                    )
                 }
-            }
+                Err(e) => {
+                    ToolResult::error("text_to_speech", format!("Failed to read output: {}", e))
+                }
+            },
             Ok(output) => {
                 let stderr = String::from_utf8_lossy(&output.stderr);
                 ToolResult::error("text_to_speech", format!("KittenTTS failed: {}", stderr))
@@ -546,12 +685,19 @@ except Exception as e:
     // Piper (local, free - requires piper binary)
     // =========================================================================
     async fn piper_local(&self, args: &TtsArgs) -> ToolResult {
-        let voice = if args.voice.is_empty() { "en_US-lessac-medium" } else { &args.voice };
+        let voice = if args.voice.is_empty() {
+            "en_US-lessac-medium"
+        } else {
+            &args.voice
+        };
 
         // Check if piper is available
         let check = Command::new("piper").arg("--help").output();
         if check.is_err() {
-            return ToolResult::error("text_to_speech", "Piper not installed. Install from: https://github.com/rhasspy/piper");
+            return ToolResult::error(
+                "text_to_speech",
+                "Piper not installed. Install from: https://github.com/rhasspy/piper",
+            );
         }
 
         let temp_dir = std::env::temp_dir();
@@ -560,7 +706,10 @@ except Exception as e:
 
         // Write text to temp file
         if let Err(e) = std::fs::write(&text_path, &args.text) {
-            return ToolResult::error("text_to_speech", format!("Failed to write temp file: {}", e));
+            return ToolResult::error(
+                "text_to_speech",
+                format!("Failed to write temp file: {}", e),
+            );
         }
 
         let result = Command::new("piper")
@@ -575,22 +724,28 @@ except Exception as e:
         let _ = std::fs::remove_file(&text_path);
 
         match result {
-            Ok(output) if output.status.success() => {
-                match std::fs::read(&output_path) {
-                    Ok(audio_bytes) => {
-                        let _ = std::fs::remove_file(&output_path);
-                        let audio_base64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &audio_bytes);
-                        ToolResult::success("text_to_speech", json!({
+            Ok(output) if output.status.success() => match std::fs::read(&output_path) {
+                Ok(audio_bytes) => {
+                    let _ = std::fs::remove_file(&output_path);
+                    let audio_base64 = base64::Engine::encode(
+                        &base64::engine::general_purpose::STANDARD,
+                        &audio_bytes,
+                    );
+                    ToolResult::success(
+                        "text_to_speech",
+                        json!({
                             "success": true,
                             "audio": audio_base64,
                             "format": "wav",
                             "provider": "piper",
                             "voice": voice
-                        }))
-                    }
-                    Err(e) => ToolResult::error("text_to_speech", format!("Failed to read output: {}", e)),
+                        }),
+                    )
                 }
-            }
+                Err(e) => {
+                    ToolResult::error("text_to_speech", format!("Failed to read output: {}", e))
+                }
+            },
             Ok(output) => {
                 let stderr = String::from_utf8_lossy(&output.stderr);
                 ToolResult::error("text_to_speech", format!("Piper failed: {}", stderr))
@@ -600,18 +755,27 @@ except Exception as e:
     }
 
     async fn kokoro_local(&self, args: &TtsArgs) -> ToolResult {
-        let voice = if args.voice.is_empty() { "af_sky" } else { &args.voice };
-        
+        let voice = if args.voice.is_empty() {
+            "af_sky"
+        } else {
+            &args.voice
+        };
+
         let mut engine_lock = self.kokoro_engine.lock().await;
         if engine_lock.is_none() {
             match TtsEngine::new().await {
                 Ok(engine) => *engine_lock = Some(engine),
-                Err(e) => return ToolResult::error("text_to_speech", format!("Failed to initialize Kokoro engine: {}", e)),
+                Err(e) => {
+                    return ToolResult::error(
+                        "text_to_speech",
+                        format!("Failed to initialize Kokoro engine: {}", e),
+                    )
+                }
             }
         }
-        
+
         let engine = engine_lock.as_mut().unwrap();
-        
+
         match engine.synthesize(&args.text, Some(voice)) {
             Ok(audio) => {
                 let spec = hound::WavSpec {
@@ -620,37 +784,55 @@ except Exception as e:
                     bits_per_sample: 16,
                     sample_format: hound::SampleFormat::Int,
                 };
-                
+
                 let mut cursor = std::io::Cursor::new(Vec::new());
                 {
                     let mut writer = match hound::WavWriter::new(&mut cursor, spec) {
                         Ok(w) => w,
-                        Err(e) => return ToolResult::error("text_to_speech", format!("Failed to create WAV writer: {}", e)),
+                        Err(e) => {
+                            return ToolResult::error(
+                                "text_to_speech",
+                                format!("Failed to create WAV writer: {}", e),
+                            )
+                        }
                     };
 
                     for sample in audio {
                         // Convert f32 (-1.0 to 1.0) to i16
-                        let s = (sample * i16::MAX as f32).clamp(i16::MIN as f32, i16::MAX as f32) as i16;
+                        let s = (sample * i16::MAX as f32).clamp(i16::MIN as f32, i16::MAX as f32)
+                            as i16;
                         if let Err(e) = writer.write_sample(s) {
-                            return ToolResult::error("text_to_speech", format!("Failed to write sample: {}", e));
+                            return ToolResult::error(
+                                "text_to_speech",
+                                format!("Failed to write sample: {}", e),
+                            );
                         }
                     }
                     if let Err(e) = writer.finalize() {
-                        return ToolResult::error("text_to_speech", format!("Failed to finalize WAV: {}", e));
+                        return ToolResult::error(
+                            "text_to_speech",
+                            format!("Failed to finalize WAV: {}", e),
+                        );
                     }
                 }
-                
+
                 let wav_bytes = cursor.into_inner();
-                let audio_base64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &wav_bytes);
-                ToolResult::success("text_to_speech", json!({
-                    "success": true,
-                    "audio": audio_base64,
-                    "format": "wav",
-                    "provider": "kokoro",
-                    "voice": voice
-                }))
+                let audio_base64 =
+                    base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &wav_bytes);
+                ToolResult::success(
+                    "text_to_speech",
+                    json!({
+                        "success": true,
+                        "audio": audio_base64,
+                        "format": "wav",
+                        "provider": "kokoro",
+                        "voice": voice
+                    }),
+                )
             }
-            Err(e) => ToolResult::error("text_to_speech", format!("Kokoro synthesis failed: {}", e)),
+            Err(e) => {
+                ToolResult::error("text_to_speech", format!("Kokoro synthesis failed: {}", e))
+            }
         }
     }
 }
@@ -666,13 +848,18 @@ impl HermesTool for TtsTool {
     }
 
     fn schema(&self) -> ToolSchema {
-        ToolSchema::from_type::<TtsArgs>("text_to_speech", "Convert text to speech with multiple AI providers")
+        ToolSchema::from_type::<TtsArgs>(
+            "text_to_speech",
+            "Convert text to speech with multiple AI providers",
+        )
     }
 
     async fn execute(&self, args: Value, _context: ToolContext) -> ToolResult {
         let args: TtsArgs = match serde_json::from_value(args) {
             Ok(a) => a,
-            Err(e) => return ToolResult::error("text_to_speech", format!("Invalid arguments: {}", e)),
+            Err(e) => {
+                return ToolResult::error("text_to_speech", format!("Invalid arguments: {}", e))
+            }
         };
         self.generate_speech(&args).await
     }
@@ -705,9 +892,7 @@ mod tests {
     #[tokio::test]
     async fn test_tts_invalid_args() {
         let tool = TtsTool::new();
-        let result = tool
-            .execute(json!({}), ToolContext::default())
-            .await;
+        let result = tool.execute(json!({}), ToolContext::default()).await;
         assert!(!result.success);
     }
 

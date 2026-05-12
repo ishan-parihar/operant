@@ -281,7 +281,10 @@ mod tests {
 
     #[test]
     fn test_extract_host_from_url() {
-        assert_eq!(extract_host("https://www.example.com/path"), "www.example.com");
+        assert_eq!(
+            extract_host("https://www.example.com/path"),
+            "www.example.com"
+        );
         assert_eq!(extract_host("http://evil.com:8080"), "evil.com");
     }
 

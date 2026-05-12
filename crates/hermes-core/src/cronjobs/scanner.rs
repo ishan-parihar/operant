@@ -16,11 +16,20 @@ pub struct CronPromptInjectionBlocked(pub String);
 
 /// Critical threat patterns for cron prompts.
 const THREAT_PATTERNS: &[(&str, &str)] = &[
-    (r#"(?i)ignore\s+(?:\w+\s+)*(?:previous|all|above|prior)\s+(?:\w+\s+)*instructions"#, "prompt_injection"),
+    (
+        r#"(?i)ignore\s+(?:\w+\s+)*(?:previous|all|above|prior)\s+(?:\w+\s+)*instructions"#,
+        "prompt_injection",
+    ),
     (r#"(?i)do\s+not\s+tell\s+the\s+user"#, "deception_hide"),
     (r#"(?i)system\s+prompt\s+override"#, "sys_prompt_override"),
-    (r#"(?i)disregard\s+(your|all|any)\s+(instructions|rules|guidelines)"#, "disregard_rules"),
-    (r#"(?i)cat\s+[^\n]*(\.env|credentials|\.netrc|\.pgpass)"#, "read_secrets"),
+    (
+        r#"(?i)disregard\s+(your|all|any)\s+(instructions|rules|guidelines)"#,
+        "disregard_rules",
+    ),
+    (
+        r#"(?i)cat\s+[^\n]*(\.env|credentials|\.netrc|\.pgpass)"#,
+        "read_secrets",
+    ),
     (r#"(?i)authorized_keys"#, "ssh_backdoor"),
     (r#"(?i)/etc/sudoers|visudo"#, "sudoers_mod"),
     (r#"(?i)rm\s+-rf\s+/"#, "destructive_root_rm"),
@@ -31,11 +40,26 @@ const SECRET_VAR_RE: &str = r#"\$\{?\w*(?:KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|A
 
 /// Exfiltration command patterns.
 const EXFIL_COMMAND_PATTERNS: &[(&str, &str)] = &[
-    (r#"(?i)curl\s+[^\n]*https?://[^\s"'`]*\$\{?\w*(?:KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|API)\w*\}?"#, "exfil_curl_url"),
-    (r#"(?i)wget\s+[^\n]*https?://[^\s"'`]*\$\{?\w*(?:KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|API)\w*\}?"#, "exfil_wget_url"),
-    (r#"(?i)curl\s+[^\n]*(?:--data(?:-raw|-binary|-urlencode)?|-d|--form|-F)\s+[^\n]*\$\{?\w*(?:KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|API)\w*\}?"#, "exfil_curl_data"),
-    (r#"(?i)wget\s+[^\n]*--post-(?:data|file)=[^\n]*\$\{?\w*(?:KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|API)\w*\}?"#, "exfil_wget_post"),
-    (r#"(?i)curl\s+[^\n]*(?:-H|--header)\s+["']Authorization:\s*(?:Bearer|token)\s+\$\{?\w*(?:KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|API)\w*\}?["']"#, "exfil_curl_auth_header"),
+    (
+        r#"(?i)curl\s+[^\n]*https?://[^\s"'`]*\$\{?\w*(?:KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|API)\w*\}?"#,
+        "exfil_curl_url",
+    ),
+    (
+        r#"(?i)wget\s+[^\n]*https?://[^\s"'`]*\$\{?\w*(?:KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|API)\w*\}?"#,
+        "exfil_wget_url",
+    ),
+    (
+        r#"(?i)curl\s+[^\n]*(?:--data(?:-raw|-binary|-urlencode)?|-d|--form|-F)\s+[^\n]*\$\{?\w*(?:KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|API)\w*\}?"#,
+        "exfil_curl_data",
+    ),
+    (
+        r#"(?i)wget\s+[^\n]*--post-(?:data|file)=[^\n]*\$\{?\w*(?:KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|API)\w*\}?"#,
+        "exfil_wget_post",
+    ),
+    (
+        r#"(?i)curl\s+[^\n]*(?:-H|--header)\s+["']Authorization:\s*(?:Bearer|token)\s+\$\{?\w*(?:KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|API)\w*\}?["']"#,
+        "exfil_curl_auth_header",
+    ),
 ];
 
 /// Invisible unicode characters used in prompt injection.

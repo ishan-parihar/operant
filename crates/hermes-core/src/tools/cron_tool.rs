@@ -57,14 +57,20 @@ impl CronTool {
             name: "cron".to_string(),
             details: "Missing 'name' for job creation".to_string(),
         })?;
-        let schedule = args.schedule.as_ref().ok_or_else(|| Error::InvalidToolArgs {
-            name: "cron".to_string(),
-            details: "Missing 'schedule' for job creation".to_string(),
-        })?;
-        let display = args.schedule_display.as_ref().ok_or_else(|| Error::InvalidToolArgs {
-            name: "cron".to_string(),
-            details: "Missing 'schedule_display' for job creation".to_string(),
-        })?;
+        let schedule = args
+            .schedule
+            .as_ref()
+            .ok_or_else(|| Error::InvalidToolArgs {
+                name: "cron".to_string(),
+                details: "Missing 'schedule' for job creation".to_string(),
+            })?;
+        let display = args
+            .schedule_display
+            .as_ref()
+            .ok_or_else(|| Error::InvalidToolArgs {
+                name: "cron".to_string(),
+                details: "Missing 'schedule_display' for job creation".to_string(),
+            })?;
         let prompt = args.prompt.as_ref().ok_or_else(|| Error::InvalidToolArgs {
             name: "cron".to_string(),
             details: "Missing 'prompt' for job creation".to_string(),
@@ -114,7 +120,10 @@ impl CronTool {
                 json!({ "success": true, "job": job }),
             ))
         } else {
-            Ok(ToolResult::error("cron_get", format!("Job {} not found", job_id)))
+            Ok(ToolResult::error(
+                "cron_get",
+                format!("Job {} not found", job_id),
+            ))
         }
     }
 
@@ -133,7 +142,10 @@ impl CronTool {
                 json!({ "success": true, "job": job, "message": "Job updated successfully" }),
             ))
         } else {
-            Ok(ToolResult::error("cron_update", format!("Job {} not found", job_id)))
+            Ok(ToolResult::error(
+                "cron_update",
+                format!("Job {} not found", job_id),
+            ))
         }
     }
 
@@ -145,7 +157,10 @@ impl CronTool {
                 json!({ "success": true, "message": format!("Job {} deleted", job_id) }),
             ))
         } else {
-            Ok(ToolResult::error("cron_delete", format!("Job {} not found", job_id)))
+            Ok(ToolResult::error(
+                "cron_delete",
+                format!("Job {} not found", job_id),
+            ))
         }
     }
 
@@ -153,7 +168,10 @@ impl CronTool {
         let mut updates = std::collections::HashMap::new();
         updates.insert("enabled".to_string(), Some(json!(false)));
         updates.insert("state".to_string(), Some(json!("paused")));
-        updates.insert("paused_at".to_string(), Some(json!(chrono::Utc::now().to_rfc3339())));
+        updates.insert(
+            "paused_at".to_string(),
+            Some(json!(chrono::Utc::now().to_rfc3339())),
+        );
 
         let updated_job = self.db.update_job(job_id, updates)?;
         if let Some(job) = updated_job {
@@ -162,7 +180,10 @@ impl CronTool {
                 json!({ "success": true, "job": job, "message": "Job paused successfully" }),
             ))
         } else {
-            Ok(ToolResult::error("cron_pause", format!("Job {} not found", job_id)))
+            Ok(ToolResult::error(
+                "cron_pause",
+                format!("Job {} not found", job_id),
+            ))
         }
     }
 
@@ -179,7 +200,10 @@ impl CronTool {
                 json!({ "success": true, "job": job, "message": "Job resumed successfully" }),
             ))
         } else {
-            Ok(ToolResult::error("cron_resume", format!("Job {} not found", job_id)))
+            Ok(ToolResult::error(
+                "cron_resume",
+                format!("Job {} not found", job_id),
+            ))
         }
     }
 }

@@ -99,7 +99,12 @@ pub struct HermesAgent {
 
 impl HermesAgent {
     /// Create a new Hermes agent
-    pub fn new(config: AgentConfig, client: Box<dyn ModelClient>, registry: ToolRegistry, database: Arc<Database>) -> Self {
+    pub fn new(
+        config: AgentConfig,
+        client: Box<dyn ModelClient>,
+        registry: ToolRegistry,
+        database: Arc<Database>,
+    ) -> Self {
         Self {
             config,
             client: Arc::from(client),
@@ -169,24 +174,39 @@ impl HermesAgent {
     #[instrument(skip(self), fields(model = % self.config.model))]
     pub async fn run(&self, user_query: String) -> Result<Message> {
         info!("Starting agent run");
-        
+
         // Generate a session ID for this run if not already present
         let session_id = format!("sess_{}", uuid::Uuid::new_v4());
-        
+
         // Add user message
         self.add_message(Message::user(&user_query)).await;
-        
+
         // Persist user message
-        self.database.save_message(&session_id, "user", &user_query, &chrono::Utc::now().to_rfc3339()).map_err(|e| {
-            warn!(error = %e, "Failed to persist user message");
-            e
-        })?;
-        
+        self.database
+            .save_message(
+                &session_id,
+                "user",
+                &user_query,
+                &chrono::Utc::now().to_rfc3339(),
+            )
+            .map_err(|e| {
+                warn!(error = %e, "Failed to persist user message");
+                e
+            })?;
+
         // Save session metadata
-        self.database.save_session(&session_id, None, "agent", &chrono::Utc::now().to_rfc3339(), &chrono::Utc::now().to_rfc3339()).map_err(|e| {
-            warn!(error = %e, "Failed to save session metadata");
-            e
-        })?;
+        self.database
+            .save_session(
+                &session_id,
+                None,
+                "agent",
+                &chrono::Utc::now().to_rfc3339(),
+                &chrono::Utc::now().to_rfc3339(),
+            )
+            .map_err(|e| {
+                warn!(error = %e, "Failed to save session metadata");
+                e
+            })?;
 
         // Build initial messages including system prompt
         let mut messages = self.build_messages().await?;
@@ -240,10 +260,23 @@ impl HermesAgent {
 
                     messages.push(assistant_msg.clone());
                     self.add_message(assistant_msg.clone()).await;
-                    
+
                     // Persist assistant message
-                    let _ = self.database.save_message(&session_id, "assistant", &response_text, &chrono::Utc::now().to_rfc3339());
-                    self.database.save_session(&session_id, None, "agent", &chrono::Utc::now().to_rfc3339(), &chrono::Utc::now().to_rfc3339()).ok();
+                    let _ = self.database.save_message(
+                        &session_id,
+                        "assistant",
+                        &response_text,
+                        &chrono::Utc::now().to_rfc3339(),
+                    );
+                    self.database
+                        .save_session(
+                            &session_id,
+                            None,
+                            "agent",
+                            &chrono::Utc::now().to_rfc3339(),
+                            &chrono::Utc::now().to_rfc3339(),
+                        )
+                        .ok();
 
                     // If no tool calls, we're done
                     if tool_calls.is_empty() {
@@ -261,8 +294,21 @@ impl HermesAgent {
 
                     for result in &tool_results {
                         // Persist tool result
-                        let _ = self.database.save_message(&session_id, "tool", &result.content, &chrono::Utc::now().to_rfc3339());
-                        self.database.save_session(&session_id, None, "agent", &chrono::Utc::now().to_rfc3339(), &chrono::Utc::now().to_rfc3339()).ok();
+                        let _ = self.database.save_message(
+                            &session_id,
+                            "tool",
+                            &result.content,
+                            &chrono::Utc::now().to_rfc3339(),
+                        );
+                        self.database
+                            .save_session(
+                                &session_id,
+                                None,
+                                "agent",
+                                &chrono::Utc::now().to_rfc3339(),
+                                &chrono::Utc::now().to_rfc3339(),
+                            )
+                            .ok();
                         if result.success {
                             self.emit(AgentEvent::ToolComplete {
                                 result: result.clone(),
@@ -627,7 +673,6 @@ impl HermesAgent {
     }
 }
 
-
 #[derive(Debug, Default)]
 struct ThinkBlockRouter {
     pending: String,
@@ -742,7 +787,6 @@ fn strip_reasoning_tags(text: &str) -> String {
     }
     cleaned
 }
-
 
 fn extract_tool_calls_from_choice(
     deltas: Option<Vec<crate::client::ToolCallDelta>>,
@@ -965,9 +1009,12 @@ impl HermesAgentBuilder {
     /// Build the agent
     pub fn build(self) -> Result<HermesAgent> {
         let client: Box<dyn ModelClient> = self.client.unwrap_or_else(|| {
-            let openai = crate::client::OpenAIClient::from_env()
-                .unwrap_or_else(|_| crate::client::OpenAIClient::new(crate::client::ClientConfig::default()));
-            Box::new(crate::agent::clients::openai::OpenAIModelClient::new(openai))
+            let openai = crate::client::OpenAIClient::from_env().unwrap_or_else(|_| {
+                crate::client::OpenAIClient::new(crate::client::ClientConfig::default())
+            });
+            Box::new(crate::agent::clients::openai::OpenAIModelClient::new(
+                openai,
+            ))
         });
 
         let registry = self
@@ -1088,7 +1135,8 @@ mod tests {
     #[serial]
     #[tokio::test]
     async fn test_agent_builder() {
-        let db = Arc::new(Database::init(std::path::PathBuf::from("test_agent_builder.db")).unwrap());
+        let db =
+            Arc::new(Database::init(std::path::PathBuf::from("test_agent_builder.db")).unwrap());
         let _agent = HermesAgentBuilder::new()
             .model("gpt-3.5-turbo")
             .max_iterations(10)
@@ -1119,7 +1167,9 @@ mod tests {
         let db = Database::init(std::path::PathBuf::from("test_db.sqlite")).unwrap();
         let agent = HermesAgent::new(
             AgentConfig::default(),
-            Box::new(OpenAIModelClient::new(OpenAIClient::new(crate::client::ClientConfig::default()))),
+            Box::new(OpenAIModelClient::new(OpenAIClient::new(
+                crate::client::ClientConfig::default(),
+            ))),
             ToolRegistry::new(Duration::from_secs(1)),
             Arc::new(db),
         )
@@ -1308,7 +1358,9 @@ mod tests {
         let db = Database::init(std::path::PathBuf::from("test_db_resp.sqlite")).unwrap();
         let agent = HermesAgent::new(
             AgentConfig::default(),
-            Box::new(OpenAIModelClient::new(OpenAIClient::new(crate::client::ClientConfig::default()))),
+            Box::new(OpenAIModelClient::new(OpenAIClient::new(
+                crate::client::ClientConfig::default(),
+            ))),
             ToolRegistry::new(Duration::from_secs(1)),
             Arc::new(db),
         );

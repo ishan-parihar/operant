@@ -16,17 +16,15 @@ use std::time::Duration;
 
 use hermes_core::tools::builtin::{
     ApprovalTool, BinaryExtensionsTool, CamofoxStateTool, CheckpointTool, ClarifyTool,
-    CodeExecutionTool, DateTimeTool, DiscordAdminTool, DiscordTool, EnvVarTool,
-    FileListTool, FileReadTool, FileSearchTool, FileStateTool, FileWriteTool,
-    HomeAssistantTool, HttpRequestTool, ImageGenerationTool, InspectJsonTool,
-    MemoryRecallTool, MemorySearchTool, MemoryStoreTool, MixtureOfAgentsTool,
-    NeuttsSynthTool, NotificationTool, OpenRouterTool, OsvCheckTool, PatchTool,
-    RlTrainingTool, SendMessageTool, SkillViewTool, SkillsTool, SlashConfirmTool,
+    CodeExecutionTool, DateTimeTool, DiscordAdminTool, DiscordTool, EnvVarTool, FileListTool,
+    FileReadTool, FileSearchTool, FileStateTool, FileWriteTool, HomeAssistantTool, HttpRequestTool,
+    ImageGenerationTool, InspectJsonTool, MemoryRecallTool, MemorySearchTool, MemoryStoreTool,
+    MixtureOfAgentsTool, NeuttsSynthTool, NotificationTool, OpenRouterTool, OsvCheckTool,
+    PatchTool, RlTrainingTool, SendMessageTool, SkillViewTool, SkillsTool, SlashConfirmTool,
     SpotifyAlbumsTool, SpotifyDevicesTool, SpotifyLibraryTool, SpotifyPlaybackTool,
-    SpotifyPlaylistsTool, SpotifyQueueTool, SpotifySearchTool, SystemInfoTool,
-    TerminalTool, TimestampTool, TodoTool, ToolBackendTool, TranscriptionTool,
-    TruncateOutputTool, TtsTool, VideoAnalysisTool, VisionTool, WebFetchTool,
-    WebSearchTool, XaiHttpTool,
+    SpotifyPlaylistsTool, SpotifyQueueTool, SpotifySearchTool, SystemInfoTool, TerminalTool,
+    TimestampTool, TodoTool, ToolBackendTool, TranscriptionTool, TruncateOutputTool, TtsTool,
+    VideoAnalysisTool, VisionTool, WebFetchTool, WebSearchTool, XaiHttpTool,
 };
 use hermes_core::tools::{HermesTool, ToolContext, ToolRegistry};
 
@@ -172,7 +170,9 @@ async fn test_schema_has_required_fields() {
 
     for schema in &schemas {
         let json = serde_json::to_value(schema).expect("Schema must serialize to a JSON value");
-        let obj = json.as_object().expect("Schema JSON value should be a JSON object");
+        let obj = json
+            .as_object()
+            .expect("Schema JSON value should be a JSON object");
 
         assert!(
             obj.contains_key("name"),
@@ -383,10 +383,7 @@ async fn test_notification_tool_accepts_context_metadata() {
         .with_metadata("user", "integration-test");
 
     let result = tool
-        .execute(
-            serde_json::json!({ "message": "context test" }),
-            context,
-        )
+        .execute(serde_json::json!({ "message": "context test" }), context)
         .await;
 
     assert!(result.success, "Should succeed with context metadata");
@@ -541,15 +538,15 @@ fn test_builtin_schema_is_valid_json_schema() {
                 ));
             }
         } else {
-            issues.push(format!(
-                "{}: parameters missing 'type' field",
-                tool.name()
-            ));
+            issues.push(format!("{}: parameters missing 'type' field", tool.name()));
         }
 
         // The schema must not crash when converted to JSON string
         if serde_json::to_string(&schema).is_err() {
-            issues.push(format!("{}: schema failed JSON string conversion", tool.name()));
+            issues.push(format!(
+                "{}: schema failed JSON string conversion",
+                tool.name()
+            ));
         }
     }
 

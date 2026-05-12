@@ -1,13 +1,13 @@
 //! Browser Binary Downloader and Verifier for Hermes-RS
-//! 
+//!
 //! This module handles the automatic downloading and verification of the
 //! Lightpanda browser binary.
 
+use serde::Deserialize;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
-use serde::Deserialize;
 
 use crate::error::{Error, Result};
 
@@ -37,7 +37,7 @@ impl BrowserDownloader {
     /// Downloads the latest Lightpanda browser binary for the current platform
     pub async fn download_binary() -> Result<PathBuf> {
         let bin_path = Self::default_bin_path();
-        
+
         if bin_path.exists() && Self::verify_binary(&bin_path).await.is_ok() {
             return Ok(bin_path);
         }
@@ -49,23 +49,18 @@ impl BrowserDownloader {
             .user_agent("Hermes-RS-Downloader")
             .build()?;
 
-        let release: GithubRelease = client
-            .get(release_url)
-            .send()
-            .await?
-            .json()
-            .await?;
+        let release: GithubRelease = client.get(release_url).send().await?.json().await?;
 
         let asset = Self::find_matching_asset(&release.assets)?;
         tracing::info!("Downloading asset: {}", asset.name);
 
-        let response = client
-            .get(&asset.browser_download_url)
-            .send()
-            .await?;
+        let response = client.get(&asset.browser_download_url).send().await?;
 
         if !response.status().is_success() {
-            return Err(Error::Agent(format!("Failed to download binary: {}", response.status())));
+            return Err(Error::Agent(format!(
+                "Failed to download binary: {}",
+                response.status()
+            )));
         }
 
         if let Some(parent) = bin_path.parent() {
@@ -86,17 +81,25 @@ impl BrowserDownloader {
         }
 
         if Self::verify_binary(&bin_path).await.is_err() {
-            return Err(Error::Agent("Downloaded binary failed verification".to_string()));
+            return Err(Error::Agent(
+                "Downloaded binary failed verification".to_string(),
+            ));
         }
 
-        tracing::info!("Browser binary successfully installed to {}", bin_path.display());
+        tracing::info!(
+            "Browser binary successfully installed to {}",
+            bin_path.display()
+        );
         Ok(bin_path)
     }
 
     /// Verifies that the binary exists and can be executed
     pub async fn verify_binary(path: &Path) -> Result<()> {
         if !path.exists() {
-            return Err(Error::Config(format!("Binary not found at {}", path.display())));
+            return Err(Error::Config(format!(
+                "Binary not found at {}",
+                path.display()
+            )));
         }
 
         let output = Command::new(path)
@@ -114,13 +117,19 @@ impl BrowserDownloader {
     fn find_matching_asset(assets: &[GithubAsset]) -> Result<GithubAsset> {
         let os = std::env::consts::OS;
         let arch = std::env::consts::ARCH;
-        
+
         tracing::debug!("Matching asset for OS: {}, Arch: {}", os, arch);
-        
-        assets.iter()
+
+        assets
+            .iter()
             .find(|a| a.name.contains(os) && a.name.contains(arch))
             .cloned()
-            .ok_or_else(|| Error::Agent(format!("Could not find matching binary for {} on {}", arch, os)))
+            .ok_or_else(|| {
+                Error::Agent(format!(
+                    "Could not find matching binary for {} on {}",
+                    arch, os
+                ))
+            })
     }
 }
 

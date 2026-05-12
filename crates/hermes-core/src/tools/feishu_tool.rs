@@ -83,9 +83,7 @@ async fn get_tenant_token() -> Result<String, String> {
 
     let token = body["tenant_access_token"]
         .as_str()
-        .ok_or_else(|| {
-            "Missing tenant_access_token in Feishu auth response".to_string()
-        })?
+        .ok_or_else(|| "Missing tenant_access_token in Feishu auth response".to_string())?
         .to_string();
 
     // Token lifetime is 7200 s; we cache for 7000 s for safety.
@@ -362,9 +360,8 @@ impl HermesTool for FeishuDriveTool {
                         );
                     }
                 };
-                let path = format!(
-                    "/open-apis/drive/v1/files/{file_token}/comments/{comment_id}/replies"
-                );
+                let path =
+                    format!("/open-apis/drive/v1/files/{file_token}/comments/{comment_id}/replies");
                 let body = json!({ "content": [{ "text": content }] });
                 match feishu_request("POST", &path, Some(body)).await {
                     Ok(resp) => ToolResult::success(
@@ -469,7 +466,10 @@ mod tests {
             .await;
         assert!(!result.success, "should fail without document_id");
         let err = result.error.unwrap_or_default();
-        assert!(err.contains("document_id"), "error mentions document_id: {err}");
+        assert!(
+            err.contains("document_id"),
+            "error mentions document_id: {err}"
+        );
     }
 
     #[tokio::test]
@@ -504,7 +504,10 @@ mod tests {
             .await;
         assert!(!result.success);
         let err = result.error.unwrap_or_default();
-        assert!(err.contains("Unknown action"), "error mentions 'Unknown action': {err}");
+        assert!(
+            err.contains("Unknown action"),
+            "error mentions 'Unknown action': {err}"
+        );
     }
 
     #[tokio::test]
@@ -560,7 +563,10 @@ mod tests {
         let schema = FeishuDocTool::new().schema();
         let schema_val = serde_json::to_value(&schema).unwrap();
         let props = &schema_val["parameters"]["properties"];
-        assert!(props.get("document_id").is_some(), "schema missing document_id");
+        assert!(
+            props.get("document_id").is_some(),
+            "schema missing document_id"
+        );
     }
 
     #[test]

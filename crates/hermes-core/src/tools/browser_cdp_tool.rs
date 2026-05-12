@@ -1,10 +1,10 @@
 use async_trait::async_trait;
+use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{json, Value};
-use schemars::JsonSchema;
 
-use crate::tools::{HermesTool, ToolContext, ToolResult};
 use crate::schema::ToolSchema;
+use crate::tools::{HermesTool, ToolContext, ToolResult};
 
 pub struct BrowserCdpTool;
 
@@ -50,7 +50,12 @@ impl HermesTool for BrowserCdpTool {
         let target_ws_url = if let Some(ref target_id) = parsed.target_id {
             match resolve_target_ws_url(&cdp_url, target_id).await {
                 Ok(url) => url,
-                Err(e) => return ToolResult::error(self.name(), format!("Target resolution failed: {}", e)),
+                Err(e) => {
+                    return ToolResult::error(
+                        self.name(),
+                        format!("Target resolution failed: {}", e),
+                    )
+                }
             }
         } else {
             cdp_url.clone()
@@ -97,7 +102,10 @@ async fn resolve_target_ws_url(cdp_url: &str, target_id: &str) -> Result<String,
         }
     }
 
-    Err(format!("Target '{}' not found in browser targets", target_id))
+    Err(format!(
+        "Target '{}' not found in browser targets",
+        target_id
+    ))
 }
 
 #[cfg(test)]

@@ -1,12 +1,10 @@
 use async_trait::async_trait;
-use futures::StreamExt;
 use futures::stream::BoxStream;
+use futures::StreamExt;
 
-use crate::client::{
-    ChatStreamEvent, OpenAIClient, ToolCall, ToolCallFunction,
-};
-use crate::error::Result;
 use super::super::model_client::{ChatRequest, ModelClient, StreamChunk};
+use crate::client::{ChatStreamEvent, OpenAIClient, ToolCall, ToolCallFunction};
+use crate::error::Result;
 
 /// Adapter that wraps [`OpenAIClient`] and implements [`ModelClient`].
 ///
@@ -66,10 +64,7 @@ impl ModelClient for OpenAIModelClient {
         // (process_stream in agent/mod.rs) merges incremental arguments.
         let mapped = stream.map(|event_result| match event_result {
             Ok(event) => {
-                let content = event
-                    .choices
-                    .first()
-                    .and_then(|c| c.delta.content.clone());
+                let content = event.choices.first().and_then(|c| c.delta.content.clone());
 
                 let reasoning = event
                     .choices

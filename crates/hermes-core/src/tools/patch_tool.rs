@@ -377,10 +377,7 @@ mod tests {
 
     #[test]
     fn test_normalize_whitespace_mixed_line_endings() {
-        assert_eq!(
-            normalize_whitespace("foo\r\nbar\r\nbaz"),
-            "foo\nbar\nbaz"
-        );
+        assert_eq!(normalize_whitespace("foo\r\nbar\r\nbaz"), "foo\nbar\nbaz");
     }
 
     #[test]
@@ -435,7 +432,10 @@ mod tests {
         let result = fuzzy_replace(content, find, replace);
         assert!(result.is_some());
         let (replaced, _) = result.unwrap();
-        assert!(replaced.ends_with('\n'), "trailing newline should be preserved");
+        assert!(
+            replaced.ends_with('\n'),
+            "trailing newline should be preserved"
+        );
     }
 
     #[test]
@@ -446,7 +446,10 @@ mod tests {
         let result = fuzzy_replace(content, find, replace);
         assert!(result.is_some());
         let (replaced, _) = result.unwrap();
-        assert!(!replaced.ends_with('\n'), "no trailing newline added if original lacked it");
+        assert!(
+            !replaced.ends_with('\n'),
+            "no trailing newline added if original lacked it"
+        );
     }
 
     #[tokio::test]

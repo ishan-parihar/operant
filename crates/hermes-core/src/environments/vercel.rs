@@ -44,9 +44,7 @@ impl Default for VercelSandboxEnvironment {
 #[async_trait]
 impl Environment for VercelSandboxEnvironment {
     async fn execute(&self, _command: &str, _timeout: Option<Duration>) -> EnvironmentResult {
-        warn!(
-            "VercelSandboxEnvironment::execute called but backend is not yet implemented"
-        );
+        warn!("VercelSandboxEnvironment::execute called but backend is not yet implemented");
         EnvironmentResult {
             stdout: String::new(),
             stderr: "Vercel Sandbox backend is not yet implemented in Rust".to_string(),

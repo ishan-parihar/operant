@@ -40,7 +40,11 @@ pub fn find_suggestions(
         .filter_map(|candidate| score_candidate(query, candidate))
         .collect();
 
-    scored.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    scored.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     scored
         .into_iter()
@@ -60,31 +64,59 @@ fn score_candidate(query: &str, candidate: &str) -> Option<ScoredCandidate> {
     }
 
     if let Some(score) = strategy_prefix_match(query, candidate) {
-        return Some(ScoredCandidate { candidate: candidate.to_string(), score, strategy: "prefix_match" });
+        return Some(ScoredCandidate {
+            candidate: candidate.to_string(),
+            score,
+            strategy: "prefix_match",
+        });
     }
 
     if let Some(score) = strategy_substring_match(query, candidate) {
-        return Some(ScoredCandidate { candidate: candidate.to_string(), score, strategy: "substring_match" });
+        return Some(ScoredCandidate {
+            candidate: candidate.to_string(),
+            score,
+            strategy: "substring_match",
+        });
     }
 
     if let Some(score) = strategy_word_match(query, candidate) {
-        return Some(ScoredCandidate { candidate: candidate.to_string(), score, strategy: "word_match" });
+        return Some(ScoredCandidate {
+            candidate: candidate.to_string(),
+            score,
+            strategy: "word_match",
+        });
     }
 
     if let Some(score) = strategy_acronym_match(query, candidate) {
-        return Some(ScoredCandidate { candidate: candidate.to_string(), score, strategy: "acronym_match" });
+        return Some(ScoredCandidate {
+            candidate: candidate.to_string(),
+            score,
+            strategy: "acronym_match",
+        });
     }
 
     if let Some(score) = strategy_levenshtein(query, candidate) {
-        return Some(ScoredCandidate { candidate: candidate.to_string(), score, strategy: "levenshtein" });
+        return Some(ScoredCandidate {
+            candidate: candidate.to_string(),
+            score,
+            strategy: "levenshtein",
+        });
     }
 
     if let Some(score) = strategy_jaro_winkler(query, candidate) {
-        return Some(ScoredCandidate { candidate: candidate.to_string(), score, strategy: "jaro_winkler" });
+        return Some(ScoredCandidate {
+            candidate: candidate.to_string(),
+            score,
+            strategy: "jaro_winkler",
+        });
     }
 
     if let Some(score) = strategy_dice_coefficient(query, candidate) {
-        return Some(ScoredCandidate { candidate: candidate.to_string(), score, strategy: "dice_coefficient" });
+        return Some(ScoredCandidate {
+            candidate: candidate.to_string(),
+            score,
+            strategy: "dice_coefficient",
+        });
     }
 
     // Fallback: character-set Jaccard similarity — always produces a score
@@ -92,8 +124,16 @@ fn score_candidate(query: &str, candidate: &str) -> Option<ScoredCandidate> {
     let c_set: HashSet<char> = candidate.to_ascii_lowercase().chars().collect();
     let intersection = q_set.intersection(&c_set).count();
     let union = q_set.union(&c_set).count();
-    let score = if union == 0 { 1.0 } else { intersection as f64 / union as f64 };
-    Some(ScoredCandidate { candidate: candidate.to_string(), score, strategy: "fallback" })
+    let score = if union == 0 {
+        1.0
+    } else {
+        intersection as f64 / union as f64
+    };
+    Some(ScoredCandidate {
+        candidate: candidate.to_string(),
+        score,
+        strategy: "fallback",
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -145,10 +185,16 @@ fn strategy_word_match(query: &str, candidate: &str) -> Option<f64> {
     }
 
     let q_upper: Vec<String> = query_words.iter().map(|w| w.to_ascii_uppercase()).collect();
-    let c_upper: Vec<String> = candidate_words.iter().map(|w| w.to_ascii_uppercase()).collect();
+    let c_upper: Vec<String> = candidate_words
+        .iter()
+        .map(|w| w.to_ascii_uppercase())
+        .collect();
     let c_set: HashSet<&str> = c_upper.iter().map(|s| s.as_str()).collect();
 
-    let matches = q_upper.iter().filter(|qw| c_set.contains(qw.as_str())).count();
+    let matches = q_upper
+        .iter()
+        .filter(|qw| c_set.contains(qw.as_str()))
+        .count();
     if matches > 0 {
         let total = q_upper.len().max(c_upper.len());
         Some(matches as f64 / total as f64)
@@ -279,7 +325,11 @@ fn jaro_winkler_similarity(a: &str, b: &str) -> f64 {
     let mut matches: usize = 0;
 
     for i in 0..m {
-        let lo = if i > match_distance { i - match_distance } else { 0 };
+        let lo = if i > match_distance {
+            i - match_distance
+        } else {
+            0
+        };
         let hi = (i + match_distance + 1).min(n);
         for j in lo..hi {
             if b_matched[j] {
@@ -428,7 +478,10 @@ mod tests {
     fn test_word_match_priority() {
         // word_match fires when the multi-word query's words overlap candidate words
         // but the query itself isn't a substring (due to separator differences)
-        let candidates = vec!["get_current_working_directory".to_string(), "foo_bar".to_string()];
+        let candidates = vec![
+            "get_current_working_directory".to_string(),
+            "foo_bar".to_string(),
+        ];
         let result = find_best_match("get current", &candidates);
         assert!(result.is_some());
         let (matched, _score, strategy) = result.unwrap();
@@ -557,7 +610,11 @@ mod tests {
 
     #[test]
     fn test_find_suggestions_sorted_by_score() {
-        let candidates = vec!["exactly".to_string(), "exact".to_string(), "xxyyzz".to_string()];
+        let candidates = vec![
+            "exactly".to_string(),
+            "exact".to_string(),
+            "xxyyzz".to_string(),
+        ];
         let suggestions = find_suggestions("exact", &candidates, 3);
         assert!(!suggestions.is_empty());
         // First result should be the best match

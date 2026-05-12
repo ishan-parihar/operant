@@ -101,7 +101,10 @@ impl Environment for SingularityEnvironment {
         let output = cmd.output().await.map_err(Error::from)?;
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(Error::Agent(format!("Singularity upload failed: {}", stderr)));
+            return Err(Error::Agent(format!(
+                "Singularity upload failed: {}",
+                stderr
+            )));
         }
         Ok(())
     }

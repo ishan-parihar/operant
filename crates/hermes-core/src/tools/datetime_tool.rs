@@ -355,9 +355,7 @@ mod tests {
     #[tokio::test]
     async fn test_datetime_default_execution() {
         let tool = DateTimeTool;
-        let result = tool
-            .execute(json!({}), ToolContext::default())
-            .await;
+        let result = tool.execute(json!({}), ToolContext::default()).await;
         assert!(result.success);
     }
 
@@ -382,9 +380,7 @@ mod tests {
     #[tokio::test]
     async fn test_timestamp_default_execution() {
         let tool = TimestampTool;
-        let result = tool
-            .execute(json!({}), ToolContext::default())
-            .await;
+        let result = tool.execute(json!({}), ToolContext::default()).await;
         assert!(result.success);
     }
 

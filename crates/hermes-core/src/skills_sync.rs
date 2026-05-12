@@ -68,8 +68,8 @@ pub fn read_manifest(path: &Path) -> Result<Manifest> {
 
     if value.get("version").and_then(|v| v.as_u64()).is_some() {
         // V2 format: {"version": 2, "skills": [...]}
-        let manifest: Manifest = serde_json::from_value(value)
-            .with_context(|| "Failed to parse V2 manifest")?;
+        let manifest: Manifest =
+            serde_json::from_value(value).with_context(|| "Failed to parse V2 manifest")?;
         Ok(manifest)
     } else {
         // V1 format: {"skills": [...]} — no version field
@@ -153,7 +153,9 @@ pub fn sync_skills(manifest: &Manifest, skills_dir: &Path, dry_run: bool) -> Res
             report.added.push(entry.name.clone());
             if !dry_run {
                 if let Err(e) = create_skill_directory(&dest, entry) {
-                    report.conflicts.push(format!("{}: failed to create: {}", entry.name, e));
+                    report
+                        .conflicts
+                        .push(format!("{}: failed to create: {}", entry.name, e));
                 }
             }
             continue;
@@ -200,10 +202,9 @@ pub fn sync_skills(manifest: &Manifest, skills_dir: &Path, dry_run: bool) -> Res
                 report.updated.push(entry.name.clone());
                 if !dry_run {
                     if let Err(e) = update_skill_directory(dir_path, entry) {
-                        report.conflicts.push(format!(
-                            "{}: failed to update: {}",
-                            entry.name, e
-                        ));
+                        report
+                            .conflicts
+                            .push(format!("{}: failed to update: {}", entry.name, e));
                     }
                 }
             }
@@ -325,11 +326,8 @@ mod tests {
 
     fn test_dir() -> PathBuf {
         let count = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
-        let dir = std::env::temp_dir().join(format!(
-            "hermes_sync_test_{}_{}",
-            std::process::id(),
-            count
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("hermes_sync_test_{}_{}", std::process::id(), count));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir

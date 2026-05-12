@@ -4,8 +4,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::process_registry::{ProcessRegistry, ProcessSession, ProcessStatus};
-use crate::tools::{HermesTool, ToolContext, ToolResult};
 use crate::schema::ToolSchema;
+use crate::tools::{HermesTool, ToolContext, ToolResult};
 
 #[derive(JsonSchema, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -64,13 +64,21 @@ impl HermesTool for ProcessTool {
             "list" => {
                 let sessions = self.registry.list().await;
                 let running_count = self.registry.running_count().await;
-                ToolResult::success(self.name(), ProcessListResult { processes: sessions, running_count })
+                ToolResult::success(
+                    self.name(),
+                    ProcessListResult {
+                        processes: sessions,
+                        running_count,
+                    },
+                )
             }
 
             "spawn" => {
                 let command = match parsed.command {
                     Some(c) => c,
-                    None => return ToolResult::error(self.name(), "Missing 'command' for spawn action"),
+                    None => {
+                        return ToolResult::error(self.name(), "Missing 'command' for spawn action")
+                    }
                 };
                 match self.registry.spawn(command, parsed.cwd).await {
                     Ok(session) => ToolResult::success(self.name(), session),
@@ -81,7 +89,12 @@ impl HermesTool for ProcessTool {
             "poll" => {
                 let sid = match parsed.session_id {
                     Some(s) => s,
-                    None => return ToolResult::error(self.name(), "Missing 'sessionId' for poll action"),
+                    None => {
+                        return ToolResult::error(
+                            self.name(),
+                            "Missing 'sessionId' for poll action",
+                        )
+                    }
                 };
                 match self.registry.poll(&sid).await {
                     Some(session) => ToolResult::success(self.name(), session),
@@ -92,7 +105,12 @@ impl HermesTool for ProcessTool {
             "wait" => {
                 let sid = match parsed.session_id {
                     Some(s) => s,
-                    None => return ToolResult::error(self.name(), "Missing 'sessionId' for wait action"),
+                    None => {
+                        return ToolResult::error(
+                            self.name(),
+                            "Missing 'sessionId' for wait action",
+                        )
+                    }
                 };
                 match self.registry.wait(&sid, parsed.timeout_secs).await {
                     Some(session) => ToolResult::success(self.name(), session),
@@ -103,7 +121,12 @@ impl HermesTool for ProcessTool {
             "kill" => {
                 let sid = match parsed.session_id {
                     Some(s) => s,
-                    None => return ToolResult::error(self.name(), "Missing 'sessionId' for kill action"),
+                    None => {
+                        return ToolResult::error(
+                            self.name(),
+                            "Missing 'sessionId' for kill action",
+                        )
+                    }
                 };
                 match self.registry.kill(&sid).await {
                     Ok(()) => ToolResult::success(self.name(), serde_json::json!({"killed": true})),
@@ -114,19 +137,32 @@ impl HermesTool for ProcessTool {
             "get_output" => {
                 let sid = match parsed.session_id {
                     Some(s) => s,
-                    None => return ToolResult::error(self.name(), "Missing 'sessionId' for get_output action"),
+                    None => {
+                        return ToolResult::error(
+                            self.name(),
+                            "Missing 'sessionId' for get_output action",
+                        )
+                    }
                 };
                 match self.registry.poll(&sid).await {
-                    Some(session) => ToolResult::success(self.name(), serde_json::json!({
-                        "sessionId": session.id,
-                        "output": session.output_buffer,
-                        "status": session.status,
-                    })),
+                    Some(session) => ToolResult::success(
+                        self.name(),
+                        serde_json::json!({
+                            "sessionId": session.id,
+                            "output": session.output_buffer,
+                            "status": session.status,
+                        }),
+                    ),
                     None => ToolResult::error(self.name(), format!("Process '{sid}' not found")),
                 }
             }
 
-            other => ToolResult::error(self.name(), format!("Unknown action: '{other}'. Use: list, spawn, poll, wait, kill, get_output")),
+            other => ToolResult::error(
+                self.name(),
+                format!(
+                    "Unknown action: '{other}'. Use: list, spawn, poll, wait, kill, get_output"
+                ),
+            ),
         }
     }
 }

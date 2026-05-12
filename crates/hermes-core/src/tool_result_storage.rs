@@ -171,8 +171,8 @@ impl ToolResultStorage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tools::ToolResult;
     use crate::budget_config::BudgetConfig;
+    use crate::tools::ToolResult;
 
     fn make_result(tool_call_id: &str, content: &str) -> ToolResult {
         ToolResult {
@@ -229,7 +229,10 @@ mod tests {
         let config = PreviewConfig { max_previews: 3 };
         let mut storage = ToolResultStorage::new(config);
         for i in 0..10 {
-            storage.store_result("tool", make_result(&format!("call_{}", i), &format!("r{}", i)));
+            storage.store_result(
+                "tool",
+                make_result(&format!("call_{}", i), &format!("r{}", i)),
+            );
         }
         let preview = storage.get_preview("tool").unwrap();
         // Only the last 3 should survive.
@@ -291,8 +294,7 @@ mod tests {
         let mut storage = ToolResultStorage::new(PreviewConfig::default());
         storage.track_budget("tool", 150_000);
 
-        let config = BudgetConfig::default()
-            .with_max_tokens_per_turn(100_000);
+        let config = BudgetConfig::default().with_max_tokens_per_turn(100_000);
         assert!(storage.is_budget_exceeded(&config));
     }
 
@@ -302,8 +304,7 @@ mod tests {
         storage.track_budget("tool", 10);
         storage.track_budget("tool", 10);
 
-        let config = BudgetConfig::default()
-            .with_max_calls_per_turn(1);
+        let config = BudgetConfig::default().with_max_calls_per_turn(1);
         assert!(storage.is_budget_exceeded(&config));
     }
 

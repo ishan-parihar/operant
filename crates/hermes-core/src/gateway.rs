@@ -217,11 +217,14 @@ impl SessionStore {
         channel_id: &str,
     ) -> Option<PlatformSession> {
         let sessions = self.sessions.read().expect("Session store lock poisoned");
-        sessions.values().find(|s| {
-            s.platform == platform
-                && s.platform_user_id == user_id
-                && s.platform_channel_id == channel_id
-        }).cloned()
+        sessions
+            .values()
+            .find(|s| {
+                s.platform == platform
+                    && s.platform_user_id == user_id
+                    && s.platform_channel_id == channel_id
+            })
+            .cloned()
     }
 
     /// Update the last_active timestamp for a session
@@ -267,7 +270,10 @@ impl SessionStore {
     /// Find a session by its Hermes session ID
     pub fn get_hermes_session(&self, hermes_session_id: &str) -> Option<PlatformSession> {
         let sessions = self.sessions.read().expect("Session store lock poisoned");
-        sessions.values().find(|s| s.hermes_session_id == hermes_session_id).cloned()
+        sessions
+            .values()
+            .find(|s| s.hermes_session_id == hermes_session_id)
+            .cloned()
     }
 }
 
@@ -1179,8 +1185,8 @@ pub async fn handle_admin_command(
     directory: &ChannelDirectory,
     global_admins: &[String],
 ) -> Result<String> {
-    let is_admin = global_admins.iter().any(|a| a == user_id)
-        || directory.is_admin(channel_id, user_id);
+    let is_admin =
+        global_admins.iter().any(|a| a == user_id) || directory.is_admin(channel_id, user_id);
 
     if !is_admin {
         return Ok("You are not authorized to use admin commands.".to_string());
@@ -1357,12 +1363,8 @@ mod tests {
     #[test]
     fn test_session_store_find() {
         let store = SessionStore::new();
-        store
-            .create_session("discord", "user1", "chan1")
-            .unwrap();
-        let s2 = store
-            .create_session("telegram", "user2", "chan2")
-            .unwrap();
+        store.create_session("discord", "user1", "chan1").unwrap();
+        let s2 = store.create_session("telegram", "user2", "chan2").unwrap();
 
         let found = store.find_session("telegram", "user2", "chan2");
         assert!(found.is_some());
@@ -1375,15 +1377,9 @@ mod tests {
     #[test]
     fn test_session_store_list() {
         let store = SessionStore::new();
-        store
-            .create_session("telegram", "a", "c1")
-            .unwrap();
-        store
-            .create_session("telegram", "b", "c2")
-            .unwrap();
-        store
-            .create_session("discord", "c", "c3")
-            .unwrap();
+        store.create_session("telegram", "a", "c1").unwrap();
+        store.create_session("telegram", "b", "c2").unwrap();
+        store.create_session("discord", "c", "c3").unwrap();
 
         assert_eq!(store.get_session_count(), 3);
 
@@ -1400,9 +1396,7 @@ mod tests {
     #[test]
     fn test_session_store_close_and_update() {
         let store = SessionStore::new();
-        let session = store
-            .create_session("test", "user", "chan")
-            .unwrap();
+        let session = store.create_session("test", "user", "chan").unwrap();
         let sid = session.session_id.clone();
 
         assert!(store.update_activity(&sid).is_ok());
@@ -1414,9 +1408,7 @@ mod tests {
     #[test]
     fn test_session_hermes_lookup() {
         let store = SessionStore::new();
-        let mut session = store
-            .create_session("test", "user", "chan")
-            .unwrap();
+        let mut session = store.create_session("test", "user", "chan").unwrap();
         // manually assign hermes_session_id via metadata
         let sid = session.session_id.clone();
 

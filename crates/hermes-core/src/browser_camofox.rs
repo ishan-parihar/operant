@@ -349,10 +349,7 @@ mod tests {
             .create();
 
         let browser = mock_browser(&server);
-        let result = browser
-            .execute_script("document.title")
-            .await
-            .unwrap();
+        let result = browser.execute_script("document.title").await.unwrap();
 
         assert_eq!(result["result"], "document.title");
         mock.assert();

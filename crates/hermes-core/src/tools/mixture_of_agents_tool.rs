@@ -1,10 +1,10 @@
 use async_trait::async_trait;
+use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{json, Value};
-use schemars::JsonSchema;
 
-use crate::tools::{HermesTool, ToolContext, ToolResult};
 use crate::schema::ToolSchema;
+use crate::tools::{HermesTool, ToolContext, ToolResult};
 
 pub struct MixtureOfAgentsTool;
 
@@ -74,16 +74,16 @@ impl HermesTool for MixtureOfAgentsTool {
             })
             .collect();
 
-        let ref_results: Vec<std::result::Result<String, String>> = futures::future::join_all(ref_futures).await;
+        let ref_results: Vec<std::result::Result<String, String>> =
+            futures::future::join_all(ref_futures).await;
 
         let mut ref_responses = Vec::new();
         let mut errors = Vec::new();
         for (i, result) in ref_results.iter().enumerate() {
             match result {
-                Ok(content) => ref_responses.push(format!(
-                    "[{} Response]:\n{}",
-                    REFERENCE_MODELS[i], content
-                )),
+                Ok(content) => {
+                    ref_responses.push(format!("[{} Response]:\n{}", REFERENCE_MODELS[i], content))
+                }
                 Err(e) => {
                     errors.push(format!("{}: {}", REFERENCE_MODELS[i], e));
                     ref_responses.push(format!("[{} Error]: {}", REFERENCE_MODELS[i], e));
@@ -147,7 +147,10 @@ async fn call_model_owned(
         .map_err(|e| format!("HTTP error: {}", e))?;
 
     let status = resp.status();
-    let text = resp.text().await.map_err(|e| format!("Read error: {}", e))?;
+    let text = resp
+        .text()
+        .await
+        .map_err(|e| format!("Read error: {}", e))?;
 
     if !status.is_success() {
         return Err(format!("API error ({}): {}", status, text));
@@ -191,10 +194,7 @@ mod tests {
 
         let tool = MixtureOfAgentsTool;
         let result = tool
-            .execute(
-                json!({"prompt": "test prompt"}),
-                ToolContext::default(),
-            )
+            .execute(json!({"prompt": "test prompt"}), ToolContext::default())
             .await;
 
         if let Some(key) = saved {

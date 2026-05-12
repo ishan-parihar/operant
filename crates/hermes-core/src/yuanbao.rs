@@ -146,10 +146,9 @@ impl YuanbaoClient {
                         }
                         ToolResult::success(endpoint, body)
                     }
-                    Err(e) => ToolResult::error(
-                        endpoint,
-                        format!("Failed to parse response: {}", e),
-                    ),
+                    Err(e) => {
+                        ToolResult::error(endpoint, format!("Failed to parse response: {}", e))
+                    }
                 }
             }
             Err(e) => ToolResult::error(endpoint, format!("HTTP request failed: {}", e)),
@@ -169,65 +168,360 @@ struct StickerEntry {
 }
 
 const STICKERS: &[StickerEntry] = &[
-    StickerEntry { name: "六六六", sticker_id: "278", package_id: "1003", description: "666 厉害 牛 棒 绝了 好强 awesome" },
-    StickerEntry { name: "我想开了", sticker_id: "262", package_id: "1003", description: "想开 佛系 释怀 顿悟 看淡了 无所谓" },
-    StickerEntry { name: "害羞", sticker_id: "130", package_id: "1003", description: "腼腆 不好意思 脸红 娇羞 羞涩 捂脸" },
-    StickerEntry { name: "比心", sticker_id: "252", package_id: "1003", description: "笔芯 爱你 爱心手势 love heart 喜欢你" },
-    StickerEntry { name: "委屈", sticker_id: "125", package_id: "1003", description: "难过 想哭 可怜巴巴 瘪嘴 受伤 被欺负" },
-    StickerEntry { name: "亲亲", sticker_id: "146", package_id: "1003", description: "么么 mua 亲一下 kiss 飞吻 啵" },
-    StickerEntry { name: "酷", sticker_id: "131", package_id: "1003", description: "帅 墨镜 cool 高冷 有型 swagger" },
-    StickerEntry { name: "睡", sticker_id: "145", package_id: "1003", description: "睡觉 困 zzZ 打盹 躺平 休眠 sleepy" },
-    StickerEntry { name: "发呆", sticker_id: "152", package_id: "1003", description: "懵 愣住 放空 呆滞 出神 脑子空白" },
-    StickerEntry { name: "可怜", sticker_id: "157", package_id: "1003", description: "卖萌 求饶 委屈巴巴 弱小 拜托 眼巴巴" },
-    StickerEntry { name: "摊手", sticker_id: "200", package_id: "1003", description: "无奈 没办法 耸肩 随便 那咋整 whatever" },
-    StickerEntry { name: "头大", sticker_id: "213", package_id: "1003", description: "头疼 烦恼 郁闷 难搞 崩溃 一团乱" },
-    StickerEntry { name: "吓", sticker_id: "256", package_id: "1003", description: "害怕 惊恐 震惊 吓一跳 恐怖 怂" },
-    StickerEntry { name: "吐血", sticker_id: "203", package_id: "1003", description: "无语 崩溃 被雷 内伤 一口老血 屮" },
-    StickerEntry { name: "哼", sticker_id: "185", package_id: "1003", description: "傲娇 生气 不满 撇嘴 不理 赌气" },
-    StickerEntry { name: "嘿嘿", sticker_id: "220", package_id: "1003", description: "坏笑 猥琐笑 偷笑 憨笑 得意 你懂的" },
-    StickerEntry { name: "头秃", sticker_id: "218", package_id: "1003", description: "程序员 加班 焦虑 没头发 秃了 肝爆" },
-    StickerEntry { name: "暗中观察", sticker_id: "221", package_id: "1003", description: "窥屏 潜水 偷偷看 角落 围观 屏住呼吸" },
-    StickerEntry { name: "我酸了", sticker_id: "224", package_id: "1003", description: "嫉妒 柠檬精 羡慕 吃柠檬 眼红 恰柠檬" },
-    StickerEntry { name: "打call", sticker_id: "246", package_id: "1003", description: "应援 加油 支持 喝彩 助威 call" },
-    StickerEntry { name: "庆祝", sticker_id: "251", package_id: "1003", description: "祝贺 开心 耶 party 胜利 干杯" },
-    StickerEntry { name: "奋斗", sticker_id: "151", package_id: "1003", description: "努力 加油 拼搏 冲 干劲 卷起来" },
-    StickerEntry { name: "惊讶", sticker_id: "143", package_id: "1003", description: "震惊 哇 不敢相信 OMG 居然 这么离谱" },
-    StickerEntry { name: "疑问", sticker_id: "144", package_id: "1003", description: "问号 不懂 啥 为什么 啥情况 懵逼问" },
-    StickerEntry { name: "仔细分析", sticker_id: "248", package_id: "1003", description: "思考 推敲 认真 研究 琢磨 让我想想" },
-    StickerEntry { name: "撅嘴", sticker_id: "184", package_id: "1003", description: "嘟嘴 卖萌 不高兴 撒娇 嘴翘" },
-    StickerEntry { name: "泪奔", sticker_id: "199", package_id: "1003", description: "大哭 伤心 破防 感动哭 泪流满面 呜呜" },
-    StickerEntry { name: "尊嘟假嘟", sticker_id: "276", package_id: "1003", description: "真的假的 真假 可爱问 你骗我 是不是" },
-    StickerEntry { name: "略略略", sticker_id: "113", package_id: "1003", description: "调皮 吐舌 不服 略 气死你 鬼脸" },
-    StickerEntry { name: "困", sticker_id: "180", package_id: "1003", description: "想睡 倦 打哈欠 睁不开眼 好困啊 sleepy" },
-    StickerEntry { name: "折磨", sticker_id: "181", package_id: "1003", description: "难受 痛苦 煎熬 蚌埠住了 受不了 要命" },
-    StickerEntry { name: "抠鼻", sticker_id: "182", package_id: "1003", description: "不屑 无聊 淡定 无所谓 鄙视 挖鼻" },
-    StickerEntry { name: "鼓掌", sticker_id: "183", package_id: "1003", description: "拍手 叫好 赞同 666 喝彩 掌声" },
-    StickerEntry { name: "斜眼笑", sticker_id: "204", package_id: "1003", description: "滑稽 坏笑 doge 意味深长 阴阳怪气 嘿嘿嘿" },
-    StickerEntry { name: "辣眼睛", sticker_id: "216", package_id: "1003", description: "看不下去 cringe 毁三观 太丑了 瞎了" },
-    StickerEntry { name: "哦哟", sticker_id: "217", package_id: "1003", description: "惊讶 起哄 哇哦 有戏 不简单 哟" },
-    StickerEntry { name: "吃瓜", sticker_id: "222", package_id: "1003", description: "围观 看戏 八卦 路人 看热闹 板凳" },
-    StickerEntry { name: "狗头", sticker_id: "225", package_id: "1003", description: "doge 保命 开玩笑 滑稽 反讽 懂的都懂" },
-    StickerEntry { name: "敬礼", sticker_id: "227", package_id: "1003", description: "salute 尊重 收到 遵命 致敬 报告" },
-    StickerEntry { name: "哦", sticker_id: "231", package_id: "1003", description: "知道了 明白 敷衍 嗯 这样啊 收到" },
-    StickerEntry { name: "拿到红包", sticker_id: "236", package_id: "1003", description: "红包 谢谢老板 发财 开心 抢到了 欧气" },
-    StickerEntry { name: "牛吖", sticker_id: "239", package_id: "1003", description: "牛 厉害 强 666 佩服 大佬" },
-    StickerEntry { name: "贴贴", sticker_id: "272", package_id: "1003", description: "抱抱 亲昵 蹭蹭 亲密 靠靠 撒娇贴" },
-    StickerEntry { name: "爱心", sticker_id: "138", package_id: "1003", description: "心 love 喜欢你 红心 示爱 么么哒" },
-    StickerEntry { name: "晚安", sticker_id: "170", package_id: "1003", description: "好梦 睡了 night 早点休息 安啦 moon" },
-    StickerEntry { name: "太阳", sticker_id: "176", package_id: "1003", description: "晴天 早上好 阳光 morning 好天气 日" },
-    StickerEntry { name: "柠檬", sticker_id: "266", package_id: "1003", description: "酸 嫉妒 柠檬精 羡慕 我酸 恰柠檬" },
-    StickerEntry { name: "大冤种", sticker_id: "267", package_id: "1003", description: "倒霉 吃亏 自嘲 好心没好报 背锅 工具人" },
-    StickerEntry { name: "吐了", sticker_id: "132", package_id: "1003", description: "恶心 yue 受不了 嫌弃 想吐 生理不适" },
-    StickerEntry { name: "怒", sticker_id: "134", package_id: "1003", description: "生气 愤怒 火大 暴躁 气炸 怼" },
-    StickerEntry { name: "玫瑰", sticker_id: "165", package_id: "1003", description: "花 示爱 表白 浪漫 送你花 情人节" },
-    StickerEntry { name: "凋谢", sticker_id: "119", package_id: "1003", description: "花谢 失恋 难过 枯萎 心碎 凉了" },
-    StickerEntry { name: "点赞", sticker_id: "159", package_id: "1003", description: "赞 认同 好棒 good like 大拇指 顶" },
-    StickerEntry { name: "握手", sticker_id: "164", package_id: "1003", description: "合作 你好 商务 hello deal 成交 友好" },
-    StickerEntry { name: "抱拳", sticker_id: "163", package_id: "1003", description: "谢谢 失敬 江湖 承让 拜托 有礼" },
-    StickerEntry { name: "ok", sticker_id: "169", package_id: "1003", description: "好的 收到 没问题 okay 行 可以 懂了" },
-    StickerEntry { name: "拳头", sticker_id: "174", package_id: "1003", description: "加油 干 冲 fight 力量 击拳 硬气" },
-    StickerEntry { name: "鞭炮", sticker_id: "191", package_id: "1003", description: "过年 喜庆 爆竹 春节 噼里啪啦 红" },
-    StickerEntry { name: "烟花", sticker_id: "258", package_id: "1003", description: "庆典 漂亮 新年 嘭 绽放 节日快乐" },
+    StickerEntry {
+        name: "六六六",
+        sticker_id: "278",
+        package_id: "1003",
+        description: "666 厉害 牛 棒 绝了 好强 awesome",
+    },
+    StickerEntry {
+        name: "我想开了",
+        sticker_id: "262",
+        package_id: "1003",
+        description: "想开 佛系 释怀 顿悟 看淡了 无所谓",
+    },
+    StickerEntry {
+        name: "害羞",
+        sticker_id: "130",
+        package_id: "1003",
+        description: "腼腆 不好意思 脸红 娇羞 羞涩 捂脸",
+    },
+    StickerEntry {
+        name: "比心",
+        sticker_id: "252",
+        package_id: "1003",
+        description: "笔芯 爱你 爱心手势 love heart 喜欢你",
+    },
+    StickerEntry {
+        name: "委屈",
+        sticker_id: "125",
+        package_id: "1003",
+        description: "难过 想哭 可怜巴巴 瘪嘴 受伤 被欺负",
+    },
+    StickerEntry {
+        name: "亲亲",
+        sticker_id: "146",
+        package_id: "1003",
+        description: "么么 mua 亲一下 kiss 飞吻 啵",
+    },
+    StickerEntry {
+        name: "酷",
+        sticker_id: "131",
+        package_id: "1003",
+        description: "帅 墨镜 cool 高冷 有型 swagger",
+    },
+    StickerEntry {
+        name: "睡",
+        sticker_id: "145",
+        package_id: "1003",
+        description: "睡觉 困 zzZ 打盹 躺平 休眠 sleepy",
+    },
+    StickerEntry {
+        name: "发呆",
+        sticker_id: "152",
+        package_id: "1003",
+        description: "懵 愣住 放空 呆滞 出神 脑子空白",
+    },
+    StickerEntry {
+        name: "可怜",
+        sticker_id: "157",
+        package_id: "1003",
+        description: "卖萌 求饶 委屈巴巴 弱小 拜托 眼巴巴",
+    },
+    StickerEntry {
+        name: "摊手",
+        sticker_id: "200",
+        package_id: "1003",
+        description: "无奈 没办法 耸肩 随便 那咋整 whatever",
+    },
+    StickerEntry {
+        name: "头大",
+        sticker_id: "213",
+        package_id: "1003",
+        description: "头疼 烦恼 郁闷 难搞 崩溃 一团乱",
+    },
+    StickerEntry {
+        name: "吓",
+        sticker_id: "256",
+        package_id: "1003",
+        description: "害怕 惊恐 震惊 吓一跳 恐怖 怂",
+    },
+    StickerEntry {
+        name: "吐血",
+        sticker_id: "203",
+        package_id: "1003",
+        description: "无语 崩溃 被雷 内伤 一口老血 屮",
+    },
+    StickerEntry {
+        name: "哼",
+        sticker_id: "185",
+        package_id: "1003",
+        description: "傲娇 生气 不满 撇嘴 不理 赌气",
+    },
+    StickerEntry {
+        name: "嘿嘿",
+        sticker_id: "220",
+        package_id: "1003",
+        description: "坏笑 猥琐笑 偷笑 憨笑 得意 你懂的",
+    },
+    StickerEntry {
+        name: "头秃",
+        sticker_id: "218",
+        package_id: "1003",
+        description: "程序员 加班 焦虑 没头发 秃了 肝爆",
+    },
+    StickerEntry {
+        name: "暗中观察",
+        sticker_id: "221",
+        package_id: "1003",
+        description: "窥屏 潜水 偷偷看 角落 围观 屏住呼吸",
+    },
+    StickerEntry {
+        name: "我酸了",
+        sticker_id: "224",
+        package_id: "1003",
+        description: "嫉妒 柠檬精 羡慕 吃柠檬 眼红 恰柠檬",
+    },
+    StickerEntry {
+        name: "打call",
+        sticker_id: "246",
+        package_id: "1003",
+        description: "应援 加油 支持 喝彩 助威 call",
+    },
+    StickerEntry {
+        name: "庆祝",
+        sticker_id: "251",
+        package_id: "1003",
+        description: "祝贺 开心 耶 party 胜利 干杯",
+    },
+    StickerEntry {
+        name: "奋斗",
+        sticker_id: "151",
+        package_id: "1003",
+        description: "努力 加油 拼搏 冲 干劲 卷起来",
+    },
+    StickerEntry {
+        name: "惊讶",
+        sticker_id: "143",
+        package_id: "1003",
+        description: "震惊 哇 不敢相信 OMG 居然 这么离谱",
+    },
+    StickerEntry {
+        name: "疑问",
+        sticker_id: "144",
+        package_id: "1003",
+        description: "问号 不懂 啥 为什么 啥情况 懵逼问",
+    },
+    StickerEntry {
+        name: "仔细分析",
+        sticker_id: "248",
+        package_id: "1003",
+        description: "思考 推敲 认真 研究 琢磨 让我想想",
+    },
+    StickerEntry {
+        name: "撅嘴",
+        sticker_id: "184",
+        package_id: "1003",
+        description: "嘟嘴 卖萌 不高兴 撒娇 嘴翘",
+    },
+    StickerEntry {
+        name: "泪奔",
+        sticker_id: "199",
+        package_id: "1003",
+        description: "大哭 伤心 破防 感动哭 泪流满面 呜呜",
+    },
+    StickerEntry {
+        name: "尊嘟假嘟",
+        sticker_id: "276",
+        package_id: "1003",
+        description: "真的假的 真假 可爱问 你骗我 是不是",
+    },
+    StickerEntry {
+        name: "略略略",
+        sticker_id: "113",
+        package_id: "1003",
+        description: "调皮 吐舌 不服 略 气死你 鬼脸",
+    },
+    StickerEntry {
+        name: "困",
+        sticker_id: "180",
+        package_id: "1003",
+        description: "想睡 倦 打哈欠 睁不开眼 好困啊 sleepy",
+    },
+    StickerEntry {
+        name: "折磨",
+        sticker_id: "181",
+        package_id: "1003",
+        description: "难受 痛苦 煎熬 蚌埠住了 受不了 要命",
+    },
+    StickerEntry {
+        name: "抠鼻",
+        sticker_id: "182",
+        package_id: "1003",
+        description: "不屑 无聊 淡定 无所谓 鄙视 挖鼻",
+    },
+    StickerEntry {
+        name: "鼓掌",
+        sticker_id: "183",
+        package_id: "1003",
+        description: "拍手 叫好 赞同 666 喝彩 掌声",
+    },
+    StickerEntry {
+        name: "斜眼笑",
+        sticker_id: "204",
+        package_id: "1003",
+        description: "滑稽 坏笑 doge 意味深长 阴阳怪气 嘿嘿嘿",
+    },
+    StickerEntry {
+        name: "辣眼睛",
+        sticker_id: "216",
+        package_id: "1003",
+        description: "看不下去 cringe 毁三观 太丑了 瞎了",
+    },
+    StickerEntry {
+        name: "哦哟",
+        sticker_id: "217",
+        package_id: "1003",
+        description: "惊讶 起哄 哇哦 有戏 不简单 哟",
+    },
+    StickerEntry {
+        name: "吃瓜",
+        sticker_id: "222",
+        package_id: "1003",
+        description: "围观 看戏 八卦 路人 看热闹 板凳",
+    },
+    StickerEntry {
+        name: "狗头",
+        sticker_id: "225",
+        package_id: "1003",
+        description: "doge 保命 开玩笑 滑稽 反讽 懂的都懂",
+    },
+    StickerEntry {
+        name: "敬礼",
+        sticker_id: "227",
+        package_id: "1003",
+        description: "salute 尊重 收到 遵命 致敬 报告",
+    },
+    StickerEntry {
+        name: "哦",
+        sticker_id: "231",
+        package_id: "1003",
+        description: "知道了 明白 敷衍 嗯 这样啊 收到",
+    },
+    StickerEntry {
+        name: "拿到红包",
+        sticker_id: "236",
+        package_id: "1003",
+        description: "红包 谢谢老板 发财 开心 抢到了 欧气",
+    },
+    StickerEntry {
+        name: "牛吖",
+        sticker_id: "239",
+        package_id: "1003",
+        description: "牛 厉害 强 666 佩服 大佬",
+    },
+    StickerEntry {
+        name: "贴贴",
+        sticker_id: "272",
+        package_id: "1003",
+        description: "抱抱 亲昵 蹭蹭 亲密 靠靠 撒娇贴",
+    },
+    StickerEntry {
+        name: "爱心",
+        sticker_id: "138",
+        package_id: "1003",
+        description: "心 love 喜欢你 红心 示爱 么么哒",
+    },
+    StickerEntry {
+        name: "晚安",
+        sticker_id: "170",
+        package_id: "1003",
+        description: "好梦 睡了 night 早点休息 安啦 moon",
+    },
+    StickerEntry {
+        name: "太阳",
+        sticker_id: "176",
+        package_id: "1003",
+        description: "晴天 早上好 阳光 morning 好天气 日",
+    },
+    StickerEntry {
+        name: "柠檬",
+        sticker_id: "266",
+        package_id: "1003",
+        description: "酸 嫉妒 柠檬精 羡慕 我酸 恰柠檬",
+    },
+    StickerEntry {
+        name: "大冤种",
+        sticker_id: "267",
+        package_id: "1003",
+        description: "倒霉 吃亏 自嘲 好心没好报 背锅 工具人",
+    },
+    StickerEntry {
+        name: "吐了",
+        sticker_id: "132",
+        package_id: "1003",
+        description: "恶心 yue 受不了 嫌弃 想吐 生理不适",
+    },
+    StickerEntry {
+        name: "怒",
+        sticker_id: "134",
+        package_id: "1003",
+        description: "生气 愤怒 火大 暴躁 气炸 怼",
+    },
+    StickerEntry {
+        name: "玫瑰",
+        sticker_id: "165",
+        package_id: "1003",
+        description: "花 示爱 表白 浪漫 送你花 情人节",
+    },
+    StickerEntry {
+        name: "凋谢",
+        sticker_id: "119",
+        package_id: "1003",
+        description: "花谢 失恋 难过 枯萎 心碎 凉了",
+    },
+    StickerEntry {
+        name: "点赞",
+        sticker_id: "159",
+        package_id: "1003",
+        description: "赞 认同 好棒 good like 大拇指 顶",
+    },
+    StickerEntry {
+        name: "握手",
+        sticker_id: "164",
+        package_id: "1003",
+        description: "合作 你好 商务 hello deal 成交 友好",
+    },
+    StickerEntry {
+        name: "抱拳",
+        sticker_id: "163",
+        package_id: "1003",
+        description: "谢谢 失敬 江湖 承让 拜托 有礼",
+    },
+    StickerEntry {
+        name: "ok",
+        sticker_id: "169",
+        package_id: "1003",
+        description: "好的 收到 没问题 okay 行 可以 懂了",
+    },
+    StickerEntry {
+        name: "拳头",
+        sticker_id: "174",
+        package_id: "1003",
+        description: "加油 干 冲 fight 力量 击拳 硬气",
+    },
+    StickerEntry {
+        name: "鞭炮",
+        sticker_id: "191",
+        package_id: "1003",
+        description: "过年 喜庆 爆竹 春节 噼里啪啦 红",
+    },
+    StickerEntry {
+        name: "烟花",
+        sticker_id: "258",
+        package_id: "1003",
+        description: "庆典 漂亮 新年 嘭 绽放 节日快乐",
+    },
 ];
 
 fn find_sticker_by_name(name: &str) -> Option<&'static StickerEntry> {
@@ -366,10 +660,7 @@ impl HermesTool for YuanbaoQueryGroupInfo {
         }
 
         self.client
-            .call(
-                "query_group_info",
-                json!({ "group_code": args.group_code }),
-            )
+            .call("query_group_info", json!({ "group_code": args.group_code }))
             .await
     }
 }
@@ -720,8 +1011,7 @@ mod tests {
         let key = b"Jefe";
         let data = b"what do ya want for nothing?";
         let result = hmac_sha256(key, data);
-        let expected =
-            "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843";
+        let expected = "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843";
         assert_eq!(hex_encode(&result), expected);
     }
 

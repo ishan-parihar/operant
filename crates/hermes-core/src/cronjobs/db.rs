@@ -49,18 +49,18 @@ impl CronDb {
     pub fn init(path: PathBuf) -> Result<Self, Error> {
         let conn = Connection::open(path)
             .map_err(|e| Error::Agent(format!("Failed to open cron database: {}", e)))?;
-        
+
         let db = Self {
             conn: Arc::new(Mutex::new(conn)),
         };
-        
+
         db.setup_schema()?;
         Ok(db)
     }
 
     fn setup_schema(&self) -> Result<(), Error> {
         let conn = self.conn.lock().unwrap();
-        
+
         let schema = r#"
             CREATE TABLE IF NOT EXISTS cron_jobs (
                 id                   TEXT PRIMARY KEY,
@@ -101,7 +101,7 @@ impl CronDb {
 
         conn.execute_batch(schema)
             .map_err(|e| Error::Agent(format!("Failed to initialize cron schema: {}", e)))?;
-        
+
         Ok(())
     }
 
@@ -128,9 +128,12 @@ impl CronDb {
         no_agent: bool,
     ) -> Result<String, Error> {
         let conn = self.conn.lock().unwrap();
-        let id = format!("cron_{}", uuid::Uuid::new_v4().to_string()[..8].replace('-', ""));
+        let id = format!(
+            "cron_{}",
+            uuid::Uuid::new_v4().to_string()[..8].replace('-', "")
+        );
         let created_at = chrono::Utc::now().to_rfc3339();
-        
+
         let skills_json = skills.and_then(|s| serde_json::to_string(&s).ok());
         let context_json = context_from.and_then(|c| serde_json::to_string(&c).ok());
         let toolsets_json = enabled_toolsets.and_then(|t| serde_json::to_string(&t).ok());
@@ -161,51 +164,56 @@ impl CronDb {
             "SELECT * FROM cron_jobs WHERE enabled = 1"
         };
 
-        let mut stmt = conn.prepare(query)
+        let mut stmt = conn
+            .prepare(query)
             .map_err(|e| Error::Agent(format!("Failed to prepare list_jobs: {}", e)))?;
 
-        let rows = stmt.query_map([], |row| {
-            let skills_raw: Option<String> = row.get("skills")?;
-            let skills = skills_raw.and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok());
-            let context_raw: Option<String> = row.get("context_from")?;
-            let context_from = context_raw.and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok());
-            let toolsets_raw: Option<String> = row.get("enabled_toolsets")?;
-            let toolsets = toolsets_raw.and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok());
+        let rows = stmt
+            .query_map([], |row| {
+                let skills_raw: Option<String> = row.get("skills")?;
+                let skills = skills_raw.and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok());
+                let context_raw: Option<String> = row.get("context_from")?;
+                let context_from =
+                    context_raw.and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok());
+                let toolsets_raw: Option<String> = row.get("enabled_toolsets")?;
+                let toolsets =
+                    toolsets_raw.and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok());
 
-            Ok(CronJob {
-                id: row.get("id")?,
-                name: row.get("name")?,
-                prompt: row.get("prompt")?,
-                schedule: row.get("schedule")?,
-                schedule_display: row.get("schedule_display")?,
-                repeat_times: row.get("repeat_times")?,
-                repeat_completed: row.get("repeat_completed")?,
-                deliver: row.get("deliver")?,
-                origin_platform: row.get("origin_platform")?,
-                origin_chat_id: row.get("origin_chat_id")?,
-                origin_thread_id: row.get("origin_thread_id")?,
-                skill: row.get("skill")?,
-                skills,
-                model: row.get("model")?,
-                provider: row.get("provider")?,
-                base_url: row.get("base_url")?,
-                script: row.get("script")?,
-                context_from,
-                enabled_toolsets: toolsets,
-                workdir: row.get("workdir")?,
-                no_agent: row.get("no_agent")?,
-                enabled: row.get("enabled")?,
-                state: row.get("state")?,
-                paused_at: row.get("paused_at")?,
-                paused_reason: row.get("paused_reason")?,
-                created_at: row.get("created_at")?,
-                next_run_at: row.get("next_run_at")?,
-                last_run_at: row.get("last_run_at")?,
-                last_status: row.get("last_status")?,
-                last_error: row.get("last_error")?,
-                last_delivery_error: row.get("last_delivery_error")?,
+                Ok(CronJob {
+                    id: row.get("id")?,
+                    name: row.get("name")?,
+                    prompt: row.get("prompt")?,
+                    schedule: row.get("schedule")?,
+                    schedule_display: row.get("schedule_display")?,
+                    repeat_times: row.get("repeat_times")?,
+                    repeat_completed: row.get("repeat_completed")?,
+                    deliver: row.get("deliver")?,
+                    origin_platform: row.get("origin_platform")?,
+                    origin_chat_id: row.get("origin_chat_id")?,
+                    origin_thread_id: row.get("origin_thread_id")?,
+                    skill: row.get("skill")?,
+                    skills,
+                    model: row.get("model")?,
+                    provider: row.get("provider")?,
+                    base_url: row.get("base_url")?,
+                    script: row.get("script")?,
+                    context_from,
+                    enabled_toolsets: toolsets,
+                    workdir: row.get("workdir")?,
+                    no_agent: row.get("no_agent")?,
+                    enabled: row.get("enabled")?,
+                    state: row.get("state")?,
+                    paused_at: row.get("paused_at")?,
+                    paused_reason: row.get("paused_reason")?,
+                    created_at: row.get("created_at")?,
+                    next_run_at: row.get("next_run_at")?,
+                    last_run_at: row.get("last_run_at")?,
+                    last_status: row.get("last_status")?,
+                    last_error: row.get("last_error")?,
+                    last_delivery_error: row.get("last_delivery_error")?,
+                })
             })
-        }).map_err(|e| Error::Agent(format!("Error listing cron jobs: {}", e)))?;
+            .map_err(|e| Error::Agent(format!("Error listing cron jobs: {}", e)))?;
 
         let mut jobs = Vec::new();
         for row in rows {
@@ -216,58 +224,68 @@ impl CronDb {
 
     pub fn get_job(&self, id: &str) -> Result<Option<CronJob>, Error> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare("SELECT * FROM cron_jobs WHERE id = ?1")
+        let mut stmt = conn
+            .prepare("SELECT * FROM cron_jobs WHERE id = ?1")
             .map_err(|e| Error::Agent(format!("Failed to prepare get_job: {}", e)))?;
-        
-        let job = stmt.query_row(params![id], |row| {
-            let skills_raw: Option<String> = row.get("skills")?;
-            let skills = skills_raw.and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok());
-            let context_raw: Option<String> = row.get("context_from")?;
-            let context_from = context_raw.and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok());
-            let toolsets_raw: Option<String> = row.get("enabled_toolsets")?;
-            let toolsets = toolsets_raw.and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok());
 
-            Ok(CronJob {
-                id: row.get("id")?,
-                name: row.get("name")?,
-                prompt: row.get("prompt")?,
-                schedule: row.get("schedule")?,
-                schedule_display: row.get("schedule_display")?,
-                repeat_times: row.get("repeat_times")?,
-                repeat_completed: row.get("repeat_completed")?,
-                deliver: row.get("deliver")?,
-                origin_platform: row.get("origin_platform")?,
-                origin_chat_id: row.get("origin_chat_id")?,
-                origin_thread_id: row.get("origin_thread_id")?,
-                skill: row.get("skill")?,
-                skills,
-                model: row.get("model")?,
-                provider: row.get("provider")?,
-                base_url: row.get("base_url")?,
-                script: row.get("script")?,
-                context_from,
-                enabled_toolsets: toolsets,
-                workdir: row.get("workdir")?,
-                no_agent: row.get("no_agent")?,
-                enabled: row.get("enabled")?,
-                state: row.get("state")?,
-                paused_at: row.get("paused_at")?,
-                paused_reason: row.get("paused_reason")?,
-                created_at: row.get("created_at")?,
-                next_run_at: row.get("next_run_at")?,
-                last_run_at: row.get("last_run_at")?,
-                last_status: row.get("last_status")?,
-                last_error: row.get("last_error")?,
-                last_delivery_error: row.get("last_delivery_error")?,
+        let job = stmt
+            .query_row(params![id], |row| {
+                let skills_raw: Option<String> = row.get("skills")?;
+                let skills = skills_raw.and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok());
+                let context_raw: Option<String> = row.get("context_from")?;
+                let context_from =
+                    context_raw.and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok());
+                let toolsets_raw: Option<String> = row.get("enabled_toolsets")?;
+                let toolsets =
+                    toolsets_raw.and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok());
+
+                Ok(CronJob {
+                    id: row.get("id")?,
+                    name: row.get("name")?,
+                    prompt: row.get("prompt")?,
+                    schedule: row.get("schedule")?,
+                    schedule_display: row.get("schedule_display")?,
+                    repeat_times: row.get("repeat_times")?,
+                    repeat_completed: row.get("repeat_completed")?,
+                    deliver: row.get("deliver")?,
+                    origin_platform: row.get("origin_platform")?,
+                    origin_chat_id: row.get("origin_chat_id")?,
+                    origin_thread_id: row.get("origin_thread_id")?,
+                    skill: row.get("skill")?,
+                    skills,
+                    model: row.get("model")?,
+                    provider: row.get("provider")?,
+                    base_url: row.get("base_url")?,
+                    script: row.get("script")?,
+                    context_from,
+                    enabled_toolsets: toolsets,
+                    workdir: row.get("workdir")?,
+                    no_agent: row.get("no_agent")?,
+                    enabled: row.get("enabled")?,
+                    state: row.get("state")?,
+                    paused_at: row.get("paused_at")?,
+                    paused_reason: row.get("paused_reason")?,
+                    created_at: row.get("created_at")?,
+                    next_run_at: row.get("next_run_at")?,
+                    last_run_at: row.get("last_run_at")?,
+                    last_status: row.get("last_status")?,
+                    last_error: row.get("last_error")?,
+                    last_delivery_error: row.get("last_delivery_error")?,
+                })
             })
-        }).optional().map_err(|e| Error::Agent(format!("Error fetching cron job: {}", e)))?;
-        
+            .optional()
+            .map_err(|e| Error::Agent(format!("Error fetching cron job: {}", e)))?;
+
         Ok(job)
     }
 
-    pub fn update_job(&self, id: &str, updates: std::collections::HashMap<String, Option<serde_json::Value>>) -> Result<Option<CronJob>, Error> {
+    pub fn update_job(
+        &self,
+        id: &str,
+        updates: std::collections::HashMap<String, Option<serde_json::Value>>,
+    ) -> Result<Option<CronJob>, Error> {
         let conn = self.conn.lock().unwrap();
-        
+
         if updates.is_empty() {
             return self.get_job(id);
         }
@@ -286,66 +304,83 @@ impl CronDb {
             }
         }
 
-        let sql = format!("UPDATE cron_jobs SET {} WHERE id = ?{}", set_clauses.join(", "), params_vec.len() + 1);
-        
+        let sql = format!(
+            "UPDATE cron_jobs SET {} WHERE id = ?{}",
+            set_clauses.join(", "),
+            params_vec.len() + 1
+        );
+
         let mut final_params = params_vec;
         final_params.push(Box::new(id.to_string()));
 
         conn.execute(&sql, rusqlite::params_from_iter(final_params))
             .map_err(|e| Error::Agent(format!("Failed to update cron job: {}", e)))?;
-        
-        let mut stmt = conn.prepare("SELECT * FROM cron_jobs WHERE id = ?1")
+
+        let mut stmt = conn
+            .prepare("SELECT * FROM cron_jobs WHERE id = ?1")
             .map_err(|e| Error::Agent(format!("Failed to prepare get_job: {}", e)))?;
-        
-        let job = stmt.query_row(params![id], |row| {
-            let skills_raw: Option<String> = row.get("skills")?;
-            let skills = skills_raw.and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok());
-            let context_raw: Option<String> = row.get("context_from")?;
-            let context_from = context_raw.and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok());
-            let toolsets_raw: Option<String> = row.get("enabled_toolsets")?;
-            let toolsets = toolsets_raw.and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok());
-            
-            Ok(CronJob {
-                id: row.get("id")?,
-                name: row.get("name")?,
-                prompt: row.get("prompt")?,
-                schedule: row.get("schedule")?,
-                schedule_display: row.get("schedule_display")?,
-                repeat_times: row.get("repeat_times")?,
-                repeat_completed: row.get("repeat_completed")?,
-                deliver: row.get("deliver")?,
-                origin_platform: row.get("origin_platform")?,
-                origin_chat_id: row.get("origin_chat_id")?,
-                origin_thread_id: row.get("origin_thread_id")?,
-                skill: row.get("skill")?,
-                skills,
-                model: row.get("model")?,
-                provider: row.get("provider")?,
-                base_url: row.get("base_url")?,
-                script: row.get("script")?,
-                context_from,
-                enabled_toolsets: toolsets,
-                workdir: row.get("workdir")?,
-                no_agent: row.get("no_agent")?,
-                enabled: row.get("enabled")?,
-                state: row.get("state")?,
-                paused_at: row.get("paused_at")?,
-                paused_reason: row.get("paused_reason")?,
-                created_at: row.get("created_at")?,
-                next_run_at: row.get("next_run_at")?,
-                last_run_at: row.get("last_run_at")?,
-                last_status: row.get("last_status")?,
-                last_error: row.get("last_error")?,
-                last_delivery_error: row.get("last_delivery_error")?,
+
+        let job = stmt
+            .query_row(params![id], |row| {
+                let skills_raw: Option<String> = row.get("skills")?;
+                let skills = skills_raw.and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok());
+                let context_raw: Option<String> = row.get("context_from")?;
+                let context_from =
+                    context_raw.and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok());
+                let toolsets_raw: Option<String> = row.get("enabled_toolsets")?;
+                let toolsets =
+                    toolsets_raw.and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok());
+
+                Ok(CronJob {
+                    id: row.get("id")?,
+                    name: row.get("name")?,
+                    prompt: row.get("prompt")?,
+                    schedule: row.get("schedule")?,
+                    schedule_display: row.get("schedule_display")?,
+                    repeat_times: row.get("repeat_times")?,
+                    repeat_completed: row.get("repeat_completed")?,
+                    deliver: row.get("deliver")?,
+                    origin_platform: row.get("origin_platform")?,
+                    origin_chat_id: row.get("origin_chat_id")?,
+                    origin_thread_id: row.get("origin_thread_id")?,
+                    skill: row.get("skill")?,
+                    skills,
+                    model: row.get("model")?,
+                    provider: row.get("provider")?,
+                    base_url: row.get("base_url")?,
+                    script: row.get("script")?,
+                    context_from,
+                    enabled_toolsets: toolsets,
+                    workdir: row.get("workdir")?,
+                    no_agent: row.get("no_agent")?,
+                    enabled: row.get("enabled")?,
+                    state: row.get("state")?,
+                    paused_at: row.get("paused_at")?,
+                    paused_reason: row.get("paused_reason")?,
+                    created_at: row.get("created_at")?,
+                    next_run_at: row.get("next_run_at")?,
+                    last_run_at: row.get("last_run_at")?,
+                    last_status: row.get("last_status")?,
+                    last_error: row.get("last_error")?,
+                    last_delivery_error: row.get("last_delivery_error")?,
+                })
             })
-        }).optional().map_err(|e| Error::Agent(format!("Error fetching updated cron job: {}", e)))?;
-        
+            .optional()
+            .map_err(|e| Error::Agent(format!("Error fetching updated cron job: {}", e)))?;
+
         Ok(job)
     }
 
-    pub fn mark_job_run(&self, id: &str, success: bool, error: Option<String>, delivery_error: Option<String>, next_run_at: Option<String>) -> Result<(), Error> {
+    pub fn mark_job_run(
+        &self,
+        id: &str,
+        success: bool,
+        error: Option<String>,
+        delivery_error: Option<String>,
+        next_run_at: Option<String>,
+    ) -> Result<(), Error> {
         let conn = self.conn.lock().unwrap();
-        
+
         conn.execute(
             "UPDATE cron_jobs SET 
                 last_run_at = ?1, 
@@ -363,7 +398,8 @@ impl CronDb {
                 next_run_at,
                 id
             ],
-        ).map_err(|e| Error::Agent(format!("Failed to mark cron job run: {}", e)))?;
+        )
+        .map_err(|e| Error::Agent(format!("Failed to mark cron job run: {}", e)))?;
 
         Ok(())
     }
@@ -373,7 +409,8 @@ impl CronDb {
         conn.execute(
             "UPDATE cron_jobs SET next_run_at = ?1 WHERE id = ?2",
             params![next_run_at, id],
-        ).map_err(|e| Error::Agent(format!("Failed to set next run for cron job: {}", e)))?;
+        )
+        .map_err(|e| Error::Agent(format!("Failed to set next run for cron job: {}", e)))?;
         Ok(())
     }
 
@@ -388,52 +425,57 @@ impl CronDb {
     pub fn get_due_jobs(&self) -> Result<Vec<CronJob>, Error> {
         let conn = self.conn.lock().unwrap();
         let now = chrono::Utc::now().to_rfc3339();
-        
-        let mut stmt = conn.prepare("SELECT * FROM cron_jobs WHERE enabled = 1 AND next_run_at <= ?1")
+
+        let mut stmt = conn
+            .prepare("SELECT * FROM cron_jobs WHERE enabled = 1 AND next_run_at <= ?1")
             .map_err(|e| Error::Agent(format!("Failed to prepare get_due_jobs: {}", e)))?;
 
-        let rows = stmt.query_map(params![now], |row| {
-            let skills_raw: Option<String> = row.get("skills")?;
-            let skills = skills_raw.and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok());
-            let context_raw: Option<String> = row.get("context_from")?;
-            let context_from = context_raw.and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok());
-            let toolsets_raw: Option<String> = row.get("enabled_toolsets")?;
-            let toolsets = toolsets_raw.and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok());
+        let rows = stmt
+            .query_map(params![now], |row| {
+                let skills_raw: Option<String> = row.get("skills")?;
+                let skills = skills_raw.and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok());
+                let context_raw: Option<String> = row.get("context_from")?;
+                let context_from =
+                    context_raw.and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok());
+                let toolsets_raw: Option<String> = row.get("enabled_toolsets")?;
+                let toolsets =
+                    toolsets_raw.and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok());
 
-            Ok(CronJob {
-                id: row.get("id")?,
-                name: row.get("name")?,
-                prompt: row.get("prompt")?,
-                schedule: row.get("schedule")?,
-                schedule_display: row.get("schedule_display")?,
-                repeat_times: row.get("repeat_times")?,
-                repeat_completed: row.get("repeat_completed")?,
-                deliver: row.get("deliver")?,
-                origin_platform: row.get("origin_platform")?,
-                origin_chat_id: row.get("origin_chat_id")?,
-                origin_thread_id: row.get("origin_thread_id")?,
-                skill: row.get("skill")?,
-                skills,
-                model: row.get("model")?,
-                provider: row.get("provider")?,
-                base_url: row.get("base_url")?,
-                script: row.get("script")?,
-                context_from,
-                enabled_toolsets: toolsets,
-                workdir: row.get("workdir")?,
-                no_agent: row.get("no_agent")?,
-                enabled: row.get("enabled")?,
-                state: row.get("state")?,
-                paused_at: row.get("paused_at")?,
-                paused_reason: row.get("paused_reason")?,
-                created_at: row.get("created_at")?,
-                next_run_at: row.get("next_run_at")?,
-                last_run_at: row.get("last_run_at")?,
-                last_status: row.get("last_status")?,
-                last_error: row.get("last_error")?,
-                last_delivery_error: row.get("last_delivery_error")?,
+                Ok(CronJob {
+                    id: row.get("id")?,
+                    name: row.get("name")?,
+                    prompt: row.get("prompt")?,
+                    schedule: row.get("schedule")?,
+                    schedule_display: row.get("schedule_display")?,
+                    repeat_times: row.get("repeat_times")?,
+                    repeat_completed: row.get("repeat_completed")?,
+                    deliver: row.get("deliver")?,
+                    origin_platform: row.get("origin_platform")?,
+                    origin_chat_id: row.get("origin_chat_id")?,
+                    origin_thread_id: row.get("origin_thread_id")?,
+                    skill: row.get("skill")?,
+                    skills,
+                    model: row.get("model")?,
+                    provider: row.get("provider")?,
+                    base_url: row.get("base_url")?,
+                    script: row.get("script")?,
+                    context_from,
+                    enabled_toolsets: toolsets,
+                    workdir: row.get("workdir")?,
+                    no_agent: row.get("no_agent")?,
+                    enabled: row.get("enabled")?,
+                    state: row.get("state")?,
+                    paused_at: row.get("paused_at")?,
+                    paused_reason: row.get("paused_reason")?,
+                    created_at: row.get("created_at")?,
+                    next_run_at: row.get("next_run_at")?,
+                    last_run_at: row.get("last_run_at")?,
+                    last_status: row.get("last_status")?,
+                    last_error: row.get("last_error")?,
+                    last_delivery_error: row.get("last_delivery_error")?,
+                })
             })
-        }).map_err(|e| Error::Agent(format!("Error fetching due cron jobs: {}", e)))?;
+            .map_err(|e| Error::Agent(format!("Error fetching due cron jobs: {}", e)))?;
 
         let mut jobs = Vec::new();
         for row in rows {

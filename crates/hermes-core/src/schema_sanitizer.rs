@@ -387,23 +387,21 @@ mod tests {
 
     #[test]
     fn test_sanitize_tool_schemas() {
-        let mut tools = vec![
-            json!({
-                "type": "function",
-                "function": {
-                    "name": "test_tool",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "cmd": {
-                                "type": "string",
-                                "enum": ["ls", "exec", "cat"]
-                            }
+        let mut tools = vec![json!({
+            "type": "function",
+            "function": {
+                "name": "test_tool",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "cmd": {
+                            "type": "string",
+                            "enum": ["ls", "exec", "cat"]
                         }
                     }
                 }
-            }),
-        ];
+            }
+        })];
         sanitize_tool_schemas(&mut tools).unwrap();
         let params = &tools[0]["function"]["parameters"]["properties"]["cmd"];
         let enm = params["enum"].as_array().unwrap();
