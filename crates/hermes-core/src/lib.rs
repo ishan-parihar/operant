@@ -59,6 +59,9 @@ pub mod environments;
 pub mod error;
 pub mod fuzzy_match;
 pub mod gateway;
+pub mod gateway_hooks;
+pub mod gateway_pipeline;
+pub mod gateway_session;
 pub mod interrupt;
 pub mod kanban;
 pub mod managed_tool_gateway;
@@ -116,9 +119,10 @@ pub use environments::{
 pub use error::{Error, Result};
 pub use gateway::{
     format_startup_message, handle_admin_command, ChannelDirectory, ChannelInfo, ChannelType,
-    Gateway, GatewayConfig, GatewayStats, PlatformAdapter, PlatformSession, SessionStore, UserInfo,
-    WebhookAdapter,
+    Gateway, GatewayConfig, GatewayStats, PlatformAdapter, PlatformRegistry, PlatformSession,
+    SessionStore, UserInfo, WebhookAdapter,
 };
+pub use gateway_session::PersistentSessionStore;
 pub use managed_tool_gateway::{
     GatewayConfig as ManagedGatewayConfig, ManagedToolGateway, UrlPattern,
 };

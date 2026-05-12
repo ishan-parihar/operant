@@ -47,6 +47,33 @@ pub enum AuthSubcommand {
 
     /// Show which providers have credentials configured.
     Status,
+
+    /// Manage Spotify credentials
+    Spotify {
+        #[command(subcommand)]
+        cmd: SpotifyCommand,
+    },
+}
+
+/// Manage Spotify API credentials.
+#[derive(Debug, Clone, Subcommand)]
+pub enum SpotifyCommand {
+    /// Configure Spotify API credentials
+    Configure {
+        /// Spotify client ID
+        #[arg(long)]
+        client_id: Option<String>,
+        /// Spotify client secret
+        #[arg(long)]
+        client_secret: Option<String>,
+        /// Redirect URI
+        #[arg(long, default_value = "http://localhost:8888/callback")]
+        redirect_uri: String,
+    },
+    /// Show current Spotify auth status
+    Status,
+    /// Clear Spotify credentials
+    Clear,
 }
 
 /// Manage fallback models.
@@ -104,6 +131,7 @@ pub async fn handle_auth_command(config: &AppConfig, cmd: AuthSubcommand) -> Res
         AuthSubcommand::Remove { provider } => handle_auth_remove(&provider),
         AuthSubcommand::Reset => handle_auth_reset(),
         AuthSubcommand::Status => handle_auth_status(config),
+        AuthSubcommand::Spotify { cmd } => handle_spotify_command(cmd),
     }
 }
 
@@ -265,6 +293,117 @@ fn handle_auth_status(config: &AppConfig) -> Result<()> {
 
     println!("─────────────────────────────────────────────────────");
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Spotify handlers
+// ---------------------------------------------------------------------------
+
+/// In-memory storage for Spotify credentials (ephemeral, for this session).
+static SPOTIFY_CLIENT_ID: std::sync::LazyLock<std::sync::Mutex<Option<String>>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(None));
+static SPOTIFY_CLIENT_SECRET: std::sync::LazyLock<std::sync::Mutex<Option<String>>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(None));
+static SPOTIFY_REDIRECT_URI: std::sync::LazyLock<std::sync::Mutex<String>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new("http://localhost:8888/callback".to_string()));
+
+/// Dispatch and execute a Spotify subcommand.
+fn handle_spotify_command(cmd: SpotifyCommand) -> Result<()> {
+    match cmd {
+        SpotifyCommand::Configure {
+            client_id,
+            client_secret,
+            redirect_uri,
+        } => handle_spotify_configure(client_id, client_secret, redirect_uri),
+        SpotifyCommand::Status => handle_spotify_status(),
+        SpotifyCommand::Clear => handle_spotify_clear(),
+    }
+}
+
+/// Configure Spotify API credentials.
+fn handle_spotify_configure(
+    client_id: Option<String>,
+    client_secret: Option<String>,
+    redirect_uri: String,
+) -> Result<()> {
+    if let Some(id) = &client_id {
+        if let Ok(mut store) = SPOTIFY_CLIENT_ID.lock() {
+            *store = Some(id.clone());
+        }
+    }
+    if let Some(secret) = &client_secret {
+        if let Ok(mut store) = SPOTIFY_CLIENT_SECRET.lock() {
+            *store = Some(secret.clone());
+        }
+    }
+    if let Ok(mut store) = SPOTIFY_REDIRECT_URI.lock() {
+        *store = redirect_uri.clone();
+    }
+
+    println!("Spotify credentials configured for this session.");
+    if client_id.is_some() {
+        println!("  client_id:     set");
+    }
+    if client_secret.is_some() {
+        println!("  client_secret: set");
+    }
+    println!("  redirect_uri:  {}", redirect_uri);
+    Ok(())
+}
+
+/// Show current Spotify auth status.
+fn handle_spotify_status() -> Result<()> {
+    let client_id = SPOTIFY_CLIENT_ID.lock().ok().and_then(|s| s.clone());
+    let client_secret = SPOTIFY_CLIENT_SECRET.lock().ok().and_then(|s| s.clone());
+    let redirect_uri = SPOTIFY_REDIRECT_URI
+        .lock()
+        .ok()
+        .map(|s| s.clone())
+        .unwrap_or_else(|| "http://localhost:8888/callback".to_string());
+
+    println!("── Spotify Auth Status ────────────────────────────────");
+
+    match (&client_id, &client_secret) {
+        (Some(_), Some(_)) => println!("  Status:   fully configured"),
+        (Some(_), None) => println!("  Status:   partially configured (missing client_secret)"),
+        (None, Some(_)) => println!("  Status:   partially configured (missing client_id)"),
+        (None, None) => println!("  Status:   not configured"),
+    }
+
+    println!("  Client ID:     {}", credential_hint(&client_id));
+    println!("  Client Secret: {}", credential_hint(&client_secret));
+    println!("  Redirect URI:  {}", redirect_uri);
+    println!();
+    println!("  Use `hermes auth spotify configure` to set credentials.");
+    println!("─────────────────────────────────────────────────────");
+    Ok(())
+}
+
+/// Clear Spotify credentials from the current session.
+fn handle_spotify_clear() -> Result<()> {
+    if let Ok(mut store) = SPOTIFY_CLIENT_ID.lock() {
+        *store = None;
+    }
+    if let Ok(mut store) = SPOTIFY_CLIENT_SECRET.lock() {
+        *store = None;
+    }
+    if let Ok(mut store) = SPOTIFY_REDIRECT_URI.lock() {
+        *store = "http://localhost:8888/callback".to_string();
+    }
+    println!("Spotify credentials cleared for this session.");
+    Ok(())
+}
+
+/// Return a display hint for an optional credential value.
+/// Shows the first 4 characters followed by "..." if set, or "(not set)".
+fn credential_hint(value: &Option<String>) -> String {
+    match value {
+        Some(v) if !v.is_empty() => {
+            let prefix: String = v.chars().take(4).collect();
+            format!("{}...", prefix)
+        }
+        _ => "(not set)".to_string(),
+    }
 }
 
 // ---------------------------------------------------------------------------

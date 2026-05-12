@@ -75,6 +75,23 @@ pub enum ProfileSubcommand {
         /// Name for the imported profile (defaults to the name field in the file)
         name: Option<String>,
     },
+    /// Install a profile from a source path
+    Install {
+        /// Profile name
+        name: String,
+        /// Source TOML file path
+        source: Option<String>,
+    },
+    /// Update a profile (or all if no name given)
+    Update {
+        /// Profile name to update; updates all if omitted
+        name: Option<String>,
+    },
+    /// Show detailed info about a profile
+    Info {
+        /// Profile name to inspect
+        name: String,
+    },
 }
 
 /// A saved Hermes profile persisted as a TOML file.
@@ -295,6 +312,9 @@ pub async fn handle_profile_command(config: &AppConfig, cmd: ProfileSubcommand) 
         } => cmd_rename(old_name, new_name),
         ProfileSubcommand::Export { name, output } => cmd_export(name, output),
         ProfileSubcommand::Import { path, name } => cmd_import(path, name),
+        ProfileSubcommand::Install { name, source } => cmd_install(config, name, source),
+        ProfileSubcommand::Update { name } => cmd_update(name),
+        ProfileSubcommand::Info { name } => cmd_info(name),
     }
 }
 
@@ -557,5 +577,111 @@ fn cmd_import(path: PathBuf, rename: Option<String>) -> Result<()> {
         profile.name,
         path.display()
     );
+    Ok(())
+}
+
+/// Install a profile from a source TOML file path.
+fn cmd_install(config: &AppConfig, name: String, source: Option<String>) -> Result<()> {
+    ensure_profiles_dir()?;
+
+    if profile_path(&name).exists() {
+        anyhow::bail!("Profile '{name}' already exists");
+    }
+
+    let profile = match source {
+        Some(path) => {
+            let content = std::fs::read_to_string(&path)
+                .with_context(|| format!("Failed to read source '{}'", path))?;
+            let mut p: Profile = toml::from_str(&content)
+                .with_context(|| format!("Failed to parse source '{}'", path))?;
+            p.name = name.clone();
+            p.updated_at = iso_timestamp_now();
+            p
+        }
+        None => {
+            let now = iso_timestamp_now();
+            Profile {
+                name: name.clone(),
+                model: config.agent.model.clone(),
+                base_url: {
+                    let url = &config.client.base_url;
+                    if url.is_empty() || url == "https://api.openai.com/v1" {
+                        None
+                    } else {
+                        Some(url.clone())
+                    }
+                },
+                api_key_hint: build_api_key_hint(config.client.api_key.as_ref()),
+                created_at: now.clone(),
+                updated_at: now,
+            }
+        }
+    };
+
+    write_profile(&profile)?;
+    println!("Installed profile '{name}'");
+    Ok(())
+}
+
+/// Update a profile's timestamp (or all profiles if no name given).
+fn cmd_update(name: Option<String>) -> Result<()> {
+    ensure_profiles_dir()?;
+
+    let names = match name {
+        Some(n) => {
+            if !profile_path(&n).exists() {
+                anyhow::bail!("Profile '{n}' does not exist");
+            }
+            vec![n]
+        }
+        None => list_profile_names()?,
+    };
+
+    if names.is_empty() {
+        println!("No profiles to update.");
+        return Ok(());
+    }
+
+    for n in &names {
+        let mut profile = read_profile(n)
+            .with_context(|| format!("Failed to read profile '{n}'"))?;
+        profile.updated_at = iso_timestamp_now();
+        write_profile(&profile)?;
+        println!("Updated profile '{n}'");
+    }
+
+    Ok(())
+}
+
+/// Show detailed info about a profile.
+fn cmd_info(name: String) -> Result<()> {
+    ensure_profiles_dir()?;
+
+    if !profile_path(&name).exists() {
+        anyhow::bail!("Profile '{name}' does not exist");
+    }
+
+    let profile = read_profile(&name)?;
+    let active = read_active_profile()?;
+    let is_active = active.as_deref() == Some(&name);
+
+    println!("── Profile: {} ──────────────────────────", name);
+    if is_active {
+        println!("  Status:        (active)");
+    }
+    println!("  Name:          {}", profile.name);
+    println!("  Model:         {}", profile.model);
+    println!(
+        "  Base URL:      {}",
+        profile.base_url.as_deref().unwrap_or("(default)")
+    );
+    println!(
+        "  API key:       {}",
+        profile.api_key_hint.as_deref().unwrap_or("(not set)")
+    );
+    println!("  Created:       {}", profile.created_at);
+    println!("  Updated:       {}", profile.updated_at);
+    println!("───────────────────────────────────────────");
+
     Ok(())
 }

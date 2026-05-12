@@ -18,6 +18,10 @@ use uuid::Uuid;
 use crate::config::runtime_config;
 use crate::error::Result;
 
+pub mod platforms;
+
+pub use platforms::PlatformRegistry;
+
 /// Configuration for the gateway
 #[derive(Debug, Clone)]
 pub struct GatewayConfig {

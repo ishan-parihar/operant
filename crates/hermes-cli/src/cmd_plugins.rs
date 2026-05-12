@@ -43,6 +43,11 @@ pub enum PluginsSubcommand {
         /// Name of the plugin to disable
         name: String,
     },
+    /// Toggle a plugin on/off
+    Toggle {
+        /// Plugin name to toggle
+        name: String,
+    },
 }
 
 pub async fn handle_plugins_command(config: &AppConfig, cmd: PluginsSubcommand) -> Result<()> {
@@ -56,6 +61,7 @@ pub async fn handle_plugins_command(config: &AppConfig, cmd: PluginsSubcommand) 
         PluginsSubcommand::Remove { name } => remove_plugin(config, &name).await,
         PluginsSubcommand::Enable { name } => enable_plugin(config, &name).await,
         PluginsSubcommand::Disable { name } => disable_plugin(config, &name).await,
+        PluginsSubcommand::Toggle { name } => toggle_plugin(config, &name).await,
     }
 }
 
@@ -179,6 +185,29 @@ async fn disable_plugin(config: &AppConfig, name: &str) -> Result<()> {
         .with_context(|| format!("Failed to disable plugin '{}'", name))?;
 
     println!("Plugin '{}' has been disabled.", name);
+    Ok(())
+}
+
+/// Toggle a plugin between enabled and disabled states.
+async fn toggle_plugin(config: &AppConfig, name: &str) -> Result<()> {
+    let dir = plugins_dir(config)?;
+    let plugin_dir = dir.join(name);
+    let marker = dir.join(format!("{}.enabled", name));
+
+    if !plugin_dir.exists() {
+        anyhow::bail!("Plugin '{}' is not installed.", name);
+    }
+
+    if marker.exists() {
+        std::fs::remove_file(&marker)
+            .with_context(|| format!("Failed to disable plugin '{}'", name))?;
+        println!("Plugin '{}' has been disabled.", name);
+    } else {
+        std::fs::write(&marker, "")
+            .with_context(|| format!("Failed to enable plugin '{}'", name))?;
+        println!("Plugin '{}' has been enabled.", name);
+    }
+
     Ok(())
 }
 

@@ -53,6 +53,30 @@ pub enum MemorySubcommand {
     Stats,
     /// Show the user profile stored in memory
     Profile,
+    /// Import memories from a file
+    Import {
+        /// Path to the source file
+        source: String,
+    },
+    /// Export memories to a file
+    Export {
+        /// Output file path (defaults to memories.json in current directory)
+        output: Option<String>,
+        /// Output format (json or text, default: json)
+        #[arg(long)]
+        format: Option<String>,
+    },
+    /// Prune old/low-importance memories
+    Prune {
+        /// Prune memories older than this many days
+        older_than_days: Option<u64>,
+    },
+    /// Clear all memories (with confirmation)
+    Clear {
+        /// Skip confirmation prompt
+        #[arg(long, action = clap::ArgAction::SetTrue)]
+        confirm: bool,
+    },
 }
 
 /// Dispatch a memory subcommand.
@@ -74,6 +98,10 @@ pub async fn handle_memory_command(
         MemorySubcommand::Delete { id } => cmd_delete(&id).await,
         MemorySubcommand::Stats => cmd_stats().await,
         MemorySubcommand::Profile => cmd_profile().await,
+        MemorySubcommand::Import { source } => cmd_import(&source).await,
+        MemorySubcommand::Export { output, format } => cmd_export(output, format).await,
+        MemorySubcommand::Prune { older_than_days } => cmd_prune(older_than_days).await,
+        MemorySubcommand::Clear { confirm } => cmd_clear(confirm).await,
     }
 }
 
@@ -332,5 +360,131 @@ async fn cmd_profile() -> Result<()> {
         }
     }
 
+    Ok(())
+}
+
+async fn cmd_import(source: &str) -> Result<()> {
+    let content = std::fs::read_to_string(source)
+        .with_context(|| format!("Failed to read '{}'", source))?;
+
+    let mm = loaded_memory_manager().await?;
+    let block_id = format!(
+        "import_{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    );
+    let block = MemoryBlock::new(&block_id, "import", &content);
+    mm.store(block).await;
+
+    println!("Imported memory from '{}'", source);
+    Ok(())
+}
+
+async fn cmd_export(
+    output: Option<String>,
+    format: Option<String>,
+) -> Result<()> {
+    let mm = loaded_memory_manager().await?;
+    let blocks = mm.search("").await;
+
+    let fmt = format.as_deref().unwrap_or("json");
+    let output_path = output.unwrap_or_else(|| "memories.json".to_string());
+
+    match fmt {
+        "json" => {
+            let json = serde_json::to_string_pretty(&blocks)
+                .context("Failed to serialize memories to JSON")?;
+            std::fs::write(&output_path, &json)
+                .with_context(|| format!("Failed to write to '{}'", output_path))?;
+        }
+        "text" => {
+            let mut text = String::new();
+            for block in &blocks {
+                text.push_str(&format!(
+                    "[{}] {} (importance: {})\n  {}\n\n",
+                    block.block_type, block.id, block.importance, block.content
+                ));
+            }
+            std::fs::write(&output_path, &text)
+                .with_context(|| format!("Failed to write to '{}'", output_path))?;
+        }
+        _ => anyhow::bail!(
+            "Unsupported format '{}'. Use 'json' or 'text'.",
+            fmt
+        ),
+    }
+
+    println!(
+        "Exported {} memory block(s) to {}",
+        blocks.len(),
+        output_path
+    );
+    Ok(())
+}
+
+async fn cmd_prune(older_than_days: Option<u64>) -> Result<()> {
+    let mm = loaded_memory_manager().await?;
+    let blocks = mm.search("").await;
+
+    let days = older_than_days.unwrap_or(90);
+    let cutoff = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64
+        - (days as i64 * 86_400);
+
+    let to_prune: Vec<_> = blocks
+        .iter()
+        .filter(|b| b.created_at < cutoff && b.importance < 30)
+        .collect();
+
+    if to_prune.is_empty() {
+        println!(
+            "No memories older than {} days with low importance found.",
+            days
+        );
+        return Ok(());
+    }
+
+    println!(
+        "Found {} memory block(s) eligible for pruning (older than {} days, importance < 30):",
+        to_prune.len(),
+        days
+    );
+    for block in &to_prune {
+        println!(
+            "  [{}] {} (importance: {}, created: {})",
+            block.block_type,
+            block.id,
+            block.importance,
+            block.created_at
+        );
+    }
+    println!();
+    println!(
+        "Use `hermes memory clear` with confirmation to remove all memories."
+    );
+
+    Ok(())
+}
+
+async fn cmd_clear(confirm: bool) -> Result<()> {
+    if !confirm {
+        println!(
+            "Warning: This will permanently delete ALL memories, sessions, and profiles."
+        );
+        println!("Use --confirm to proceed.");
+        return Ok(());
+    }
+
+    let mm = loaded_memory_manager().await?;
+    mm.clear_all().await;
+    mm.save_to_disk()
+        .await
+        .context("Failed to save after clearing")?;
+
+    println!("All memories, sessions, and profiles have been cleared.");
     Ok(())
 }

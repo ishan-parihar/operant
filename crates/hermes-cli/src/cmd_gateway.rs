@@ -6,7 +6,7 @@
 //! it is a read-only management view backed by configuration and (when
 //! available) the in-process gateway state.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::Subcommand;
 use hermes_core::config::AppConfig;
 
@@ -82,6 +82,12 @@ pub enum GatewaySubcommand {
         #[command(subcommand)]
         action: PairingAction,
     },
+    /// Start the gateway and platform adapters
+    Start,
+    /// Stop the gateway and platform adapters
+    Stop,
+    /// Restart the gateway
+    Restart,
 }
 
 // ── Public dispatcher ─────────────────────────────────────────────────
@@ -110,6 +116,27 @@ pub async fn handle_gateway_command(config: &AppConfig, cmd: GatewaySubcommand) 
             PairingAction::Approve { code } => cmd_pairing_approve(config, &code),
             PairingAction::Revoke { id } => cmd_pairing_revoke(config, &id),
         },
+        GatewaySubcommand::Start => {
+            crate::gateway_runner::start_gateway(config)
+                .await
+                .map(|msg| {
+                    println!("{}", msg);
+                })
+        }
+        GatewaySubcommand::Stop => {
+            crate::gateway_runner::stop_gateway()
+                .await
+                .map(|msg| {
+                    println!("{}", msg);
+                })
+        }
+        GatewaySubcommand::Restart => {
+            crate::gateway_runner::restart_gateway(config)
+                .await
+                .map(|msg| {
+                    println!("{}", msg);
+                })
+        }
     }
 }
 
@@ -176,17 +203,20 @@ fn indicator(enabled: bool, has_token: bool) -> String {
     }
 }
 
-/// List active gateway sessions.
-///
-/// Without a running gateway instance this prints a placeholder message.
+/// List active gateway sessions from the persistent session store.
 fn cmd_sessions(config: &AppConfig) -> Result<()> {
-    let gw = &config.gateway;
+    let db_path = config
+        .database_path
+        .to_str()
+        .context("database_path is not valid UTF-8")?;
 
-    // Check whether any platform could produce sessions.
-    let any_platform = gw.telegram_enabled || gw.discord_enabled || gw.slack_enabled;
-    if !any_platform {
-        println!("No gateway platforms are enabled in config.");
-        println!("Enable a platform (telegram, discord, slack) in your config file first.");
+    let store =
+        hermes_core::PersistentSessionStore::open(db_path).context("Failed to open session store")?;
+
+    let sessions = store.list_active_sessions(None);
+
+    if sessions.is_empty() {
+        println!("No active gateway sessions.");
         return Ok(());
     }
 
@@ -195,15 +225,37 @@ fn cmd_sessions(config: &AppConfig) -> Result<()> {
     println!();
     println!("{:<22} {:<10} {:<28} {:<22} {:<22}", "Session ID", "Platform", "User ID", "Channel ID", "Created At");
     println!("{}", "-".repeat(110));
-    println!(
-        "{:<22} {:<10} {:<28} {:<22} {:<22}",
-        "(no active sessions)", "", "", "", ""
-    );
+    for s in &sessions {
+        println!(
+            "{:<22} {:<10} {:<28} {:<22} {:<22}",
+            truncate(&s.session_id, 20),
+            truncate(&s.platform, 8),
+            truncate(&s.platform_user_id, 26),
+            truncate(&s.platform_channel_id, 20),
+            fmt_ts_short(&s.created_at),
+        );
+    }
     println!();
-    println!("Start the gateway to see live sessions. Sessions are created");
-    println!("when users interact with the bot on a connected platform.");
-
+    println!("Total: {} session(s)", sessions.len());
     Ok(())
+}
+
+fn truncate(s: &str, max_len: usize) -> String {
+    if s.len() > max_len {
+        let boundary = (0..=max_len)
+            .rev()
+            .find(|&i| s.is_char_boundary(i))
+            .unwrap_or(0);
+        format!("{}…", &s[..boundary])
+    } else {
+        s.to_string()
+    }
+}
+
+fn fmt_ts_short(rfc3339: &str) -> String {
+    chrono::DateTime::parse_from_rfc3339(rfc3339)
+        .map(|dt| dt.format("%Y-%m-%d %H:%M").to_string())
+        .unwrap_or_else(|_| rfc3339.to_string())
 }
 
 /// List registered gateway channels.
