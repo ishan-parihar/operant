@@ -5,14 +5,13 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use futures::stream::BoxStream;
 use futures::StreamExt;
 use tokio::sync::{mpsc, RwLock};
 use tokio::time::timeout;
 use tracing::{debug, error, info, instrument, warn};
 
-use crate::client::{
-    ChatResponse, ChatStreamEvent, ChatStreamResponse, Message, OpenAIClient, ToolCall,
-};
+use crate::client::{ChatResponse, Message, ToolCall};
 use crate::config::{runtime_config, BehaviorSettings};
 use crate::context_files::{load_default_context_files, load_workspace_context};
 use crate::database::Database;
@@ -90,7 +89,7 @@ pub enum AgentEvent {
 /// Hermes Agent for tool orchestration
 pub struct HermesAgent {
     config: AgentConfig,
-    client: OpenAIClient,
+    client: Arc<dyn ModelClient>,
     registry: ToolRegistry,
     conversation: Arc<RwLock<Vec<Message>>>,
     event_tx: Option<mpsc::Sender<AgentEvent>>,
@@ -100,10 +99,10 @@ pub struct HermesAgent {
 
 impl HermesAgent {
     /// Create a new Hermes agent
-    pub fn new(config: AgentConfig, client: OpenAIClient, registry: ToolRegistry, database: Arc<Database>) -> Self {
+    pub fn new(config: AgentConfig, client: Box<dyn ModelClient>, registry: ToolRegistry, database: Arc<Database>) -> Self {
         Self {
             config,
-            client,
+            client: Arc::from(client),
             registry,
             conversation: Arc::new(RwLock::new(Vec::new())),
             event_tx: None,
@@ -115,14 +114,14 @@ impl HermesAgent {
     /// Create with event channel for streaming events
     pub fn with_events(
         config: AgentConfig,
-        client: OpenAIClient,
+        client: Box<dyn ModelClient>,
         registry: ToolRegistry,
         database: Arc<Database>,
         event_tx: mpsc::Sender<AgentEvent>,
     ) -> Self {
         Self {
             config,
-            client,
+            client: Arc::from(client),
             registry,
             conversation: Arc::new(RwLock::new(Vec::new())),
             event_tx: Some(event_tx),
@@ -216,17 +215,15 @@ impl HermesAgent {
             // Get tool schemas
             let tools = self.registry.get_schemas().await;
 
-            let response = if self.config.stream {
-                let stream = self
-                    .client
-                    .chat_streaming(&self.config.model, &messages, Some(&tools))
-                    .await?;
+            let request = ChatRequest::new(&self.config.model, messages.clone())
+                .with_tools(tools)
+                .with_stream(self.config.stream);
+
+            let response = if request.stream {
+                let stream = self.client.chat_streaming(request).await?;
                 self.process_stream(stream).await
             } else {
-                let response = self
-                    .client
-                    .chat(&self.config.model, &messages, Some(&tools))
-                    .await?;
+                let response = self.client.chat(request).await?;
                 self.process_response(response).await
             };
 
@@ -386,10 +383,16 @@ impl HermesAgent {
         });
     }
 
+    /// Access the underlying model client (useful for tools needing direct
+    /// access to the concrete provider client).
+    pub fn client(&self) -> &Arc<dyn ModelClient> {
+        &self.client
+    }
+
     /// Process streaming response with early tool detection
     async fn process_stream(
         &self,
-        mut stream: ChatStreamResponse,
+        mut stream: BoxStream<'static, Result<StreamChunk>>,
     ) -> Result<(String, String, Vec<ToolCall>)> {
         let mut parser = ToolCallStreamParser::new().on_tool_call(|tc| {
             let tc_id = tc.id.clone();
@@ -402,11 +405,11 @@ impl HermesAgent {
         let mut tool_calls: Vec<ToolCall> = Vec::new();
         let mut has_error = false;
 
-        while let Some(event_result) = stream.next().await {
-            match event_result {
-                Ok(event) => {
-                    // Process the event
-                    if let Some(reasoning) = extract_reasoning_from_event(&event) {
+        while let Some(chunk_result) = stream.next().await {
+            match chunk_result {
+                Ok(chunk) => {
+                    // Process reasoning from StreamChunk
+                    if let Some(reasoning) = chunk.reasoning {
                         let reasoning = strip_reasoning_tags(&reasoning);
                         if !reasoning.is_empty() {
                             accumulated_reasoning.push_str(&reasoning);
@@ -414,7 +417,8 @@ impl HermesAgent {
                         }
                     }
 
-                    if let Some(text) = extract_text_from_event(&event) {
+                    // Process content from StreamChunk
+                    if let Some(text) = chunk.content {
                         let (content_delta, reasoning_delta) = content_router.feed(&text);
 
                         if !content_delta.is_empty() {
@@ -441,10 +445,11 @@ impl HermesAgent {
                         }
                     }
 
-                    // Extract any tool calls from native provider tool-call deltas
-                    let chunk_tool_calls = extract_tool_calls_from_event(&event);
-                    for tc in chunk_tool_calls {
-                        merge_stream_tool_call(&mut tool_calls, tc);
+                    // Merge native provider tool-call deltas
+                    if let Some(chunk_tool_calls) = chunk.tool_calls {
+                        for tc in chunk_tool_calls {
+                            merge_stream_tool_call(&mut tool_calls, tc);
+                        }
                     }
                 }
                 Err(e) => {
@@ -622,39 +627,6 @@ impl HermesAgent {
     }
 }
 
-/// Extract text content from a streaming event
-fn extract_text_from_event(event: &ChatStreamEvent) -> Option<String> {
-    let mut text = String::new();
-
-    for choice in &event.choices {
-        if let Some(content) = &choice.delta.content {
-            text.push_str(content);
-        }
-    }
-
-    if text.is_empty() {
-        None
-    } else {
-        Some(text)
-    }
-}
-
-/// Extract reasoning content from a streaming event
-fn extract_reasoning_from_event(event: &ChatStreamEvent) -> Option<String> {
-    let mut reasoning = String::new();
-
-    for choice in &event.choices {
-        if let Some(content) = &choice.delta.reasoning_content {
-            reasoning.push_str(content);
-        }
-    }
-
-    if reasoning.is_empty() {
-        None
-    } else {
-        Some(reasoning)
-    }
-}
 
 #[derive(Debug, Default)]
 struct ThinkBlockRouter {
@@ -771,43 +743,6 @@ fn strip_reasoning_tags(text: &str) -> String {
     cleaned
 }
 
-/// Extract tool calls from a streaming event
-fn extract_tool_calls_from_event(event: &ChatStreamEvent) -> Vec<ToolCall> {
-    let mut tool_calls: Vec<ToolCall> = Vec::new();
-
-    for choice in &event.choices {
-        if let Some(delta_tool_calls) = &choice.delta.tool_calls {
-            for delta in delta_tool_calls {
-                if let Some(ref function) = delta.function {
-                    // Extract the tool call ID
-                    let id = delta.id.clone().unwrap_or_else(|| {
-                        format!("call_stream_{}_{}", delta.index, function.name)
-                    });
-
-                    // Create or update tool call
-                    if let Some(last) = tool_calls.last_mut() {
-                        if last.id == id {
-                            // Append to existing
-                            last.function.arguments.push_str(&function.arguments);
-                            continue;
-                        }
-                    }
-
-                    // New tool call
-                    tool_calls.push(ToolCall {
-                        id: id.clone(),
-                        function: crate::client::ToolCallFunction {
-                            name: function.name.clone(),
-                            arguments: function.arguments.clone(),
-                        },
-                    });
-                }
-            }
-        }
-    }
-
-    tool_calls
-}
 
 fn extract_tool_calls_from_choice(
     deltas: Option<Vec<crate::client::ToolCallDelta>>,
@@ -950,7 +885,7 @@ fn strip_tool_call_markup(content: &str) -> String {
 /// Builder for creating a HermesAgent
 pub struct HermesAgentBuilder {
     config: AgentConfig,
-    client: Option<OpenAIClient>,
+    client: Option<Box<dyn ModelClient>>,
     registry: Option<ToolRegistry>,
     memory_manager: Option<MemoryManager>,
     database: Option<Arc<Database>>,
@@ -1003,8 +938,8 @@ impl HermesAgentBuilder {
         self
     }
 
-    /// Set the OpenAI client
-    pub fn client(mut self, client: OpenAIClient) -> Self {
+    /// Set the model client
+    pub fn client(mut self, client: Box<dyn ModelClient>) -> Self {
         self.client = Some(client);
         self
     }
@@ -1029,9 +964,10 @@ impl HermesAgentBuilder {
 
     /// Build the agent
     pub fn build(self) -> Result<HermesAgent> {
-        let client = self.client.unwrap_or_else(|| {
-            OpenAIClient::from_env()
-                .unwrap_or_else(|_| OpenAIClient::new(crate::client::ClientConfig::default()))
+        let client: Box<dyn ModelClient> = self.client.unwrap_or_else(|| {
+            let openai = crate::client::OpenAIClient::from_env()
+                .unwrap_or_else(|_| crate::client::OpenAIClient::new(crate::client::ClientConfig::default()));
+            Box::new(crate::agent::clients::openai::OpenAIModelClient::new(openai))
         });
 
         let registry = self
@@ -1057,9 +993,90 @@ impl Default for HermesAgentBuilder {
     }
 }
 
+mod context_compressor;
+pub use context_compressor::{CompressionStrategy, ContextCompressor};
+
+mod prompt_builder;
+pub use prompt_builder::{ContextEntry, PromptBuilder};
+
+mod model_client;
+pub use model_client::{ChatRequest, ModelClient, StreamChunk};
+
+pub mod clients;
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::client::ChatStreamEvent;
+    use serial_test::serial;
+
+    #[allow(dead_code)]
+    fn extract_text_from_event(event: &ChatStreamEvent) -> Option<String> {
+        let mut text = String::new();
+
+        for choice in &event.choices {
+            if let Some(content) = &choice.delta.content {
+                text.push_str(content);
+            }
+        }
+
+        if text.is_empty() {
+            None
+        } else {
+            Some(text)
+        }
+    }
+
+    #[allow(dead_code)]
+    fn extract_reasoning_from_event(event: &ChatStreamEvent) -> Option<String> {
+        let mut reasoning = String::new();
+
+        for choice in &event.choices {
+            if let Some(content) = &choice.delta.reasoning_content {
+                reasoning.push_str(content);
+            }
+        }
+
+        if reasoning.is_empty() {
+            None
+        } else {
+            Some(reasoning)
+        }
+    }
+
+    #[allow(dead_code)]
+    fn extract_tool_calls_from_event(event: &ChatStreamEvent) -> Vec<ToolCall> {
+        let mut tool_calls: Vec<ToolCall> = Vec::new();
+
+        for choice in &event.choices {
+            if let Some(delta_tool_calls) = &choice.delta.tool_calls {
+                for delta in delta_tool_calls {
+                    if let Some(ref function) = delta.function {
+                        let id = delta.id.clone().unwrap_or_else(|| {
+                            format!("call_stream_{}_{}", delta.index, function.name)
+                        });
+
+                        if let Some(last) = tool_calls.last_mut() {
+                            if last.id == id {
+                                last.function.arguments.push_str(&function.arguments);
+                                continue;
+                            }
+                        }
+
+                        tool_calls.push(ToolCall {
+                            id: id.clone(),
+                            function: crate::client::ToolCallFunction {
+                                name: function.name.clone(),
+                                arguments: function.arguments.clone(),
+                            },
+                        });
+                    }
+                }
+            }
+        }
+
+        tool_calls
+    }
 
     #[test]
     fn test_default_config() {
@@ -1068,6 +1085,7 @@ mod tests {
         assert_eq!(config.max_iterations, 20);
     }
 
+    #[serial]
     #[tokio::test]
     async fn test_agent_builder() {
         let db = Arc::new(Database::init(std::path::PathBuf::from("test_agent_builder.db")).unwrap());
@@ -1084,8 +1102,12 @@ mod tests {
         let _ = std::fs::remove_file("test_agent_builder.db-shm");
     }
 
+    #[serial]
     #[tokio::test]
     async fn build_messages_injects_long_term_memory() {
+        use crate::agent::clients::openai::OpenAIModelClient;
+        use crate::client::OpenAIClient;
+
         let memory_manager = MemoryManager::new();
         memory_manager
             .store(
@@ -1097,7 +1119,7 @@ mod tests {
         let db = Database::init(std::path::PathBuf::from("test_db.sqlite")).unwrap();
         let agent = HermesAgent::new(
             AgentConfig::default(),
-            OpenAIClient::new(crate::client::ClientConfig::default()),
+            Box::new(OpenAIModelClient::new(OpenAIClient::new(crate::client::ClientConfig::default()))),
             ToolRegistry::new(Duration::from_secs(1)),
             Arc::new(db),
         )
@@ -1277,12 +1299,16 @@ mod tests {
         assert_eq!(rest, "");
     }
 
+    #[serial]
     #[tokio::test]
     async fn process_response_parses_xml_tool_calls_in_non_stream_mode() {
+        use crate::agent::clients::openai::OpenAIModelClient;
+        use crate::client::OpenAIClient;
+
         let db = Database::init(std::path::PathBuf::from("test_db_resp.sqlite")).unwrap();
         let agent = HermesAgent::new(
             AgentConfig::default(),
-            OpenAIClient::new(crate::client::ClientConfig::default()),
+            Box::new(OpenAIModelClient::new(OpenAIClient::new(crate::client::ClientConfig::default()))),
             ToolRegistry::new(Duration::from_secs(1)),
             Arc::new(db),
         );

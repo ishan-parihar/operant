@@ -2,11 +2,13 @@
 
 use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use tracing::debug;
 
-use crate::client::{Message, OpenAIClient, Role};
+use crate::agent::{ChatRequest, ModelClient};
+use crate::client::{Message, Role};
 use crate::error::{Error, Result};
 use crate::memory::{MemoryBlock, MemoryManager};
 
@@ -14,7 +16,7 @@ const DISTILLATION_SYSTEM_DIRECTIVE: &str = "Analyze the conversation history. E
 
 /// Distill durable facts from a completed session and persist them to long-term memory.
 pub async fn distill_session_to_memory(
-    client: OpenAIClient,
+    client: Arc<dyn ModelClient>,
     model: String,
     memory_manager: MemoryManager,
     history: Vec<Message>,
@@ -32,7 +34,8 @@ pub async fn distill_session_to_memory(
         Message::system(DISTILLATION_SYSTEM_DIRECTIVE),
         Message::user(format!("Conversation history:\n{}", transcript)),
     ];
-    let response = client.chat(&model, &messages, None).await?;
+    let request = ChatRequest::new(&model, messages);
+    let response = client.chat(request).await?;
     let content = response
         .choices
         .into_iter()
@@ -158,12 +161,16 @@ mod tests {
             .create_async()
             .await;
 
-        let client = OpenAIClient::new(ClientConfig {
+        use crate::agent::clients::openai::OpenAIModelClient;
+        use crate::client::OpenAIClient;
+
+        let raw_client = OpenAIClient::new(ClientConfig {
             base_url: format!("{}/v1", server.url()),
             api_key: None,
             timeout: Duration::from_secs(5),
             max_context_length: 128_000,
         });
+        let client: Arc<dyn ModelClient> = Arc::new(OpenAIModelClient::new(raw_client));
         let dir = test_dir("persist");
         let memory_manager = MemoryManager::with_storage_dir(dir.clone());
 

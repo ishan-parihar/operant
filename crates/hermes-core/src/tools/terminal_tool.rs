@@ -204,9 +204,74 @@ mod tests {
 
         let result = tool.execute(args, ToolContext::default()).await;
 
-        // This is a basic test to ensure the tool successfully runs directly
-        // Because of direct execution 'echo' won't process the quotes via shell, so stdout should literally be "'hello world'\n"
-        // Let's just check if it succeeds.
         assert!(result.success);
+        let v: Value = serde_json::from_str(&result.content).unwrap();
+        let stdout = v["stdout"].as_str().unwrap();
+        assert!(!stdout.is_empty(), "stdout should not be empty");
+    }
+
+    #[tokio::test]
+    async fn test_terminal_tool_empty_command() {
+        let tool = TerminalTool;
+        let args = json!({ "command": "" });
+        let result = tool.execute(args, ToolContext::default()).await;
+        assert!(!result.success);
+        let err = result.error.unwrap();
+        assert!(err.contains("Empty command"));
+    }
+
+    #[tokio::test]
+    async fn test_terminal_tool_command_fails() {
+        let tool = TerminalTool;
+        let args = json!({ "command": "false" });
+        let result = tool.execute(args, ToolContext::default()).await;
+        assert!(result.success); // Non-zero exit is still a "successful" execution
+        let v: Value = serde_json::from_str(&result.content).unwrap();
+        assert_eq!(v["success"], false);
+        assert_eq!(v["exit_code"], 1);
+    }
+
+    #[tokio::test]
+    async fn test_terminal_tool_shell_mode() {
+        let tool = TerminalTool;
+        let args = json!({
+            "command": "echo hello",
+            "use_shell": true
+        });
+        let result = tool.execute(args, ToolContext::default()).await;
+        assert!(result.success);
+        let v: Value = serde_json::from_str(&result.content).unwrap();
+        assert_eq!(v["exit_code"], 0);
+        let stdout = v["stdout"].as_str().unwrap();
+        assert!(stdout.contains("hello"));
+    }
+
+    #[tokio::test]
+    async fn test_terminal_tool_env_vars() {
+        let tool = TerminalTool;
+        let args = json!({
+            "command": "echo $HERMES_TEST_VAR",
+            "envVars": { "HERMES_TEST_VAR": "custom_value" },
+            "useShell": true
+        });
+        let result = tool.execute(args, ToolContext::default()).await;
+        assert!(result.success);
+        let v: Value = serde_json::from_str(&result.content).unwrap();
+        let stdout = v["stdout"].as_str().unwrap();
+        assert!(stdout.contains("custom_value"));
+    }
+
+    #[tokio::test]
+    async fn test_terminal_tool_working_dir() {
+        let tool = TerminalTool;
+        let args = json!({
+            "command": "pwd",
+            "workingDir": "/tmp"
+        });
+        let result = tool.execute(args, ToolContext::default()).await;
+        assert!(result.success);
+        let v: Value = serde_json::from_str(&result.content).unwrap();
+        let stdout = v["stdout"].as_str().unwrap();
+        assert!(stdout.contains("/tmp"));
     }
 }

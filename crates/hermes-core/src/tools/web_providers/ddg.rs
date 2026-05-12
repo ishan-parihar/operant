@@ -34,3 +34,14 @@ impl WebSearchProvider for DDGProvider {
         }).collect())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_ddg_provider_name() {
+        let provider = DDGProvider::new("https://example.com".to_string(), "test-agent".to_string());
+        assert_eq!(provider.name(), "duckduckgo");
+    }
+}

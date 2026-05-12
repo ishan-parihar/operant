@@ -407,3 +407,44 @@ fn uuid_simple() -> String {
         .unwrap_or_default();
     format!("{:x}{:x}", now.as_secs(), now.subsec_nanos())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_code_execution_schema() {
+        let schema = CodeExecutionTool.schema();
+        let json = serde_json::to_string(&schema).unwrap();
+        assert!(!json.is_empty());
+        assert_eq!(schema.name, "code_execution");
+    }
+
+    #[tokio::test]
+    async fn test_code_execution_invalid_args() {
+        let tool = CodeExecutionTool;
+        let result = tool
+            .execute(json!({}), ToolContext::default())
+            .await;
+        assert!(!result.success);
+    }
+
+    #[tokio::test]
+    async fn test_code_execution_unsupported_language() {
+        let tool = CodeExecutionTool;
+        let result = tool
+            .execute(
+                json!({"code": "print('hi')", "language": "brainfuck"}),
+                ToolContext::default(),
+            )
+            .await;
+        assert!(!result.success);
+    }
+
+    #[test]
+    fn test_uuid_simple_not_empty() {
+        let id = uuid_simple();
+        assert!(!id.is_empty());
+    }
+}

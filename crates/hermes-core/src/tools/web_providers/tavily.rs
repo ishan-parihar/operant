@@ -34,3 +34,14 @@ impl WebSearchProvider for TavilyProvider {
         }).collect())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_tavily_provider_name() {
+        let provider = TavilyProvider::new("test-key".to_string());
+        assert_eq!(provider.name(), "tavily");
+    }
+}

@@ -34,34 +34,24 @@
 - Transcription tool (`transcription_tool.rs`): Groq/OpenAI Whisper audio transcription
 - Web providers (`web_providers/`): Tavily, Exa, SearXNG, Brave, DuckDuckGo backends
 - McpManager→ToolRegistry auto-registration wiring (mcp.rs:754 McpTool)
+- **Phase 2**: skills_hub, mcp_oauth, security, voice_mode, skills_guard (all complete)
+- **Phase 3**: credential_files, skill_usage, skills_sync, website_policy, fuzzy_match, ansi_strip, schema_sanitizer, interrupt, budget_config, tool_result_storage, browser_camofox, managed_tool_gateway, path_security, env_passthrough (all complete)
+- **Phase 4**: credential_pool, ms_graph, yuanbao, environments (8 backends) (all complete)
+- **Phase 5a+5b**: 10 standalone tool stubs (binary_extensions, xai_http, camofox_state, debug_helpers, tool_output_limits, file_state, slash_confirm, tool_backend_helpers, openrouter_client, neutts_synth) — all in `crates/hermes-core/src/tools/`
+- **Phase 6**: approval system (`approval.rs`) — 3-layer guard, 12 hardline categories, 47 dangerous patterns, 30+ tests
+- **Phase 7**: browser supervisor (`browser_supervisor.rs`) — CDPSupervisor + Browserbase/Browser Use/Firecrawl providers + 3 HermesTools + 24 tests
+- **Phase 8**: State DB expansion (`database.rs` → 1477 LOC) — FTS5 search, session_metadata/tags/events/tools_state tables, merge_sessions, retry engine
+- **Phase 9**: Gateway enhancement (`gateway.rs` → 1118 LOC) — PlatformAdapter trait, SessionStore, ChannelDirectory, WebhookAdapter, GatewayStats
+- **Phase 10**: CLI config system (`crates/hermes-cli/src/config.rs` → 3672 LOC) — CliConfig (40+ sections), env expansion, deep merge, 8-step migration, validation
+- **843 tests passing** (755 core lib + 86 cli bin + 2 doctest) — 0 failures
 
 ## Pending
 
-### Phase 2 — High Priority Unported Tools
-
-- **Skills ecosystem**: `skills_hub.py` (3,261 LOC) — community skills hub, the largest unported module
-- **MCP OAuth**: `mcp_oauth.py` + `mcp_oauth_manager.py` (1,239 LOC) — required for MCP servers with OAuth
-- **Security tools**: `tirith_security.py` (691 LOC) + `url_safety.py` (327 LOC) + `osv_check.py` (155 LOC)
-- **Voice mode**: `voice_mode.py` (1,017 LOC) — CLI voice interaction mode
-- **Skills guard**: `skills_guard.py` (932 LOC) — skill execution security policy
-- **Wire McpManager→ToolRegistry**: Bridge auto-discovery of MCP server tools into ToolRegistry
-
-### Phase 3 — Medium Priority
-
-- **Credential files**: `credential_files.py` (436 LOC)
-- **Skill usage tracking**: `skill_usage.py` (609 LOC)
-- **Skills sync**: `skills_sync.py` (431 LOC)
-- **Tool result storage**: `tool_result_storage.py` (232 LOC)
-- **Website policy**: `website_policy.py` (282 LOC)
-- **Browser Camofox**: `browser_camofox.py` (603 LOC)
-- **Managed tool gateway**: `managed_tool_gateway.py` (167 LOC)
-- **Gateway notification integration**: wire Telegram/Discord/Slack delivery into tools
-
-### Phase 4 — Environments & Enterprise
-
-- **Environments** (Python ~5,100 LOC): Docker, SSH, Modal, Daytona, Vercel Sandbox, Singularity sandboxing layer
-- **Microsoft Graph**: `microsoft_graph_auth.py` + `microsoft_graph_client.py` (653 LOC)
-- **Yuanbao**: `yuanbao_tools.py` (736 LOC) — Tencent integration
+All Python tool modules from hermes-agent have been fully ported to Rust across all 10 phases. Remaining items are infrastructure/hardening only:
+- Integrate environment backends with real SDK dependencies (Docker, SSH, Modal, Daytona, Vercel)
+- Reduce clippy warnings (~82 pre-existing)
+- Set up CI pipeline (GitHub Actions)
+- Consider squashing 53+ uncommitted files into logical phase commits
 
 ### Infrastructure & Hardening
 

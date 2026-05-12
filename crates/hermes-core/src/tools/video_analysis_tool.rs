@@ -103,3 +103,32 @@ impl HermesTool for VideoAnalysisTool {
         self.analyze_video(&args).await
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_video_analysis_schema() {
+        let tool = VideoAnalysisTool::new();
+        let schema = tool.schema();
+        let json = serde_json::to_string(&schema).unwrap();
+        assert!(!json.is_empty());
+        assert_eq!(schema.name, "video_analyze");
+    }
+
+    #[test]
+    fn test_default_analysis_type() {
+        assert_eq!(default_analysis_type(), "describe");
+    }
+
+    #[tokio::test]
+    async fn test_video_analysis_invalid_args() {
+        let tool = VideoAnalysisTool::new();
+        let result = tool
+            .execute(json!({}), ToolContext::default())
+            .await;
+        assert!(!result.success);
+    }
+}

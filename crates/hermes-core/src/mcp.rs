@@ -16,7 +16,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::error::Result;
 use crate::schema::ToolSchema;
-use crate::tools::{HermesTool, ToolContext, ToolResult};
+use crate::tools::{HermesTool, ToolContext, ToolRegistry, ToolResult};
 
 /// MCP protocol version
 const MCP_VERSION: &str = "2024-11-05";
@@ -777,11 +777,64 @@ impl HermesTool for McpTool {
     }
 }
 
+/// A namespaced wrapper around McpTool for registration in ToolRegistry.
+///
+/// Prefixes the tool name with `mcp_{server_name}/` to avoid collisions
+/// with built-in tools and tools from other MCP servers.
+#[derive(Debug, Clone)]
+pub struct McpNamespacedTool {
+    qualified_name: String,
+    tool: McpTool,
+}
+
+impl McpNamespacedTool {
+    fn new(server_name: &str, tool: McpTool) -> Self {
+        Self {
+            qualified_name: format!("mcp_{}/{}", server_name, tool.name()),
+            tool,
+        }
+    }
+}
+
+#[async_trait]
+impl HermesTool for McpNamespacedTool {
+    fn name(&self) -> &str {
+        &self.qualified_name
+    }
+
+    fn description(&self) -> &str {
+        self.tool.description()
+    }
+
+    fn schema(&self) -> ToolSchema {
+        ToolSchema::new(
+            &self.qualified_name,
+            self.tool.description(),
+            self.tool.definition().input_schema.clone(),
+        )
+    }
+
+    async fn execute(&self, args: Value, context: ToolContext) -> ToolResult {
+        self.tool.execute(args, context).await
+    }
+}
+
 /// MCP server connection manager
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone)]
 pub struct McpManager {
     /// Connected servers (HTTP and stdio)
     servers: Arc<RwLock<HashMap<String, McpTransport>>>,
+    /// Tracks tool names registered in ToolRegistry for incremental sync
+    registered_tool_names: Arc<RwLock<Vec<String>>>,
+}
+
+impl Default for McpManager {
+    fn default() -> Self {
+        Self {
+            servers: Arc::new(RwLock::new(HashMap::new())),
+            registered_tool_names: Arc::new(RwLock::new(Vec::new())),
+        }
+    }
 }
 
 impl McpManager {
@@ -857,6 +910,35 @@ impl McpManager {
             }
         }
         tools
+    }
+
+    /// Synchronize all MCP tools into a ToolRegistry with namespaced names.
+    ///
+    /// Each tool is registered as `mcp_{server_name}/{tool_name}` to avoid
+    /// collisions with built-in tools. Previously registered MCP tools are
+    /// unregistered before re-syncing.
+    pub async fn sync_tools_to_registry(&self, registry: &ToolRegistry) {
+        // Unregister all previously synced tools
+        let mut prev_names = self.registered_tool_names.write().await;
+        for name in prev_names.iter() {
+            registry.unregister(name).await;
+        }
+        prev_names.clear();
+
+        // Register current tools with namespaced names
+        let servers = self.servers.read().await;
+        for (server_name, transport) in servers.iter() {
+            if !transport.is_connected().await {
+                continue;
+            }
+            for tool in transport.get_tools().await {
+                let namespaced = McpNamespacedTool::new(server_name, tool);
+                let name = namespaced.name().to_string();
+                if registry.register::<McpNamespacedTool>(namespaced).await.is_ok() {
+                    prev_names.push(name);
+                }
+            }
+        }
     }
 }
 

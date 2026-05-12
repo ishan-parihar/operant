@@ -14,6 +14,8 @@ use crate::mcp::McpManager;
 use crate::process_registry::ProcessRegistry;
 use crate::tools::{ToolRegistry, SessionSearchTool};
 
+pub use super::binary_extensions::BinaryExtensionsTool;
+pub use super::browser_camofox_state::CamofoxStateTool;
 pub use super::browser_tool::BrowserTool;
 pub use super::browser_dialog_tool::BrowserDialogTool;
 pub use super::browser_cdp_tool::BrowserCdpTool;
@@ -29,24 +31,33 @@ pub use super::clarify_tool::ClarifyTool;
 pub use super::code_execution::CodeExecutionTool;
 pub use super::cron_tool::CronTool;
 pub use super::datetime_tool::{DateTimeTool, TimestampTool};
+pub use super::debug_helpers::{EnvVarTool, InspectJsonTool, SystemInfoTool};
+pub use super::file_state::FileStateTool;
 pub use super::file_tools::{FileListTool, FileReadTool, FileSearchTool, FileWriteTool};
 pub use super::http_tool::HttpRequestTool;
 pub use super::image_generation_tool::ImageGenerationTool;
 pub use super::kanban_tool::KanbanTool;
 pub use super::mcp_tool::McpManagementTool;
 pub use super::memory_tools::{MemoryRecallTool, MemorySearchTool, MemoryStoreTool};
+pub use super::neutts_synth::NeuttsSynthTool;
 pub use super::notification_tool::{NotificationTool, ApprovalTool};
+pub use super::openrouter_client::OpenRouterTool;
+pub use super::osv_check::OsvCheckTool;
 pub use super::patch_tool::PatchTool;
 pub use super::process_tool::ProcessTool;
 pub use super::skills_tool::{SkillsTool, SkillViewTool};
+pub use super::slash_confirm::SlashConfirmTool;
 pub use super::transcription_tool::TranscriptionTool;
 pub use super::sub_agent_tool::SubAgentTool;
 pub use super::terminal_tool::TerminalTool;
+pub use super::tool_backend_helpers::ToolBackendTool;
+pub use super::tool_output_limits::TruncateOutputTool;
 pub use super::todo_tool::TodoTool;
 pub use super::tts_tool::TtsTool;
 pub use super::video_analysis_tool::VideoAnalysisTool;
 pub use super::vision_tool::VisionTool;
 pub use super::web_tools::{WebFetchTool, WebSearchTool};
+pub use super::xai_http::XaiHttpTool;
 pub use super::discord_tool::{DiscordAdminTool, DiscordTool};
 pub use super::feishu_tool::{FeishuDocTool, FeishuDriveTool};
 pub use super::home_assistant_tool::HomeAssistantTool;
@@ -60,6 +71,8 @@ pub async fn register_builtin_tools(
     kanban_db: Arc<KanbanDb>,
     mcp_manager: Option<McpManager>,
 ) -> Result<()> {
+    registry.register(BinaryExtensionsTool).await?;
+    registry.register(CamofoxStateTool).await?;
     registry.register(BrowserTool).await?;
     registry.register(CheckpointTool::new()).await?;
     registry.register(FileReadTool).await?;
@@ -67,8 +80,11 @@ pub async fn register_builtin_tools(
     registry.register(FileSearchTool).await?;
     registry.register(FileListTool).await?;
     registry.register(TerminalTool).await?;
+    registry.register(TruncateOutputTool).await?;
+    registry.register(ToolBackendTool).await?;
     registry.register(WebSearchTool).await?;
     registry.register(WebFetchTool).await?;
+    registry.register(XaiHttpTool).await?;
     registry.register(CodeExecutionTool).await?;
     registry.register(CronTool::new(cron_db)).await?;
     registry.register(KanbanTool::new(kanban_db)).await?;
@@ -78,17 +94,25 @@ pub async fn register_builtin_tools(
     registry.register(HttpRequestTool).await?;
     registry.register(DateTimeTool).await?;
     registry.register(TimestampTool).await?;
+    registry.register(InspectJsonTool).await?;
+    registry.register(EnvVarTool).await?;
+    registry.register(SystemInfoTool).await?;
+    registry.register(FileStateTool).await?;
     registry.register(TodoTool).await?;
     registry.register(ClarifyTool).await?;
     registry.register(PatchTool).await?;
     registry.register(VisionTool).await?;
     registry.register(SkillsTool).await?;
     registry.register(SkillViewTool).await?;
+    registry.register(SlashConfirmTool).await?;
     registry.register(ProcessTool::new(ProcessRegistry::new())).await?;
     registry.register(NotificationTool).await?;
     registry.register(ApprovalTool).await?;
+    registry.register(OpenRouterTool).await?;
+    registry.register(OsvCheckTool).await?;
     registry.register(ImageGenerationTool::new()).await?;
     registry.register(TtsTool::new()).await?;
+    registry.register(NeuttsSynthTool).await?;
     registry.register(VideoAnalysisTool::new()).await?;
     registry.register(SessionSearchTool::new(database)).await?;
     registry.register(SendMessageTool).await?;
@@ -139,16 +163,23 @@ pub async fn register_builtin_tools_with_sub_agent(
 /// Get a list of all built-in tool names
 pub fn builtin_tool_names() -> Vec<&'static str> {
     vec![
+        "apply_output_limits",
         "approval_request",
         "browser",
+        "browser_camofox_state",
+        "check_binary_file",
         "checkpoint",
         "clarify",
         "code_execution",
         "cron",
         "datetime",
+        "debug_env",
+        "debug_inspect_json",
+        "debug_system",
         "file_list",
         "file_read",
         "file_search",
+        "file_state",
         "file_write",
         "http_request",
         "image_generate",
@@ -157,13 +188,18 @@ pub fn builtin_tool_names() -> Vec<&'static str> {
         "memory_recall",
         "memory_search",
         "memory_store",
+        "neutts_synthesize",
         "notification",
+        "openrouter_query",
+        "osv_check",
         "patch",
         "process",
         "session_search",
         "skills_list",
         "skill_view",
+        "slash_confirm",
         "terminal",
+        "tool_backend",
         "timestamp",
         "todo",
         "transcribe_audio",
@@ -172,6 +208,7 @@ pub fn builtin_tool_names() -> Vec<&'static str> {
         "vision_analyze",
         "web_fetch",
         "web_search",
+        "xai_http_request",
         "send_message",
         "discord",
         "discord_admin",

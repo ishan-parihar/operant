@@ -388,3 +388,79 @@ fn html_decode(s: &str) -> String {
         .replace("&#x27;", "'")
         .replace("&nbsp;", " ")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_web_search_schema() {
+        let schema = WebSearchTool.schema();
+        let json = serde_json::to_string(&schema).unwrap();
+        assert!(!json.is_empty());
+        assert_eq!(schema.name, "web_search");
+    }
+
+    #[test]
+    fn test_web_fetch_schema() {
+        let schema = WebFetchTool.schema();
+        let json = serde_json::to_string(&schema).unwrap();
+        assert!(!json.is_empty());
+        assert_eq!(schema.name, "web_fetch");
+    }
+
+    #[tokio::test]
+    async fn test_web_search_invalid_args() {
+        let tool = WebSearchTool;
+        let result = tool
+            .execute(json!({}), ToolContext::default())
+            .await;
+        assert!(!result.success);
+    }
+
+    #[tokio::test]
+    async fn test_web_fetch_invalid_url() {
+        let tool = WebFetchTool;
+        let result = tool
+            .execute(json!({"url": ""}), ToolContext::default())
+            .await;
+        assert!(!result.success);
+    }
+
+    #[test]
+    fn test_strip_html_tags() {
+        let result = strip_html_tags("<b>bold</b> and <i>italic</i>");
+        assert_eq!(result, "bold and italic");
+    }
+
+    #[test]
+    fn test_html_decode() {
+        let result = html_decode("&amp; &lt; &gt; &quot; &#39;");
+        assert_eq!(result, "& < > \" '");
+    }
+
+    #[test]
+    fn test_parse_ddg_lite_actual_ddg_format() {
+        let html = r#"<html><body><a href="https://example.com/page" class="result-link">Example Site</a><td class="result-snippet">This is an example snippet</td></body></html>"#;
+        let results = parse_ddg_lite_results(html, 10);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0]["title"], "Example Site");
+        assert_eq!(results[0]["url"], "https://example.com/page");
+        assert_eq!(results[0]["snippet"], "This is an example snippet");
+    }
+
+    #[test]
+    fn test_parse_ddg_lite_results_empty() {
+        let results = parse_ddg_lite_results("<html></html>", 10);
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_parse_ddg_lite_results_with_links() {
+        let html = r#"<html><body><a class="result-link" href="https://example.com">Example</a></body></html>"#;
+        let results = parse_ddg_lite_results(html, 10);
+        // Should match the fallback heuristic (href="http...")
+        assert_eq!(results.len(), 1);
+    }
+}

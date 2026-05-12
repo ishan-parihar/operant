@@ -228,3 +228,81 @@ impl HermesTool for MemoryRecallTool {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_memory_store_schema() {
+        let schema = MemoryStoreTool.schema();
+        let json = serde_json::to_string(&schema).unwrap();
+        assert!(!json.is_empty());
+        assert_eq!(schema.name, "memory_store");
+    }
+
+    #[test]
+    fn test_memory_search_schema() {
+        let schema = MemorySearchTool.schema();
+        let json = serde_json::to_string(&schema).unwrap();
+        assert!(!json.is_empty());
+        assert_eq!(schema.name, "memory_search");
+    }
+
+    #[test]
+    fn test_memory_recall_schema() {
+        let schema = MemoryRecallTool.schema();
+        let json = serde_json::to_string(&schema).unwrap();
+        assert!(!json.is_empty());
+        assert_eq!(schema.name, "memory_recall");
+    }
+
+    #[tokio::test]
+    async fn test_memory_store_and_recall() {
+        let store = MemoryStoreTool;
+        let recall = MemoryRecallTool;
+
+        // Store a memory
+        let store_result = store
+            .execute(
+                json!({"key": "test_key", "content": "test content"}),
+                ToolContext::default(),
+            )
+            .await;
+        assert!(store_result.success);
+
+        // Recall it
+        let recall_result = recall
+            .execute(json!({"key": "test_key"}), ToolContext::default())
+            .await;
+        assert!(recall_result.success);
+    }
+
+    #[tokio::test]
+    async fn test_memory_store_missing_args() {
+        let tool = MemoryStoreTool;
+        let result = tool
+            .execute(json!({}), ToolContext::default())
+            .await;
+        assert!(!result.success);
+    }
+
+    #[tokio::test]
+    async fn test_memory_search_empty() {
+        let tool = MemorySearchTool;
+        let result = tool
+            .execute(json!({"query": "nonexistent"}), ToolContext::default())
+            .await;
+        assert!(result.success);
+    }
+
+    #[tokio::test]
+    async fn test_memory_recall_not_found() {
+        let tool = MemoryRecallTool;
+        let result = tool
+            .execute(json!({"key": "nonexistent_key"}), ToolContext::default())
+            .await;
+        assert!(result.success); // Returns success with found=false
+    }
+}

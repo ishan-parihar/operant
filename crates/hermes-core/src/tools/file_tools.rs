@@ -403,3 +403,86 @@ impl HermesTool for FileListTool {
         )
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_file_read_schema() {
+        let schema = FileReadTool.schema();
+        let json = serde_json::to_string(&schema).unwrap();
+        assert!(!json.is_empty());
+        assert_eq!(schema.name, "file_read");
+    }
+
+    #[test]
+    fn test_file_write_schema() {
+        let schema = FileWriteTool.schema();
+        let json = serde_json::to_string(&schema).unwrap();
+        assert!(!json.is_empty());
+        assert_eq!(schema.name, "file_write");
+    }
+
+    #[test]
+    fn test_file_search_schema() {
+        let schema = FileSearchTool.schema();
+        let json = serde_json::to_string(&schema).unwrap();
+        assert!(!json.is_empty());
+        assert_eq!(schema.name, "file_search");
+    }
+
+    #[test]
+    fn test_file_list_schema() {
+        let schema = FileListTool.schema();
+        let json = serde_json::to_string(&schema).unwrap();
+        assert!(!json.is_empty());
+        assert_eq!(schema.name, "file_list");
+    }
+
+    #[tokio::test]
+    async fn test_file_read_missing_path() {
+        let tool = FileReadTool;
+        let result = tool
+            .execute(json!({}), ToolContext::default())
+            .await;
+        assert!(!result.success);
+    }
+
+    #[tokio::test]
+    async fn test_file_read_nonexistent() {
+        let tool = FileReadTool;
+        let result = tool
+            .execute(json!({"path": "/nonexistent/path/file.txt"}), ToolContext::default())
+            .await;
+        assert!(!result.success);
+    }
+
+    #[tokio::test]
+    async fn test_file_write_missing_args() {
+        let tool = FileWriteTool;
+        let result = tool
+            .execute(json!({}), ToolContext::default())
+            .await;
+        assert!(!result.success);
+    }
+
+    #[tokio::test]
+    async fn test_file_search_missing_args() {
+        let tool = FileSearchTool;
+        let result = tool
+            .execute(json!({}), ToolContext::default())
+            .await;
+        assert!(!result.success);
+    }
+
+    #[tokio::test]
+    async fn test_file_list_missing_path() {
+        let tool = FileListTool;
+        let result = tool
+            .execute(json!({}), ToolContext::default())
+            .await;
+        assert!(!result.success);
+    }
+}

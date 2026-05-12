@@ -169,3 +169,16 @@ impl HermesTool for KanbanTool {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_kanban_schema() {
+        let schema = ToolSchema::from_type::<KanbanToolArgs>("kanban", "test");
+        let json = serde_json::to_value(&schema).unwrap();
+        assert!(json.is_object());
+        assert_eq!(json["name"], "kanban");
+    }
+}

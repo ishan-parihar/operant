@@ -70,3 +70,23 @@ pub async fn send_cdp_command(url: &str, command: &Value) -> Result<Value> {
             "WebSocket connection closed without response").into(),
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_cdp_command_serializes_correctly() {
+        // Test that CDP commands serialize to valid JSON
+        let command = serde_json::json!({
+            "id": 1,
+            "method": "Runtime.evaluate",
+            "params": {
+                "expression": "1+1"
+            }
+        });
+        let json = serde_json::to_string(&command).unwrap();
+        assert!(json.contains("Runtime.evaluate"));
+        assert!(json.contains("1+1"));
+    }
+}

@@ -1,6 +1,7 @@
 //! Hermes-RS CLI
 
 mod autonomous;
+pub(crate) mod config;
 mod tui;
 
 use std::fs::OpenOptions;
@@ -9,9 +10,11 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use crate::config::CliConfig;
 use anyhow::{Context, Result};
 use clap::{ArgAction, Parser, Subcommand};
 use hermes_core::agent::{AgentConfig, AgentEvent, HermesAgent};
+use hermes_core::agent::clients::openai::OpenAIModelClient;
 use hermes_core::client::{ClientConfig, OpenAIClient};
 use hermes_core::config::{
     install_runtime_config, load_app_config, AppConfig, BehaviorSettings, LoggingSettings,
@@ -259,7 +262,16 @@ pub(crate) async fn build_registry(
     let cron_db = Arc::new(CronDb::init(cron_path)?);
     let kanban_db = Arc::new(KanbanDb::init(kanban_path)?);
     let registry = ToolRegistry::new(Duration::from_secs(config.tools.registry_timeout_secs));
-    hermes_core::tools::register_builtin_tools_with_sub_agent(&registry, client, model, database, cron_db, kanban_db, Some(mcp_manager.clone())).await?;
+    hermes_core::tools::register_builtin_tools_with_sub_agent(
+        &registry,
+        client,
+        model,
+        database,
+        cron_db,
+        kanban_db,
+        Some(mcp_manager.clone()),
+    )
+    .await?;
     registry.register(EchoTool::new()).await?;
     registry.register(CalculatorTool::new()).await?;
 
@@ -270,9 +282,7 @@ pub(crate) async fn build_registry(
             }
         }
 
-        for tool in mcp_manager.get_all_tools().await {
-            registry.register(tool).await?;
-        }
+        mcp_manager.sync_tools_to_registry(&registry).await;
     }
 
     Ok(registry)
@@ -314,14 +324,21 @@ pub(crate) async fn create_runtime_agent(
     event_tx: mpsc::Sender<AgentEvent>,
     mcp_manager: &McpManager,
 ) -> Result<HermesAgent> {
-    let client = OpenAIClient::new(client_config(config));
+    let raw_client = OpenAIClient::new(client_config(config));
     let database = Arc::new(Database::init(config.database_path.clone())?);
-    let registry = build_registry(config, mcp_manager, &client, &behavior.model, database.clone()).await?;
+    let registry = build_registry(
+        config,
+        mcp_manager,
+        &raw_client,
+        &behavior.model,
+        database.clone(),
+    )
+    .await?;
     let agent_config = agent_config(config, behavior, system_prompt);
     let memory_manager = load_repo_memory_manager().await?;
 
     Ok(
-        HermesAgent::with_events(agent_config, client, registry, database, event_tx)
+        HermesAgent::with_events(agent_config, Box::new(OpenAIModelClient::new(raw_client)), registry, database, event_tx)
             .with_memory_manager(memory_manager),
     )
 }
@@ -331,15 +348,22 @@ async fn create_agent_without_events(
     system_prompt: Option<&str>,
     mcp_manager: &McpManager,
 ) -> Result<HermesAgent> {
-    let client = OpenAIClient::new(client_config(config));
+    let raw_client = OpenAIClient::new(client_config(config));
     let database = Arc::new(Database::init(config.database_path.clone())?);
-    let registry = build_registry(config, mcp_manager, &client, &config.agent.model, database.clone()).await?;
+    let registry = build_registry(
+        config,
+        mcp_manager,
+        &raw_client,
+        &config.agent.model,
+        database.clone(),
+    )
+    .await?;
     let agent_config = agent_config(config, &config.agent, system_prompt);
     let memory_manager = load_repo_memory_manager().await?;
 
-    Ok(HermesAgent::new(agent_config, client, registry, database).with_memory_manager(memory_manager))
+    Ok(HermesAgent::new(agent_config, Box::new(OpenAIModelClient::new(raw_client)), registry, database)
+        .with_memory_manager(memory_manager))
 }
-
 
 async fn load_repo_memory_manager() -> Result<MemoryManager> {
     let storage_dir = std::env::current_dir().context("Failed to determine current directory")?;
@@ -399,7 +423,8 @@ async fn list_tools(config: &AppConfig, verbose: bool) -> Result<()> {
     let mcp_manager = McpManager::new();
     let client = OpenAIClient::new(client_config(config));
     let database = Arc::new(Database::init(config.database_path.clone())?);
-    let registry = build_registry(config, &mcp_manager, &client, &config.agent.model, database).await?;
+    let registry =
+        build_registry(config, &mcp_manager, &client, &config.agent.model, database).await?;
     let tools = registry.get_schemas().await;
 
     for tool in tools {
@@ -416,7 +441,8 @@ async fn test_tool(config: &AppConfig, tool_name: &str, args: Option<&str>) -> R
     let mcp_manager = McpManager::new();
     let client = OpenAIClient::new(client_config(config));
     let database = Arc::new(Database::init(config.database_path.clone())?);
-    let registry = build_registry(config, &mcp_manager, &client, &config.agent.model, database).await?;
+    let registry =
+        build_registry(config, &mcp_manager, &client, &config.agent.model, database).await?;
     let parsed_args: Value = if let Some(args) = args {
         serde_json::from_str(args).context("Failed to parse tool arguments as JSON")?
     } else {
@@ -564,7 +590,25 @@ impl HermesTool for CalculatorTool {
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
+
+    // Load CLI-level config (YAML-based with deep merge, .env, env expansion)
+    let cli_config = CliConfig::load().unwrap_or_else(|e| {
+        eprintln!("Warning: Failed to load CLI config: {}. Using defaults.", e);
+        CliConfig::default()
+    });
+
+    // Load core AppConfig (TOML-based) and layer on any values from CliConfig
     let mut loaded = load_app_config(cli.config.as_deref())?;
+
+    // Merge CliConfig-derived values into core AppConfig
+    let cli_app_config = cli_config.to_app_config();
+    if loaded.config.client.base_url.is_empty() {
+        loaded.config.client.base_url = cli_app_config.client.base_url;
+    }
+    if loaded.config.agent.model == "gpt-4" {
+        loaded.config.agent.model = cli_app_config.agent.model;
+    }
+
     loaded.config.apply_env_overrides()?;
     apply_cli_overrides(&cli, &mut loaded.config);
     install_runtime_config(loaded.config.clone());

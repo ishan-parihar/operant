@@ -130,3 +130,15 @@ impl HermesTool for ProcessTool {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_process_schema() {
+        let schema = ToolSchema::from_type::<ProcessToolArgs>("process", "test");
+        let json = serde_json::to_string(&schema).unwrap();
+        assert!(!json.is_empty());
+    }
+}

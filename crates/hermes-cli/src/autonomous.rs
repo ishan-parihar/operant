@@ -222,12 +222,9 @@ struct RealAutonomousAgentExecutor {
 impl AutonomousAgentExecutor for RealAutonomousAgentExecutor {
     async fn run(&self, _snapshot: &WorkspaceSnapshot, query: String) -> Result<()> {
         let mcp_manager = McpManager::new();
-        let agent = create_agent_without_events(
-            &self.config,
-            self.system_prompt.as_deref(),
-            &mcp_manager,
-        )
-        .await?;
+        let agent =
+            create_agent_without_events(&self.config, self.system_prompt.as_deref(), &mcp_manager)
+                .await?;
         agent.run(query).await?;
         Ok(())
     }

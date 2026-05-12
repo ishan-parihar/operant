@@ -213,3 +213,28 @@ impl HermesTool for ImageGenerationTool {
         self.generate(args).await
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_image_generation_schema() {
+        let tool = ImageGenerationTool::new();
+        let schema = tool.schema();
+        let json = serde_json::to_string(&schema).unwrap();
+        assert!(!json.is_empty());
+        assert_eq!(schema.name, "image_generate");
+    }
+
+    #[test]
+    fn test_default_aspect_ratio() {
+        assert_eq!(default_aspect_ratio(), "1:1");
+    }
+
+    #[test]
+    fn test_default_model() {
+        assert_eq!(default_model(), "flux-pro");
+    }
+}

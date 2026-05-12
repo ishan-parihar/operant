@@ -364,4 +364,185 @@ mod tests {
         assert_eq!(count, 1);
         assert!(replaced.contains("baz"));
     }
+
+    #[test]
+    fn test_normalize_whitespace_empty() {
+        assert_eq!(normalize_whitespace(""), "");
+    }
+
+    #[test]
+    fn test_normalize_whitespace_only_whitespace() {
+        assert_eq!(normalize_whitespace("   \n  \n  "), "\n\n");
+    }
+
+    #[test]
+    fn test_normalize_whitespace_mixed_line_endings() {
+        assert_eq!(
+            normalize_whitespace("foo\r\nbar\r\nbaz"),
+            "foo\nbar\nbaz"
+        );
+    }
+
+    #[test]
+    fn test_normalize_whitespace_no_change() {
+        let input = "hello world\nfoo bar\n";
+        assert_eq!(normalize_whitespace(input), "hello world\nfoo bar");
+    }
+
+    #[test]
+    fn test_fuzzy_replace_empty_find() {
+        let result = fuzzy_replace("some content", "", "replacement");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_fuzzy_replace_no_match() {
+        let result = fuzzy_replace("hello world", "goodbye", "hi");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_fuzzy_replace_exact_equivalent() {
+        // When content is already normalized, fuzzy_replace should still match
+        let content = "fn main() {\n    return;\n}\n";
+        let find = "fn main() {\n    return;\n}";
+        let replace = "fn main() {\n    return 0;\n}";
+        let result = fuzzy_replace(content, find, replace);
+        assert!(result.is_some());
+        let (replaced, count) = result.unwrap();
+        assert_eq!(count, 1);
+        assert!(replaced.contains("return 0"));
+    }
+
+    #[test]
+    fn test_fuzzy_replace_delete_content() {
+        let content = "keep\nremove\nkeep\n";
+        let find = "remove";
+        let replace = "";
+        let result = fuzzy_replace(content, find, replace);
+        assert!(result.is_some());
+        let (replaced, count) = result.unwrap();
+        assert_eq!(count, 1);
+        // Deleting a line with empty replacement removes it; surrounding lines remain
+        assert_eq!(replaced, "keep\nkeep\n");
+    }
+
+    #[test]
+    fn test_fuzzy_replace_trailing_newline_preserved() {
+        let content = "line1\nline2\nline3\n";
+        let find = "line2";
+        let replace = "modified";
+        let result = fuzzy_replace(content, find, replace);
+        assert!(result.is_some());
+        let (replaced, _) = result.unwrap();
+        assert!(replaced.ends_with('\n'), "trailing newline should be preserved");
+    }
+
+    #[test]
+    fn test_fuzzy_replace_no_trailing_newline() {
+        let content = "line1\nline2\nline3";
+        let find = "line2";
+        let replace = "modified";
+        let result = fuzzy_replace(content, find, replace);
+        assert!(result.is_some());
+        let (replaced, _) = result.unwrap();
+        assert!(!replaced.ends_with('\n'), "no trailing newline added if original lacked it");
+    }
+
+    #[tokio::test]
+    async fn test_patch_delete_content() {
+        let path = create_temp_file("Hello, world!\n");
+        let path_str = path.to_str().unwrap().to_string();
+
+        let tool = PatchTool;
+        let result = tool
+            .execute(
+                serde_json::json!({
+                    "path": path_str,
+                    "find": "Hello, world!",
+                    "replace": ""
+                }),
+                default_context(),
+            )
+            .await;
+
+        assert!(result.success);
+        let parsed: Value = serde_json::from_str(&result.content).unwrap();
+        assert_eq!(parsed["replacements"], 1);
+
+        let updated = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(updated, "\n");
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn test_patch_path_is_directory() {
+        let tool = PatchTool;
+        let result = tool
+            .execute(
+                serde_json::json!({
+                    "path": "/tmp",
+                    "find": "a",
+                    "replace": "b"
+                }),
+                default_context(),
+            )
+            .await;
+
+        assert!(!result.success);
+        let err = result.error.unwrap();
+        assert!(err.contains("not a file"));
+    }
+
+    #[tokio::test]
+    async fn test_patch_no_trailing_newline() {
+        let path = create_temp_file("line1");
+        let path_str = path.to_str().unwrap().to_string();
+
+        let tool = PatchTool;
+        let result = tool
+            .execute(
+                serde_json::json!({
+                    "path": path_str,
+                    "find": "line1",
+                    "replace": "replaced"
+                }),
+                default_context(),
+            )
+            .await;
+
+        assert!(result.success);
+        let updated = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(updated, "replaced");
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn test_patch_fuzzy_fallback_with_extra_whitespace() {
+        let path = create_temp_file("  hello   world\n");
+        let path_str = path.to_str().unwrap().to_string();
+
+        let tool = PatchTool;
+        let result = tool
+            .execute(
+                serde_json::json!({
+                    "path": path_str,
+                    "find": "hello world",
+                    "replace": "hi there"
+                }),
+                default_context(),
+            )
+            .await;
+
+        assert!(result.success);
+        let parsed: Value = serde_json::from_str(&result.content).unwrap();
+        assert_eq!(parsed["matchType"], "fuzzy");
+
+        let updated = std::fs::read_to_string(&path).unwrap();
+        assert!(updated.contains("hi there"));
+
+        let _ = std::fs::remove_file(&path);
+    }
 }

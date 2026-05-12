@@ -677,3 +677,61 @@ impl HermesTool for TtsTool {
         self.generate_speech(&args).await
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_tts_schema() {
+        let tool = TtsTool::new();
+        let schema = tool.schema();
+        let json = serde_json::to_string(&schema).unwrap();
+        assert!(!json.is_empty());
+        assert_eq!(schema.name, "text_to_speech");
+    }
+
+    #[test]
+    fn test_default_provider() {
+        assert_eq!(default_provider(), "edge");
+    }
+
+    #[test]
+    fn test_default_voice() {
+        assert_eq!(default_voice(), "en-US-AriaNeural");
+    }
+
+    #[tokio::test]
+    async fn test_tts_invalid_args() {
+        let tool = TtsTool::new();
+        let result = tool
+            .execute(json!({}), ToolContext::default())
+            .await;
+        assert!(!result.success);
+    }
+
+    #[tokio::test]
+    async fn test_tts_empty_text() {
+        let tool = TtsTool::new();
+        let result = tool
+            .execute(
+                json!({"text": "", "provider": "edge"}),
+                ToolContext::default(),
+            )
+            .await;
+        assert!(!result.success);
+    }
+
+    #[tokio::test]
+    async fn test_tts_unknown_provider() {
+        let tool = TtsTool::new();
+        let result = tool
+            .execute(
+                json!({"text": "hello", "provider": "unknown"}),
+                ToolContext::default(),
+            )
+            .await;
+        assert!(!result.success);
+    }
+}

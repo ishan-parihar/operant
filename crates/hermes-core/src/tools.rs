@@ -5,6 +5,8 @@
 //! - `ToolRegistry` for managing and executing tools
 //! - Built-in tools for common operations
 
+pub mod binary_extensions;
+pub mod browser_camofox_state;
 pub mod browser_cdp_tool;
 pub mod browser_dialog_tool;
 pub mod browser_downloader;
@@ -17,21 +19,29 @@ pub mod code_execution;
 pub mod computer_use_tool;
 pub mod cron_tool;
 pub mod datetime_tool;
+pub mod debug_helpers;
+pub mod file_state;
 pub mod file_tools;
 pub mod http_tool;
 pub mod image_generation_tool;
 pub mod kanban_tool;
 pub mod mcp_tool;
+pub mod neutts_synth;
 pub mod memory_tools;
 pub mod process_tool;
 pub mod mixture_of_agents_tool;
 pub mod notification_tool;
+pub mod openrouter_client;
+pub mod osv_check;
 pub mod patch_tool;
 pub mod rl_training_tool;
 pub mod session_search_tool;
 pub mod send_message_tool;
+pub mod slash_confirm;
 pub mod skills_tool;
 pub mod spotify_tool;
+pub mod tool_backend_helpers;
+pub mod tool_output_limits;
 pub mod sub_agent_tool;
 pub mod terminal_tool;
 pub mod todo_tool;
@@ -41,6 +51,7 @@ pub mod video_analysis_tool;
 pub mod vision_tool;
 pub mod web_tools;
 pub mod web_providers;
+pub mod xai_http;
 
 pub use web_providers::{
     DDGProvider, ExaProvider, SearXNGProvider, TavilyProvider, WebSearchProvider, WebSearchResult,
@@ -69,6 +80,7 @@ pub use discord_tool::{DiscordAdminTool, DiscordTool};
 pub use feishu_tool::{FeishuDocTool, FeishuDriveTool};
 pub use home_assistant_tool::HomeAssistantTool;
 pub use send_message_tool::SendMessageTool;
+pub use osv_check::OsvCheckTool;
 pub use browser_dialog_tool::BrowserDialogTool;
 pub use browser_cdp_tool::BrowserCdpTool;
 pub use computer_use_tool::ComputerUseTool;
@@ -297,6 +309,12 @@ impl ToolRegistry {
     pub async fn get(&self, name: &str) -> Option<Arc<dyn HermesTool>> {
         let tools = self.tools.read().await;
         tools.get(name).cloned()
+    }
+
+    /// Unregister a tool by name
+    pub async fn unregister(&self, name: &str) -> bool {
+        let mut tools = self.tools.write().await;
+        tools.remove(name).is_some()
     }
 
     /// Check if a tool is registered
