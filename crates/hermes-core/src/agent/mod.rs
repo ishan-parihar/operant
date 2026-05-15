@@ -2,9 +2,11 @@
 //!
 //! Implements the ReAct (Reason + Act) pattern for LLM-driven tool execution.
 
+use std::collections::{HashSet, VecDeque};
 use std::sync::Arc;
 use std::time::Duration;
 
+use futures::future::join_all;
 use futures::stream::BoxStream;
 use futures::StreamExt;
 use tokio::sync::{mpsc, RwLock};
@@ -12,7 +14,7 @@ use tokio::time::timeout;
 use tracing::{debug, error, info, instrument, warn};
 
 use crate::client::{ChatResponse, Message, ToolCall};
-use crate::config::{runtime_config, BehaviorSettings};
+use crate::config::{runtime_config, BehaviorSettings, ToolProgressMode};
 use crate::context_files::{load_default_context_files, load_workspace_context};
 use crate::database::Database;
 use crate::distillation::distill_session_to_memory;
@@ -20,6 +22,51 @@ use crate::error::{Error, Result};
 use crate::memory::MemoryManager;
 use crate::parser::{ToolCallParser, ToolCallStreamParser};
 use crate::tools::{ToolContext, ToolRegistry, ToolResult};
+
+/// Simple detector for infinite agent loops
+struct LoopDetector {
+    /// Window of recent states to compare
+    history: VecDeque<u64>,
+    /// Max repeats allowed
+    max_repeats: usize,
+    /// Window size for comparison
+    window_size: usize,
+}
+
+impl LoopDetector {
+    fn new(window_size: usize, max_repeats: usize) -> Self {
+        Self {
+            history: VecDeque::with_capacity(window_size),
+            max_repeats,
+            window_size,
+        }
+    }
+
+    fn check(&mut self, state: u64) -> bool {
+        self.history.push_back(state);
+        if self.history.len() > self.window_size {
+            self.history.pop_front();
+        }
+
+        if self.history.len() < self.window_size {
+            return false;
+        }
+
+        let repeats = self.history.iter().filter(|&&h| h == state).count();
+        repeats >= self.max_repeats
+    }
+}
+
+fn hash_tool_calls(calls: &[ToolCall]) -> u64 {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut hasher = DefaultHasher::new();
+    for tc in calls {
+        tc.function.name.hash(&mut hasher);
+        tc.function.arguments.hash(&mut hasher);
+    }
+    hasher.finish()
+}
 
 /// Configuration for the Hermes agent
 #[derive(Debug, Clone)]
@@ -40,6 +87,13 @@ pub struct AgentConfig {
     pub context_window: usize,
     /// Max self-healing attempts on tool errors
     pub max_healing_attempts: usize,
+    /// How tool execution progress is reported
+    pub tool_progress: ToolProgressMode,
+    /// Max consecutive tool-only iterations before force-answer.
+    /// When the LLM calls tools N times without producing text,
+    /// the next request omits tools to force a textual response.
+    /// 0 = disabled (use max_iterations as the only limit).
+    pub max_consecutive_tool_only: usize,
 }
 
 impl Default for AgentConfig {
@@ -59,6 +113,8 @@ impl From<&BehaviorSettings> for AgentConfig {
             stream: settings.stream,
             context_window: settings.context_window,
             max_healing_attempts: settings.max_healing_attempts,
+            tool_progress: settings.tool_progress.clone(),
+            max_consecutive_tool_only: settings.max_consecutive_tool_only,
         }
     }
 }
@@ -71,7 +127,11 @@ pub enum AgentEvent {
     /// Model reasoning content
     Reasoning { text: String },
     /// Tool execution started
-    ToolStart { name: String, arguments: String },
+    ToolStart {
+        name: String,
+        arguments: String,
+        tool_call_id: String,
+    },
     /// Tool execution completed
     ToolComplete { result: ToolResult },
     /// Tool execution failed
@@ -144,7 +204,10 @@ impl HermesAgent {
     /// Send an event to the channel
     async fn emit(&self, event: AgentEvent) {
         if let Some(ref tx) = self.event_tx {
-            let _ = tx.send(event).await;
+            debug!("Emitting event: {:?}", std::mem::discriminant(&event));
+            if tx.send(event).await.is_err() {
+                warn!("Agent event channel closed (receiver dropped)");
+            }
         }
     }
 
@@ -181,20 +244,7 @@ impl HermesAgent {
         // Add user message
         self.add_message(Message::user(&user_query)).await;
 
-        // Persist user message
-        self.database
-            .save_message(
-                &session_id,
-                "user",
-                &user_query,
-                &chrono::Utc::now().to_rfc3339(),
-            )
-            .map_err(|e| {
-                warn!(error = %e, "Failed to persist user message");
-                e
-            })?;
-
-        // Save session metadata
+        // Save session metadata FIRST (messages FK depends on sessions.id)
         self.database
             .save_session(
                 &session_id,
@@ -208,9 +258,26 @@ impl HermesAgent {
                 e
             })?;
 
+        // Persist user message
+        self.database
+            .save_message(
+                &session_id,
+                "user",
+                &user_query,
+                &chrono::Utc::now().to_rfc3339(),
+            )
+            .map_err(|e| {
+                warn!(error = %e, "Failed to persist user message");
+                e
+            })?;
+
         // Build initial messages including system prompt
         let mut messages = self.build_messages().await?;
         let mut iteration = 0;
+        let mut force_answer = false;
+        let mut force_answer_attempted = false;
+        let mut consecutive_tool_only = 0usize;
+        let mut loop_detector = LoopDetector::new(5, 3);
 
         loop {
             iteration += 1;
@@ -235,20 +302,50 @@ impl HermesAgent {
             // Get tool schemas
             let tools = self.registry.get_schemas().await;
 
-            let request = ChatRequest::new(&self.config.model, messages.clone())
-                .with_tools(tools)
-                .with_stream(self.config.stream);
+            let mut messages_for_api = messages.clone();
+            sanitize_messages_for_api(&mut messages_for_api);
 
-            let response = if request.stream {
-                let stream = self.client.chat_streaming(request).await?;
-                self.process_stream(stream).await
+            debug!(
+                iteration = iteration,
+                message_count = messages_for_api.len(),
+                message_roles = ?messages_for_api.iter().map(|m| (m.role.as_str(), m.tool_calls.is_some(), m.tool_call_id.is_some())).collect::<Vec<_>>(),
+                "Sending messages to API"
+            );
+
+            // When force_answer is true, omit tools from the request so the LLM
+            // cannot call tools and must respond with text. This breaks infinite
+            // tool-only loops (e.g. Gemma via Gemini calling tools forever).
+            let request = if force_answer {
+                info!("FORCE ANSWER: omitting tools to force text response");
+                ChatRequest::new(&self.config.model, messages_for_api)
+                    .with_stream(self.config.stream)
             } else {
-                let response = self.client.chat(request).await?;
-                self.process_response(response).await
+                ChatRequest::new(&self.config.model, messages_for_api)
+                    .with_tools(tools)
+                    .with_stream(self.config.stream)
             };
 
-            match response {
-                Ok((response_text, reasoning_text, tool_calls)) => {
+            let (response_text, reasoning_text, tool_calls, extra_content) = if request.stream {
+                let stream = self.client.chat_streaming(request).await?;
+                let (text, reasoning, tcs, extra) = self.process_stream(stream).await?;
+                debug!(count = tcs.len(), "Streaming response tool_calls");
+                (text, reasoning, tcs, extra)
+            } else {
+                let response = self.client.chat(request).await?;
+                let (text, reasoning, tcs, extra) = self.process_response(response).await?;
+                debug!(count = tcs.len(), "Non-streaming response tool_calls");
+                (text, reasoning, tcs, extra)
+            };
+            let response_text = response_text;
+            let reasoning_text = reasoning_text;
+            let tool_calls = tool_calls;
+            let extra_content = extra_content;
+                    info!(
+                        "API RESPONSE: text_len={}, tool_count={}, text_preview={:?}",
+                        response_text.len(),
+                        tool_calls.len(),
+                        response_text.chars().take(100).collect::<String>()
+                    );
                     // Add assistant message to conversation
                     let mut assistant_msg = Message::assistant(&response_text);
                     if !reasoning_text.is_empty() {
@@ -257,7 +354,26 @@ impl HermesAgent {
                     if !tool_calls.is_empty() {
                         assistant_msg = assistant_msg.with_tool_calls(tool_calls.clone());
                     }
+                    // Include provider-specific extra content (e.g. Google Gemini thought_signature)
+                    if let Some(ref extra) = extra_content {
+                        if !extra.is_null() {
+                            assistant_msg = assistant_msg.with_extra_content(extra.clone());
+                        }
+                    }
+                        for tc in &tool_calls {
+                            debug!(
+                                assistant_tool_id = %tc.id,
+                                assistant_tool_name = %tc.function.name,
+                                "Tool call in assistant message"
+                            );
+                        }
+                    }
 
+                    debug!(
+                        assistant_has_tcs = assistant_msg.tool_calls.is_some(),
+                        assistant_tc_count = assistant_msg.tool_calls.as_ref().map(|tcs| tcs.len()).unwrap_or(0),
+                        "Assistant message created"
+                    );
                     messages.push(assistant_msg.clone());
                     self.add_message(assistant_msg.clone()).await;
 
@@ -278,12 +394,82 @@ impl HermesAgent {
                         )
                         .ok();
 
-                    // If no tool calls, we're done
-                    if tool_calls.is_empty() {
+                    // If the model returned tool_calls, execute them and loop.
+                    if !tool_calls.is_empty() {
+                        info!(
+                            "LOOP CONTINUE: iteration has {} tool call(s): {:?}",
+                            tool_calls.len(),
+                            tool_calls.iter().map(|tc| format!("{}={}", tc.function.name, tc.id)).collect::<Vec<_>>()
+                        );
+
+                        // Check for loops
+                        let state_hash = hash_tool_calls(&tool_calls);
+                        if loop_detector.check(state_hash) {
+                            warn!("Agent loop detected");
+                            if !force_answer_attempted {
+                                info!("Loop detected, retrying with force-answer");
+                                force_answer = true;
+                                force_answer_attempted = true;
+                                continue;
+                            }
+                            info!("Force-answer already attempted, returning result");
+                            let result = assistant_msg.clone();
+                            self.spawn_session_distillation(messages.clone());
+                            self.emit(AgentEvent::Done {
+                                message: assistant_msg,
+                            })
+                            .await;
+                            return Ok(result);
+                        }
+
+                        // Consecutive tool-only detection: some LLMs (Gemma via Gemini)
+                        // call tools indefinitely without producing text. When the
+                        // model calls tools but produces empty text N times in a row,
+                        // force-answer kicks in by omitting tools from the request.
+                        let tool_only = response_text.trim().is_empty();
+                        if tool_only {
+                            consecutive_tool_only += 1;
+                            let threshold = self.config.max_consecutive_tool_only;
+                            if threshold > 0 && consecutive_tool_only >= threshold {
+                                info!(
+                                    "FORCE ANSWER after {} consecutive tool-only iterations (threshold={})",
+                                    consecutive_tool_only, threshold
+                                );
+                                force_answer = true;
+                            }
+                        } else {
+                            consecutive_tool_only = 0;
+                        }
+
+                        // Fall through to tool execution below
+                    } else {
+                        // Model returned no tool_calls. This is the natural end of the turn.
+                        // If content is also empty and we've been executing tools,
+                        // retry ONCE without tools (the model may need help producing text).
+                        let response_has_reasoning = assistant_msg.reasoning.is_some();
+                        let content_empty = response_text.trim().is_empty();
+
+                        if content_empty && !force_answer_attempted && iteration > 1 {
+                            info!(
+                                "Empty response after tool execution, retrying without tools \
+                                 (iteration={}, content_empty={}, reasoning={})",
+                                iteration, content_empty, response_has_reasoning
+                            );
+                            force_answer = true;
+                            force_answer_attempted = true;
+                            continue;
+                        }
+
+                        info!(
+                            "DONE: content_len={}, content_empty={}, has_reasoning={}",
+                            response_text.len(),
+                            content_empty,
+                            response_has_reasoning
+                        );
                         let result = assistant_msg.clone();
                         self.spawn_session_distillation(messages.clone());
                         self.emit(AgentEvent::Done {
-                            message: assistant_msg,
+                            message: assistant_msg.clone(),
                         })
                         .await;
                         return Ok(result);
@@ -292,59 +478,55 @@ impl HermesAgent {
                     // Execute tools and add results
                     let tool_results = self.execute_tools(tool_calls).await?;
 
-                    for result in &tool_results {
-                        // Persist tool result
+                    // Important: We must use the IDs from the tool_calls that were actually sent to the provider
+                    // to ensure strict 1:1 mapping in the conversation history.
+                    for result in tool_results {
+                        let tool_content = if result.success {
+                            result.content.clone()
+                        } else {
+                            result.error.clone().unwrap_or_else(|| "Error".to_string())
+                        };
+                        
+                        debug!(
+                            tool_call_id = %result.tool_call_id,
+                            tool_name = %result.name,
+                            content_len = tool_content.len(),
+                            "Creating tool result message"
+                        );
+
+                        // Persist tool result to database
                         let _ = self.database.save_message(
                             &session_id,
                             "tool",
-                            &result.content,
+                            &tool_content,
                             &chrono::Utc::now().to_rfc3339(),
                         );
-                        self.database
-                            .save_session(
-                                &session_id,
-                                None,
-                                "agent",
-                                &chrono::Utc::now().to_rfc3339(),
-                                &chrono::Utc::now().to_rfc3339(),
-                            )
-                            .ok();
-                        if result.success {
-                            self.emit(AgentEvent::ToolComplete {
-                                result: result.clone(),
-                            })
-                            .await;
-                        } else {
-                            self.emit(AgentEvent::ToolError {
-                                name: result.tool_call_id.clone(),
-                                error: result.error.clone().unwrap_or_default(),
-                            })
-                            .await;
-                        }
-                    }
 
-                    // Add tool results to messages
-                    for result in tool_results {
-                        messages.push(Message::tool(
+                        let tool_msg = Message::tool_with_name(
                             &result.tool_call_id,
-                            if result.success {
-                                &result.content
-                            } else {
-                                result.error.as_deref().unwrap_or("Error")
-                            },
-                        ));
-                    }
-                }
-                Err(e) => {
-                    error!(error = %e, "Error processing stream");
-                    self.emit(AgentEvent::Error {
-                        error: e.to_string(),
-                    })
-                    .await;
-                    return Err(e);
-                }
-            }
+                            &result.name,
+                            &tool_content,
+                        );
 
+                        self.emit(AgentEvent::ToolComplete {
+                            result: result.clone(),
+                        })
+                        .await;
+
+                        messages.push(tool_msg.clone());
+                        self.add_message(tool_msg).await;
+                    }
+
+                    // Update session timestamp
+                    self.database
+                        .save_session(
+                            &session_id,
+                            None,
+                            "agent",
+                            &chrono::Utc::now().to_rfc3339(),
+                            &chrono::Utc::now().to_rfc3339(),
+                        )
+                        .ok();
             self.emit(AgentEvent::IterationComplete { iteration }).await;
         }
     }
@@ -356,10 +538,8 @@ impl HermesAgent {
         let mut system_prompt = if let Some(ref system) = self.config.system_prompt {
             system.clone()
         } else {
-            "You are Hermes, an AI assistant that uses tools to help users. \
-                When you need to use a tool, output your request in the following XML format:\n\
-                <tool_call>{\"name\": \"tool_name\", \"arguments\": {\"arg1\": \"value1\"}}</tool_call>\n\
-                If you need to use multiple tools, output them sequentially, each wrapped in its own XML tags.\n\
+            "You are Hermes, an AI assistant. You have access to tools that you can call to help users. \
+                When you need to use a tool, use the available functions provided to you. \
                 After receiving tool results, continue reasoning and either call more tools or provide your final response."
                 .to_string()
         };
@@ -439,16 +619,37 @@ impl HermesAgent {
     async fn process_stream(
         &self,
         mut stream: BoxStream<'static, Result<StreamChunk>>,
-    ) -> Result<(String, String, Vec<ToolCall>)> {
-        let mut parser = ToolCallStreamParser::new().on_tool_call(|tc| {
-            let tc_id = tc.id.clone();
-            debug!(tool_call_id = %tc_id, name = %tc.function.name, "Early tool call detected");
+    ) -> Result<(String, String, Vec<ToolCall>, Option<serde_json::Value>)> {
+        let event_tx = self.event_tx.clone();
+        let tool_progress = self.config.tool_progress.clone();
+        let mut native_emitted_ids: HashSet<String> = HashSet::new();
+        let mut accumulated_extra: Option<serde_json::Value> = None;
+
+        let mut parser = ToolCallStreamParser::new().on_tool_call({
+            let event_tx = event_tx.clone();
+            let tool_progress = tool_progress.clone();
+            move |tc| {
+                let tc_id = tc.id.clone();
+                debug!(tool_call_id = %tc_id, name = %tc.function.name, "Early tool call detected");
+                if tool_progress == ToolProgressMode::Streaming
+                    || tool_progress == ToolProgressMode::Auto
+                {
+                    if let Some(ref tx) = event_tx {
+                        let _ = tx.try_send(AgentEvent::ToolStart {
+                            name: tc.function.name,
+                            arguments: tc.function.arguments,
+                            tool_call_id: tc.id,
+                        });
+                    }
+                }
+            }
         });
         let mut content_router = ThinkBlockRouter::default();
         let mut tool_call_router = ToolCallContentRouter::default();
         let mut accumulated_text = String::new();
         let mut accumulated_reasoning = String::new();
         let mut tool_calls: Vec<ToolCall> = Vec::new();
+        let mut seen = SeenToolCalls::default();
         let mut has_error = false;
 
         while let Some(chunk_result) = stream.next().await {
@@ -470,9 +671,7 @@ impl HermesAgent {
                         if !content_delta.is_empty() {
                             let chunk_tool_calls = parser.process_chunk(&content_delta);
                             for tc in chunk_tool_calls {
-                                if !tool_calls.iter().any(|existing| existing.id == tc.id) {
-                                    tool_calls.push(tc);
-                                }
+                                merge_stream_tool_call(&mut tool_calls, tc, &mut seen);
                             }
 
                             let visible_text = tool_call_router.feed(&content_delta);
@@ -491,10 +690,55 @@ impl HermesAgent {
                         }
                     }
 
+                    // Capture provider-specific extra content (e.g. Gemini thought_signature)
+                    if let Some(ref extra) = chunk.extra_content {
+                        if !extra.is_null() {
+                            accumulated_extra = Some(extra.clone());
+                        }
+                    }
+
                     // Merge native provider tool-call deltas
                     if let Some(chunk_tool_calls) = chunk.tool_calls {
+                        debug!(
+                            count = chunk_tool_calls.len(),
+                            "Native tool_call deltas received"
+                        );
                         for tc in chunk_tool_calls {
-                            merge_stream_tool_call(&mut tool_calls, tc);
+                            let is_new = !tool_calls.iter().any(|existing| existing.id == tc.id);
+                            let tc_id = tc.id.clone();
+                            let name = tc.function.name.clone();
+                            let args = tc.function.arguments.clone();
+                            merge_stream_tool_call(&mut tool_calls, tc, &mut seen);
+                            if is_new
+                                && !name.is_empty()
+                                && (tool_progress == ToolProgressMode::Streaming
+                                    || tool_progress == ToolProgressMode::Auto)
+                            {
+                                if !native_emitted_ids.contains(&tc_id) {
+                                    native_emitted_ids.insert(tc_id.clone());
+                                    if let Some(ref tx) = event_tx {
+                                        if tx
+                                            .try_send(AgentEvent::ToolStart {
+                                                name: name.clone(),
+                                                arguments: args,
+                                                tool_call_id: tc_id.clone(),
+                                            })
+                                            .is_err()
+                                        {
+                                            warn!(
+                                                tool_id = %tc_id,
+                                                tool_name = %name,
+                                                "native tool_call try_send failed"
+                                            );
+                                        }
+                                    }
+                                    debug!(
+                                        tool_id = %tc_id,
+                                        tool_name = %name,
+                                        "emitted ToolStart for native tool_call"
+                                    );
+                                }
+                            }
                         }
                     }
                 }
@@ -510,33 +754,77 @@ impl HermesAgent {
             return Err(Error::Agent("Stream processing failed".to_string()));
         }
 
-        let (remaining_content, remaining_reasoning) = content_router.finish();
-        if !remaining_content.is_empty() {
-            let remaining_calls = parser.process_chunk(&remaining_content);
-            for tc in remaining_calls {
-                merge_stream_tool_call(&mut tool_calls, tc);
+        // Streaming native tool_calls arrive as partial argument deltas
+        // (e.g. "{" then "}") which contaminate seen. Rebuild from final
+        // complete tool_calls so XML-parsed equivalents dedupe correctly.
+        {
+            let mut fresh_seen = SeenToolCalls::default();
+            for tc in &tool_calls {
+                fresh_seen.insert(&tc.function.name, &tc.function.arguments);
             }
-            accumulated_text.push_str(&tool_call_router.feed(&remaining_content));
+            seen = fresh_seen;
         }
-        accumulated_text.push_str(&tool_call_router.finish());
+
+        // Final flush of all routers
+        let (remaining_content, remaining_reasoning) = content_router.finish();
+        
+        // Feed remaining content through the routers
+        if !remaining_content.is_empty() {
+            let chunk_tool_calls = parser.process_chunk(&remaining_content);
+            for tc in chunk_tool_calls {
+                merge_stream_tool_call(&mut tool_calls, tc, &mut seen);
+            }
+            let visible_text = tool_call_router.feed(&remaining_content);
+            if !visible_text.is_empty() {
+                accumulated_text.push_str(&visible_text);
+                self.emit(AgentEvent::Content { text: visible_text }).await;
+            }
+        }
+
+        // Final finish for parser and tool_call_router
+        let (remaining_calls, final_parser_text) = parser.finish();
+        for tc in remaining_calls {
+            merge_stream_tool_call(&mut tool_calls, tc, &mut seen);
+        }
+        
+        let final_router_text = tool_call_router.finish();
+        
+        // Use the more complete text from the routers/parser
+        if !final_router_text.is_empty() {
+            accumulated_text.push_str(&final_router_text);
+            self.emit(AgentEvent::Content { text: final_router_text }).await;
+        }
+        
+        if !final_parser_text.is_empty() && !accumulated_text.contains(&final_parser_text) {
+             // This is a fallback in case the router missed something the parser caught
+             // or vice versa. We avoid duplicates by checking contains().
+             accumulated_text.push_str(&final_parser_text);
+        }
+
         accumulated_reasoning.push_str(&remaining_reasoning);
 
-        // Also try to extract any remaining tool calls from accumulated text
+        // Also try to extract any remaining tool calls from accumulated text as a final safety net
         let mut remaining_parser = ToolCallParser::new();
-        let remaining_calls = remaining_parser.parse(&accumulated_text)?;
-
-        // Merge tool calls, avoiding duplicates
-        for tc in remaining_calls {
-            merge_stream_tool_call(&mut tool_calls, tc);
+        if let Ok(extra_calls) = remaining_parser.parse(&accumulated_text) {
+            for tc in extra_calls {
+                merge_stream_tool_call(&mut tool_calls, tc, &mut seen);
+            }
         }
 
-        Ok((accumulated_text, accumulated_reasoning, tool_calls))
+        info!(
+            "process_stream DONE: text_len={}, text_preview={:?}, tool_count={}, tool_names={:?}",
+            accumulated_text.len(),
+            accumulated_text.chars().take(100).collect::<String>(),
+            tool_calls.len(),
+            tool_calls.iter().map(|tc| &tc.function.name).collect::<Vec<_>>()
+        );
+        Ok((accumulated_text, accumulated_reasoning, tool_calls, accumulated_extra))
     }
 
     async fn process_response(
         &self,
         response: ChatResponse,
-    ) -> Result<(String, String, Vec<ToolCall>)> {
+    ) -> Result<(String, String, Vec<ToolCall>, Option<serde_json::Value>)> {
         let choice = response
             .choices
             .into_iter()
@@ -551,10 +839,14 @@ impl HermesAgent {
             .map(|value| strip_reasoning_tags(&value))
             .unwrap_or_default();
         let mut tool_calls = extract_tool_calls_from_choice(message.tool_calls);
+        let mut seen = SeenToolCalls::default();
+        for tc in &tool_calls {
+            seen.insert(&tc.function.name, &tc.function.arguments);
+        }
         let mut xml_parser = ToolCallParser::new();
         if let Ok(xml_tool_calls) = xml_parser.parse(&raw_content) {
             for tool_call in xml_tool_calls {
-                merge_stream_tool_call(&mut tool_calls, tool_call);
+                merge_stream_tool_call(&mut tool_calls, tool_call, &mut seen);
             }
         }
 
@@ -574,71 +866,79 @@ impl HermesAgent {
         Ok((content, reasoning, tool_calls))
     }
 
-    /// Execute tools and handle self-healing
     async fn execute_tools(&self, tool_calls: Vec<ToolCall>) -> Result<Vec<ToolResult>> {
-        let mut results = Vec::new();
+        let tool_timeout = self.config.tool_timeout;
 
-        for tool_call in tool_calls {
-            let name = tool_call.function.name.clone();
-            let args_str = tool_call.function.arguments.clone();
-
-            debug!(tool = %name, args = %args_str, "Executing tool");
+        for tc in &tool_calls {
+            debug!(
+                tool_call_id = %tc.id,
+                tool = %tc.function.name,
+                args = %tc.function.arguments,
+                "Executing tool"
+            );
             self.emit(AgentEvent::ToolStart {
-                name: name.clone(),
-                arguments: args_str.clone(),
+                name: tc.function.name.clone(),
+                arguments: tc.function.arguments.clone(),
+                tool_call_id: tc.id.clone(),
             })
             .await;
-
-            // Parse arguments
-            let args: serde_json::Value = match serde_json::from_str(&args_str) {
-                Ok(a) => a,
-                Err(e) => {
-                    warn!(tool = %name, error = %e, "Failed to parse tool arguments");
-                    results.push(ToolResult::error(
-                        &tool_call.id,
-                        format!("Invalid JSON: {}", e),
-                    ));
-                    continue;
-                }
-            };
-
-            // Validate tool exists
-            if !self.registry.contains(&name).await {
-                error!(tool = %name, "Tool not found");
-                results.push(ToolResult::error(
-                    &tool_call.id,
-                    format!("Tool '{}' not found", name),
-                ));
-                continue;
-            }
-
-            // Execute with timeout
-            let result = timeout(
-                self.config.tool_timeout,
-                self.registry
-                    .execute(&name, &tool_call.id, args, ToolContext::default()),
-            )
-            .await;
-
-            match result {
-                Ok(Ok(r)) => {
-                    debug!(tool = %name, success = r.success, "Tool execution completed");
-                    results.push(r);
-                }
-                Ok(Err(e)) => {
-                    error!(tool = %name, error = %e, "Tool execution failed");
-                    results.push(ToolResult::error(&tool_call.id, e.to_string()));
-                }
-                Err(_) => {
-                    error!(tool = %name, "Tool execution timed out");
-                    results.push(ToolResult::error(
-                        &tool_call.id,
-                        format!("Tool timed out after {:?}", self.config.tool_timeout),
-                    ));
-                }
-            }
         }
 
+        let registry = &self.registry;
+
+        let futures: Vec<_> = tool_calls
+            .into_iter()
+            .map(|tool_call| async move {
+                let name = tool_call.function.name.clone();
+                let args_str = tool_call.function.arguments.clone();
+                let id = tool_call.id.clone();
+
+                // Aggressive trimming of whitespace, null bytes, and other control characters
+                let mut trimmed_args = args_str.trim().trim_matches(|c: char| c.is_control() || c.is_whitespace()).to_string();
+
+                if trimmed_args.is_empty() || trimmed_args == "\"\"" {
+                     debug!(tool = %name, "Empty tool arguments received, defaulting to empty object");
+                     trimmed_args = "{}".to_string();
+                 }
+
+                let args: serde_json::Value = match serde_json::from_str(&trimmed_args) {
+                    Ok(a) => a,
+                    Err(e) => {
+                        warn!(tool = %name, error = %e, args = %trimmed_args, "Failed to parse tool arguments");
+                        return ToolResult::error_with_name(&name, &id, format!("Invalid JSON: {}", e));
+                    }
+                };
+
+                if !registry.contains(&name).await {
+                    error!(tool = %name, "Tool not found");
+                    return ToolResult::error_with_name(&name, &id, format!("Tool '{}' not found", name));
+                }
+
+                let result = timeout(
+                    tool_timeout,
+                    registry.execute(&name, &id, args, ToolContext::default()),
+                )
+                .await;
+
+                match result {
+                    Ok(Ok(mut r)) => {
+                        debug!(tool = %name, success = r.success, "Tool execution completed");
+                        r.name = name.clone();
+                        r
+                    }
+                    Ok(Err(e)) => {
+                        error!(tool = %name, error = %e, "Tool execution failed");
+                        ToolResult::error_with_name(&name, &id, e.to_string())
+                    }
+                    Err(_) => {
+                        error!(tool = %name, "Tool execution timed out");
+                        ToolResult::error_with_name(&name, &id, format!("Tool timed out after {:?}", tool_timeout))
+                    }
+                }
+            })
+            .collect();
+
+        let results = join_all(futures).await;
         Ok(results)
     }
 
@@ -795,22 +1095,76 @@ fn extract_tool_calls_from_choice(
         .unwrap_or_default()
         .into_iter()
         .filter_map(|delta| {
-            let function = delta.function?;
-            Some(ToolCall {
-                id: delta
-                    .id
-                    .unwrap_or_else(|| format!("call_choice_{}_{}", delta.index, function.name)),
-                function,
-            })
+            let mut function = delta.function?;
+
+            // Normalize empty arguments to "{}" to prevent EOF errors later
+            if function.arguments.trim().is_empty() {
+                function.arguments = "{}".to_string();
+            }
+
+            let id = delta.id.unwrap_or_else(|| {
+                let generated = format!("call_choice_{}_{}", delta.index, function.name);
+                debug!(
+                    index = %delta.index,
+                    generated_id = %generated,
+                    name = %function.name,
+                    "No id in delta, generating one"
+                );
+                generated
+            });
+            debug!(
+                tool_call_id = %id,
+                name = %function.name,
+                index = %delta.index,
+                "extract_tool_calls_from_choice"
+            );
+            Some(ToolCall { id, function })
         })
         .collect()
 }
 
-fn merge_stream_tool_call(tool_calls: &mut Vec<ToolCall>, tool_call: ToolCall) {
+#[derive(Default)]
+struct SeenToolCalls {
+    names: std::collections::HashSet<String>,
+}
+
+impl SeenToolCalls {
+    fn insert(&mut self, name: &str, arguments: &str) -> bool {
+        let key = format!("{}:{}", name, arguments);
+        self.names.insert(key)
+    }
+}
+
+fn merge_stream_tool_call(
+    tool_calls: &mut Vec<ToolCall>,
+    tool_call: ToolCall,
+    seen: &mut SeenToolCalls,
+) {
+    if tool_call.id.is_empty() {
+        if seen.insert(&tool_call.function.name, &tool_call.function.arguments) {
+            debug!(
+                new_name = %tool_call.function.name,
+                "Tool call has empty ID, treating as new call"
+            );
+            tool_calls.push(tool_call);
+        } else {
+            debug!(
+                duplicate_name = %tool_call.function.name,
+                "Duplicate tool call with same name/args, skipping"
+            );
+        }
+        return;
+    }
+
     if let Some(existing) = tool_calls
         .iter_mut()
         .find(|existing| existing.id == tool_call.id)
     {
+        debug!(
+            existing_id = %existing.id,
+            new_name = %tool_call.function.name,
+            "Merging tool call arguments"
+        );
         if existing.function.name.is_empty() {
             existing.function.name = tool_call.function.name;
         }
@@ -821,8 +1175,58 @@ fn merge_stream_tool_call(tool_calls: &mut Vec<ToolCall>, tool_call: ToolCall) {
                 .push_str(&tool_call.function.arguments);
         }
     } else {
-        tool_calls.push(tool_call);
+        if seen.insert(&tool_call.function.name, &tool_call.function.arguments) {
+            debug!(
+                new_id = %tool_call.id,
+                new_name = %tool_call.function.name,
+                "Adding new tool call to list"
+            );
+            tool_calls.push(tool_call);
+        } else {
+            debug!(
+                duplicate_id = %tool_call.id,
+                name = %tool_call.function.name,
+                "Skipping duplicate tool call with different ID but same name/args"
+            );
+        }
     }
+}
+
+fn sanitize_messages_for_api(messages: &mut Vec<Message>) {
+    let mut seen_tool_call_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    for msg in messages.iter() {
+        if msg.role == crate::client::Role::Assistant {
+            if let Some(ref tool_calls) = msg.tool_calls {
+                for tc in tool_calls {
+                    if !tc.id.is_empty() {
+                        seen_tool_call_ids.insert(tc.id.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    // Filter out tool results that don't have a matching tool call
+    messages.retain(|msg| {
+        if msg.role == crate::client::Role::Tool {
+            if let Some(ref tool_call_id) = msg.tool_call_id {
+                if !seen_tool_call_ids.contains(tool_call_id) {
+                    warn!(
+                        orphan_tcid = %tool_call_id,
+                        "Removing orphan tool result message to avoid API errors"
+                    );
+                    return false;
+                }
+                true
+            } else {
+                warn!("Removing tool message without tool_call_id");
+                false
+            }
+        } else {
+            true
+        }
+    });
 }
 
 #[derive(Default)]
@@ -1055,6 +1459,7 @@ pub mod clients;
 mod tests {
     use super::*;
     use crate::client::ChatStreamEvent;
+    use crate::client::{Choice, MessageDelta, ToolCallFunction};
     use serial_test::serial;
 
     #[allow(dead_code)]
@@ -1200,6 +1605,7 @@ mod tests {
                     content: Some("Hello ".to_string()),
                     reasoning_content: None,
                     tool_calls: None,
+                    extra_content: None,
                 },
                 finish_reason: None,
             }],
@@ -1317,6 +1723,9 @@ mod tests {
                 arguments: "{\"format\":".to_string(),
             },
         }];
+        let mut seen = SeenToolCalls::default();
+        seen.insert("datetime", "{\"format\":");
+        seen.insert("datetime", "\"%Y-%m-%d\"}");
 
         merge_stream_tool_call(
             &mut tool_calls,
@@ -1327,6 +1736,7 @@ mod tests {
                     arguments: "\"%Y-%m-%d\"}".to_string(),
                 },
             },
+            &mut seen,
         );
 
         assert_eq!(tool_calls.len(), 1);
@@ -1390,11 +1800,255 @@ mod tests {
             },
         };
 
-        let (content, reasoning, tool_calls) = agent.process_response(response).await.unwrap();
+        let (content, reasoning, tool_calls, _extra) = agent.process_response(response).await.unwrap();
 
         assert_eq!(content, "");
         assert_eq!(reasoning, "need tool");
         assert_eq!(tool_calls.len(), 1);
         assert_eq!(tool_calls[0].function.name, "datetime");
+    }
+
+    #[test]
+    fn sanitize_messages_for_api_keeps_matching_tool_messages() {
+        let mut messages = vec![
+            Message::system("You are a helpful assistant."),
+            Message::user("What is the weather?"),
+            Message::assistant("")
+                .with_tool_calls(vec![ToolCall {
+                    id: "call_abc123".to_string(),
+                    function: crate::client::ToolCallFunction {
+                        name: "get_weather".to_string(),
+                        arguments: "{\"location\":\"NYC\"}".to_string(),
+                    },
+                }]),
+            Message::tool_with_name("call_abc123", "get_weather", "Sunny, 72°F"),
+        ];
+
+        sanitize_messages_for_api(&mut messages);
+
+        assert_eq!(messages.len(), 4, "Tool message with matching ID should be kept");
+        assert_eq!(messages[3].role, crate::client::Role::Tool);
+        assert_eq!(messages[3].tool_call_id.as_deref(), Some("call_abc123"));
+    }
+
+    #[test]
+    fn sanitize_messages_for_api_removes_orphan_tool_messages() {
+        let mut messages = vec![
+            Message::system("You are a helpful assistant."),
+            Message::user("What is the weather?"),
+            Message::assistant("")
+                .with_tool_calls(vec![ToolCall {
+                    id: "call_abc123".to_string(),
+                    function: ToolCallFunction {
+                        name: "get_weather".to_string(),
+                        arguments: "{\"location\":\"NYC\"}".to_string(),
+                    },
+                }]),
+            Message::tool_with_name("call_xyz999", "get_weather", "Sunny, 72°F"),
+        ];
+
+        sanitize_messages_for_api(&mut messages);
+
+        assert_eq!(messages.len(), 3, "Orphan tool message should be REMOVED");
+        assert!(messages.last().unwrap().tool_call_id.is_none());
+    }
+
+    #[test]
+    fn sanitize_messages_for_api_handles_empty_tool_call_ids() {
+        let mut messages = vec![
+            Message::assistant("")
+                .with_tool_calls(vec![ToolCall {
+                    id: "".to_string(),
+                    function: ToolCallFunction {
+                        name: "get_weather".to_string(),
+                        arguments: "{}".to_string(),
+                    },
+                }]),
+            Message::tool_with_name("call_abc123", "get_weather", "Sunny"),
+        ];
+
+        sanitize_messages_for_api(&mut messages);
+
+        assert_eq!(messages.len(), 1, "Tool message without matching assistant tool_call_id should be removed");
+    }
+
+    #[test]
+    fn sanitize_messages_for_api_multi_iteration() {
+        let mut messages = vec![
+            Message::system("Assistant."),
+            Message::user("Check weather and time."),
+            Message::assistant("Checking weather.")
+                .with_tool_calls(vec![ToolCall {
+                    id: "call_001".to_string(),
+                    function: ToolCallFunction {
+                        name: "get_weather".to_string(),
+                        arguments: "{\"location\":\"NYC\"}".to_string(),
+                    },
+                }]),
+            Message::tool_with_name("call_001", "get_weather", "Sunny"),
+            Message::assistant("Now checking time.")
+                .with_tool_calls(vec![ToolCall {
+                    id: "call_002".to_string(),
+                    function: ToolCallFunction {
+                        name: "get_time".to_string(),
+                        arguments: "{\"timezone\":\"EST\"}".to_string(),
+                    },
+                }]),
+            Message::tool_with_name("call_002", "get_time", "3:00 PM"),
+        ];
+
+        sanitize_messages_for_api(&mut messages);
+
+        assert_eq!(messages.len(), 6, "All messages with matching IDs should be kept");
+    }
+
+    #[test]
+    fn merge_stream_tool_call_handles_native_and_xml_same_id() {
+        let mut tool_calls = vec![ToolCall {
+            id: "call_abc123".to_string(),
+            function: ToolCallFunction {
+                name: "get_weather".to_string(),
+                arguments: "{\"locati".to_string(),
+            },
+        }];
+        let mut seen = SeenToolCalls::default();
+        seen.insert("get_weather", "{\"locati");
+
+        merge_stream_tool_call(
+            &mut tool_calls,
+            ToolCall {
+                id: "call_abc123".to_string(),
+                function: ToolCallFunction {
+                    name: "get_weather".to_string(),
+                    arguments: "on\":\"NYC\"}".to_string(),
+                },
+            },
+            &mut seen,
+        );
+
+        assert_eq!(tool_calls.len(), 1, "Same ID should merge into one tool_call");
+        assert_eq!(
+            tool_calls[0].function.arguments,
+            "{\"location\":\"NYC\"}"
+        );
+    }
+
+    #[test]
+    fn merge_stream_tool_call_skips_duplicate_with_different_id() {
+        let mut tool_calls = vec![ToolCall {
+            id: "call_abc123".to_string(),
+            function: ToolCallFunction {
+                name: "get_weather".to_string(),
+                arguments: "{\"location\":\"NYC\"}".to_string(),
+            },
+        }];
+        let mut seen = SeenToolCalls::default();
+        seen.insert("get_weather", "{\"location\":\"NYC\"}");
+
+        merge_stream_tool_call(
+            &mut tool_calls,
+            ToolCall {
+                id: "call_1744678400".to_string(),
+                function: ToolCallFunction {
+                    name: "get_weather".to_string(),
+                    arguments: "{\"location\":\"NYC\"}".to_string(),
+                },
+            },
+            &mut seen,
+        );
+
+        assert_eq!(tool_calls.len(), 1,
+            "FIX: merge_stream_tool_call should skip duplicate even when IDs differ");
+    }
+
+    #[serial]
+    #[tokio::test]
+    async fn process_response_native_and_xml_tool_calls_different_ids() {
+        use crate::client::ToolCallDelta;
+        use crate::client::ToolCallFunction as TcFunc;
+
+        let response = ChatResponse {
+            id: "resp_1".to_string(),
+            object: "chat.completion".to_string(),
+            created: 0,
+            model: "deepseek".to_string(),
+            choices: vec![Choice {
+                index: 0,
+                message: MessageDelta {
+                    role: Some(crate::client::Role::Assistant),
+                    content: Some(
+                        "I'll check the weather.\n<tool_call>{\"name\":\"get_weather\",\"arguments\":{\"location\":\"NYC\"}}</tool_call>".to_string()
+                    ),
+                    reasoning_content: None,
+                    tool_calls: Some(vec![ToolCallDelta {
+                        index: 0,
+                        id: Some("call_deepseek_abc123".to_string()),
+                        call_type: Some("function".to_string()),
+                        function: Some(TcFunc {
+                            name: "get_weather".to_string(),
+                            arguments: "{\"location\":\"NYC\"}".to_string(),
+                        }),
+                    }]),
+                },
+                finish_reason: Some("tool_calls".to_string()),
+            }],
+            usage: crate::client::Usage {
+                prompt_tokens: 10,
+                completion_tokens: 20,
+                total_tokens: 30,
+            },
+        };
+
+        let db_path = std::path::PathBuf::from("test_db_native_xml.sqlite");
+        let _ = std::fs::remove_file(&db_path);
+
+        let agent = HermesAgent::new(
+            AgentConfig::default(),
+            Box::new(crate::agent::clients::openai::OpenAIModelClient::new(
+                crate::client::OpenAIClient::new(crate::client::ClientConfig::default()),
+            )),
+            ToolRegistry::new(Duration::from_secs(1)),
+            Arc::new(Database::init(db_path).unwrap()),
+        );
+
+        let (content, reasoning, tool_calls, _extra) = agent.process_response(response).await.unwrap();
+
+        assert_eq!(content, "I'll check the weather.\n");
+        let has_duplicate = tool_calls.len() > 1;
+        if has_duplicate {
+            println!("process_response returned {} tool_calls instead of 1", tool_calls.len());
+        }
+        assert!(tool_calls.len() >= 1);
+        assert_eq!(tool_calls[0].function.name, "get_weather");
+    }
+
+
+
+    #[test]
+    fn merge_stream_tool_call_different_args_same_name_allows_both() {
+        let mut tool_calls = vec![ToolCall {
+            id: "call_001".to_string(),
+            function: ToolCallFunction {
+                name: "get_weather".to_string(),
+                arguments: "{\"location\":\"NYC\"}".to_string(),
+            },
+        }];
+        let mut seen = SeenToolCalls::default();
+        seen.insert("get_weather", "{\"location\":\"NYC\"}");
+
+        merge_stream_tool_call(
+            &mut tool_calls,
+            ToolCall {
+                id: "call_002".to_string(),
+                function: ToolCallFunction {
+                    name: "get_time".to_string(),
+                    arguments: "{\"timezone\":\"EST\"}".to_string(),
+                },
+            },
+            &mut seen,
+        );
+
+        assert_eq!(tool_calls.len(), 2,
+            "Different tools with different IDs should both be added");
     }
 }

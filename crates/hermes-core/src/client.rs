@@ -179,6 +179,18 @@ impl OpenAIClient {
     ) -> Result<ChatStreamResponse> {
         let request = self.build_chat_request(model, messages, tools, true)?;
 
+        // Log message roles to verify tool results are included
+        let tool_result_count = messages.iter().filter(|m| m.tool_call_id.is_some()).count();
+        let tool_call_count = messages.iter().filter(|m| m.tool_calls.is_some()).count();
+        let roles: Vec<&str> = messages.iter().map(|m| m.role.as_str()).collect();
+        info!(
+            roles = %roles.join(","),
+            total = messages.len(),
+            tool_results = tool_result_count,
+            assistant_tool_calls = tool_call_count,
+            "Sending streaming request"
+        );
+
         let url = self.build_url("")?;
         let headers = self.build_headers()?;
 
@@ -269,6 +281,10 @@ pub struct Message {
     pub name: Option<String>,
     pub tool_call_id: Option<String>,
     pub tool_calls: Option<Vec<ToolCall>>,
+    /// Provider-specific extra fields (e.g. Google Gemini thought_signature).
+    /// These are stored in the message and included in serialization for
+    /// subsequent API requests so the provider can validate its own format.
+    pub extra_content: Option<serde_json::Value>,
 }
 
 impl Message {
@@ -281,6 +297,7 @@ impl Message {
             name: None,
             tool_call_id: None,
             tool_calls: None,
+            extra_content: None,
         }
     }
 
@@ -308,6 +325,24 @@ impl Message {
             tool_call_id: Some(tool_call_id.into()),
             name: None,
             tool_calls: None,
+            extra_content: None,
+        }
+    }
+
+    /// Create a tool message with tool name (for API compatibility)
+    pub fn tool_with_name(
+        tool_call_id: impl Into<String>,
+        name: impl Into<String>,
+        content: impl Into<String>,
+    ) -> Self {
+        Self {
+            role: Role::Tool,
+            content: content.into(),
+            reasoning: None,
+            tool_call_id: Some(tool_call_id.into()),
+            name: Some(name.into()),
+            tool_calls: None,
+            extra_content: None,
         }
     }
 
@@ -323,6 +358,12 @@ impl Message {
         if !reasoning.trim().is_empty() {
             self.reasoning = Some(reasoning);
         }
+        self
+    }
+
+    /// Add provider-specific extra content (e.g. Google Gemini thought_signature)
+    pub fn with_extra_content(mut self, extra: serde_json::Value) -> Self {
+        self.extra_content = Some(extra);
         self
     }
 
@@ -346,16 +387,42 @@ impl Message {
                 })
                 .collect();
             map.insert("tool_calls".to_string(), json!(tc_array));
-            map.insert("content".to_string(), json!(self.content));
+            // Per OpenAI spec: content MUST be null (not empty string) when
+            // tool_calls is present and there is no assistant text. Some
+            // providers (DeepSeek, proxies) are strict about this.
+            if self.role == Role::Assistant && self.content.trim().is_empty() {
+                map.insert("content".to_string(), Value::Null);
+            } else {
+                map.insert("content".to_string(), json!(self.content));
+            }
         } else {
             map.insert("content".to_string(), json!(self.content));
         }
 
         if let Some(ref name) = self.name {
-            map.insert("name".to_string(), json!(name));
+            // Only include name for non-tool messages. Some providers (Google Gemini)
+            // reject tool messages with extra fields beyond role/content/tool_call_id.
+            if self.role != Role::Tool {
+                map.insert("name".to_string(), json!(name));
+            }
         }
         if let Some(ref tool_call_id) = self.tool_call_id {
             map.insert("tool_call_id".to_string(), json!(tool_call_id));
+        }
+
+        if let Some(ref reasoning) = self.reasoning {
+            map.insert("reasoning_content".to_string(), json!(reasoning));
+        }
+
+        // Include provider-specific extra content (e.g. Google Gemini thought_signature).
+        // This must be forwarded to the provider on subsequent API calls for tool
+        // validation to succeed.
+        if let Some(ref extra) = self.extra_content {
+            if let Some(obj) = extra.as_object() {
+                for (k, v) in obj {
+                    map.insert(k.clone(), v.clone());
+                }
+            }
         }
 
         Value::Object(map)
@@ -371,6 +438,7 @@ impl Default for Message {
             name: None,
             tool_call_id: None,
             tool_calls: None,
+            extra_content: None,
         }
     }
 }
@@ -481,6 +549,11 @@ pub struct StreamingMessageDelta {
     pub reasoning_content: Option<String>,
     #[serde(default)]
     pub tool_calls: Option<Vec<StreamingToolCallDelta>>,
+    /// Provider-specific extra content (e.g. Google Gemini thought_signature).
+    /// Captured from streaming deltas and forwarded to subsequent API calls
+    /// so the provider can validate its own format.
+    #[serde(default, alias = "extra_content")]
+    pub extra_content: Option<serde_json::Value>,
 }
 
 /// Tool call delta for streaming
@@ -651,6 +724,38 @@ mod tests {
 
         assert_eq!(value["role"], "tool");
         assert_eq!(value["tool_call_id"], "call_123");
+    }
+
+    #[test]
+    fn test_assistant_with_tool_calls_serialization() {
+        let msg = Message::assistant("I'll use a tool.")
+            .with_tool_calls(vec![ToolCall {
+                id: "call_abc123".to_string(),
+                function: ToolCallFunction {
+                    name: "get_weather".to_string(),
+                    arguments: "{\"location\":\"NYC\"}".to_string(),
+                },
+            }]);
+        let value = msg.to_value();
+
+        assert_eq!(value["role"], "assistant");
+        assert_eq!(value["content"], "I'll use a tool.");
+        assert!(value.get("tool_calls").is_some());
+        assert_eq!(value["tool_calls"][0]["id"], "call_abc123");
+        assert_eq!(value["tool_calls"][0]["function"]["name"], "get_weather");
+        assert!(value.get("tool_call_id").is_none(), "Assistant messages should not have tool_call_id");
+    }
+
+    #[test]
+    fn test_tool_message_with_name_serialization() {
+        let msg = Message::tool_with_name("call_abc123", "get_weather", "Sunny, 72°F");
+        let value = msg.to_value();
+
+        assert_eq!(value["role"], "tool");
+        assert_eq!(value["tool_call_id"], "call_abc123");
+        assert_eq!(value["content"], "Sunny, 72°F");
+        assert!(value.get("name").is_none(), "Tool messages should not have name field (some providers reject it)");
+        assert!(value.get("tool_calls").is_none(), "Tool messages should not have tool_calls field");
     }
 
     #[test]
