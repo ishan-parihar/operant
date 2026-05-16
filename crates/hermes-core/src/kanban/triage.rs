@@ -136,8 +136,7 @@ impl TriageSpecifier {
     pub fn build_prompt(&self, task_id: &str, instruction: Option<&str>) -> Result<String, Error> {
         let ctx = self.build_context(task_id)?;
 
-        let instruction_text =
-            instruction.unwrap_or("Suggest the next action for this task.");
+        let instruction_text = instruction.unwrap_or("Suggest the next action for this task.");
 
         let started_str = ctx
             .started_at
