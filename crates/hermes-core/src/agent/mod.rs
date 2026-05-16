@@ -606,7 +606,18 @@ impl HermesAgent {
 
         for tool_call in tool_calls {
             let name = tool_call.function.name.clone();
-            let args_str = tool_call.function.arguments.clone();
+            // Default empty/whitespace-only argument strings to "{}" so that
+            // providers which stream tool-calls without any arguments at all
+            // (e.g. zero-arg tools like `datetime`) still produce a valid
+            // JSON object instead of triggering "EOF while parsing a value
+            // at line 1 column 0".
+            let raw_args = tool_call.function.arguments.clone();
+            let trimmed = raw_args.trim();
+            let args_str = if trimmed.is_empty() {
+                "{}".to_string()
+            } else {
+                raw_args
+            };
 
             debug!(tool = %name, args = %args_str, "Executing tool");
             self.emit(AgentEvent::ToolStart {

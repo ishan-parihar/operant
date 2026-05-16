@@ -436,9 +436,21 @@ pub struct ToolCall {
 }
 
 /// Function in a tool call
+///
+/// Both `name` and `arguments` default to empty strings during deserialization.
+/// This is required because OpenAI-compatible streaming providers send the
+/// function name in the FIRST `tool_calls` delta of an SSE stream and emit
+/// subsequent deltas with only an `arguments` fragment (and no `name`). Without
+/// these defaults the inner deserializer would error on every continuation
+/// delta, making the parent `Option<ToolCallFunction>` fail and dropping all
+/// subsequent argument chunks. The agent would then see an empty `arguments`
+/// string and produce `Invalid JSON: EOF while parsing a value at line 1
+/// column 0` for every tool call.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolCallFunction {
+    #[serde(default)]
     pub name: String,
+    #[serde(default)]
     pub arguments: String,
 }
 
