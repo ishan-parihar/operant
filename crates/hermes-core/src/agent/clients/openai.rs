@@ -64,19 +64,17 @@ impl ModelClient for OpenAIModelClient {
         // (process_stream in agent/mod.rs) merges incremental arguments.
         let mapped = stream.map(|event_result| match event_result {
             Ok(event) => {
-                let content = event.choices.first().and_then(|c| c.delta.content.clone());
-
-                let reasoning = event
-                    .choices
-                    .first()
-                    .and_then(|c| c.delta.reasoning_content.clone());
-
+                let choice = &event.choices.first();
+                let content = choice.and_then(|c| c.delta.content.clone());
+                let reasoning = choice.and_then(|c| c.delta.reasoning_content.clone());
                 let tool_calls = extract_tool_calls_from_stream_event(&event);
+                let extra_content = choice.and_then(|c| c.delta.extra_content.clone());
 
                 Ok(StreamChunk {
                     content,
                     reasoning,
                     tool_calls,
+                    extra_content,
                 })
             }
             Err(e) => Err(e),

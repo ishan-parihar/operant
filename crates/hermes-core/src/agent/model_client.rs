@@ -67,6 +67,8 @@ pub struct StreamChunk {
     pub content: Option<String>,
     pub reasoning: Option<String>,
     pub tool_calls: Option<Vec<ToolCall>>,
+    /// Provider-specific extra data (e.g. Google Gemini thought_signature)
+    pub extra_content: Option<serde_json::Value>,
 }
 
 impl StreamChunk {
@@ -79,6 +81,7 @@ impl StreamChunk {
             content,
             reasoning,
             tool_calls,
+            extra_content: None,
         }
     }
 }
