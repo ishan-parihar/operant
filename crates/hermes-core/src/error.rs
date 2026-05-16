@@ -69,6 +69,22 @@ pub enum Error {
     #[error("JSON decode error: {0}")]
     JsonDecode(#[from] serde_json::Error),
 
+    // ========== Provider Errors ==========
+    #[error("Provider API error: HTTP {status} - {body}")]
+    Provider {
+        status: u16,
+        body: String,
+        retry_after: Option<std::time::Duration>,
+    },
+
+    #[error("Rate limited (retry after {retry_after:?})")]
+    RateLimited {
+        retry_after: std::time::Duration,
+    },
+
+    #[error("Authentication failed: {0}")]
+    Authentication(String),
+
     // ========== Agent Errors ==========
     #[error("Agent error: {0}")]
     Agent(String),
@@ -100,13 +116,15 @@ pub enum Error {
 impl Error {
     /// Returns whether this error indicates a transient failure that might succeed on retry
     pub fn is_transient(&self) -> bool {
-        matches!(
-            self,
+        match self {
             Error::Network(_)
                 | Error::IncompleteSseMessage
                 | Error::ToolTimeout { .. }
                 | Error::IncompleteXml { .. }
-        )
+                | Error::RateLimited { .. } => true,
+            Error::Provider { status, .. } if *status >= 500 => true,
+            _ => false,
+        }
     }
 
     /// Returns whether this error should trigger self-healing (re-prompt the LLM)
@@ -117,6 +135,7 @@ impl Error {
                 | Error::InvalidToolArgs { .. }
                 | Error::ToolExecution { .. }
                 | Error::XmlParse(_)
+                | Error::Provider { .. }
                 | Error::Agent(_)
         )
     }
@@ -135,6 +154,15 @@ impl Error {
             }
             Error::InvalidToolArgs { name, details } => {
                 format!("Invalid arguments for tool '{}': {}", name, details)
+            }
+            Error::Provider { status, .. } => {
+                format!("The AI provider returned an error (HTTP {}). Please try again or modify your approach.", status)
+            }
+            Error::RateLimited { .. } => {
+                "Rate limit exceeded. Waiting before retrying.".to_string()
+            }
+            Error::Authentication(_) => {
+                "Authentication with the AI provider failed. Please check your API key.".to_string()
             }
             Error::MaxIterationsExceeded { max } => {
                 format!("Maximum iterations ({}) exceeded.", max)
@@ -158,5 +186,43 @@ mod tests {
         };
         assert!(tool_not_found.is_self_healing());
         assert!(!tool_not_found.is_transient());
+    }
+
+    #[test]
+    fn test_provider_500_is_transient_and_self_healing() {
+        let err = Error::Provider {
+            status: 500,
+            body: "Internal Server Error".to_string(),
+            retry_after: None,
+        };
+        assert!(err.is_transient(), "Provider 500 should be transient");
+        assert!(err.is_self_healing(), "Provider 500 should be self-healing");
+    }
+
+    #[test]
+    fn test_provider_400_is_not_transient_but_self_healing() {
+        let err = Error::Provider {
+            status: 400,
+            body: "Bad Request".to_string(),
+            retry_after: None,
+        };
+        assert!(!err.is_transient(), "Provider 400 should not be transient");
+        assert!(err.is_self_healing(), "Provider 400 should be self-healing");
+    }
+
+    #[test]
+    fn test_rate_limited_is_transient_not_self_healing() {
+        let err = Error::RateLimited {
+            retry_after: std::time::Duration::from_secs(5),
+        };
+        assert!(err.is_transient(), "RateLimited should be transient");
+        assert!(!err.is_self_healing(), "RateLimited should not be self-healing");
+    }
+
+    #[test]
+    fn test_authentication_not_transient_not_self_healing() {
+        let err = Error::Authentication("invalid key".to_string());
+        assert!(!err.is_transient(), "Authentication should not be transient");
+        assert!(!err.is_self_healing(), "Authentication should not be self-healing");
     }
 }
