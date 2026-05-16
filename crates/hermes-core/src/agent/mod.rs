@@ -181,20 +181,7 @@ impl HermesAgent {
         // Add user message
         self.add_message(Message::user(&user_query)).await;
 
-        // Persist user message
-        self.database
-            .save_message(
-                &session_id,
-                "user",
-                &user_query,
-                &chrono::Utc::now().to_rfc3339(),
-            )
-            .map_err(|e| {
-                warn!(error = %e, "Failed to persist user message");
-                e
-            })?;
-
-        // Save session metadata
+        // Save session first (must exist before messages can reference it)
         self.database
             .save_session(
                 &session_id,
@@ -205,6 +192,19 @@ impl HermesAgent {
             )
             .map_err(|e| {
                 warn!(error = %e, "Failed to save session metadata");
+                e
+            })?;
+
+        // Persist user message
+        self.database
+            .save_message(
+                &session_id,
+                "user",
+                &user_query,
+                &chrono::Utc::now().to_rfc3339(),
+            )
+            .map_err(|e| {
+                warn!(error = %e, "Failed to persist user message");
                 e
             })?;
 
@@ -239,9 +239,12 @@ impl HermesAgent {
                 .with_tools(tools)
                 .with_stream(self.config.stream);
 
+            let mut stream_extra_content = None;
             let response = if request.stream {
                 let stream = self.client.chat_streaming(request).await?;
-                self.process_stream(stream).await
+                let (text, reasoning, tcs, extra) = self.process_stream(stream).await?;
+                stream_extra_content = extra;
+                Ok((text, reasoning, tcs))
             } else {
                 let response = self.client.chat(request).await?;
                 self.process_response(response).await
@@ -256,6 +259,12 @@ impl HermesAgent {
                     }
                     if !tool_calls.is_empty() {
                         assistant_msg = assistant_msg.with_tool_calls(tool_calls.clone());
+                    }
+                    // Attach provider-specific extra content (e.g. Gemini thought_signature)
+                    if let Some(ref extra) = stream_extra_content {
+                        if !extra.is_null() {
+                            assistant_msg = assistant_msg.with_extra_content(extra.clone());
+                        }
                     }
 
                     messages.push(assistant_msg.clone());
@@ -333,6 +342,15 @@ impl HermesAgent {
                                 result.error.as_deref().unwrap_or("Error")
                             },
                         ));
+                        self.add_message(Message::tool(
+                            &result.tool_call_id,
+                            if result.success {
+                                &result.content
+                            } else {
+                                result.error.as_deref().unwrap_or("Error")
+                            },
+                        ))
+                        .await;
                     }
                 }
                 Err(e) => {
@@ -439,7 +457,8 @@ impl HermesAgent {
     async fn process_stream(
         &self,
         mut stream: BoxStream<'static, Result<StreamChunk>>,
-    ) -> Result<(String, String, Vec<ToolCall>)> {
+    ) -> Result<(String, String, Vec<ToolCall>, Option<serde_json::Value>)> {
+        let mut accumulated_extra: Option<serde_json::Value> = None;
         let mut parser = ToolCallStreamParser::new().on_tool_call(|tc| {
             let tc_id = tc.id.clone();
             debug!(tool_call_id = %tc_id, name = %tc.function.name, "Early tool call detected");
@@ -460,6 +479,13 @@ impl HermesAgent {
                         if !reasoning.is_empty() {
                             accumulated_reasoning.push_str(&reasoning);
                             self.emit(AgentEvent::Reasoning { text: reasoning }).await;
+                        }
+                    }
+
+                    // Capture provider-specific extra content (e.g. Gemini thought_signature)
+                    if let Some(ref extra) = chunk.extra_content {
+                        if !extra.is_null() {
+                            accumulated_extra = Some(extra.clone());
                         }
                     }
 
@@ -530,7 +556,7 @@ impl HermesAgent {
             merge_stream_tool_call(&mut tool_calls, tc);
         }
 
-        Ok((accumulated_text, accumulated_reasoning, tool_calls))
+        Ok((accumulated_text, accumulated_reasoning, tool_calls, accumulated_extra))
     }
 
     async fn process_response(
@@ -872,7 +898,6 @@ impl ToolCallContentRouter {
                     .map(|offset| index + offset + 1)
                 {
                     self.pending.drain(..open_end);
-                    self.inside_tool_call = false;
                     self.inside_tool_call = true;
                     continue;
                 }
@@ -1200,6 +1225,7 @@ mod tests {
                     content: Some("Hello ".to_string()),
                     reasoning_content: None,
                     tool_calls: None,
+                    extra_content: None,
                 },
                 finish_reason: None,
             }],
