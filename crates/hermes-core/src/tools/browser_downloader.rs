@@ -34,15 +34,14 @@ impl BrowserDownloader {
             .join("browser")
     }
 
-    /// Downloads the latest Lightpanda browser binary for the current platform
+    /// Downloads the latest Lightpanda browser binary for the current platform.
+    ///
+    /// Always checks GitHub Releases for the latest binary and re-downloads it so the
+    /// agent always runs the newest version.
     pub async fn download_binary() -> Result<PathBuf> {
         let bin_path = Self::default_bin_path();
 
-        if bin_path.exists() && Self::verify_binary(&bin_path).await.is_ok() {
-            return Ok(bin_path);
-        }
-
-        tracing::info!("Downloading Lightpanda browser binary...");
+        tracing::info!("Fetching latest Lightpanda browser binary from GitHub Releases…");
 
         let release_url = "https://api.github.com/repos/lightpanda-io/browser/releases/latest";
         let client = reqwest::Client::builder()
@@ -68,7 +67,7 @@ impl BrowserDownloader {
         }
 
         let mut file = fs::File::create(&bin_path).await?;
-        let mut content = response.bytes().await?;
+        let content = response.bytes().await?;
         file.write_all(&content).await?;
         file.flush().await?;
 
