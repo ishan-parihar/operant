@@ -102,6 +102,24 @@ impl MarkdownConverter {
         }
         result
     }
+
+    /// Reinsert all protected inline code and code block content, HTML-escaping
+    /// the raw code content before wrapping in Telegram HTML tags.
+    ///
+    /// Use this variant when code blocks were extracted *before* HTML escaping
+    /// (i.e. they contain the original verbatim text and must be escaped now).
+    fn reinsert_all_escaped(&self, text: &str) -> String {
+        let mut result = text.to_string();
+        for (i, code) in self.inline_codes.iter().enumerate() {
+            let ph = make_placeholder("INLINE_CODE", i);
+            result = result.replace(&ph, &format!("<code>{}</code>", escape_code_content(code)));
+        }
+        for (i, code) in self.code_blocks.iter().enumerate() {
+            let ph = make_placeholder("CODE_BLOCK", i);
+            result = result.replace(&ph, &format!("<pre>{}</pre>", escape_code_content(code)));
+        }
+        result
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -109,6 +127,9 @@ impl MarkdownConverter {
 // ---------------------------------------------------------------------------
 
 lazy_static! {
+    /// Bold+italic combined: `***text***` → `<b><i>text</i></b>`
+    /// Must run before the individual bold and italic patterns.
+    static ref BOLD_ITALIC_RE: Regex = Regex::new(r"\*\*\*(.+?)\*\*\*").unwrap();
     /// Bold: `**text**` → `<b>text</b>`
     static ref BOLD_RE: Regex = Regex::new(r"\*\*(.+?)\*\*").unwrap();
     /// Italic: `*text*` → `<i>text</i>`
@@ -119,9 +140,10 @@ lazy_static! {
     static ref LINK_RE: Regex = Regex::new(r"\[(.+?)\]\((.+?)\)").unwrap();
     /// Header: `## text` → `<b>text</b>\n`  (multiline)
     static ref HEADER_RE: Regex = Regex::new(r"(?m)^#{1,6}\s+(.*?)$").unwrap();
-    /// Blockquote: `> text` → `<blockquote>text</blockquote>`  (multiline)
+    /// Blockquote: `&gt; text` → `<blockquote>text</blockquote>` (multiline).
+    /// The `>` character is HTML-escaped to `&gt;` before this regex runs.
     static ref BLOCKQUOTE_RE: Regex =
-        Regex::new(r"(?m)^>\s?(.*?)$").unwrap();
+        Regex::new(r"(?m)^&gt;\s?(.*?)$").unwrap();
 }
 
 /// Escape `&`, `<`, `>`, `"`, and `'` to their HTML entity equivalents.
@@ -140,13 +162,33 @@ fn escape_html(text: &str) -> String {
     out
 }
 
+/// Escape only `&`, `<`, and `>` — the minimal set required inside Telegram
+/// `<pre>` and `<code>` text nodes.  Quotes (`"`, `'`) do not need escaping
+/// in text content and should be left verbatim so that code like
+/// `println!("hi")` is displayed correctly.
+fn escape_code_content(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for ch in text.chars() {
+        match ch {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
 /// Convert markdown constructs to Telegram HTML in text whose code spans
 /// have already been extracted into placeholders.
 fn convert_markdown(text: &str) -> String {
-    // Bold first so `**text**` becomes `<b>text</b>`, preventing the
-    // inner `*` from being matched by the italic pattern.
-    let s = BOLD_RE.replace_all(text, "<b>$1</b>");
-    // Italic now only sees standalone `*text*` spans.
+    // Bold+italic combined first: `***text***` → `<b><i>text</i></b>`.
+    // This must precede the individual bold and italic passes so that the
+    // triple-star sequence is consumed atomically.
+    let s = BOLD_ITALIC_RE.replace_all(text, "<b><i>$1</i></b>");
+    // Bold: only standalone `**text**` spans now remain.
+    let s = BOLD_RE.replace_all(&s, "<b>$1</b>");
+    // Italic: only standalone `*text*` spans now remain.
     let s = ITALIC_RE.replace_all(&s, "<i>$1</i>");
     // Strikethrough.
     let s = STRIKETHROUGH_RE.replace_all(&s, "<s>$1</s>");
@@ -160,6 +202,8 @@ fn convert_markdown(text: &str) -> String {
     // so subsequent content starts on a fresh line.
     let s = HEADER_RE.replace_all(&s, "<b>$1</b>\n");
     // Blockquotes – per-line conversion.
+    // Note: `>` has been HTML-escaped to `&gt;` at this point, so the
+    // regex anchors on `&gt;` rather than `>`.
     let s = BLOCKQUOTE_RE.replace_all(&s, "<blockquote>$1</blockquote>");
     s.to_string()
 }
@@ -184,37 +228,40 @@ fn convert_markdown(text: &str) -> String {
 /// | Blockquote       | `> text`                    | `<blockquote>text</blockquote>`            |
 ///
 /// **Processing order** (critical for correctness):
-/// 1. Escape raw HTML special characters (`&`, `<`, `>`, `"`, `'`)
-/// 2. Extract fenced code blocks → placeholders (protects from further
-///    markdown & HTML processing)
-/// 3. Extract inline code spans → placeholders
-/// 4. Apply markdown conversions: bold → italic → strikethrough → links →
-///    headers → blockquotes
+/// 1. Extract fenced code blocks → placeholders (raw content is preserved so
+///    HTML-escaping does not mangle characters like `"` inside `<pre>`)
+/// 2. Extract inline code spans → placeholders
+/// 3. Escape raw HTML special characters (`&`, `<`, `>`, `"`, `'`) in the
+///    non-code body
+/// 4. Apply markdown conversions: bold+italic → bold → italic → strikethrough
+///    → links → headers → blockquotes
 /// 5. Reinsert protected inline code and code blocks wrapped in Telegram
-///    HTML tags
+///    HTML tags (content is HTML-escaped at this point)
 ///
 /// This ordering guarantees that markdown inside code fences or backtick
-/// spans is never accidentally converted.
+/// spans is never accidentally converted, and that literal characters like
+/// `"` in code blocks reach the final output unescaped inside `<pre>`.
 pub fn markdown_to_telegram_html(text: &str) -> String {
     if text.is_empty() {
         return String::new();
     }
 
-    // 1. Escape HTML special characters (prevent injection).
-    let escaped = escape_html(text);
-
-    // 2. Extract and protect code blocks.
+    // 1. Extract and protect code blocks and inline code BEFORE HTML escaping
+    //    so that characters like `"` inside fences are preserved verbatim.
     let mut conv = MarkdownConverter::new();
-    let no_blocks = conv.extract_code_blocks(&escaped);
-
-    // 3. Extract and protect inline code.
+    let no_blocks = conv.extract_code_blocks(text);
     let no_code = conv.extract_inline_code(&no_blocks);
 
-    // 4. Convert remaining markdown to Telegram HTML.
-    let html = convert_markdown(&no_code);
+    // 2. Escape HTML special characters in the remaining (non-code) body.
+    let escaped = escape_html(&no_code);
 
-    // 5. Reinsert protected content wrapped in `<pre>` / `<code>`.
-    conv.reinsert_all(&html)
+    // 3. Convert remaining markdown to Telegram HTML.
+    let html = convert_markdown(&escaped);
+
+    // 4. Reinsert protected content wrapped in `<pre>` / `<code>`.
+    //    The raw code content is HTML-escaped here so that `<`, `>`, `&`
+    //    inside code blocks/spans are safe for Telegram's HTML parser.
+    conv.reinsert_all_escaped(&html)
 }
 
 #[cfg(test)]

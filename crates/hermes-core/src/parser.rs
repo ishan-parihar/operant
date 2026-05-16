@@ -259,13 +259,17 @@ impl ToolCallParser {
 
         // Try to extract JSON using regex first (tolerant approach)
         if let Some(tool_call) = self.try_parse_tool_call(content) {
-            // NOTE: We don't fire callback here anymore because try_parse_tool_call
-            // is called incrementally in process_char, and ToolCallStreamParser
-            // already handles the callback logic for ParserEvent::ToolCall.
+            // Fire the early-detection callback immediately.
+            if let Some(ref cb) = self.on_tool_call {
+                cb(tool_call.clone());
+            }
             events.push(ParserEvent::ToolCall(tool_call));
         } else {
             // Fall back to more aggressive parsing
             if let Some(tool_call) = self.aggressive_parse(content) {
+                if let Some(ref cb) = self.on_tool_call {
+                    cb(tool_call.clone());
+                }
                 events.push(ParserEvent::ToolCall(tool_call));
             } else {
                 warn!(content = %content, "Failed to parse tool_call content");
@@ -537,10 +541,7 @@ impl ToolCallStreamParser {
         for event in events {
             match event {
                 ParserEvent::ToolCall(tc) => {
-                    // Fire early detection callback if set (moved from Parser to StreamParser)
-                    if let Some(ref callback) = self.parser.on_tool_call {
-                        callback(tc.clone());
-                    }
+                    // The callback was already fired inside ToolCallParser::process_tool_call.
                     tool_calls.push(tc);
                 }
                 ParserEvent::Text(t) => self.pending_text.push_str(&t),
@@ -563,9 +564,7 @@ impl ToolCallStreamParser {
         for event in events {
             match event {
                 ParserEvent::ToolCall(tc) => {
-                    if let Some(ref callback) = self.parser.on_tool_call {
-                        callback(tc.clone());
-                    }
+                    // The callback was already fired inside ToolCallParser::process_tool_call.
                     tool_calls.push(tc);
                 }
                 ParserEvent::Text(t) => text.push_str(&t),
