@@ -155,9 +155,10 @@ fn show_setup_status(config: &AppConfig) {
     );
 
     // TTS
-    let tts_status = match &config.tts.provider {
-        Some(p) if config.tts.enabled => format!("{} (enabled)", p),
-        _ => "disabled".to_string(),
+    let tts_status = if config.tts.enabled {
+        format!("{} (enabled)", config.tts.provider)
+    } else {
+        "disabled".to_string()
     };
     print_status("TTS", &tts_status, config.tts.enabled);
 
@@ -1054,16 +1055,14 @@ async fn step_tts(config: &mut AppConfig, _reconfigure: bool) -> Result<()> {
             "kittentts",
         ];
 
-        let current_idx = config
-            .tts
-            .provider
-            .as_ref()
-            .and_then(|p| tts_values.iter().position(|v| *v == p))
+        let current_idx = tts_values
+            .iter()
+            .position(|v| *v == config.tts.provider)
             .unwrap_or(0);
 
         let sel = prompt_select_with_desc("Select TTS provider", &tts_options, current_idx)?;
         if sel < tts_values.len() {
-            config.tts.provider = Some(tts_values[sel].to_string());
+            config.tts.provider = tts_values[sel].to_string();
             config.tts.enabled = true;
             print_success(&format!(
                 "TTS enabled with provider: {}",
