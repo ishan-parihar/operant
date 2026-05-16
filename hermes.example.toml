@@ -1,5 +1,7 @@
 # Hermes-RS configuration example
 
+terminal_backend = "local"
+
 [client]
 base_url = "https://api.openai.com/v1"
 # api_key = "set me or use OPENAI_API_KEY"
@@ -15,6 +17,9 @@ stream = true
 context_window = 128000
 max_healing_attempts = 3
 show_reasoning = true
+tool_progress = "auto"
+context_compression = false
+session_reset = "never"
 # system_prompt = "You are Hermes."
 
 [autonomous]
@@ -84,11 +89,26 @@ slack_enabled = false
 slack_api_base = "https://slack.com/api"
 webhooks_enabled = false
 # webhooks_addr = "127.0.0.1:8080"
+matrix_enabled = false
+mattermost_enabled = false
+whatsapp_enabled = false
+signal_enabled = false
+email_enabled = false
+imessage_enabled = false
+facebook_messenger_enabled = false
+wechat_enabled = false
+line_enabled = false
+viber_enabled = false
+google_business_messages_enabled = false
+twitter_enabled = false
+instagram_enabled = false
 admins = []
 
 [tools]
 registry_timeout_secs = 30
 event_channel_size = 100
+# disabled_tools = ["spotify_playback", "homeassistant"]
+# disabled_toolsets = ["messaging", "media", "smart_home"]
 
 [tools.web]
 search_url = "https://lite.duckduckgo.com/lite/?q={query}"
@@ -114,3 +134,20 @@ max_timeout_secs = 300
 # openai_api_key = "..."
 groq_model = "whisper-large-v3-turbo"
 openai_model = "whisper-1"
+
+[tts]
+# provider = "edge"       # edge|elevenlabs|openai|google|azure|kokoro
+enabled = false
+
+[vision]
+# provider = "openai"
+# model = "gpt-4o"
+# base_url = "https://api.openai.com/v1"
+# api_key = "..."
+
+[credential_pool]
+# strategy = "fill_first"  # fill_first|round_robin|random|least_used
+enabled = false
+
+[auxiliary_models]
+# Optional auxiliary model configurations
