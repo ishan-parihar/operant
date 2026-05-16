@@ -1,46 +1,59 @@
 //! Hermes-RS CLI
 
 mod autonomous;
-pub(crate) mod config;
-mod tui;
-mod cmd_config;
-mod cmd_sessions;
-mod cmd_mcp;
-mod cmd_skills;
-mod cmd_model;
-mod cmd_completion;
-mod cmd_cron;
-mod cmd_kanban;
-mod cmd_gateway;
-mod gateway_runner;
-mod cmd_checkpoints;
-mod cmd_memory;
-mod cmd_profile;
-mod cmd_auth;
-mod cmd_version;
-mod cmd_doctor;
-mod cmd_status;
-mod cmd_dump;
-mod cmd_logs;
-mod cmd_backup;
-mod cmd_import;
-mod cmd_uninstall;
-mod cmd_update;
-mod cmd_insights;
-mod cmd_pairing;
-mod cmd_webhook;
-mod cmd_hooks;
-mod cmd_debug;
-mod cmd_computer_use;
+mod claw_migrate;
 mod cmd_acp;
+mod cmd_auth;
+mod cmd_backup;
+mod cmd_checkpoints;
 mod cmd_claw;
+mod cmd_completion;
+mod cmd_computer_use;
+mod cmd_config;
+mod cmd_cron;
 mod cmd_curator;
 mod cmd_dashboard;
+mod cmd_debug;
+mod cmd_doctor;
+mod cmd_dump;
+mod cmd_gateway;
+mod cmd_hooks;
+mod cmd_import;
+mod cmd_insights;
+mod cmd_kanban;
+mod cmd_logs;
+mod cmd_mcp;
+mod cmd_memory;
+mod cmd_model;
+mod cmd_pairing;
 mod cmd_plugins;
-mod cmd_slack;
-mod cmd_whatsapp;
+mod cmd_profile;
+mod cmd_rl;
+mod cmd_sessions;
 mod cmd_setup;
+mod cmd_skills;
+mod cmd_slack;
+mod cmd_status;
 mod cmd_tools;
+mod cmd_uninstall;
+mod cmd_update;
+mod cmd_version;
+mod cmd_webhook;
+mod cmd_whatsapp;
+mod commands;
+pub(crate) mod config;
+mod dashboard_server;
+mod env_store;
+mod gateway_commands;
+mod gateway_platforms;
+mod gateway_runner;
+mod gateway_webhooks;
+mod mcp_serve;
+pub mod plugins_install;
+mod post_setup;
+mod prompt_helpers;
+pub mod provider;
+mod tui;
 
 use std::fs::OpenOptions;
 use std::io::{self, Write};
@@ -198,6 +211,9 @@ enum Commands {
     },
     /// Manage kanban tasks
     Kanban {
+        /// Board slug to operate on (default: "default")
+        #[arg(long, default_value_t = String::from("default"), global = true)]
+        board: String,
         #[command(subcommand)]
         cmd: cmd_kanban::KanbanSubcommand,
     },
@@ -335,6 +351,8 @@ enum Commands {
     },
     /// Interactive setup wizard
     Setup {
+        /// Optional setup section (provider, terminal, tts, gateway, agent)
+        section: Option<String>,
         #[arg(long)]
         non_interactive: bool,
         #[arg(long)]
@@ -359,6 +377,11 @@ enum Commands {
         #[command(subcommand)]
         cmd: cmd_dashboard::DashboardSubcommand,
     },
+    /// Reinforcement learning training and management
+    Rl {
+        #[command(subcommand)]
+        cmd: cmd_rl::RlSubcommand,
+    },
 }
 
 fn init_logging(
@@ -382,7 +405,10 @@ fn init_logging(
         .with_file(logging.with_file)
         .with_line_number(logging.with_line_number);
 
-    match select_log_target(logging, rich_output) {
+    // When --verbose is passed, force logs to stderr so they are visible
+    // even when tui.rich_output is true (which normally routes logs to sink).
+    let effective_rich_output = rich_output && !verbose;
+    match select_log_target(logging, effective_rich_output) {
         LogTarget::File => {
             let file = OpenOptions::new()
                 .create(true)
@@ -470,7 +496,7 @@ fn client_config(config: &AppConfig) -> ClientConfig {
     ClientConfig::from(&config.client)
 }
 
-fn agent_config(
+pub(crate) fn agent_config(
     config: &AppConfig,
     behavior: &BehaviorSettings,
     system_prompt: Option<&str>,
@@ -511,6 +537,18 @@ pub(crate) async fn build_registry(
     .await?;
     registry.register(EchoTool::new()).await?;
     registry.register(CalculatorTool::new()).await?;
+
+    let disabled_tools: std::collections::HashSet<String> =
+        config.tools.disabled_tools.iter().cloned().collect();
+    let disabled_toolsets: std::collections::HashSet<String> =
+        config.tools.disabled_toolsets.iter().cloned().collect();
+
+    if !disabled_tools.is_empty() {
+        registry.set_disabled_tools(disabled_tools).await;
+    }
+    if !disabled_toolsets.is_empty() {
+        registry.set_disabled_toolsets(disabled_toolsets).await;
+    }
 
     if config.mcp.autoload {
         for server in config.mcp.servers.iter().filter(|server| server.enabled) {
@@ -584,7 +622,7 @@ pub(crate) async fn create_runtime_agent(
     .with_memory_manager(memory_manager))
 }
 
-async fn create_agent_without_events(
+pub(crate) async fn create_agent_without_events(
     config: &AppConfig,
     system_prompt: Option<&str>,
     mcp_manager: &McpManager,
@@ -616,7 +654,7 @@ async fn load_repo_memory_manager() -> Result<MemoryManager> {
     load_memory_manager(storage_dir).await
 }
 
-async fn load_memory_manager(storage_dir: PathBuf) -> Result<MemoryManager> {
+pub(crate) async fn load_memory_manager(storage_dir: PathBuf) -> Result<MemoryManager> {
     let memory_manager = MemoryManager::with_storage_dir(storage_dir);
     memory_manager
         .load_from_disk()
@@ -633,27 +671,161 @@ async fn run_non_tui(config: &AppConfig, system_prompt: Option<&str>, query: &st
     Ok(())
 }
 
+fn preview_tool_args(args: &str) -> Option<String> {
+    if let Ok(json) = serde_json::from_str::<serde_json::Value>(args) {
+        for key in &[
+            "query",
+            "command",
+            "url",
+            "file_path",
+            "path",
+            "code",
+            "text",
+        ] {
+            if let Some(val) = json.get(*key).and_then(|v| v.as_str()) {
+                let truncated = if val.len() > 80 {
+                    format!("{}...", &val[..80])
+                } else {
+                    val.to_string()
+                };
+                return Some(truncated);
+            }
+        }
+    }
+    None
+}
+
 async fn chat_non_tui(config: &AppConfig, system_prompt: Option<&str>) -> Result<()> {
+    use crate::commands::{CommandContext, CommandHandler, CommandRegistry};
+
     let mcp_manager = McpManager::new();
-    let agent = create_agent_without_events(config, system_prompt, &mcp_manager).await?;
+    let (event_tx, mut event_rx) = mpsc::channel::<AgentEvent>(256);
+    let agent =
+        create_runtime_agent(config, &config.agent, system_prompt, event_tx, &mcp_manager).await?;
+
+    // Spawn task to display tool events in real-time
+    tokio::spawn(async move {
+        while let Some(event) = event_rx.recv().await {
+            match event {
+                AgentEvent::ToolStart { name, arguments } => {
+                    let preview = preview_tool_args(&arguments)
+                        .map(|a| format!("{}: {}", name, a))
+                        .unwrap_or_else(|| name);
+                    println!("  Tool: {}...", preview);
+                }
+                AgentEvent::ToolComplete { result: _ } => {
+                    println!("  Tool: Done.");
+                }
+                AgentEvent::ToolError { name, error } => {
+                    eprintln!("  Tool Error {}: {}", name, error);
+                }
+                _ => {}
+            }
+        }
+    });
+
+    let mut registry = CommandRegistry::new();
+
+    struct NewHandler;
+    #[async_trait::async_trait]
+    impl CommandHandler for NewHandler {
+        async fn execute(&self, _ctx: &CommandContext<'_>) -> commands::CommandResult {
+            Ok("Use /exit or Ctrl+C to end the session.".to_string())
+        }
+    }
+    registry.register_handler("new", Box::new(NewHandler)).ok();
+
+    struct HelpHandler;
+    #[async_trait::async_trait]
+    impl CommandHandler for HelpHandler {
+        async fn execute(&self, _ctx: &CommandContext<'_>) -> commands::CommandResult {
+            Ok("System status: running. Use `hermes status` for details.".to_string())
+        }
+    }
+    registry
+        .register_handler("help", Box::new(HelpHandler))
+        .ok();
+
+    struct StatusHandler;
+    #[async_trait::async_trait]
+    impl CommandHandler for StatusHandler {
+        async fn execute(&self, _ctx: &CommandContext<'_>) -> commands::CommandResult {
+            Ok("System status: running. Use `hermes status` for details.".to_string())
+        }
+    }
+    registry
+        .register_handler("status", Box::new(StatusHandler))
+        .ok();
+
+    struct TimeHandler;
+    #[async_trait::async_trait]
+    impl CommandHandler for TimeHandler {
+        async fn execute(&self, _ctx: &CommandContext<'_>) -> commands::CommandResult {
+            use chrono::Local;
+            Ok(format!(
+                "Current time: {}",
+                Local::now().format("%Y-%m-%d %H:%M:%S")
+            ))
+        }
+    }
+    registry
+        .register_handler("time", Box::new(TimeHandler))
+        .ok();
+
+    struct SessionHandler;
+    #[async_trait::async_trait]
+    impl CommandHandler for SessionHandler {
+        async fn execute(&self, _ctx: &CommandContext<'_>) -> commands::CommandResult {
+            Ok("Conversation session active. Use /history to see messages.".to_string())
+        }
+    }
+    registry
+        .register_handler("session", Box::new(SessionHandler))
+        .ok();
 
     loop {
         print!("You: ");
         io::stdout().flush()?;
         let mut input = String::new();
         io::stdin().read_line(&mut input)?;
-        let input = input.trim();
+        let input = input.trim().to_string();
 
         if input.is_empty() {
             continue;
         }
-        if input.eq_ignore_ascii_case("exit") || input.eq_ignore_ascii_case("quit") {
-            break;
-        }
-        if input.eq_ignore_ascii_case("clear") {
-            agent.clear_history().await;
-            println!("Conversation cleared.");
-            continue;
+
+        if input.starts_with('/') {
+            let parts: Vec<&str> = input.splitn(2, char::is_whitespace).collect();
+            let cmd_name = parts[0];
+            let cmd_args = parts.get(1).copied().unwrap_or("");
+
+            match registry.resolve(cmd_name) {
+                Some("exit") => break,
+                Some("new") | Some("reset") => {
+                    agent.clear_history().await;
+                    println!("Conversation cleared. Starting new session.");
+                    continue;
+                }
+                Some("history") => {
+                    // TODO: print conversation history from agent
+                    println!("History not yet available in non-TUI mode.");
+                    continue;
+                }
+                Some(canonical) => {
+                    match registry.execute(canonical, cmd_args).await {
+                        Ok(output) => println!("{}", output),
+                        Err(e) => eprintln!("Command error: {}", e),
+                    }
+                    continue;
+                }
+                None => {
+                    println!(
+                        "Unknown command: {}. Type /help for available commands.",
+                        cmd_name
+                    );
+                    continue;
+                }
+            }
         }
 
         match agent.run(input.to_string()).await {
@@ -690,7 +862,11 @@ async fn test_tool(config: &AppConfig, tool_name: &str, args: Option<&str>) -> R
     let registry =
         build_registry(config, &mcp_manager, &client, &config.agent.model, database).await?;
     let parsed_args: Value = if let Some(args) = args {
-        serde_json::from_str(args).context("Failed to parse tool arguments as JSON")?
+        if args.trim().is_empty() {
+            Value::Object(serde_json::Map::new())
+        } else {
+            serde_json::from_str(args).context("Failed to parse tool arguments as JSON")?
+        }
     } else {
         Value::Object(serde_json::Map::new())
     };
@@ -854,6 +1030,27 @@ async fn main() -> Result<()> {
     if loaded.config.agent.model == "gpt-4" {
         loaded.config.agent.model = cli_app_config.agent.model;
     }
+    if loaded.config.client.api_key.is_none() {
+        loaded.config.client.api_key = cli_app_config.client.api_key.clone();
+    }
+    if !loaded.config.gateway.telegram_enabled && cli_app_config.gateway.telegram_enabled {
+        loaded.config.gateway.telegram_enabled = cli_app_config.gateway.telegram_enabled;
+        if loaded.config.gateway.telegram_token.is_none() {
+            loaded.config.gateway.telegram_token = cli_app_config.gateway.telegram_token;
+        }
+    }
+    if !loaded.config.gateway.discord_enabled && cli_app_config.gateway.discord_enabled {
+        loaded.config.gateway.discord_enabled = cli_app_config.gateway.discord_enabled;
+        if loaded.config.gateway.discord_token.is_none() {
+            loaded.config.gateway.discord_token = cli_app_config.gateway.discord_token;
+        }
+    }
+    if !loaded.config.gateway.slack_enabled && cli_app_config.gateway.slack_enabled {
+        loaded.config.gateway.slack_enabled = cli_app_config.gateway.slack_enabled;
+        if loaded.config.gateway.slack_token.is_none() {
+            loaded.config.gateway.slack_token = cli_app_config.gateway.slack_token;
+        }
+    }
 
     loaded.config.apply_env_overrides()?;
     apply_cli_overrides(&cli, &mut loaded.config);
@@ -938,8 +1135,8 @@ async fn main() -> Result<()> {
         Commands::Cron { cmd } => {
             cmd_cron::handle_cron_command(&loaded.config, cmd.clone()).await?;
         }
-        Commands::Kanban { cmd } => {
-            cmd_kanban::handle_kanban_command(&loaded.config, cmd.clone()).await?;
+        Commands::Kanban { board, cmd } => {
+            cmd_kanban::handle_kanban_command(&loaded.config, &board, cmd.clone()).await?;
         }
         Commands::Gateway { cmd } => {
             cmd_gateway::handle_gateway_command(&loaded.config, cmd.clone()).await?;
@@ -1023,6 +1220,7 @@ async fn main() -> Result<()> {
             cmd_slack::handle_slack_command(&loaded.config, cmd.clone()).await?;
         }
         Commands::Setup {
+            section,
             non_interactive,
             reset,
             reconfigure,
@@ -1030,6 +1228,7 @@ async fn main() -> Result<()> {
         } => {
             cmd_setup::handle_setup_command(
                 &loaded.config,
+                section.as_deref(),
                 *non_interactive,
                 *reset,
                 *reconfigure,
@@ -1045,6 +1244,9 @@ async fn main() -> Result<()> {
         }
         Commands::Dashboard { cmd } => {
             cmd_dashboard::handle_dashboard_command(&loaded.config, cmd.clone()).await?;
+        }
+        Commands::Rl { cmd } => {
+            cmd_rl::handle_rl_command(&loaded.config, cmd.clone()).await?;
         }
     }
 
