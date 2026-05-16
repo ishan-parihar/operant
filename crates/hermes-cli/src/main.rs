@@ -706,11 +706,28 @@ async fn load_repo_memory_manager() -> Result<MemoryManager> {
 }
 
 pub(crate) async fn load_memory_manager(storage_dir: PathBuf) -> Result<MemoryManager> {
-    let memory_manager = MemoryManager::with_storage_dir(storage_dir);
+    let memory_manager = MemoryManager::with_storage_dir(storage_dir.clone());
     memory_manager
         .load_from_disk()
         .await
         .context("Failed to load long-term memory")?;
+
+    // If configured provider is not "builtin", initialise it now.
+    // The provider is available via hermes_core::memory_provider::build_memory_provider.
+    let cfg = hermes_core::config::runtime_config();
+    if cfg.memory.enabled && cfg.memory.provider != "builtin" && cfg.memory.provider != "disabled" {
+        let provider = hermes_core::memory_provider::build_memory_provider(
+            &cfg.memory.provider,
+            storage_dir,
+        );
+        // Initialize in the background; failures are non-fatal.
+        tokio::spawn(async move {
+            if let Err(e) = provider.initialize("main").await {
+                tracing::warn!(provider = %provider.name(), error = %e, "Memory provider init failed");
+            }
+        });
+    }
+
     Ok(memory_manager)
 }
 
