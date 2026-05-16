@@ -34,3 +34,8 @@ hermes-agent
 .memsearch/
 .contexty/
 .sisyphus/
+
+# Production database files
+*.db
+*.db-shm
+*.db-wal
