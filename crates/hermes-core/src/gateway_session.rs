@@ -194,8 +194,7 @@ impl PersistentSessionStore {
 
 fn row_to_session(row: &rusqlite::Row<'_>) -> rusqlite::Result<PlatformSession> {
     let metadata_str: String = row.get(7)?;
-    let metadata: HashMap<String, String> =
-        serde_json::from_str(&metadata_str).unwrap_or_default();
+    let metadata: HashMap<String, String> = serde_json::from_str(&metadata_str).unwrap_or_default();
     Ok(PlatformSession {
         session_id: row.get(0)?,
         platform: row.get(1)?,

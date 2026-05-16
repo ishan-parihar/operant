@@ -177,6 +177,7 @@ mod tests {
     fn make_result(tool_call_id: &str, content: &str) -> ToolResult {
         ToolResult {
             tool_call_id: tool_call_id.to_string(),
+            name: "test_tool".to_string(),
             success: true,
             content: content.to_string(),
             error: None,

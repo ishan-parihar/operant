@@ -9,19 +9,14 @@ use serde_json::{json, Value};
 
 use crate::error::{Error, Result};
 
-/// Represents a tool's JSON Schema definition
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ToolSchema {
-    /// Tool name (e.g., "get_weather")
     pub name: String,
-    /// Human-readable description of what the tool does
     pub description: String,
-    /// JSON Schema for the tool's parameters
     pub parameters: Value,
 }
 
 impl ToolSchema {
-    /// Create a new ToolSchema
     pub fn new(name: impl Into<String>, description: impl Into<String>, parameters: Value) -> Self {
         Self {
             name: name.into(),
@@ -30,7 +25,6 @@ impl ToolSchema {
         }
     }
 
-    /// Generate schema from a type that implements JsonSchema
     pub fn from_type<T: JsonSchema>(
         name: impl Into<String>,
         description: impl Into<String>,

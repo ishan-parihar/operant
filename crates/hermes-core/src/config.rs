@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{OnceLock, RwLock};
 
@@ -10,6 +11,9 @@ static RUNTIME_CONFIG: OnceLock<RwLock<AppConfig>> = OnceLock::new();
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct AppConfig {
+    /// Configuration format version. None = v0 (legacy, no version field).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<u32>,
     pub client: ClientSettings,
     pub agent: BehaviorSettings,
     pub autonomous: AutonomousSettings,
@@ -19,6 +23,11 @@ pub struct AppConfig {
     pub skills: SkillsSettings,
     pub gateway: GatewaySettings,
     pub tools: ToolSettings,
+    pub tts: TtsSettings,
+    pub vision: VisionSettings,
+    pub credential_pool: CredentialPoolSettings,
+    pub terminal_backend: TerminalBackend,
+    pub auxiliary_models: AuxiliaryModels,
     pub database_path: PathBuf,
 }
 
@@ -29,6 +38,7 @@ impl Default for AppConfig {
             .unwrap_or_else(|| PathBuf::from("database.db"));
 
         Self {
+            version: Some(2),
             client: ClientSettings::default(),
             agent: BehaviorSettings::default(),
             autonomous: AutonomousSettings::default(),
@@ -38,6 +48,11 @@ impl Default for AppConfig {
             skills: SkillsSettings::default(),
             gateway: GatewaySettings::default(),
             tools: ToolSettings::default(),
+            tts: TtsSettings::default(),
+            vision: VisionSettings::default(),
+            credential_pool: CredentialPoolSettings::default(),
+            terminal_backend: TerminalBackend::Local,
+            auxiliary_models: AuxiliaryModels::default(),
             database_path,
         }
     }
@@ -48,6 +63,9 @@ impl Default for AppConfig {
 pub struct ClientSettings {
     pub base_url: String,
     pub api_key: Option<String>,
+    /// Additional API keys for credential pool / multi-key rotation.
+    #[serde(default)]
+    pub additional_api_keys: Vec<String>,
     pub timeout_secs: u64,
     pub max_context_length: usize,
 }
@@ -57,9 +75,42 @@ impl Default for ClientSettings {
         Self {
             base_url: "https://api.openai.com/v1".to_string(),
             api_key: None,
+            additional_api_keys: Vec::new(),
             timeout_secs: 60,
             max_context_length: 128_000,
         }
+    }
+}
+
+/// How tool execution progress is reported to the user.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolProgressMode {
+    PerStep,
+    FinalOnly,
+    Streaming,
+    Auto,
+}
+
+impl Default for ToolProgressMode {
+    fn default() -> Self {
+        Self::Auto
+    }
+}
+
+/// When the conversation session should be automatically reset.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionResetMode {
+    Never,
+    OnSystemPromptChange,
+    OnToolChange,
+    Always,
+}
+
+impl Default for SessionResetMode {
+    fn default() -> Self {
+        Self::Never
     }
 }
 
@@ -75,6 +126,15 @@ pub struct BehaviorSettings {
     pub context_window: usize,
     pub max_healing_attempts: usize,
     pub show_reasoning: bool,
+    pub tool_progress: ToolProgressMode,
+    pub session_reset: SessionResetMode,
+    pub context_compression: bool,
+    pub context_compression_threshold: f64,
+    /// Max consecutive tool-only iterations before force-answer kicks in.
+    /// When the LLM calls tools N times in a row without producing text,
+    /// the agent omits tools from the request to force a textual response.
+    /// Set to 0 to disable (use max_iterations as the only limit).
+    pub max_consecutive_tool_only: usize,
 }
 
 impl Default for BehaviorSettings {
@@ -89,6 +149,11 @@ impl Default for BehaviorSettings {
             context_window: 128_000,
             max_healing_attempts: 3,
             show_reasoning: true,
+            tool_progress: ToolProgressMode::Auto,
+            session_reset: SessionResetMode::Never,
+            context_compression: false,
+            context_compression_threshold: 0.5,
+            max_consecutive_tool_only: 90,
         }
     }
 }
@@ -268,8 +333,45 @@ pub struct GatewaySettings {
     pub slack_enabled: bool,
     pub slack_token: Option<String>,
     pub slack_api_base: String,
+    pub matrix_enabled: bool,
+    pub matrix_token: Option<String>,
+    pub mattermost_enabled: bool,
+    pub mattermost_token: Option<String>,
+    pub whatsapp_enabled: bool,
+    pub whatsapp_token: Option<String>,
+    pub signal_enabled: bool,
+    pub signal_token: Option<String>,
+    pub email_enabled: bool,
+    pub email_smtp_host: Option<String>,
+    pub email_smtp_user: Option<String>,
+    pub email_smtp_pass: Option<String>,
+    pub imessage_enabled: bool,
+    pub facebook_messenger_enabled: bool,
+    pub facebook_messenger_token: Option<String>,
+    pub wechat_enabled: bool,
+    pub wechat_token: Option<String>,
+    pub line_enabled: bool,
+    pub line_token: Option<String>,
+    pub viber_enabled: bool,
+    pub viber_token: Option<String>,
+    pub google_business_messages_enabled: bool,
+    pub google_business_messages_token: Option<String>,
+    pub twitter_enabled: bool,
+    pub twitter_token: Option<String>,
+    pub instagram_enabled: bool,
+    pub instagram_token: Option<String>,
     pub webhooks_enabled: bool,
     pub webhooks_addr: Option<String>,
+    pub sms_twilio_enabled: bool,
+    pub dingtalk_enabled: bool,
+    pub feishu_lark_enabled: bool,
+    pub wecom_enabled: bool,
+    pub wecom_callback_enabled: bool,
+    pub qq_bot_enabled: bool,
+    pub yuanbao_enabled: bool,
+    pub google_chat_enabled: bool,
+    pub irc_enabled: bool,
+    pub microsoft_teams_enabled: bool,
     pub admins: Vec<String>,
 }
 
@@ -285,9 +387,95 @@ impl Default for GatewaySettings {
             slack_enabled: false,
             slack_token: None,
             slack_api_base: "https://slack.com/api".to_string(),
+            matrix_enabled: false,
+            matrix_token: None,
+            mattermost_enabled: false,
+            mattermost_token: None,
+            whatsapp_enabled: false,
+            whatsapp_token: None,
+            signal_enabled: false,
+            signal_token: None,
+            email_enabled: false,
+            email_smtp_host: None,
+            email_smtp_user: None,
+            email_smtp_pass: None,
+            imessage_enabled: false,
+            facebook_messenger_enabled: false,
+            facebook_messenger_token: None,
+            wechat_enabled: false,
+            wechat_token: None,
+            line_enabled: false,
+            line_token: None,
+            viber_enabled: false,
+            viber_token: None,
+            google_business_messages_enabled: false,
+            google_business_messages_token: None,
+            twitter_enabled: false,
+            twitter_token: None,
+            instagram_enabled: false,
+            instagram_token: None,
             webhooks_enabled: false,
             webhooks_addr: None,
+            sms_twilio_enabled: false,
+            dingtalk_enabled: false,
+            feishu_lark_enabled: false,
+            wecom_enabled: false,
+            wecom_callback_enabled: false,
+            qq_bot_enabled: false,
+            yuanbao_enabled: false,
+            google_chat_enabled: false,
+            irc_enabled: false,
+            microsoft_teams_enabled: false,
             admins: Vec::new(),
+        }
+    }
+}
+
+/// Terminal execution backends.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum TerminalBackend {
+    Local,
+    Docker,
+    Modal,
+    Ssh,
+    Daytona,
+    VercelSandbox,
+    Singularity,
+}
+
+impl Default for TerminalBackend {
+    fn default() -> Self {
+        Self::Local
+    }
+}
+
+impl std::fmt::Display for TerminalBackend {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Local => write!(f, "local"),
+            Self::Docker => write!(f, "docker"),
+            Self::Modal => write!(f, "modal"),
+            Self::Ssh => write!(f, "ssh"),
+            Self::Daytona => write!(f, "daytona"),
+            Self::VercelSandbox => write!(f, "vercel_sandbox"),
+            Self::Singularity => write!(f, "singularity"),
+        }
+    }
+}
+
+impl std::str::FromStr for TerminalBackend {
+    type Err = String;
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s {
+            "local" => Ok(Self::Local),
+            "docker" => Ok(Self::Docker),
+            "modal" => Ok(Self::Modal),
+            "ssh" => Ok(Self::Ssh),
+            "daytona" => Ok(Self::Daytona),
+            "vercel_sandbox" => Ok(Self::VercelSandbox),
+            "singularity" => Ok(Self::Singularity),
+            _ => Err(format!("Unknown terminal backend: {}", s)),
         }
     }
 }
@@ -303,6 +491,8 @@ pub struct ToolSettings {
     pub terminal: TerminalSettings,
     pub code_execution: CodeExecutionSettings,
     pub stt: SttSettings,
+    pub disabled_tools: Vec<String>,
+    pub disabled_toolsets: Vec<String>,
 }
 
 impl Default for ToolSettings {
@@ -316,6 +506,8 @@ impl Default for ToolSettings {
             terminal: TerminalSettings::default(),
             code_execution: CodeExecutionSettings::default(),
             stt: SttSettings::default(),
+            disabled_tools: Vec::new(),
+            disabled_toolsets: Vec::new(),
         }
     }
 }
@@ -336,6 +528,110 @@ impl Default for SttSettings {
             openai_api_key: None,
             groq_model: "whisper-large-v3-turbo".to_string(),
             openai_model: "whisper-1".to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct TtsSettings {
+    pub provider: Option<String>,
+    pub enabled: bool,
+}
+
+impl Default for TtsSettings {
+    fn default() -> Self {
+        Self {
+            provider: None,
+            enabled: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct VisionSettings {
+    pub provider: Option<String>,
+    pub model: Option<String>,
+    pub base_url: Option<String>,
+    pub api_key: Option<String>,
+}
+
+impl Default for VisionSettings {
+    fn default() -> Self {
+        Self {
+            provider: None,
+            model: None,
+            base_url: None,
+            api_key: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct CredentialPoolSettings {
+    pub strategy: Option<String>,
+    pub enabled: bool,
+    pub strategies: HashMap<String, String>,
+}
+
+impl Default for CredentialPoolSettings {
+    fn default() -> Self {
+        Self {
+            strategy: None,
+            enabled: false,
+            strategies: HashMap::new(),
+        }
+    }
+}
+
+/// Configuration for an auxiliary model assigned to a specific task slot.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuxiliaryModelConfig {
+    pub provider: Option<String>,
+    pub model: Option<String>,
+    pub base_url: Option<String>,
+    pub api_key: Option<String>,
+}
+
+impl Default for AuxiliaryModelConfig {
+    fn default() -> Self {
+        Self {
+            provider: None,
+            model: None,
+            base_url: None,
+            api_key: None,
+        }
+    }
+}
+
+/// Auxiliary model routing for specialized task slots.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuxiliaryModels {
+    pub vision: Option<AuxiliaryModelConfig>,
+    pub compression: Option<AuxiliaryModelConfig>,
+    pub web_extract: Option<AuxiliaryModelConfig>,
+    pub image_gen: Option<AuxiliaryModelConfig>,
+    pub embeddings: Option<AuxiliaryModelConfig>,
+    pub search: Option<AuxiliaryModelConfig>,
+    pub memory: Option<AuxiliaryModelConfig>,
+    pub code_execution: Option<AuxiliaryModelConfig>,
+    pub reasoning: Option<AuxiliaryModelConfig>,
+}
+
+impl Default for AuxiliaryModels {
+    fn default() -> Self {
+        Self {
+            vision: None,
+            compression: None,
+            web_extract: None,
+            image_gen: None,
+            embeddings: None,
+            search: None,
+            memory: None,
+            code_execution: None,
+            reasoning: None,
         }
     }
 }
@@ -474,6 +770,10 @@ pub fn default_config_paths() -> Vec<PathBuf> {
         paths.push(config_dir.join("hermes").join("config.toml"));
     }
 
+    if let Some(home_dir) = dirs::home_dir() {
+        paths.push(home_dir.join(".hermes").join("hermes.toml"));
+    }
+
     paths
 }
 
@@ -556,6 +856,18 @@ impl AppConfig {
         )?;
         apply_string_value_override("HERMES_LOG_LEVEL", &mut self.logging.level);
         apply_path_override("HERMES_SKILLS_DIR", &mut self.skills.root_dir)?;
+
+        // Gateway env var overrides
+        apply_string_option_override("TELEGRAM_BOT_TOKEN", &mut self.gateway.telegram_token)?;
+        apply_bool_override(
+            "HERMES_TELEGRAM_ENABLED",
+            &mut self.gateway.telegram_enabled,
+        )?;
+        apply_string_option_override("DISCORD_BOT_TOKEN", &mut self.gateway.discord_token)?;
+        apply_bool_override("HERMES_DISCORD_ENABLED", &mut self.gateway.discord_enabled)?;
+        apply_string_option_override("SLACK_BOT_TOKEN", &mut self.gateway.slack_token)?;
+        apply_bool_override("HERMES_SLACK_ENABLED", &mut self.gateway.slack_enabled)?;
+
         Ok(())
     }
 }
