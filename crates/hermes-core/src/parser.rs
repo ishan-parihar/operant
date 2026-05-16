@@ -112,7 +112,7 @@ impl ToolCallParser {
             // Flush any remaining text
             if !self.buffer.is_empty() {
                 let text = std::mem::take(&mut self.buffer);
-                
+
                 // Try to find any tool calls in the remaining text even if not in tags
                 if let Some(tool_call) = self.try_parse_tool_call(&text) {
                     events.push(ParserEvent::ToolCall(tool_call));
@@ -175,7 +175,7 @@ impl ToolCallParser {
                         let mut text = String::from("<");
                         text.push_str(&tag);
                         text.push('>');
-                        
+
                         if !self.buffer.is_empty() {
                             let mut combined = std::mem::take(&mut self.buffer);
                             combined.push_str(&text);
@@ -350,7 +350,7 @@ impl ToolCallParser {
                         return Some(tc);
                     }
                 }
-                
+
                 // If closing braces didn't work, try more aggressive partial extraction
                 if let Some(tc) = self.aggressive_parse(partial) {
                     return Some(tc);
@@ -366,18 +366,23 @@ impl ToolCallParser {
     fn extract_tool_call_from_json(&self, value: &Value) -> Option<ToolCall> {
         // Handle direct object format: { "name": "...", "arguments": "..." }
         // Some models might output { "tool": "name", "parameters": { ... } } or similar
-        let name = value.get("name")
+        let name = value
+            .get("name")
             .or_else(|| value.get("tool"))
             .or_else(|| value.get("function").and_then(|f| f.get("name")))
             .and_then(|v| v.as_str())?;
 
         // Arguments can be a string (escaped JSON) or a direct object
-        let arguments_str = match value.get("arguments")
+        let arguments_str = match value
+            .get("arguments")
             .or_else(|| value.get("parameters"))
             .or_else(|| value.get("function").and_then(|f| f.get("arguments")))
-            .or_else(|| value.get("function").and_then(|f| f.get("parameters"))) {
+            .or_else(|| value.get("function").and_then(|f| f.get("parameters")))
+        {
             Some(Value::String(s)) => {
-                let trimmed = s.trim().trim_matches(|c: char| c.is_control() || c.is_whitespace());
+                let trimmed = s
+                    .trim()
+                    .trim_matches(|c: char| c.is_control() || c.is_whitespace());
                 if trimmed.is_empty() {
                     "{}".to_string()
                 } else {
@@ -415,7 +420,8 @@ impl ToolCallParser {
     fn aggressive_parse(&self, content: &str) -> Option<ToolCall> {
         // Try to find "name" or "function" followed by a string
         let name_re = Regex::new(r#""(?:name|function)":\s*"([^"]+)""#).ok()?;
-        let args_re = Regex::new(r#""(?:arguments|parameters)":\s*"?(\{[^}]*\}|"[^"]*")"?"#).ok()?;
+        let args_re =
+            Regex::new(r#""(?:arguments|parameters)":\s*"?(\{[^}]*\}|"[^"]*")"?"#).ok()?;
 
         let name = name_re
             .captures(content)
@@ -429,7 +435,9 @@ impl ToolCallParser {
             .unwrap_or_else(|| "{}".to_string());
 
         // Fix: If args is empty string "" (captured from literal ""), change to "{}"
-        let trimmed_args = args.trim().trim_matches(|c: char| c.is_control() || c.is_whitespace());
+        let trimmed_args = args
+            .trim()
+            .trim_matches(|c: char| c.is_control() || c.is_whitespace());
         if args == "\"\"" || args.is_empty() || trimmed_args.is_empty() {
             args = "{}".to_string();
         }
@@ -726,7 +734,8 @@ Some text here
         assert_eq!(parser.take_text(), "Final thoughts before tool: ");
 
         // Part 2: Complete the tag and provide JSON
-        let calls2 = parser.process_chunk("call>{\"name\": \"echo\", \"arguments\": \"{}\"}</tool_call>");
+        let calls2 =
+            parser.process_chunk("call>{\"name\": \"echo\", \"arguments\": \"{}\"}</tool_call>");
         assert_eq!(calls2.len(), 1);
         assert_eq!(calls2[0].function.name, "echo");
         assert_eq!(parser.take_text(), "");
@@ -778,7 +787,8 @@ Some text here
     #[test]
     fn test_nested_function_fallback() {
         // Test case for models using { "function": { "name": "...", "arguments": { ... } } }
-        let content = r#"<tool_call>{"function": {"name": "echo", "arguments": {"msg": "hi"}}}</tool_call>"#;
+        let content =
+            r#"<tool_call>{"function": {"name": "echo", "arguments": {"msg": "hi"}}}</tool_call>"#;
         let mut parser = ToolCallParser::new();
         let tool_calls = parser.parse(content).unwrap();
 

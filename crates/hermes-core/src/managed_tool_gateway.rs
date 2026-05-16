@@ -283,17 +283,17 @@ impl ManagedToolGateway {
             );
         }
 
-        let text = resp
-            .text()
-            .await
-            .with_context(|| format!("Failed to read gateway response body for '{tool_name}/{action}'"))?;
+        let text = resp.text().await.with_context(|| {
+            format!("Failed to read gateway response body for '{tool_name}/{action}'")
+        })?;
 
         if text.trim().is_empty() {
             anyhow::bail!("Gateway tool '{tool_name}/{action}' returned an empty response body");
         }
 
-        serde_json::from_str(&text)
-            .with_context(|| format!("Failed to parse gateway response for '{tool_name}/{action}': {text}"))
+        serde_json::from_str(&text).with_context(|| {
+            format!("Failed to parse gateway response for '{tool_name}/{action}': {text}")
+        })
     }
 
     /// List all available tools from the gateway.
