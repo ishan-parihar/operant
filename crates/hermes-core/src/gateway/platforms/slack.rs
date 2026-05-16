@@ -54,10 +54,7 @@ impl PlatformAdapter for SlackAdapter {
         Ok(())
     }
 
-    async fn handle_update(
-        &self,
-        _update: serde_json::Value,
-    ) -> Result<Option<IncomingMessage>> {
+    async fn handle_update(&self, _update: serde_json::Value) -> Result<Option<IncomingMessage>> {
         Ok(None)
     }
 

@@ -7,9 +7,10 @@ use async_trait::async_trait;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tokio::sync::RwLock;
 use tracing::{debug, error, info, warn};
@@ -17,6 +18,7 @@ use uuid::Uuid;
 
 use crate::config::runtime_config;
 use crate::error::Result;
+use crate::gateway_markdown::markdown_to_telegram_html;
 
 pub mod platforms;
 
@@ -427,14 +429,20 @@ pub trait PlatformAdapter: Send + Sync {
         Ok(())
     }
 
-    /// Edit an existing message.
-    fn edit_message(
+    /// Send a message and return the platform message ID.
+    async fn send_message_return_id(&self, message: OutgoingMessage) -> Result<String> {
+        self.send_message(message).await?;
+        Ok(String::new())
+    }
+
+    /// Edit an existing message and return the platform message ID.
+    async fn edit_message(
         &self,
         _channel_id: &str,
         _message_id: &str,
         _message: &OutgoingMessage,
-    ) -> Result<()> {
-        Ok(())
+    ) -> Result<String> {
+        Ok(String::new())
     }
 
     /// Delete a message.
@@ -547,6 +555,24 @@ impl Gateway {
         Ok(())
     }
 
+    /// Start all enabled adapters with a shared message channel.
+    /// Each adapter that supports it will spawn a polling/listening
+    /// task and forward incoming messages through the sender.
+    pub async fn start_with_channel(
+        &self,
+        message_tx: mpsc::UnboundedSender<IncomingMessage>,
+    ) -> Result<()> {
+        for (name, adapter) in &self.adapters {
+            if adapter.is_enabled() {
+                info!(platform = %name, "Starting platform adapter with channel");
+                if let Err(e) = adapter.start_with_channel(message_tx.clone()).await {
+                    error!(platform = %name, error = %e, "Failed to start adapter with channel");
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Check if the gateway is running
     pub async fn is_running(&self) -> bool {
         *self.running.read().await
@@ -609,6 +635,52 @@ impl Gateway {
         adapter.send_message(message).await
     }
 
+    /// Send a message and return the platform message ID.
+    pub async fn send_message_return_id(
+        &self,
+        platform: &str,
+        message: OutgoingMessage,
+    ) -> Result<String> {
+        let adapter = match self.adapters.get(platform) {
+            Some(a) => a,
+            None => {
+                return Err(crate::error::Error::Agent(format!(
+                    "Unknown platform: {}",
+                    platform
+                )));
+            }
+        };
+        adapter.send_message_return_id(message).await
+    }
+
+    /// Edit an existing message on a platform.
+    pub async fn edit_message(
+        &self,
+        platform: &str,
+        channel_id: &str,
+        message_id: &str,
+        message: OutgoingMessage,
+    ) -> Result<String> {
+        let adapter = match self.adapters.get(platform) {
+            Some(a) => a,
+            None => {
+                return Err(crate::error::Error::Agent(format!(
+                    "Unknown platform: {}",
+                    platform
+                )));
+            }
+        };
+        adapter.edit_message(channel_id, message_id, &message).await
+    }
+
+    /// Send a typing indicator to a platform channel
+    pub fn send_typing(&self, platform: &str, channel_id: &str) -> Result<()> {
+        if let Some(adapter) = self.adapters.get(platform) {
+            adapter.send_typing(channel_id)?;
+        }
+        Ok(())
+    }
+
     // ── Extended Gateway API ──
 
     /// Register a platform adapter using `&mut self` (in-place)
@@ -657,13 +729,20 @@ impl Gateway {
 pub struct TelegramAdapter {
     token: Option<String>,
     enabled: bool,
+    running: Arc<AtomicBool>,
+    client: reqwest::Client,
 }
 
 impl TelegramAdapter {
     /// Create a new Telegram adapter
     pub fn new(token: Option<String>) -> Self {
         let enabled = token.is_some();
-        Self { token, enabled }
+        Self {
+            token,
+            enabled,
+            running: Arc::new(AtomicBool::new(false)),
+            client: reqwest::Client::new(),
+        }
     }
 
     fn api_url(&self) -> String {
@@ -674,6 +753,120 @@ impl TelegramAdapter {
             self.token.as_ref().unwrap_or(&String::new())
         )
     }
+
+    /// Send a message to a Telegram chat and return the message_id.
+    /// Uses HTML parse_mode; falls back to plain text on 400 Bad Request.
+    async fn send_telegram_inner(
+        &self,
+        channel_id: &str,
+        text: &str,
+        reply_to: Option<&str>,
+    ) -> Result<String> {
+        let html = markdown_to_telegram_html(text);
+        let mut body = serde_json::json!({
+            "chat_id": channel_id,
+            "text": html,
+            "parse_mode": "HTML",
+        });
+
+        if let Some(reply) = reply_to {
+            body["reply_to_message_id"] = serde_json::json!(reply);
+        }
+
+        tracing::debug!(
+            "Sending message to chat {} ({} chars)",
+            channel_id,
+            text.len()
+        );
+        let response = self
+            .client
+            .post(format!("{}/sendMessage", self.api_url()))
+            .json(&body)
+            .send()
+            .await?;
+
+        let status = response.status();
+
+        // If HTML parsing fails (400 Bad Request), retry as plain text
+        if status.as_u16() == 400 {
+            warn!("Telegram HTML parse failed, retrying as plain text");
+            tracing::warn!(
+                "HTML send failed (400), falling back to plain text for chat {}",
+                channel_id
+            );
+            let mut plain_body = serde_json::json!({
+                "chat_id": channel_id,
+                "text": text,
+            });
+            if let Some(reply) = reply_to {
+                plain_body["reply_to_message_id"] = serde_json::json!(reply);
+            }
+            let resp = self
+                .client
+                .post(format!("{}/sendMessage", self.api_url()))
+                .json(&plain_body)
+                .send()
+                .await?;
+            if !resp.status().is_success() {
+                tracing::error!(
+                    "Send failed for chat {}: HTTP {}",
+                    channel_id,
+                    resp.status()
+                );
+            }
+            let data: serde_json::Value = resp.json().await?;
+            tracing::info!(
+                "Message sent to chat {} via plain text, message_id: {:?}",
+                channel_id,
+                data["result"]["message_id"].as_i64()
+            );
+            return Ok(data["result"]["message_id"]
+                .as_i64()
+                .map(|id| id.to_string())
+                .unwrap_or_default());
+        }
+
+        tracing::info!("Message sent to chat {}", channel_id);
+        let data: serde_json::Value = response.json().await?;
+        tracing::info!(
+            "Message sent to chat {}, message_id: {:?}",
+            channel_id,
+            data["result"]["message_id"].as_i64()
+        );
+        Ok(data["result"]["message_id"]
+            .as_i64()
+            .map(|id| id.to_string())
+            .unwrap_or_default())
+    }
+}
+
+/// Escape HTML special characters for Telegram HTML parse_mode
+fn escape_html(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+}
+
+/// Split text into ~max_chunk_size chunks at character boundaries.
+/// Preserves the original text; HTML-escaping is applied per-chunk by callers.
+fn chunk_text(text: &str, max_chunk_size: usize) -> Vec<String> {
+    let mut chunks = Vec::new();
+    let mut start = 0;
+    while start < text.len() {
+        let end = std::cmp::min(start + max_chunk_size, text.len());
+        chunks.push(text[start..end].to_string());
+        start = end;
+    }
+    chunks
+}
+
+/// Path used to persist the Telegram polling offset across restarts.
+fn get_offset_path() -> PathBuf {
+    std::env::current_dir()
+        .ok()
+        .map(|p| p.join("telegram_offset.txt"))
+        .unwrap_or_else(|| PathBuf::from("telegram_offset.txt"))
 }
 
 #[async_trait]
@@ -692,8 +885,8 @@ impl PlatformAdapter for TelegramAdapter {
         }
 
         // Verify the token by getting bot info
-        let client = reqwest::Client::new();
-        let response = client
+        let response = self
+            .client
             .get(format!("{}/getMe", self.api_url()))
             .send()
             .await?;
@@ -709,41 +902,356 @@ impl PlatformAdapter for TelegramAdapter {
     }
 
     async fn stop(&self) -> Result<()> {
+        self.running.store(false, Ordering::SeqCst);
         info!("Telegram adapter stopped");
         Ok(())
     }
 
     async fn send_message(&self, message: OutgoingMessage) -> Result<()> {
-        let client = reqwest::Client::new();
+        let text = &message.content;
+        let max_len = 4096;
 
-        let mut body = serde_json::json!({
-            "chat_id": message.channel_id,
-            "text": message.content,
-        });
-
-        if message.parse_markdown {
-            body["parse_mode"] = serde_json::json!("MarkdownV2");
+        if text.len() <= max_len {
+            self.send_telegram_inner(&message.channel_id, text, message.reply_to.as_deref())
+                .await?;
+        } else {
+            let chunks = chunk_text(text, 4000);
+            for (i, chunk) in chunks.iter().enumerate() {
+                let reply_to = if i == 0 {
+                    message.reply_to.as_deref()
+                } else {
+                    None
+                };
+                self.send_telegram_inner(&message.channel_id, chunk, reply_to)
+                    .await?;
+            }
         }
-
-        if let Some(ref reply_to) = message.reply_to {
-            body["reply_to_message_id"] = serde_json::json!(reply_to);
-        }
-
-        client
-            .post(format!("{}/sendMessage", self.api_url()))
-            .json(&body)
-            .send()
-            .await?;
 
         Ok(())
     }
 
+    fn send_typing(&self, channel_id: &str) -> Result<()> {
+        let url = format!("{}/sendChatAction", self.api_url());
+        let body = serde_json::json!({
+            "chat_id": channel_id,
+            "action": "typing",
+        });
+        let client = self.client.clone();
+        tokio::spawn(async move {
+            let _ = client.post(&url).json(&body).send().await;
+        });
+        tracing::debug!("Sent typing indicator to chat {}", channel_id);
+        Ok(())
+    }
+
+    async fn send_message_return_id(&self, message: OutgoingMessage) -> Result<String> {
+        let text = &message.content;
+        if text.len() <= 4096 {
+            self.send_telegram_inner(&message.channel_id, text, message.reply_to.as_deref())
+                .await
+        } else {
+            // For long messages, just send first chunk and return its ID
+            let chunks = chunk_text(text, 4000);
+            let id = self
+                .send_telegram_inner(&message.channel_id, &chunks[0], message.reply_to.as_deref())
+                .await?;
+            for chunk in &chunks[1..] {
+                self.send_telegram_inner(&message.channel_id, chunk, None)
+                    .await?;
+            }
+            Ok(id)
+        }
+    }
+
+    async fn edit_message(
+        &self,
+        channel_id: &str,
+        message_id: &str,
+        message: &OutgoingMessage,
+    ) -> Result<String> {
+        let url = format!("{}/editMessageText", self.api_url());
+        let html = markdown_to_telegram_html(&message.content);
+        let body = serde_json::json!({
+            "chat_id": channel_id,
+            "message_id": message_id,
+            "text": html,
+            "parse_mode": "HTML",
+        });
+        let resp = self.client.post(&url).json(&body).send().await?;
+        if resp.status().as_u16() == 400 {
+            // "message is not modified" — return existing ID.
+            return Ok(message_id.to_string());
+        }
+        if !resp.status().is_success() {
+            return Err(crate::error::Error::Agent(format!(
+                "Telegram edit_message failed: HTTP {}",
+                resp.status()
+            )));
+        }
+        Ok(message_id.to_string())
+    }
+
+    fn delete_message(&self, channel_id: &str, message_id: &str) -> Result<()> {
+        let url = format!("{}/deleteMessage", self.api_url());
+        let body = serde_json::json!({
+            "chat_id": channel_id,
+            "message_id": message_id,
+        });
+        let client = self.client.clone();
+        tokio::spawn(async move {
+            if let Err(e) = client.post(&url).json(&body).send().await {
+                tracing::error!("Telegram delete_message error: {}", e);
+            }
+        });
+        Ok(())
+    }
+
     async fn handle_update(&self, update: serde_json::Value) -> Result<Option<IncomingMessage>> {
-        // Parse Telegram update
+        // Parse Telegram update — delegates to the static parse_update
+        TelegramAdapter::parse_update(update)
+    }
+
+    fn config_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "platform": "telegram",
+            "enabled": self.enabled,
+            "has_token": self.token.is_some()
+        })
+    }
+
+    async fn start_with_channel(
+        &self,
+        message_tx: mpsc::UnboundedSender<IncomingMessage>,
+    ) -> Result<()> {
+        if !self.is_enabled() {
+            return Ok(());
+        }
+
+        self.start().await?;
+        tracing::info!("Telegram token verified via getMe");
+
+        let token = self.token.clone().unwrap_or_default();
+        let base = runtime_config().gateway.telegram_api_base;
+        let url = format!("{}/bot{}/getUpdates", base.trim_end_matches('/'), token);
+        let running = self.running.clone();
+        running.store(true, Ordering::SeqCst);
+
+        let client = self.client.clone();
+
+        tracing::info!("Telegram polling task spawned");
+        tokio::spawn(async move {
+            // ── OUTER SUPERVISED RESTART LOOP ──
+            // On 409 Conflict the inner loop breaks here, triggering a fresh
+            // startup probe (timeout=0) before re-entering the polling loop.
+            'restart: while running.load(Ordering::SeqCst) {
+                let mut offset: i64 = 0;
+
+                // === STARTUP PROBE: claim any pending updates before long-poll starts ===
+                if let Ok(resp) = client
+                    .post(&url)
+                    .json(&serde_json::json!({
+                        "offset": 0,
+                        "timeout": 0,
+                    }))
+                    .send()
+                    .await
+                {
+                    if let Ok(data) = resp.json::<serde_json::Value>().await {
+                        if let Some(updates) = data["result"].as_array() {
+                            for update in updates {
+                                if let Some(update_id) = update["update_id"].as_i64() {
+                                    offset = update_id + 1;
+                                }
+                            }
+                        }
+                    }
+                }
+                tracing::info!("Startup probe completed, initial offset: {}", offset);
+
+                // === LOAD SAVED OFFSET (persist across restarts) ===
+                let offset_path = get_offset_path();
+                if offset_path.exists() {
+                    if let Ok(saved) = tokio::fs::read_to_string(&offset_path).await {
+                        if let Ok(n) = saved.trim().parse::<i64>() {
+                            if n > offset {
+                                offset = n;
+                            }
+                        }
+                    }
+                }
+                tracing::info!("Loaded saved offset: {}", offset);
+
+                // === REGISTER BOT COMMANDS ===
+                {
+                    let cmd_url =
+                        format!("{}/bot{}/setMyCommands", base.trim_end_matches('/'), token);
+                    let cmd_body = serde_json::json!({
+                        "commands": [
+                            { "command": "start", "description": "Start the bot" },
+                            { "command": "help", "description": "Show help" },
+                            { "command": "session", "description": "Show session info" },
+                        ]
+                    });
+                    let _ = client.post(&cmd_url).json(&cmd_body).send().await;
+                }
+                tracing::info!("Bot commands registered via setMyCommands");
+
+                // ── INNER POLLING LOOP ──
+                let mut retry_delay: u64 = 1;
+                let mut last_heartbeat = Instant::now();
+
+                tracing::info!("Entering main polling loop");
+                while running.load(Ordering::SeqCst) {
+                    // Early exit if the gateway receiver has been dropped (clean shutdown).
+                    if message_tx.is_closed() {
+                        info!("Telegram: message channel closed, stopping poll loop");
+                        running.store(false, Ordering::SeqCst);
+                        break;
+                    }
+
+                    // Heartbeat: log every 60s without receiving updates
+                    if last_heartbeat.elapsed() >= Duration::from_secs(60) {
+                        info!("Polling active, last update offset: {}", offset);
+                        last_heartbeat = Instant::now();
+                    }
+
+                    let response = client
+                        .post(&url)
+                        .json(&serde_json::json!({
+                            "offset": offset,
+                            "timeout": 30,
+                        }))
+                        .send()
+                        .await;
+
+                    let mut had_updates = false;
+
+                    match response {
+                        Ok(resp) => {
+                            let status = resp.status();
+
+                            // Handle 409 Conflict — break to outer loop for a clean re-probe
+                            if status.as_u16() == 409 {
+                                tracing::warn!(
+                                    "Telegram 409 Conflict (another instance?), restarting from probe in 35s"
+                                );
+                                tokio::time::sleep(Duration::from_secs(35)).await;
+                                break;
+                            }
+
+                            // Any other successful HTTP response resets the retry delay.
+                            retry_delay = 1;
+
+                            if let Ok(data) = resp.json::<serde_json::Value>().await {
+                                if let Some(updates) = data["result"].as_array() {
+                                    had_updates = !updates.is_empty();
+                                    if had_updates {
+                                        tracing::info!(
+                                            "Received {} update(s) from Telegram",
+                                            updates.len()
+                                        );
+                                        last_heartbeat = Instant::now();
+                                    }
+                                    for update in updates {
+                                        if let Some(update_id) = update["update_id"].as_i64() {
+                                            offset = update_id + 1;
+                                        }
+                                        if let Ok(Some(msg)) =
+                                            TelegramAdapter::parse_update(update.clone())
+                                        {
+                                            tracing::info!("Sent message to gateway handler (chat: {}, content: {:.50})", msg.channel_id, msg.content);
+                                            if let Err(e) = message_tx.send(msg) {
+                                                tracing::error!(
+                                                    "Failed to send message to gateway handler: {}",
+                                                    e
+                                                );
+                                                // Receiver dropped — likely shutting down.
+                                                running.store(false, Ordering::SeqCst);
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Persist offset to disk when updates were received
+                            if had_updates {
+                                let _ = std::fs::write(&offset_path, offset.to_string());
+                            }
+                        }
+                        Err(e) => {
+                            tracing::error!(
+                                "Telegram polling error (retrying in {}s): {}",
+                                retry_delay,
+                                e
+                            );
+                            tokio::time::sleep(Duration::from_secs(retry_delay)).await;
+                            retry_delay = (retry_delay * 2).min(30);
+                            continue; // Stay in inner loop, skip the 2s pause below
+                        }
+                    }
+
+                    // Only sleep when no updates arrived (long-poll timed out)
+                    // so we don't add latency between receiving updates and polling again.
+                    if !had_updates {
+                        tokio::time::sleep(Duration::from_secs(2)).await;
+                    }
+                }
+
+                // Before re-probing, check if we should shut down cleanly.
+                if !running.load(Ordering::SeqCst) || message_tx.is_closed() {
+                    break 'restart;
+                }
+            }
+        });
+
+        info!("Telegram bot started with polling");
+        Ok(())
+    }
+
+    async fn send_message_to_channel(
+        &self,
+        channel_id: &str,
+        message: &OutgoingMessage,
+    ) -> Result<String> {
+        let text = &message.content;
+        let max_len = 4096;
+
+        if text.len() <= max_len {
+            self.send_telegram_inner(channel_id, text, message.reply_to.as_deref())
+                .await
+        } else {
+            let chunks = chunk_text(text, 4000);
+            let first_id = self
+                .send_telegram_inner(channel_id, &chunks[0], message.reply_to.as_deref())
+                .await?;
+            for chunk in &chunks[1..] {
+                self.send_telegram_inner(channel_id, chunk, None).await?;
+            }
+            Ok(first_id)
+        }
+    }
+}
+
+impl TelegramAdapter {
+    /// Parse a Telegram update into an IncomingMessage.
+    /// This is the same logic used by handle_update but callable without a trait object.
+    fn parse_update(update: serde_json::Value) -> Result<Option<IncomingMessage>> {
         let message = match update.get("message") {
             Some(m) => m,
             None => return Ok(None),
         };
+
+        // Filter out messages from bots
+        if let Some(from) = message.get("from") {
+            if from
+                .get("is_bot")
+                .and_then(|b| b.as_bool())
+                .unwrap_or(false)
+            {
+                return Ok(None);
+            }
+        }
 
         let chat = match message.get("chat") {
             Some(c) => c,
@@ -752,11 +1260,35 @@ impl PlatformAdapter for TelegramAdapter {
 
         let from = message.get("from");
 
-        let content = message
-            .get("text")
-            .and_then(|t| t.as_str())
-            .unwrap_or("")
-            .to_string();
+        let content = if let Some(text) = message.get("text").and_then(|t| t.as_str()) {
+            text.to_string()
+        } else if message.get("photo").is_some() {
+            message
+                .get("caption")
+                .and_then(|c| c.as_str())
+                .unwrap_or("[sent a photo]")
+                .to_string()
+        } else if let Some(doc) = message.get("document") {
+            let filename = doc
+                .get("file_name")
+                .and_then(|f| f.as_str())
+                .unwrap_or("unknown");
+            message
+                .get("caption")
+                .and_then(|c| c.as_str())
+                .map(|c| c.to_string())
+                .unwrap_or_else(|| format!("[sent a document: {}]", filename))
+        } else if message.get("voice").is_some() {
+            message
+                .get("caption")
+                .and_then(|c| c.as_str())
+                .unwrap_or("[sent a voice message]")
+                .to_string()
+        } else if message.get("sticker").is_some() {
+            "[sent a sticker]".to_string()
+        } else {
+            "[sent an attachment]".to_string()
+        };
 
         if content.is_empty() {
             return Ok(None);
@@ -781,32 +1313,202 @@ impl PlatformAdapter for TelegramAdapter {
             .with_raw(update),
         ))
     }
+}
 
-    fn config_json(&self) -> serde_json::Value {
-        serde_json::json!({
-            "platform": "telegram",
-            "enabled": self.enabled,
-            "has_token": self.token.is_some()
+impl TelegramAdapter {
+    /// Send a message in reply to another message in a Telegram chat.
+    /// Returns the message_id of the sent message.
+    ///
+    /// This is important for threaded replies where `reply_to_message_id`
+    /// keeps the response in the same thread.
+    pub async fn send_message_with_reply(
+        &self,
+        chat_id: &str,
+        text: &str,
+        reply_to: &str,
+    ) -> Result<String> {
+        self.send_telegram_inner(chat_id, text, Some(reply_to))
+            .await
+    }
+
+    /// Send a streaming message to a Telegram chat, progressively editing
+    /// the same message as new chunks arrive from the receiver.
+    ///
+    /// The first chunk is sent as a new message and each subsequent chunk
+    /// edits that message in place (progressive edit). When the receiver is
+    /// exhausted or an error occurs, the spawned task finishes.
+    ///
+    /// Returns a `JoinHandle` that can be used to await or detach the stream.
+    pub fn send_message_streaming(
+        &self,
+        chat_id: String,
+        mut content_rx: tokio::sync::mpsc::Receiver<String>,
+    ) -> tokio::task::JoinHandle<()> {
+        let client = self.client.clone();
+        let token = self.token.clone().unwrap_or_default();
+        let base = runtime_config().gateway.telegram_api_base;
+        let api_base = base.trim_end_matches('/').to_string();
+
+        tokio::spawn(async move {
+            // Wait for the first chunk of the stream
+            let first_chunk = match content_rx.recv().await {
+                Some(chunk) => chunk,
+                None => {
+                    tracing::debug!("Telegram streaming: receiver closed before first chunk");
+                    return;
+                }
+            };
+
+            // Send the initial message and capture the message_id
+            let escaped = escape_html(&first_chunk);
+            let body = serde_json::json!({
+                "chat_id": chat_id,
+                "text": escaped,
+                "parse_mode": "HTML",
+            });
+
+            let message_id = match client
+                .post(format!("{}/bot{}/sendMessage", api_base, token))
+                .json(&body)
+                .send()
+                .await
+            {
+                Ok(resp) => {
+                    if let Ok(data) = resp.json::<serde_json::Value>().await {
+                        data["result"]["message_id"]
+                            .as_i64()
+                            .map(|id| id.to_string())
+                    } else {
+                        None
+                    }
+                }
+                Err(e) => {
+                    tracing::error!("Telegram streaming: initial send failed: {}", e);
+                    return;
+                }
+            };
+
+            let message_id = match message_id {
+                Some(id) => id,
+                None => {
+                    tracing::error!("Telegram streaming: failed to get message_id from response");
+                    return;
+                }
+            };
+            tracing::info!(
+                "Streaming message started for chat {}, message_id: {}",
+                chat_id,
+                message_id
+            );
+
+            // Edit the message progressively as new chunks arrive
+            while let Some(chunk) = content_rx.recv().await {
+                let escaped = escape_html(&chunk);
+                let edit_body = serde_json::json!({
+                    "chat_id": chat_id,
+                    "message_id": message_id,
+                    "text": escaped,
+                    "parse_mode": "HTML",
+                });
+
+                match client
+                    .post(format!("{}/bot{}/editMessageText", api_base, token))
+                    .json(&edit_body)
+                    .send()
+                    .await
+                {
+                    Ok(resp) => {
+                        // 400 "message is not modified" — skip, not an error
+                        if resp.status().as_u16() == 400 {
+                            // message not modified, continue streaming
+                        } else {
+                            tracing::info!("Streaming message {} edited successfully", message_id);
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!("Telegram streaming edit error: {}", e);
+                        break;
+                    }
+                }
+            }
         })
     }
+}
 
-    async fn start_with_channel(
-        &self,
-        _message_tx: mpsc::UnboundedSender<IncomingMessage>,
-    ) -> Result<()> {
-        self.start().await
+/// Polls Telegram for new updates in a non-blocking loop.
+///
+/// Uses long polling (30s timeout) to receive updates from Telegram's Bot API.
+/// Spawns a single task that continues until `stop()` is called.
+pub struct TelegramPoller {
+    adapter: Arc<TelegramAdapter>,
+    running: Arc<AtomicBool>,
+    interval: Duration,
+}
+
+impl TelegramPoller {
+    /// Create a new Telegram poller for the given adapter.
+    pub fn new(adapter: Arc<TelegramAdapter>) -> Self {
+        Self {
+            adapter,
+            running: Arc::new(AtomicBool::new(false)),
+            interval: Duration::from_secs(2),
+        }
     }
 
-    async fn send_message_to_channel(
-        &self,
-        channel_id: &str,
-        message: &OutgoingMessage,
-    ) -> Result<String> {
-        let mut msg = OutgoingMessage::new(channel_id.to_string(), message.content.clone());
-        msg.parse_markdown = message.parse_markdown;
-        msg.reply_to = message.reply_to.clone();
-        self.send_message(msg).await?;
-        Ok(String::new())
+    /// Start the polling loop. Spawns a task that sends received messages
+    /// through the `tx` channel. This method itself does not block.
+    pub fn start(&self, tx: mpsc::UnboundedSender<IncomingMessage>) {
+        self.running.store(true, Ordering::SeqCst);
+        let adapter = self.adapter.clone();
+        let running = self.running.clone();
+        let interval = self.interval;
+        let url = format!("{}/getUpdates", adapter.api_url());
+
+        tokio::spawn(async move {
+            let client = reqwest::Client::new();
+            let mut offset: i64 = 0;
+
+            while running.load(Ordering::SeqCst) {
+                let response = client
+                    .post(&url)
+                    .json(&serde_json::json!({
+                        "offset": offset,
+                        "timeout": 30,
+                    }))
+                    .send()
+                    .await;
+
+                match response {
+                    Ok(resp) => {
+                        if let Ok(data) = resp.json::<serde_json::Value>().await {
+                            if let Some(updates) = data["result"].as_array() {
+                                for update in updates {
+                                    if let Some(update_id) = update["update_id"].as_i64() {
+                                        offset = update_id + 1;
+                                    }
+                                    if let Ok(Some(msg)) =
+                                        adapter.handle_update(update.clone()).await
+                                    {
+                                        let _ = tx.send(msg);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!("Telegram polling error: {}", e);
+                    }
+                }
+
+                tokio::time::sleep(interval).await;
+            }
+        });
+    }
+
+    /// Stop the polling loop. Sets the running flag to false,
+    /// causing the spawned task to exit on its next iteration.
+    pub fn stop(&self) {
+        self.running.store(false, Ordering::SeqCst);
     }
 }
 

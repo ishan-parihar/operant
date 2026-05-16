@@ -5,8 +5,8 @@ use tracing::info;
 pub mod discord;
 pub mod slack;
 
-use crate::error::Result;
 use super::PlatformAdapter;
+use crate::error::Result;
 
 /// Registry of platform adapters by name.
 pub struct PlatformRegistry {
