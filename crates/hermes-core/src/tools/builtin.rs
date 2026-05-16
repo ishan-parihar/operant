@@ -11,7 +11,7 @@ use crate::kanban::KanbanDb;
 use crate::mcp::McpManager;
 use crate::process_registry::ProcessRegistry;
 use crate::tools::{SessionSearchTool, ToolRegistry};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 pub use super::binary_extensions::BinaryExtensionsTool;
@@ -66,6 +66,7 @@ pub use super::xai_http::XaiHttpTool;
 /// Register all built-in tools with a registry
 pub async fn register_builtin_tools(
     registry: &ToolRegistry,
+    skills_dir: &Path,
     database: Arc<Database>,
     cron_db: Arc<CronDb>,
     kanban_db: Arc<KanbanDb>,
@@ -103,8 +104,12 @@ pub async fn register_builtin_tools(
     registry.register(ClarifyTool).await?;
     registry.register(PatchTool).await?;
     registry.register(VisionTool).await?;
-    registry.register(SkillsTool).await?;
-    registry.register(SkillViewTool).await?;
+    registry
+        .register(SkillsTool::new(skills_dir.to_path_buf()))
+        .await?;
+    registry
+        .register(SkillViewTool::new(skills_dir.to_path_buf()))
+        .await?;
     registry.register(SlashConfirmTool).await?;
     registry
         .register(ProcessTool::new(ProcessRegistry::new()))
@@ -149,6 +154,7 @@ pub async fn register_builtin_tools(
 /// Register all built-in tools plus the sub-agent delegation tool.
 pub async fn register_builtin_tools_with_sub_agent(
     registry: &ToolRegistry,
+    skills_dir: &Path,
     parent_client: &OpenAIClient,
     model: impl Into<String>,
     database: Arc<Database>,
@@ -156,7 +162,15 @@ pub async fn register_builtin_tools_with_sub_agent(
     kanban_db: Arc<KanbanDb>,
     mcp_manager: Option<McpManager>,
 ) -> Result<()> {
-    register_builtin_tools(registry, database.clone(), cron_db, kanban_db, mcp_manager).await?;
+    register_builtin_tools(
+        registry,
+        skills_dir,
+        database.clone(),
+        cron_db,
+        kanban_db,
+        mcp_manager,
+    )
+    .await?;
     registry
         .register(SubAgentTool::new(
             parent_client,
@@ -245,14 +259,23 @@ pub fn builtin_tool_names() -> Vec<&'static str> {
 mod tests {
     use super::*;
     use std::time::Duration;
+    use tempfile::TempDir;
+
+    fn setup_skills_dir() -> (TempDir, PathBuf) {
+        let dir = TempDir::new().unwrap();
+        let skills_dir = dir.path().join("skills");
+        std::fs::create_dir(&skills_dir).unwrap();
+        (dir, skills_dir)
+    }
 
     #[tokio::test]
     async fn test_register_all_builtin_tools() {
         let registry = ToolRegistry::new(Duration::from_secs(5));
+        let (_tmp, skills_dir) = setup_skills_dir();
         let database = Arc::new(Database::init(PathBuf::from("test_all_builtin.db")).unwrap());
         let cron_db = Arc::new(CronDb::init(PathBuf::from("test_all_cron.db")).unwrap());
         let kanban_db = Arc::new(KanbanDb::init(PathBuf::from("test_all_kanban.db")).unwrap());
-        register_builtin_tools(&registry, database, cron_db, kanban_db, None)
+        register_builtin_tools(&registry, &skills_dir, database, cron_db, kanban_db, None)
             .await
             .unwrap();
 
@@ -264,13 +287,21 @@ mod tests {
     #[tokio::test]
     async fn test_register_builtin_tools_with_sub_agent() {
         let registry = ToolRegistry::new(Duration::from_secs(5));
+        let (_tmp, skills_dir) = setup_skills_dir();
         let client = OpenAIClient::new(crate::client::ClientConfig::default());
         let database = Arc::new(Database::init(PathBuf::from("test_with_sub.db")).unwrap());
         let cron_db = Arc::new(CronDb::init(PathBuf::from("test_with_sub_cron.db")).unwrap());
         let kanban_db = Arc::new(KanbanDb::init(PathBuf::from("test_with_sub_kanban.db")).unwrap());
 
         register_builtin_tools_with_sub_agent(
-            &registry, &client, "gpt-4.1", database, cron_db, kanban_db, None,
+            &registry,
+            &skills_dir,
+            &client,
+            "gpt-4.1",
+            database,
+            cron_db,
+            kanban_db,
+            None,
         )
         .await
         .unwrap();

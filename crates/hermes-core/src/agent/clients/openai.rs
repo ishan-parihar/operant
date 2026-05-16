@@ -187,7 +187,6 @@ fn extract_tool_calls_from_stream_event(
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
