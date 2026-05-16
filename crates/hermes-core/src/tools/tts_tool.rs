@@ -22,6 +22,7 @@ use std::process::Command;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
+use crate::config::runtime_config;
 use crate::schema::ToolSchema;
 use crate::tools::{HermesTool, ToolContext, ToolResult};
 
@@ -53,11 +54,11 @@ pub struct TtsArgs {
 }
 
 fn default_provider() -> String {
-    "edge".to_string()
+    "kokoro".to_string()
 }
 
 fn default_voice() -> String {
-    "en-US-AriaNeural".to_string()
+    "af_sky".to_string()
 }
 
 impl TtsTool {
@@ -855,12 +856,26 @@ impl HermesTool for TtsTool {
     }
 
     async fn execute(&self, args: Value, _context: ToolContext) -> ToolResult {
-        let args: TtsArgs = match serde_json::from_value(args) {
+        let mut args: TtsArgs = match serde_json::from_value(args) {
             Ok(a) => a,
             Err(e) => {
                 return ToolResult::error("text_to_speech", format!("Invalid arguments: {}", e))
             }
         };
+
+        // If caller left provider/voice as defaults, honour the global config.
+        let cfg = runtime_config();
+        if args.provider == default_provider() && cfg.tts.provider != default_provider() {
+            args.provider = cfg.tts.provider.clone();
+        }
+        if args.voice == default_voice() {
+            if let Some(ref v) = cfg.tts.voice {
+                if !v.is_empty() {
+                    args.voice = v.clone();
+                }
+            }
+        }
+
         self.generate_speech(&args).await
     }
 }
@@ -881,12 +896,12 @@ mod tests {
 
     #[test]
     fn test_default_provider() {
-        assert_eq!(default_provider(), "edge");
+        assert_eq!(default_provider(), "kokoro");
     }
 
     #[test]
     fn test_default_voice() {
-        assert_eq!(default_voice(), "en-US-AriaNeural");
+        assert_eq!(default_voice(), "af_sky");
     }
 
     #[tokio::test]
