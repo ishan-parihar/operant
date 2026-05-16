@@ -337,7 +337,16 @@ impl McpClient {
             )));
         }
 
-        let rpc_response: JsonRpcResponse = response.json().await?;
+        let text = response.text().await?;
+        if text.trim().is_empty() {
+            return Err(crate::error::Error::Agent(
+                "MCP server returned empty response body".to_string(),
+            ));
+        }
+
+        let rpc_response: JsonRpcResponse = serde_json::from_str(&text).map_err(|e| {
+            crate::error::Error::ParseResponse(format!("Failed to parse MCP response: {}", e))
+        })?;
 
         if let Some(error) = rpc_response.error {
             return Err(crate::error::Error::Agent(format!(
@@ -622,19 +631,16 @@ impl McpStdioClient {
             crate::error::Error::Agent(format!("Failed to read from MCP stdout: {}", e))
         })?;
 
-        if response_line.is_empty() {
+        let trimmed = response_line.trim();
+        if trimmed.is_empty() {
             return Err(crate::error::Error::Agent(
-                "MCP server closed stdout unexpectedly".to_string(),
+                "MCP server returned empty or whitespace-only response".to_string(),
             ));
         }
 
-        let rpc_response: JsonRpcResponse =
-            serde_json::from_str(response_line.trim()).map_err(|e| {
-                crate::error::Error::ParseResponse(format!(
-                    "Failed to parse MCP stdio response: {}",
-                    e
-                ))
-            })?;
+        let rpc_response: JsonRpcResponse = serde_json::from_str(trimmed).map_err(|e| {
+            crate::error::Error::ParseResponse(format!("Failed to parse MCP stdio response: {}", e))
+        })?;
 
         if let Some(error) = rpc_response.error {
             return Err(crate::error::Error::Agent(format!(

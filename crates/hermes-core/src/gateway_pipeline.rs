@@ -1,7 +1,8 @@
+use crate::gateway::IncomingMessage;
 use std::sync::Arc;
 use tokio::sync::mpsc as _;
-use crate::gateway::IncomingMessage;
 
+#[derive(Debug)]
 pub enum PipelineAction {
     Allow,
     Block(String),

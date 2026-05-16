@@ -16,7 +16,10 @@ impl EventHooks {
 
     pub fn register(&self, event: &str, name: &str, f: HookFn) {
         let mut hooks = self.hooks.write().expect("EventHooks write lock poisoned");
-        hooks.entry(event.into()).or_default().push((name.into(), f));
+        hooks
+            .entry(event.into())
+            .or_default()
+            .push((name.into(), f));
     }
 
     pub fn unregister(&self, event: &str, name: &str) {

@@ -39,6 +39,7 @@
 //! └─────────────────────────────────────────────────────────────┘
 //! ```
 
+pub mod acp;
 pub mod agent;
 pub mod ansi_strip;
 pub mod approval;
@@ -52,6 +53,7 @@ pub mod context_files;
 pub mod credential_files;
 pub mod credential_pool;
 pub mod cronjobs;
+pub mod curator;
 pub mod database;
 pub mod distillation;
 pub mod env_passthrough;
@@ -60,6 +62,7 @@ pub mod error;
 pub mod fuzzy_match;
 pub mod gateway;
 pub mod gateway_hooks;
+pub mod gateway_markdown;
 pub mod gateway_pipeline;
 pub mod gateway_session;
 pub mod interrupt;
@@ -72,6 +75,7 @@ pub mod ms_graph;
 pub mod parser;
 pub mod platform;
 pub mod process_registry;
+pub mod rl_training;
 pub mod schema;
 pub mod schema_sanitizer;
 pub mod security;
@@ -87,6 +91,7 @@ pub mod voice;
 pub mod website_policy;
 pub mod yuanbao;
 
+pub use acp::{server, AcpHandler, AgentState, RpcRequest, RpcResponse};
 pub use agent::{AgentConfig, AgentEvent, HermesAgent};
 pub use approval::{
     check_tool_approval, prompt_user_for_approval, ApprovalContext, ApprovalGuard, ApprovalMode,
@@ -109,6 +114,7 @@ pub use context_files::{
     load_context_dir, load_default_context_files, load_workspace_context, scan_context_content,
 };
 pub use credential_pool::{AuthType, CredentialPool, PoolStrategy, PooledCredential};
+pub use curator::{archiver, backup, review, CuratorEngine, CuratorReport, CuratorState};
 pub use distillation::distill_session_to_memory;
 pub use environments::{
     daytona::DaytonaEnvironment, docker::DockerEnvironment, local::LocalEnvironment,
@@ -119,8 +125,9 @@ pub use environments::{
 pub use error::{Error, Result};
 pub use gateway::{
     format_startup_message, handle_admin_command, ChannelDirectory, ChannelInfo, ChannelType,
-    Gateway, GatewayConfig, GatewayStats, PlatformAdapter, PlatformRegistry, PlatformSession,
-    SessionStore, UserInfo, WebhookAdapter,
+    Gateway, GatewayConfig, GatewayStats, IncomingMessage, OutgoingMessage, PlatformAdapter,
+    PlatformRegistry, PlatformSession, SessionStore, TelegramAdapter, TelegramPoller, UserInfo,
+    WebhookAdapter,
 };
 pub use gateway_session::PersistentSessionStore;
 pub use managed_tool_gateway::{
@@ -135,6 +142,11 @@ pub use ms_graph::{
 pub use parser::ToolCallParser;
 pub use platform::PlatformInfo;
 pub use process_registry::{ProcessRegistry, ProcessSession, ProcessStatus};
+pub use rl_training::{
+    check_rl_env_vars, check_tinker_atropos, list_available_environments, ActionValue,
+    EpisodeResult, QStateEntry, QTable, RlState, RlTrainer, StepResult, TrainingSummary,
+};
+pub use skill_usage::{LifecycleState, SkillUsageTracker, UsageRecord, UsageTelemetry};
 pub use skills::{Skill, SkillManager};
 pub use skills_guard::{
     content_hash, format_scan_report, scan_skill, should_allow_install, GuardScanner, ScanResult,

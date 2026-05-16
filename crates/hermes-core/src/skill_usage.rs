@@ -18,7 +18,7 @@
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Lifecycle state for a skill.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -62,6 +62,9 @@ pub struct UsageRecord {
     /// Provenance source (e.g., "agent", "hub", "bundled").
     #[serde(default)]
     pub provenance: Option<String>,
+    /// Whether this skill is pinned (exempt from auto-archive).
+    #[serde(default)]
+    pub pinned: bool,
 }
 
 /// Wrapper around a collection of usage records with load/save from JSON.
@@ -127,6 +130,7 @@ impl UsageTelemetry {
                 agent_created: false,
                 lifecycle: LifecycleState::Active,
                 provenance: None,
+                pinned: false,
             });
         }
         self.get_record_mut(name).expect("record was just inserted")
@@ -178,6 +182,32 @@ impl UsageTelemetry {
         self.set_state(name, LifecycleState::Active)
     }
 
+    /// Set the pinned status for a skill.
+    ///
+    /// Returns an error if the skill has no record.
+    pub fn set_pinned(&mut self, name: &str, pinned: bool) -> Result<()> {
+        let rec = self
+            .get_record_mut(name)
+            .ok_or_else(|| anyhow::anyhow!("Skill '{}' not found in telemetry", name))?;
+        rec.pinned = pinned;
+        Ok(())
+    }
+
+    /// Return records filtered to agent-created skills only.
+    pub fn agent_created_records(&self) -> Vec<&UsageRecord> {
+        self.records.iter().filter(|r| r.agent_created).collect()
+    }
+
+    /// Return active (non-archived, non-retired) records.
+    pub fn list_active(&self) -> Vec<&UsageRecord> {
+        self.records
+            .iter()
+            .filter(|r| {
+                r.lifecycle != LifecycleState::Archived && r.lifecycle != LifecycleState::Retired
+            })
+            .collect()
+    }
+
     /// Mark a skill as agent-created and set provenance to "agent".
     pub fn mark_agent_created(&mut self, name: &str) {
         let rec = self.ensure_record(name);
@@ -203,6 +233,11 @@ impl UsageTelemetry {
         &self.records
     }
 
+    /// Return all records (mutable).
+    pub fn all_records_mut(&mut self) -> &mut Vec<UsageRecord> {
+        &mut self.records
+    }
+
     /// Return the number of records.
     pub fn len(&self) -> usize {
         self.records.len()
@@ -217,6 +252,80 @@ impl UsageTelemetry {
 impl Default for UsageTelemetry {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Thread-safe wrapper around `UsageTelemetry` for shared access across components.
+///
+/// Provides atomic load/save from a JSON file, suitable for use behind `Arc`.
+pub struct SkillUsageTracker {
+    file_path: PathBuf,
+    inner: std::sync::Mutex<UsageTelemetry>,
+}
+
+impl SkillUsageTracker {
+    /// Create a new tracker pointing at the given file path.
+    pub fn new(file_path: PathBuf) -> Self {
+        Self {
+            file_path,
+            inner: std::sync::Mutex::new(UsageTelemetry::new()),
+        }
+    }
+
+    /// Load telemetry from disk (creates empty if missing).
+    pub fn load(&self) -> Result<()> {
+        let telemetry = UsageTelemetry::load(&self.file_path)?;
+        let mut inner = self.inner.lock().unwrap();
+        *inner = telemetry;
+        Ok(())
+    }
+
+    /// Save telemetry to disk.
+    pub fn save(&self) -> Result<()> {
+        let inner = self.inner.lock().unwrap();
+        inner.save(&self.file_path)
+    }
+
+    /// Get all records.
+    pub fn all_records(&self) -> Vec<UsageRecord> {
+        let inner = self.inner.lock().unwrap();
+        inner.all_records().to_vec()
+    }
+
+    /// Get agent-created records only.
+    pub fn agent_created_records(&self) -> Vec<UsageRecord> {
+        let inner = self.inner.lock().unwrap();
+        inner.agent_created_records().into_iter().cloned().collect()
+    }
+
+    /// List active (non-archived/non-retired) records.
+    pub fn list_active(&self) -> Vec<UsageRecord> {
+        let inner = self.inner.lock().unwrap();
+        inner.list_active().into_iter().cloned().collect()
+    }
+
+    /// Set pinned status for a skill.
+    pub fn set_pinned(&self, name: &str, pinned: bool) -> Result<()> {
+        let mut inner = self.inner.lock().unwrap();
+        inner.set_pinned(name, pinned)
+    }
+
+    /// Mark a skill as agent-created.
+    pub fn mark_agent_created(&self, name: &str) {
+        let mut inner = self.inner.lock().unwrap();
+        inner.mark_agent_created(name);
+    }
+
+    /// Remove a record by name.
+    pub fn remove(&self, name: &str) {
+        let mut inner = self.inner.lock().unwrap();
+        inner.remove(name);
+    }
+
+    /// Set the lifecycle state for a skill.
+    pub fn set_state(&self, name: &str, state: LifecycleState) -> Result<()> {
+        let mut inner = self.inner.lock().unwrap();
+        inner.set_state(name, state)
     }
 }
 

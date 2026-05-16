@@ -10,6 +10,7 @@ use hermes_core::{
     agent::clients::openai::OpenAIModelClient,
     agent::{AgentConfig, HermesAgent},
     client::{ClientConfig, OpenAIClient},
+    config::ToolProgressMode,
     database::Database,
     error::Result,
     schema::ToolSchema,
@@ -164,6 +165,7 @@ Use the echo tool to repeat information and the calculate tool for math."
         context_window: 128_000,
         request_timeout: Duration::from_secs(120),
         max_healing_attempts: 3,
+        tool_progress: ToolProgressMode::Auto,
     };
 
     let database = Arc::new(Database::init(std::path::PathBuf::from("simple_agent.db"))?);
