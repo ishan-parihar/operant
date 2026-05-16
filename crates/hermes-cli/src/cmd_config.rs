@@ -310,7 +310,10 @@ fn resolve_or_create_config_path() -> Result<PathBuf> {
         .unwrap_or_else(|| PathBuf::from("hermes.toml"));
 
     write_default_config(&first)?;
-    println!("Created default configuration file at '{}'", first.display());
+    println!(
+        "Created default configuration file at '{}'",
+        first.display()
+    );
     Ok(first)
 }
 
@@ -341,6 +344,10 @@ fn handle_env_path() -> Result<()> {
     if env_path.exists() {
         let display = env_path.canonicalize().unwrap_or_else(|_| env_path.clone());
         println!("{}", display.display());
+    } else if crate::env_store::hermes_env_path().exists() {
+        let alt = crate::env_store::hermes_env_path();
+        let display = alt.canonicalize().unwrap_or_else(|_| alt.clone());
+        println!("{}", display.display());
     } else {
         println!("No .env file found.");
     }
@@ -361,7 +368,10 @@ fn handle_migrate(apply: bool) -> Result<()> {
     println!("{}", "-".repeat(40));
 
     if !config_path.exists() {
-        println!("No config file found at '{}'. Nothing to migrate.", config_path.display());
+        println!(
+            "No config file found at '{}'. Nothing to migrate.",
+            config_path.display()
+        );
         return Ok(());
     }
 
@@ -390,18 +400,65 @@ fn handle_migrate(apply: bool) -> Result<()> {
 
     if let Some(v) = current_version {
         if v >= target_version {
-            println!("  Config is already at the latest version (v{}).", target_version);
+            println!(
+                "  Config is already at the latest version (v{}).",
+                target_version
+            );
         } else if apply {
             println!("Applying migration from v{} to v{}...", v, target_version);
-            println!("(Migration logic not yet implemented)");
+            // Parse TOML, set version field, write back
+            let mut value: toml::Value =
+                content.parse().context("Failed to parse config as TOML")?;
+            if let Some(table) = value.as_table_mut() {
+                table.insert(
+                    "version".to_string(),
+                    toml::Value::Integer(target_version as i64),
+                );
+            }
+            let new_content =
+                toml::to_string(&value).context("Failed to serialize migrated config")?;
+            std::fs::write(&config_path, &new_content).with_context(|| {
+                format!(
+                    "Failed to write migrated config to '{}'",
+                    config_path.display()
+                )
+            })?;
+            println!(
+                "  Migration complete. Config updated to v{}.",
+                target_version
+            );
         } else {
-            println!("Run with --apply to perform migration from v{} to v{}.", v, target_version);
+            println!(
+                "Run with --apply to perform migration from v{} to v{}.",
+                v, target_version
+            );
         }
     } else if apply {
         println!("Applying migration from v0 to v{}...", target_version);
-        println!("(Migration logic not yet implemented)");
+        // Parse TOML, set version field, write back
+        let mut value: toml::Value = content.parse().context("Failed to parse config as TOML")?;
+        if let Some(table) = value.as_table_mut() {
+            table.insert(
+                "version".to_string(),
+                toml::Value::Integer(target_version as i64),
+            );
+        }
+        let new_content = toml::to_string(&value).context("Failed to serialize migrated config")?;
+        std::fs::write(&config_path, &new_content).with_context(|| {
+            format!(
+                "Failed to write migrated config to '{}'",
+                config_path.display()
+            )
+        })?;
+        println!(
+            "  Migration complete. Config updated to v{}.",
+            target_version
+        );
     } else {
-        println!("Run with --apply to perform migration from v0 to v{}.", target_version);
+        println!(
+            "Run with --apply to perform migration from v0 to v{}.",
+            target_version
+        );
     }
 
     Ok(())

@@ -103,14 +103,23 @@ async fn list_plugins(config: &AppConfig) -> Result<()> {
         let name = entry.file_name();
         let size = dir_size(&entry.path()).unwrap_or(0);
         let marker = dir.join(format!("{}.enabled", name.to_string_lossy()));
-        let status = if marker.exists() { "enabled" } else { "disabled" };
-        println!("  {:<24} {:>8}K  {}", name.to_string_lossy(), size / 1024, status);
+        let status = if marker.exists() {
+            "enabled"
+        } else {
+            "disabled"
+        };
+        println!(
+            "  {:<24} {:>8}K  {}",
+            name.to_string_lossy(),
+            size / 1024,
+            status
+        );
     }
 
     Ok(())
 }
 
-/// Print a notice that plugin installation requires the Python hermes-agent.
+/// Install a plugin by cloning its git repository and validating the manifest.
 async fn install_plugin(
     config: &AppConfig,
     identifier: &str,
@@ -118,18 +127,14 @@ async fn install_plugin(
     enable: bool,
 ) -> Result<()> {
     let dir = plugins_dir(config)?;
-    println!("Plugin installation is handled by the Python hermes-agent.");
-    println!();
-    println!("  Identifier: {}", identifier);
-    println!("  Target:     {}", dir.display());
-    if force {
-        println!("  Force:      yes");
-    }
+    let name = crate::plugins_install::install_plugin(identifier, &dir, force).await?;
+    println!("Plugin '{}' installed successfully.", name);
     if enable {
-        println!("  Enable:     yes");
+        let marker = dir.join(format!("{}.enabled", name));
+        std::fs::write(&marker, "")
+            .with_context(|| format!("Failed to enable plugin '{}'", name))?;
+        println!("Plugin '{}' enabled.", name);
     }
-    println!();
-    println!("To install plugins, use: hermes plugins install <git-url>");
     Ok(())
 }
 
@@ -164,8 +169,7 @@ async fn enable_plugin(config: &AppConfig, name: &str) -> Result<()> {
     }
 
     let marker = dir.join(format!("{}.enabled", name));
-    std::fs::write(&marker, "")
-        .with_context(|| format!("Failed to enable plugin '{}'", name))?;
+    std::fs::write(&marker, "").with_context(|| format!("Failed to enable plugin '{}'", name))?;
 
     println!("Plugin '{}' has been enabled.", name);
     Ok(())

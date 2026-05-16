@@ -9,6 +9,7 @@
 use anyhow::{Context, Result};
 use clap::Subcommand;
 use hermes_core::config::AppConfig;
+use tokio::signal::unix::{signal, SignalKind};
 
 // ── Sub-subcommand enums ────────────────────────────────────────────────
 
@@ -59,8 +60,14 @@ pub enum PairingAction {
 /// query the in-process gateway state.
 #[derive(Debug, Clone, Subcommand)]
 pub enum GatewaySubcommand {
+    /// Run the gateway in foreground (blocking, Ctrl+C to stop)
+    Run,
     /// Show gateway status (enabled platforms, runtime state)
-    Status,
+    Status {
+        /// Show detailed service status including systemd info
+        #[arg(long)]
+        deep: bool,
+    },
     /// List active gateway sessions
     Sessions,
     /// List registered channels
@@ -82,12 +89,27 @@ pub enum GatewaySubcommand {
         #[command(subcommand)]
         action: PairingAction,
     },
-    /// Start the gateway and platform adapters
+    /// Start the gateway service (via systemd)
     Start,
-    /// Stop the gateway and platform adapters
+    /// Stop the gateway service
     Stop,
-    /// Restart the gateway
+    /// Restart the gateway service
     Restart,
+    /// Install systemd service for automatic gateway startup
+    Install {
+        /// Force reinstall even if already installed
+        #[arg(long)]
+        force: bool,
+        /// Install as system-wide service (requires root)
+        #[arg(long)]
+        system: bool,
+    },
+    /// Uninstall the gateway systemd service
+    Uninstall,
+    /// List gateway profiles
+    List,
+    /// Remove legacy service units
+    MigrateLegacy,
 }
 
 // ── Public dispatcher ─────────────────────────────────────────────────
@@ -99,7 +121,8 @@ pub enum GatewaySubcommand {
 /// that works without an active gateway instance.
 pub async fn handle_gateway_command(config: &AppConfig, cmd: GatewaySubcommand) -> Result<()> {
     match cmd {
-        GatewaySubcommand::Status => cmd_status(config),
+        GatewaySubcommand::Run => cmd_run(config).await,
+        GatewaySubcommand::Status { deep } => cmd_status(config, deep),
         GatewaySubcommand::Sessions => cmd_sessions(config),
         GatewaySubcommand::Channels => cmd_channels(config),
         GatewaySubcommand::Stats => cmd_stats(config),
@@ -116,27 +139,13 @@ pub async fn handle_gateway_command(config: &AppConfig, cmd: GatewaySubcommand) 
             PairingAction::Approve { code } => cmd_pairing_approve(config, &code),
             PairingAction::Revoke { id } => cmd_pairing_revoke(config, &id),
         },
-        GatewaySubcommand::Start => {
-            crate::gateway_runner::start_gateway(config)
-                .await
-                .map(|msg| {
-                    println!("{}", msg);
-                })
-        }
-        GatewaySubcommand::Stop => {
-            crate::gateway_runner::stop_gateway()
-                .await
-                .map(|msg| {
-                    println!("{}", msg);
-                })
-        }
-        GatewaySubcommand::Restart => {
-            crate::gateway_runner::restart_gateway(config)
-                .await
-                .map(|msg| {
-                    println!("{}", msg);
-                })
-        }
+        GatewaySubcommand::Start => cmd_start().await,
+        GatewaySubcommand::Stop => cmd_stop().await,
+        GatewaySubcommand::Restart => cmd_restart().await,
+        GatewaySubcommand::Install { force, system } => cmd_install(config, force, system),
+        GatewaySubcommand::Uninstall => cmd_uninstall().await,
+        GatewaySubcommand::List => cmd_list(config),
+        GatewaySubcommand::MigrateLegacy => cmd_migrate_legacy(),
     }
 }
 
@@ -146,7 +155,7 @@ pub async fn handle_gateway_command(config: &AppConfig, cmd: GatewaySubcommand) 
 ///
 /// Shows which platforms are enabled, the webhook state, and a reminder
 /// that the gateway must be started for these to be active.
-fn cmd_status(config: &AppConfig) -> Result<()> {
+fn cmd_status(config: &AppConfig, deep: bool) -> Result<()> {
     let gw = &config.gateway;
 
     println!("Gateway Status (from config)");
@@ -170,26 +179,385 @@ fn cmd_status(config: &AppConfig) -> Result<()> {
     println!(
         "Webhooks:  {}",
         if gw.webhooks_enabled {
-            let addr = gw
-                .webhooks_addr
-                .as_deref()
-                .unwrap_or("localhost:0");
+            let addr = gw.webhooks_addr.as_deref().unwrap_or("localhost:0");
             format!("enabled (listen on {addr})")
         } else {
             "disabled".to_string()
         }
     );
-    println!("Admins:    {}", if gw.admins.is_empty() {
-        "none configured (all users allowed)".to_string()
+    println!(
+        "Admins:    {}",
+        if gw.admins.is_empty() {
+            "none configured (all users allowed)".to_string()
+        } else {
+            gw.admins.join(", ")
+        }
+    );
+    println!();
+    // Cross-process running check via PID file
+    let pid_path = hermes_core::platform::hermes_home().join("gateway.pid");
+    let running = std::fs::read_to_string(&pid_path)
+        .ok()
+        .and_then(|pid_str| pid_str.trim().parse::<u32>().ok())
+        .map(|pid| {
+            std::process::Command::new("kill")
+                .arg("-0")
+                .arg(pid.to_string())
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false)
+        })
+        .unwrap_or(false);
+
+    if running {
+        println!("Runtime: running (PID from {})", pid_path.display());
     } else {
-        gw.admins.join(", ")
-    });
+        println!("Runtime: not running");
+        if pid_path.exists() {
+            let _ = std::fs::remove_file(&pid_path);
+        }
+    }
+
+    if deep {
+        println!();
+        println!("Service Status (systemd):");
+        let sysd = std::process::Command::new("systemctl")
+            .args(["--user", "is-active", "hermes-gateway"])
+            .output();
+        match sysd {
+            Ok(out) => {
+                let status = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                println!("  Active: {}", status);
+                if let Ok(enabled) = std::process::Command::new("systemctl")
+                    .args(["--user", "is-enabled", "hermes-gateway"])
+                    .output()
+                {
+                    let enabled_str = String::from_utf8_lossy(&enabled.stdout).trim().to_string();
+                    println!("  Enabled: {}", enabled_str);
+                }
+            }
+            Err(_) => {
+                println!("  systemd not available");
+            }
+        }
+    }
+
     println!();
-    println!("Run `hermes gateway sessions` / `channels` / `stats`");
-    println!("after starting the gateway to see live data.");
+    println!("Run `hermes gateway run` to start in foreground.");
+    println!("Run `hermes gateway start` to start via systemd.");
+    println!("Run `hermes gateway stop` to stop it.");
+
+    Ok(())
+}
+
+/// Install systemd service for automatic gateway startup.
+fn cmd_install(config: &AppConfig, force: bool, system: bool) -> Result<()> {
+    let hermes_bin = std::env::current_exe().context("Failed to determine hermes binary path")?;
+
+    let (unit_dir, scope_label) = if system {
+        ("/etc/systemd/system".to_string(), "system")
+    } else {
+        let home = std::env::var("HOME").context("HOME not set")?;
+        (
+            std::path::PathBuf::from(&home)
+                .join(".config")
+                .join("systemd")
+                .join("user")
+                .to_string_lossy()
+                .to_string(),
+            "user",
+        )
+    };
+
+    let unit_path = std::path::PathBuf::from(&unit_dir).join("hermes-gateway.service");
+
+    if unit_path.exists() && !force {
+        println!(
+            "Gateway service already installed at: {}",
+            unit_path.display()
+        );
+        println!("Use --force to reinstall.");
+        println!();
+        println!("To enable and start:");
+        println!("  systemctl --{} enable hermes-gateway", scope_label);
+        println!("  systemctl --{} start hermes-gateway", scope_label);
+        return Ok(());
+    }
+
+    std::fs::create_dir_all(&unit_dir).context("Failed to create systemd unit directory")?;
+
+    let unit_content = format!(
+        r#"[Unit]
+Description=Hermes Multi-Platform Gateway
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart={bin} gateway run
+Restart=on-failure
+RestartSec=5
+RestartSteps=3
+RestartMaxDelaySec=30
+TimeoutStopSec=30
+
+[Install]
+WantedBy=default.target
+"#,
+        bin = hermes_bin.display()
+    );
+
+    std::fs::write(&unit_path, unit_content.as_bytes())
+        .with_context(|| format!("Failed to write {}", unit_path.display()))?;
+
+    println!("Gateway systemd service installed:");
+    println!("  {}", unit_path.display());
+    println!("  Scope: {}", scope_label);
     println!();
-    println!("Note: Gateway is not running — use the TUI or");
-    println!("      programmatic API to start platform adapters.");
+    println!("To enable and start:");
+    println!("  systemctl daemon-reload");
+    println!("  systemctl --{} enable hermes-gateway", scope_label);
+    println!("  systemctl --{} start hermes-gateway", scope_label);
+    println!();
+    println!("To view logs:");
+    println!("  journalctl --{} -u hermes-gateway -f", scope_label);
+
+    Ok(())
+}
+
+/// Run the gateway in foreground.
+async fn cmd_run(config: &AppConfig) -> Result<()> {
+    let msg = crate::gateway_runner::start_gateway(config).await?;
+    println!("{}", msg);
+    println!("Press Ctrl+C (SIGINT) or send SIGTERM to stop the gateway.");
+
+    let mut sigint = signal(SignalKind::interrupt())?;
+    let mut sigterm = signal(SignalKind::terminate())?;
+
+    tokio::select! {
+        _ = sigint.recv() => {
+            println!("\nReceived SIGINT (Ctrl+C). Shutting down gateway...");
+        }
+        _ = sigterm.recv() => {
+            println!("\nReceived SIGTERM. Shutting down gateway...");
+        }
+    }
+
+    crate::gateway_runner::stop_gateway().await?;
+    println!("Gateway stopped.");
+    Ok(())
+}
+
+/// Start the gateway service via systemd.
+async fn cmd_start() -> Result<()> {
+    let out = tokio::process::Command::new("systemctl")
+        .args(["--user", "start", "hermes-gateway"])
+        .output()
+        .await;
+
+    match out {
+        Ok(output) if output.status.success() => {
+            println!("Gateway service started via systemd.");
+            Ok(())
+        }
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if stderr.contains("not found") || stderr.contains("No such") {
+                println!("Gateway service is not installed.");
+                println!("Run `hermes gateway install` to install it first.");
+            } else {
+                println!("Failed to start gateway service: {}", stderr.trim());
+                println!("Try `hermes gateway run` for foreground mode.");
+            }
+            Ok(())
+        }
+        Err(_) => {
+            println!("systemd is not available on this system.");
+            println!("Try `hermes gateway run` for foreground mode.");
+            Ok(())
+        }
+    }
+}
+
+/// Stop the gateway service.
+async fn cmd_stop() -> Result<()> {
+    let sysd = tokio::process::Command::new("systemctl")
+        .args(["--user", "stop", "hermes-gateway"])
+        .output()
+        .await;
+
+    if let Ok(output) = &sysd {
+        if output.status.success() {
+            println!("Gateway service stopped via systemd.");
+            return Ok(());
+        }
+    }
+
+    let pid_path = hermes_core::platform::hermes_home().join("gateway.pid");
+    if let Ok(pid_str) = std::fs::read_to_string(&pid_path) {
+        if let Ok(pid) = pid_str.trim().parse::<u32>() {
+            let kill = tokio::process::Command::new("kill")
+                .arg(pid.to_string())
+                .output()
+                .await;
+            if let Ok(k) = kill {
+                if k.status.success() {
+                    println!("Gateway process ({}) killed.", pid);
+                    let _ = std::fs::remove_file(&pid_path);
+                    return Ok(());
+                }
+            }
+        }
+    }
+
+    let msg = crate::gateway_runner::stop_gateway().await?;
+    println!("{}", msg);
+    Ok(())
+}
+
+/// Restart the gateway service.
+async fn cmd_restart() -> Result<()> {
+    let out = tokio::process::Command::new("systemctl")
+        .args(["--user", "restart", "hermes-gateway"])
+        .output()
+        .await;
+
+    match out {
+        Ok(output) if output.status.success() => {
+            println!("Gateway service restarted via systemd.");
+            Ok(())
+        }
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if stderr.contains("not found") || stderr.contains("No such") {
+                println!("Gateway service is not installed.");
+                println!("Run `hermes gateway install` to install it first.");
+            } else {
+                println!("Failed to restart gateway service: {}", stderr.trim());
+                println!("Try stopping first with `hermes gateway stop`");
+                println!("then starting with `hermes gateway run`.");
+            }
+            Ok(())
+        }
+        Err(_) => {
+            println!("systemd is not available on this system.");
+            println!("Use `hermes gateway run` for foreground mode.");
+            Ok(())
+        }
+    }
+}
+
+/// Uninstall the gateway systemd service.
+async fn cmd_uninstall() -> Result<()> {
+    let _ = tokio::process::Command::new("systemctl")
+        .args(["--user", "stop", "hermes-gateway"])
+        .output()
+        .await;
+    let _ = tokio::process::Command::new("systemctl")
+        .args(["--user", "disable", "hermes-gateway"])
+        .output()
+        .await;
+
+    let home = std::env::var("HOME").unwrap_or_default();
+    let unit_path = std::path::PathBuf::from(&home)
+        .join(".config")
+        .join("systemd")
+        .join("user")
+        .join("hermes-gateway.service");
+
+    if unit_path.exists() {
+        std::fs::remove_file(&unit_path).context("Failed to remove service unit")?;
+        println!("Removed: {}", unit_path.display());
+    }
+
+    let _ = tokio::process::Command::new("systemctl")
+        .args(["--user", "daemon-reload"])
+        .output()
+        .await;
+
+    let pid_path = hermes_core::platform::hermes_home().join("gateway.pid");
+    if pid_path.exists() {
+        let _ = std::fs::remove_file(&pid_path);
+    }
+
+    println!("Gateway service uninstalled.");
+    Ok(())
+}
+
+/// List gateway profiles with status.
+fn cmd_list(config: &AppConfig) -> Result<()> {
+    let gw = &config.gateway;
+
+    println!("Gateway Profiles");
+    println!("────────────────");
+    println!();
+
+    let enabled_count = [gw.telegram_enabled, gw.discord_enabled, gw.slack_enabled]
+        .iter()
+        .filter(|&&e| e)
+        .count();
+
+    println!("Active profile: default");
+    println!("  Platforms:    {}/3 enabled", enabled_count);
+    println!("  Telegram:     {}", if gw.telegram_enabled { "✓" } else { "✗" });
+    println!("  Discord:      {}", if gw.discord_enabled { "✓" } else { "✗" });
+    println!("  Slack:        {}", if gw.slack_enabled { "✓" } else { "✗" });
+
+    let pid_path = hermes_core::platform::hermes_home().join("gateway.pid");
+    let running = std::fs::read_to_string(&pid_path)
+        .ok()
+        .and_then(|s| s.trim().parse::<u32>().ok())
+        .map(|pid| {
+            std::process::Command::new("kill")
+                .arg("-0")
+                .arg(pid.to_string())
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false)
+        })
+        .unwrap_or(false);
+
+    println!("  Status:       {}", if running { "running" } else { "stopped" });
+    println!();
+    println!("Run `hermes gateway run` to start in foreground.");
+    Ok(())
+}
+
+/// Remove legacy service units from previous versions.
+fn cmd_migrate_legacy() -> Result<()> {
+    let home = std::env::var("HOME").context("HOME not set")?;
+    let user_unit_dir = std::path::PathBuf::from(&home)
+        .join(".config")
+        .join("systemd")
+        .join("user");
+
+    let legacy_names = ["hermes.service", "hermes-agent.service", "hermes-gateway.service"];
+    let mut found = false;
+
+    for name in &legacy_names {
+        let path = user_unit_dir.join(name);
+        if path.exists() {
+            println!("Found legacy unit: {}", path.display());
+            found = true;
+        }
+    }
+
+    if !found {
+        println!("No legacy service units found.");
+        return Ok(());
+    }
+
+    println!();
+    println!("To clean up legacy units manually:");
+    for name in &legacy_names {
+        let path = user_unit_dir.join(name);
+        if path.exists() {
+            println!("  rm {}", path.display());
+        }
+    }
+    println!();
+    println!("Then run:");
+    println!("  systemctl --user daemon-reload");
 
     Ok(())
 }
@@ -210,8 +578,8 @@ fn cmd_sessions(config: &AppConfig) -> Result<()> {
         .to_str()
         .context("database_path is not valid UTF-8")?;
 
-    let store =
-        hermes_core::PersistentSessionStore::open(db_path).context("Failed to open session store")?;
+    let store = hermes_core::PersistentSessionStore::open(db_path)
+        .context("Failed to open session store")?;
 
     let sessions = store.list_active_sessions(None);
 
@@ -223,7 +591,10 @@ fn cmd_sessions(config: &AppConfig) -> Result<()> {
     println!("Gateway Sessions");
     println!("────────────────");
     println!();
-    println!("{:<22} {:<10} {:<28} {:<22} {:<22}", "Session ID", "Platform", "User ID", "Channel ID", "Created At");
+    println!(
+        "{:<22} {:<10} {:<28} {:<22} {:<22}",
+        "Session ID", "Platform", "User ID", "Channel ID", "Created At"
+    );
     println!("{}", "-".repeat(110));
     for s in &sessions {
         println!(
@@ -309,17 +680,30 @@ fn cmd_stats(config: &AppConfig) -> Result<()> {
     println!("──────────────────");
     println!();
     println!("Enabled platforms:  {enabled_count}/3");
-    println!("Webhooks:           {}", if gw.webhooks_enabled { "enabled" } else { "disabled" });
+    println!(
+        "Webhooks:           {}",
+        if gw.webhooks_enabled {
+            "enabled"
+        } else {
+            "disabled"
+        }
+    );
     println!("Admins configured:  {}", gw.admins.len());
     println!();
     println!("Runtime statistics are not available without an active");
     println!("gateway. Start the gateway to see live metrics:");
 
     if gw.telegram_enabled {
-        println!("  • Telegram  {}", token_status(gw.telegram_token.as_deref()));
+        println!(
+            "  • Telegram  {}",
+            token_status(gw.telegram_token.as_deref())
+        );
     }
     if gw.discord_enabled {
-        println!("  • Discord   {}", token_status(gw.discord_token.as_deref()));
+        println!(
+            "  • Discord   {}",
+            token_status(gw.discord_token.as_deref())
+        );
     }
     if gw.slack_enabled {
         println!("  • Slack     {}", token_status(gw.slack_token.as_deref()));
@@ -349,10 +733,7 @@ fn cmd_webhook_list(config: &AppConfig) -> Result<()> {
         return Ok(());
     }
 
-    let addr = gw
-        .webhooks_addr
-        .as_deref()
-        .unwrap_or("not configured");
+    let addr = gw.webhooks_addr.as_deref().unwrap_or("not configured");
     println!("Webhook listen address: {addr}");
     println!();
     println!("Webhooks are registered dynamically at runtime.");

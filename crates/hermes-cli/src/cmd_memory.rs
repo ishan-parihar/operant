@@ -80,10 +80,7 @@ pub enum MemorySubcommand {
 }
 
 /// Dispatch a memory subcommand.
-pub async fn handle_memory_command(
-    _config: &AppConfig,
-    cmd: MemorySubcommand,
-) -> Result<()> {
+pub async fn handle_memory_command(_config: &AppConfig, cmd: MemorySubcommand) -> Result<()> {
     match cmd {
         MemorySubcommand::List => cmd_list().await,
         MemorySubcommand::Show { id } => cmd_show(&id).await,
@@ -364,8 +361,8 @@ async fn cmd_profile() -> Result<()> {
 }
 
 async fn cmd_import(source: &str) -> Result<()> {
-    let content = std::fs::read_to_string(source)
-        .with_context(|| format!("Failed to read '{}'", source))?;
+    let content =
+        std::fs::read_to_string(source).with_context(|| format!("Failed to read '{}'", source))?;
 
     let mm = loaded_memory_manager().await?;
     let block_id = format!(
@@ -382,10 +379,7 @@ async fn cmd_import(source: &str) -> Result<()> {
     Ok(())
 }
 
-async fn cmd_export(
-    output: Option<String>,
-    format: Option<String>,
-) -> Result<()> {
+async fn cmd_export(output: Option<String>, format: Option<String>) -> Result<()> {
     let mm = loaded_memory_manager().await?;
     let blocks = mm.search("").await;
 
@@ -410,10 +404,7 @@ async fn cmd_export(
             std::fs::write(&output_path, &text)
                 .with_context(|| format!("Failed to write to '{}'", output_path))?;
         }
-        _ => anyhow::bail!(
-            "Unsupported format '{}'. Use 'json' or 'text'.",
-            fmt
-        ),
+        _ => anyhow::bail!("Unsupported format '{}'. Use 'json' or 'text'.", fmt),
     }
 
     println!(
@@ -456,25 +447,18 @@ async fn cmd_prune(older_than_days: Option<u64>) -> Result<()> {
     for block in &to_prune {
         println!(
             "  [{}] {} (importance: {}, created: {})",
-            block.block_type,
-            block.id,
-            block.importance,
-            block.created_at
+            block.block_type, block.id, block.importance, block.created_at
         );
     }
     println!();
-    println!(
-        "Use `hermes memory clear` with confirmation to remove all memories."
-    );
+    println!("Use `hermes memory clear` with confirmation to remove all memories.");
 
     Ok(())
 }
 
 async fn cmd_clear(confirm: bool) -> Result<()> {
     if !confirm {
-        println!(
-            "Warning: This will permanently delete ALL memories, sessions, and profiles."
-        );
+        println!("Warning: This will permanently delete ALL memories, sessions, and profiles.");
         println!("Use --confirm to proceed.");
         return Ok(());
     }

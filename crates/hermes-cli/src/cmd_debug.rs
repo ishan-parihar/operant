@@ -85,28 +85,56 @@ fn gather_report(config: &AppConfig) -> Result<String> {
     sys.insert("OS".to_string(), format!("{os} ({arch})"));
     sys.insert("Hostname".to_string(), hostname);
     sys.insert("Shell".to_string(), shell);
-    sys.insert("Home".to_string(), dirs::home_dir().map_or_else(|| "?".into(), |p| p.display().to_string()));
+    sys.insert(
+        "Home".to_string(),
+        dirs::home_dir().map_or_else(|| "?".into(), |p| p.display().to_string()),
+    );
     sections.insert("System".to_string(), sys);
 
     // ── Hermes config ──────────────────────────────────────────────────
     let mut cfg = BTreeMap::new();
     cfg.insert("Model".to_string(), config.agent.model.clone());
-    cfg.insert("Max iterations".to_string(), config.agent.max_iterations.to_string());
-    cfg.insert("Tool timeout".to_string(), format!("{}s", config.agent.tool_timeout_secs));
+    cfg.insert(
+        "Max iterations".to_string(),
+        config.agent.max_iterations.to_string(),
+    );
+    cfg.insert(
+        "Tool timeout".to_string(),
+        format!("{}s", config.agent.tool_timeout_secs),
+    );
     cfg.insert("Streaming".to_string(), config.agent.stream.to_string());
-    cfg.insert("Database".to_string(), config.database_path.display().to_string());
+    cfg.insert(
+        "Database".to_string(),
+        config.database_path.display().to_string(),
+    );
     sections.insert("Hermes Config".to_string(), cfg);
 
     // ── Data dirs ──────────────────────────────────────────────────────
     let mut dd = BTreeMap::new();
-    dd.insert("Config dir".to_string(), hermes_core::platform::hermes_config_dir().display().to_string());
-    dd.insert("Data dir".to_string(), hermes_core::platform::hermes_data_dir().display().to_string());
+    dd.insert(
+        "Config dir".to_string(),
+        hermes_core::platform::hermes_config_dir()
+            .display()
+            .to_string(),
+    );
+    dd.insert(
+        "Data dir".to_string(),
+        hermes_core::platform::hermes_data_dir()
+            .display()
+            .to_string(),
+    );
     sections.insert("Directories".to_string(), dd);
 
     // ── Version info ───────────────────────────────────────────────────
     let mut ver = BTreeMap::new();
-    ver.insert("hermes version".to_string(), env!("CARGO_PKG_VERSION").to_string());
-    ver.insert("rustc".to_string(), env!("CARGO_PKG_RUST_VERSION").to_string());
+    ver.insert(
+        "hermes version".to_string(),
+        env!("CARGO_PKG_VERSION").to_string(),
+    );
+    ver.insert(
+        "rustc".to_string(),
+        env!("CARGO_PKG_RUST_VERSION").to_string(),
+    );
     sections.insert("Versions".to_string(), ver);
 
     // ── Render ──────────────────────────────────────────────────────────

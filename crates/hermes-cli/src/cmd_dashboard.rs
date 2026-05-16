@@ -42,51 +42,43 @@ pub async fn handle_dashboard_command(config: &AppConfig, cmd: DashboardSubcomma
             port,
             host,
             no_open,
-            insecure,
+            insecure: _,
             tui,
             stop,
             status,
-        } => cmd_server(config, port, host, no_open, insecure, tui, stop, status).await,
+        } => cmd_server(config, port, host, no_open, tui, stop, status).await,
     }
 }
 
 async fn cmd_server(
-    _config: &AppConfig,
-    _port: u16,
-    _host: String,
+    config: &AppConfig,
+    port: u16,
+    host: String,
     no_open: bool,
-    insecure: bool,
     tui: bool,
     stop: bool,
     status: bool,
 ) -> Result<()> {
-    println!("The web dashboard is a Python-only feature in the Hermes agent framework.");
-    println!();
-    println!("To run it:");
-    println!("  cd hermes-agent && pip install -e '.[dashboard]' && hermes dashboard --server");
-    println!();
-
-    let mut flags = Vec::new();
-
     if stop {
-        flags.push("--stop");
+        println!("Dashboard stop not yet implemented (kill the process)");
+        return Ok(());
     }
     if status {
-        flags.push("--status");
-    }
-    if no_open {
-        flags.push("--no-open");
-    }
-    if insecure {
-        flags.push("--insecure");
+        println!("Dashboard status: use the /api/status endpoint when running");
+        return Ok(());
     }
     if tui {
-        flags.push("--tui");
+        anyhow::bail!("Use `hermes chat --tui` or `hermes autonomous` for TUI mode");
     }
 
-    if !flags.is_empty() {
-        println!("Active flags: {}", flags.join(", "));
+    let url = format!("http://{}:{}", host, port);
+    println!("Starting Hermes Dashboard on {}", url);
+
+    if !no_open {
+        if let Err(e) = open::that(&url) {
+            tracing::warn!("Failed to open browser: {}", e);
+        }
     }
 
-    Ok(())
+    crate::dashboard_server::run_dashboard(config, &host, port).await
 }

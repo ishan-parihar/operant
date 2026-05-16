@@ -11,7 +11,11 @@ pub async fn handle_status_command(config: &AppConfig, deep: bool) -> Result<()>
     match Database::init(config.database_path.clone()) {
         Ok(db) => {
             let count = db.get_session_count().unwrap_or(0);
-            println!("Database: {} sessions at {}", count, config.database_path.display());
+            println!(
+                "Database: {} sessions at {}",
+                count,
+                config.database_path.display()
+            );
         }
         Err(_) => println!("Database: not available"),
     }
@@ -23,7 +27,10 @@ pub async fn handle_status_command(config: &AppConfig, deep: bool) -> Result<()>
         println!("Model: {} (default)", model);
     }
 
-    println!("Data dir: {}", hermes_core::platform::hermes_data_dir().display());
+    println!(
+        "Data dir: {}",
+        hermes_core::platform::hermes_data_dir().display()
+    );
 
     if deep {
         let key = config.client.api_key.as_deref().unwrap_or("");
@@ -38,7 +45,12 @@ pub async fn handle_status_command(config: &AppConfig, deep: bool) -> Result<()>
             println!("API key: {}", masked);
         }
 
-        let shell_name = info.shell.path.file_stem().and_then(|s| s.to_str()).unwrap_or("unknown");
+        let shell_name = info
+            .shell
+            .path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("unknown");
         println!("Shell: {} ({})", shell_name, info.shell.path.display());
         if let Some(py) = hermes_core::platform::find_python() {
             println!("Python: {}", py.display());
@@ -46,12 +58,16 @@ pub async fn handle_status_command(config: &AppConfig, deep: bool) -> Result<()>
         if let Some(node) = hermes_core::platform::find_node() {
             println!("Node: {}", node.display());
         }
-        println!("Config dir: {}", hermes_core::platform::hermes_config_dir().display());
-        println!("Skills dir: {}", hermes_core::platform::hermes_skills_dir().display());
+        println!(
+            "Config dir: {}",
+            hermes_core::platform::hermes_config_dir().display()
+        );
+        println!(
+            "Skills dir: {}",
+            hermes_core::platform::hermes_skills_dir().display()
+        );
         println!("MCP servers: {} configured", config.mcp.servers.len());
     }
 
     Ok(())
 }
-
-

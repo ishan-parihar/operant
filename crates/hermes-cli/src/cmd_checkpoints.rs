@@ -39,8 +39,7 @@ pub async fn handle_checkpoints_command(
 }
 
 fn working_dir() -> Result<String> {
-    let dir = std::env::current_dir()
-        .context("Failed to determine current directory")?;
+    let dir = std::env::current_dir().context("Failed to determine current directory")?;
     Ok(dir.to_string_lossy().to_string())
 }
 
@@ -78,7 +77,10 @@ async fn cmd_status(config: &AppConfig) -> Result<()> {
 
     println!("Checkpoint System Status");
     println!("{}", "=".repeat(40));
-    println!("Status:           {}", if enabled { "Enabled" } else { "Disabled" });
+    println!(
+        "Status:           {}",
+        if enabled { "Enabled" } else { "Disabled" }
+    );
     println!("Storage:          {}", storage.display());
 
     if enabled {
@@ -90,8 +92,7 @@ async fn cmd_status(config: &AppConfig) -> Result<()> {
         println!("Storage size:     N/A (directory does not exist yet)");
     }
 
-    let db = Database::init(config.database_path.clone())
-        .context("Failed to open database")?;
+    let db = Database::init(config.database_path.clone()).context("Failed to open database")?;
 
     let dir = working_dir()?;
     let checkpoints = db
@@ -113,8 +114,7 @@ async fn cmd_status(config: &AppConfig) -> Result<()> {
 }
 
 async fn cmd_list(config: &AppConfig) -> Result<()> {
-    let db = Database::init(config.database_path.clone())
-        .context("Failed to open database")?;
+    let db = Database::init(config.database_path.clone()).context("Failed to open database")?;
 
     let dir = working_dir()?;
     let checkpoints = db
@@ -152,8 +152,7 @@ async fn cmd_list(config: &AppConfig) -> Result<()> {
 }
 
 async fn cmd_prune(config: &AppConfig, keep: usize) -> Result<()> {
-    let db = Database::init(config.database_path.clone())
-        .context("Failed to open database")?;
+    let db = Database::init(config.database_path.clone()).context("Failed to open database")?;
 
     let dir = working_dir()?;
     let checkpoints = db
@@ -176,17 +175,12 @@ async fn cmd_prune(config: &AppConfig, keep: usize) -> Result<()> {
             .with_context(|| format!("Failed to delete checkpoint {}", cp.hash))?;
     }
 
-    println!(
-        "Pruned {} checkpoint(s), kept {}.",
-        to_delete.len(),
-        keep,
-    );
+    println!("Pruned {} checkpoint(s), kept {}.", to_delete.len(), keep,);
     Ok(())
 }
 
 async fn cmd_clear(config: &AppConfig) -> Result<()> {
-    let db = Database::init(config.database_path.clone())
-        .context("Failed to open database")?;
+    let db = Database::init(config.database_path.clone()).context("Failed to open database")?;
 
     let dir = working_dir()?;
     let checkpoints = db

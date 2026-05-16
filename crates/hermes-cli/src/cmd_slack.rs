@@ -44,7 +44,8 @@ async fn cmd_manifest(
     slashes_only: bool,
 ) -> Result<()> {
     let app_name = name_override.unwrap_or_else(|| "Hermes".to_string());
-    let app_desc = desc_override.unwrap_or_else(|| "A high-performance ReAct agent framework".to_string());
+    let app_desc =
+        desc_override.unwrap_or_else(|| "A high-performance ReAct agent framework".to_string());
 
     let manifest = if slashes_only {
         serde_json::json!({
@@ -82,8 +83,8 @@ async fn cmd_manifest(
         })
     };
 
-    let output = serde_json::to_string_pretty(&manifest)
-        .context("Failed to serialize manifest JSON")?;
+    let output =
+        serde_json::to_string_pretty(&manifest).context("Failed to serialize manifest JSON")?;
 
     match write_path {
         Some(path) => {

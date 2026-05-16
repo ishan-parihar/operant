@@ -38,10 +38,9 @@ fn load_subscriptions() -> Result<HashMap<String, WebhookSubscription>> {
     if !path.exists() {
         return Ok(HashMap::new());
     }
-    let content = fs::read_to_string(&path)
-        .with_context(|| format!("Failed to read {}", path.display()))?;
-    serde_json::from_str(&content)
-        .with_context(|| format!("Failed to parse {}", path.display()))
+    let content =
+        fs::read_to_string(&path).with_context(|| format!("Failed to read {}", path.display()))?;
+    serde_json::from_str(&content).with_context(|| format!("Failed to parse {}", path.display()))
 }
 
 /// Save subscriptions to disk atomically.

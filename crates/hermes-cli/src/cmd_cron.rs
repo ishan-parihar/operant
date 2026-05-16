@@ -94,8 +94,7 @@ pub async fn handle_cron_command(config: &AppConfig, cmd: CronSubcommand) -> Res
 }
 
 async fn cmd_list(config: &AppConfig) -> Result<()> {
-    let db =
-        CronDb::init(config.database_path.clone()).context("Failed to open cron database")?;
+    let db = CronDb::init(config.database_path.clone()).context("Failed to open cron database")?;
     let jobs = db.list_jobs(true).context("Failed to list cron jobs")?;
 
     if jobs.is_empty() {
@@ -142,8 +141,7 @@ async fn cmd_list(config: &AppConfig) -> Result<()> {
 }
 
 async fn cmd_create(config: &AppConfig, name: &str, schedule: &str, command: &str) -> Result<()> {
-    let db =
-        CronDb::init(config.database_path.clone()).context("Failed to open cron database")?;
+    let db = CronDb::init(config.database_path.clone()).context("Failed to open cron database")?;
     let id = db
         .create_job(
             name.to_string(),
@@ -173,8 +171,7 @@ async fn cmd_create(config: &AppConfig, name: &str, schedule: &str, command: &st
 }
 
 async fn cmd_get(config: &AppConfig, id: &str) -> Result<()> {
-    let db =
-        CronDb::init(config.database_path.clone()).context("Failed to open cron database")?;
+    let db = CronDb::init(config.database_path.clone()).context("Failed to open cron database")?;
     let job = db
         .get_job(id)
         .context("Failed to get cron job")?
@@ -188,10 +185,22 @@ async fn cmd_get(config: &AppConfig, id: &str) -> Result<()> {
     println!("Enabled:         {}", job.enabled);
     println!("State:           {}", job.state);
     println!("Created At:      {}", job.created_at);
-    println!("Next Run At:     {}", job.next_run_at.as_deref().unwrap_or("—"));
-    println!("Last Run At:     {}", job.last_run_at.as_deref().unwrap_or("—"));
-    println!("Last Status:     {}", job.last_status.as_deref().unwrap_or("—"));
-    println!("Last Error:      {}", job.last_error.as_deref().unwrap_or("—"));
+    println!(
+        "Next Run At:     {}",
+        job.next_run_at.as_deref().unwrap_or("—")
+    );
+    println!(
+        "Last Run At:     {}",
+        job.last_run_at.as_deref().unwrap_or("—")
+    );
+    println!(
+        "Last Status:     {}",
+        job.last_status.as_deref().unwrap_or("—")
+    );
+    println!(
+        "Last Error:      {}",
+        job.last_error.as_deref().unwrap_or("—")
+    );
     Ok(())
 }
 
@@ -202,8 +211,7 @@ async fn cmd_update(
     schedule: Option<String>,
     command: Option<String>,
 ) -> Result<()> {
-    let db =
-        CronDb::init(config.database_path.clone()).context("Failed to open cron database")?;
+    let db = CronDb::init(config.database_path.clone()).context("Failed to open cron database")?;
 
     db.get_job(id)
         .context("Failed to get cron job")?
@@ -230,7 +238,9 @@ async fn cmd_update(
         );
     }
 
-    let updated = db.update_job(id, updates).context("Failed to update cron job")?;
+    let updated = db
+        .update_job(id, updates)
+        .context("Failed to update cron job")?;
 
     match updated {
         Some(job) => {
@@ -248,8 +258,7 @@ async fn cmd_update(
 }
 
 async fn cmd_delete(config: &AppConfig, id: &str) -> Result<()> {
-    let db =
-        CronDb::init(config.database_path.clone()).context("Failed to open cron database")?;
+    let db = CronDb::init(config.database_path.clone()).context("Failed to open cron database")?;
     let deleted = db.delete_job(id).context("Failed to delete cron job")?;
 
     if deleted {
@@ -262,8 +271,7 @@ async fn cmd_delete(config: &AppConfig, id: &str) -> Result<()> {
 }
 
 async fn cmd_pause(config: &AppConfig, id: &str) -> Result<()> {
-    let db =
-        CronDb::init(config.database_path.clone()).context("Failed to open cron database")?;
+    let db = CronDb::init(config.database_path.clone()).context("Failed to open cron database")?;
 
     let job = db
         .get_job(id)
@@ -284,15 +292,15 @@ async fn cmd_pause(config: &AppConfig, id: &str) -> Result<()> {
         "state".to_string(),
         Some(serde_json::Value::String("paused".to_string())),
     );
-    db.update_job(id, updates).context("Failed to pause cron job")?;
+    db.update_job(id, updates)
+        .context("Failed to pause cron job")?;
 
     println!("Cron job '{}' paused successfully.", id);
     Ok(())
 }
 
 async fn cmd_resume(config: &AppConfig, id: &str) -> Result<()> {
-    let db =
-        CronDb::init(config.database_path.clone()).context("Failed to open cron database")?;
+    let db = CronDb::init(config.database_path.clone()).context("Failed to open cron database")?;
 
     let job = db
         .get_job(id)
@@ -313,15 +321,15 @@ async fn cmd_resume(config: &AppConfig, id: &str) -> Result<()> {
         "state".to_string(),
         Some(serde_json::Value::String("scheduled".to_string())),
     );
-    db.update_job(id, updates).context("Failed to resume cron job")?;
+    db.update_job(id, updates)
+        .context("Failed to resume cron job")?;
 
     println!("Cron job '{}' resumed successfully.", id);
     Ok(())
 }
 
 async fn cmd_run(config: &AppConfig, id: &str) -> Result<()> {
-    let db =
-        CronDb::init(config.database_path.clone()).context("Failed to open cron database")?;
+    let db = CronDb::init(config.database_path.clone()).context("Failed to open cron database")?;
 
     let job = db
         .get_job(id)
@@ -336,8 +344,7 @@ async fn cmd_run(config: &AppConfig, id: &str) -> Result<()> {
 }
 
 async fn cmd_status(config: &AppConfig) -> Result<()> {
-    let db =
-        CronDb::init(config.database_path.clone()).context("Failed to open cron database")?;
+    let db = CronDb::init(config.database_path.clone()).context("Failed to open cron database")?;
     let all_jobs = db.list_jobs(true).context("Failed to list cron jobs")?;
 
     let total = all_jobs.len();
@@ -355,17 +362,13 @@ async fn cmd_status(config: &AppConfig) -> Result<()> {
 }
 
 async fn cmd_tick(config: &AppConfig) -> Result<()> {
-    let db =
-        CronDb::init(config.database_path.clone()).context("Failed to open cron database")?;
+    let db = CronDb::init(config.database_path.clone()).context("Failed to open cron database")?;
     let due_jobs = db.get_due_jobs().context("Failed to get due cron jobs")?;
 
     if due_jobs.is_empty() {
         println!("No cron jobs due for execution.");
     } else {
-        println!(
-            "Found {} cron job(s) due for execution:",
-            due_jobs.len()
-        );
+        println!("Found {} cron job(s) due for execution:", due_jobs.len());
         for job in &due_jobs {
             println!("  - {} ({})", job.name, job.id);
         }
