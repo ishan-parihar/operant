@@ -198,6 +198,37 @@ impl HermesTool for EnvVarTool {
     }
 }
 
+pub struct EchoTool;
+
+#[derive(JsonSchema, Deserialize)]
+struct EchoArgs {
+    message: String,
+}
+
+#[async_trait]
+impl HermesTool for EchoTool {
+    fn name(&self) -> &str {
+        "echo"
+    }
+
+    fn description(&self) -> &str {
+        "Echo back the input message. Useful for debugging and connectivity tests."
+    }
+
+    fn schema(&self) -> ToolSchema {
+        ToolSchema::from_type::<EchoArgs>("echo", "Echo back the input message")
+    }
+
+    async fn execute(&self, args: Value, _context: ToolContext) -> ToolResult {
+        let args: EchoArgs = match serde_json::from_value(args) {
+            Ok(a) => a,
+            Err(e) => return ToolResult::error("echo", format!("Invalid arguments: {}", e)),
+        };
+
+        ToolResult::success("", serde_json::json!({ "message": args.message }))
+    }
+}
+
 pub struct SystemInfoTool;
 
 #[derive(JsonSchema, Deserialize)]

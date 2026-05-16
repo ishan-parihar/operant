@@ -11,6 +11,7 @@ use serde_json::{json, Value};
 use std::time::Duration;
 use tracing::info;
 
+use crate::gateway_markdown::markdown_to_telegram_html;
 use crate::schema::ToolSchema;
 use crate::tools::{HermesTool, ToolContext, ToolResult};
 
@@ -236,8 +237,9 @@ impl SendMessageTool {
             if is_document {
                 body["caption"] = json!(chunk);
             } else {
-                body["text"] = json!(chunk);
-                body["parse_mode"] = json!("Markdown");
+                let html = markdown_to_telegram_html(chunk);
+                body["text"] = json!(html);
+                body["parse_mode"] = json!("HTML");
             }
 
             match client.post(&url).json(&body).send().await {

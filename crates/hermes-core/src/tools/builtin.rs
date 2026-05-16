@@ -25,7 +25,7 @@ pub use super::code_execution::CodeExecutionTool;
 pub use super::computer_use_tool::ComputerUseTool;
 pub use super::cron_tool::CronTool;
 pub use super::datetime_tool::{DateTimeTool, TimestampTool};
-pub use super::debug_helpers::{EnvVarTool, InspectJsonTool, SystemInfoTool};
+pub use super::debug_helpers::{EchoTool, EnvVarTool, InspectJsonTool, SystemInfoTool};
 pub use super::discord_tool::{DiscordAdminTool, DiscordTool};
 pub use super::feishu_tool::{FeishuDocTool, FeishuDriveTool};
 pub use super::file_state::FileStateTool;
@@ -94,6 +94,7 @@ pub async fn register_builtin_tools(
     registry.register(HttpRequestTool).await?;
     registry.register(DateTimeTool).await?;
     registry.register(TimestampTool).await?;
+    registry.register(EchoTool).await?;
     registry.register(InspectJsonTool).await?;
     registry.register(EnvVarTool).await?;
     registry.register(SystemInfoTool).await?;
@@ -181,6 +182,7 @@ pub fn builtin_tool_names() -> Vec<&'static str> {
         "code_execution",
         "cron",
         "datetime",
+        "echo",
         "debug_env",
         "debug_inspect_json",
         "debug_system",
@@ -254,8 +256,8 @@ mod tests {
             .await
             .unwrap();
 
-        let schemas = registry.get_schemas().await;
-        assert_eq!(schemas.len() + 2, builtin_tool_names().len());
+        let count = registry.len().await;
+        assert_eq!(count + 2, builtin_tool_names().len());
         assert!(!registry.contains("delegate_to_sub_agent").await);
     }
 
@@ -273,8 +275,8 @@ mod tests {
         .await
         .unwrap();
 
-        let schemas = registry.get_schemas().await;
-        assert_eq!(schemas.len() + 1, builtin_tool_names().len());
+        let count = registry.len().await;
+        assert_eq!(count + 1, builtin_tool_names().len());
         assert!(registry.contains("delegate_task").await);
     }
 }

@@ -1116,6 +1116,14 @@ impl HermesTool for DiscordTool {
         "Read and participate in a Discord server"
     }
 
+    fn toolset(&self) -> &str {
+        "messaging"
+    }
+
+    fn is_available(&self) -> bool {
+        std::env::var("DISCORD_BOT_TOKEN").is_ok() || std::env::var("DISCORD_TOKEN").is_ok()
+    }
+
     fn schema(&self) -> ToolSchema {
         let desc = build_schema_description("discord", CORE_ACTIONS);
         let params = build_schema_params(CORE_ACTIONS);
@@ -1148,6 +1156,14 @@ impl HermesTool for DiscordAdminTool {
 
     fn description(&self) -> &str {
         "Manage a Discord server via the REST API"
+    }
+
+    fn toolset(&self) -> &str {
+        "messaging"
+    }
+
+    fn is_available(&self) -> bool {
+        std::env::var("DISCORD_BOT_TOKEN").is_ok() || std::env::var("DISCORD_TOKEN").is_ok()
     }
 
     fn schema(&self) -> ToolSchema {
