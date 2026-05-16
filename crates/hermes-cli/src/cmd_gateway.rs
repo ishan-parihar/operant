@@ -499,9 +499,18 @@ fn cmd_list(config: &AppConfig) -> Result<()> {
 
     println!("Active profile: default");
     println!("  Platforms:    {}/3 enabled", enabled_count);
-    println!("  Telegram:     {}", if gw.telegram_enabled { "✓" } else { "✗" });
-    println!("  Discord:      {}", if gw.discord_enabled { "✓" } else { "✗" });
-    println!("  Slack:        {}", if gw.slack_enabled { "✓" } else { "✗" });
+    println!(
+        "  Telegram:     {}",
+        if gw.telegram_enabled { "✓" } else { "✗" }
+    );
+    println!(
+        "  Discord:      {}",
+        if gw.discord_enabled { "✓" } else { "✗" }
+    );
+    println!(
+        "  Slack:        {}",
+        if gw.slack_enabled { "✓" } else { "✗" }
+    );
 
     let pid_path = hermes_core::platform::hermes_home().join("gateway.pid");
     let running = std::fs::read_to_string(&pid_path)
@@ -517,7 +526,10 @@ fn cmd_list(config: &AppConfig) -> Result<()> {
         })
         .unwrap_or(false);
 
-    println!("  Status:       {}", if running { "running" } else { "stopped" });
+    println!(
+        "  Status:       {}",
+        if running { "running" } else { "stopped" }
+    );
     println!();
     println!("Run `hermes gateway run` to start in foreground.");
     Ok(())
@@ -531,7 +543,11 @@ fn cmd_migrate_legacy() -> Result<()> {
         .join("systemd")
         .join("user");
 
-    let legacy_names = ["hermes.service", "hermes-agent.service", "hermes-gateway.service"];
+    let legacy_names = [
+        "hermes.service",
+        "hermes-agent.service",
+        "hermes-gateway.service",
+    ];
     let mut found = false;
 
     for name in &legacy_names {

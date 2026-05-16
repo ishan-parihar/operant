@@ -275,6 +275,14 @@ pub static COMMAND_REGISTRY: &[CommandDef] = &[
         args_hint: "[subcommand]",
         admin_only: false,
     },
+    CommandDef {
+        name: "skills",
+        description: "List installed skills",
+        aliases: &["skill"],
+        category: "Tools",
+        args_hint: "",
+        admin_only: false,
+    },
     // ── Info ─────────────────────────────────────────────────
     CommandDef {
         name: "start",
@@ -571,6 +579,7 @@ pub fn handle_command(cmd_name: &str, _args: &str, is_admin: bool) -> Option<Str
 
         "reload-mcp" => "MCP server reload requested. Not yet supported via chat.".into(),
         "reload-skills" => "Skill registry reload requested. Not yet supported via chat.".into(),
+        "skills" => "Skills are available via `hermes skills list` in CLI.".into(),
         "kanban" => {
             let a = _args.trim();
             if a.is_empty() {
