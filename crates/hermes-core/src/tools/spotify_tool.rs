@@ -14,7 +14,8 @@ fn spotify_token() -> Option<String> {
 
 fn spotify_available() -> bool {
     std::env::var("HERMES_SPOTIFY_ACCESS_TOKEN").is_ok()
-        || (std::env::var("SPOTIFY_CLIENT_ID").is_ok() && std::env::var("SPOTIFY_CLIENT_SECRET").is_ok())
+        || (std::env::var("SPOTIFY_CLIENT_ID").is_ok()
+            && std::env::var("SPOTIFY_CLIENT_SECRET").is_ok())
 }
 
 #[derive(Clone)]

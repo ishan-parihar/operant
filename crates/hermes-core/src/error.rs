@@ -78,9 +78,7 @@ pub enum Error {
     },
 
     #[error("Rate limited (retry after {retry_after:?})")]
-    RateLimited {
-        retry_after: std::time::Duration,
-    },
+    RateLimited { retry_after: std::time::Duration },
 
     #[error("Authentication failed: {0}")]
     Authentication(String),
@@ -118,10 +116,10 @@ impl Error {
     pub fn is_transient(&self) -> bool {
         match self {
             Error::Network(_)
-                | Error::IncompleteSseMessage
-                | Error::ToolTimeout { .. }
-                | Error::IncompleteXml { .. }
-                | Error::RateLimited { .. } => true,
+            | Error::IncompleteSseMessage
+            | Error::ToolTimeout { .. }
+            | Error::IncompleteXml { .. }
+            | Error::RateLimited { .. } => true,
             Error::Provider { status, .. } if *status >= 500 => true,
             _ => false,
         }
@@ -216,13 +214,22 @@ mod tests {
             retry_after: std::time::Duration::from_secs(5),
         };
         assert!(err.is_transient(), "RateLimited should be transient");
-        assert!(!err.is_self_healing(), "RateLimited should not be self-healing");
+        assert!(
+            !err.is_self_healing(),
+            "RateLimited should not be self-healing"
+        );
     }
 
     #[test]
     fn test_authentication_not_transient_not_self_healing() {
         let err = Error::Authentication("invalid key".to_string());
-        assert!(!err.is_transient(), "Authentication should not be transient");
-        assert!(!err.is_self_healing(), "Authentication should not be self-healing");
+        assert!(
+            !err.is_transient(),
+            "Authentication should not be transient"
+        );
+        assert!(
+            !err.is_self_healing(),
+            "Authentication should not be self-healing"
+        );
     }
 }

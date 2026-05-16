@@ -383,8 +383,7 @@ impl ToolRegistry {
             .values()
             .filter(|t| {
                 if t.is_available() {
-                    !disabled_names.contains(t.name())
-                        && !disabled_toolsets.contains(t.toolset())
+                    !disabled_names.contains(t.name()) && !disabled_toolsets.contains(t.toolset())
                 } else {
                     false
                 }
@@ -393,10 +392,7 @@ impl ToolRegistry {
             .collect()
     }
 
-    pub async fn get_available_schemas_filtered(
-        &self,
-        filter: &[String],
-    ) -> Vec<ToolSchema> {
+    pub async fn get_available_schemas_filtered(&self, filter: &[String]) -> Vec<ToolSchema> {
         let tools = self.tools.read().await;
         let disabled_names = self.disabled_names.read().await;
         let disabled_toolsets = self.disabled_toolsets.read().await;
@@ -525,9 +521,11 @@ async fn registry_worker(
                             )
                             .await
                     }
-                    None => {
-                        ToolResult::error_with_name(&tool_name, &tool_call_id, format!("Tool '{}' not found", tool_name))
-                    }
+                    None => ToolResult::error_with_name(
+                        &tool_name,
+                        &tool_call_id,
+                        format!("Tool '{}' not found", tool_name),
+                    ),
                 };
 
                 let _ = response_tx.send(result);
