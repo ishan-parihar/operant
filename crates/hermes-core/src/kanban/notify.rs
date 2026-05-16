@@ -1,7 +1,7 @@
-use rusqlite::{params, Connection};
-use std::sync::{Arc, Mutex};
-use serde::{Serialize, Deserialize};
 use crate::error::Error;
+use rusqlite::{params, Connection};
+use serde::{Deserialize, Serialize};
+use std::sync::{Arc, Mutex};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NotifySubscription {
@@ -23,7 +23,13 @@ impl NotifyManager {
         Self { conn }
     }
 
-    pub fn subscribe(&self, task_id: &str, platform: &str, chat_id: &str, user_id: Option<&str>) -> Result<(), Error> {
+    pub fn subscribe(
+        &self,
+        task_id: &str,
+        platform: &str,
+        chat_id: &str,
+        user_id: Option<&str>,
+    ) -> Result<(), Error> {
         let conn = self.conn.lock().unwrap();
         let now = chrono::Utc::now().timestamp();
         conn.execute(
@@ -39,7 +45,8 @@ impl NotifyManager {
         conn.execute(
             "DELETE FROM kanban_notify_subs WHERE task_id = ?1 AND platform = ?2 AND chat_id = ?3",
             params![task_id, platform, chat_id],
-        ).map_err(|e| Error::Agent(format!("Failed to unsubscribe: {}", e)))?;
+        )
+        .map_err(|e| Error::Agent(format!("Failed to unsubscribe: {}", e)))?;
         Ok(())
     }
 
@@ -49,17 +56,19 @@ impl NotifyManager {
             "SELECT task_id, platform, chat_id, thread_id, user_id, created_at, last_event_id FROM kanban_notify_subs WHERE task_id = ?1"
         ).map_err(|e| Error::Agent(format!("Failed to prepare: {}", e)))?;
 
-        let rows = stmt.query_map(params![task_id], |row| {
-            Ok(NotifySubscription {
-                task_id: row.get(0)?,
-                platform: row.get(1)?,
-                chat_id: row.get(2)?,
-                thread_id: row.get(3)?,
-                user_id: row.get(4)?,
-                created_at: row.get(5)?,
-                last_event_id: row.get(6)?,
+        let rows = stmt
+            .query_map(params![task_id], |row| {
+                Ok(NotifySubscription {
+                    task_id: row.get(0)?,
+                    platform: row.get(1)?,
+                    chat_id: row.get(2)?,
+                    thread_id: row.get(3)?,
+                    user_id: row.get(4)?,
+                    created_at: row.get(5)?,
+                    last_event_id: row.get(6)?,
+                })
             })
-        }).map_err(|e| Error::Agent(format!("Query error: {}", e)))?;
+            .map_err(|e| Error::Agent(format!("Query error: {}", e)))?;
 
         let mut subs = Vec::new();
         for row in rows {
@@ -68,7 +77,12 @@ impl NotifyManager {
         Ok(subs)
     }
 
-    pub fn notify_subscribers(&self, task_id: &str, event_kind: &str, payload: &str) -> Result<(), Error> {
+    pub fn notify_subscribers(
+        &self,
+        task_id: &str,
+        event_kind: &str,
+        payload: &str,
+    ) -> Result<(), Error> {
         let subs = self.list_subscriptions(task_id)?;
         if subs.is_empty() {
             return Ok(());
@@ -76,7 +90,11 @@ impl NotifyManager {
         for sub in &subs {
             tracing::info!(
                 "Notify {} on {} ({}) about '{}': {}",
-                sub.task_id, sub.platform, sub.chat_id, event_kind, payload
+                sub.task_id,
+                sub.platform,
+                sub.chat_id,
+                event_kind,
+                payload
             );
         }
         Ok(())

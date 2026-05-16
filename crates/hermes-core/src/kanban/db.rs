@@ -396,7 +396,7 @@ impl KanbanDb {
             "INSERT INTO tasks (id, title, body, assignee, status, priority, created_by, created_at, 
              workspace_kind, workspace_path, tenant, idempotency_key, max_runtime_seconds, skills, max_retries) 
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
-            params![id, title, body, assignee, status, priority, created_by, created_at, 
+            params![id, title, body, assignee, status, priority, created_by, created_at,
                     workspace_kind, workspace_path, tenant, idempotency_key, max_runtime_seconds, skills_json, max_retries],
         ).map_err(|e| Error::Agent(format!("Failed to create task: {}", e)))?;
 
