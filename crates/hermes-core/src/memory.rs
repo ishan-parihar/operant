@@ -730,6 +730,168 @@ fn uuid_simple() -> String {
     format!("{:x}-{:x}", now.as_secs(), now.subsec_nanos())
 }
 
+// ---------------------------------------------------------------------------
+// Hindsight Memory Client
+// ---------------------------------------------------------------------------
+
+/// A thin HTTP client for the Hindsight Cloud/local memory API.
+///
+/// Hindsight provides semantic search + knowledge graph retrieval. Configure it
+/// via environment variables (`HINDSIGHT_API_KEY`, `HINDSIGHT_BANK_ID`, …) or
+/// the `[memory]` section of `hermes.toml`.
+///
+/// API docs: <https://ui.hindsight.vectorize.io>
+#[derive(Debug, Clone)]
+pub struct HindsightMemoryClient {
+    api_url: String,
+    api_key: String,
+    bank_id: String,
+    budget: String,
+    client: reqwest::Client,
+}
+
+impl HindsightMemoryClient {
+    const DEFAULT_API_URL: &'static str = "https://api.hindsight.vectorize.io";
+    const DEFAULT_BANK_ID: &'static str = "hermes";
+    const DEFAULT_BUDGET: &'static str = "mid";
+
+    /// Construct from explicit values.  Empty strings fall back to environment
+    /// variables and finally to built-in defaults.
+    pub fn new(api_url: Option<String>, bank_id: Option<String>, budget: Option<String>) -> Self {
+        let api_key = std::env::var("HINDSIGHT_API_KEY").unwrap_or_default();
+        let api_url = api_url
+            .filter(|s| !s.is_empty())
+            .or_else(|| std::env::var("HINDSIGHT_API_URL").ok())
+            .unwrap_or_else(|| Self::DEFAULT_API_URL.to_string());
+        let bank_id = bank_id
+            .filter(|s| !s.is_empty())
+            .or_else(|| std::env::var("HINDSIGHT_BANK_ID").ok())
+            .unwrap_or_else(|| Self::DEFAULT_BANK_ID.to_string());
+        let budget = budget
+            .filter(|s| !s.is_empty())
+            .or_else(|| std::env::var("HINDSIGHT_BUDGET").ok())
+            .unwrap_or_else(|| Self::DEFAULT_BUDGET.to_string());
+
+        Self {
+            api_url,
+            api_key,
+            bank_id,
+            budget,
+            client: reqwest::Client::new(),
+        }
+    }
+
+    /// Build from the global runtime config `[memory]` section.
+    pub fn from_config() -> Self {
+        use crate::config::runtime_config;
+        let cfg = runtime_config();
+        Self::new(
+            cfg.memory.hindsight_api_url.clone(),
+            cfg.memory.hindsight_bank_id.clone(),
+            cfg.memory.hindsight_budget.clone(),
+        )
+    }
+
+    fn auth_header(&self) -> String {
+        format!("Bearer {}", self.api_key)
+    }
+
+    /// Retain (store) a text document in Hindsight.
+    pub async fn retain(&self, text: &str, tags: Vec<String>) -> crate::error::Result<()> {
+        if self.api_key.is_empty() {
+            return Err(crate::error::Error::Config(
+                "HINDSIGHT_API_KEY is not set".to_string(),
+            ));
+        }
+
+        let body = serde_json::json!({
+            "bank_id": self.bank_id,
+            "document": { "text": text },
+            "tags": tags,
+        });
+
+        let resp = self
+            .client
+            .post(format!("{}/v1/retain", self.api_url))
+            .header("Authorization", self.auth_header())
+            .json(&body)
+            .send()
+            .await?;
+
+        if resp.status().is_success() {
+            Ok(())
+        } else {
+            let status = resp.status();
+            let msg = resp.text().await.unwrap_or_default();
+            Err(crate::error::Error::Agent(format!(
+                "Hindsight retain failed ({status}): {msg}"
+            )))
+        }
+    }
+
+    /// Recall (search) memories from Hindsight.
+    pub async fn recall(&self, query: &str) -> crate::error::Result<Vec<String>> {
+        if self.api_key.is_empty() {
+            return Err(crate::error::Error::Config(
+                "HINDSIGHT_API_KEY is not set".to_string(),
+            ));
+        }
+
+        let body = serde_json::json!({
+            "bank_id": self.bank_id,
+            "query": query,
+            "budget": self.budget,
+        });
+
+        let resp = self
+            .client
+            .post(format!("{}/v1/recall", self.api_url))
+            .header("Authorization", self.auth_header())
+            .json(&body)
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let msg = resp.text().await.unwrap_or_default();
+            return Err(crate::error::Error::Agent(format!(
+                "Hindsight recall failed ({status}): {msg}"
+            )));
+        }
+
+        let json: serde_json::Value = resp.json().await?;
+
+        // Hindsight returns { "memories": [ { "text": "..." }, … ] }
+        let memories = json
+            .get("memories")
+            .and_then(|m| m.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|m| m.get("text").and_then(|t| t.as_str()).map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        Ok(memories)
+    }
+}
+
+/// Select a memory provider at runtime based on the global config.
+///
+/// Returns a pre-loaded `MemoryManager` for `"builtin"` or signals that
+/// `"hindsight"` should be used (caller should use `HindsightMemoryClient`).
+/// Returns the active memory provider name from config ("builtin", "hindsight", etc.)
+/// or "disabled" when memory is turned off.
+pub fn resolve_memory_provider() -> String {
+    use crate::config::runtime_config;
+    let cfg = runtime_config();
+    if cfg.memory.enabled {
+        cfg.memory.provider.clone()
+    } else {
+        "disabled".to_string()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

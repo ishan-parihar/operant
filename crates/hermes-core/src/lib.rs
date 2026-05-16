@@ -44,6 +44,7 @@ pub mod agent;
 pub mod ansi_strip;
 pub mod approval;
 pub mod browser_camofox;
+pub mod browser_provider;
 pub mod browser_supervisor;
 pub mod budget_config;
 pub mod client;
@@ -71,6 +72,7 @@ pub mod managed_tool_gateway;
 pub mod mcp;
 pub mod mcp_oauth;
 pub mod memory;
+pub mod memory_provider;
 pub mod ms_graph;
 pub mod parser;
 pub mod platform;
@@ -97,7 +99,10 @@ pub use approval::{
     check_tool_approval, prompt_user_for_approval, ApprovalContext, ApprovalGuard, ApprovalMode,
     ApprovalVerdict, RiskLevel,
 };
-pub use browser_camofox::CamofoxBrowser;
+pub use browser_provider::{
+    build_browser_provider, BrowserProvider, BrowserbaseProvider, BrowserUseProvider,
+    CamofoxProvider, FirecrawlProvider, LightpandaProvider,
+};
 pub use browser_supervisor::{
     BrowserSession, BrowserSupervisorTool, CDPSupervisor, CdpNavigateTool, CloudProvider,
     CloudProviderClient, CloudProviderConfig, DialogBridgeTool, SessionStatus,
@@ -106,8 +111,8 @@ pub use client::{Message, OpenAIClient};
 pub use config::{
     install_runtime_config, load_app_config, runtime_config, AppConfig, AutonomousSettings,
     BehaviorSettings, ClientSettings, CodeExecutionSettings, GatewaySettings, HttpToolSettings,
-    LoadedConfig, LoggingSettings, McpServerConfig, McpSettings, SkillsSettings, SttSettings,
-    TerminalSettings, ToolSettings, TuiSettings, WebToolSettings,
+    LoadedConfig, LoggingSettings, McpServerConfig, McpSettings, MemorySettings, SkillsSettings,
+    SttSettings, TerminalSettings, ToolSettings, TuiSettings, WebToolSettings,
 };
 pub use context::{estimate_tokens, ContextConfig, ContextManager};
 pub use context_files::{
@@ -135,6 +140,10 @@ pub use managed_tool_gateway::{
 };
 pub use mcp::{McpClient, McpNamespacedTool, McpStdioClient, McpTool, McpTransport};
 pub use memory::{MemoryBlock, MemoryManager, Session, UserProfile};
+pub use memory_provider::{
+    build_memory_provider, BuiltinProvider, HindsightProvider, LocalVectorProvider,
+    Mem0Provider, MemoryProvider, RetainDbProvider,
+};
 pub use ms_graph::{
     CachedAccessToken, GraphCredentials, MicrosoftGraphClient, MicrosoftGraphError,
     MicrosoftGraphTokenProvider,

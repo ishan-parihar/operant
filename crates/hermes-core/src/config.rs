@@ -25,6 +25,8 @@ pub struct AppConfig {
     pub gateway: GatewaySettings,
     pub tools: ToolSettings,
     pub tts: TtsSettings,
+    pub memory: MemorySettings,
+    pub browser: BrowserSettings,
     pub vision: VisionSettings,
     pub credential_pool: CredentialPoolSettings,
     pub terminal_backend: TerminalBackend,
@@ -50,6 +52,8 @@ impl Default for AppConfig {
             gateway: GatewaySettings::default(),
             tools: ToolSettings::default(),
             tts: TtsSettings::default(),
+            memory: MemorySettings::default(),
+            browser: BrowserSettings::default(),
             vision: VisionSettings::default(),
             credential_pool: CredentialPoolSettings::default(),
             terminal_backend: TerminalBackend::Local,
@@ -531,16 +535,74 @@ impl Default for SttSettings {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct TtsSettings {
-    pub provider: Option<String>,
+    /// TTS provider: kokoro|edge|elevenlabs|openai|minimax|mistral|gemini|xai|neutts|kittentts|piper
+    pub provider: String,
     pub enabled: bool,
+    /// Default voice for the selected provider (provider-specific identifier)
+    pub voice: Option<String>,
 }
 
 impl Default for TtsSettings {
     fn default() -> Self {
         Self {
-            provider: None,
+            provider: "kokoro".to_string(),
             enabled: false,
+            voice: None,
         }
+    }
+}
+
+/// Memory provider configuration.
+///
+/// `provider` selects the long-term memory backend:
+/// - `"builtin"` (default) — file-backed MEMORY.md/USER.md in the working directory
+/// - `"hindsight"` — Hindsight Cloud/local API (requires `HINDSIGHT_API_KEY`)
+/// - Any other string is passed through as-is for future/custom providers.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct MemorySettings {
+    /// Memory provider: builtin|hindsight
+    pub provider: String,
+    /// Whether long-term memory is enabled at all
+    pub enabled: bool,
+    /// Hindsight API URL (only used when provider = "hindsight")
+    pub hindsight_api_url: Option<String>,
+    /// Hindsight bank/collection identifier
+    pub hindsight_bank_id: Option<String>,
+    /// Recall budget: low|mid|high (only used when provider = "hindsight")
+    pub hindsight_budget: Option<String>,
+}
+
+impl Default for MemorySettings {
+    fn default() -> Self {
+        Self {
+            provider: "hindsight".to_string(),
+            enabled: true,
+            hindsight_api_url: None,
+            hindsight_bank_id: None,
+            hindsight_budget: None,
+        }
+    }
+}
+
+/// Browser provider configuration.
+///
+/// `provider` selects the browser backend:
+/// - `"lightpanda"` (default) — local binary, auto-downloaded from GitHub Releases
+/// - `"camofox"` — local anti-detection browser REST API (`CAMOFOX_URL`)
+/// - `"browserbase"` — Browserbase cloud (`BROWSERBASE_API_KEY` + `BROWSERBASE_PROJECT_ID`)
+/// - `"browser-use"` — Browser Use cloud agent (`BROWSER_USE_API_KEY`)
+/// - `"firecrawl"` — Firecrawl scrape API (`FIRECRAWL_API_KEY`)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct BrowserSettings {
+    /// Browser provider name
+    pub provider: String,
+}
+
+impl Default for BrowserSettings {
+    fn default() -> Self {
+        Self { provider: "lightpanda".to_string() }
     }
 }
 
