@@ -419,6 +419,7 @@ impl TuiApp {
             self.system_prompt.as_deref(),
             event_tx,
             &self.mcp_manager,
+            &self.state.persistent.config.skills.root_dir,
         )
         .await?;
         self.agent = Some(Arc::new(agent));

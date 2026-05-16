@@ -57,7 +57,7 @@ mod tui;
 
 use std::fs::OpenOptions;
 use std::io::{self, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -73,11 +73,12 @@ use hermes_core::config::{
 };
 use hermes_core::mcp::McpManager;
 use hermes_core::memory::MemoryManager;
+use hermes_core::skills::SkillManager;
 use hermes_core::tools::{HermesTool, ToolContext, ToolRegistry};
 use serde::Deserialize;
 use serde_json::Value;
 use tokio::sync::mpsc;
-use tracing::Level;
+use tracing::{warn, Level};
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 use crate::tui::{LaunchMode, TuiApp};
@@ -527,6 +528,7 @@ pub(crate) async fn build_registry(
     let registry = ToolRegistry::new(Duration::from_secs(config.tools.registry_timeout_secs));
     hermes_core::tools::register_builtin_tools_with_sub_agent(
         &registry,
+        &config.skills.root_dir,
         client,
         model,
         database,
@@ -592,61 +594,110 @@ async fn connect_mcp_server(mcp_manager: &McpManager, server: &McpServerConfig) 
     Ok(())
 }
 
-pub(crate) async fn create_runtime_agent(
+/// Shared components produced by the agent core builder.
+struct AgentCore {
+    raw_client: OpenAIClient,
+    database: Arc<Database>,
+    registry: ToolRegistry,
+    agent_config: AgentConfig,
+    memory_manager: MemoryManager,
+    skill_manager: SkillManager,
+}
+
+/// Build the shared core components needed by both agent constructors.
+async fn build_agent_core(
     config: &AppConfig,
-    behavior: &BehaviorSettings,
     system_prompt: Option<&str>,
-    event_tx: mpsc::Sender<AgentEvent>,
     mcp_manager: &McpManager,
-) -> Result<HermesAgent> {
+    skills_dir: &Path,
+    model_name: &str,
+    behavior: &BehaviorSettings,
+) -> Result<AgentCore> {
     let raw_client = OpenAIClient::new(client_config(config));
     let database = Arc::new(Database::init(config.database_path.clone())?);
     let registry = build_registry(
         config,
         mcp_manager,
         &raw_client,
-        &behavior.model,
+        model_name,
         database.clone(),
     )
     .await?;
     let agent_config = agent_config(config, behavior, system_prompt);
     let memory_manager = load_repo_memory_manager().await?;
 
-    Ok(HermesAgent::with_events(
-        agent_config,
-        Box::new(OpenAIModelClient::new(raw_client)),
-        registry,
+    let mut skill_manager = SkillManager::new(skills_dir.to_path_buf());
+    if let Err(e) = skill_manager.load_all() {
+        warn!(
+            error = %e,
+            "Failed to load skills from {}",
+            skills_dir.display()
+        );
+    }
+
+    Ok(AgentCore {
+        raw_client,
         database,
+        registry,
+        agent_config,
+        memory_manager,
+        skill_manager,
+    })
+}
+
+pub(crate) async fn create_runtime_agent(
+    config: &AppConfig,
+    behavior: &BehaviorSettings,
+    system_prompt: Option<&str>,
+    event_tx: mpsc::Sender<AgentEvent>,
+    mcp_manager: &McpManager,
+    skills_dir: &Path,
+) -> Result<HermesAgent> {
+    let core = build_agent_core(
+        config,
+        system_prompt,
+        mcp_manager,
+        skills_dir,
+        &behavior.model,
+        behavior,
+    )
+    .await?;
+
+    Ok(HermesAgent::with_events(
+        core.agent_config,
+        Box::new(OpenAIModelClient::new(core.raw_client)),
+        core.registry,
+        core.database,
         event_tx,
     )
-    .with_memory_manager(memory_manager))
+    .with_memory_manager(core.memory_manager)
+    .with_skill_manager(core.skill_manager))
 }
 
 pub(crate) async fn create_agent_without_events(
     config: &AppConfig,
     system_prompt: Option<&str>,
     mcp_manager: &McpManager,
+    skills_dir: &Path,
 ) -> Result<HermesAgent> {
-    let raw_client = OpenAIClient::new(client_config(config));
-    let database = Arc::new(Database::init(config.database_path.clone())?);
-    let registry = build_registry(
+    let core = build_agent_core(
         config,
+        system_prompt,
         mcp_manager,
-        &raw_client,
+        skills_dir,
         &config.agent.model,
-        database.clone(),
+        &config.agent,
     )
     .await?;
-    let agent_config = agent_config(config, &config.agent, system_prompt);
-    let memory_manager = load_repo_memory_manager().await?;
 
     Ok(HermesAgent::new(
-        agent_config,
-        Box::new(OpenAIModelClient::new(raw_client)),
-        registry,
-        database,
+        core.agent_config,
+        Box::new(OpenAIModelClient::new(core.raw_client)),
+        core.registry,
+        core.database,
     )
-    .with_memory_manager(memory_manager))
+    .with_memory_manager(core.memory_manager)
+    .with_skill_manager(core.skill_manager))
 }
 
 async fn load_repo_memory_manager() -> Result<MemoryManager> {
@@ -665,7 +716,9 @@ pub(crate) async fn load_memory_manager(storage_dir: PathBuf) -> Result<MemoryMa
 
 async fn run_non_tui(config: &AppConfig, system_prompt: Option<&str>, query: &str) -> Result<()> {
     let mcp_manager = McpManager::new();
-    let agent = create_agent_without_events(config, system_prompt, &mcp_manager).await?;
+    let agent =
+        create_agent_without_events(config, system_prompt, &mcp_manager, &config.skills.root_dir)
+            .await?;
     let response = agent.run(query.to_string()).await?;
     println!("{}", response.content);
     Ok(())
@@ -700,8 +753,15 @@ async fn chat_non_tui(config: &AppConfig, system_prompt: Option<&str>) -> Result
 
     let mcp_manager = McpManager::new();
     let (event_tx, mut event_rx) = mpsc::channel::<AgentEvent>(256);
-    let agent =
-        create_runtime_agent(config, &config.agent, system_prompt, event_tx, &mcp_manager).await?;
+    let agent = create_runtime_agent(
+        config,
+        &config.agent,
+        system_prompt,
+        event_tx,
+        &mcp_manager,
+        &config.skills.root_dir,
+    )
+    .await?;
 
     // Spawn task to display tool events in real-time
     tokio::spawn(async move {
@@ -781,6 +841,36 @@ async fn chat_non_tui(config: &AppConfig, system_prompt: Option<&str>) -> Result
     }
     registry
         .register_handler("session", Box::new(SessionHandler))
+        .ok();
+
+    struct SkillsHandler {
+        skills_dir: PathBuf,
+    }
+    #[async_trait::async_trait]
+    impl CommandHandler for SkillsHandler {
+        async fn execute(&self, _ctx: &CommandContext<'_>) -> commands::CommandResult {
+            let mut skill_manager = SkillManager::new(self.skills_dir.clone());
+            if let Err(e) = skill_manager.load_all() {
+                return Ok(format!("Failed to load skills: {}", e));
+            }
+            let skills = skill_manager.list();
+            if skills.is_empty() {
+                return Ok("No skills installed.".to_string());
+            }
+            let mut output = String::from("Installed skills:\n");
+            for (name, description) in &skills {
+                output.push_str(&format!("  /{} — {}\n", name, description));
+            }
+            Ok(output)
+        }
+    }
+    registry
+        .register_handler(
+            "skills",
+            Box::new(SkillsHandler {
+                skills_dir: config.skills.root_dir.clone(),
+            }),
+        )
         .ok();
 
     loop {

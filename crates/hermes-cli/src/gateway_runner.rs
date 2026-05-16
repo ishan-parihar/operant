@@ -42,7 +42,10 @@ impl MessageHandler for GatewayMessageHandler {
                     // reasoning_content and leave content empty.
                     if let Some(ref reasoning) = response.reasoning {
                         if !reasoning.trim().is_empty() {
-                            tracing::info!("Content empty but reasoning available, using as fallback (len={})", reasoning.len());
+                            tracing::info!(
+                                "Content empty but reasoning available, using as fallback (len={})",
+                                reasoning.len()
+                            );
                             reasoning.clone()
                         } else {
                             tracing::warn!("Agent returned empty response, no reasoning available");
@@ -145,9 +148,15 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
     let (event_tx, mut event_rx) = mpsc::channel::<AgentEvent>(256);
     let current_channel: Arc<Mutex<Option<(String, String)>>> = Arc::new(Mutex::new(None));
 
-    let agent =
-        crate::create_runtime_agent(app_config, &app_config.agent, None, event_tx, &mcp_manager)
-            .await?;
+    let agent = crate::create_runtime_agent(
+        app_config,
+        &app_config.agent,
+        None,
+        event_tx,
+        &mcp_manager,
+        &app_config.skills.root_dir,
+    )
+    .await?;
     let handler = Arc::new(GatewayMessageHandler {
         agent: Arc::new(agent),
     });
@@ -455,14 +464,18 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                         // Wait 30s before first notification (quick tasks skip it)
                         tokio::time::sleep(std::time::Duration::from_secs(30)).await;
                         let start = std::time::Instant::now();
-                        let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+                        let mut interval =
+                            tokio::time::interval(std::time::Duration::from_secs(60));
                         loop {
                             interval.tick().await;
                             let elapsed = start.elapsed().as_secs();
                             let minutes = elapsed / 60;
                             let seconds = elapsed % 60;
                             let body = if minutes > 0 {
-                                format!("\u{23F3} Still working... ({}m {}s elapsed...)", minutes, seconds)
+                                format!(
+                                    "\u{23F3} Still working... ({}m {}s elapsed...)",
+                                    minutes, seconds
+                                )
                             } else {
                                 format!("\u{23F3} Still working... ({}s elapsed...)", seconds)
                             };
