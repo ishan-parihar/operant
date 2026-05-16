@@ -5,6 +5,7 @@ use std::sync::{OnceLock, RwLock};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
+use crate::platform;
 
 static RUNTIME_CONFIG: OnceLock<RwLock<AppConfig>> = OnceLock::new();
 
@@ -307,13 +308,8 @@ pub struct SkillsSettings {
 
 impl Default for SkillsSettings {
     fn default() -> Self {
-        let root_dir = dirs::config_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("hermes")
-            .join("skills");
-
         Self {
-            root_dir,
+            root_dir: platform::hermes_skills_dir(),
             autoload: true,
             template_name: "new-skill".to_string(),
             template_description: "Describe what this skill does.".to_string(),
