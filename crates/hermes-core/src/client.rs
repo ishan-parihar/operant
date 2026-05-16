@@ -159,7 +159,7 @@ impl OpenAIClient {
 
         if !status.is_success() {
             error!(status = %status, body = %body, "Chat request failed");
-            return Err(Error::Agent(format!("HTTP {}: {}", status, body)));
+            return Err(classify_http_error(status.as_u16(), &body));
         }
 
         let response: ChatResponse = serde_json::from_str(&body)
@@ -194,7 +194,7 @@ impl OpenAIClient {
         if !status.is_success() {
             let body = response.text().await?;
             error!(status = %status, body = %body, "Streaming request failed");
-            return Err(Error::Agent(format!("HTTP {}: {}", status, body)));
+            return Err(classify_http_error(status.as_u16(), &body));
         }
 
         info!("Streaming connection established");
@@ -269,6 +269,8 @@ pub struct Message {
     pub name: Option<String>,
     pub tool_call_id: Option<String>,
     pub tool_calls: Option<Vec<ToolCall>>,
+    /// Provider-specific extra fields (e.g. Google Gemini thought_signature)
+    pub extra_content: Option<serde_json::Value>,
 }
 
 impl Message {
@@ -281,6 +283,7 @@ impl Message {
             name: None,
             tool_call_id: None,
             tool_calls: None,
+            extra_content: None,
         }
     }
 
@@ -308,6 +311,7 @@ impl Message {
             tool_call_id: Some(tool_call_id.into()),
             name: None,
             tool_calls: None,
+            extra_content: None,
         }
     }
 
@@ -317,12 +321,27 @@ impl Message {
         self
     }
 
-    /// Add reasoning content to the message
+    /// Add reasoning content to the message.
+    ///
+    /// Stores any non-empty string verbatim — including whitespace-only
+    /// values like `" "`. DeepSeek V4 Pro thinking mode and Kimi/Moonshot
+    /// thinking mode both pad missing reasoning with a single space when
+    /// echoing back tool-call assistant turns; trimming that pad here would
+    /// cause the round-tripped message to fail the provider's
+    /// `reasoning_content` echo-back validation on the next request.
+    /// Refs: hermes-agent #15250, #17341 (DeepSeek V4 Pro tightened to
+    /// reject empty string; a single space satisfies the validator).
     pub fn with_reasoning(mut self, reasoning: impl Into<String>) -> Self {
         let reasoning = reasoning.into();
-        if !reasoning.trim().is_empty() {
+        if !reasoning.is_empty() {
             self.reasoning = Some(reasoning);
         }
+        self
+    }
+
+    /// Add provider-specific extra content (e.g. Google Gemini thought_signature)
+    pub fn with_extra_content(mut self, extra: serde_json::Value) -> Self {
+        self.extra_content = Some(extra);
         self
     }
 
@@ -352,10 +371,43 @@ impl Message {
         }
 
         if let Some(ref name) = self.name {
-            map.insert("name".to_string(), json!(name));
+            // Only include name for non-tool messages. Some providers (Google Gemini)
+            // reject tool messages with extra fields beyond role/content/tool_call_id.
+            if self.role != Role::Tool {
+                map.insert("name".to_string(), json!(name));
+            }
         }
         if let Some(ref tool_call_id) = self.tool_call_id {
             map.insert("tool_call_id".to_string(), json!(tool_call_id));
+        }
+
+        // Include provider-specific extra content (e.g. Google Gemini thought_signature)
+        if let Some(ref extra) = self.extra_content {
+            if let Some(obj) = extra.as_object() {
+                for (k, v) in obj {
+                    map.insert(k.clone(), v.clone());
+                }
+            }
+        }
+
+        // DeepSeek V4 Pro / Kimi / MiMo thinking-mode providers reject
+        // assistant messages that carry `tool_calls` but no `reasoning_content`
+        // on the next replay (HTTP 400 "The reasoning_content in the thinking
+        // mode must be passed back to the API"). Empty string is also rejected
+        // by V4 Pro — a single space is the minimal value that satisfies the
+        // validator without leaking fabricated reasoning. Non-thinking
+        // providers ignore the extra field, so this is safe to emit
+        // unconditionally for tool-call assistant turns.
+        // Refs: hermes-agent #15250, #17341, #17400.
+        let has_tool_calls = self.tool_calls.is_some();
+        match self.reasoning.as_deref() {
+            Some(reasoning) if !reasoning.is_empty() => {
+                map.insert("reasoning_content".to_string(), json!(reasoning));
+            }
+            _ if self.role == Role::Assistant && has_tool_calls => {
+                map.insert("reasoning_content".to_string(), json!(" "));
+            }
+            _ => {}
         }
 
         Value::Object(map)
@@ -371,6 +423,7 @@ impl Default for Message {
             name: None,
             tool_call_id: None,
             tool_calls: None,
+            extra_content: None,
         }
     }
 }
@@ -481,6 +534,9 @@ pub struct StreamingMessageDelta {
     pub reasoning_content: Option<String>,
     #[serde(default)]
     pub tool_calls: Option<Vec<StreamingToolCallDelta>>,
+    /// Provider-specific extra content (e.g. Google Gemini thought_signature)
+    #[serde(default, alias = "extra_content")]
+    pub extra_content: Option<serde_json::Value>,
 }
 
 /// Tool call delta for streaming
@@ -494,6 +550,46 @@ pub struct StreamingToolCallDelta {
     pub call_type: Option<String>,
     #[serde(default)]
     pub function: Option<ToolCallFunction>,
+}
+
+/// Classify an HTTP error from the provider API into a structured Error variant.
+///
+/// Uses the HTTP status code and response body to produce the most specific
+/// error variant, extracting retry timing from the body when available.
+pub(crate) fn classify_http_error(status: u16, body: &str) -> Error {
+    let retry_after = parse_retry_after_from_body(body);
+    match status {
+        401 | 403 => Error::Authentication(body.to_string()),
+        429 => Error::RateLimited {
+            retry_after: retry_after.unwrap_or(Duration::from_secs(5)),
+        },
+        s if s >= 500 => Error::Provider {
+            status,
+            body: body.to_string(),
+            retry_after,
+        },
+        _ => Error::Provider {
+            status,
+            body: body.to_string(),
+            retry_after: None,
+        },
+    }
+}
+
+/// Try to extract a `retry_after` duration from the provider's JSON error body.
+///
+/// Checks for `retry_after` as a number (seconds) or a parseable string.
+fn parse_retry_after_from_body(body: &str) -> Option<Duration> {
+    let json: serde_json::Value = serde_json::from_str(body).ok()?;
+    if let Some(seconds) = json.get("retry_after").and_then(|v| v.as_f64()) {
+        return Some(Duration::from_secs_f64(seconds));
+    }
+    if let Some(seconds_str) = json.get("retry_after").and_then(|v| v.as_str()) {
+        if let Ok(seconds) = seconds_str.parse::<f64>() {
+            return Some(Duration::from_secs_f64(seconds));
+        }
+    }
+    None
 }
 
 /// SSE streaming response wrapper
@@ -654,6 +750,96 @@ mod tests {
     }
 
     #[test]
+    fn test_assistant_message_with_reasoning_serializes_reasoning_content() {
+        let msg = Message::assistant("Hello").with_reasoning("deep thought");
+        let value = msg.to_value();
+
+        assert_eq!(value["role"], "assistant");
+        assert_eq!(value["content"], "Hello");
+        assert_eq!(value["reasoning_content"], "deep thought");
+    }
+
+    #[test]
+    fn test_assistant_message_with_tool_calls_and_reasoning() {
+        let tool_calls = vec![ToolCall {
+            id: "call_1".to_string(),
+            function: ToolCallFunction {
+                name: "datetime".to_string(),
+                arguments: "{}".to_string(),
+            },
+        }];
+        let msg = Message::assistant("")
+            .with_tool_calls(tool_calls)
+            .with_reasoning("need to check time");
+        let value = msg.to_value();
+
+        assert_eq!(value["role"], "assistant");
+        assert_eq!(value["reasoning_content"], "need to check time");
+        assert!(value.get("tool_calls").is_some(), "should have tool_calls");
+    }
+
+    #[test]
+    fn assistant_tool_calls_without_reasoning_pads_reasoning_content() {
+        // Regression: DeepSeek V4 Pro thinking mode (and Kimi / MiMo) returns
+        // HTTP 400 "The reasoning_content in the thinking mode must be passed
+        // back to the API" when an assistant tool-call message is replayed
+        // without `reasoning_content`. We pad with a single space — empty
+        // string is rejected, " " is the minimum that satisfies the validator.
+        let tool_calls = vec![ToolCall {
+            id: "call_pad".to_string(),
+            function: ToolCallFunction {
+                name: "datetime".to_string(),
+                arguments: "{}".to_string(),
+            },
+        }];
+        let msg = Message::assistant("").with_tool_calls(tool_calls);
+
+        let value = msg.to_value();
+        assert_eq!(
+            value["reasoning_content"], " ",
+            "missing reasoning on tool-call assistant turn must be padded to ' '"
+        );
+    }
+
+    #[test]
+    fn assistant_without_tool_calls_does_not_pad_reasoning_content() {
+        // Plain assistant text turns without tool_calls don't trigger the
+        // DeepSeek thinking-mode echo-back rule, so we must NOT inject the
+        // pad — that would corrupt sessions for non-thinking providers.
+        let msg = Message::assistant("hello");
+        let value = msg.to_value();
+        assert!(
+            value.get("reasoning_content").is_none(),
+            "non-tool-call assistant turns must not synthesize reasoning_content"
+        );
+    }
+
+    #[test]
+    fn with_reasoning_preserves_whitespace_pad() {
+        // DeepSeek echoes back its own " " pad on subsequent replays. We must
+        // preserve that verbatim so the next replay round-trips successfully.
+        let msg = Message::assistant("").with_reasoning(" ");
+        assert_eq!(msg.reasoning.as_deref(), Some(" "));
+    }
+
+    #[test]
+    fn with_reasoning_drops_empty_string() {
+        let msg = Message::assistant("").with_reasoning("");
+        assert!(msg.reasoning.is_none());
+    }
+
+    #[test]
+    fn user_and_tool_messages_never_get_reasoning_pad() {
+        // The pad applies only to assistant tool-call turns. User and tool
+        // messages must remain untouched even when tool_calls are absent.
+        let user = Message::user("hi").to_value();
+        assert!(user.get("reasoning_content").is_none());
+
+        let tool = Message::tool("call_x", "result").to_value();
+        assert!(tool.get("reasoning_content").is_none());
+    }
+
+    #[test]
     fn test_reasoning_context_alias_deserializes() {
         let value = serde_json::json!({
             "role": "assistant",
@@ -694,5 +880,85 @@ mod tests {
         // This will succeed even without env vars (uses defaults)
         let client = OpenAIClient::from_env();
         assert!(client.is_ok());
+    }
+
+    // --- classify_http_error tests ---
+
+    #[test]
+    fn classify_401_as_authentication() {
+        let err = classify_http_error(401, "Invalid API key");
+        assert!(matches!(err, Error::Authentication(_)));
+    }
+
+    #[test]
+    fn classify_403_as_authentication() {
+        let err = classify_http_error(403, "Forbidden");
+        assert!(matches!(err, Error::Authentication(_)));
+    }
+
+    #[test]
+    fn classify_429_as_rate_limited() {
+        let err = classify_http_error(429, "Too Many Requests");
+        assert!(matches!(err, Error::RateLimited { .. }));
+    }
+
+    #[test]
+    fn classify_429_parses_retry_after() {
+        let body = r#"{"error": "rate limit", "retry_after": 12.5}"#;
+        let err = classify_http_error(429, body);
+        match err {
+            Error::RateLimited { retry_after } => {
+                assert_eq!(retry_after.as_secs_f64(), 12.5);
+            }
+            _ => panic!("expected RateLimited, got {:?}", err),
+        }
+    }
+
+    #[test]
+    fn classify_500_as_provider() {
+        let err = classify_http_error(500, "Internal error");
+        match err {
+            Error::Provider {
+                status,
+                ref body,
+                retry_after: _,
+            } => {
+                assert_eq!(status, 500);
+                assert_eq!(body, "Internal error");
+            }
+            _ => panic!("expected Provider, got {:?}", err),
+        }
+    }
+
+    #[test]
+    fn classify_502_as_transient_provider() {
+        let err = classify_http_error(502, "Bad Gateway");
+        assert!(err.is_transient());
+    }
+
+    #[test]
+    fn classify_400_as_non_transient_provider() {
+        let err = classify_http_error(400, "Bad Request");
+        assert!(matches!(err, Error::Provider { status: 400, .. }));
+        assert!(!err.is_transient());
+    }
+
+    #[test]
+    fn classify_http_error_parses_retry_after_string() {
+        let body = r#"{"retry_after": "30"}"#;
+        let err = classify_http_error(429, body);
+        match err {
+            Error::RateLimited { retry_after } => {
+                assert_eq!(retry_after.as_secs(), 30);
+            }
+            _ => panic!("expected RateLimited, got {:?}", err),
+        }
+    }
+
+    #[test]
+    fn classify_http_error_invalid_body_does_not_panic() {
+        // Invalid JSON should not crash; falls through to default classification
+        let err = classify_http_error(429, "not json at all");
+        assert!(matches!(err, Error::RateLimited { .. }));
     }
 }
