@@ -12,17 +12,6 @@ use crate::tools::{HermesTool, ToolContext, ToolResult};
 const MAX_NAME_LENGTH: usize = 64;
 const MAX_DESCRIPTION_LENGTH: usize = 1024;
 
-fn get_skills_dir() -> PathBuf {
-    let home = std::env::var("HERMES_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| {
-            dirs::home_dir()
-                .map(|h| h.join(".hermes"))
-                .unwrap_or_else(|| PathBuf::from("~/.hermes"))
-        });
-    home.join("skills")
-}
-
 fn parse_frontmatter(content: &str) -> (serde_json::Value, String) {
     if !content.starts_with("---") {
         return (serde_json::Value::Null, content.to_string());
@@ -104,7 +93,9 @@ struct SkillMeta {
     category: Option<String>,
 }
 
-pub struct SkillsTool;
+pub struct SkillsTool {
+    root_dir: PathBuf,
+}
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -120,14 +111,10 @@ struct SkillViewArgs {
 }
 
 impl SkillsTool {
-    pub fn new() -> Self {
-        Self
-    }
-}
-
-impl Default for SkillsTool {
-    fn default() -> Self {
-        Self::new()
+    pub fn new(skills_dir: PathBuf) -> Self {
+        Self {
+            root_dir: skills_dir,
+        }
     }
 }
 
@@ -149,7 +136,7 @@ impl HermesTool for SkillsTool {
     }
 
     async fn execute(&self, args: Value, _context: ToolContext) -> ToolResult {
-        let skills_dir = get_skills_dir();
+        let skills_dir = self.root_dir.clone();
 
         if !skills_dir.exists() {
             if let Err(e) = fs::create_dir_all(&skills_dir) {
@@ -203,7 +190,17 @@ impl HermesTool for SkillsTool {
     }
 }
 
-pub struct SkillViewTool;
+pub struct SkillViewTool {
+    root_dir: PathBuf,
+}
+
+impl SkillViewTool {
+    pub fn new(skills_dir: PathBuf) -> Self {
+        Self {
+            root_dir: skills_dir,
+        }
+    }
+}
 
 #[async_trait]
 impl HermesTool for SkillViewTool {
@@ -230,7 +227,7 @@ impl HermesTool for SkillViewTool {
             }
         };
 
-        let skills_dir = get_skills_dir();
+        let skills_dir = self.root_dir.clone();
 
         if !skills_dir.exists() {
             return ToolResult::error(
@@ -305,17 +302,35 @@ impl HermesTool for SkillViewTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::TempDir;
+
+    fn setup_test_env() -> (TempDir, PathBuf) {
+        let dir = TempDir::new().unwrap();
+        let skills_dir = dir.path().join("skills");
+        std::fs::create_dir(&skills_dir).unwrap();
+        // Create a test skill file
+        let skill_path = skills_dir.join("test-skill");
+        std::fs::create_dir(&skill_path).unwrap();
+        std::fs::write(
+            skill_path.join("SKILL.md"),
+            "# Test Skill\n\nA test skill for unit tests.",
+        )
+        .unwrap();
+        (dir, skills_dir)
+    }
 
     #[test]
     fn test_skills_list_name_and_description() {
-        let tool = SkillsTool::new();
+        let (_dir, skills_dir) = setup_test_env();
+        let tool = SkillsTool::new(skills_dir);
         assert_eq!(tool.name(), "skills_list");
         assert!(!tool.description().is_empty());
     }
 
     #[test]
     fn test_skill_view_name() {
-        let tool = SkillViewTool;
+        let (_dir, skills_dir) = setup_test_env();
+        let tool = SkillViewTool::new(skills_dir);
         assert_eq!(tool.name(), "skill_view");
         assert!(!tool.description().is_empty());
     }
@@ -355,7 +370,8 @@ mod tests {
 
     #[test]
     fn test_skill_view_execute_missing_name() {
-        let tool = SkillViewTool;
+        let (_dir, skills_dir) = setup_test_env();
+        let tool = SkillViewTool::new(skills_dir);
         let result = tool.execute_sync(serde_json::json!({}));
         assert!(!result.success);
         assert!(result
@@ -366,15 +382,10 @@ mod tests {
 
     #[test]
     fn test_skills_list_categories_dedup() {
-        let tool = SkillsTool::new();
+        let (_dir, skills_dir) = setup_test_env();
+        let tool = SkillsTool::new(skills_dir);
         let schema = tool.schema();
         assert_eq!(schema.name, "skills_list");
-    }
-
-    #[test]
-    fn test_get_skills_dir_default() {
-        let dir = get_skills_dir();
-        assert!(!dir.as_os_str().is_empty());
     }
 }
 

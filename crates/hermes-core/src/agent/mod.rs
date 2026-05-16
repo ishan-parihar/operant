@@ -19,6 +19,7 @@ use crate::distillation::distill_session_to_memory;
 use crate::error::{Error, Result};
 use crate::memory::MemoryManager;
 use crate::parser::{ToolCallParser, ToolCallStreamParser};
+use crate::skills::SkillManager;
 use crate::tools::{ToolContext, ToolRegistry, ToolResult};
 
 /// Configuration for the Hermes agent
@@ -94,6 +95,7 @@ pub struct HermesAgent {
     conversation: Arc<RwLock<Vec<Message>>>,
     event_tx: Option<mpsc::Sender<AgentEvent>>,
     memory_manager: Option<MemoryManager>,
+    skill_manager: Option<SkillManager>,
     database: Arc<Database>,
 }
 
@@ -112,6 +114,7 @@ impl HermesAgent {
             conversation: Arc::new(RwLock::new(Vec::new())),
             event_tx: None,
             memory_manager: None,
+            skill_manager: None,
             database,
         }
     }
@@ -131,6 +134,7 @@ impl HermesAgent {
             conversation: Arc::new(RwLock::new(Vec::new())),
             event_tx: Some(event_tx),
             memory_manager: None,
+            skill_manager: None,
             database,
         }
     }
@@ -138,6 +142,12 @@ impl HermesAgent {
     /// Attach a memory manager for long-term memory injection and session distillation.
     pub fn with_memory_manager(mut self, memory_manager: MemoryManager) -> Self {
         self.memory_manager = Some(memory_manager);
+        self
+    }
+
+    /// Attach a skill manager for available skills injection into the system prompt.
+    pub fn with_skill_manager(mut self, skill_manager: SkillManager) -> Self {
+        self.skill_manager = Some(skill_manager);
         self
     }
 
@@ -392,6 +402,20 @@ impl HermesAgent {
             }
         }
 
+        if let Some(skill_manager) = &self.skill_manager {
+            let skills = skill_manager.list();
+            if !skills.is_empty() {
+                system_prompt.push_str("\n\n<available_skills>\n");
+                for (name, description) in &skills {
+                    system_prompt.push_str(&format!(
+                        "  <skill name=\"{}\">{}</skill>\n",
+                        name, description
+                    ));
+                }
+                system_prompt.push_str("</available_skills>");
+            }
+        }
+
         let context_files = self.load_context_file_prompt();
         if !context_files.trim().is_empty() {
             system_prompt.push_str("\n\n<workspace_context>\n");
@@ -556,7 +580,12 @@ impl HermesAgent {
             merge_stream_tool_call(&mut tool_calls, tc);
         }
 
-        Ok((accumulated_text, accumulated_reasoning, tool_calls, accumulated_extra))
+        Ok((
+            accumulated_text,
+            accumulated_reasoning,
+            tool_calls,
+            accumulated_extra,
+        ))
     }
 
     async fn process_response(
