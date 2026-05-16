@@ -194,6 +194,7 @@ impl Default for HermesConfig {
 pub struct ApiConfig {
     pub provider: Option<String>,
     pub base_url: Option<String>,
+    pub api_key: Option<String>,
     pub api_type: Option<String>,
     pub api_version: Option<String>,
     pub models: Vec<ModelConfig>,
@@ -211,6 +212,7 @@ impl Default for ApiConfig {
         Self {
             provider: None,
             base_url: None,
+            api_key: None,
             api_type: Some("chat_completions".to_string()),
             api_version: None,
             models: Vec::new(),
@@ -2006,6 +2008,48 @@ pub fn known_env_vars() -> Vec<EnvVarInfo> {
             section: EnvSection::Provider,
             advanced: true,
         },
+        EnvVarInfo {
+            name: "COHERE_API_KEY",
+            description: "Cohere API key",
+            default: None,
+            section: EnvSection::Provider,
+            advanced: false,
+        },
+        EnvVarInfo {
+            name: "PERPLEXITY_API_KEY",
+            description: "Perplexity API key",
+            default: None,
+            section: EnvSection::Provider,
+            advanced: false,
+        },
+        EnvVarInfo {
+            name: "HF_API_TOKEN",
+            description: "HuggingFace API token",
+            default: None,
+            section: EnvSection::Provider,
+            advanced: false,
+        },
+        EnvVarInfo {
+            name: "REPLICATE_API_KEY",
+            description: "Replicate API key",
+            default: None,
+            section: EnvSection::Provider,
+            advanced: false,
+        },
+        EnvVarInfo {
+            name: "AI21_API_KEY",
+            description: "AI21 API key",
+            default: None,
+            section: EnvSection::Provider,
+            advanced: false,
+        },
+        EnvVarInfo {
+            name: "STABILITY_API_KEY",
+            description: "Stability AI API key",
+            default: None,
+            section: EnvSection::Provider,
+            advanced: false,
+        },
         // ── Tool env vars ──
         EnvVarInfo {
             name: "TAVILY_API_KEY",
@@ -3139,6 +3183,9 @@ impl CliConfig {
         // Map API settings
         if let Some(base_url) = &self.api.base_url {
             app.client.base_url = base_url.clone();
+        }
+        if let Some(api_key) = &self.api.api_key {
+            app.client.api_key = Some(api_key.clone());
         }
         if let Some(timeout) = self.api.timeout_seconds {
             app.client.timeout_secs = timeout;
