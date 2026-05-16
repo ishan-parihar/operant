@@ -93,7 +93,7 @@ pub use spotify_tool::{
 };
 pub use transcription_tool::TranscriptionTool;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -112,6 +112,8 @@ use crate::schema::ToolSchema;
 pub struct ToolResult {
     /// Tool call ID this result is for
     pub tool_call_id: String,
+    /// Tool name (for API compatibility)
+    pub name: String,
     /// Whether the execution succeeded
     pub success: bool,
     /// Result content (serialized JSON or error message)
@@ -121,12 +123,41 @@ pub struct ToolResult {
     pub error: Option<String>,
 }
 
+impl Default for ToolResult {
+    fn default() -> Self {
+        Self {
+            tool_call_id: String::new(),
+            name: String::new(),
+            success: false,
+            content: String::new(),
+            error: None,
+        }
+    }
+}
+
 impl ToolResult {
     /// Create a successful result
     pub fn success<T: Serialize>(tool_call_id: impl Into<String>, content: T) -> Self {
         let content = serde_json::to_string(&content).unwrap_or_else(|_| "{}".to_string());
         Self {
             tool_call_id: tool_call_id.into(),
+            name: String::new(),
+            success: true,
+            content,
+            error: None,
+        }
+    }
+
+    /// Create a successful result with tool name
+    pub fn success_with_name<T: Serialize>(
+        name: impl Into<String>,
+        tool_call_id: impl Into<String>,
+        content: T,
+    ) -> Self {
+        let content = serde_json::to_string(&content).unwrap_or_else(|_| "{}".to_string());
+        Self {
+            tool_call_id: tool_call_id.into(),
+            name: name.into(),
             success: true,
             content,
             error: None,
@@ -137,6 +168,22 @@ impl ToolResult {
     pub fn error(tool_call_id: impl Into<String>, error: impl Into<String>) -> Self {
         Self {
             tool_call_id: tool_call_id.into(),
+            name: String::new(),
+            success: false,
+            content: String::new(),
+            error: Some(error.into()),
+        }
+    }
+
+    /// Create an error result with tool name
+    pub fn error_with_name(
+        name: impl Into<String>,
+        tool_call_id: impl Into<String>,
+        error: impl Into<String>,
+    ) -> Self {
+        Self {
+            tool_call_id: tool_call_id.into(),
+            name: name.into(),
             success: false,
             content: String::new(),
             error: Some(error.into()),
@@ -148,6 +195,7 @@ impl ToolResult {
         let content = serde_json::to_string(&value).unwrap_or_else(|_| "{}".to_string());
         Self {
             tool_call_id: tool_call_id.into(),
+            name: String::new(),
             success: true,
             content,
             error: None,
@@ -161,32 +209,22 @@ impl ToolResult {
     }
 }
 
-/// Trait for defining a Hermes tool
-///
-/// Tools must provide:
-/// - A unique name
-/// - A description for the LLM
-/// - A JSON Schema for their parameters
-/// - An async execute method
 #[async_trait]
 pub trait HermesTool: Send + Sync {
-    /// Get the tool's unique name
     fn name(&self) -> &str;
 
-    /// Get the tool's description
     fn description(&self) -> &str;
 
-    /// Get the JSON Schema for the tool's parameters
     fn schema(&self) -> ToolSchema;
 
-    /// Execute the tool with the given arguments
-    ///
-    /// # Arguments
-    /// * `args` - JSON object containing the tool arguments
-    /// * `context` - Additional execution context
-    ///
-    /// # Returns
-    /// A `ToolResult` containing the execution outcome
+    fn toolset(&self) -> &str {
+        "builtin"
+    }
+
+    fn is_available(&self) -> bool {
+        true
+    }
+
     async fn execute(&self, args: Value, context: ToolContext) -> ToolResult;
 }
 
@@ -244,11 +282,17 @@ impl ToolExecutor {
         let result = timeout(self.timeout, tool.execute(args, context)).await;
 
         match result {
-            Ok(result) => result,
+            Ok(mut result) => {
+                // Ensure the result has the correct tool_call_id and name
+                result.tool_call_id = tool_call_id;
+                result.name = tool_name;
+                result
+            }
             Err(_) => {
                 warn!(tool = %tool_name, timeout = ?self.timeout, "Tool execution timed out");
-                ToolResult::error(
-                    tool_call_id,
+                ToolResult::error_with_name(
+                    &tool_name,
+                    &tool_call_id,
                     format!("Tool timed out after {:?}", self.timeout),
                 )
             }
@@ -256,27 +300,28 @@ impl ToolExecutor {
     }
 }
 
-/// Registry for managing and executing tools
 pub struct ToolRegistry {
     tools: Arc<RwLock<HashMap<String, Arc<dyn HermesTool>>>>,
+    disabled_names: Arc<RwLock<HashSet<String>>>,
+    disabled_toolsets: Arc<RwLock<HashSet<String>>>,
     executor: ToolExecutor,
     #[allow(dead_code)]
     command_tx: mpsc::Sender<ToolCommand>,
 }
 
 impl ToolRegistry {
-    /// Create a new tool registry
     pub fn new(timeout: Duration) -> Self {
         let tools = Arc::new(RwLock::new(HashMap::new()));
         let (command_tx, command_rx) = mpsc::channel(100);
 
         let registry = Self {
             tools,
+            disabled_names: Arc::new(RwLock::new(HashSet::new())),
+            disabled_toolsets: Arc::new(RwLock::new(HashSet::new())),
             executor: ToolExecutor::new(timeout),
             command_tx,
         };
 
-        // Start the background worker
         let tools_clone = registry.tools.clone();
         let executor = ToolExecutor::new(timeout);
         tokio::spawn(async move {
@@ -286,7 +331,6 @@ impl ToolRegistry {
         registry
     }
 
-    /// Register a tool
     #[instrument(skip(self, tool), fields(tool = % tool.name()))]
     pub async fn register<T: HermesTool + 'static>(&self, tool: T) -> Result<()> {
         let name = tool.name().to_string();
@@ -301,43 +345,107 @@ impl ToolRegistry {
         Ok(())
     }
 
-    /// Get all registered tool schemas
-    pub async fn get_schemas(&self) -> Vec<ToolSchema> {
-        let tools = self.tools.read().await;
-        tools.values().map(|t| t.schema()).collect()
+    pub async fn disable_tool(&self, name: &str) {
+        let mut disabled = self.disabled_names.write().await;
+        disabled.insert(name.to_string());
     }
 
-    /// Get a tool by name
+    pub async fn enable_tool(&self, name: &str) {
+        let mut disabled = self.disabled_names.write().await;
+        disabled.remove(name);
+    }
+
+    pub async fn disable_toolset(&self, toolset: &str) {
+        let mut disabled = self.disabled_toolsets.write().await;
+        disabled.insert(toolset.to_string());
+    }
+
+    pub async fn enable_toolset(&self, toolset: &str) {
+        let mut disabled = self.disabled_toolsets.write().await;
+        disabled.remove(toolset);
+    }
+
+    pub async fn set_disabled_tools(&self, names: HashSet<String>) {
+        let mut disabled = self.disabled_names.write().await;
+        *disabled = names;
+    }
+
+    pub async fn set_disabled_toolsets(&self, toolsets: HashSet<String>) {
+        let mut disabled = self.disabled_toolsets.write().await;
+        *disabled = toolsets;
+    }
+
+    pub async fn get_schemas(&self) -> Vec<ToolSchema> {
+        let tools = self.tools.read().await;
+        let disabled_names = self.disabled_names.read().await;
+        let disabled_toolsets = self.disabled_toolsets.read().await;
+        tools
+            .values()
+            .filter(|t| {
+                if t.is_available() {
+                    !disabled_names.contains(t.name())
+                        && !disabled_toolsets.contains(t.toolset())
+                } else {
+                    false
+                }
+            })
+            .map(|t| t.schema())
+            .collect()
+    }
+
+    pub async fn get_available_schemas_filtered(
+        &self,
+        filter: &[String],
+    ) -> Vec<ToolSchema> {
+        let tools = self.tools.read().await;
+        let disabled_names = self.disabled_names.read().await;
+        let disabled_toolsets = self.disabled_toolsets.read().await;
+        tools
+            .values()
+            .filter(|t| {
+                if !t.is_available() {
+                    return false;
+                }
+                if disabled_names.contains(t.name()) {
+                    return false;
+                }
+                if disabled_toolsets.contains(t.toolset()) {
+                    return false;
+                }
+                if !filter.is_empty() && !filter.contains(&t.name().to_string()) {
+                    return false;
+                }
+                true
+            })
+            .map(|t| t.schema())
+            .collect()
+    }
+
     pub async fn get(&self, name: &str) -> Option<Arc<dyn HermesTool>> {
         let tools = self.tools.read().await;
         tools.get(name).cloned()
     }
 
-    /// Unregister a tool by name
     pub async fn unregister(&self, name: &str) -> bool {
         let mut tools = self.tools.write().await;
         tools.remove(name).is_some()
     }
 
-    /// Check if a tool is registered
     pub async fn contains(&self, name: &str) -> bool {
         let tools = self.tools.read().await;
         tools.contains_key(name)
     }
 
-    /// Get the number of registered tools
     pub async fn len(&self) -> usize {
         let tools = self.tools.read().await;
         tools.len()
     }
 
-    /// Check if no tools are registered
     pub async fn is_empty(&self) -> bool {
         let tools = self.tools.read().await;
         tools.is_empty()
     }
 
-    /// Execute a tool by name with arguments
     #[instrument(skip(self, args, context), fields(tool = % tool_name))]
     pub async fn execute(
         &self,
@@ -371,7 +479,6 @@ impl ToolRegistry {
         }
     }
 
-    /// Execute multiple tools concurrently
     #[allow(dead_code)]
     pub async fn execute_all(
         &self,
@@ -419,7 +526,7 @@ async fn registry_worker(
                             .await
                     }
                     None => {
-                        ToolResult::error(&tool_call_id, format!("Tool '{}' not found", tool_name))
+                        ToolResult::error_with_name(&tool_name, &tool_call_id, format!("Tool '{}' not found", tool_name))
                     }
                 };
 
@@ -469,7 +576,7 @@ mod tests {
                     serde_json::json!({ "result": format!("Processed: {}", query) }),
                 )
             } else {
-                ToolResult::error("call_1", "Missing 'query' argument")
+                ToolResult::error_with_name("test_tool", "call_1", "Missing 'query' argument")
             }
         }
     }

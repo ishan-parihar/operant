@@ -455,6 +455,7 @@ impl HermesTool for SubAgentTool {
                 match self.call_batch(task_params).await {
                     Ok(content) => ToolResult {
                         tool_call_id: TOOL_NAME.to_string(),
+                        name: TOOL_NAME.to_string(),
                         success: true,
                         content,
                         error: None,
@@ -487,6 +488,7 @@ impl HermesTool for SubAgentTool {
             {
                 Ok(content) => ToolResult {
                     tool_call_id: TOOL_NAME.to_string(),
+                    name: TOOL_NAME.to_string(),
                     success: true,
                     content,
                     error: None,

@@ -735,6 +735,14 @@ impl HermesTool for HomeAssistantTool {
          devices (turn on/off, set temperature, etc.). Requires HASS_TOKEN env var."
     }
 
+    fn toolset(&self) -> &str {
+        "smart_home"
+    }
+
+    fn is_available(&self) -> bool {
+        std::env::var("HASS_TOKEN").is_ok() || std::env::var("HASS_URL").is_ok()
+    }
+
     fn schema(&self) -> ToolSchema {
         ToolSchema::from_type::<HomeAssistantArgs>(
             "homeassistant",

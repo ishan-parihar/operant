@@ -12,6 +12,11 @@ fn spotify_token() -> Option<String> {
     std::env::var("HERMES_SPOTIFY_ACCESS_TOKEN").ok()
 }
 
+fn spotify_available() -> bool {
+    std::env::var("HERMES_SPOTIFY_ACCESS_TOKEN").is_ok()
+        || (std::env::var("SPOTIFY_CLIENT_ID").is_ok() && std::env::var("SPOTIFY_CLIENT_SECRET").is_ok())
+}
+
 #[derive(Clone)]
 struct SpotifyClient {
     client: reqwest::Client,
@@ -139,6 +144,12 @@ impl HermesTool for SpotifyPlaybackTool {
     fn description(&self) -> &str {
         "Control Spotify playback: get state, play/pause, next/previous, seek, repeat, shuffle, volume, transfer."
     }
+    fn toolset(&self) -> &str {
+        "media"
+    }
+    fn is_available(&self) -> bool {
+        spotify_available()
+    }
     fn schema(&self) -> ToolSchema {
         ToolSchema::from_type::<PlaybackArgs>(self.name(), self.description())
     }
@@ -248,6 +259,12 @@ impl HermesTool for SpotifyDevicesTool {
     fn description(&self) -> &str {
         "List available Spotify devices for playback."
     }
+    fn toolset(&self) -> &str {
+        "media"
+    }
+    fn is_available(&self) -> bool {
+        spotify_available()
+    }
     fn schema(&self) -> ToolSchema {
         ToolSchema::from_type::<DevicesArgs>(self.name(), self.description())
     }
@@ -289,6 +306,12 @@ impl HermesTool for SpotifyQueueTool {
     }
     fn description(&self) -> &str {
         "View the playback queue or add items to it."
+    }
+    fn toolset(&self) -> &str {
+        "media"
+    }
+    fn is_available(&self) -> bool {
+        spotify_available()
     }
     fn schema(&self) -> ToolSchema {
         ToolSchema::from_type::<QueueArgs>(self.name(), self.description())
@@ -338,6 +361,12 @@ impl HermesTool for SpotifySearchTool {
     }
     fn description(&self) -> &str {
         "Search Spotify for tracks, albums, artists, or playlists."
+    }
+    fn toolset(&self) -> &str {
+        "media"
+    }
+    fn is_available(&self) -> bool {
+        spotify_available()
     }
     fn schema(&self) -> ToolSchema {
         ToolSchema::from_type::<SearchArgs>(self.name(), self.description())
@@ -410,6 +439,12 @@ impl HermesTool for SpotifyPlaylistsTool {
     }
     fn description(&self) -> &str {
         "Manage Spotify playlists: list, view, create, add/remove tracks."
+    }
+    fn toolset(&self) -> &str {
+        "media"
+    }
+    fn is_available(&self) -> bool {
+        spotify_available()
     }
     fn schema(&self) -> ToolSchema {
         ToolSchema::from_type::<PlaylistsArgs>(self.name(), self.description())
@@ -488,6 +523,12 @@ impl HermesTool for SpotifyAlbumsTool {
     fn description(&self) -> &str {
         "Browse your saved albums or view album details and tracks."
     }
+    fn toolset(&self) -> &str {
+        "media"
+    }
+    fn is_available(&self) -> bool {
+        spotify_available()
+    }
     fn schema(&self) -> ToolSchema {
         ToolSchema::from_type::<AlbumsArgs>(self.name(), self.description())
     }
@@ -545,6 +586,12 @@ impl HermesTool for SpotifyLibraryTool {
     }
     fn description(&self) -> &str {
         "Access your Spotify library: saved tracks, albums, and check saved status."
+    }
+    fn toolset(&self) -> &str {
+        "media"
+    }
+    fn is_available(&self) -> bool {
+        spotify_available()
     }
     fn schema(&self) -> ToolSchema {
         ToolSchema::from_type::<LibraryArgs>(self.name(), self.description())
