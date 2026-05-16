@@ -12,6 +12,7 @@
 //!
 //! All tests use only the public API: `hermes_core::tools::*`.
 
+use std::path::PathBuf;
 use std::time::Duration;
 
 use hermes_core::tools::builtin::{
@@ -432,7 +433,10 @@ fn zero_dep_tools() -> Vec<(&'static str, Box<dyn HermesTool>)> {
         ("neutts_synthesize", Box::new(NeuttsSynthTool)),
         ("discord", Box::new(DiscordTool)),
         ("discord_admin", Box::new(DiscordAdminTool)),
-        ("skill_view", Box::new(SkillViewTool)),
+        (
+            "skill_view",
+            Box::new(SkillViewTool::new(PathBuf::from("/tmp"))),
+        ),
         ("mixture_of_agents", Box::new(MixtureOfAgentsTool)),
         ("rl", Box::new(RlTrainingTool)),
         ("spotify_playback", Box::new(SpotifyPlaybackTool)),
@@ -449,7 +453,10 @@ fn zero_dep_tools() -> Vec<(&'static str, Box<dyn HermesTool>)> {
         ("video_analyze", Box::new(VideoAnalysisTool::new())),
         ("transcribe_audio", Box::new(TranscriptionTool::new())),
         ("homeassistant", Box::new(HomeAssistantTool::new())),
-        ("skills_list", Box::new(SkillsTool::new())),
+        (
+            "skills_list",
+            Box::new(SkillsTool::new(PathBuf::from("/tmp"))),
+        ),
     ]
 }
 
