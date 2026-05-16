@@ -30,9 +30,11 @@ pub enum LogsSubcommand {
 
 pub async fn handle_logs_command(config: &AppConfig, cmd: LogsSubcommand) -> Result<()> {
     match cmd {
-        LogsSubcommand::Show { lines, level, component } => {
-            cmd_show(config, lines, level.as_deref(), component.as_deref()).await
-        }
+        LogsSubcommand::Show {
+            lines,
+            level,
+            component,
+        } => cmd_show(config, lines, level.as_deref(), component.as_deref()).await,
         LogsSubcommand::Follow { level } => cmd_follow(config, level.as_deref()).await,
     }
 }
@@ -54,9 +56,10 @@ async fn cmd_show(
     level: Option<&str>,
     component: Option<&str>,
 ) -> Result<()> {
-    let path = log_path(config).context("No log file found. Configure logging.log_file or run Hermes first.")?;
-    let file = fs::File::open(&path)
-        .with_context(|| format!("Failed to open log: {}", path.display()))?;
+    let path = log_path(config)
+        .context("No log file found. Configure logging.log_file or run Hermes first.")?;
+    let file =
+        fs::File::open(&path).with_context(|| format!("Failed to open log: {}", path.display()))?;
     let reader = BufReader::new(file);
     let all_lines: Vec<String> = reader.lines().filter_map(|l| l.ok()).collect();
     let slice: Vec<&String> = all_lines
@@ -67,7 +70,11 @@ async fn cmd_show(
             level_ok && comp_ok
         })
         .collect();
-    let start = if slice.len() > lines { slice.len() - lines } else { 0 };
+    let start = if slice.len() > lines {
+        slice.len() - lines
+    } else {
+        0
+    };
     for line in &slice[start..] {
         println!("{}", line);
     }

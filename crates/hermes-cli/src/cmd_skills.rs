@@ -172,9 +172,9 @@ fn search_skills(config: &AppConfig, query: &str) -> Result<()> {
     }
 
     let mut manager = SkillManager::new(skills_dir.clone());
-    let all = manager.load_all().with_context(|| {
-        format!("Failed to load skills from '{}'", skills_dir.display())
-    })?;
+    let all = manager
+        .load_all()
+        .with_context(|| format!("Failed to load skills from '{}'", skills_dir.display()))?;
 
     let query_lower = query.to_lowercase();
     let matches: Vec<_> = all
@@ -250,10 +250,7 @@ async fn install_skill(config: &AppConfig, source: &str, name: Option<&str>) -> 
             .with_context(|| format!("Failed to download '{}'", source))?;
 
         if !response.status().is_success() {
-            anyhow::bail!(
-                "Download failed with status {}",
-                response.status()
-            );
+            anyhow::bail!("Download failed with status {}", response.status());
         }
 
         let body = response
@@ -275,14 +272,12 @@ async fn install_skill(config: &AppConfig, source: &str, name: Option<&str>) -> 
         let body = std::fs::read_to_string(path)
             .with_context(|| format!("Failed to read '{}'", source))?;
 
-        let derived = name
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| {
-                path.file_stem()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("skill")
-                    .to_string()
-            });
+        let derived = name.map(|s| s.to_string()).unwrap_or_else(|| {
+            path.file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("skill")
+                .to_string()
+        });
 
         (body, derived)
     };
@@ -302,7 +297,10 @@ async fn install_skill(config: &AppConfig, source: &str, name: Option<&str>) -> 
 
 fn uninstall_skill(config: &AppConfig, name: &str) -> Result<()> {
     if !Confirm::new()
-        .with_prompt(format!("Are you sure you want to uninstall skill '{}'?", name))
+        .with_prompt(format!(
+            "Are you sure you want to uninstall skill '{}'?",
+            name
+        ))
         .interact()
         .context("Failed to read confirmation")?
     {
@@ -315,20 +313,14 @@ fn uninstall_skill(config: &AppConfig, name: &str) -> Result<()> {
         .delete(name)
         .with_context(|| format!("Failed to uninstall skill '{}'", name))?;
 
-    println!(
-        "{} Skill '{}' uninstalled.",
-        style("✓").green(),
-        name
-    );
+    println!("{} Skill '{}' uninstalled.", style("✓").green(), name);
     Ok(())
 }
 
 fn update_skill(config: &AppConfig, name: &str) -> Result<()> {
     let skills_dir = &config.skills.root_dir;
     let mut manager = SkillManager::new(skills_dir.clone());
-    manager
-        .load_all()
-        .context("Failed to load skills")?;
+    manager.load_all().context("Failed to load skills")?;
 
     let old_skill = manager
         .get(name)
@@ -336,19 +328,13 @@ fn update_skill(config: &AppConfig, name: &str) -> Result<()> {
         .ok_or_else(|| anyhow::anyhow!("Skill '{}' not found.", name))?;
 
     // Reload from disk to pick up any changes
-    manager
-        .load_all()
-        .context("Failed to reload skills")?;
+    manager.load_all().context("Failed to reload skills")?;
 
     let updated = manager
         .get(name)
         .ok_or_else(|| anyhow::anyhow!("Skill '{}' not found after reload.", name))?;
 
-    println!(
-        "{} Skill '{}' updated.",
-        style("✓").green(),
-        name
-    );
+    println!("{} Skill '{}' updated.", style("✓").green(), name);
     if updated.version != old_skill.version {
         println!(
             "  Version changed: {} → {}",
@@ -451,56 +437,31 @@ fn check_skill(config: &AppConfig, name: &str) -> Result<()> {
             );
         }
     } else {
-        println!(
-            "  {} Platform: any (no restrictions)",
-            style("✓").green()
-        );
+        println!("  {} Platform: any (no restrictions)", style("✓").green());
     }
 
     // Environment variable checks
     if skill.prerequisites_env.is_empty() {
-        println!(
-            "  {} Env vars: none required",
-            style("✓").green()
-        );
+        println!("  {} Env vars: none required", style("✓").green());
     } else {
         for var in &skill.prerequisites_env {
             if std::env::var(var).is_ok() {
-                println!(
-                    "  {} Env var '{}': set",
-                    style("✓").green(),
-                    var
-                );
+                println!("  {} Env var '{}': set", style("✓").green(), var);
             } else {
-                println!(
-                    "  {} Env var '{}': NOT set",
-                    style("✗").red(),
-                    var
-                );
+                println!("  {} Env var '{}': NOT set", style("✗").red(), var);
             }
         }
     }
 
     // Command checks
     if skill.prerequisites_commands.is_empty() {
-        println!(
-            "  {} Commands: none required",
-            style("✓").green()
-        );
+        println!("  {} Commands: none required", style("✓").green());
     } else {
         for cmd in &skill.prerequisites_commands {
             if command_exists(cmd) {
-                println!(
-                    "  {} Command '{}': found",
-                    style("✓").green(),
-                    cmd
-                );
+                println!("  {} Command '{}': found", style("✓").green(), cmd);
             } else {
-                println!(
-                    "  {} Command '{}': NOT found",
-                    style("✗").red(),
-                    cmd
-                );
+                println!("  {} Command '{}': NOT found", style("✗").red(), cmd);
             }
         }
     }
@@ -684,20 +645,11 @@ fn reset_skill(config: &AppConfig, name: &str) -> Result<()> {
         .create(name, &content)
         .with_context(|| format!("Failed to re-create skill '{}'", name))?;
 
-    println!(
-        "{} Skill '{}' has been reset.",
-        style("✓").green(),
-        name
-    );
+    println!("{} Skill '{}' has been reset.", style("✓").green(), name);
     Ok(())
 }
 
-fn publish_skill(
-    config: &AppConfig,
-    name: &str,
-    description: &str,
-    version: &str,
-) -> Result<()> {
+fn publish_skill(config: &AppConfig, name: &str, description: &str, version: &str) -> Result<()> {
     let mut manager = SkillManager::new(config.skills.root_dir.clone());
     manager.load_all().context("Failed to load skills")?;
 
@@ -722,8 +674,7 @@ fn publish_skill(
         .root_dir
         .join(format!("{}.manifest.json", name));
 
-    let json = serde_json::to_string_pretty(&manifest)
-        .context("Failed to serialize manifest")?;
+    let json = serde_json::to_string_pretty(&manifest).context("Failed to serialize manifest")?;
 
     std::fs::write(&manifest_path, &json)
         .with_context(|| format!("Failed to write manifest to '{}'", manifest_path.display()))?;
@@ -746,9 +697,8 @@ fn snapshot_skill(config: &AppConfig, name: &str, output: Option<&str>) -> Resul
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(format!("{}.tar.gz", name)));
 
-    let file =
-        std::fs::File::create(&output_path)
-            .with_context(|| format!("Failed to create '{}'", output_path.display()))?;
+    let file = std::fs::File::create(&output_path)
+        .with_context(|| format!("Failed to create '{}'", output_path.display()))?;
 
     let gz = flate2::write::GzEncoder::new(file, flate2::Compression::default());
     let mut tar = tar::Builder::new(gz);
@@ -775,11 +725,10 @@ fn handle_tap_command(config: &AppConfig, cmd: TapCommand) -> Result<()> {
                 println!("No taps configured.");
                 return Ok(());
             }
-            let raw = std::fs::read_to_string(&taps_path)
-                .context("Failed to read taps.json")?;
+            let raw = std::fs::read_to_string(&taps_path).context("Failed to read taps.json")?;
 
-            let taps: HashMap<String, String> = serde_json::from_str(&raw)
-                .context("Failed to parse taps.json")?;
+            let taps: HashMap<String, String> =
+                serde_json::from_str(&raw).context("Failed to parse taps.json")?;
 
             if taps.is_empty() {
                 println!("No taps configured.");
@@ -791,55 +740,40 @@ fn handle_tap_command(config: &AppConfig, cmd: TapCommand) -> Result<()> {
             }
         }
         TapCommand::Add { source, alias } => {
-            let alias = alias
-                .unwrap_or_else(|| derive_name_from_url(&source));
+            let alias = alias.unwrap_or_else(|| derive_name_from_url(&source));
 
             let mut taps: HashMap<String, String> = if taps_path.exists() {
-                let raw = std::fs::read_to_string(&taps_path)
-                    .context("Failed to read taps.json")?;
+                let raw =
+                    std::fs::read_to_string(&taps_path).context("Failed to read taps.json")?;
                 serde_json::from_str(&raw).unwrap_or_default()
             } else {
                 HashMap::new()
             };
 
             taps.insert(alias.clone(), source.clone());
-            let json = serde_json::to_string_pretty(&taps)
-                .context("Failed to serialize taps")?;
-            std::fs::write(&taps_path, &json)
-                .context("Failed to write taps.json")?;
+            let json = serde_json::to_string_pretty(&taps).context("Failed to serialize taps")?;
+            std::fs::write(&taps_path, &json).context("Failed to write taps.json")?;
 
-            println!(
-                "{} Tap added: {} → {}",
-                style("✓").green(),
-                alias,
-                source
-            );
+            println!("{} Tap added: {} → {}", style("✓").green(), alias, source);
         }
         TapCommand::Remove { name } => {
             if !taps_path.exists() {
                 anyhow::bail!("No taps configured.");
             }
 
-            let raw = std::fs::read_to_string(&taps_path)
-                .context("Failed to read taps.json")?;
+            let raw = std::fs::read_to_string(&taps_path).context("Failed to read taps.json")?;
 
-            let mut taps: HashMap<String, String> = serde_json::from_str(&raw)
-                .context("Failed to parse taps.json")?;
+            let mut taps: HashMap<String, String> =
+                serde_json::from_str(&raw).context("Failed to parse taps.json")?;
 
             if taps.remove(&name).is_none() {
                 anyhow::bail!("Tap '{}' not found.", name);
             }
 
-            let json = serde_json::to_string_pretty(&taps)
-                .context("Failed to serialize taps")?;
-            std::fs::write(&taps_path, &json)
-                .context("Failed to write taps.json")?;
+            let json = serde_json::to_string_pretty(&taps).context("Failed to serialize taps")?;
+            std::fs::write(&taps_path, &json).context("Failed to write taps.json")?;
 
-            println!(
-                "{} Tap removed: {}",
-                style("✓").green(),
-                name
-            );
+            println!("{} Tap removed: {}", style("✓").green(), name);
         }
     }
 
@@ -894,10 +828,7 @@ fn reconstruct_skill_md(skill: &hermes_core::skills::Skill) -> String {
     front.push_str(&format!("version: {}\n", skill.version));
 
     if !skill.platforms.is_empty() {
-        front.push_str(&format!(
-            "platforms: [{}]\n",
-            skill.platforms.join(", ")
-        ));
+        front.push_str(&format!("platforms: [{}]\n", skill.platforms.join(", ")));
     }
     if !skill.prerequisites_env.is_empty() {
         front.push_str(&format!(

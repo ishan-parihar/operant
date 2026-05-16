@@ -95,57 +95,111 @@ pub async fn handle_claw_command(config: &AppConfig, cmd: ClawSubcommand) -> Res
     }
 }
 
-fn openclaw_dir(source: &Option<String>) -> PathBuf {
-    match source {
-        Some(path) => PathBuf::from(path),
-        None => dirs::home_dir()
-            .map(|h| h.join(".openclaw"))
-            .unwrap_or_else(|| PathBuf::from(".openclaw")),
-    }
+fn skills_dir(config: &AppConfig) -> PathBuf {
+    config.skills.root_dir.clone()
 }
 
 async fn cmd_migrate(
-    _config: &AppConfig,
+    config: &AppConfig,
     source: Option<String>,
     dry_run: bool,
     _preset: Option<String>,
-    _overwrite: bool,
+    overwrite: bool,
     _migrate_secrets: bool,
     _no_backup: bool,
     _workspace_target: Option<String>,
     _skill_conflict: Option<String>,
     _yes: bool,
 ) -> Result<()> {
-    let claw_dir = openclaw_dir(&source);
+    let claw_dir = match crate::claw_migrate::detect_openclaw(source.as_deref()) {
+        Some(dir) => dir,
+        None => {
+            println!("No OpenClaw directory found.");
+            println!("Nothing to migrate.");
+            return Ok(());
+        }
+    };
 
-    if !claw_dir.exists() {
-        println!("No OpenClaw directory found at: {}", claw_dir.display());
-        println!("Nothing to migrate.");
+    let target_skills = skills_dir(config);
+
+    let items = crate::claw_migrate::scan_openclaw(&claw_dir)?;
+    println!("Found OpenClaw directory: {}", claw_dir.display());
+    if items.is_empty() {
+        println!("No migratable items found (expected: skills/, config/, etc.).");
         return Ok(());
     }
-
-    println!("Found OpenClaw directory: {}", claw_dir.display());
+    println!("Discovered items: {}", items.join(", "));
 
     if dry_run {
-        println!("[DRY RUN] Would migrate from: {}", claw_dir.display());
-        println!("[DRY RUN] The Python migration script is available at:");
+        println!();
+        println!("[DRY RUN] Preview of migration:");
+        let result = crate::claw_migrate::dry_run_migrate(&claw_dir, &target_skills)?;
+        for item in &result.migrated {
+            println!(
+                "  {}  [{}]  ->  {}",
+                item.status, item.item_type, item.source
+            );
+        }
+        println!();
         println!(
-            "[DRY RUN]   <hermes-repo>/scripts/claw_migrate.py --source {}",
-            claw_dir.display()
+            "Skills would be imported to: {}/openclaw-imported",
+            target_skills.display()
         );
         return Ok(());
     }
 
-    println!(
-        "To complete the migration, run the Python migration script:"
-    );
-    println!(
-        "  python3 scripts/claw_migrate.py --source {}",
-        claw_dir.display()
-    );
     println!();
-    println!("This script will transfer your Claw configuration, skills,");
-    println!("workspaces, and data into the Hermes format.");
+    println!("Migrating OpenClaw skills...");
+    println!("  Source:      {}/skills", claw_dir.display());
+    println!(
+        "  Destination: {}/openclaw-imported",
+        target_skills.display()
+    );
+
+    let result = crate::claw_migrate::migrate_skills(&claw_dir, &target_skills, overwrite)?;
+
+    let migrated_count = result
+        .migrated
+        .iter()
+        .filter(|i| i.status == "migrated")
+        .count();
+    let skipped_count = result
+        .migrated
+        .iter()
+        .filter(|i| i.status.starts_with("skipped"))
+        .count();
+    let error_count = result.errors.len();
+
+    println!();
+    if migrated_count > 0 {
+        println!("✅ Migrated {} skill(s).", migrated_count);
+        for item in result.migrated.iter().filter(|i| i.status == "migrated") {
+            println!("   - {}", item.source);
+        }
+    }
+    if skipped_count > 0 {
+        println!(
+            "⏭️  Skipped {} skill(s) (already exist, use --overwrite to replace).",
+            skipped_count
+        );
+    }
+    if error_count > 0 {
+        println!("❌ {} error(s) during migration:", error_count);
+        for err in &result.errors {
+            println!("   - {}", err);
+        }
+    }
+
+    if migrated_count == 0 && error_count == 0 {
+        println!("No skills found in the OpenClaw skills directory.");
+    }
+
+    println!();
+    println!(
+        "Migration complete. Skills are available in: {}/openclaw-imported",
+        target_skills.display()
+    );
+    println!("You can run `hermes claw cleanup` to remove the OpenClaw directory after verifying.");
 
     Ok(())
 }
@@ -156,29 +210,36 @@ async fn cmd_cleanup(
     dry_run: bool,
     _yes: bool,
 ) -> Result<()> {
-    let claw_dir = openclaw_dir(&source);
-
-    if !claw_dir.exists() {
-        println!("No OpenClaw directory found at: {}", claw_dir.display());
-        println!("Nothing to clean up.");
-        return Ok(());
-    }
+    let claw_dir = match crate::claw_migrate::detect_openclaw(source.as_deref()) {
+        Some(dir) => dir,
+        None => {
+            println!("No OpenClaw directory found at ~/.openclaw.");
+            println!("Nothing to clean up.");
+            return Ok(());
+        }
+    };
 
     println!("OpenClaw directory: {}", claw_dir.display());
+    println!();
 
+    let messages = crate::claw_migrate::cleanup_openclaw(&claw_dir, dry_run)?;
     if dry_run {
-        println!("[DRY RUN] Would clean up the following:");
-        println!("[DRY RUN]   - {}", claw_dir.display());
-        println!("[DRY RUN]   - Backup files in the Hermes workspace");
-        println!("[DRY RUN]   - Temporary migration artifacts");
+        println!("[DRY RUN] Would perform the following:");
+        for msg in &messages {
+            println!("  {}", msg);
+        }
+        println!();
+        println!("The OpenClaw directory will be MOVED to a backup location,");
+        println!("not permanently deleted. You can restore it if needed.");
         return Ok(());
     }
 
-    println!("Cleanup of old Claw data is available via:");
-    println!("  python3 scripts/claw_cleanup.py --source {}", claw_dir.display());
+    for msg in &messages {
+        println!("{}", msg);
+    }
     println!();
-    println!("This will remove old Claw configuration, backup files,");
-    println!("and temporary migration artifacts.");
+    println!("✅ OpenClaw directory has been backed up and removed.");
+    println!("Your original ~/.openclaw was moved to ~/.openclaw.backup");
 
     Ok(())
 }

@@ -60,10 +60,7 @@ pub enum SessionsSubcommand {
 }
 
 /// Dispatch a sessions subcommand.
-pub async fn handle_sessions_command(
-    config: &AppConfig,
-    cmd: SessionsSubcommand,
-) -> Result<()> {
+pub async fn handle_sessions_command(config: &AppConfig, cmd: SessionsSubcommand) -> Result<()> {
     match cmd {
         SessionsSubcommand::List => cmd_list(config).await,
         SessionsSubcommand::Show { id } => cmd_show(config, &id).await,
@@ -76,19 +73,14 @@ pub async fn handle_sessions_command(
             older_than_days,
             force,
         } => cmd_prune(config, older_than_days, force).await,
-        SessionsSubcommand::Rename { id, title } => {
-            cmd_rename(config, &id, &title).await
-        }
+        SessionsSubcommand::Rename { id, title } => cmd_rename(config, &id, &title).await,
         SessionsSubcommand::Browse => cmd_browse(config).await,
     }
 }
 
 async fn cmd_list(config: &AppConfig) -> Result<()> {
-    let db = Database::init(config.database_path.clone())
-        .context("Failed to open database")?;
-    let sessions = db
-        .list_sessions(20)
-        .context("Failed to list sessions")?;
+    let db = Database::init(config.database_path.clone()).context("Failed to open database")?;
+    let sessions = db.list_sessions(20).context("Failed to list sessions")?;
 
     if sessions.is_empty() {
         println!("No sessions found.");
@@ -122,8 +114,7 @@ async fn cmd_list(config: &AppConfig) -> Result<()> {
 }
 
 async fn cmd_show(config: &AppConfig, id: &str) -> Result<()> {
-    let db = Database::init(config.database_path.clone())
-        .context("Failed to open database")?;
+    let db = Database::init(config.database_path.clone()).context("Failed to open database")?;
     let messages = db
         .get_session_messages(id)
         .context("Failed to get session messages")?;
@@ -149,17 +140,14 @@ async fn cmd_show(config: &AppConfig, id: &str) -> Result<()> {
 }
 
 async fn cmd_delete(config: &AppConfig, id: &str) -> Result<()> {
-    let db = Database::init(config.database_path.clone())
-        .context("Failed to open database")?;
-    db.delete_session(id)
-        .context("Failed to delete session")?;
+    let db = Database::init(config.database_path.clone()).context("Failed to open database")?;
+    db.delete_session(id).context("Failed to delete session")?;
     println!("Session '{}' deleted successfully.", id);
     Ok(())
 }
 
 async fn cmd_stats(config: &AppConfig) -> Result<()> {
-    let db = Database::init(config.database_path.clone())
-        .context("Failed to open database")?;
+    let db = Database::init(config.database_path.clone()).context("Failed to open database")?;
     let session_count = db
         .get_session_count()
         .context("Failed to get session count")?;
@@ -170,10 +158,7 @@ async fn cmd_stats(config: &AppConfig) -> Result<()> {
     if let Ok(meta) = std::fs::metadata(&config.database_path) {
         let size = meta.len();
         if size >= 1_000_000_000 {
-            println!(
-                "Database size: {:.2} GB",
-                size as f64 / 1_000_000_000.0
-            );
+            println!("Database size: {:.2} GB", size as f64 / 1_000_000_000.0);
         } else if size >= 1_000_000 {
             println!("Database size: {:.2} MB", size as f64 / 1_000_000.0);
         } else if size >= 1_000 {
@@ -186,9 +171,13 @@ async fn cmd_stats(config: &AppConfig) -> Result<()> {
     Ok(())
 }
 
-async fn cmd_export(config: &AppConfig, id: &str, output: Option<String>, format: &str) -> Result<()> {
-    let db = Database::init(config.database_path.clone())
-        .context("Failed to open database")?;
+async fn cmd_export(
+    config: &AppConfig,
+    id: &str,
+    output: Option<String>,
+    format: &str,
+) -> Result<()> {
+    let db = Database::init(config.database_path.clone()).context("Failed to open database")?;
     let messages = db
         .get_session_messages(id)
         .context("Failed to get session messages")?;
@@ -244,8 +233,7 @@ async fn cmd_export(config: &AppConfig, id: &str, output: Option<String>, format
 }
 
 async fn cmd_prune(config: &AppConfig, older_than_days: u64, force: bool) -> Result<()> {
-    let db = Database::init(config.database_path.clone())
-        .context("Failed to open database")?;
+    let db = Database::init(config.database_path.clone()).context("Failed to open database")?;
     let sessions = db
         .list_sessions(10_000)
         .context("Failed to list sessions")?;
@@ -301,8 +289,7 @@ async fn cmd_prune(config: &AppConfig, older_than_days: u64, force: bool) -> Res
 }
 
 async fn cmd_rename(config: &AppConfig, id: &str, title: &str) -> Result<()> {
-    let db = Database::init(config.database_path.clone())
-        .context("Failed to open database")?;
+    let db = Database::init(config.database_path.clone()).context("Failed to open database")?;
     db.update_session_title(id, title)
         .with_context(|| format!("Failed to rename session '{}'", id))?;
     println!("Session '{}' renamed to '{}'", id, title);
@@ -310,8 +297,7 @@ async fn cmd_rename(config: &AppConfig, id: &str, title: &str) -> Result<()> {
 }
 
 async fn cmd_browse(config: &AppConfig) -> Result<()> {
-    let db = Database::init(config.database_path.clone())
-        .context("Failed to open database")?;
+    let db = Database::init(config.database_path.clone()).context("Failed to open database")?;
     let sessions = db.list_sessions(50).context("Failed to list sessions")?;
 
     if sessions.is_empty() {
@@ -329,7 +315,13 @@ async fn cmd_browse(config: &AppConfig) -> Result<()> {
             } else {
                 title.to_string()
             };
-            format!("{} | {:.8} | {} ({} msgs)", i + 1, s.id, display_title, s.message_count)
+            format!(
+                "{} | {:.8} | {} ({} msgs)",
+                i + 1,
+                s.id,
+                display_title,
+                s.message_count
+            )
         })
         .collect();
 

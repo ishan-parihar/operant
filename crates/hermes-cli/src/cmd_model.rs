@@ -80,7 +80,11 @@ pub async fn handle_model_command(config: &AppConfig, cmd: ModelSubcommand) -> R
 /// Print the current model configuration to stdout.
 fn show_model(config: &AppConfig) -> Result<()> {
     let provider = infer_provider(&config.client.base_url);
-    let stream_label = if config.agent.stream { "enabled" } else { "disabled" };
+    let stream_label = if config.agent.stream {
+        "enabled"
+    } else {
+        "disabled"
+    };
     let api_key_label = if config.client.api_key.is_some() {
         "configured"
     } else {

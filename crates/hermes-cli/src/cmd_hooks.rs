@@ -69,7 +69,11 @@ fn cmd_list() -> Result<()> {
                     chrono_or_epoch(secs)
                 })
                 .unwrap_or_else(|| "unknown".to_string());
-            println!("  {:<30}  last modified: {}", name.trim_end_matches(".hook"), modified);
+            println!(
+                "  {:<30}  last modified: {}",
+                name.trim_end_matches(".hook"),
+                modified
+            );
         }
     }
     Ok(())

@@ -45,7 +45,10 @@ async fn cmd_remove(_config: &AppConfig, full: bool, yes: bool) -> Result<()> {
 
     remove_dir(&hermes_core::platform::hermes_data_dir(), "data directory")?;
     if full {
-        remove_dir(&hermes_core::platform::hermes_config_dir(), "config directory")?;
+        remove_dir(
+            &hermes_core::platform::hermes_config_dir(),
+            "config directory",
+        )?;
     }
     Ok(())
 }

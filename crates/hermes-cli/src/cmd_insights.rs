@@ -23,9 +23,10 @@ pub async fn handle_insights_command(config: &AppConfig, cmd: InsightsSubcommand
 }
 
 async fn cmd_sessions(config: &AppConfig, _days: u64) -> Result<()> {
-    let db = Database::init(config.database_path.clone())
-        .context("Failed to open database")?;
-    let total = db.get_session_count().context("Failed to get session count")?;
+    let db = Database::init(config.database_path.clone()).context("Failed to open database")?;
+    let total = db
+        .get_session_count()
+        .context("Failed to get session count")?;
     println!("Total sessions: {}", total);
     let sessions = db.list_sessions(50).context("Failed to list sessions")?;
     if sessions.is_empty() {

@@ -176,8 +176,8 @@ fn read_profile(name: &str) -> Result<Profile> {
     let path = profile_path(name);
     let content = std::fs::read_to_string(&path)
         .with_context(|| format!("Failed to read profile '{name}'"))?;
-    let profile: Profile = toml::from_str(&content)
-        .with_context(|| format!("Failed to parse profile '{name}'"))?;
+    let profile: Profile =
+        toml::from_str(&content).with_context(|| format!("Failed to parse profile '{name}'"))?;
     Ok(profile)
 }
 
@@ -306,10 +306,7 @@ pub async fn handle_profile_command(config: &AppConfig, cmd: ProfileSubcommand) 
         ProfileSubcommand::Use { name } => cmd_use(name),
         ProfileSubcommand::Delete { name } => cmd_delete(name),
         ProfileSubcommand::Alias { name, alias } => cmd_alias(name, alias),
-        ProfileSubcommand::Rename {
-            old_name,
-            new_name,
-        } => cmd_rename(old_name, new_name),
+        ProfileSubcommand::Rename { old_name, new_name } => cmd_rename(old_name, new_name),
         ProfileSubcommand::Export { name, output } => cmd_export(name, output),
         ProfileSubcommand::Import { path, name } => cmd_import(path, name),
         ProfileSubcommand::Install { name, source } => cmd_install(config, name, source),
@@ -545,10 +542,7 @@ fn cmd_export(name: String, output: Option<PathBuf>) -> Result<()> {
     std::fs::write(&output_path, &content)
         .with_context(|| format!("Failed to write to '{}'", output_path.display()))?;
 
-    println!(
-        "Exported profile '{name}' to {}",
-        output_path.display()
-    );
+    println!("Exported profile '{name}' to {}", output_path.display());
     Ok(())
 }
 
@@ -643,8 +637,8 @@ fn cmd_update(name: Option<String>) -> Result<()> {
     }
 
     for n in &names {
-        let mut profile = read_profile(n)
-            .with_context(|| format!("Failed to read profile '{n}'"))?;
+        let mut profile =
+            read_profile(n).with_context(|| format!("Failed to read profile '{n}'"))?;
         profile.updated_at = iso_timestamp_now();
         write_profile(&profile)?;
         println!("Updated profile '{n}'");

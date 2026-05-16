@@ -41,8 +41,12 @@ pub enum McpSubcommand {
         /// Name of the MCP server to test
         name: String,
     },
-    /// Run Hermes as an MCP server (stub)
-    Serve,
+    /// Run Hermes as an MCP server over stdio
+    Serve {
+        /// Enable verbose logging to stderr
+        #[arg(long, short)]
+        verbose: bool,
+    },
     /// Login to an MCP server (OAuth flow)
     Login {
         /// MCP server name
@@ -94,7 +98,7 @@ pub async fn handle_mcp_command(
         } => handle_add(config, mcp_manager, name, url, command, args, env).await,
         McpSubcommand::Remove { name } => handle_remove(name),
         McpSubcommand::Test { name } => handle_test(config, mcp_manager, name).await,
-        McpSubcommand::Serve => handle_serve(),
+        McpSubcommand::Serve { verbose } => handle_serve(config, verbose).await,
         McpSubcommand::Login {
             name,
             auth_url,
@@ -144,15 +148,22 @@ fn handle_list(config: &AppConfig) -> Result<()> {
             McpTransportKind::Stdio => server.command.as_deref().unwrap_or("-"),
         };
 
-        println!("{:<20} {:<10} {:<8} {:<40}", server.name, transport, enabled, endpoint);
+        println!(
+            "{:<20} {:<10} {:<8} {:<40}",
+            server.name, transport, enabled, endpoint
+        );
     }
 
     println!();
-    println!("Autoload: {}", if config.mcp.autoload { "enabled" } else { "disabled" });
     println!(
-        "Total servers: {}",
-        config.mcp.servers.len()
+        "Autoload: {}",
+        if config.mcp.autoload {
+            "enabled"
+        } else {
+            "disabled"
+        }
     );
+    println!("Total servers: {}", config.mcp.servers.len());
 
     Ok(())
 }
@@ -182,15 +193,15 @@ async fn handle_add(
             anyhow::bail!("Provide either --url <URL> (for HTTP transport) or --command <CMD> (for stdio transport).");
         }
         (Some(url_val), None) => {
-            println!("Testing connection to HTTP MCP server '{}' at {} ...", name, url_val);
+            println!(
+                "Testing connection to HTTP MCP server '{}' at {} ...",
+                name, url_val
+            );
 
             mcp_manager
                 .add_server(&name, url_val.clone(), None)
                 .await
-                .context(format!(
-                    "Failed to connect to MCP server at {}",
-                    url_val
-                ))?;
+                .context(format!("Failed to connect to MCP server at {}", url_val))?;
 
             if let Some(transport) = mcp_manager.get(&name).await {
                 let tools = transport.get_tools().await;
@@ -228,10 +239,7 @@ async fn handle_add(
             mcp_manager
                 .add_stdio_server(&name, cmd.clone(), args.clone(), env_map.clone())
                 .await
-                .context(format!(
-                    "Failed to connect to stdio MCP server '{}'",
-                    cmd
-                ))?;
+                .context(format!("Failed to connect to stdio MCP server '{}'", cmd))?;
 
             if let Some(transport) = mcp_manager.get(&name).await {
                 let tools = transport.get_tools().await;
@@ -285,11 +293,7 @@ fn handle_remove(name: String) -> Result<()> {
     Ok(())
 }
 
-async fn handle_test(
-    config: &AppConfig,
-    mcp_manager: &McpManager,
-    name: String,
-) -> Result<()> {
+async fn handle_test(config: &AppConfig, mcp_manager: &McpManager, name: String) -> Result<()> {
     let server = config
         .mcp
         .servers
@@ -299,7 +303,10 @@ async fn handle_test(
 
     println!("Testing MCP server '{}' ...", name);
     println!("  Transport:  {:?}", server.transport);
-    println!("  Enabled:    {}", if server.enabled { "yes" } else { "no" });
+    println!(
+        "  Enabled:    {}",
+        if server.enabled { "yes" } else { "no" }
+    );
 
     match server.transport {
         McpTransportKind::Http => {
@@ -361,8 +368,15 @@ async fn handle_test(
     Ok(())
 }
 
-fn handle_serve() -> Result<()> {
-    println!("MCP server mode not yet implemented — use `hermes mcp serve` from the Python version");
+async fn handle_serve(config: &AppConfig, verbose: bool) -> Result<()> {
+    println!("Starting Hermes MCP server over stdio...");
+    println!("Protocol: MCP 2024-11-05");
+    println!("Listening for JSON-RPC requests on stdin...");
+    if verbose {
+        println!("Verbose mode enabled.");
+    }
+    crate::mcp_serve::run_mcp_serve(config, verbose).await?;
+    println!("MCP server shut down gracefully.");
     Ok(())
 }
 
@@ -384,7 +398,9 @@ fn handle_mcp_login(
             println!("  Server:       {}", srv.name);
             println!("  Transport:    {:?}", srv.transport);
 
-            let url = auth_url.as_deref().unwrap_or(srv.url.as_deref().unwrap_or("unknown"));
+            let url = auth_url
+                .as_deref()
+                .unwrap_or(srv.url.as_deref().unwrap_or("unknown"));
             println!();
             println!("  To complete the OAuth flow:");
             println!("    1. Visit: {}", url);
@@ -393,7 +409,10 @@ fn handle_mcp_login(
             }
             println!();
             println!("    3. After authorization, you will receive a callback with an auth code.");
-            println!("    4. Use `hermes mcp configure {} --auth-token <token>` to set the token.", name);
+            println!(
+                "    4. Use `hermes mcp configure {} --auth-token <token>` to set the token.",
+                name
+            );
         }
         None => {
             println!("MCP server '{}' is not configured.", name);
@@ -480,7 +499,10 @@ fn handle_mcp_configure(
         println!("No settings were provided to update.");
         println!("  Usage: hermes mcp configure {} --auth-token <token> --url <url> --command <cmd> --args <args>", name);
     } else {
-        println!("Updated MCP server '{}' configuration for this session:", name);
+        println!(
+            "Updated MCP server '{}' configuration for this session:",
+            name
+        );
         for setting in &changed {
             println!("  • {}", setting);
         }

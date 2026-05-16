@@ -7,7 +7,12 @@ pub async fn handle_version_command(_config: &AppConfig, detailed: bool) -> Resu
         println!("hermes {}", env!("CARGO_PKG_VERSION"));
         println!("OS: {}", info.os);
         println!("Arch: {}", info.arch);
-        let shell_name = info.shell.path.file_stem().and_then(|s| s.to_str()).unwrap_or("unknown");
+        let shell_name = info
+            .shell
+            .path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("unknown");
         println!("Shell: {}", shell_name);
         if cfg!(debug_assertions) {
             println!("Build: debug");

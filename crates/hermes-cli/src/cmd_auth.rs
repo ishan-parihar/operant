@@ -103,18 +103,119 @@ pub enum FallbackSubcommand {
 // ---------------------------------------------------------------------------
 
 /// Static mapping of well-known provider names to their environment variable
-/// names.  Used by `list`, `status`, and `seed` operations.
-const PROVIDER_ENV_VARS: &[(&str, &str)] = &[
-    ("openai", "OPENAI_API_KEY"),
-    ("anthropic", "ANTHROPIC_API_KEY"),
-    ("azure", "AZURE_OPENAI_API_KEY"),
-    ("groq", "GROQ_API_KEY"),
-    ("mistral", "MISTRAL_API_KEY"),
-    ("cohere", "COHERE_API_KEY"),
-    ("deepseek", "DEEPSEEK_API_KEY"),
-    ("openrouter", "OPENROUTER_API_KEY"),
-    ("together", "TOGETHER_API_KEY"),
-    ("google", "GOOGLE_API_KEY"),
+/// names, a human-readable description, and a signup URL.  Used by `list`,
+/// `status`, `seed`, and `login` operations.
+const PROVIDER_ENV_VARS: &[(&str, &str, &str, &str)] = &[
+    (
+        "openai",
+        "OPENAI_API_KEY",
+        "OpenAI API key",
+        "https://platform.openai.com/api-keys",
+    ),
+    (
+        "anthropic",
+        "ANTHROPIC_API_KEY",
+        "Anthropic API key",
+        "https://console.anthropic.com/",
+    ),
+    (
+        "google",
+        "GOOGLE_API_KEY",
+        "Google AI API key",
+        "https://aistudio.google.com/",
+    ),
+    ("xai", "XAI_API_KEY", "xAI API key", "https://console.x.ai/"),
+    (
+        "mistral",
+        "MISTRAL_API_KEY",
+        "Mistral API key",
+        "https://console.mistral.ai/",
+    ),
+    (
+        "groq",
+        "GROQ_API_KEY",
+        "Groq API key",
+        "https://console.groq.com/",
+    ),
+    (
+        "deepseek",
+        "DEEPSEEK_API_KEY",
+        "DeepSeek API key",
+        "https://platform.deepseek.com/",
+    ),
+    (
+        "together",
+        "TOGETHER_API_KEY",
+        "Together AI API key",
+        "https://api.together.xyz/",
+    ),
+    (
+        "openrouter",
+        "OPENROUTER_API_KEY",
+        "OpenRouter API key",
+        "https://openrouter.ai/",
+    ),
+    (
+        "nvidia",
+        "NVIDIA_API_KEY",
+        "NVIDIA API key",
+        "https://build.nvidia.com/",
+    ),
+    (
+        "cohere",
+        "COHERE_API_KEY",
+        "Cohere API key",
+        "https://dashboard.cohere.com/",
+    ),
+    (
+        "perplexity",
+        "PERPLEXITY_API_KEY",
+        "Perplexity API key",
+        "https://www.perplexity.ai/settings/api",
+    ),
+    (
+        "azure",
+        "AZURE_OPENAI_API_KEY",
+        "Azure OpenAI API key",
+        "https://portal.azure.com/",
+    ),
+    (
+        "bedrock",
+        "AWS_ACCESS_KEY_ID",
+        "AWS Access Key ID (for Bedrock)",
+        "https://aws.amazon.com/bedrock/",
+    ),
+    (
+        "huggingface",
+        "HF_API_TOKEN",
+        "HuggingFace API token",
+        "https://huggingface.co/settings/tokens",
+    ),
+    ("ollama", "", "Ollama (local, no API key needed)", ""),
+    (
+        "replicate",
+        "REPLICATE_API_KEY",
+        "Replicate API key",
+        "https://replicate.com/account",
+    ),
+    (
+        "ai21",
+        "AI21_API_KEY",
+        "AI21 API key",
+        "https://www.ai21.com/",
+    ),
+    (
+        "stabilityai",
+        "STABILITY_API_KEY",
+        "Stability AI API key",
+        "https://platform.stability.ai/",
+    ),
+    (
+        "elevenlabs",
+        "ELEVENLABS_API_KEY",
+        "ElevenLabs API key",
+        "https://elevenlabs.io/",
+    ),
 ];
 
 // ---------------------------------------------------------------------------
@@ -125,9 +226,11 @@ const PROVIDER_ENV_VARS: &[(&str, &str)] = &[
 pub async fn handle_auth_command(config: &AppConfig, cmd: AuthSubcommand) -> Result<()> {
     match cmd {
         AuthSubcommand::List => handle_auth_list(config),
-        AuthSubcommand::Add { provider, key, label } => {
-            handle_auth_add(&provider, &key, label.as_deref())
-        }
+        AuthSubcommand::Add {
+            provider,
+            key,
+            label,
+        } => handle_auth_add(&provider, &key, label.as_deref()),
         AuthSubcommand::Remove { provider } => handle_auth_remove(&provider),
         AuthSubcommand::Reset => handle_auth_reset(),
         AuthSubcommand::Status => handle_auth_status(config),
@@ -151,7 +254,7 @@ fn handle_auth_list(config: &AppConfig) -> Result<()> {
 
     let mut found_any = false;
 
-    for (provider, env_var) in PROVIDER_ENV_VARS {
+    for (provider, env_var, _, _) in PROVIDER_ENV_VARS {
         let pool = CredentialPool::new(provider);
         pool.seed_from_env(env_var);
         let credentials = pool.list();
@@ -204,7 +307,10 @@ fn handle_auth_add(provider: &str, key: &str, label: Option<&str>) -> Result<()>
     println!("  ID:       {}", id);
     println!();
     println!("Note: This credential is stored in-memory for the current session.");
-    println!("To persist, set the {} environment variable.", provider_env_var(provider));
+    println!(
+        "To persist, set the {} environment variable.",
+        provider_env_var(provider)
+    );
 
     Ok(())
 }
@@ -230,8 +336,15 @@ fn handle_auth_remove(provider: &str) -> Result<()> {
     if removed.is_empty() {
         println!("No credentials found for '{}'.", provider);
     } else {
-        println!("Removed {} credential(s) for '{}'.", removed.len(), provider);
-        println!("To permanently remove, unset the {} environment variable.", env_var);
+        println!(
+            "Removed {} credential(s) for '{}'.",
+            removed.len(),
+            provider
+        );
+        println!(
+            "To permanently remove, unset the {} environment variable.",
+            env_var
+        );
     }
 
     Ok(())
@@ -241,7 +354,7 @@ fn handle_auth_remove(provider: &str) -> Result<()> {
 fn handle_auth_reset() -> Result<()> {
     let mut count = 0usize;
 
-    for (provider, env_var) in PROVIDER_ENV_VARS {
+    for (provider, env_var, _, _) in PROVIDER_ENV_VARS {
         let pool = CredentialPool::new(provider);
         pool.seed_from_env(env_var);
         let credentials = pool.list();
@@ -253,7 +366,11 @@ fn handle_auth_reset() -> Result<()> {
     }
 
     if count > 0 {
-        println!("Reset {} credential(s) across {} provider(s).", count, PROVIDER_ENV_VARS.len());
+        println!(
+            "Reset {} credential(s) across {} provider(s).",
+            count,
+            PROVIDER_ENV_VARS.len()
+        );
     } else {
         println!("No credentials to reset.");
     }
@@ -269,7 +386,7 @@ fn handle_auth_status(config: &AppConfig) -> Result<()> {
     println!(" {:<14} Status", "Provider");
     println!(" ─────────────────────────────────────────────────────");
 
-    for (provider, env_var) in PROVIDER_ENV_VARS {
+    for (provider, env_var, _, _) in PROVIDER_ENV_VARS {
         let value = std::env::var(env_var).ok();
         let status = match value {
             Some(v) if !v.trim().is_empty() => {
@@ -305,7 +422,9 @@ static SPOTIFY_CLIENT_ID: std::sync::LazyLock<std::sync::Mutex<Option<String>>> 
 static SPOTIFY_CLIENT_SECRET: std::sync::LazyLock<std::sync::Mutex<Option<String>>> =
     std::sync::LazyLock::new(|| std::sync::Mutex::new(None));
 static SPOTIFY_REDIRECT_URI: std::sync::LazyLock<std::sync::Mutex<String>> =
-    std::sync::LazyLock::new(|| std::sync::Mutex::new("http://localhost:8888/callback".to_string()));
+    std::sync::LazyLock::new(|| {
+        std::sync::Mutex::new("http://localhost:8888/callback".to_string())
+    });
 
 /// Dispatch and execute a Spotify subcommand.
 fn handle_spotify_command(cmd: SpotifyCommand) -> Result<()> {
@@ -436,9 +555,7 @@ static FALLBACK_MODELS: std::sync::LazyLock<std::sync::Mutex<Vec<String>>> =
 /// The primary model is read from `config.agent.model`.  Fallback models
 /// are maintained in-memory for the current session.
 fn handle_fallback_list(config: &AppConfig) -> Result<()> {
-    let guard = FALLBACK_MODELS
-        .lock()
-        .unwrap();
+    let guard = FALLBACK_MODELS.lock().unwrap();
 
     println!("── Fallback Models ────────────────────────────────────");
     println!("  Primary:  {}", config.agent.model);
@@ -458,9 +575,7 @@ fn handle_fallback_list(config: &AppConfig) -> Result<()> {
 
 /// Add a fallback model.
 fn handle_fallback_add(model: &str) -> Result<()> {
-    let mut guard = FALLBACK_MODELS
-        .lock()
-        .unwrap();
+    let mut guard = FALLBACK_MODELS.lock().unwrap();
 
     if guard.contains(&model.to_string()) {
         println!("Fallback model '{}' is already configured.", model);
@@ -474,9 +589,7 @@ fn handle_fallback_add(model: &str) -> Result<()> {
 
 /// Remove a fallback model.
 fn handle_fallback_remove(model: &str) -> Result<()> {
-    let mut guard = FALLBACK_MODELS
-        .lock()
-        .unwrap();
+    let mut guard = FALLBACK_MODELS.lock().unwrap();
 
     let initial_len = guard.len();
     guard.retain(|m| m != model);
@@ -492,9 +605,7 @@ fn handle_fallback_remove(model: &str) -> Result<()> {
 
 /// Clear all fallback models.
 fn handle_fallback_clear() -> Result<()> {
-    let mut guard = FALLBACK_MODELS
-        .lock()
-        .unwrap();
+    let mut guard = FALLBACK_MODELS.lock().unwrap();
 
     let count = guard.len();
     guard.clear();
@@ -506,39 +617,90 @@ fn handle_fallback_clear() -> Result<()> {
 // Login / Logout
 // ---------------------------------------------------------------------------
 
-/// Check login status.
+/// Interactive login prompt.
 ///
-/// Returns success and prints whether an API key is available from the
-/// environment or config.
+/// Presents a list of known providers, prompts for an API key, and stores
+/// it in the process environment.
 pub async fn handle_login(config: &AppConfig) -> Result<()> {
-    let env_key = std::env::var("OPENAI_API_KEY").ok();
-    let config_key = config.client.api_key.as_ref().cloned();
+    use dialoguer::{Password, Select};
 
-    match (env_key, config_key) {
-        (Some(env), _) if !env.trim().is_empty() => {
-            let hint = key_hint(&env, 4);
-            println!("✓ Logged in (OPENAI_API_KEY = {})", hint);
-            println!("  Provider: OpenAI-compatible");
-            Ok(())
-        }
-        (_, Some(cfg)) if !cfg.trim().is_empty() => {
-            let hint = key_hint(&cfg, 4);
-            println!("✓ Logged in (client.api_key = {})", hint);
-            println!("  Provider: OpenAI-compatible");
-            Ok(())
-        }
-        _ => {
-            println!("✗ Not logged in.");
-            println!();
-            println!("  Set the OPENAI_API_KEY environment variable or configure");
-            println!("  client.api_key in your hermes.toml config file.");
-            println!();
-            println!("  Quick start:");
-            println!("    export OPENAI_API_KEY=sk-...");
-            println!("    hermes login");
-            Ok(())
-        }
+    // Build the list of provider items for the selector
+    let items: Vec<String> = PROVIDER_ENV_VARS
+        .iter()
+        .map(|(name, _, desc, url)| {
+            if url.is_empty() {
+                format!("{}  ─ {}", name, desc)
+            } else {
+                format!("{}  ─ {}  ({})", name, desc, url)
+            }
+        })
+        .collect();
+
+    println!("── Hermes Login ────────────────────────────────────────");
+    println!();
+
+    let selection = Select::new()
+        .with_prompt("Select a provider")
+        .items(&items)
+        .default(0)
+        .interact()?;
+
+    let (provider, env_var, desc, signup_url) = PROVIDER_ENV_VARS[selection];
+
+    // If the provider has no API key (ollama), just inform
+    if env_var.is_empty() {
+        println!();
+        println!("✓ {} does not require an API key.", provider);
+        println!("  It is available out of the box.");
+        println!();
+        println!("─────────────────────────────────────────────────────");
+        return Ok(());
     }
+
+    println!();
+    println!("  Provider:  {}", provider);
+    println!("  Endpoint:  {}", desc);
+
+    if signup_url.is_empty() {
+        println!("  Sign up at the provider's website.");
+    } else {
+        println!("  Sign up:   {}", signup_url);
+    }
+
+    println!();
+
+    let prompt = format!("Enter your API key for {}", provider);
+    let key = Password::new().with_prompt(&prompt).interact()?;
+
+    if key.trim().is_empty() {
+        println!("No key entered. Login cancelled.");
+        return Ok(());
+    }
+
+    // Store in process environment
+    std::env::set_var(env_var, &key);
+
+    // Also add to the in-memory credential pool
+    {
+        let pool = CredentialPool::new(provider);
+        let cred = PooledCredential::new(provider, AuthType::ApiKey, &key, "login");
+        pool.add(cred);
+    }
+
+    // Also update config-level api_key if this is "openai" (backward compat)
+    if provider == "openai" {
+        // config is &AppConfig, but we can update runtime config
+        let mut updated = config.clone();
+        updated.client.api_key = Some(key.clone());
+        hermes_core::config::install_runtime_config(updated);
+    }
+
+    let hint = key_hint(&key, 4);
+    println!();
+    println!("✓ Logged in to {}  (key: {}...{})", provider, hint, "✓");
+    println!("  Environment variable set: {}", env_var);
+    println!("─────────────────────────────────────────────────────");
+    Ok(())
 }
 
 /// Log out by clearing credential pool entries.
@@ -548,7 +710,7 @@ pub async fn handle_logout(config: &AppConfig) -> Result<()> {
     // Clear all credential pools
     let mut count = 0usize;
 
-    for (provider, env_var) in PROVIDER_ENV_VARS {
+    for (provider, env_var, _, _) in PROVIDER_ENV_VARS {
         let pool = CredentialPool::new(provider);
         pool.seed_from_env(env_var);
         let credentials = pool.list();
@@ -560,7 +722,10 @@ pub async fn handle_logout(config: &AppConfig) -> Result<()> {
 
     // Also show what was cleared
     if count > 0 {
-        println!("✓ Logged out — cleared {} credential(s) from session.", count);
+        println!(
+            "✓ Logged out — cleared {} credential(s) from session.",
+            count
+        );
     } else if config.client.api_key.is_some() {
         println!("✓ Logged out (config-level key remains in hermes.toml).");
     } else {
@@ -594,7 +759,7 @@ fn key_hint(key: &str, n: usize) -> String {
 ///
 /// Falls back to `"{PROVIDER}_API_KEY"` (uppercased) for unknown providers.
 fn provider_env_var(provider: &str) -> String {
-    for (name, var) in PROVIDER_ENV_VARS {
+    for (name, var, _, _) in PROVIDER_ENV_VARS {
         if name.eq_ignore_ascii_case(provider) {
             return var.to_string();
         }

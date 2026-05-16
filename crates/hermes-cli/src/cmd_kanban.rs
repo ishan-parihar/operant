@@ -4,10 +4,10 @@
 //! list, show, create, complete, block, comment, link, and stats.
 
 use anyhow::{Context, Result};
-use clap::{Parser, Subcommand};
+use clap::Subcommand;
 use hermes_core::config::AppConfig;
-use hermes_core::kanban::KanbanDb;
-use hermes_core::kanban::TaskStatus;
+use hermes_core::kanban::{KanbanDb, KanbanManager, TaskStatus};
+use std::path::PathBuf;
 
 #[derive(Debug, Clone, Subcommand)]
 pub enum NotifyAction {
@@ -26,24 +26,14 @@ pub enum NotifyAction {
         chat_id: String,
     },
     /// List notification subscriptions for a task
-    List {
-        id: String,
-    },
+    List { id: String },
 }
 
 #[derive(Debug, Clone, Subcommand)]
 pub enum AssigneesAction {
-    List {
-        id: String,
-    },
-    Add {
-        id: String,
-        assignee: String,
-    },
-    Remove {
-        id: String,
-        assignee: String,
-    },
+    List { id: String },
+    Add { id: String, assignee: String },
+    Remove { id: String, assignee: String },
 }
 
 /// Manage kanban tasks
@@ -214,75 +204,153 @@ pub enum KanbanSubcommand {
         /// Task ID
         id: String,
     },
+    /// List all available kanban boards
+    ListBoards,
+    /// Create a new kanban board with the given slug
+    CreateBoard {
+        /// Board slug (e.g. "work", "personal")
+        slug: String,
+    },
+    /// Delete a kanban board (cannot delete "default")
+    DeleteBoard {
+        /// Board slug to delete
+        slug: String,
+    },
+}
+
+fn kanban_dir(config: &AppConfig) -> PathBuf {
+    config
+        .database_path
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."))
+        .to_path_buf()
+}
+
+fn open_db(config: &AppConfig, board_slug: &str) -> Result<KanbanDb, anyhow::Error> {
+    let mgr = KanbanManager::new(kanban_dir(config));
+    mgr.open_board(board_slug)
+        .context("Failed to open kanban database")
 }
 
 /// Dispatch a kanban subcommand.
 pub async fn handle_kanban_command(
     config: &AppConfig,
+    board_slug: &str,
     cmd: KanbanSubcommand,
 ) -> Result<()> {
     match cmd {
-        KanbanSubcommand::List => cmd_list(config).await,
-        KanbanSubcommand::Show { id } => cmd_show(config, &id).await,
+        KanbanSubcommand::ListBoards => cmd_list_boards(config).await,
+        KanbanSubcommand::CreateBoard { slug } => cmd_create_board(config, &slug).await,
+        KanbanSubcommand::DeleteBoard { slug } => cmd_delete_board(config, &slug).await,
+        KanbanSubcommand::List => cmd_list(config, board_slug).await,
+        KanbanSubcommand::Show { id } => cmd_show(config, board_slug, &id).await,
         KanbanSubcommand::Create {
             title,
             description,
             priority,
         } => {
-            cmd_create(config, &title, description.as_deref(), priority.as_deref())
-                .await
+            cmd_create(
+                config,
+                board_slug,
+                &title,
+                description.as_deref(),
+                priority.as_deref(),
+            )
+            .await
         }
-        KanbanSubcommand::Complete { id } => cmd_complete(config, &id).await,
+        KanbanSubcommand::Complete { id } => cmd_complete(config, board_slug, &id).await,
         KanbanSubcommand::Block { id, reason } => {
-            cmd_block(config, &id, reason.as_deref()).await
+            cmd_block(config, board_slug, &id, reason.as_deref()).await
         }
-        KanbanSubcommand::Comment { id, message } => cmd_comment(config, &id, &message).await,
+        KanbanSubcommand::Comment { id, message } => {
+            cmd_comment(config, board_slug, &id, &message).await
+        }
         KanbanSubcommand::Link { from_id, to_id } => {
-            cmd_link(config, &from_id, &to_id).await
+            cmd_link(config, board_slug, &from_id, &to_id).await
         }
         KanbanSubcommand::Unlink { from_id, to_id } => {
-            cmd_unlink(config, &from_id, &to_id).await
+            cmd_unlink(config, board_slug, &from_id, &to_id).await
         }
-        KanbanSubcommand::Stats => cmd_stats(config).await,
-        KanbanSubcommand::Init => cmd_init(config).await,
+        KanbanSubcommand::Stats => cmd_stats(config, board_slug).await,
+        KanbanSubcommand::Init => cmd_init(config, board_slug).await,
         KanbanSubcommand::Assign { id, assignee } => {
-            cmd_assign(config, &id, &assignee).await
+            cmd_assign(config, board_slug, &id, &assignee).await
         }
-        KanbanSubcommand::Assignees { action } => cmd_assignees(config, action).await,
-        KanbanSubcommand::Unblock { id, reason } => cmd_unblock(config, &id, &reason).await,
-        KanbanSubcommand::Archive { id } => cmd_archive(config, &id).await,
-        KanbanSubcommand::Tail { id, lines } => cmd_tail(config, &id, lines).await,
-        KanbanSubcommand::Watch { id } => cmd_watch(config, &id).await,
-        KanbanSubcommand::Runs { id } => cmd_runs(config, &id).await,
-        KanbanSubcommand::Log { id, message } => cmd_log(config, &id, &message).await,
-        KanbanSubcommand::Notify { action } => cmd_notify(config, action).await,
-        KanbanSubcommand::Dispatch => cmd_dispatch(config).await,
-        KanbanSubcommand::Gc => cmd_gc(config).await,
-        KanbanSubcommand::Diagnostics => cmd_diagnostics(config).await,
+        KanbanSubcommand::Assignees { action } => cmd_assignees(config, board_slug, action).await,
+        KanbanSubcommand::Unblock { id, reason } => {
+            cmd_unblock(config, board_slug, &id, &reason).await
+        }
+        KanbanSubcommand::Archive { id } => cmd_archive(config, board_slug, &id).await,
+        KanbanSubcommand::Tail { id, lines } => cmd_tail(config, board_slug, &id, lines).await,
+        KanbanSubcommand::Watch { id } => cmd_watch(config, board_slug, &id).await,
+        KanbanSubcommand::Runs { id } => cmd_runs(config, board_slug, &id).await,
+        KanbanSubcommand::Log { id, message } => cmd_log(config, board_slug, &id, &message).await,
+        KanbanSubcommand::Notify { action } => cmd_notify(config, board_slug, action).await,
+        KanbanSubcommand::Dispatch => cmd_dispatch(config, board_slug).await,
+        KanbanSubcommand::Gc => cmd_gc(config, board_slug).await,
+        KanbanSubcommand::Diagnostics => cmd_diagnostics(config, board_slug).await,
         KanbanSubcommand::Triage { id, instruction } => {
-            cmd_triage(config, &id, instruction.as_deref()).await
+            cmd_triage(config, board_slug, &id, instruction.as_deref()).await
         }
-        KanbanSubcommand::Reclaim { id } => cmd_reclaim(config, &id).await,
+        KanbanSubcommand::Reclaim { id } => cmd_reclaim(config, board_slug, &id).await,
         KanbanSubcommand::Reassign { id, assignee } => {
-            cmd_reassign(config, &id, &assignee).await
+            cmd_reassign(config, board_slug, &id, &assignee).await
         }
         KanbanSubcommand::Edit { id, title, body } => {
-            cmd_edit(config, &id, title.as_deref(), body.as_deref()).await
+            cmd_edit(config, board_slug, &id, title.as_deref(), body.as_deref()).await
         }
-        KanbanSubcommand::Claim { id } => cmd_claim(config, &id).await,
+        KanbanSubcommand::Claim { id } => cmd_claim(config, board_slug, &id).await,
         KanbanSubcommand::Heartbeat { id, note, run_id } => {
-            cmd_heartbeat(config, &id, note.as_deref(), run_id).await
+            cmd_heartbeat(config, board_slug, &id, note.as_deref(), run_id).await
         }
-        KanbanSubcommand::Context { id } => cmd_context(config, &id).await,
+        KanbanSubcommand::Context { id } => cmd_context(config, board_slug, &id).await,
     }
 }
 
-async fn cmd_list(config: &AppConfig) -> Result<()> {
-    let db = KanbanDb::init(config.database_path.clone())
+async fn cmd_list_boards(config: &AppConfig) -> Result<()> {
+    let mgr = KanbanManager::new(kanban_dir(config));
+    let boards = mgr.list_boards().context("Failed to list boards")?;
+
+    if boards.is_empty() {
+        println!("No kanban boards found.");
+        return Ok(());
+    }
+
+    println!("{:<16} {:<10} {:<8}", "Board", "Tasks", "Exists");
+    println!("{}", "-".repeat(36));
+    for b in &boards {
+        println!(
+            "{:<16} {:<10} {:<8}",
+            b.slug,
+            b.task_count,
+            if b.exists { "yes" } else { "no" },
+        );
+    }
+    Ok(())
+}
+
+async fn cmd_create_board(config: &AppConfig, slug: &str) -> Result<()> {
+    let mgr = KanbanManager::new(kanban_dir(config));
+    mgr.create_board(slug)
+        .with_context(|| format!("Failed to create board '{}'", slug))?;
+    println!("Created kanban board: {}", slug);
+    Ok(())
+}
+
+async fn cmd_delete_board(config: &AppConfig, slug: &str) -> Result<()> {
+    let mgr = KanbanManager::new(kanban_dir(config));
+    mgr.delete_board(slug)
+        .with_context(|| format!("Failed to delete board '{}'", slug))?;
+    println!("Deleted kanban board: {}", slug);
+    Ok(())
+}
+
+async fn cmd_list(config: &AppConfig, board_slug: &str) -> Result<()> {
+    let mgr = KanbanManager::new(kanban_dir(config));
+    let db = mgr
+        .open_board(board_slug)
         .context("Failed to open kanban database")?;
-    let tasks = db
-        .list_tasks()
-        .context("Failed to list tasks")?;
+    let tasks = db.list_tasks().context("Failed to list tasks")?;
 
     if tasks.is_empty() {
         println!("No kanban tasks found.");
@@ -315,9 +383,8 @@ async fn cmd_list(config: &AppConfig) -> Result<()> {
     Ok(())
 }
 
-async fn cmd_show(config: &AppConfig, id: &str) -> Result<()> {
-    let db = KanbanDb::init(config.database_path.clone())
-        .context("Failed to open kanban database")?;
+async fn cmd_show(config: &AppConfig, board_slug: &str, id: &str) -> Result<()> {
+    let db = open_db(config, board_slug)?;
     let task = db
         .get_task(id)
         .context("Failed to get task")?
@@ -344,9 +411,7 @@ async fn cmd_show(config: &AppConfig, id: &str) -> Result<()> {
     }
     println!();
 
-    let comments = db
-        .list_comments(id)
-        .context("Failed to list comments")?;
+    let comments = db.list_comments(id).context("Failed to list comments")?;
 
     if comments.is_empty() {
         println!("Comments:  (none)");
@@ -367,33 +432,31 @@ async fn cmd_show(config: &AppConfig, id: &str) -> Result<()> {
 
 async fn cmd_create(
     config: &AppConfig,
+    board_slug: &str,
     title: &str,
     description: Option<&str>,
     priority: Option<&str>,
 ) -> Result<()> {
-    let db = KanbanDb::init(config.database_path.clone())
-        .context("Failed to open kanban database")?;
+    let db = open_db(config, board_slug)?;
 
-    let prio: i32 = priority
-        .and_then(|p| p.parse().ok())
-        .unwrap_or(0);
+    let prio: i32 = priority.and_then(|p| p.parse().ok()).unwrap_or(0);
 
     let task_id = db
         .create_task(
             title,
             description,
-            None, /* assignee */
+            None,        /* assignee */
             Some("cli"), /* created_by */
-            "local", /* workspace_kind */
-            None, /* workspace_path */
-            None, /* tenant */
+            "local",     /* workspace_kind */
+            None,        /* workspace_path */
+            None,        /* tenant */
             prio,
-            &[], /* parents */
+            &[],   /* parents */
             false, /* triage */
-            None, /* idempotency_key */
-            None, /* max_runtime_seconds */
-            None, /* skills */
-            None, /* max_retries */
+            None,  /* idempotency_key */
+            None,  /* max_runtime_seconds */
+            None,  /* skills */
+            None,  /* max_retries */
         )
         .context("Failed to create task")?;
 
@@ -401,59 +464,65 @@ async fn cmd_create(
     Ok(())
 }
 
-async fn cmd_complete(config: &AppConfig, id: &str) -> Result<()> {
-    let db = KanbanDb::init(config.database_path.clone())
-        .context("Failed to open kanban database")?;
+async fn cmd_complete(config: &AppConfig, board_slug: &str, id: &str) -> Result<()> {
+    let db = open_db(config, board_slug)?;
     db.complete_task(id, None, None, None, None, None)
         .context("Failed to complete task")?;
     println!("Task '{}' marked as complete.", id);
     Ok(())
 }
 
-async fn cmd_block(config: &AppConfig, id: &str, reason: Option<&str>) -> Result<()> {
-    let db = KanbanDb::init(config.database_path.clone())
-        .context("Failed to open kanban database")?;
+async fn cmd_block(
+    config: &AppConfig,
+    board_slug: &str,
+    id: &str,
+    reason: Option<&str>,
+) -> Result<()> {
+    let db = open_db(config, board_slug)?;
     db.block_task(id, reason.unwrap_or("Blocked via CLI"), None)
         .context("Failed to block task")?;
     println!("Task '{}' blocked.", id);
     Ok(())
 }
 
-async fn cmd_comment(config: &AppConfig, id: &str, text: &str) -> Result<()> {
-    let db = KanbanDb::init(config.database_path.clone())
-        .context("Failed to open kanban database")?;
+async fn cmd_comment(config: &AppConfig, board_slug: &str, id: &str, text: &str) -> Result<()> {
+    let db = open_db(config, board_slug)?;
     db.add_comment(id, "cli", text)
         .context("Failed to add comment")?;
     println!("Comment added to task '{}'.", id);
     Ok(())
 }
 
-async fn cmd_link(config: &AppConfig, from_id: &str, to_id: &str) -> Result<()> {
-    let db = KanbanDb::init(config.database_path.clone())
-        .context("Failed to open kanban database")?;
+async fn cmd_link(config: &AppConfig, board_slug: &str, from_id: &str, to_id: &str) -> Result<()> {
+    let db = open_db(config, board_slug)?;
     db.link_tasks(from_id, to_id)
         .context("Failed to link tasks")?;
     println!("Linked task '{}' -> '{}'.", from_id, to_id);
     Ok(())
 }
 
-async fn cmd_unlink(config: &AppConfig, from_id: &str, to_id: &str) -> Result<()> {
-    let db = KanbanDb::init(config.database_path.clone())
-        .context("Failed to open kanban database")?;
+async fn cmd_unlink(
+    config: &AppConfig,
+    board_slug: &str,
+    from_id: &str,
+    to_id: &str,
+) -> Result<()> {
+    let db = open_db(config, board_slug)?;
     db.unlink_tasks(from_id, to_id)
         .context("Failed to unlink tasks")?;
     println!("Unlinked task '{}' -> '{}'.", from_id, to_id);
     Ok(())
 }
 
-async fn cmd_assignees(config: &AppConfig, action: AssigneesAction) -> Result<()> {
+async fn cmd_assignees(
+    config: &AppConfig,
+    board_slug: &str,
+    action: AssigneesAction,
+) -> Result<()> {
     match action {
         AssigneesAction::List { id } => {
-            let db = KanbanDb::init(config.database_path.clone())
-                .context("Failed to open kanban database")?;
-            let assignees = db
-                .list_assignees(&id)
-                .context("Failed to list assignees")?;
+            let db = open_db(config, board_slug)?;
+            let assignees = db.list_assignees(&id).context("Failed to list assignees")?;
             if assignees.is_empty() {
                 println!("No assignees for task '{}'.", id);
             } else {
@@ -465,16 +534,14 @@ async fn cmd_assignees(config: &AppConfig, action: AssigneesAction) -> Result<()
             Ok(())
         }
         AssigneesAction::Add { id, assignee } => {
-            let db = KanbanDb::init(config.database_path.clone())
-                .context("Failed to open kanban database")?;
+            let db = open_db(config, board_slug)?;
             db.add_assignee(&id, &assignee)
                 .context("Failed to add assignee")?;
             println!("Added assignee '{}' to task '{}'.", assignee, id);
             Ok(())
         }
         AssigneesAction::Remove { id, assignee } => {
-            let db = KanbanDb::init(config.database_path.clone())
-                .context("Failed to open kanban database")?;
+            let db = open_db(config, board_slug)?;
             db.remove_assignee(&id, &assignee)
                 .context("Failed to remove assignee")?;
             println!("Removed assignee '{}' from task '{}'.", assignee, id);
@@ -483,40 +550,59 @@ async fn cmd_assignees(config: &AppConfig, action: AssigneesAction) -> Result<()
     }
 }
 
-async fn cmd_notify(config: &AppConfig, action: NotifyAction) -> Result<()> {
+async fn cmd_notify(config: &AppConfig, board_slug: &str, action: NotifyAction) -> Result<()> {
     match action {
-        NotifyAction::Subscribe { id, platform, chat_id, user_id } => {
-            let db = KanbanDb::init(config.database_path.clone())
-                .context("Failed to open kanban database")?;
+        NotifyAction::Subscribe {
+            id,
+            platform,
+            chat_id,
+            user_id,
+        } => {
+            let db = open_db(config, board_slug)?;
             let manager = hermes_core::kanban::NotifyManager::new(db.conn().clone());
-            manager.subscribe(&id, &platform, &chat_id, user_id.as_deref())
+            manager
+                .subscribe(&id, &platform, &chat_id, user_id.as_deref())
                 .context("Failed to subscribe")?;
-            println!("Subscribed to notifications for task '{}' on {}.", id, platform);
+            println!(
+                "Subscribed to notifications for task '{}' on {}.",
+                id, platform
+            );
             Ok(())
         }
-        NotifyAction::Unsubscribe { id, platform, chat_id } => {
-            let db = KanbanDb::init(config.database_path.clone())
-                .context("Failed to open kanban database")?;
+        NotifyAction::Unsubscribe {
+            id,
+            platform,
+            chat_id,
+        } => {
+            let db = open_db(config, board_slug)?;
             let manager = hermes_core::kanban::NotifyManager::new(db.conn().clone());
-            manager.unsubscribe(&id, &platform, &chat_id)
+            manager
+                .unsubscribe(&id, &platform, &chat_id)
                 .context("Failed to unsubscribe")?;
-            println!("Unsubscribed from notifications for task '{}' on {}.", id, platform);
+            println!(
+                "Unsubscribed from notifications for task '{}' on {}.",
+                id, platform
+            );
             Ok(())
         }
         NotifyAction::List { id } => {
-            let db = KanbanDb::init(config.database_path.clone())
-                .context("Failed to open kanban database")?;
+            let db = open_db(config, board_slug)?;
             let manager = hermes_core::kanban::NotifyManager::new(db.conn().clone());
-            let subs = manager.list_subscriptions(&id)
+            let subs = manager
+                .list_subscriptions(&id)
                 .context("Failed to list subscriptions")?;
             if subs.is_empty() {
                 println!("No subscriptions for task '{}'.", id);
             } else {
                 println!("Subscriptions for task '{}':", id);
                 for s in subs {
-                    println!("  - {} on {} (chat: {}) [user: {}]",
-                        s.task_id, s.platform, s.chat_id,
-                        s.user_id.as_deref().unwrap_or("none"));
+                    println!(
+                        "  - {} on {} (chat: {}) [user: {}]",
+                        s.task_id,
+                        s.platform,
+                        s.chat_id,
+                        s.user_id.as_deref().unwrap_or("none")
+                    );
                 }
             }
             Ok(())
@@ -524,12 +610,9 @@ async fn cmd_notify(config: &AppConfig, action: NotifyAction) -> Result<()> {
     }
 }
 
-async fn cmd_stats(config: &AppConfig) -> Result<()> {
-    let db = KanbanDb::init(config.database_path.clone())
-        .context("Failed to open kanban database")?;
-    let tasks = db
-        .list_tasks()
-        .context("Failed to list tasks")?;
+async fn cmd_stats(config: &AppConfig, board_slug: &str) -> Result<()> {
+    let db = open_db(config, board_slug)?;
+    let tasks = db.list_tasks().context("Failed to list tasks")?;
 
     let total = tasks.len();
     let mut by_status = std::collections::BTreeMap::new();
@@ -567,37 +650,33 @@ async fn cmd_stats(config: &AppConfig) -> Result<()> {
     Ok(())
 }
 
-async fn cmd_init(config: &AppConfig) -> Result<()> {
-    KanbanDb::init(config.database_path.clone())
+async fn cmd_init(config: &AppConfig, board_slug: &str) -> Result<()> {
+    let mgr = KanbanManager::new(kanban_dir(config));
+    mgr.open_board(board_slug)
         .context("Failed to initialize kanban database")?;
-    println!(
-        "Kanban database initialized at {}",
-        config.database_path.display()
-    );
+    let path = mgr.resolve_path(board_slug);
+    println!("Kanban database initialized at {}", path.display());
     Ok(())
 }
 
-async fn cmd_assign(config: &AppConfig, id: &str, assignee: &str) -> Result<()> {
-    let db = KanbanDb::init(config.database_path.clone())
-        .context("Failed to open kanban database")?;
+async fn cmd_assign(config: &AppConfig, board_slug: &str, id: &str, assignee: &str) -> Result<()> {
+    let db = open_db(config, board_slug)?;
     db.add_comment(id, "cli", &format!("Assigned to {}", assignee))
         .context("Failed to record assignment")?;
     println!("Task '{}' assigned to '{}'.", id, assignee);
     Ok(())
 }
 
-async fn cmd_unblock(config: &AppConfig, id: &str, reason: &str) -> Result<()> {
-    let db = KanbanDb::init(config.database_path.clone())
-        .context("Failed to open kanban database")?;
+async fn cmd_unblock(config: &AppConfig, board_slug: &str, id: &str, reason: &str) -> Result<()> {
+    let db = open_db(config, board_slug)?;
     db.add_comment(id, "cli", &format!("Unblocked: {}", reason))
         .context("Failed to record unblock")?;
     println!("Task '{}' unblocked.", id);
     Ok(())
 }
 
-async fn cmd_archive(config: &AppConfig, id: &str) -> Result<()> {
-    let db = KanbanDb::init(config.database_path.clone())
-        .context("Failed to open kanban database")?;
+async fn cmd_archive(config: &AppConfig, board_slug: &str, id: &str) -> Result<()> {
+    let db = open_db(config, board_slug)?;
     db.add_comment(id, "cli", "Task archived")
         .context("Failed to record archivation")?;
     println!("Task '{}' archived.", id);
@@ -606,11 +685,11 @@ async fn cmd_archive(config: &AppConfig, id: &str) -> Result<()> {
 
 async fn cmd_tail(
     config: &AppConfig,
+    board_slug: &str,
     id: &str,
     lines: Option<usize>,
 ) -> Result<()> {
-    let db = KanbanDb::init(config.database_path.clone())
-        .context("Failed to open kanban database")?;
+    let db = open_db(config, board_slug)?;
     let events = db
         .list_events(id)
         .with_context(|| format!("Failed to list events for task '{}'", id))?;
@@ -640,20 +719,20 @@ async fn cmd_tail(
     Ok(())
 }
 
-async fn cmd_watch(config: &AppConfig, id: &str) -> Result<()> {
-    let db = KanbanDb::init(config.database_path.clone())
-        .context("Failed to open kanban database")?;
-    // Verify the task exists
+async fn cmd_watch(config: &AppConfig, board_slug: &str, id: &str) -> Result<()> {
+    let db = open_db(config, board_slug)?;
     db.get_task(id)
         .context("Failed to get task")?
         .with_context(|| format!("Task '{}' not found", id))?;
-    println!("Now watching task '{}'. Use `hermes kanban tail {}` to check for updates.", id, id);
+    println!(
+        "Now watching task '{}'. Use `hermes kanban tail {}` to check for updates.",
+        id, id
+    );
     Ok(())
 }
 
-async fn cmd_runs(config: &AppConfig, id: &str) -> Result<()> {
-    let db = KanbanDb::init(config.database_path.clone())
-        .context("Failed to open kanban database")?;
+async fn cmd_runs(config: &AppConfig, board_slug: &str, id: &str) -> Result<()> {
+    let db = open_db(config, board_slug)?;
     let runs = db
         .list_runs(id)
         .with_context(|| format!("Failed to list runs for task '{}'", id))?;
@@ -681,21 +760,20 @@ async fn cmd_runs(config: &AppConfig, id: &str) -> Result<()> {
     Ok(())
 }
 
-async fn cmd_log(config: &AppConfig, id: &str, message: &str) -> Result<()> {
-    let db = KanbanDb::init(config.database_path.clone())
-        .context("Failed to open kanban database")?;
+async fn cmd_log(config: &AppConfig, board_slug: &str, id: &str, message: &str) -> Result<()> {
+    let db = open_db(config, board_slug)?;
     db.add_comment(id, "cli", message)
         .context("Failed to add log entry")?;
     println!("Log entry added to task '{}'.", id);
     Ok(())
 }
 
-async fn cmd_dispatch(config: &AppConfig) -> Result<()> {
-    let db = KanbanDb::init(config.database_path.clone())
-        .context("Failed to open kanban database")?;
+async fn cmd_dispatch(config: &AppConfig, board_slug: &str) -> Result<()> {
+    let db = open_db(config, board_slug)?;
     let dispatcher = hermes_core::kanban::Dispatcher::new(db.conn().clone());
 
-    let pending = dispatcher.pending_tasks(10)
+    let pending = dispatcher
+        .pending_tasks(10)
         .context("Failed to query pending tasks")?;
 
     if pending.is_empty() {
@@ -708,7 +786,8 @@ async fn cmd_dispatch(config: &AppConfig) -> Result<()> {
         match dispatcher.claim_task(task_id, "cli-dispatcher") {
             Ok(run_id) => {
                 println!("  Claimed task '{}' (run {}): {}", task_id, run_id, title);
-                dispatcher.complete_run(task_id, run_id, "claimed", Some("Dispatched via CLI"))
+                dispatcher
+                    .complete_run(task_id, run_id, "claimed", Some("Dispatched via CLI"))
                     .context("Failed to auto-complete claim")?;
                 println!("  -> Marked as done (CLI dispatch is supervisory)");
             }
@@ -720,12 +799,12 @@ async fn cmd_dispatch(config: &AppConfig) -> Result<()> {
     Ok(())
 }
 
-async fn cmd_gc(config: &AppConfig) -> Result<()> {
-    let db = KanbanDb::init(config.database_path.clone())
-        .context("Failed to open kanban database")?;
+async fn cmd_gc(config: &AppConfig, board_slug: &str) -> Result<()> {
+    let db = open_db(config, board_slug)?;
     let dispatcher = hermes_core::kanban::Dispatcher::new(db.conn().clone());
 
-    let (tasks, runs, events) = dispatcher.gc(30)
+    let (tasks, runs, events) = dispatcher
+        .gc(30)
         .context("Failed to run garbage collection")?;
 
     println!("Garbage collection complete:");
@@ -735,9 +814,8 @@ async fn cmd_gc(config: &AppConfig) -> Result<()> {
     Ok(())
 }
 
-async fn cmd_diagnostics(config: &AppConfig) -> Result<()> {
-    let db = KanbanDb::init(config.database_path.clone())
-        .context("Failed to open kanban database")?;
+async fn cmd_diagnostics(config: &AppConfig, board_slug: &str) -> Result<()> {
+    let db = open_db(config, board_slug)?;
     let diag = hermes_core::kanban::KanbanDiagnostics::new(db.conn().clone());
 
     let issues = diag.run_checks().context("Failed to run diagnostics")?;
@@ -750,7 +828,10 @@ async fn cmd_diagnostics(config: &AppConfig) -> Result<()> {
     let errors = issues.iter().filter(|i| i.severity == "error").count();
     let warnings = issues.iter().filter(|i| i.severity == "warning").count();
 
-    println!("Kanban Diagnostics: {} error(s), {} warning(s)", errors, warnings);
+    println!(
+        "Kanban Diagnostics: {} error(s), {} warning(s)",
+        errors, warnings
+    );
     println!();
 
     for issue in &issues {
@@ -759,7 +840,10 @@ async fn cmd_diagnostics(config: &AppConfig) -> Result<()> {
             "warning" => "W",
             _ => "I",
         };
-        println!("[{}] [{}] {} — {}", badge, issue.category, issue.task_id, issue.description);
+        println!(
+            "[{}] [{}] {} — {}",
+            badge, issue.category, issue.task_id, issue.description
+        );
         println!("     Action: {}", issue.action);
         println!();
     }
@@ -767,9 +851,13 @@ async fn cmd_diagnostics(config: &AppConfig) -> Result<()> {
     Ok(())
 }
 
-async fn cmd_triage(config: &AppConfig, task_id: &str, instruction: Option<&str>) -> Result<()> {
-    let db = KanbanDb::init(config.database_path.clone())
-        .context("Failed to open kanban database")?;
+async fn cmd_triage(
+    config: &AppConfig,
+    board_slug: &str,
+    task_id: &str,
+    instruction: Option<&str>,
+) -> Result<()> {
+    let db = open_db(config, board_slug)?;
     let triage = hermes_core::kanban::TriageSpecifier::new(db.conn().clone());
     let prompt = triage
         .build_prompt(task_id, instruction)
@@ -778,23 +866,34 @@ async fn cmd_triage(config: &AppConfig, task_id: &str, instruction: Option<&str>
     Ok(())
 }
 
-async fn cmd_reclaim(config: &AppConfig, id: &str) -> Result<()> {
-    let db = KanbanDb::init(config.database_path.clone())
-        .context("Failed to open kanban database")?;
+async fn cmd_reclaim(config: &AppConfig, board_slug: &str, id: &str) -> Result<()> {
+    let db = open_db(config, board_slug)?;
     let conn = db.conn();
-    conn.lock().unwrap()
-        .execute("UPDATE tasks SET status = 'todo', current_run_id = NULL WHERE id = ?1", (&id,))
+    conn.lock()
+        .unwrap()
+        .execute(
+            "UPDATE tasks SET status = 'todo', current_run_id = NULL WHERE id = ?1",
+            (&id,),
+        )
         .map_err(|e| anyhow::anyhow!("Failed to reclaim task '{}': {}", id, e))?;
     println!("Task '{}' reclaimed (reset to todo).", id);
     Ok(())
 }
 
-async fn cmd_reassign(config: &AppConfig, id: &str, assignee: &str) -> Result<()> {
-    let db = KanbanDb::init(config.database_path.clone())
-        .context("Failed to open kanban database")?;
+async fn cmd_reassign(
+    config: &AppConfig,
+    board_slug: &str,
+    id: &str,
+    assignee: &str,
+) -> Result<()> {
+    let db = open_db(config, board_slug)?;
     let conn = db.conn();
-    conn.lock().unwrap()
-        .execute("UPDATE tasks SET assignee = ?1 WHERE id = ?2", (&assignee, &id))
+    conn.lock()
+        .unwrap()
+        .execute(
+            "UPDATE tasks SET assignee = ?1 WHERE id = ?2",
+            (&assignee, &id),
+        )
         .map_err(|e| anyhow::anyhow!("Failed to reassign task '{}': {}", id, e))?;
     println!("Task '{}' reassigned to '{}'.", id, assignee);
     Ok(())
@@ -802,12 +901,12 @@ async fn cmd_reassign(config: &AppConfig, id: &str, assignee: &str) -> Result<()
 
 async fn cmd_edit(
     config: &AppConfig,
+    board_slug: &str,
     id: &str,
     title: Option<&str>,
     body: Option<&str>,
 ) -> Result<()> {
-    let db = KanbanDb::init(config.database_path.clone())
-        .context("Failed to open kanban database")?;
+    let db = open_db(config, board_slug)?;
     let conn = db.conn();
     let locked = conn.lock().unwrap();
 
@@ -834,9 +933,8 @@ async fn cmd_edit(
     Ok(())
 }
 
-async fn cmd_claim(config: &AppConfig, id: &str) -> Result<()> {
-    let db = KanbanDb::init(config.database_path.clone())
-        .context("Failed to open kanban database")?;
+async fn cmd_claim(config: &AppConfig, board_slug: &str, id: &str) -> Result<()> {
+    let db = open_db(config, board_slug)?;
     let dispatcher = hermes_core::kanban::Dispatcher::new(db.conn().clone());
     let run_id = dispatcher
         .claim_task(id, "cli-claim")
@@ -847,21 +945,20 @@ async fn cmd_claim(config: &AppConfig, id: &str) -> Result<()> {
 
 async fn cmd_heartbeat(
     config: &AppConfig,
+    board_slug: &str,
     id: &str,
     note: Option<&str>,
     run_id: Option<i64>,
 ) -> Result<()> {
-    let db = KanbanDb::init(config.database_path.clone())
-        .context("Failed to open kanban database")?;
+    let db = open_db(config, board_slug)?;
     db.heartbeat_worker(id, note, run_id)
         .context("Failed to send heartbeat")?;
     println!("Heartbeat sent for task '{}'.", id);
     Ok(())
 }
 
-async fn cmd_context(config: &AppConfig, id: &str) -> Result<()> {
-    let db = KanbanDb::init(config.database_path.clone())
-        .context("Failed to open kanban database")?;
+async fn cmd_context(config: &AppConfig, board_slug: &str, id: &str) -> Result<()> {
+    let db = open_db(config, board_slug)?;
     let context = db
         .build_worker_context(id)
         .context("Failed to build context")?;

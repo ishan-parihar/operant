@@ -26,8 +26,8 @@ pub async fn handle_import_command(config: &AppConfig, cmd: ImportSubcommand) ->
 fn copy_dir_recursive(src: &PathBuf, dst: &PathBuf) -> Result<()> {
     fs::create_dir_all(dst)
         .with_context(|| format!("Failed to create destination: {}", dst.display()))?;
-    for entry in fs::read_dir(src)
-        .with_context(|| format!("Failed to read source: {}", src.display()))?
+    for entry in
+        fs::read_dir(src).with_context(|| format!("Failed to read source: {}", src.display()))?
     {
         let entry = entry?;
         let ft = entry.file_type()?;
@@ -36,8 +36,13 @@ fn copy_dir_recursive(src: &PathBuf, dst: &PathBuf) -> Result<()> {
         if ft.is_dir() {
             copy_dir_recursive(&src_path, &dst_path)?;
         } else {
-            fs::copy(&src_path, &dst_path)
-                .with_context(|| format!("Failed to copy {} to {}", src_path.display(), dst_path.display()))?;
+            fs::copy(&src_path, &dst_path).with_context(|| {
+                format!(
+                    "Failed to copy {} to {}",
+                    src_path.display(),
+                    dst_path.display()
+                )
+            })?;
         }
     }
     Ok(())
@@ -64,10 +69,16 @@ async fn cmd_import(_config: &AppConfig, path: &PathBuf, force: bool) -> Result<
     if !force {
         eprintln!("This will overwrite existing files in:");
         if config_backup.exists() {
-            eprintln!("  Config: {}", hermes_core::platform::hermes_config_dir().display());
+            eprintln!(
+                "  Config: {}",
+                hermes_core::platform::hermes_config_dir().display()
+            );
         }
         if data_backup.exists() {
-            eprintln!("  Data:   {}", hermes_core::platform::hermes_data_dir().display());
+            eprintln!(
+                "  Data:   {}",
+                hermes_core::platform::hermes_data_dir().display()
+            );
         }
         eprintln!("Use --force to skip this warning.");
         return Ok(());

@@ -96,10 +96,7 @@ fn cmd_install() -> Result<()> {
 /// Look for cua-driver on PATH.
 fn find_cua_driver() -> Option<String> {
     for name in &["cua-driver", "cua-driver.exe"] {
-        if let Ok(output) = Command::new("which")
-            .arg(name)
-            .output()
-        {
+        if let Ok(output) = Command::new("which").arg(name).output() {
             if output.status.success() {
                 let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
                 if !path.is_empty() {
@@ -108,11 +105,7 @@ fn find_cua_driver() -> Option<String> {
             }
         }
         // Also try command -v as fallback
-        if let Ok(output) = Command::new("command")
-            .arg("-v")
-            .arg(name)
-            .output()
-        {
+        if let Ok(output) = Command::new("command").arg("-v").arg(name).output() {
             if output.status.success() {
                 let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
                 if !path.is_empty() {
