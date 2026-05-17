@@ -60,6 +60,7 @@ pub mod distillation;
 pub mod env_passthrough;
 pub mod environments;
 pub mod error;
+pub mod error_classifier;
 pub mod fuzzy_match;
 pub mod gateway;
 pub mod gateway_hooks;
@@ -73,10 +74,14 @@ pub mod mcp;
 pub mod mcp_oauth;
 pub mod memory;
 pub mod memory_provider;
+pub mod models_dev;
 pub mod ms_graph;
+pub mod nous_rate_guard;
 pub mod parser;
 pub mod platform;
 pub mod process_registry;
+pub mod rate_limit_tracker;
+pub mod retry;
 pub mod rl_training;
 pub mod schema;
 pub mod schema_sanitizer;
@@ -166,3 +171,15 @@ pub use tools::{
     ToolResult,
 };
 pub use trajectory::{Trajectory, TrajectoryBuilder, TrajectoryExporter};
+
+pub use error_classifier::{classify_api_error, ClassifiedError, FailoverReason};
+pub use models_dev::{
+    fetch_models_dev, get_model_capabilities, list_agentic_models, lookup_models_dev_context,
+    provider_to_models_dev, ModelCapabilities,
+};
+pub use nous_rate_guard::{
+    clear_nous_rate_limit, is_genuine_nous_rate_limit, nous_rate_limit_remaining,
+    record_nous_rate_limit, NousRateLimitState,
+};
+pub use rate_limit_tracker::{RateLimitBucket, RateLimitState};
+pub use retry::{default_backoff, jittered_backoff};
