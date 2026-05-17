@@ -12,7 +12,7 @@ use std::sync::RwLock;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 use crate::error::{Error, Result};
@@ -150,6 +150,26 @@ pub struct PooledCredential {
     /// When the current exhaustion cooldown expires.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error_reset_at: Option<DateTime<Utc>>,
+
+    // OAuth-specific fields
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refresh_token: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub portal_base_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inference_base_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_key_expires_at: Option<DateTime<Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_endpoint: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_refresh: Option<String>,
 }
 
 impl PooledCredential {
@@ -171,6 +191,15 @@ impl PooledCredential {
             last_error_reason: None,
             last_error_message: None,
             error_reset_at: None,
+            refresh_token: None,
+            client_id: None,
+            portal_base_url: None,
+            inference_base_url: None,
+            agent_key: None,
+            agent_key_expires_at: None,
+            token_endpoint: None,
+            token_type: None,
+            last_refresh: None,
         }
     }
 
@@ -200,6 +229,27 @@ impl PooledCredential {
         self.usage_count = self.usage_count.saturating_add(1);
         self.last_used_at = Some(Utc::now());
     }
+
+    /// Check if an OAuth access token is expiring within the given skew window.
+    pub fn is_oauth_expiring(&self, skew_seconds: u64) -> bool {
+        if self.credential_type != AuthType::OAuth {
+            return false;
+        }
+        self.expires_at.map_or(false, |exp| {
+            Utc::now() + chrono::Duration::seconds(skew_seconds as i64) >= exp
+        })
+    }
+
+    /// Check if this OAuth credential needs a token refresh.
+    pub fn needs_oauth_refresh(&self, skew_seconds: u64) -> bool {
+        if self.credential_type != AuthType::OAuth {
+            return false;
+        }
+        if self.refresh_token.is_none() {
+            return false;
+        }
+        self.is_oauth_expiring(skew_seconds)
+    }
 }
 
 impl Default for PooledCredential {
@@ -220,6 +270,15 @@ impl Default for PooledCredential {
             last_error_reason: None,
             last_error_message: None,
             error_reset_at: None,
+            refresh_token: None,
+            client_id: None,
+            portal_base_url: None,
+            inference_base_url: None,
+            agent_key: None,
+            agent_key_expires_at: None,
+            token_endpoint: None,
+            token_type: None,
+            last_refresh: None,
         }
     }
 }
@@ -449,27 +508,79 @@ impl CredentialPool {
     }
 
     /// Refresh all OAuth credentials in the pool.
-    ///
-    /// This is a stub — actual OAuth refresh logic is provider-specific and
-    /// would be implemented by the caller. Currently logs and returns success.
-    pub fn refresh(&self) -> Result<()> {
-        info!(provider = %self.provider, "Credential pool refresh requested (stub)");
+    pub async fn refresh_async(&self) -> Result<()> {
+        let refresher = crate::oauth_refresh::OAuthRefresher::new()?;
+        let inner = self.inner.read().expect("credential pool lock poisoned");
+
+        for cred in inner.credentials.values() {
+            if cred.credential_type == AuthType::OAuth && cred.needs_oauth_refresh(120) {
+                info!(
+                    provider = %self.provider,
+                    credential = %cred.name,
+                    "Refreshing OAuth token"
+                );
+                match refresher.refresh(&self.provider, cred).await {
+                    Ok(response) => {
+                        info!(
+                            provider = %self.provider,
+                            credential = %cred.name,
+                            "OAuth token refreshed successfully"
+                        );
+                        let _ = refresher.persist_to_auth_store(&self.provider, cred, &response);
+                    }
+                    Err(e) => {
+                        warn!(
+                            provider = %self.provider,
+                            credential = %cred.name,
+                            error = %e,
+                            "OAuth refresh failed, attempting sync from auth store"
+                        );
+                        if let Some(synced) = refresher.sync_from_auth_store(&self.provider, cred) {
+                            if synced.value != cred.value {
+                                info!(provider = %self.provider, credential = %cred.name, "Adopted synced token from auth store");
+                            }
+                        }
+                    }
+                }
+            }
+        }
         Ok(())
     }
 
     /// Attempt an OAuth refresh for a specific provider type.
-    ///
-    /// Supported provider types: `"anthropic"`, `"codex"`, `"nous"`.
-    ///
-    /// This is a stub — actual refresh requires network calls and is
-    /// provider-specific. Currently logs and returns success.
-    pub fn refresh_oauth(&self, provider_type: &str) -> Result<()> {
-        info!(
-            provider = %self.provider,
-            oauth_provider = %provider_type,
-            "OAuth credential refresh requested for {} (stub)",
-            provider_type
-        );
+    pub async fn refresh_oauth_async(&self, provider_type: &str) -> Result<()> {
+        let refresher = crate::oauth_refresh::OAuthRefresher::new()?;
+        let inner = self.inner.read().expect("credential pool lock poisoned");
+
+        for cred in inner.credentials.values() {
+            if cred.credential_type == AuthType::OAuth {
+                match refresher.refresh(provider_type, cred).await {
+                    Ok(response) => {
+                        info!(
+                            provider = %self.provider,
+                            oauth_provider = %provider_type,
+                            credential = %cred.name,
+                            "OAuth credential refreshed"
+                        );
+                        let _ = refresher.persist_to_auth_store(provider_type, cred, &response);
+                    }
+                    Err(e) => {
+                        warn!(
+                            provider = %self.provider,
+                            oauth_provider = %provider_type,
+                            credential = %cred.name,
+                            error = %e,
+                            "OAuth refresh failed"
+                        );
+                        if let Some(synced) = refresher.sync_from_auth_store(provider_type, cred) {
+                            if synced.value != cred.value {
+                                info!(provider = %self.provider, "Adopted synced token from auth store");
+                            }
+                        }
+                    }
+                }
+            }
+        }
         Ok(())
     }
 

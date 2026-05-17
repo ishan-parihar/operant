@@ -77,6 +77,7 @@ pub mod memory_provider;
 pub mod models_dev;
 pub mod ms_graph;
 pub mod nous_rate_guard;
+pub mod oauth_refresh;
 pub mod parser;
 pub mod platform;
 pub mod process_registry;
@@ -180,6 +181,10 @@ pub use models_dev::{
 pub use nous_rate_guard::{
     clear_nous_rate_limit, is_genuine_nous_rate_limit, nous_rate_limit_remaining,
     record_nous_rate_limit, NousRateLimitState,
+};
+pub use oauth_refresh::{
+    auth_store_path, load_auth_store, save_auth_store, OAuthRefresher, OAuthTokenResponse,
+    AuthStore, ProviderState,
 };
 pub use rate_limit_tracker::{RateLimitBucket, RateLimitState};
 pub use retry::{default_backoff, jittered_backoff};
