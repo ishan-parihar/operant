@@ -5,6 +5,7 @@
 //! backed by configuration and the `hermes_core::gateway` module.
 
 use anyhow::{Context, Result};
+use base64::Engine;
 use hermes_core::agent::{AgentEvent, HermesAgent};
 use hermes_core::config::runtime_config;
 use hermes_core::config::AppConfig;
@@ -357,6 +358,21 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                         }
                     }
                 }
+                AgentEvent::ToolComplete { result } => {
+                    // Intercept TTS audio results and send as voice message
+                    if result.name == "text_to_speech" && result.success {
+                        if let Ok(data) = serde_json::from_str::<serde_json::Value>(&result.content) {
+                            if let Some(audio_b64) = data.get("audio").and_then(|a| a.as_str()) {
+                                let format = data.get("format").and_then(|f| f.as_str()).unwrap_or("wav");
+                                if let Ok(audio_bytes) = base64::engine::general_purpose::STANDARD.decode(audio_b64) {
+                                    if let Err(e) = gw_for_events.send_voice(&platform, &channel_id, &audio_bytes, format).await {
+                                        tracing::warn!(error = %e, "Failed to send TTS voice message");
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
                 _ => {}
             }
         }
@@ -525,28 +541,22 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                     let gw = gw.clone();
                     let ch = channel_id.clone();
                     Some(tokio::spawn(async move {
-                        // Wait 30s before first notification (quick tasks skip it)
-                        tokio::time::sleep(std::time::Duration::from_secs(30)).await;
                         let start = std::time::Instant::now();
-                        let mut interval =
-                            tokio::time::interval(std::time::Duration::from_secs(60));
+                        // Wait 3 minutes before first notification (matches Python behavior)
+                        tokio::time::sleep(std::time::Duration::from_secs(180)).await;
                         loop {
-                            interval.tick().await;
                             let elapsed = start.elapsed().as_secs();
                             let minutes = elapsed / 60;
-                            let seconds = elapsed % 60;
-                            let body = if minutes > 0 {
-                                format!(
-                                    "\u{23F3} Still working... ({}m {}s elapsed...)",
-                                    minutes, seconds
-                                )
-                            } else {
-                                format!("\u{23F3} Still working... ({}s elapsed...)", seconds)
-                            };
+                            let body = format!(
+                                "\u{23F3} Still working... ({}m elapsed...)",
+                                minutes
+                            );
                             let msg = OutgoingMessage::new(&ch, &body).no_markdown();
                             if gw.send_to_platform("telegram", msg).await.is_err() {
                                 break;
                             }
+                            // Wait 3 minutes between notifications
+                            tokio::time::sleep(std::time::Duration::from_secs(180)).await;
                         }
                     }))
                 } else {

@@ -59,8 +59,16 @@ pub trait BrowserProvider: Send + Sync {
 pub struct LightpandaProvider;
 
 impl LightpandaProvider {
+    async fn ensure_binary(&self) -> Result<std::path::PathBuf> {
+        let bin_path = crate::tools::browser_downloader::BrowserDownloader::default_bin_path();
+        if bin_path.exists() {
+            return Ok(bin_path);
+        }
+        crate::tools::browser_downloader::BrowserDownloader::download_binary().await
+    }
+
     async fn run(&self, args: &[&str]) -> Result<String> {
-        let bin = crate::tools::browser_downloader::BrowserDownloader::download_binary().await?;
+        let bin = self.ensure_binary().await?;
         let out = tokio::time::timeout(
             Duration::from_secs(30),
             tokio::process::Command::new(&bin).args(args).output(),
@@ -71,7 +79,8 @@ impl LightpandaProvider {
         if out.status.success() {
             Ok(String::from_utf8_lossy(&out.stdout).into_owned())
         } else {
-            Err(Error::Agent(String::from_utf8_lossy(&out.stderr).into_owned()))
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            Err(Error::Agent(format!("browser error: {}", stderr)))
         }
     }
 }
@@ -80,11 +89,21 @@ impl LightpandaProvider {
 impl BrowserProvider for LightpandaProvider {
     fn name(&self) -> &str { "lightpanda" }
     fn is_configured(&self) -> bool { true }
-    async fn navigate(&self, url: &str) -> Result<String> { self.run(&["navigate", url]).await }
-    async fn snapshot(&self) -> Result<String> { self.run(&["snapshot"]).await }
-    async fn click(&self, selector: &str) -> Result<String> { self.run(&["click", selector]).await }
-    async fn type_text(&self, selector: &str, text: &str) -> Result<String> { self.run(&["type", selector, text]).await }
-    async fn scroll(&self, direction: &str) -> Result<String> { self.run(&["scroll", direction]).await }
+    async fn navigate(&self, url: &str) -> Result<String> {
+        self.run(&["fetch", "--dump", "markdown", url]).await
+    }
+    async fn snapshot(&self) -> Result<String> {
+        Err(Error::Agent("Lightpanda fetch mode: use navigate(url) to get page content".into()))
+    }
+    async fn click(&self, _selector: &str) -> Result<String> {
+        Err(Error::Agent("Lightpanda fetch mode does not support click interactions".into()))
+    }
+    async fn type_text(&self, _selector: &str, _text: &str) -> Result<String> {
+        Err(Error::Agent("Lightpanda fetch mode does not support type interactions".into()))
+    }
+    async fn scroll(&self, _direction: &str) -> Result<String> {
+        Err(Error::Agent("Lightpanda fetch mode does not support scroll".into()))
+    }
 }
 
 // ---------------------------------------------------------------------------
