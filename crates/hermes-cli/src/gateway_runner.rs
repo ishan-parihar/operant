@@ -163,6 +163,9 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
     gateway = gateway.with_handler(handler);
 
     let gateway = Arc::new(gateway);
+
+    // Check for interrupted turns from previous session
+    check_interrupted_turns();
     gateway.start().await.context("Failed to start gateway")?;
 
     let (message_tx, mut message_rx) = mpsc::unbounded_channel::<IncomingMessage>();
@@ -539,6 +542,12 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                 );
                 *current_channel.lock().await = Some((platform.clone(), channel_id.clone()));
 
+                // ── 5.6 Per-turn .env reload for credential rotation ─────────
+                hermes_core::env_passthrough::reload_dotenv();
+
+                // ── 5.7 Turn state: mark pending ─────────────────────────────
+                save_turn_state(&channel_id, "pending");
+
                 // ── 6. Route message ──────────────────────────────────────────
                 match gw.route_message(msg).await {
                     Ok(Some(response)) => {
@@ -554,10 +563,14 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                                 e
                             );
                         }
+                        save_turn_state(&channel_id, "complete");
                     }
-                    Ok(None) => {}
+                    Ok(None) => {
+                        save_turn_state(&channel_id, "complete");
+                    }
                     Err(e) => {
                         tracing::error!("Failed to route message on {}: {}", platform, e);
+                        save_turn_state(&channel_id, "failed");
                     }
                 }
 
@@ -930,5 +943,35 @@ mod tests {
 
         let not_running = is_running().await;
         assert!(!not_running);
+    }
+}
+
+// ── Turn state tracking for auto-continue / interruption recovery ────────
+
+/// Persist turn state so interrupted sessions can be detected on restart.
+fn save_turn_state(channel_id: &str, status: &str) {
+    let path = hermes_core::platform::hermes_home().join(".turn_state.json");
+    let ts = chrono::Utc::now().to_rfc3339();
+    let json = serde_json::json!({
+        "channel_id": channel_id,
+        "status": status,
+        "timestamp": ts,
+    });
+    let _ = std::fs::write(path, json.to_string());
+}
+
+/// Check for interrupted turns on startup and log a warning.
+pub fn check_interrupted_turns() {
+    let path = hermes_core::platform::hermes_home().join(".turn_state.json");
+    if let Ok(content) = std::fs::read_to_string(&path) {
+        if let Ok(state) = serde_json::from_str::<serde_json::Value>(&content) {
+            if state.get("status").and_then(|s| s.as_str()) == Some("pending") {
+                tracing::warn!(
+                    channel_id = %state["channel_id"],
+                    timestamp = %state["timestamp"],
+                    "Detected interrupted turn from previous session"
+                );
+            }
+        }
     }
 }

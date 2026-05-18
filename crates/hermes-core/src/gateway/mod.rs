@@ -21,6 +21,7 @@ use crate::error::Result;
 use crate::gateway_markdown::markdown_to_telegram_html;
 
 pub mod platforms;
+pub mod stream_consumer;
 
 pub use platforms::PlatformRegistry;
 
