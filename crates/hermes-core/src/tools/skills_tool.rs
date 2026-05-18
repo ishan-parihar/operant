@@ -38,52 +38,70 @@ fn find_skills_in_dir(skills_dir: &PathBuf) -> Vec<SkillMeta> {
         return skills;
     }
 
-    if let Ok(entries) = fs::read_dir(skills_dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                let skill_md = path.join("SKILL.md");
-                if skill_md.exists() {
-                    if let Ok(content) = fs::read_to_string(&skill_md) {
-                        let (frontmatter, body) = parse_frontmatter(&content);
-                        let name = frontmatter
-                            .get("name")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or(&path.file_name().unwrap_or_default().to_string_lossy())
-                            .chars()
-                            .take(MAX_NAME_LENGTH)
-                            .collect::<String>();
-
-                        let description = frontmatter
-                            .get("description")
-                            .and_then(|v| v.as_str())
-                            .map(|s| {
-                                if s.len() > MAX_DESCRIPTION_LENGTH {
-                                    format!("{}...", &s[..MAX_DESCRIPTION_LENGTH - 3])
-                                } else {
-                                    s.to_string()
-                                }
-                            })
-                            .unwrap_or_else(|| {
-                                body.lines()
-                                    .find(|l| !l.trim().starts_with('#'))
-                                    .map(|l| l.trim().to_string())
-                                    .unwrap_or_default()
-                            });
-
-                        skills.push(SkillMeta {
-                            name,
-                            description,
-                            category: None,
-                        });
-                    }
-                }
-            }
-        }
-    }
-
+    collect_skills_recursive(skills_dir, skills_dir, &mut skills);
     skills.sort_by(|a, b| a.name.cmp(&b.name));
     skills
+}
+
+fn collect_skills_recursive(base_dir: &PathBuf, current_dir: &PathBuf, skills: &mut Vec<SkillMeta>) {
+    let Ok(entries) = fs::read_dir(current_dir) else { return };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let dir_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        if dir_name.starts_with('.') {
+            continue;
+        }
+
+        let skill_md = path.join("SKILL.md");
+        if skill_md.exists() {
+            if let Ok(content) = fs::read_to_string(&skill_md) {
+                let (frontmatter, body) = parse_frontmatter(&content);
+                let name = frontmatter
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(dir_name)
+                    .chars()
+                    .take(MAX_NAME_LENGTH)
+                    .collect::<String>();
+
+                let description = frontmatter
+                    .get("description")
+                    .and_then(|v| v.as_str())
+                    .map(|s| {
+                        if s.len() > MAX_DESCRIPTION_LENGTH {
+                            format!("{}...", &s[..MAX_DESCRIPTION_LENGTH - 3])
+                        } else {
+                            s.to_string()
+                        }
+                    })
+                    .unwrap_or_else(|| {
+                        body.lines()
+                            .find(|l| !l.trim().starts_with('#'))
+                            .map(|l| l.trim().to_string())
+                            .unwrap_or_default()
+                    });
+
+                let category = path
+                    .parent()
+                    .filter(|p| *p != base_dir)
+                    .and_then(|p| p.file_name())
+                    .and_then(|n| n.to_str())
+                    .map(|s| s.to_string());
+
+                skills.push(SkillMeta {
+                    name,
+                    description,
+                    category,
+                });
+            }
+        } else {
+            // Not a skill dir — might be a category, recurse
+            collect_skills_recursive(base_dir, &path, skills);
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]

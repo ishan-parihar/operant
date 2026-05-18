@@ -102,7 +102,7 @@ impl BrowserDownloader {
         }
 
         let output = Command::new(path)
-            .arg("--version")
+            .arg("version")
             .output()
             .map_err(|e| Error::Agent(format!("Failed to execute binary: {}", e)))?;
 
