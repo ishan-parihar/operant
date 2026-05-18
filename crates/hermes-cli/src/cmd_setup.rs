@@ -330,6 +330,9 @@ pub async fn run_setup_wizard(
         Some("tts") => {
             step_tts(&mut updated, true).await?;
         }
+        Some("browser") => {
+            step_browser_and_skills(&mut updated).await?;
+        }
         Some("gateway") => {
             step_gateway(&mut updated, true).await?;
         }
@@ -374,6 +377,9 @@ pub async fn run_setup_wizard(
 
                 // Step 5: Text-to-Speech
                 step_tts(&mut updated, false).await?;
+
+                // Step 5b: Browser & Skills setup
+                step_browser_and_skills(&mut updated).await?;
 
                 // Step 6: Agent behaviour settings
                 step_agent_settings(&mut updated, false).await?;
@@ -1068,10 +1074,99 @@ async fn step_tts(config: &mut AppConfig, _reconfigure: bool) -> Result<()> {
                 "TTS enabled with provider: {}",
                 tts_options[sel].0
             ));
+
+            // Download Kokoro model files if selected
+            if tts_values[sel] == "kokoro" {
+                let cache_dir = dirs::home_dir()
+                    .unwrap_or_default()
+                    .join(".cache")
+                    .join("kokoros");
+                let model_path = cache_dir.join("kokoro-v1.0.onnx");
+                let voices_path = cache_dir.join("voices-v1.0.bin");
+
+                if !model_path.exists() || !voices_path.exists() {
+                    print_info("Kokoro requires model files (~338 MB). Downloading now...");
+                    std::fs::create_dir_all(&cache_dir).ok();
+
+                    let client = reqwest::Client::new();
+                    if !model_path.exists() {
+                        print_info("  Downloading kokoro-v1.0.onnx (311 MB)...");
+                        match download_file_to(&client, "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.onnx", &model_path).await {
+                            Ok(_) => print_success("  Model downloaded."),
+                            Err(e) => print_warning(&format!("  Download failed: {}. TTS will download on first use.", e)),
+                        }
+                    }
+                    if !voices_path.exists() {
+                        print_info("  Downloading voices-v1.0.bin (27 MB)...");
+                        match download_file_to(&client, "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin", &voices_path).await {
+                            Ok(_) => print_success("  Voices downloaded."),
+                            Err(e) => print_warning(&format!("  Download failed: {}. TTS will download on first use.", e)),
+                        }
+                    }
+                } else {
+                    print_success("Kokoro model files already present.");
+                }
+            }
         }
     } else {
         config.tts.enabled = false;
         print_success("TTS disabled");
+    }
+
+    println!();
+    Ok(())
+}
+
+/// Download a file from URL to a local path.
+async fn download_file_to(client: &reqwest::Client, url: &str, dest: &std::path::Path) -> Result<()> {
+    let resp = client.get(url).send().await?;
+    if !resp.status().is_success() {
+        anyhow::bail!("HTTP {}", resp.status());
+    }
+    let bytes = resp.bytes().await?;
+    std::fs::write(dest, &bytes)?;
+    Ok(())
+}
+
+/// Browser binary pre-install and skills directory setup.
+async fn step_browser_and_skills(config: &mut AppConfig) -> Result<()> {
+    print_page_header("Browser & Skills Setup");
+
+    // ── Browser ──────────────────────────────────────────────────────────────
+    let bin_path = hermes_core::tools::browser_downloader::BrowserDownloader::default_bin_path();
+    let browser_ok = hermes_core::tools::browser_downloader::BrowserDownloader::verify_binary(&bin_path).await.is_ok();
+
+    if browser_ok {
+        print_success(&format!("Lightpanda browser already installed at {}", bin_path.display()));
+    } else if prompt_yes_no("Install Lightpanda browser for web automation?", true)? {
+        print_info("Downloading Lightpanda browser binary...");
+        match hermes_core::tools::browser_downloader::BrowserDownloader::download_binary().await {
+            Ok(path) => {
+                config.tools.browser_binary_path = Some(path.clone());
+                print_success(&format!("Browser installed at {}", path.display()));
+            }
+            Err(e) => {
+                print_warning(&format!("Browser install failed: {}. Will retry on first use.", e));
+            }
+        }
+    }
+
+    // ── Skills directory ─────────────────────────────────────────────────────
+    let skills_dir = &config.skills.root_dir;
+    if skills_dir.exists() {
+        let count = std::fs::read_dir(skills_dir)
+            .map(|entries| entries.filter_map(|e| e.ok()).filter(|e| e.path().is_dir()).count())
+            .unwrap_or(0);
+        if count > 0 {
+            print_success(&format!("Skills directory: {} ({} skills)", skills_dir.display(), count));
+        } else {
+            print_warning(&format!("Skills directory exists but is empty: {}", skills_dir.display()));
+            print_info("Add skills with: hermes skills install <name>");
+        }
+    } else {
+        std::fs::create_dir_all(skills_dir).ok();
+        print_info(&format!("Created skills directory: {}", skills_dir.display()));
+        print_info("Add skills with: hermes skills install <name>");
     }
 
     println!();
