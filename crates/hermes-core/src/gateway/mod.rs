@@ -522,6 +522,11 @@ pub trait PlatformAdapter: Send + Sync {
         channel_id: &str,
         message: &OutgoingMessage,
     ) -> Result<String>;
+
+    /// Send a voice/audio message to a channel.
+    async fn send_voice(&self, _channel_id: &str, _audio_data: &[u8], _format: &str) -> Result<()> {
+        Ok(()) // default no-op for platforms that don't support voice
+    }
 }
 
 /// Gateway for routing messages between platforms and the agent
@@ -720,6 +725,15 @@ impl Gateway {
             }
         };
         adapter.edit_message(channel_id, message_id, &message).await
+    }
+
+    /// Send a voice/audio message to a platform channel.
+    pub async fn send_voice(&self, platform: &str, channel_id: &str, audio_data: &[u8], format: &str) -> Result<()> {
+        let adapter = match self.adapters.get(platform) {
+            Some(a) => a,
+            None => return Ok(()), // silently skip unsupported platforms
+        };
+        adapter.send_voice(channel_id, audio_data, format).await
     }
 
     /// Send a typing indicator to a platform channel
@@ -1264,6 +1278,32 @@ impl PlatformAdapter for TelegramAdapter {
             }
             Ok(first_id)
         }
+    }
+
+    async fn send_voice(&self, channel_id: &str, audio_data: &[u8], format: &str) -> Result<()> {
+        let url = format!(
+            "https://api.telegram.org/bot{}/sendVoice",
+            self.token.as_deref().unwrap_or("")
+        );
+        let filename = format!("voice.{}", format);
+        let mime = match format {
+            "ogg" | "opus" => "audio/ogg",
+            "mp3" => "audio/mpeg",
+            _ => "audio/wav",
+        };
+        let part = reqwest::multipart::Part::bytes(audio_data.to_vec())
+            .file_name(filename)
+            .mime_str(mime)
+            .map_err(|e| crate::error::Error::Agent(e.to_string()))?;
+        let form = reqwest::multipart::Form::new()
+            .text("chat_id", channel_id.to_string())
+            .part("voice", part);
+        let resp = self.client.post(&url).multipart(form).send().await?;
+        if !resp.status().is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(crate::error::Error::Agent(format!("sendVoice failed: {}", body)));
+        }
+        Ok(())
     }
 }
 

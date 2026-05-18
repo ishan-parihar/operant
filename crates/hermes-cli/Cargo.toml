@@ -28,6 +28,7 @@ config = { workspace = true }
 # Serialization
 schemars = { workspace = true }
 serde = { workspace = true }
+base64 = "0.22"
 serde_json = { workspace = true }
 serde_yaml = "0.9"
 toml = "0.8"
