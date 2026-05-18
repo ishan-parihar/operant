@@ -20,6 +20,7 @@ use crate::config::runtime_config;
 use crate::error::Result;
 use crate::gateway_markdown::markdown_to_telegram_html;
 
+pub mod pairing;
 pub mod platforms;
 pub mod stream_consumer;
 
@@ -46,6 +47,8 @@ pub struct GatewayConfig {
     pub webhooks_addr: Option<String>,
     /// Default admin users (user IDs that can access admin commands)
     pub admins: Vec<String>,
+    /// Streaming transport mode: "auto", "edit", "draft", "off"
+    pub streaming_transport: String,
 }
 
 impl Default for GatewayConfig {
@@ -61,6 +64,7 @@ impl Default for GatewayConfig {
             webhooks_enabled: settings.webhooks_enabled,
             webhooks_addr: settings.webhooks_addr,
             admins: settings.admins,
+            streaming_transport: settings.streaming_transport,
         }
     }
 }
@@ -82,6 +86,8 @@ pub struct IncomingMessage {
     pub raw: serde_json::Value,
     /// Timestamp
     pub timestamp: i64,
+    /// Whether this message is from a group chat
+    pub is_group_chat: bool,
 }
 
 impl IncomingMessage {
@@ -104,12 +110,19 @@ impl IncomingMessage {
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_secs() as i64)
                 .unwrap_or(0),
+            is_group_chat: false,
         }
     }
 
     /// Set the raw message
     pub fn with_raw(mut self, raw: serde_json::Value) -> Self {
         self.raw = raw;
+        self
+    }
+
+    /// Mark as group chat message
+    pub fn with_group_chat(mut self, is_group: bool) -> Self {
+        self.is_group_chat = is_group;
         self
     }
 }
@@ -307,6 +320,15 @@ impl SessionStore {
         } else {
             false
         }
+    }
+
+    /// Find or create a shared session keyed by channel_id only (for group chats).
+    pub fn find_or_create_shared_session(&self, platform: &str, channel_id: &str) -> Result<PlatformSession> {
+        if let Some(s) = self.find_session(platform, "__shared__", channel_id) {
+            let _ = self.update_activity(&s.session_id);
+            return Ok(s);
+        }
+        self.create_session(platform, "__shared__", channel_id)
     }
 }
 
@@ -1322,6 +1344,7 @@ impl TelegramAdapter {
                     .unwrap_or_default(),
                 content,
             )
+            .with_group_chat(matches!(chat.get("type").and_then(|t| t.as_str()), Some("group" | "supergroup")))
             .with_raw(update),
         ))
     }

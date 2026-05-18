@@ -424,6 +424,7 @@ pub struct GatewaySettings {
     pub irc_enabled: bool,
     pub microsoft_teams_enabled: bool,
     pub admins: Vec<String>,
+    pub streaming_transport: String,
 }
 
 impl Default for GatewaySettings {
@@ -478,6 +479,7 @@ impl Default for GatewaySettings {
             irc_enabled: false,
             microsoft_teams_enabled: false,
             admins: Vec::new(),
+            streaming_transport: "auto".to_string(),
         }
     }
 }

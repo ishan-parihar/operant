@@ -107,6 +107,16 @@ fn build_adapters(config: &GatewayConfig) -> Vec<Arc<dyn PlatformAdapter>> {
     adapters
 }
 
+fn build_session_context(platform: &str, channel_id: &str, app_config: &AppConfig) -> String {
+    let mut ctx = String::new();
+    ctx.push_str(&format!("Connected platform: {}\n", platform));
+    ctx.push_str(&format!("Channel: {}\n", hermes_core::pii::redact_chat_id(channel_id)));
+    if app_config.gateway.telegram_enabled { ctx.push_str("Available: Telegram\n"); }
+    if app_config.gateway.discord_enabled { ctx.push_str("Available: Discord\n"); }
+    if app_config.gateway.slack_enabled { ctx.push_str("Available: Slack\n"); }
+    ctx
+}
+
 /// Start the gateway with the provided application configuration.
 ///
 /// Constructs a `GatewayConfig` from `app_config.gateway.*` fields,
@@ -133,6 +143,7 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
         webhooks_enabled: app_config.gateway.webhooks_enabled,
         webhooks_addr: app_config.gateway.webhooks_addr.clone(),
         admins: app_config.gateway.admins.clone(),
+        streaming_transport: app_config.gateway.streaming_transport.clone(),
     };
     let dispatch_config = gw_config.clone();
     let adapters = build_adapters(&gw_config);
@@ -452,6 +463,13 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                 }
 
                 // ── 4. Session management ─────────────────────────────────────
+                if msg.is_group_chat {
+                    match gw.get_session_store().find_or_create_shared_session(&msg.platform, &msg.channel_id) {
+                        Ok(s) => tracing::info!("Shared session {} for channel {}", s.session_id, msg.channel_id),
+                        Err(e) => tracing::warn!("Failed to get shared session: {}", e),
+                    }
+                    msg.content = format!("[{}]: {}", msg.username, msg.content);
+                } else {
                 let existing = gw.get_session_store().find_session(
                     &msg.platform,
                     &msg.user_id,
@@ -479,6 +497,7 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                         ),
                         Err(e) => tracing::warn!("Failed to create session: {}", e),
                     }
+                }
                 }
 
                 // ── 5. Typing indicator ───────────────────────────────────────
@@ -547,6 +566,10 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
 
                 // ── 5.7 Turn state: mark pending ─────────────────────────────
                 save_turn_state(&channel_id, "pending");
+
+                // ── 5.8 Session context injection ────────────────────────────
+                let ctx = build_session_context(&platform, &channel_id, &app_config_clone);
+                msg.content = format!("[context: {}]\n{}", ctx.trim(), msg.content);
 
                 // ── 6. Route message ──────────────────────────────────────────
                 match gw.route_message(msg).await {
