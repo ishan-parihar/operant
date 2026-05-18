@@ -74,7 +74,27 @@ pub async fn distill_session_to_memory(
 }
 
 fn parse_distilled_facts(raw: &str) -> Result<Vec<String>> {
-    serde_json::from_str::<Vec<String>>(raw.trim())
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Ok(vec![]);
+    }
+
+    // Strip markdown code fences if present.
+    let json_str = if trimmed.starts_with("```") {
+        let inner = trimmed
+            .strip_prefix("```json")
+            .or_else(|| trimmed.strip_prefix("```"))
+            .unwrap_or(trimmed);
+        inner.trim_end_matches("```").trim()
+    } else {
+        trimmed
+    };
+
+    if json_str.is_empty() {
+        return Ok(vec![]);
+    }
+
+    serde_json::from_str::<Vec<String>>(json_str)
         .map_err(|error| Error::ParseResponse(format!("Invalid distillation JSON: {}", error)))
 }
 

@@ -214,28 +214,51 @@ impl OpenAIClient {
             });
         }
 
-        let response = self
-            .http_client
-            .post(url)
-            .headers(headers)
-            .json(&request)
-            .send()
-            .await?;
+        let max_retries = self.config.rate_limit.max_retries;
+        let base_delay = self.config.rate_limit.base_delay_secs;
+        let max_delay = self.config.rate_limit.max_delay_secs;
 
-        let status = response.status();
-        if !status.is_success() {
+        for attempt in 1..=max_retries {
+            let response = self
+                .http_client
+                .post(url.clone())
+                .headers(headers.clone())
+                .json(&request)
+                .send()
+                .await?;
+
+            let status = response.status();
+            if status.is_success() {
+                info!("Streaming connection established");
+                let stream = response.bytes_stream();
+                return Ok(ChatStreamResponse::new(stream));
+            }
+
             let body = response.text().await?;
-            // Drain bucket on 429 even for streaming failures.
+
             if status == 429 {
                 self.rate_limiter.drain_bucket(model).await;
             }
+
+            // Retry on 5xx if attempts remain.
+            if status.as_u16() >= 500 && attempt < max_retries {
+                let delay_s = exponential_backoff_secs(attempt, base_delay, max_delay);
+                warn!(
+                    model = %model,
+                    attempt,
+                    status = status.as_u16(),
+                    delay_secs = delay_s,
+                    "Streaming transient server error, retrying",
+                );
+                tokio::time::sleep(Duration::from_secs(delay_s)).await;
+                continue;
+            }
+
             error!(status = %status, body = %body, "Streaming request failed");
             return Err(classify_http_error(status.as_u16(), &body));
         }
 
-        info!("Streaming connection established");
-        let stream = response.bytes_stream();
-        Ok(ChatStreamResponse::new(stream))
+        unreachable!("retry loop must return")
     }
 
     /// Execute an API POST request with rate-limit checking and automatic retry.
@@ -361,6 +384,17 @@ impl OpenAIClient {
         unreachable!("Retry loop always returns or breaks");
     }
 
+    /// Recursively remove null values and $schema from JSON Schema objects.
+    fn clean_schema(obj: &mut serde_json::Map<String, Value>) {
+        obj.remove("$schema");
+        obj.retain(|_, v| !v.is_null());
+        for value in obj.values_mut() {
+            if let Some(inner) = value.as_object_mut() {
+                Self::clean_schema(inner);
+            }
+        }
+    }
+
     ///Build the chat request payload
     fn build_chat_request(
         &self,
@@ -380,12 +414,16 @@ impl OpenAIClient {
                 let tools_array: Vec<Value> = tools
                     .iter()
                     .map(|t| {
+                        let mut params = t.parameters.clone();
+                        if let Some(obj) = params.as_object_mut() {
+                            Self::clean_schema(obj);
+                        }
                         json!({
                             "type": "function",
                             "function": {
                                 "name": t.name,
                                 "description": t.description,
-                                "parameters": t.parameters
+                                "parameters": params
                             }
                         })
                     })
