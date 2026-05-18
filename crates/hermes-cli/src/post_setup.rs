@@ -141,7 +141,8 @@ fn print_tool_summary(config: &AppConfig) {
         ("Text-to-Speech", config.tts.enabled, None),
         (
             "Browser Automation",
-            config.tools.browser_binary_path.is_some(),
+            config.tools.browser_binary_path.is_some()
+                || hermes_core::tools::browser_downloader::BrowserDownloader::default_bin_path().exists(),
             None,
         ),
         ("Terminal/Commands", true, None),
