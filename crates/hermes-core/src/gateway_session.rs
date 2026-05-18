@@ -186,6 +186,19 @@ impl PersistentSessionStore {
         );
         result.ok()
     }
+
+    /// Find or create a shared session keyed by channel_id only (for group chats).
+    pub fn find_or_create_shared_session(
+        &self,
+        platform: &str,
+        channel_id: &str,
+    ) -> Result<PlatformSession, Error> {
+        if let Some(s) = self.find_session(platform, "__shared__", channel_id) {
+            let _ = self.update_activity(&s.session_id);
+            return Ok(s);
+        }
+        self.create_session(platform, "__shared__", channel_id)
+    }
 }
 
 // ---------------------------------------------------------------------------
