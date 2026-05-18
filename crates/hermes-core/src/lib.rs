@@ -79,6 +79,7 @@ pub mod ms_graph;
 pub mod nous_rate_guard;
 pub mod oauth_refresh;
 pub mod parser;
+pub mod pii;
 pub mod platform;
 pub mod plugins;
 pub mod process_registry;
