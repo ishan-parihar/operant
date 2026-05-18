@@ -2262,6 +2262,7 @@ mod tests {
             webhooks_enabled: false,
             webhooks_addr: None,
             admins: vec![],
+            streaming_transport: "auto".to_string(),
         };
         let gw = Gateway::new(config);
         let stats = gw.get_stats().await;
@@ -2415,6 +2416,7 @@ mod tests {
             webhooks_enabled: false,
             webhooks_addr: None,
             admins: vec!["admin1".to_string()],
+            streaming_transport: "auto".to_string(),
         };
         let msg = format_startup_message(&config);
         assert!(msg.contains("Hermes Gateway"));

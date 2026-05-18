@@ -862,6 +862,7 @@ mod tests {
             webhooks_enabled: false,
             webhooks_addr: None,
             admins: vec![],
+            streaming_transport: "auto".to_string(),
         };
         let adapters = build_adapters(&config);
         assert_eq!(adapters.len(), 0);
@@ -879,6 +880,7 @@ mod tests {
             webhooks_enabled: false,
             webhooks_addr: None,
             admins: vec![],
+            streaming_transport: "auto".to_string(),
         };
         let adapters = build_adapters(&config);
         assert_eq!(adapters.len(), 1);
@@ -897,6 +899,7 @@ mod tests {
             webhooks_enabled: true,
             webhooks_addr: Some("0.0.0.0:9090".to_string()),
             admins: vec![],
+            streaming_transport: "auto".to_string(),
         };
         let adapters = build_adapters(&config);
         assert_eq!(adapters.len(), 4);
@@ -930,6 +933,7 @@ mod tests {
             webhooks_enabled: app_config.gateway.webhooks_enabled,
             webhooks_addr: app_config.gateway.webhooks_addr.clone(),
             admins: app_config.gateway.admins.clone(),
+            streaming_transport: "auto".to_string(),
         };
 
         assert!(gw_config.telegram_enabled);
