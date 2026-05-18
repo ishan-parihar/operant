@@ -133,6 +133,7 @@ async fn main() -> Result<()> {
         api_key: std::env::var("OPENAI_API_KEY").ok(),
         timeout: Duration::from_secs(60),
         max_context_length: 128_000,
+        rate_limit: Default::default(),
     };
 
     let client = OpenAIClient::new(config);
@@ -164,6 +165,8 @@ Use the echo tool to repeat information and the calculate tool for math."
         context_window: 128_000,
         request_timeout: Duration::from_secs(120),
         max_healing_attempts: 3,
+        fallback_models: vec![],
+        fallback_on_errors: false,
     };
 
     let database = Arc::new(Database::init(std::path::PathBuf::from("simple_agent.db"))?);

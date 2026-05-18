@@ -52,17 +52,19 @@ pub struct McpCapabilities {
 /// Initialize request
 #[derive(Debug, Serialize)]
 struct InitializeRequest {
+    #[serde(rename = "protocolVersion")]
     protocol_version: String,
     capabilities: ClientCapabilities,
+    #[serde(rename = "clientInfo")]
     client_info: ClientInfo,
 }
 
 /// Client capabilities
 #[derive(Debug, Serialize)]
 struct ClientCapabilities {
-    #[serde(rename = "roots")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     roots: Option<Roots>,
-    #[serde(rename = "sampling")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     sampling: Option<Sampling>,
 }
 
@@ -88,8 +90,10 @@ struct ClientInfo {
 #[derive(Debug, Deserialize)]
 #[allow(dead_code)]
 struct InitializeResponse {
+    #[serde(rename = "protocolVersion")]
     protocol_version: String,
     capabilities: ServerCapabilities,
+    #[serde(rename = "serverInfo")]
     server_info: ServerInfo,
 }
 
@@ -139,8 +143,10 @@ struct ServerInfo {
 struct JsonRpcRequest {
     jsonrpc: String,
     method: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     params: Option<Value>,
-    id: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    id: Option<u64>,
 }
 
 /// JSON-RPC response
@@ -172,7 +178,9 @@ struct ToolListResult {
 #[derive(Debug, Clone, Deserialize)]
 pub struct McpToolDefinition {
     pub name: String,
+    #[serde(default)]
     pub description: String,
+    #[serde(rename = "inputSchema")]
     pub input_schema: Value,
 }
 
@@ -231,7 +239,7 @@ impl McpClient {
         }
 
         // Send initialized notification
-        self.send_notification("initialized", Value::Null).await?;
+        self.send_notification("notifications/initialized", Value::Null).await?;
 
         // List available tools
         self.list_tools().await?;
@@ -313,7 +321,7 @@ impl McpClient {
             jsonrpc: "2.0".to_string(),
             method: method.to_string(),
             params,
-            id: request_id,
+            id: Some(request_id),
         };
 
         let mut req_builder = self
@@ -366,7 +374,7 @@ impl McpClient {
             jsonrpc: "2.0".to_string(),
             method: method.to_string(),
             params: Some(params),
-            id: 0,
+            id: None,
         };
 
         let mut req_builder = self
@@ -506,7 +514,7 @@ impl McpStdioClient {
         }
 
         // Send initialized notification
-        self.send_notification("initialized", Value::Null).await?;
+        self.send_notification("notifications/initialized", Value::Null).await?;
 
         // List available tools
         self.list_tools().await?;
@@ -600,7 +608,7 @@ impl McpStdioClient {
             jsonrpc: "2.0".to_string(),
             method: method.to_string(),
             params,
-            id: request_id,
+            id: Some(request_id),
         };
 
         let mut request_line = serde_json::to_string(&request).map_err(|e| {
@@ -660,7 +668,7 @@ impl McpStdioClient {
             jsonrpc: "2.0".to_string(),
             method: method.to_string(),
             params: Some(params),
-            id: 0,
+            id: None,
         };
 
         let mut request_line = serde_json::to_string(&request).map_err(|e| {
@@ -795,8 +803,11 @@ pub struct McpNamespacedTool {
 
 impl McpNamespacedTool {
     fn new(server_name: &str, tool: McpTool) -> Self {
+        let qualified_name = format!("mcp_{}_{}", server_name, tool.name())
+            .replace('/', "_")
+            .replace('-', "_");
         Self {
-            qualified_name: format!("mcp_{}/{}", server_name, tool.name()),
+            qualified_name,
             tool,
         }
     }

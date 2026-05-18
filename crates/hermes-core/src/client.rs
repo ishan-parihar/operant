@@ -16,10 +16,11 @@ use reqwest::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use tracing::{debug, error, info, instrument};
+use tracing::{debug, error, info, instrument, warn};
 
 use crate::config::{runtime_config, ClientSettings};
 use crate::error::{Error, Result};
+use crate::rate_limiter::{exponential_backoff_secs, parse_retry_after_header, RateLimiter, RateLimitError};
 use crate::schema::ToolSchema;
 
 /// OpenAI API client configuration
@@ -33,6 +34,8 @@ pub struct ClientConfig {
     pub timeout: Duration,
     /// Maximum context length (for truncation warnings)
     pub max_context_length: usize,
+    /// Rate limit settings for outbound requests.
+    pub rate_limit: crate::config::RateLimitSettings,
 }
 
 impl Default for ClientConfig {
@@ -48,6 +51,7 @@ impl From<&ClientSettings> for ClientConfig {
             api_key: settings.api_key.clone(),
             timeout: Duration::from_secs(settings.timeout_secs),
             max_context_length: settings.max_context_length,
+            rate_limit: settings.rate_limit.clone(),
         }
     }
 }
@@ -57,6 +61,8 @@ impl From<&ClientSettings> for ClientConfig {
 pub struct OpenAIClient {
     config: ClientConfig,
     http_client: Client,
+    /// Token-bucket rate limiter keyed by model name.
+    rate_limiter: RateLimiter,
 }
 
 impl OpenAIClient {
@@ -67,17 +73,29 @@ impl OpenAIClient {
             .build()
             .expect("Failed to create HTTP client");
 
+        let rate_limiter = RateLimiter::new(
+            config.rate_limit.bucket_capacity,
+            config.rate_limit.bucket_refill_rate,
+        );
+
         Self {
             config,
             http_client,
+            rate_limiter,
         }
     }
 
     /// Create a client from an existing HTTP client handle.
     pub(crate) fn from_shared_http_client(config: ClientConfig, http_client: Client) -> Self {
+        let rate_limiter = RateLimiter::new(
+            config.rate_limit.bucket_capacity,
+            config.rate_limit.bucket_refill_rate,
+        );
+
         Self {
             config,
             http_client,
+            rate_limiter,
         }
     }
 
@@ -87,6 +105,10 @@ impl OpenAIClient {
 
     pub(crate) fn http_client_clone(&self) -> Client {
         self.http_client.clone()
+    }
+
+    pub(crate) fn rate_limiter_clone(&self) -> RateLimiter {
+        self.rate_limiter.clone()
     }
 
     /// Create from environment variables
@@ -103,6 +125,7 @@ impl OpenAIClient {
             api_key: api_key.or(base.client.api_key),
             timeout: Duration::from_secs(base.client.timeout_secs),
             max_context_length: base.client.max_context_length,
+            rate_limit: base.client.rate_limit.clone(),
         }))
     }
 
@@ -133,7 +156,7 @@ impl OpenAIClient {
         reqwest::Url::parse(&url).map_err(|e| Error::InvalidUrl(e.to_string()))
     }
 
-    /// Send a non-streaming chat completion request
+    /// Send a non-streaming chat completion request with rate-limit handling.
     #[instrument(skip(self, messages, tools), fields(model = % model))]
     pub async fn chat(
         &self,
@@ -146,16 +169,9 @@ impl OpenAIClient {
         let url = self.build_url("")?;
         let headers = self.build_headers()?;
 
-        let response = self
-            .http_client
-            .post(url)
-            .headers(headers)
-            .json(&request)
-            .send()
+        let (status, body) = self
+            .execute_with_retry(model, url, headers, request)
             .await?;
-
-        let status = response.status();
-        let body = response.text().await?;
 
         if !status.is_success() {
             error!(status = %status, body = %body, "Chat request failed");
@@ -169,7 +185,7 @@ impl OpenAIClient {
         Ok(response)
     }
 
-    /// Send a streaming chat completion request
+    /// Send a streaming chat completion request with rate-limit checking.
     #[instrument(skip(self, messages, tools), fields(model = % model))]
     pub async fn chat_streaming(
         &self,
@@ -182,6 +198,22 @@ impl OpenAIClient {
         let url = self.build_url("")?;
         let headers = self.build_headers()?;
 
+        // Pre-flight rate-limit check (streaming does not retry mid-stream).
+        if let Err(e) = self.rate_limiter.check_rate_limit(model).await {
+            let retry_after = match e {
+                RateLimitError::TooManyRequests { retry_after_secs } => retry_after_secs,
+                _ => 60,
+            };
+            warn!(
+                model = %model,
+                retry_after_secs = retry_after,
+                "Rate limited, rejecting streaming request"
+            );
+            return Err(Error::RateLimited {
+                retry_after: Duration::from_secs(retry_after),
+            });
+        }
+
         let response = self
             .http_client
             .post(url)
@@ -193,6 +225,10 @@ impl OpenAIClient {
         let status = response.status();
         if !status.is_success() {
             let body = response.text().await?;
+            // Drain bucket on 429 even for streaming failures.
+            if status == 429 {
+                self.rate_limiter.drain_bucket(model).await;
+            }
             error!(status = %status, body = %body, "Streaming request failed");
             return Err(classify_http_error(status.as_u16(), &body));
         }
@@ -200,6 +236,129 @@ impl OpenAIClient {
         info!("Streaming connection established");
         let stream = response.bytes_stream();
         Ok(ChatStreamResponse::new(stream))
+    }
+
+    /// Execute an API POST request with rate-limit checking and automatic retry.
+    ///
+    /// Retry flow:
+    /// 1. Check the proactive token-bucket rate limiter.
+    /// 2. Send the HTTP POST request.
+    /// 3. On 429: parse `Retry-After`, drain the bucket, wait, retry.
+    /// 4. On 5xx / network error: exponential backoff, retry.
+    /// 5. After exhausting retries: return the last error.
+    async fn execute_with_retry(
+        &self,
+        model: &str,
+        url: reqwest::Url,
+        headers: HeaderMap,
+        body: serde_json::Value,
+    ) -> Result<(reqwest::StatusCode, String)> {
+        let max_retries = self.config.rate_limit.max_retries;
+        let base_delay = self.config.rate_limit.base_delay_secs;
+        let max_delay = self.config.rate_limit.max_delay_secs;
+
+        for attempt in 1..=max_retries {
+            // 1. Proactive rate-limit check (consume a token).
+            if let Err(e) = self.rate_limiter.check_rate_limit(model).await {
+                let wait = match e {
+                    RateLimitError::TooManyRequests { retry_after_secs } => {
+                        Duration::from_secs(retry_after_secs)
+                    }
+                    _ => Duration::from_secs(base_delay),
+                };
+                debug!(
+                    model = %model,
+                    wait_ms = wait.as_millis(),
+                    "Proactive rate limit engaged, waiting",
+                );
+                if attempt < max_retries {
+                    tokio::time::sleep(wait).await;
+                    continue;
+                }
+                return Err(Error::RateLimited { retry_after: wait });
+            }
+
+            // 2. Send the HTTP request.
+            let response = match self
+                .http_client
+                .post(url.clone())
+                .headers(headers.clone())
+                .json(&body)
+                .send()
+                .await
+            {
+                Ok(r) => r,
+                Err(e) => {
+                    if attempt < max_retries {
+                        let delay_s =
+                            exponential_backoff_secs(attempt, base_delay, max_delay);
+                        warn!(
+                            model = %model,
+                            attempt,
+                            delay_secs = delay_s,
+                            error = %e,
+                            "Network error, retrying",
+                        );
+                        tokio::time::sleep(Duration::from_secs(delay_s)).await;
+                        continue;
+                    }
+                    return Err(Error::Network(e));
+                }
+            };
+
+            let status = response.status();
+            let retry_after_hdr = parse_retry_after_header(response.headers());
+            let body_text = response.text().await.map_err(Error::Network)?;
+
+            // 3. Handle 429 rate limiting.
+            if status == 429 {
+                self.rate_limiter.drain_bucket(model).await;
+
+                let retry_after = retry_after_hdr.unwrap_or_else(|| {
+                    Duration::from_secs(
+                        exponential_backoff_secs(attempt, base_delay, max_delay),
+                    )
+                });
+
+                if attempt < max_retries {
+                    warn!(
+                        model = %model,
+                        attempt,
+                        retry_after_ms = retry_after.as_millis(),
+                        "HTTP 429, retrying after backoff",
+                    );
+                    tokio::time::sleep(retry_after).await;
+                    continue;
+                }
+
+                error!(
+                    model = %model,
+                    status = %status,
+                    body = %body_text,
+                    "Request failed after exhausting retries",
+                );
+                return Err(classify_http_error(status.as_u16(), &body_text));
+            }
+
+            // 4. Handle transient server errors.
+            if status.as_u16() >= 500 && attempt < max_retries {
+                let delay_s = exponential_backoff_secs(attempt, base_delay, max_delay);
+                warn!(
+                    model = %model,
+                    attempt,
+                    status = status.as_u16(),
+                    delay_secs = delay_s,
+                    "Transient server error, retrying",
+                );
+                tokio::time::sleep(Duration::from_secs(delay_s)).await;
+                continue;
+            }
+
+            // 5. Success or non-retryable error — return to caller.
+            return Ok((status, body_text));
+        }
+
+        unreachable!("Retry loop always returns or breaks");
     }
 
     ///Build the chat request payload
