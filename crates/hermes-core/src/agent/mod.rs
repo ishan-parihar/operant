@@ -41,6 +41,10 @@ pub struct AgentConfig {
     pub context_window: usize,
     /// Max self-healing attempts on tool errors
     pub max_healing_attempts: usize,
+    /// Ordered list of fallback models for automatic failover on retryable errors.
+    pub fallback_models: Vec<String>,
+    /// Whether automatic fallback to fallback_models is enabled.
+    pub fallback_on_errors: bool,
 }
 
 impl Default for AgentConfig {
@@ -60,6 +64,8 @@ impl From<&BehaviorSettings> for AgentConfig {
             stream: settings.stream,
             context_window: settings.context_window,
             max_healing_attempts: settings.max_healing_attempts,
+            fallback_models: settings.fallback_models.clone(),
+            fallback_on_errors: settings.fallback_on_errors,
         }
     }
 }
@@ -1082,6 +1088,18 @@ impl HermesAgentBuilder {
             ))
         });
 
+        // Wrap with fallback logic if configured
+        let client: Box<dyn ModelClient> = if !self.config.fallback_models.is_empty() {
+            Box::new(FallbackModelClient::new(
+                Arc::from(client),
+                self.config.model.clone(),
+                self.config.fallback_models.clone(),
+                self.config.fallback_on_errors,
+            ))
+        } else {
+            client
+        };
+
         let registry = self
             .registry
             .unwrap_or_else(|| ToolRegistry::new(self.config.tool_timeout));
@@ -1113,6 +1131,9 @@ pub use prompt_builder::{ContextEntry, PromptBuilder};
 
 mod model_client;
 pub use model_client::{ChatRequest, ModelClient, StreamChunk};
+
+mod fallback;
+pub use fallback::FallbackModelClient;
 
 pub mod clients;
 

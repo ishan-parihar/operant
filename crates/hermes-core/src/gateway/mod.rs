@@ -281,6 +281,32 @@ impl SessionStore {
             .find(|s| s.hermes_session_id == hermes_session_id)
             .cloned()
     }
+
+    /// Update metadata fields on a session identified by platform + user + channel.
+    /// Returns Ok(true) if session was found and updated, Ok(false) otherwise.
+    pub fn update_session_metadata(
+        &self,
+        platform: &str,
+        user_id: &str,
+        channel_id: &str,
+        updates: &[(String, String)],
+    ) -> bool {
+        let mut sessions = self.sessions.write().expect("Session store lock poisoned");
+        let session = sessions.values_mut().find(|s| {
+            s.platform == platform
+                && s.platform_user_id == user_id
+                && s.platform_channel_id == channel_id
+        });
+        if let Some(s) = session {
+            for (key, value) in updates {
+                s.metadata.insert(key.clone(), value.clone());
+            }
+            s.last_active = Utc::now().to_rfc3339();
+            true
+        } else {
+            false
+        }
+    }
 }
 
 /// Type of channel
@@ -1080,21 +1106,6 @@ impl PlatformAdapter for TelegramAdapter {
                     }
                 }
                 tracing::info!("Loaded saved offset: {}", offset);
-
-                // === REGISTER BOT COMMANDS ===
-                {
-                    let cmd_url =
-                        format!("{}/bot{}/setMyCommands", base.trim_end_matches('/'), token);
-                    let cmd_body = serde_json::json!({
-                        "commands": [
-                            { "command": "start", "description": "Start the bot" },
-                            { "command": "help", "description": "Show help" },
-                            { "command": "session", "description": "Show session info" },
-                        ]
-                    });
-                    let _ = client.post(&cmd_url).json(&cmd_body).send().await;
-                }
-                tracing::info!("Bot commands registered via setMyCommands");
 
                 // ── INNER POLLING LOOP ──
                 let mut retry_delay: u64 = 1;

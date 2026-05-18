@@ -23,6 +23,7 @@ pub struct AppConfig {
     pub mcp: McpSettings,
     pub skills: SkillsSettings,
     pub gateway: GatewaySettings,
+    pub plugins: PluginSettings,
     pub tools: ToolSettings,
     pub tts: TtsSettings,
     pub memory: MemorySettings,
@@ -50,6 +51,7 @@ impl Default for AppConfig {
             mcp: McpSettings::default(),
             skills: SkillsSettings::default(),
             gateway: GatewaySettings::default(),
+            plugins: PluginSettings::default(),
             tools: ToolSettings::default(),
             tts: TtsSettings::default(),
             memory: MemorySettings::default(),
@@ -73,6 +75,8 @@ pub struct ClientSettings {
     pub additional_api_keys: Vec<String>,
     pub timeout_secs: u64,
     pub max_context_length: usize,
+    /// Rate limit configuration for outbound API requests.
+    pub rate_limit: RateLimitSettings,
 }
 
 impl Default for ClientSettings {
@@ -83,6 +87,35 @@ impl Default for ClientSettings {
             additional_api_keys: Vec::new(),
             timeout_secs: 60,
             max_context_length: 128_000,
+            rate_limit: RateLimitSettings::default(),
+        }
+    }
+}
+
+/// Settings for token-bucket rate limiting of outbound API requests.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct RateLimitSettings {
+    /// Maximum number of retry attempts after a 429 or transient error.
+    pub max_retries: u32,
+    /// Base delay (seconds) for exponential backoff.
+    pub base_delay_secs: u64,
+    /// Maximum delay (seconds) for exponential backoff.
+    pub max_delay_secs: u64,
+    /// Default token-bucket capacity (max requests in a burst).
+    pub bucket_capacity: u32,
+    /// Default token refill rate (tokens per second).
+    pub bucket_refill_rate: f64,
+}
+
+impl Default for RateLimitSettings {
+    fn default() -> Self {
+        Self {
+            max_retries: 3,
+            base_delay_secs: 5,
+            max_delay_secs: 60,
+            bucket_capacity: 60,
+            bucket_refill_rate: 1.0,
         }
     }
 }
@@ -140,6 +173,22 @@ pub struct BehaviorSettings {
     /// the agent omits tools from the request to force a textual response.
     /// Set to 0 to disable (use max_iterations as the only limit).
     pub max_consecutive_tool_only: usize,
+
+    /// Ordered list of fallback models to try when the primary model fails
+    /// with a retryable provider error (5xx, 429, network error).
+    /// The models are tried in order until one succeeds or all are exhausted.
+    /// Fallback is per-request — the next request starts again with the primary model.
+    #[serde(default)]
+    pub fallback_models: Vec<String>,
+
+    /// Whether to automatically fall back to `fallback_models` on provider errors.
+    /// Default: `true`. Set to `false` to disable fallback behavior entirely.
+    #[serde(default = "default_fallback_on_errors")]
+    pub fallback_on_errors: bool,
+}
+
+fn default_fallback_on_errors() -> bool {
+    true
 }
 
 impl Default for BehaviorSettings {
@@ -159,6 +208,8 @@ impl Default for BehaviorSettings {
             context_compression: false,
             context_compression_threshold: 0.5,
             max_consecutive_tool_only: 90,
+            fallback_models: Vec::new(),
+            fallback_on_errors: true,
         }
     }
 }
@@ -427,6 +478,22 @@ impl Default for GatewaySettings {
             irc_enabled: false,
             microsoft_teams_enabled: false,
             admins: Vec::new(),
+        }
+    }
+}
+
+/// Plugin system configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct PluginSettings {
+    /// Directories to scan for plugin manifests (`plugin.toml` / `plugin.yaml`).
+    pub plugin_dirs: Vec<PathBuf>,
+}
+
+impl Default for PluginSettings {
+    fn default() -> Self {
+        Self {
+            plugin_dirs: vec![platform::hermes_home().join("plugins")],
         }
     }
 }

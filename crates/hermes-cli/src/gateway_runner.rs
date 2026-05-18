@@ -14,7 +14,7 @@ use hermes_core::gateway::{
 };
 use hermes_core::gateway_pipeline::{MessagePipeline, PipelineAction};
 
-use crate::gateway_commands::{handle_command, resolve_command};
+use crate::gateway_commands::{handle_command, resolve_command, telegram_bot_commands, CommandContext};
 use hermes_core::mcp::McpManager;
 use hermes_core::tools::{HermesTool, ToolContext, TranscriptionTool};
 use std::sync::Arc;
@@ -175,6 +175,37 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
     let admins = dispatch_config.admins.clone();
     let telegram_token = dispatch_config.telegram_token.clone();
 
+    if let Some(ref token) = telegram_token {
+        let api_base = "https://api.telegram.org";
+        let cmd_url = format!("{}/bot{}/setMyCommands", api_base, token);
+        let cmd_body = format!(
+            r#"{{"commands":{}}}"#,
+            telegram_bot_commands()
+        );
+        let client = reqwest::Client::new();
+        match client
+            .post(&cmd_url)
+            .header("Content-Type", "application/json")
+            .body(cmd_body)
+            .send()
+            .await
+        {
+            Ok(resp) => {
+                if resp.status().is_success() {
+                    tracing::info!("Telegram bot commands registered successfully");
+                } else {
+                    tracing::warn!(
+                        "Failed to register Telegram commands: HTTP {}",
+                        resp.status()
+                    );
+                }
+            }
+            Err(e) => {
+                tracing::warn!("Failed to register Telegram commands: {}", e);
+            }
+        }
+    }
+
     // Tool preview helpers
     use std::collections::HashMap as Hm;
 
@@ -318,6 +349,7 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
         tracing::warn!("Tool progress event receiver exited (event_rx closed)");
     });
 
+    let app_config_clone = app_config.clone();
     tokio::spawn(async move {
         while let Some(mut msg) = message_rx.recv().await {
             tracing::info!(
@@ -355,11 +387,21 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                         let response =
                             OutgoingMessage::new(&msg.channel_id, "This command is admin-only.");
                         gw.send_to_platform(&platform, response).await?;
-                    } else if let Some(response_text) =
-                        handle_command(cmd_def.name, cmd_args, is_admin)
-                    {
-                        let response = OutgoingMessage::new(&msg.channel_id, response_text);
-                        gw.send_to_platform(&platform, response).await?;
+                    } else {
+                        let ctx = CommandContext::new(
+                            Some(&gw),
+                            &app_config_clone,
+                            is_admin,
+                            &msg.user_id,
+                            &platform,
+                            &msg.channel_id,
+                        );
+                        if let Some(response_text) =
+                            handle_command(cmd_def.name, cmd_args, &ctx)
+                        {
+                            let response = OutgoingMessage::new(&msg.channel_id, response_text);
+                            gw.send_to_platform(&platform, response).await?;
+                        }
                     }
                     return Ok(());
                 }

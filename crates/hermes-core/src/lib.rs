@@ -80,8 +80,10 @@ pub mod nous_rate_guard;
 pub mod oauth_refresh;
 pub mod parser;
 pub mod platform;
+pub mod plugins;
 pub mod process_registry;
 pub mod rate_limit_tracker;
+pub mod rate_limiter;
 pub mod retry;
 pub mod rl_training;
 pub mod schema;
@@ -100,7 +102,7 @@ pub mod website_policy;
 pub mod yuanbao;
 
 pub use acp::{server, AcpHandler, AgentState, RpcRequest, RpcResponse};
-pub use agent::{AgentConfig, AgentEvent, HermesAgent};
+pub use agent::{AgentConfig, AgentEvent, FallbackModelClient, HermesAgent};
 pub use approval::{
     check_tool_approval, prompt_user_for_approval, ApprovalContext, ApprovalGuard, ApprovalMode,
     ApprovalVerdict, RiskLevel,
@@ -117,8 +119,12 @@ pub use client::{Message, OpenAIClient};
 pub use config::{
     install_runtime_config, load_app_config, runtime_config, AppConfig, AutonomousSettings,
     BehaviorSettings, ClientSettings, CodeExecutionSettings, GatewaySettings, HttpToolSettings,
-    LoadedConfig, LoggingSettings, McpServerConfig, McpSettings, MemorySettings, SkillsSettings,
-    SttSettings, TerminalSettings, ToolSettings, TuiSettings, WebToolSettings,
+    LoadedConfig, LoggingSettings, McpServerConfig, McpSettings, MemorySettings, RateLimitSettings,
+    SkillsSettings, SttSettings, TerminalSettings, ToolSettings, TuiSettings, WebToolSettings,
+};
+pub use plugins::{
+    discover_plugins, get_plugin_commands, handle_plugin_command, is_plugin_command,
+    register_plugin_command, resolve_plugin_command, PluginCommand, PluginHandler, PluginManifest,
 };
 pub use context::{estimate_tokens, ContextConfig, ContextManager};
 pub use context_files::{
@@ -187,4 +193,8 @@ pub use oauth_refresh::{
     AuthStore, ProviderState,
 };
 pub use rate_limit_tracker::{RateLimitBucket, RateLimitState};
+pub use rate_limiter::{
+    exponential_backoff_secs, parse_retry_after_header, RateLimitError, RateLimiter,
+    RateLimitStatus, TokenBucket,
+};
 pub use retry::{default_backoff, jittered_backoff};

@@ -9,6 +9,31 @@ use serde_json::{json, Value};
 
 use crate::error::{Error, Result};
 
+/// Sanitize a tool name to be compatible with provider APIs (Google, OpenAI).
+///
+/// Google requires: `[a-zA-Z_][a-zA-Z0-9_.:-]{0,127}`
+/// This function replaces invalid characters with `_`, ensures the name starts
+/// with a letter or underscore, and truncates to 128 characters.
+pub fn sanitize_tool_name(name: &str) -> String {
+    let mut result = String::with_capacity(name.len());
+    for ch in name.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '_' || ch == '.' || ch == ':' || ch == '-' {
+            result.push(ch);
+        } else {
+            result.push('_');
+        }
+    }
+    // Ensure starts with letter or underscore
+    if result.is_empty() || (!result.as_bytes()[0].is_ascii_alphabetic() && result.as_bytes()[0] != b'_') {
+        result.insert(0, '_');
+    }
+    // Truncate to 128 chars
+    if result.len() > 128 {
+        result.truncate(128);
+    }
+    result
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ToolSchema {
     pub name: String,
@@ -19,7 +44,7 @@ pub struct ToolSchema {
 impl ToolSchema {
     pub fn new(name: impl Into<String>, description: impl Into<String>, parameters: Value) -> Self {
         Self {
-            name: name.into(),
+            name: sanitize_tool_name(&name.into()),
             description: description.into(),
             parameters,
         }
@@ -39,7 +64,7 @@ impl ToolSchema {
         });
 
         Self {
-            name: name.into(),
+            name: sanitize_tool_name(&name.into()),
             description: description.into(),
             parameters: parameters_value,
         }
