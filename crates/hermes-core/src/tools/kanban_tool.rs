@@ -3,10 +3,9 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::sync::Arc;
-use tracing::{debug, error, info};
 
 use crate::error::{Error, Result};
-use crate::kanban::{KanbanDb, TaskStatus};
+use crate::kanban::KanbanDb;
 use crate::schema::ToolSchema;
 use crate::tools::{HermesTool, ToolContext, ToolResult};
 

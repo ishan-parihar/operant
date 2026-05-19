@@ -56,7 +56,7 @@ pub trait MemoryProvider: Send + Sync {
     }
 
     /// Dispatch a tool call; return a JSON result string.
-    async fn handle_tool_call(&self, name: &str, args: Value) -> String {
+    async fn handle_tool_call(&self, name: &str, _args: Value) -> String {
         format!(r#"{{"error":"provider {} does not handle tool {}"}}"#, self.name(), name)
     }
 

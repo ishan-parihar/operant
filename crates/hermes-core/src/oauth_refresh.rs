@@ -266,7 +266,7 @@ impl OAuthRefresher {
             let text = resp.text().await.unwrap_or_default();
             let mut code = "codex_refresh_failed".to_string();
             let mut message = format!("Codex token refresh failed with status {status}.");
-            let mut relogin_required = false;
+            let mut _relogin_required = false;
 
             if let Ok(err) = serde_json::from_str::<serde_json::Value>(&text) {
                 if let Some(err_obj) = err.get("error") {
@@ -287,14 +287,14 @@ impl OAuthRefresher {
             }
 
             if matches!(code.as_str(), "invalid_grant" | "invalid_token" | "invalid_request") {
-                relogin_required = true;
+                _relogin_required = true;
             }
             if code == "refresh_token_reused" {
                 message = "Codex refresh token was already consumed by another client. Re-authenticate.".to_string();
-                relogin_required = true;
+                _relogin_required = true;
             }
             if status.as_u16() == 401 || status.as_u16() == 403 {
-                relogin_required = true;
+                _relogin_required = true;
             }
 
             return Err(Error::Authentication(format!("{message} [code={code}]")));
@@ -467,7 +467,7 @@ impl OAuthRefresher {
             .and_then(|v| v.as_str())
             .ok_or_else(|| Error::Authentication("Nous refresh response missing access_token".to_string()))?;
 
-        let inference_base_url = payload
+        let _inference_base_url = payload
             .get("inference_base_url")
             .and_then(|v| v.as_str())
             .unwrap_or(NOUS_INFERENCE_URL);

@@ -16,7 +16,6 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::OnceLock;
 use std::time::Duration;
-use tracing::warn;
 
 use crate::schema::ToolSchema;
 use crate::tools::{HermesTool, ToolContext, ToolResult};

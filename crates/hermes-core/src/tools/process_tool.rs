@@ -3,7 +3,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::process_registry::{ProcessRegistry, ProcessSession, ProcessStatus};
+use crate::process_registry::{ProcessRegistry, ProcessSession};
 use crate::schema::ToolSchema;
 use crate::tools::{HermesTool, ToolContext, ToolResult};
 

@@ -1,8 +1,7 @@
 use rusqlite::{params, Connection, Result};
 use serde::Serialize;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use tracing::{debug, info, warn};
 
 use crate::error::Error;
 
@@ -415,7 +414,7 @@ impl KanbanDb {
         &self,
         tid: &str,
         result: Option<&str>,
-        summary: Option<&str>,
+        _summary: Option<&str>,
         metadata: Option<&serde_json::Value>,
         created_cards: Option<&[String]>,
         expected_run_id: Option<i64>,

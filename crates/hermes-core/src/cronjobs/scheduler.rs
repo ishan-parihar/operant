@@ -63,7 +63,7 @@ impl CronScheduler {
     async fn run_job(&self, job: &CronJob) -> Result<(), Error> {
         info!("Executing cron job {}: {}", job.id, job.name);
 
-        let (success, output, final_response, error_msg) = if job.no_agent {
+        let (success, _output, final_response, error_msg) = if job.no_agent {
             self.run_script_job(job).await
         } else {
             self.run_agent_job(job).await

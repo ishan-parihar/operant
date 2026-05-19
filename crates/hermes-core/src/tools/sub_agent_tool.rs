@@ -14,7 +14,6 @@ use reqwest::Client;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::Value;
-use tokio::sync::Mutex;
 use tokio::time::timeout;
 
 use crate::agent::clients::openai::OpenAIModelClient;

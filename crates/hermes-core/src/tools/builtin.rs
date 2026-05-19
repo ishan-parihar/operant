@@ -11,7 +11,7 @@ use crate::kanban::KanbanDb;
 use crate::mcp::McpManager;
 use crate::process_registry::ProcessRegistry;
 use crate::tools::{SessionSearchTool, ToolRegistry};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 
 pub use super::binary_extensions::BinaryExtensionsTool;
@@ -264,6 +264,7 @@ pub fn builtin_tool_names() -> Vec<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
     use std::time::Duration;
     use tempfile::TempDir;
 

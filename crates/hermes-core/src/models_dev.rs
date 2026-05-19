@@ -3,7 +3,6 @@
 //! Ported from hermes-agent's `agent/models_dev.py`.
 //! Provides model lookup, capability queries, and agentic model filtering.
 
-use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
