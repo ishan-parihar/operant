@@ -2,7 +2,6 @@ use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::HashMap;
 use std::sync::{OnceLock, RwLock};
 use tokio::process::Command;
 
@@ -327,7 +326,7 @@ impl RlTrainingTool {
 
         let child = cmd.spawn();
         match child {
-            Ok(mut child) => {
+            Ok(child) => {
                 let pid = child.id().unwrap_or(0);
                 let run_info = RunInfo {
                     id: run_id.clone(),

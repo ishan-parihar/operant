@@ -62,7 +62,7 @@ const EXFIL_COMMAND_PATTERNS: &[(&str, &str)] = &[
     ),
 ];
 
-/// Invisible unicode characters used in prompt injection.
+// Invisible unicode characters used in prompt injection.
 lazy_static::lazy_static! {
     static ref INVISIBLE_CHARS: HashSet<char> = {
         let mut s = HashSet::new();

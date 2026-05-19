@@ -5,12 +5,11 @@
 
 use async_trait::async_trait;
 use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::{json, Value};
 use std::sync::Arc;
-use tracing::{debug, info};
 
-use crate::cronjobs::db::{CronDb, CronJob};
+use crate::cronjobs::db::CronDb;
 use crate::error::{Error, Result};
 use crate::schema::ToolSchema;
 use crate::tools::{HermesTool, ToolContext, ToolResult};

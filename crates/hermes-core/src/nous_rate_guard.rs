@@ -6,9 +6,8 @@
 
 use std::fs;
 use std::path::PathBuf;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
-use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
 use crate::rate_limit_tracker::RateLimitState;
