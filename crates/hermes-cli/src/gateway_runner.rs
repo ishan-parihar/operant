@@ -195,6 +195,12 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
         gateway = gateway.with_adapter(adapter);
     }
 
+    // Attach persistent session store for cross-restart session tracking
+    let session_db_path = hermes_core::platform::hermes_home().join("database.db");
+    if let Ok(store) = hermes_core::PersistentSessionStore::open(session_db_path.to_str().unwrap()) {
+        gateway = gateway.with_persistent_sessions(std::sync::Arc::new(store));
+    }
+
     let mcp_manager = McpManager::new();
 
     // Create event channel for tool progress previews
