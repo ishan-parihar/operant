@@ -1005,7 +1005,7 @@ pub async fn step_tools(config: &mut AppConfig, _reconfigure: bool) -> Result<()
         config.agent.max_iterations.to_string(),
     )?;
     if !iterations_str.is_empty() {
-        config.agent.max_iterations = iterations_str.parse::<usize>().unwrap_or(20);
+        config.agent.max_iterations = iterations_str.parse::<usize>().unwrap_or(90);
     }
 
     // Tool timeout

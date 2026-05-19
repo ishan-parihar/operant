@@ -511,12 +511,12 @@ mod tests {
     #[test]
     fn set_single_key_modifies_json_object() {
         let mut obj = serde_json::json!({
-            "agent": { "model": "gpt-4", "max_iterations": 20 }
+            "agent": { "model": "gpt-4", "max_iterations": 90 }
         });
 
         set_nested(&mut obj, &["agent", "model"], "gpt-4o").unwrap();
         assert_eq!(obj["agent"]["model"], "gpt-4o");
-        assert_eq!(obj["agent"]["max_iterations"], 20);
+        assert_eq!(obj["agent"]["max_iterations"], 90);
     }
 
     #[test]
