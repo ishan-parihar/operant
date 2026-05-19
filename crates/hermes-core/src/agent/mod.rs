@@ -269,7 +269,14 @@ impl HermesAgent {
             match response {
                 Ok((response_text, reasoning_text, tool_calls)) => {
                     // Add assistant message to conversation
-                    let mut assistant_msg = Message::assistant(&response_text);
+                    // When tool calls are present, any text before them is typically
+                    // model thinking/planning that shouldn't be shown to the user.
+                    let effective_text = if !tool_calls.is_empty() {
+                        String::new()
+                    } else {
+                        response_text.clone()
+                    };
+                    let mut assistant_msg = Message::assistant(&effective_text);
                     if !reasoning_text.is_empty() {
                         assistant_msg = assistant_msg.with_reasoning(reasoning_text);
                     }
@@ -290,7 +297,7 @@ impl HermesAgent {
                     let _ = self.database.save_message(
                         &session_id,
                         "assistant",
-                        &response_text,
+                        &effective_text,
                         &chrono::Utc::now().to_rfc3339(),
                     );
                     self.database
@@ -350,23 +357,16 @@ impl HermesAgent {
 
                     // Add tool results to messages
                     for result in tool_results {
-                        messages.push(Message::tool(
-                            &result.tool_call_id,
-                            if result.success {
-                                &result.content
-                            } else {
-                                result.error.as_deref().unwrap_or("Error")
-                            },
-                        ));
-                        self.add_message(Message::tool(
-                            &result.tool_call_id,
-                            if result.success {
-                                &result.content
-                            } else {
-                                result.error.as_deref().unwrap_or("Error")
-                            },
-                        ))
-                        .await;
+                        // Truncate large tool results (e.g. TTS base64 audio) to prevent
+                        // context overflow. Keep a summary instead.
+                        let content = if result.success {
+                            truncate_tool_result(&result.name, &result.content)
+                        } else {
+                            result.error.as_deref().unwrap_or("Error").to_string()
+                        };
+                        messages.push(Message::tool(&result.tool_call_id, &content));
+                        self.add_message(Message::tool(&result.tool_call_id, &content))
+                            .await;
                     }
                 }
                 Err(e) => {
@@ -846,6 +846,33 @@ fn floor_char_boundary(text: &str, index: usize) -> usize {
         boundary -= 1;
     }
     boundary
+}
+
+/// Truncate tool results that are too large for context (e.g. base64 audio).
+/// Keeps a JSON summary with metadata but strips the bulk data.
+const MAX_TOOL_RESULT_LEN: usize = 4096;
+
+fn truncate_tool_result(tool_name: &str, content: &str) -> String {
+    if content.len() <= MAX_TOOL_RESULT_LEN {
+        return content.to_string();
+    }
+    // Try to parse as JSON and strip large fields
+    if let Ok(mut val) = serde_json::from_str::<serde_json::Value>(content) {
+        if let Some(obj) = val.as_object_mut() {
+            // Remove known large fields
+            let had_audio = obj.remove("audio").is_some();
+            let had_data = obj.remove("data").is_some();
+            if had_audio {
+                obj.insert("audio".to_string(), serde_json::json!("[audio data delivered to user]"));
+            }
+            if had_data {
+                obj.insert("data".to_string(), serde_json::json!("[large data truncated]"));
+            }
+            return serde_json::to_string(&val).unwrap_or_else(|_| content[..MAX_TOOL_RESULT_LEN].to_string());
+        }
+    }
+    // Fallback: hard truncate
+    format!("{}... [truncated, tool: {}]", &content[..MAX_TOOL_RESULT_LEN], tool_name)
 }
 
 fn strip_reasoning_tags(text: &str) -> String {
