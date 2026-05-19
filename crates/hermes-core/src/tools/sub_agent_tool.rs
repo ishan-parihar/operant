@@ -202,9 +202,9 @@ impl SubAgentTool {
             ..AgentConfig::default()
         };
 
-        let mut registry = ToolRegistry::new(config.tool_timeout);
+        let registry = ToolRegistry::new(config.tool_timeout);
         // Register tools based on child toolsets (filtered)
-        self.register_child_tools(&mut registry, &child_toolsets);
+        self.register_child_tools(&registry, &child_toolsets).await;
 
         let agent = HermesAgent::new(config, client, registry, self.database.clone());
 
@@ -294,10 +294,31 @@ impl SubAgentTool {
         toolsets
     }
 
-    fn register_child_tools(&self, registry: &mut ToolRegistry, _toolsets: &[String]) {
-        // In a full implementation, we would register only the allowed tools
-        // based on the toolsets. For now, we rely on the parent agent's tool filtering.
-        // The actual tool filtering happens at the agent level.
+    async fn register_child_tools(&self, registry: &ToolRegistry, _toolsets: &[String]) {
+        use super::browser_tool::BrowserTool;
+        use super::datetime_tool::{DateTimeTool, TimestampTool};
+        use super::file_state::FileStateTool;
+        use super::file_tools::{FileListTool, FileReadTool, FileSearchTool, FileWriteTool};
+        use super::http_tool::HttpRequestTool;
+        use super::patch_tool::PatchTool;
+        use super::terminal_tool::TerminalTool;
+        use super::vision_tool::VisionTool;
+        use super::web_tools::{WebFetchTool, WebSearchTool};
+
+        let _ = registry.register(TerminalTool).await;
+        let _ = registry.register(FileReadTool).await;
+        let _ = registry.register(FileWriteTool).await;
+        let _ = registry.register(FileSearchTool).await;
+        let _ = registry.register(FileListTool).await;
+        let _ = registry.register(FileStateTool).await;
+        let _ = registry.register(WebSearchTool).await;
+        let _ = registry.register(WebFetchTool).await;
+        let _ = registry.register(BrowserTool).await;
+        let _ = registry.register(HttpRequestTool).await;
+        let _ = registry.register(PatchTool).await;
+        let _ = registry.register(DateTimeTool).await;
+        let _ = registry.register(TimestampTool).await;
+        let _ = registry.register(VisionTool).await;
     }
 
     fn ensure_supported_model(&self) -> std::result::Result<(), BoxedToolError> {

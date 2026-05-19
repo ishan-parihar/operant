@@ -195,7 +195,7 @@ impl Default for BehaviorSettings {
     fn default() -> Self {
         Self {
             model: "gpt-4".to_string(),
-            max_iterations: 20,
+            max_iterations: 90,
             tool_timeout_secs: 30,
             request_timeout_secs: 120,
             system_prompt: None,

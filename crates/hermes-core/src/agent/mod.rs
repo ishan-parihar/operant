@@ -1240,7 +1240,7 @@ mod tests {
     fn test_default_config() {
         let config = AgentConfig::default();
         assert_eq!(config.model, "gpt-4");
-        assert_eq!(config.max_iterations, 20);
+        assert_eq!(config.max_iterations, 90);
     }
 
     #[serial]

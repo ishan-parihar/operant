@@ -1163,6 +1163,17 @@ async fn main() -> Result<()> {
     apply_cli_overrides(&cli, &mut loaded.config);
     install_runtime_config(loaded.config.clone());
 
+    // Wire delegation config to SubAgentTool statics
+    if let Some(depth) = cli_config.delegation.max_spawn_depth {
+        hermes_core::tools::sub_agent_tool::set_max_spawn_depth(depth);
+    }
+    if let Some(enabled) = cli_config.delegation.orchestrator_enabled {
+        hermes_core::tools::sub_agent_tool::set_orchestrator_enabled(enabled);
+    }
+    if let Some(count) = cli_config.delegation.max_concurrent_children {
+        hermes_core::tools::sub_agent_tool::set_max_concurrent_children(count as usize);
+    }
+
     init_logging(
         cli.verbose,
         cli.log_level.as_deref(),

@@ -4,22 +4,45 @@
 
 use async_trait::async_trait;
 use schemars::JsonSchema;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use crate::schema::ToolSchema;
 use crate::tools::{HermesTool, ToolContext, ToolResult};
 
-// Global memory storage for the memory tools
-// In production, this would be backed by a proper database
-lazy_static::lazy_static! {
-    static ref MEMORY_STORE: Arc<RwLock<HashMap<String, MemoryEntry>>> = Arc::new(RwLock::new(HashMap::new()));
+fn memory_file_path() -> PathBuf {
+    dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".hermes")
+        .join("memory")
+        .join("tool_memories.json")
 }
 
-#[derive(Debug, Clone)]
+fn load_store() -> HashMap<String, MemoryEntry> {
+    let path = memory_file_path();
+    match std::fs::read_to_string(&path) {
+        Ok(data) => serde_json::from_str(&data).unwrap_or_default(),
+        Err(_) => HashMap::new(),
+    }
+}
+
+fn save_store(store: &HashMap<String, MemoryEntry>) {
+    let path = memory_file_path();
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::write(&path, serde_json::to_string_pretty(store).unwrap_or_default());
+}
+
+lazy_static::lazy_static! {
+    static ref MEMORY_STORE: Arc<RwLock<HashMap<String, MemoryEntry>>> = Arc::new(RwLock::new(load_store()));
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct MemoryEntry {
     content: String,
     block_type: String,
@@ -76,7 +99,10 @@ impl HermesTool for MemoryStoreTool {
             created_at: now,
         };
 
-        MEMORY_STORE.write().await.insert(args.key.clone(), entry);
+        let mut store = MEMORY_STORE.write().await;
+        store.insert(args.key.clone(), entry);
+        save_store(&store);
+        drop(store);
 
         ToolResult::success(
             "memory_store",

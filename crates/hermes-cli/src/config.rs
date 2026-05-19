@@ -986,11 +986,11 @@ impl Default for DelegationConfig {
             base_url: Some(String::new()),
             api_key: Some(String::new()),
             inherit_mcp_toolsets: Some(true),
-            max_iterations: Some(50),
+            max_iterations: Some(90),
             child_timeout_seconds: Some(600),
             reasoning_effort: Some(String::new()),
             max_concurrent_children: Some(3),
-            max_spawn_depth: Some(1),
+            max_spawn_depth: Some(2),
             orchestrator_enabled: Some(true),
             subagent_auto_approve: Some(false),
         }
