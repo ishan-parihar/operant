@@ -98,9 +98,15 @@ impl CronTool {
             args.no_agent.unwrap_or(false),
         )?;
 
+        // Compute and set the first next_run_at
+        let next_run = compute_first_run(schedule);
+        if let Some(ref next) = next_run {
+            self.db.set_next_run(&id, Some(next.clone()))?;
+        }
+
         Ok(ToolResult::success(
             "cron_create",
-            json!({ "success": true, "job_id": id, "message": format!("Job '{}' created successfully", name) }),
+            json!({ "success": true, "job_id": id, "next_run_at": next_run, "message": format!("Job '{}' created successfully", name) }),
         ))
     }
 
@@ -310,3 +316,28 @@ mod tests {
         assert_eq!(schema.name, "cron");
     }
 }
+
+/// Compute the first next_run_at for a schedule string.
+/// Supports cron expressions (5-field) and interval shorthand (e.g. "every 30m").
+fn compute_first_run(schedule: &str) -> Option<String> {
+    use chrono::Utc;
+    // Try cron expression first
+    if let Ok(sched) = cron::Schedule::from_str(schedule) {
+        return sched.upcoming(Utc).next().map(|t| t.to_rfc3339());
+    }
+    // Try interval shorthand: "every 30m", "every 2h", "30m", "2h", "1d"
+    let s = schedule.trim().trim_start_matches("every").trim();
+    let (num, unit) = s.split_at(s.len().saturating_sub(1));
+    let num: u64 = num.trim().parse().ok()?;
+    let secs = match unit {
+        "s" => num,
+        "m" => num * 60,
+        "h" => num * 3600,
+        "d" => num * 86400,
+        _ => return None,
+    };
+    let next = Utc::now() + chrono::Duration::seconds(secs as i64);
+    Some(next.to_rfc3339())
+}
+
+use std::str::FromStr;

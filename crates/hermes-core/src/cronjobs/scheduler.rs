@@ -1,8 +1,8 @@
 use cron::Schedule;
-use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
 use tokio::process::Command;
+use tokio::sync::mpsc;
 use tokio::time::{sleep, Duration};
 use tracing::{debug, error, info};
 
@@ -10,14 +10,27 @@ use crate::agent::HermesAgent;
 use crate::cronjobs::db::{CronDb, CronJob};
 use crate::error::Error;
 
+/// Message sent from the cron scheduler to the gateway for delivery.
+pub struct CronDelivery {
+    pub platform: String,
+    pub chat_id: String,
+    pub content: String,
+}
+
 pub struct CronScheduler {
     db: Arc<CronDb>,
-    agent_builder: Arc<dyn Fn() -> HermesAgent + Send + Sync>,
+    agent: Arc<HermesAgent>,
+    delivery_tx: Option<mpsc::UnboundedSender<CronDelivery>>,
 }
 
 impl CronScheduler {
-    pub fn new(db: Arc<CronDb>, agent_builder: Arc<dyn Fn() -> HermesAgent + Send + Sync>) -> Self {
-        Self { db, agent_builder }
+    pub fn new(db: Arc<CronDb>, agent: Arc<HermesAgent>) -> Self {
+        Self { db, agent, delivery_tx: None }
+    }
+
+    pub fn with_delivery(mut self, tx: mpsc::UnboundedSender<CronDelivery>) -> Self {
+        self.delivery_tx = Some(tx);
+        self
     }
 
     pub async fn start(&self) {
@@ -123,8 +136,8 @@ impl CronScheduler {
     async fn run_agent_job(&self, job: &CronJob) -> (bool, String, String, Option<String>) {
         debug!("Running agent job {}: {}", job.id, job.name);
 
-        let agent = (self.agent_builder)();
-        match agent.run(job.prompt.clone()).await {
+        self.agent.clear_history().await;
+        match self.agent.run(job.prompt.clone()).await {
             Ok(message) => (true, "Agent run completed".into(), message.content, None),
             Err(e) => {
                 let err_msg = format!("Agent run failed: {}", e);
@@ -135,7 +148,21 @@ impl CronScheduler {
 
     async fn deliver_result(&self, job: &CronJob, content: &str) -> Result<(), Error> {
         info!("Delivering result for job {}: {}", job.id, job.name);
-        debug!("Result: {}", content);
+
+        if let (Some(tx), Some(platform), Some(chat_id)) = (
+            &self.delivery_tx,
+            &job.origin_platform,
+            &job.origin_chat_id,
+        ) {
+            let header = format!("📋 **Cron: {}**\n\n", job.name);
+            let _ = tx.send(CronDelivery {
+                platform: platform.clone(),
+                chat_id: chat_id.clone(),
+                content: format!("{}{}", header, content),
+            });
+        } else {
+            debug!("No delivery target for job {} (deliver={})", job.id, job.deliver);
+        }
         Ok(())
     }
 
