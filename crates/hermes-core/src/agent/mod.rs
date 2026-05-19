@@ -186,6 +186,11 @@ impl HermesAgent {
         conv.clear();
     }
 
+    /// Get a reference to the database
+    pub fn db(&self) -> &Database {
+        &self.database
+    }
+
     /// Run the agent with a user query
     #[instrument(skip(self), fields(model = % self.config.model))]
     pub async fn run(&self, user_query: String) -> Result<Message> {

@@ -516,6 +516,7 @@ pub(crate) async fn build_registry(
     client: &OpenAIClient,
     model: &str,
     database: Arc<Database>,
+    event_tx: Option<tokio::sync::mpsc::Sender<hermes_core::agent::AgentEvent>>,
 ) -> Result<ToolRegistry> {
     let db_dir = config
         .database_path
@@ -535,6 +536,7 @@ pub(crate) async fn build_registry(
         cron_db,
         kanban_db,
         Some(mcp_manager.clone()),
+        event_tx,
     )
     .await?;
     registry.register(EchoTool::new()).await?;
@@ -612,6 +614,7 @@ async fn build_agent_core(
     skills_dir: &Path,
     model_name: &str,
     behavior: &BehaviorSettings,
+    event_tx: Option<tokio::sync::mpsc::Sender<hermes_core::agent::AgentEvent>>,
 ) -> Result<AgentCore> {
     let raw_client = OpenAIClient::new(client_config(config));
     let database = Arc::new(Database::init(config.database_path.clone())?);
@@ -621,6 +624,7 @@ async fn build_agent_core(
         &raw_client,
         model_name,
         database.clone(),
+        event_tx,
     )
     .await?;
     let agent_config = agent_config(config, behavior, system_prompt);
@@ -660,6 +664,7 @@ pub(crate) async fn create_runtime_agent(
         skills_dir,
         &behavior.model,
         behavior,
+        Some(event_tx.clone()),
     )
     .await?;
 
@@ -687,6 +692,7 @@ pub(crate) async fn create_agent_without_events(
         skills_dir,
         &config.agent.model,
         &config.agent,
+        None,
     )
     .await?;
 
@@ -949,7 +955,7 @@ async fn list_tools(config: &AppConfig, verbose: bool) -> Result<()> {
     let client = OpenAIClient::new(client_config(config));
     let database = Arc::new(Database::init(config.database_path.clone())?);
     let registry =
-        build_registry(config, &mcp_manager, &client, &config.agent.model, database).await?;
+        build_registry(config, &mcp_manager, &client, &config.agent.model, database, None).await?;
     let tools = registry.get_schemas().await;
 
     for tool in tools {
@@ -967,7 +973,7 @@ async fn test_tool(config: &AppConfig, tool_name: &str, args: Option<&str>) -> R
     let client = OpenAIClient::new(client_config(config));
     let database = Arc::new(Database::init(config.database_path.clone())?);
     let registry =
-        build_registry(config, &mcp_manager, &client, &config.agent.model, database).await?;
+        build_registry(config, &mcp_manager, &client, &config.agent.model, database, None).await?;
     let parsed_args: Value = if let Some(args) = args {
         if args.trim().is_empty() {
             Value::Object(serde_json::Map::new())

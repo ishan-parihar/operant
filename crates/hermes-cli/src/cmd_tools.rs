@@ -55,7 +55,7 @@ async fn handle_list(config: &AppConfig, _platform: Option<String>) -> Result<()
     let client = OpenAIClient::new(ClientConfig::from(&config.client));
     let database = Arc::new(Database::init(config.database_path.clone())?);
     let registry =
-        crate::build_registry(config, &mcp_manager, &client, &config.agent.model, database).await?;
+        crate::build_registry(config, &mcp_manager, &client, &config.agent.model, database, None).await?;
     let tools = registry.get_schemas().await;
 
     if tools.is_empty() {

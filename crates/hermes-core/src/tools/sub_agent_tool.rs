@@ -18,7 +18,7 @@ use tokio::sync::Mutex;
 use tokio::time::timeout;
 
 use crate::agent::clients::openai::OpenAIModelClient;
-use crate::agent::{AgentConfig, HermesAgent, ModelClient};
+use crate::agent::{AgentConfig, AgentEvent, HermesAgent, ModelClient};
 use crate::client::{ClientConfig, OpenAIClient};
 use crate::database::Database;
 use crate::schema::ToolSchema;
@@ -114,6 +114,8 @@ pub struct SubAgentTool {
     /// Parent's enabled toolsets
     parent_toolsets: Vec<String>,
     database: Arc<Database>,
+    /// Optional event channel to forward child progress events to parent
+    event_tx: Option<tokio::sync::mpsc::Sender<AgentEvent>>,
 }
 
 impl SubAgentTool {
@@ -123,6 +125,7 @@ impl SubAgentTool {
         parent_depth: u32,
         parent_toolsets: Vec<String>,
         database: Arc<Database>,
+        event_tx: Option<tokio::sync::mpsc::Sender<AgentEvent>>,
     ) -> Self {
         Self {
             client_config: parent_client.config_clone(),
@@ -131,6 +134,7 @@ impl SubAgentTool {
             parent_depth,
             parent_toolsets,
             database,
+            event_tx,
         }
     }
 
@@ -206,7 +210,18 @@ impl SubAgentTool {
         // Register tools based on child toolsets (filtered)
         self.register_child_tools(&registry, &child_toolsets).await;
 
-        let agent = HermesAgent::new(config, client, registry, self.database.clone());
+        let agent = if let Some(ref parent_tx) = self.event_tx {
+            let (child_tx, mut child_rx) = tokio::sync::mpsc::channel::<AgentEvent>(128);
+            let parent_tx = parent_tx.clone();
+            tokio::spawn(async move {
+                while let Some(event) = child_rx.recv().await {
+                    let _ = parent_tx.send(event).await;
+                }
+            });
+            HermesAgent::with_events(config, client, registry, self.database.clone(), child_tx)
+        } else {
+            HermesAgent::new(config, client, registry, self.database.clone())
+        };
 
         // Run with timeout
         let timeout_duration = Duration::from_secs(timeout_seconds.max(30));
@@ -275,6 +290,7 @@ impl SubAgentTool {
             parent_depth: self.parent_depth,
             parent_toolsets: self.parent_toolsets.clone(),
             database: self.database.clone(),
+            event_tx: self.event_tx.clone(),
         }
     }
 

@@ -222,7 +222,7 @@ impl MemoryProvider for HindsightProvider {
     async fn initialize(&self, _session_id: &str) -> Result<()> { Ok(()) }
 
     fn system_prompt_block(&self) -> String {
-        "Hindsight memory active. Use hindsight_retain to store, hindsight_recall to search.".to_string()
+        "Hindsight memory active. Use hindsight_retain to store, hindsight_recall to search, hindsight_reflect to synthesize.".to_string()
     }
 
     async fn prefetch(&self, query: &str) -> String {
@@ -264,6 +264,17 @@ impl MemoryProvider for HindsightProvider {
                     "required": ["query"]
                 }
             }),
+            serde_json::json!({
+                "name": "hindsight_reflect",
+                "description": "Synthesize an answer from Hindsight memories given a query.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string"}
+                    },
+                    "required": ["query"]
+                }
+            }),
         ]
     }
 
@@ -284,6 +295,13 @@ impl MemoryProvider for HindsightProvider {
                 let query = args["query"].as_str().unwrap_or("");
                 match self.client.recall(query).await {
                     Ok(m) => serde_json::json!({"memories": m}).to_string(),
+                    Err(e) => format!(r#"{{"error":"{}"}}"#, e),
+                }
+            }
+            "hindsight_reflect" => {
+                let query = args["query"].as_str().unwrap_or("");
+                match self.client.reflect(query).await {
+                    Ok(text) => serde_json::json!({"text": text}).to_string(),
                     Err(e) => format!(r#"{{"error":"{}"}}"#, e),
                 }
             }

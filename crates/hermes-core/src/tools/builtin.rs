@@ -45,7 +45,7 @@ pub use super::patch_tool::PatchTool;
 pub use super::process_tool::ProcessTool;
 pub use super::rl_training_tool::RlTrainingTool;
 pub use super::send_message_tool::SendMessageTool;
-pub use super::skills_tool::{SkillViewTool, SkillsTool};
+pub use super::skills_tool::{SkillManageTool, SkillViewTool, SkillsTool};
 pub use super::slash_confirm::SlashConfirmTool;
 pub use super::spotify_tool::{
     SpotifyAlbumsTool, SpotifyDevicesTool, SpotifyLibraryTool, SpotifyPlaybackTool,
@@ -110,6 +110,9 @@ pub async fn register_builtin_tools(
     registry
         .register(SkillViewTool::new(skills_dir.to_path_buf()))
         .await?;
+    registry
+        .register(SkillManageTool::new(skills_dir.to_path_buf()))
+        .await?;
     registry.register(SlashConfirmTool).await?;
     registry
         .register(ProcessTool::new(ProcessRegistry::new()))
@@ -161,6 +164,7 @@ pub async fn register_builtin_tools_with_sub_agent(
     cron_db: Arc<CronDb>,
     kanban_db: Arc<KanbanDb>,
     mcp_manager: Option<McpManager>,
+    event_tx: Option<tokio::sync::mpsc::Sender<crate::agent::AgentEvent>>,
 ) -> Result<()> {
     register_builtin_tools(
         registry,
@@ -178,6 +182,7 @@ pub async fn register_builtin_tools_with_sub_agent(
             0,
             vec![],
             database,
+            event_tx,
         ))
         .await?;
     Ok(())
@@ -220,6 +225,7 @@ pub fn builtin_tool_names() -> Vec<&'static str> {
         "process",
         "session_search",
         "skills_list",
+        "skill_manage",
         "skill_view",
         "slash_confirm",
         "terminal",
@@ -301,6 +307,7 @@ mod tests {
             database,
             cron_db,
             kanban_db,
+            None,
             None,
         )
         .await

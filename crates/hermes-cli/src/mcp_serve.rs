@@ -175,7 +175,7 @@ async fn build_tool_registry(config: &AppConfig) -> Result<ToolRegistry> {
     );
 
     let registry =
-        crate::build_registry(config, &mcp_manager, &client, &config.agent.model, database).await?;
+        crate::build_registry(config, &mcp_manager, &client, &config.agent.model, database, None).await?;
 
     // Sync MCP client tools into the registry if autoload is enabled.
     if config.mcp.autoload {

@@ -35,15 +35,44 @@ struct GatewayMessageHandler {
 #[async_trait::async_trait]
 impl MessageHandler for GatewayMessageHandler {
     async fn handle(&self, message: IncomingMessage) -> hermes_core::Result<OutgoingMessage> {
-        // Clear conversation history before each gateway message to prevent
-        // unbounded context growth and cross-user leakage.
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+
+        // Build session key: per-user for DMs, per-channel for groups
+        let session_key = if message.is_group_chat {
+            format!("{}:{}", message.platform, message.channel_id)
+        } else {
+            format!("{}:{}:{}", message.platform, message.channel_id, message.user_id)
+        };
+
+        // Derive stable session_id from key hash
+        let mut hasher = DefaultHasher::new();
+        session_key.hash(&mut hasher);
+        let session_id = format!("gw_{:x}", hasher.finish());
+
+        // Ensure session exists in DB
+        let now = chrono::Utc::now().to_rfc3339();
+        let _ = self.agent.db().save_session(&session_id, None, "gateway", &now, &now);
+
+        // Load conversation history (last 20 messages) instead of clearing
         self.agent.clear_history().await;
+        if let Ok(history) = self.agent.db().get_session_messages(&session_id) {
+            let skip = history.len().saturating_sub(20);
+            for msg in history.into_iter().skip(skip) {
+                let m = match msg.role.as_str() {
+                    "user" => hermes_core::client::Message::user(msg.content),
+                    "assistant" => hermes_core::client::Message::assistant(msg.content),
+                    _ => continue,
+                };
+                self.agent.add_message(m).await;
+            }
+        }
+
+        let user_content = message.content.clone();
+
         match self.agent.run(message.content).await {
             Ok(response) => {
                 let content = if response.content.trim().is_empty() {
-                    // If content is empty but we have reasoning content, use that instead.
-                    // Reasoning models (DeepSeek R1, etc.) may put the final answer in
-                    // reasoning_content and leave content empty.
                     if let Some(ref reasoning) = response.reasoning {
                         if !reasoning.trim().is_empty() {
                             tracing::info!(
@@ -62,12 +91,21 @@ impl MessageHandler for GatewayMessageHandler {
                 } else {
                     response.content
                 };
+
+                // Save user message and assistant response to DB
+                let _ = self.agent.db().save_message(&session_id, "user", &user_content, &now);
+                let _ = self.agent.db().save_message(&session_id, "assistant", &content, &now);
+
                 Ok(OutgoingMessage::new(message.channel_id, content))
             }
-            Err(e) => Ok(OutgoingMessage::new(
-                &message.channel_id,
-                format!("Error: {}", e),
-            )),
+            Err(e) => {
+                // Still save the user message on error
+                let _ = self.agent.db().save_message(&session_id, "user", &user_content, &now);
+                Ok(OutgoingMessage::new(
+                    &message.channel_id,
+                    format!("Error: {}", e),
+                ))
+            }
         }
     }
 }
