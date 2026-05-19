@@ -18,6 +18,7 @@ use uuid::Uuid;
 
 use crate::config::runtime_config;
 use crate::error::Result;
+use crate::gateway_session::PersistentSessionStore;
 use crate::gateway_markdown::markdown_to_telegram_html;
 
 pub mod pairing;
@@ -536,6 +537,7 @@ pub struct Gateway {
     message_handler: Option<Arc<dyn MessageHandler>>,
     running: Arc<RwLock<bool>>,
     session_store: SessionStore,
+    persistent_sessions: Option<Arc<PersistentSessionStore>>,
     channel_directory: ChannelDirectory,
     start_time: Instant,
     start_time_formatted: String,
@@ -558,6 +560,7 @@ impl Gateway {
             message_handler: None,
             running: Arc::new(RwLock::new(false)),
             session_store: SessionStore::new(),
+            persistent_sessions: None,
             channel_directory: ChannelDirectory::new(),
             start_time: Instant::now(),
             start_time_formatted: Utc::now().to_rfc3339(),
@@ -576,6 +579,12 @@ impl Gateway {
     /// Set the message handler
     pub fn with_handler(mut self, handler: Arc<dyn MessageHandler>) -> Self {
         self.message_handler = Some(handler);
+        self
+    }
+
+    /// Attach a persistent session store for cross-restart session tracking.
+    pub fn with_persistent_sessions(mut self, store: Arc<PersistentSessionStore>) -> Self {
+        self.persistent_sessions = Some(store);
         self
     }
 
@@ -651,6 +660,15 @@ impl Gateway {
             content = %message.content,
             "Routing message"
         );
+
+        // Track session in persistent store if available
+        if let Some(ref store) = self.persistent_sessions {
+            let _ = if message.is_group_chat {
+                store.find_or_create_shared_session(&message.platform, &message.channel_id)
+            } else {
+                store.create_session(&message.platform, &message.user_id, &message.channel_id)
+            };
+        }
 
         // Check if user is admin
         if !self.config.admins.is_empty() && !self.config.admins.contains(&message.user_id) {
@@ -759,7 +777,9 @@ impl Gateway {
 
         GatewayStats {
             uptime_seconds: uptime,
-            active_sessions: self.session_store.get_session_count(),
+            active_sessions: self.persistent_sessions.as_ref()
+                .map(|s| s.get_session_count())
+                .unwrap_or_else(|| self.session_store.get_session_count()),
             registered_channels: self.channel_directory.list_channels(None).len(),
             active_adapters: self.adapters.len(),
             messages_processed: self.messages_processed.load(Ordering::SeqCst),
