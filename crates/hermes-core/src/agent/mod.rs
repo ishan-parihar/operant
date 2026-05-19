@@ -390,11 +390,9 @@ impl HermesAgent {
         let mut system_prompt = if let Some(ref system) = self.config.system_prompt {
             system.clone()
         } else {
-            "You are Hermes, an AI assistant that uses tools to help users. \
-                When you need to use a tool, output your request in the following XML format:\n\
-                <tool_call>{\"name\": \"tool_name\", \"arguments\": {\"arg1\": \"value1\"}}</tool_call>\n\
-                If you need to use multiple tools, output them sequentially, each wrapped in its own XML tags.\n\
-                After receiving tool results, continue reasoning and either call more tools or provide your final response."
+            "You are Hermes, a helpful AI assistant. You have access to tools that you can use to help users. \
+                Use the provided tools when needed to accomplish tasks. \
+                After receiving tool results, continue reasoning and either call more tools or provide your final response to the user."
                 .to_string()
         };
 

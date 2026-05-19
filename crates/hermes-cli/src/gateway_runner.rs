@@ -35,6 +35,9 @@ struct GatewayMessageHandler {
 #[async_trait::async_trait]
 impl MessageHandler for GatewayMessageHandler {
     async fn handle(&self, message: IncomingMessage) -> hermes_core::Result<OutgoingMessage> {
+        // Clear conversation history before each gateway message to prevent
+        // unbounded context growth and cross-user leakage.
+        self.agent.clear_history().await;
         match self.agent.run(message.content).await {
             Ok(response) => {
                 let content = if response.content.trim().is_empty() {
