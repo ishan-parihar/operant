@@ -829,6 +829,72 @@ impl HindsightMemoryClient {
         }
     }
 
+    /// Reflect — synthesize an answer from memories via Hindsight.
+    pub async fn reflect(&self, query: &str) -> crate::error::Result<String> {
+        if self.api_key.is_empty() {
+            return Err(crate::error::Error::Config(
+                "HINDSIGHT_API_KEY is not set".to_string(),
+            ));
+        }
+
+        let body = serde_json::json!({
+            "bank_id": self.bank_id,
+            "query": query,
+            "budget": self.budget,
+        });
+
+        let resp = self
+            .client
+            .post(format!("{}/v1/reflect", self.api_url))
+            .header("Authorization", self.auth_header())
+            .json(&body)
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let msg = resp.text().await.unwrap_or_default();
+            return Err(crate::error::Error::Agent(format!(
+                "Hindsight reflect failed ({status}): {msg}"
+            )));
+        }
+
+        let json: serde_json::Value = resp.json().await?;
+        Ok(json["text"].as_str().unwrap_or("").to_string())
+    }
+
+    /// Batch-retain multiple items at once.
+    pub async fn retain_batch(&self, items: Vec<serde_json::Value>) -> crate::error::Result<()> {
+        if self.api_key.is_empty() {
+            return Err(crate::error::Error::Config(
+                "HINDSIGHT_API_KEY is not set".to_string(),
+            ));
+        }
+
+        let body = serde_json::json!({
+            "bank_id": self.bank_id,
+            "items": items,
+        });
+
+        let resp = self
+            .client
+            .post(format!("{}/v1/retain_batch", self.api_url))
+            .header("Authorization", self.auth_header())
+            .json(&body)
+            .send()
+            .await?;
+
+        if resp.status().is_success() {
+            Ok(())
+        } else {
+            let status = resp.status();
+            let msg = resp.text().await.unwrap_or_default();
+            Err(crate::error::Error::Agent(format!(
+                "Hindsight retain_batch failed ({status}): {msg}"
+            )))
+        }
+    }
+
     /// Recall (search) memories from Hindsight.
     pub async fn recall(&self, query: &str) -> crate::error::Result<Vec<String>> {
         if self.api_key.is_empty() {

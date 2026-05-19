@@ -95,6 +95,7 @@ async fn execute_acp_command_inner(
         &raw_client,
         &config.agent.model,
         database.clone(),
+        None,
     )
     .await
     .map_err(|e| format!("Registry init error: {}", e))?;
