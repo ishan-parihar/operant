@@ -172,8 +172,10 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
         &app_config.skills.root_dir,
     )
     .await?;
+    let agent = Arc::new(agent);
+    let cron_agent = agent.clone();
     let handler = Arc::new(GatewayMessageHandler {
-        agent: Arc::new(agent),
+        agent,
     });
     gateway = gateway.with_handler(handler);
 
@@ -633,7 +635,30 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
     });
 
     let platform_count = gateway.status().await.len();
-    *guard = Some(gateway);
+    *guard = Some(gateway.clone());
+
+    // ── Spawn Cron Scheduler ─────────────────────────────────────────────
+    let cron_db_path = hermes_core::platform::hermes_home().join("hermes_cron.db");
+    if let Ok(cron_db) = hermes_core::cronjobs::CronDb::init(cron_db_path) {
+        let cron_db = Arc::new(cron_db);
+        let (cron_tx, mut cron_rx) = tokio::sync::mpsc::unbounded_channel::<hermes_core::cronjobs::CronDelivery>();
+
+        let scheduler = hermes_core::cronjobs::CronScheduler::new(cron_db, cron_agent.clone())
+            .with_delivery(cron_tx);
+        tokio::spawn(async move { scheduler.start().await });
+
+        // Delivery receiver — sends cron results to platforms
+        let gw_for_cron = gateway.clone();
+        tokio::spawn(async move {
+            while let Some(delivery) = cron_rx.recv().await {
+                let msg = OutgoingMessage::new(&delivery.chat_id, &delivery.content);
+                if let Err(e) = gw_for_cron.send_to_platform(&delivery.platform, msg).await {
+                    tracing::warn!(error = %e, "Failed to deliver cron result");
+                }
+            }
+        });
+        tracing::info!("Cron scheduler started");
+    }
 
     // Write PID file for cross-process status checks
     if let Ok(pid) = std::time::SystemTime::now()
