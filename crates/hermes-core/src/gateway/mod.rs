@@ -931,17 +931,172 @@ fn escape_html(s: &str) -> String {
         .replace('"', "&quot;")
 }
 
-/// Split text into ~max_chunk_size chunks at character boundaries.
-/// Preserves the original text; HTML-escaping is applied per-chunk by callers.
+/// Count UTF-16 code units in a string (Telegram's length metric).
+fn utf16_len(s: &str) -> usize {
+    s.encode_utf16().count()
+}
+
+/// Split text into chunks that respect Telegram's 4096 UTF-16 code unit limit.
+///
+/// - Measures length using UTF-16 code units, not bytes or chars.
+/// - Adds `(X/Y)` suffix indicators when multiple chunks are produced.
+/// - Reserves 14 UTF-16 code units for the suffix ` (NNN/NNN)`.
+/// - Splits at natural boundaries: prefers `\n\n`, then `\n`, then spaces.
+/// - Code-block aware: avoids splitting inside ``` fences; if a split would
+///   fall inside a code block, closes the fence and reopens it in the next chunk.
 fn chunk_text(text: &str, max_chunk_size: usize) -> Vec<String> {
-    let mut chunks = Vec::new();
-    let mut start = 0;
-    while start < text.len() {
-        let end = std::cmp::min(start + max_chunk_size, text.len());
-        chunks.push(text[start..end].to_string());
-        start = end;
+    const SUFFIX_RESERVE: usize = 14; // room for " (NNN/NNN)"
+    const FENCE_CLOSE: &str = "\n```";
+
+    if utf16_len(text) <= max_chunk_size {
+        return vec![text.to_string()];
     }
+
+    // First pass: estimate total chunks to know Y in (X/Y).
+    // This is a rough estimate — we refine during actual splitting.
+    let body_budget = max_chunk_size - SUFFIX_RESERVE;
+    let estimated_chunks = (utf16_len(text) + body_budget - 1) / body_budget;
+    let estimated_chunks = estimated_chunks.max(1);
+
+    // Second pass: actual splitting with code-block awareness.
+    let mut chunks: Vec<String> = Vec::with_capacity(estimated_chunks);
+    let mut remaining = text;
+    // When continuing from a code block opened in the previous chunk,
+    // holds the language tag so we can reopen the fence.
+    let mut carry_lang: Option<String> = None;
+
+    while !remaining.is_empty() {
+        let prefix = if let Some(ref lang) = carry_lang {
+            format!("```{}\n", lang)
+        } else {
+            String::new()
+        };
+        let prefix_utf16 = utf16_len(&prefix);
+        let fence_close_utf16 = utf16_len(FENCE_CLOSE);
+
+        // If everything remaining fits in one final chunk
+        if prefix_utf16 + utf16_len(remaining) + SUFFIX_RESERVE <= max_chunk_size {
+            chunks.push(format!("{}{}", prefix, remaining));
+            break;
+        }
+
+        // How much body text we can fit after accounting for prefix,
+        // a potential closing fence, and the suffix indicator.
+        let headroom = max_chunk_size
+            .saturating_sub(SUFFIX_RESERVE)
+            .saturating_sub(prefix_utf16)
+            .saturating_sub(fence_close_utf16);
+        let headroom = if headroom < 1 {
+            max_chunk_size / 2
+        } else {
+            headroom
+        };
+
+        // Find the largest codepoint prefix of `remaining` whose UTF-16
+        // length is ≤ headroom.
+        let cp_limit = utf16_char_limit(remaining, headroom);
+        let region = &remaining[..cp_limit];
+
+        // Find a natural split point: prefer \n\n, then \n, then space.
+        let split_at = find_split_point(region, cp_limit);
+
+        let chunk_body = &remaining[..split_at];
+        // Skip leading whitespace on remaining for next iteration
+        remaining = remaining[split_at..].trim_start();
+
+        let mut full_chunk = prefix.clone();
+        full_chunk.push_str(chunk_body);
+
+        // Determine if we end inside an open code block.
+        let (in_code, lang) = scan_code_blocks(chunk_body, carry_lang.as_deref());
+
+        if in_code {
+            full_chunk.push_str(FENCE_CLOSE);
+            carry_lang = Some(lang);
+        } else {
+            carry_lang = None;
+        }
+
+        chunks.push(full_chunk);
+    }
+
+    // Append (X/Y) indicators when multiple chunks.
+    if chunks.len() > 1 {
+        let total = chunks.len();
+        chunks = chunks
+            .into_iter()
+            .enumerate()
+            .map(|(i, chunk)| format!("{} ({}/{})", chunk, i + 1, total))
+            .collect();
+    }
+
     chunks
+}
+
+/// Find the largest codepoint index such that `s[..index]` has UTF-16 length ≤ limit.
+fn utf16_char_limit(s: &str, limit: usize) -> usize {
+    let mut count = 0;
+    let mut byte_pos = 0;
+    for ch in s.chars() {
+        let ch_utf16 = ch.len_utf16();
+        if count + ch_utf16 > limit {
+            break;
+        }
+        count += ch_utf16;
+        byte_pos += ch.len_utf8();
+    }
+    byte_pos
+}
+
+/// Find a natural split point in `region` (a string slice of `remaining`).
+/// Prefers double newlines, then single newlines, then spaces.
+/// Falls back to `cp_limit` if no natural boundary found.
+fn find_split_point(region: &str, cp_limit: usize) -> usize {
+    // Prefer \n\n
+    if let Some(pos) = region.rfind("\n\n") {
+        let split = pos + 2; // include both newlines
+        if split > cp_limit / 4 {
+            return split;
+        }
+    }
+    // Then \n
+    if let Some(pos) = region.rfind('\n') {
+        let split = pos + 1; // include the newline
+        if split > cp_limit / 4 {
+            return split;
+        }
+    }
+    // Then space
+    if let Some(pos) = region.rfind(' ') {
+        if pos > cp_limit / 4 {
+            return pos;
+        }
+    }
+    // Fallback: hard split at the limit
+    cp_limit
+}
+
+/// Scan `chunk_body` for code block fences, starting from `carry_lang` state.
+/// Returns (in_code_block, language_tag) at the end of the body.
+fn scan_code_blocks(chunk_body: &str, carry_lang: Option<&str>) -> (bool, String) {
+    let mut in_code = carry_lang.is_some();
+    let mut lang = carry_lang.unwrap_or("").to_string();
+
+    for line in chunk_body.lines() {
+        let stripped = line.trim();
+        if stripped.starts_with("```") {
+            if in_code {
+                in_code = false;
+                lang = String::new();
+            } else {
+                in_code = true;
+                let tag = stripped[3..].trim();
+                lang = tag.split_whitespace().next().unwrap_or("").to_string();
+            }
+        }
+    }
+
+    (in_code, lang)
 }
 
 /// Path used to persist the Telegram polling offset across restarts.
@@ -991,25 +1146,16 @@ impl PlatformAdapter for TelegramAdapter {
     }
 
     async fn send_message(&self, message: OutgoingMessage) -> Result<()> {
-        let text = &message.content;
-        let max_len = 4096;
-
-        if text.len() <= max_len {
-            self.send_telegram_inner(&message.channel_id, text, message.reply_to.as_deref())
+        let chunks = chunk_text(&message.content, 4000);
+        for (i, chunk) in chunks.iter().enumerate() {
+            let reply_to = if i == 0 {
+                message.reply_to.as_deref()
+            } else {
+                None
+            };
+            self.send_telegram_inner(&message.channel_id, chunk, reply_to)
                 .await?;
-        } else {
-            let chunks = chunk_text(text, 4000);
-            for (i, chunk) in chunks.iter().enumerate() {
-                let reply_to = if i == 0 {
-                    message.reply_to.as_deref()
-                } else {
-                    None
-                };
-                self.send_telegram_inner(&message.channel_id, chunk, reply_to)
-                    .await?;
-            }
         }
-
         Ok(())
     }
 
@@ -1028,22 +1174,15 @@ impl PlatformAdapter for TelegramAdapter {
     }
 
     async fn send_message_return_id(&self, message: OutgoingMessage) -> Result<String> {
-        let text = &message.content;
-        if text.len() <= 4096 {
-            self.send_telegram_inner(&message.channel_id, text, message.reply_to.as_deref())
-                .await
-        } else {
-            // For long messages, just send first chunk and return its ID
-            let chunks = chunk_text(text, 4000);
-            let id = self
-                .send_telegram_inner(&message.channel_id, &chunks[0], message.reply_to.as_deref())
+        let chunks = chunk_text(&message.content, 4000);
+        let id = self
+            .send_telegram_inner(&message.channel_id, &chunks[0], message.reply_to.as_deref())
+            .await?;
+        for chunk in &chunks[1..] {
+            self.send_telegram_inner(&message.channel_id, chunk, None)
                 .await?;
-            for chunk in &chunks[1..] {
-                self.send_telegram_inner(&message.channel_id, chunk, None)
-                    .await?;
-            }
-            Ok(id)
         }
+        Ok(id)
     }
 
     async fn edit_message(
@@ -1282,22 +1421,14 @@ impl PlatformAdapter for TelegramAdapter {
         channel_id: &str,
         message: &OutgoingMessage,
     ) -> Result<String> {
-        let text = &message.content;
-        let max_len = 4096;
-
-        if text.len() <= max_len {
-            self.send_telegram_inner(channel_id, text, message.reply_to.as_deref())
-                .await
-        } else {
-            let chunks = chunk_text(text, 4000);
-            let first_id = self
-                .send_telegram_inner(channel_id, &chunks[0], message.reply_to.as_deref())
-                .await?;
-            for chunk in &chunks[1..] {
-                self.send_telegram_inner(channel_id, chunk, None).await?;
-            }
-            Ok(first_id)
+        let chunks = chunk_text(&message.content, 4000);
+        let first_id = self
+            .send_telegram_inner(channel_id, &chunks[0], message.reply_to.as_deref())
+            .await?;
+        for chunk in &chunks[1..] {
+            self.send_telegram_inner(channel_id, chunk, None).await?;
         }
+        Ok(first_id)
     }
 
     async fn send_voice(&self, channel_id: &str, audio_data: &[u8], format: &str) -> Result<()> {
@@ -1454,8 +1585,11 @@ impl TelegramAdapter {
                 }
             };
 
+            // Accumulate raw text across chunks
+            let mut accumulated = first_chunk;
+
             // Send the initial message and capture the message_id
-            let escaped = escape_html(&first_chunk);
+            let escaped = escape_html(&accumulated);
             let body = serde_json::json!({
                 "chat_id": chat_id,
                 "text": escaped,
@@ -1483,7 +1617,7 @@ impl TelegramAdapter {
                 }
             };
 
-            let message_id = match message_id {
+            let mut message_id = match message_id {
                 Some(id) => id,
                 None => {
                     tracing::error!("Telegram streaming: failed to get message_id from response");
@@ -1498,7 +1632,57 @@ impl TelegramAdapter {
 
             // Edit the message progressively as new chunks arrive
             while let Some(chunk) = content_rx.recv().await {
-                let escaped = escape_html(&chunk);
+                // Check if adding this chunk would exceed the threshold
+                if utf16_len(&accumulated) + utf16_len(&chunk) > 4000 {
+                    // Overflow detected: finalize current message, start new one
+                    tracing::info!(
+                        "Telegram streaming: message overflow, starting new message (message_id: {})",
+                        message_id
+                    );
+
+                    // Send new message with the overflow chunk as starting content
+                    accumulated = chunk;
+                    let escaped = escape_html(&accumulated);
+                    let new_body = serde_json::json!({
+                        "chat_id": chat_id,
+                        "text": escaped,
+                        "parse_mode": "HTML",
+                    });
+
+                    match client
+                        .post(format!("{}/bot{}/sendMessage", api_base, token))
+                        .json(&new_body)
+                        .send()
+                        .await
+                    {
+                        Ok(resp) => {
+                            if let Ok(data) = resp.json::<serde_json::Value>().await {
+                                if let Some(new_id) = data["result"]["message_id"].as_i64() {
+                                    message_id = new_id.to_string();
+                                } else {
+                                    tracing::error!(
+                                        "Telegram streaming: overflow send returned no message_id"
+                                    );
+                                    break;
+                                }
+                            } else {
+                                tracing::error!(
+                                    "Telegram streaming: overflow send returned invalid JSON"
+                                );
+                                break;
+                            }
+                        }
+                        Err(e) => {
+                            tracing::error!("Telegram streaming: overflow send failed: {}", e);
+                            break;
+                        }
+                    }
+                    continue;
+                }
+
+                // Accumulate and edit
+                accumulated.push_str(&chunk);
+                let escaped = escape_html(&accumulated);
                 let edit_body = serde_json::json!({
                     "chat_id": chat_id,
                     "message_id": message_id,
@@ -2493,5 +2677,125 @@ mod tests {
         assert_eq!(ChannelType::Direct, ChannelType::Direct);
         assert_eq!(ChannelType::Group, ChannelType::Group);
         assert_ne!(ChannelType::Direct, ChannelType::Group);
+    }
+
+    // ── chunk_text tests ──
+
+    #[test]
+    fn test_chunk_text_small_message_no_split() {
+        let text = "Hello, world!";
+        let chunks = chunk_text(text, 4000);
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0], "Hello, world!");
+    }
+
+    #[test]
+    fn test_chunk_text_exact_boundary() {
+        // Text that fits exactly in one chunk (UTF-16 length == max_chunk_size)
+        let text = "A".repeat(4000);
+        let chunks = chunk_text(&text, 4000);
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(utf16_len(&chunks[0]), 4000);
+    }
+
+    #[test]
+    fn test_chunk_text_multi_chunk_with_suffix_indicators() {
+        let text = "A".repeat(9000);
+        let chunks = chunk_text(&text, 4000);
+        assert!(chunks.len() >= 2);
+        // Each chunk should have (X/Y) suffix
+        for (i, chunk) in chunks.iter().enumerate() {
+            assert!(
+                chunk.contains(&format!("({}/{})", i + 1, chunks.len())),
+                "chunk {} missing suffix: {}",
+                i,
+                chunk
+            );
+        }
+    }
+
+    #[test]
+    fn test_chunk_text_code_block_preservation() {
+        let text = format!(
+            "intro text\n\n```rust\n{}\n```\n\noutro",
+            "let x = 1;\n".repeat(500)
+        );
+        let chunks = chunk_text(&text, 4000);
+        assert!(chunks.len() >= 2);
+        for chunk in &chunks {
+            let opens = chunk.matches("```").count();
+            assert_eq!(
+                opens % 2,
+                0,
+                "chunk has unbalanced code fences: {}",
+                chunk
+            );
+        }
+    }
+
+    #[test]
+    fn test_chunk_text_word_boundary_splitting() {
+        let text = "word ".repeat(1000);
+        let chunks = chunk_text(&text, 4000);
+        assert!(chunks.len() >= 2);
+        for chunk in &chunks {
+            let content = chunk.split(" (").next().unwrap_or(chunk);
+            if !content.is_empty() {
+                let trimmed = content.trim_end();
+                assert!(
+                    trimmed.ends_with("word"),
+                    "chunk doesn't end at word boundary: ...{}",
+                    &trimmed[trimmed.len().saturating_sub(20)..]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_chunk_text_utf16_emoji_handling() {
+        // Emojis are 2 UTF-16 code units each
+        let emoji_text = "🎉".repeat(2500); // 5000 UTF-16 code units
+        let chunks = chunk_text(&emoji_text, 4000);
+        assert!(chunks.len() >= 2);
+        // Verify each chunk respects UTF-16 limit (accounting for suffix)
+        for chunk in &chunks {
+            let content = chunk.split(" (").next().unwrap_or(chunk);
+            assert!(
+                utf16_len(content) <= 4000,
+                "chunk exceeds UTF-16 limit: {} units",
+                utf16_len(content)
+            );
+        }
+    }
+
+    #[test]
+    fn test_chunk_text_newline_split_preference() {
+        let text = format!("{}\n\n{}", "line".repeat(500), "next".repeat(500));
+        let chunks = chunk_text(&text, 4000);
+        assert!(chunks.len() >= 2);
+        // Split should prefer \n\n boundary
+        let first_content = chunks[0].split(" (").next().unwrap_or(&chunks[0]);
+        assert!(
+            first_content.ends_with("\n\n") || first_content.ends_with('\n'),
+            "split didn't use newline boundary"
+        );
+    }
+
+    #[test]
+    fn test_utf16_len_ascii() {
+        assert_eq!(utf16_len("hello"), 5);
+    }
+
+    #[test]
+    fn test_utf16_len_emoji() {
+        // Most emojis are 2 UTF-16 code units
+        assert_eq!(utf16_len("🎉"), 2);
+        assert_eq!(utf16_len("a🎉b"), 4);
+    }
+
+    #[test]
+    fn test_utf16_len_mixed() {
+        // "Hello " = 6, "🎉" = 2 utf16, " World" = 6 → total 14
+        assert_eq!(utf16_len("Hello 🎉 World"), 14);
     }
 }

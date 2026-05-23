@@ -707,7 +707,7 @@ pub(crate) async fn create_agent_without_events(
 }
 
 async fn load_repo_memory_manager() -> Result<MemoryManager> {
-    let storage_dir = std::env::current_dir().context("Failed to determine current directory")?;
+    let storage_dir = hermes_core::platform::hermes_home();
     load_memory_manager(storage_dir).await
 }
 
