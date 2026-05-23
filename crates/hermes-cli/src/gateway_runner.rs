@@ -14,6 +14,7 @@ use hermes_core::gateway::{
     PlatformAdapter, SlackAdapter, TelegramAdapter, WebhookAdapter,
 };
 use hermes_core::gateway_pipeline::{MessagePipeline, PipelineAction};
+use hermes_core::memory_provider::{build_memory_provider, MemoryProvider};
 
 use crate::gateway_commands::{handle_command, resolve_command, telegram_bot_commands, CommandContext};
 use hermes_core::mcp::McpManager;
@@ -30,6 +31,7 @@ fn pid_file_path() -> std::path::PathBuf {
 /// Message handler that processes incoming gateway messages through the Hermes agent.
 struct GatewayMessageHandler {
     agent: Arc<HermesAgent>,
+    memory_provider: Arc<dyn MemoryProvider>,
 }
 
 #[async_trait::async_trait]
@@ -68,9 +70,17 @@ impl MessageHandler for GatewayMessageHandler {
             }
         }
 
+        // Prefetch relevant memories from the configured provider
+        let memory_context = self.memory_provider.prefetch(&message.content).await;
+        let query = if memory_context.is_empty() {
+            message.content.clone()
+        } else {
+            format!("[retrieved_memory]\n{}\n\n[/retrieved_memory]\n\n{}", memory_context, message.content)
+        };
+
         let user_content = message.content.clone();
 
-        match self.agent.run(message.content).await {
+        match self.agent.run(query).await {
             Ok(response) => {
                 let content = if response.content.trim().is_empty() {
                     if let Some(ref reasoning) = response.reasoning {
@@ -91,6 +101,9 @@ impl MessageHandler for GatewayMessageHandler {
                 } else {
                     response.content
                 };
+
+                // Sync this turn to the memory provider
+                let _ = self.memory_provider.sync_turn(&user_content, &content).await;
 
                 // Save user message and assistant response to DB
                 let _ = self.agent.db().save_message(&session_id, "user", &user_content, &now);
@@ -218,8 +231,19 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
     .await?;
     let agent = Arc::new(agent);
     let cron_agent = agent.clone();
+
+    // Initialize memory provider from config
+    let mem_cfg = runtime_config().memory;
+    let storage_dir = hermes_core::platform::hermes_home();
+    let memory_provider = if mem_cfg.enabled && mem_cfg.provider != "builtin" && mem_cfg.provider != "disabled" {
+        build_memory_provider(&mem_cfg.provider, storage_dir)
+    } else {
+        build_memory_provider("builtin", storage_dir)
+    };
+
     let handler = Arc::new(GatewayMessageHandler {
         agent,
+        memory_provider,
     });
     gateway = gateway.with_handler(handler);
 

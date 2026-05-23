@@ -168,32 +168,136 @@ impl SendMessageTool {
 
     // ── Smart chunking ──────────────────────────────────────────────────────
 
-    /// Split `message` into chunks each at most `max_len` bytes, prefixing every
-    /// chunk with `(i/N) ` so the receiver can reassemble them in order.
+    /// Split `message` into chunks each at most `max_len` UTF-16 code units,
+    /// appending a `(X/Y)` suffix to each chunk so the receiver can reassemble
+    /// them in order. Matches hermes-agent's format: "message content (1/3)".
+    ///
+    /// Splits at natural boundaries (\n\n > \n > space), never mid-word.
+    /// Preserves code blocks (``` fenced regions) — avoids splitting inside them.
     fn chunk_message(message: &str, max_len: usize) -> Vec<String> {
-        if message.len() <= max_len {
+        let msg_utf16_len = message.encode_utf16().count();
+        if msg_utf16_len <= max_len {
             return vec![message.to_string()];
         }
 
-        // Reserve 14 bytes for "(NNN/NNN) " which covers up to 999 chunks
-        // (more than enough given realistic message sizes).
-        let reserve = 14;
-        let usable = max_len.saturating_sub(reserve);
+        // Reserve up to 14 chars for " (NNN/NNN)" suffix — covers up to 999 chunks.
+        let max_suffix_len = 14;
+        let usable = max_len.saturating_sub(max_suffix_len);
         if usable < 1 {
             return vec![message.to_string()];
         }
 
-        let estimated = (message.len() + usable - 1) / usable;
+        // Estimate total chunks needed (conservative: assume max suffix for all).
+        let estimated = (msg_utf16_len + usable - 1) / usable;
+
+        // ── Helper: find split point within a substring ──────────────────
+        fn find_split(s: &str, limit: usize) -> usize {
+            if s.encode_utf16().count() <= limit {
+                return s.len();
+            }
+
+            // Collect UTF-16 boundaries: positions in bytes where we can split.
+            let mut utf16_positions: Vec<(usize, usize)> = Vec::new(); // (byte_offset, utf16_count)
+            let mut utf16_count = 0;
+            for (byte_offset, ch) in s.char_indices() {
+                utf16_positions.push((byte_offset, utf16_count));
+                let ch_len = ch.len_utf16();
+                if utf16_count + ch_len > limit {
+                    break;
+                }
+                utf16_count += ch_len;
+            }
+
+            if utf16_positions.is_empty() {
+                // Single char exceeds limit — must split it (rare, but safe fallback).
+                return s.chars().next().map_or(0, |c| c.len_utf8());
+            }
+
+            // Try split boundaries in preference order: \n\n, \n, space.
+            for &(byte_off, _) in utf16_positions.iter().rev() {
+                if byte_off == 0 {
+                    continue;
+                }
+                // Check for \n\n
+                if byte_off >= 2 && &s[byte_off - 2..byte_off] == "\n\n" {
+                    return byte_off;
+                }
+            }
+            for &(byte_off, _) in utf16_positions.iter().rev() {
+                if byte_off == 0 {
+                    continue;
+                }
+                // Check for \n
+                if byte_off >= 1 && &s[byte_off - 1..byte_off] == "\n" {
+                    return byte_off;
+                }
+            }
+            for &(byte_off, _) in utf16_positions.iter().rev() {
+                if byte_off == 0 {
+                    continue;
+                }
+                // Check for space
+                if byte_off >= 1 && &s[byte_off - 1..byte_off] == " " {
+                    return byte_off;
+                }
+            }
+
+            // Fallback: hard split at the last character boundary within limit.
+            utf16_positions.last().map_or(s.len(), |&(b, _)| b)
+        }
+
+        // ── Helper: check if byte offset is inside a code block ─────────
+        fn inside_code_block(message: &str, offset: usize) -> bool {
+            let before = &message[..offset];
+            before.matches("```").count() % 2 != 0
+        }
+
+        // ── Actual splitting ────────────────────────────────────────────
         let mut chunks: Vec<String> = Vec::new();
         let mut start = 0;
         let mut i = 1;
+        let bytes_len = message.len();
 
-        while start < message.len() {
-            let prefix = format!("({}/{}) ", i, estimated);
-            let available = max_len - prefix.len();
-            let end = (start + available).min(message.len());
-            chunks.push(format!("{}{}", prefix, &message[start..end]));
-            start = end;
+        while start < bytes_len {
+            let suffix = format!(" ({}/{})", i, estimated);
+            let suffix_utf16 = suffix.encode_utf16().count();
+            let available = max_len.saturating_sub(suffix_utf16);
+
+            let remaining = &message[start..];
+            let mut split_byte = find_split(remaining, available);
+
+            // Code-block awareness: if split point is inside a code block,
+            // try to find the closing ``` before the split, or extend to it.
+            if inside_code_block(message, start + split_byte) && split_byte < remaining.len() {
+                // Look for closing ``` after the split point
+                if let Some(close_pos) = remaining[split_byte..].find("```") {
+                    let close_byte = split_byte + close_pos + 3;
+                    if remaining[..close_byte].encode_utf16().count() + suffix_utf16 <= max_len {
+                        split_byte = close_byte;
+                    } else {
+                        // Can't fit the whole code block — split at last newline inside it
+                        let code_block_content = &remaining[split_byte..close_byte];
+                        if let Some(newline_pos) = code_block_content.rfind('\n') {
+                            let adjusted = split_byte + newline_pos + 1;
+                            if adjusted > split_byte {
+                                split_byte = adjusted;
+                            }
+                        }
+                    }
+                }
+            }
+
+            if split_byte == 0 {
+                split_byte = remaining
+                    .chars()
+                    .next()
+                    .map_or(remaining.len(), |c| c.len_utf8());
+            }
+
+            let chunk_content = &remaining[..split_byte.min(remaining.len())];
+            chunks.push(format!("{}{}", chunk_content, suffix));
+
+            start += split_byte;
             i += 1;
         }
 
@@ -611,11 +715,12 @@ mod tests {
         let msg = "A".repeat(5000);
         let chunks = SendMessageTool::chunk_message(&msg, 4096);
         assert!(chunks.len() > 1, "should split into multiple chunks");
-        // Verify prefixes
+        // Verify suffixes
+        let total = chunks.len();
         for (i, chunk) in chunks.iter().enumerate() {
             assert!(
-                chunk.starts_with(&format!("({}/", i + 1)),
-                "chunk {} should start with prefix",
+                chunk.ends_with(&format!(" ({}/{})", i + 1, total)),
+                "chunk {} should end with suffix",
                 i
             );
             assert!(
@@ -634,9 +739,9 @@ mod tests {
         let chunks = SendMessageTool::chunk_message(&original, 500);
         let mut reconstructed = String::new();
         for chunk in &chunks {
-            // Strip prefix "(i/N) " — find first space after numbers
-            if let Some(content_start) = chunk.find(' ') {
-                reconstructed.push_str(&chunk[content_start + 1..]);
+            // Strip suffix " (i/N)" from the end — find last " (" before digits
+            if let Some(pos) = chunk.rfind(" (") {
+                reconstructed.push_str(&chunk[..pos]);
             }
         }
         assert_eq!(reconstructed.len(), original.len());
