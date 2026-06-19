@@ -1,4 +1,4 @@
-# Hermes-RS Audit Report
+# Operant Audit Report
 
 **Date:** 2026-05-11 | **Branch:** main | **Version:** v0.1.3  
 **Phases 2-10 Complete** — **All Python tools ported to Rust**  
@@ -16,7 +16,7 @@
 
 | Metric | Value |
 |--------|-------|
-| Workspace crates | 2 (`hermes-core`, `hermes-cli`) |
+| Workspace crates | 2 (`operant-core`, `operant-cli`) |
 | Total Rust LOC | ~62,000 (core) + ~10,300 (cli) |
 | Source files | 109 (core) + 13 (cli) = 122+ |
 | Registered tools | 65+ `HermesTool` implementations (+ namespaced MCP tools via `McpNamespacedTool`) |
@@ -43,41 +43,41 @@ Phase 4 added **36+ new tests** (credential_pool: 12, process_registry: 8, ms_gr
 ## 4. Uncommitted Changes (53 files — Phase 2-10 additions + pre-existing)
 
 ```
- M Cargo.lock                    M crates/hermes-core/src/lib.rs
- M REPORT.md                     M crates/hermes-core/src/mcp.rs
- M crates/hermes-cli/src/main.rs M crates/hermes-core/src/tools.rs
- M crates/hermes-core/Cargo.toml
- M crates/hermes-cli/src/config.rs
-?? crates/hermes-core/src/approval.rs              (Phase 6)
-?? crates/hermes-core/src/browser_supervisor.rs     (Phase 7)
-?? crates/hermes-core/src/*_backend.rs              (Phase 4)
-?? crates/hermes-core/src/mcp_oauth.rs              (Phase 2)
-?? crates/hermes-core/src/security.rs               (Phase 2)
-?? crates/hermes-core/src/skills_guard.rs           (Phase 2)
-?? crates/hermes-core/src/skills_hub.rs             (Phase 2)
-?? crates/hermes-core/src/voice.rs                  (Phase 2)
-?? crates/hermes-core/src/credential_files.rs       (Phase 3)
-?? crates/hermes-core/src/env_passthrough.rs        (Phase 3)
-?? crates/hermes-core/src/skill_usage.rs            (Phase 3)
-?? crates/hermes-core/src/skills_sync.rs            (Phase 3)
-?? crates/hermes-core/src/website_policy.rs         (Phase 3)
-?? crates/hermes-core/src/fuzzy_match.rs            (Phase 3)
-?? crates/hermes-core/src/ansi_strip.rs             (Phase 3)
-?? crates/hermes-core/src/schema_sanitizer.rs       (Phase 3)
-?? crates/hermes-core/src/interrupt.rs              (Phase 3)
-?? crates/hermes-core/src/budget_config.rs          (Phase 3)
-?? crates/hermes-core/src/tool_result_storage.rs    (Phase 3)
-?? crates/hermes-core/src/browser_camofox.rs        (Phase 3)
-?? crates/hermes-core/src/managed_tool_gateway.rs   (Phase 3)
-?? crates/hermes-core/src/credential_pool.rs        (Phase 4)
-?? crates/hermes-core/src/process_registry.rs       (Phase 4)
-?? crates/hermes-core/src/ms_graph.rs               (Phase 4)
-?? crates/hermes-core/src/yuanbao.rs                (Phase 4)
-?? crates/hermes-core/src/environments/             (Phase 4)
+ M Cargo.lock                    M crates/operant-core/src/lib.rs
+ M REPORT.md                     M crates/operant-core/src/mcp.rs
+ M crates/operant-cli/src/main.rs M crates/operant-core/src/tools.rs
+ M crates/operant-core/Cargo.toml
+ M crates/operant-cli/src/config.rs
+?? crates/operant-core/src/approval.rs              (Phase 6)
+?? crates/operant-core/src/browser_supervisor.rs     (Phase 7)
+?? crates/operant-core/src/*_backend.rs              (Phase 4)
+?? crates/operant-core/src/mcp_oauth.rs              (Phase 2)
+?? crates/operant-core/src/security.rs               (Phase 2)
+?? crates/operant-core/src/skills_guard.rs           (Phase 2)
+?? crates/operant-core/src/skills_hub.rs             (Phase 2)
+?? crates/operant-core/src/voice.rs                  (Phase 2)
+?? crates/operant-core/src/credential_files.rs       (Phase 3)
+?? crates/operant-core/src/env_passthrough.rs        (Phase 3)
+?? crates/operant-core/src/skill_usage.rs            (Phase 3)
+?? crates/operant-core/src/skills_sync.rs            (Phase 3)
+?? crates/operant-core/src/website_policy.rs         (Phase 3)
+?? crates/operant-core/src/fuzzy_match.rs            (Phase 3)
+?? crates/operant-core/src/ansi_strip.rs             (Phase 3)
+?? crates/operant-core/src/schema_sanitizer.rs       (Phase 3)
+?? crates/operant-core/src/interrupt.rs              (Phase 3)
+?? crates/operant-core/src/budget_config.rs          (Phase 3)
+?? crates/operant-core/src/tool_result_storage.rs    (Phase 3)
+?? crates/operant-core/src/browser_camofox.rs        (Phase 3)
+?? crates/operant-core/src/managed_tool_gateway.rs   (Phase 3)
+?? crates/operant-core/src/credential_pool.rs        (Phase 4)
+?? crates/operant-core/src/process_registry.rs       (Phase 4)
+?? crates/operant-core/src/ms_graph.rs               (Phase 4)
+?? crates/operant-core/src/yuanbao.rs                (Phase 4)
+?? crates/operant-core/src/environments/             (Phase 4)
 ?? AUDIT_FINAL.md                                   (final audit report)
-?? crates/hermes-core/src/tools/*.rs (10 new stubs) (Phase 5a+5b)
-?? crates/hermes-core/src/budget_config.rs          (Phase 3)
-?? crates/hermes-core/src/cronjobs/                 (Phase 3)
+?? crates/operant-core/src/tools/*.rs (10 new stubs) (Phase 5a+5b)
+?? crates/operant-core/src/budget_config.rs          (Phase 3)
+?? crates/operant-core/src/cronjobs/                 (Phase 3)
 ```
 
 Phase 2+3+4 added **27 new modules** (~52K core LOC).  
@@ -121,7 +121,7 @@ Phase 2+3+4 added **27 new modules** (~52K core LOC).
 
 ### Port Status — All Python tools ported to Rust ✅
 
-All Python tool modules from hermes-agent have been ported to Rust hermes-rs:
+All Python tool modules from operant-agent have been ported to Rust operant-rs:
 
 | Phase | Modules | Total LOC |
 |-------|---------|-----------|
@@ -207,7 +207,7 @@ All Python tool modules from hermes-agent have been ported to Rust hermes-rs:
 | `database.rs` (expanded) | 1477 | session_metadata, tools_state, session_tags, session_events tables + FTS5 + merge + retry |
 | **Phase 9** | | |
 | `gateway.rs` (expanded) | 1118 | PlatformAdapter trait, SessionStore, ChannelDirectory, WebhookAdapter, GatewayStats |
-| **Phase 10 (hermes-cli)** | | |
+| **Phase 10 (operant-cli)** | | |
 | `config.rs` | 3672 | CliConfig (40+ sections), env expansion, deep merge, 8-step migration, validation |
 | | | |
 | CLI TUI | 1719 | Ratatui multi-panel terminal UI |

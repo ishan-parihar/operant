@@ -1,0 +1,1461 @@
+//! Operant-RS CLI
+
+mod autonomous;
+mod claw_migrate;
+mod cmd_acp;
+mod cmd_auth;
+mod cmd_backup;
+mod cmd_checkpoints;
+mod cmd_claw;
+mod cmd_completion;
+mod cmd_computer_use;
+mod cmd_config;
+mod cmd_cron;
+mod cmd_curator;
+mod cmd_dashboard;
+mod cmd_debug;
+mod cmd_doctor;
+mod cmd_dump;
+mod cmd_gateway;
+mod cmd_hooks;
+mod cmd_import;
+mod cmd_insights;
+mod cmd_kanban;
+mod cmd_logs;
+mod cmd_mcp;
+mod cmd_memory;
+mod cmd_model;
+mod cmd_pairing;
+mod cmd_plugins;
+mod cmd_profile;
+mod cmd_rl;
+mod cmd_sessions;
+mod cmd_setup;
+mod cmd_skills;
+mod cmd_slack;
+mod cmd_status;
+mod cmd_tools;
+mod cmd_uninstall;
+mod cmd_update;
+mod cmd_version;
+mod cmd_webhook;
+mod cmd_whatsapp;
+mod commands;
+pub(crate) mod config;
+mod dashboard_server;
+mod env_store;
+mod gateway_commands;
+mod gateway_platforms;
+mod gateway_runner;
+mod gateway_webhooks;
+mod mcp_serve;
+pub mod plugins_install;
+mod post_setup;
+mod prompt_helpers;
+pub mod provider;
+mod tui;
+
+use std::fs::OpenOptions;
+use std::io::{self, Write};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use crate::config::CliConfig;
+use anyhow::{Context, Result};
+use clap::{ArgAction, Parser, Subcommand};
+use operant_core::agent::clients::openai::OpenAIModelClient;
+use operant_core::agent::{AgentConfig, AgentEvent, OperantAgent};
+use operant_core::client::{ClientConfig, OpenAIClient};
+use operant_core::config::{
+    install_runtime_config, load_app_config, AppConfig, BehaviorSettings, LoggingSettings,
+    McpServerConfig, McpTransportKind,
+};
+use operant_core::mcp::McpManager;
+use operant_core::memory::MemoryManager;
+use operant_core::skills::SkillManager;
+use operant_core::tools::{OperantTool, ToolContext, ToolRegistry};
+use serde::Deserialize;
+use serde_json::Value;
+use tokio::sync::mpsc;
+use tracing::{warn, Level};
+use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+
+use crate::tui::{LaunchMode, TuiApp};
+use operant_core::cronjobs::CronDb;
+use operant_core::database::Database;
+use operant_core::kanban::KanbanDb;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LogTarget {
+    Stderr,
+    Sink,
+    File,
+}
+
+#[derive(Debug, Parser)]
+#[command(
+    name = "operant",
+    about = "Operant-RS: A high-performance ReAct agent framework",
+    version,
+    subcommand_negates_reqs = true
+)]
+struct Cli {
+    #[arg(short, long, global = true)]
+    verbose: bool,
+
+    #[arg(short, long, global = true)]
+    log_level: Option<String>,
+
+    #[arg(short, long, global = true)]
+    config: Option<PathBuf>,
+
+    #[arg(long, global = true, env = "OPENAI_API_KEY")]
+    api_key: Option<String>,
+
+    #[arg(long, global = true, env = "OPENAI_BASE_URL")]
+    base_url: Option<String>,
+
+    #[arg(long, global = true)]
+    model: Option<String>,
+
+    #[arg(long, global = true)]
+    max_iterations: Option<usize>,
+
+    #[arg(long, global = true)]
+    tool_timeout: Option<u64>,
+
+    #[arg(long, global = true)]
+    request_timeout: Option<u64>,
+
+    #[arg(long, global = true)]
+    context_window: Option<usize>,
+
+    #[arg(long, global = true)]
+    max_healing_attempts: Option<usize>,
+
+    #[arg(long, global = true, action = ArgAction::SetTrue, conflicts_with = "no_stream")]
+    stream: bool,
+
+    #[arg(long = "no-stream", global = true, action = ArgAction::SetTrue, conflicts_with = "stream")]
+    no_stream: bool,
+
+    #[command(subcommand)]
+    command: Option<Commands>,
+}
+
+#[derive(Debug, Subcommand)]
+enum Commands {
+    Run {
+        #[arg(short, long)]
+        system: Option<String>,
+
+        #[arg(short, long)]
+        query: Option<String>,
+
+        #[arg(long, action = ArgAction::SetTrue)]
+        autonomous: bool,
+    },
+    Autonomous {
+        #[arg(short, long)]
+        system: Option<String>,
+    },
+    /// List and manage available tools
+    Tools {
+        #[command(subcommand)]
+        cmd: cmd_tools::ToolsSubcommand,
+    },
+    Chat {
+        #[arg(short, long)]
+        system: Option<String>,
+    },
+    Test {
+        #[arg()]
+        tool_name: String,
+
+        #[arg(short, long)]
+        args: Option<String>,
+    },
+    /// Manage configuration
+    Config {
+        #[command(subcommand)]
+        cmd: cmd_config::ConfigSubcommand,
+    },
+    /// Manage conversation sessions
+    Sessions {
+        #[command(subcommand)]
+        cmd: cmd_sessions::SessionsSubcommand,
+    },
+    /// Manage MCP servers
+    Mcp {
+        #[command(subcommand)]
+        cmd: cmd_mcp::McpSubcommand,
+    },
+    /// Manage installed skills
+    Skills {
+        #[command(subcommand)]
+        cmd: cmd_skills::SkillsSubcommand,
+    },
+    /// View or change the active model configuration
+    Model {
+        #[command(subcommand)]
+        cmd: cmd_model::ModelSubcommand,
+    },
+    /// Generate shell completion scripts
+    Completion {
+        #[command(subcommand)]
+        cmd: cmd_completion::CompletionSubcommand,
+    },
+    /// Manage cron jobs
+    Cron {
+        #[command(subcommand)]
+        cmd: cmd_cron::CronSubcommand,
+    },
+    /// Manage kanban tasks
+    Kanban {
+        /// Board slug to operate on (default: "default")
+        #[arg(long, default_value_t = String::from("default"), global = true)]
+        board: String,
+        #[command(subcommand)]
+        cmd: cmd_kanban::KanbanSubcommand,
+    },
+    /// Manage gateway
+    Gateway {
+        #[command(subcommand)]
+        cmd: cmd_gateway::GatewaySubcommand,
+    },
+    /// Manage checkpoints
+    Checkpoints {
+        #[command(subcommand)]
+        cmd: cmd_checkpoints::CheckpointsSubcommand,
+    },
+    /// Manage memory
+    Memory {
+        #[command(subcommand)]
+        cmd: cmd_memory::MemorySubcommand,
+    },
+    /// Manage profiles
+    Profile {
+        #[command(subcommand)]
+        cmd: cmd_profile::ProfileSubcommand,
+    },
+    /// Manage auth credentials
+    Auth {
+        #[command(subcommand)]
+        cmd: cmd_auth::AuthSubcommand,
+    },
+    /// Manage fallback models
+    Fallback {
+        #[command(subcommand)]
+        cmd: cmd_auth::FallbackSubcommand,
+    },
+    /// Login to a provider
+    Login,
+    /// Logout
+    Logout,
+    /// Show version information
+    Version {
+        #[arg(long)]
+        detailed: bool,
+    },
+    /// Check Operant configuration and dependencies
+    Doctor {
+        /// Attempt to auto-fix common issues
+        #[arg(long)]
+        fix: bool,
+    },
+    /// Show system status overview
+    Status {
+        /// Show detailed status
+        #[arg(long)]
+        deep: bool,
+    },
+    /// Print a setup summary report
+    Dump {
+        /// Show all configuration keys as YAML
+        #[arg(long)]
+        all: bool,
+    },
+    /// View log files
+    Logs {
+        #[command(subcommand)]
+        cmd: cmd_logs::LogsSubcommand,
+    },
+    /// Backup Operant configuration and data
+    Backup {
+        #[command(subcommand)]
+        cmd: cmd_backup::BackupSubcommand,
+    },
+    /// Import from a backup
+    Import {
+        #[command(subcommand)]
+        cmd: cmd_import::ImportSubcommand,
+    },
+    /// Uninstall Operant data
+    Uninstall {
+        #[command(subcommand)]
+        cmd: cmd_uninstall::UninstallSubcommand,
+    },
+    /// Check for and apply updates
+    Update {
+        #[command(subcommand)]
+        cmd: cmd_update::UpdateSubcommand,
+    },
+    /// Show usage insights
+    Insights {
+        #[command(subcommand)]
+        cmd: cmd_insights::InsightsSubcommand,
+    },
+    /// Manage device pairing
+    Pairing {
+        #[command(subcommand)]
+        cmd: cmd_pairing::PairingSubcommand,
+    },
+    /// Manage webhook subscriptions
+    Webhook {
+        #[command(subcommand)]
+        cmd: cmd_webhook::WebhookSubcommand,
+    },
+    /// Manage shell hooks
+    Hooks {
+        #[command(subcommand)]
+        cmd: cmd_hooks::HooksSubcommand,
+    },
+    /// Generate debug reports
+    Debug {
+        #[command(subcommand)]
+        cmd: cmd_debug::DebugSubcommand,
+    },
+    /// Manage the computer-use driver
+    ComputerUse {
+        #[command(subcommand)]
+        cmd: cmd_computer_use::ComputerUseSubcommand,
+    },
+    /// Manage installed plugins
+    Plugins {
+        #[command(subcommand)]
+        cmd: cmd_plugins::PluginsSubcommand,
+    },
+    /// Manage the skill curator
+    Curator {
+        #[command(subcommand)]
+        cmd: cmd_curator::CuratorSubcommand,
+    },
+    /// Migrate from OpenClaw
+    Claw {
+        #[command(subcommand)]
+        cmd: cmd_claw::ClawSubcommand,
+    },
+    /// Generate a Slack app manifest
+    Slack {
+        #[command(subcommand)]
+        cmd: cmd_slack::SlackSubcommand,
+    },
+    /// Interactive setup wizard
+    Setup {
+        /// Optional setup section (provider, terminal, tts, gateway, agent)
+        section: Option<String>,
+        #[arg(long)]
+        non_interactive: bool,
+        #[arg(long)]
+        reset: bool,
+        #[arg(long)]
+        reconfigure: bool,
+        #[arg(long)]
+        quick: bool,
+    },
+    /// Check WhatsApp status
+    Whatsapp {
+        #[command(subcommand)]
+        cmd: cmd_whatsapp::WhatsappSubcommand,
+    },
+    /// Run the ACP server
+    Acp {
+        #[command(subcommand)]
+        cmd: cmd_acp::AcpSubcommand,
+    },
+    /// Run the web dashboard
+    Dashboard {
+        #[command(subcommand)]
+        cmd: cmd_dashboard::DashboardSubcommand,
+    },
+    /// Reinforcement learning training and management
+    Rl {
+        #[command(subcommand)]
+        cmd: cmd_rl::RlSubcommand,
+    },
+}
+
+fn init_logging(
+    verbose: bool,
+    cli_log_level: Option<&str>,
+    logging: &LoggingSettings,
+    rich_output: bool,
+) {
+    let env_filter = if verbose {
+        EnvFilter::new(format!("{}", Level::DEBUG))
+    } else if let Some(level) = cli_log_level {
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(level))
+    } else {
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(logging.level.clone()))
+    };
+
+    let subscriber = tracing_subscriber::registry().with(env_filter);
+    let layer = fmt::layer()
+        .with_target(logging.with_target)
+        .with_thread_ids(logging.with_thread_ids)
+        .with_file(logging.with_file)
+        .with_line_number(logging.with_line_number);
+
+    // When --verbose is passed, force logs to stderr so they are visible
+    // even when tui.rich_output is true (which normally routes logs to sink).
+    let effective_rich_output = rich_output && !verbose;
+    match select_log_target(logging, effective_rich_output) {
+        LogTarget::File => {
+            let file = OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(logging.log_file.as_ref().expect("log file should exist"))
+                .expect("failed to open log file");
+            let writer = Mutex::new(file);
+            match logging.format.as_str() {
+                "json" => subscriber
+                    .with(layer.with_writer(writer).with_ansi(false).json())
+                    .init(),
+                "compact" => subscriber
+                    .with(layer.with_writer(writer).with_ansi(false).compact())
+                    .init(),
+                _ => subscriber
+                    .with(layer.with_writer(writer).with_ansi(false).pretty())
+                    .init(),
+            }
+        }
+        LogTarget::Sink => match logging.format.as_str() {
+            "json" => subscriber
+                .with(layer.with_writer(io::sink).with_ansi(false).json())
+                .init(),
+            "compact" => subscriber
+                .with(layer.with_writer(io::sink).with_ansi(false).compact())
+                .init(),
+            _ => subscriber
+                .with(layer.with_writer(io::sink).with_ansi(false).pretty())
+                .init(),
+        },
+        LogTarget::Stderr => match logging.format.as_str() {
+            "json" => subscriber.with(layer.json()).init(),
+            "compact" => subscriber.with(layer.compact()).init(),
+            _ => subscriber.with(layer.pretty()).init(),
+        },
+    }
+}
+
+fn select_log_target(logging: &LoggingSettings, rich_output: bool) -> LogTarget {
+    if logging.log_file.is_some() {
+        LogTarget::File
+    } else if rich_output {
+        LogTarget::Sink
+    } else {
+        LogTarget::Stderr
+    }
+}
+
+fn apply_cli_overrides(cli: &Cli, config: &mut AppConfig) {
+    if let Some(api_key) = &cli.api_key {
+        config.client.api_key = Some(api_key.clone());
+    }
+    if let Some(base_url) = &cli.base_url {
+        config.client.base_url = base_url.clone();
+    }
+    if let Some(model) = &cli.model {
+        config.agent.model = model.clone();
+    }
+    if let Some(max_iterations) = cli.max_iterations {
+        config.agent.max_iterations = max_iterations;
+    }
+    if let Some(timeout) = cli.tool_timeout {
+        config.agent.tool_timeout_secs = timeout;
+    }
+    if let Some(timeout) = cli.request_timeout {
+        config.agent.request_timeout_secs = timeout;
+        config.client.timeout_secs = timeout;
+    }
+    if let Some(window) = cli.context_window {
+        config.agent.context_window = window;
+        config.client.max_context_length = window;
+    }
+    if let Some(healing) = cli.max_healing_attempts {
+        config.agent.max_healing_attempts = healing;
+    }
+    if cli.stream {
+        config.agent.stream = true;
+    }
+    if cli.no_stream {
+        config.agent.stream = false;
+    }
+}
+
+fn client_config(config: &AppConfig) -> ClientConfig {
+    ClientConfig::from(&config.client)
+}
+
+pub(crate) fn agent_config(
+    config: &AppConfig,
+    behavior: &BehaviorSettings,
+    system_prompt: Option<&str>,
+) -> AgentConfig {
+    let mut agent = AgentConfig::from(behavior);
+    if let Some(prompt) = system_prompt {
+        agent.system_prompt = Some(prompt.to_string());
+    }
+    agent.request_timeout = Duration::from_secs(config.agent.request_timeout_secs);
+    agent
+}
+
+pub(crate) async fn build_registry(
+    config: &AppConfig,
+    mcp_manager: &McpManager,
+    client: &OpenAIClient,
+    model: &str,
+    database: Arc<Database>,
+    event_tx: Option<tokio::sync::mpsc::Sender<operant_core::agent::AgentEvent>>,
+) -> Result<ToolRegistry> {
+    let db_dir = config
+        .database_path
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."));
+    let cron_path = db_dir.join("operant_cron.db");
+    let kanban_path = db_dir.join("operant_kanban.db");
+    let cron_db = Arc::new(CronDb::init(cron_path)?);
+    let kanban_db = Arc::new(KanbanDb::init(kanban_path)?);
+    let registry = ToolRegistry::new(Duration::from_secs(config.tools.registry_timeout_secs));
+    operant_core::tools::register_builtin_tools_with_sub_agent(
+        &registry,
+        &config.skills.root_dir,
+        client,
+        model,
+        database,
+        cron_db,
+        kanban_db,
+        Some(mcp_manager.clone()),
+        event_tx,
+    )
+    .await?;
+    registry.register(EchoTool::new()).await?;
+    registry.register(CalculatorTool::new()).await?;
+
+    let disabled_tools: std::collections::HashSet<String> =
+        config.tools.disabled_tools.iter().cloned().collect();
+    let disabled_toolsets: std::collections::HashSet<String> =
+        config.tools.disabled_toolsets.iter().cloned().collect();
+
+    if !disabled_tools.is_empty() {
+        registry.set_disabled_tools(disabled_tools).await;
+    }
+    if !disabled_toolsets.is_empty() {
+        registry.set_disabled_toolsets(disabled_toolsets).await;
+    }
+
+    if config.mcp.autoload {
+        for server in config.mcp.servers.iter().filter(|server| server.enabled) {
+            if !mcp_manager.contains(&server.name).await {
+                connect_mcp_server(mcp_manager, server).await?;
+            }
+        }
+
+        mcp_manager.sync_tools_to_registry(&registry).await;
+    }
+
+    Ok(registry)
+}
+
+async fn connect_mcp_server(mcp_manager: &McpManager, server: &McpServerConfig) -> Result<()> {
+    match server.transport {
+        McpTransportKind::Http => {
+            let url = server
+                .url
+                .clone()
+                .context("Configured HTTP MCP server is missing a URL")?;
+            mcp_manager
+                .add_server(server.name.clone(), url, server.auth_token.clone())
+                .await?;
+        }
+        McpTransportKind::Stdio => {
+            let command = server
+                .command
+                .clone()
+                .context("Configured stdio MCP server is missing a command")?;
+            mcp_manager
+                .add_stdio_server(
+                    server.name.clone(),
+                    command,
+                    server.args.clone(),
+                    server.env.clone(),
+                )
+                .await?;
+        }
+    }
+    Ok(())
+}
+
+/// Shared components produced by the agent core builder.
+struct AgentCore {
+    raw_client: OpenAIClient,
+    database: Arc<Database>,
+    registry: ToolRegistry,
+    agent_config: AgentConfig,
+    memory_manager: MemoryManager,
+    skill_manager: SkillManager,
+}
+
+/// Build the shared core components needed by both agent constructors.
+async fn build_agent_core(
+    config: &AppConfig,
+    system_prompt: Option<&str>,
+    mcp_manager: &McpManager,
+    skills_dir: &Path,
+    model_name: &str,
+    behavior: &BehaviorSettings,
+    event_tx: Option<tokio::sync::mpsc::Sender<operant_core::agent::AgentEvent>>,
+) -> Result<AgentCore> {
+    let raw_client = OpenAIClient::new(client_config(config));
+    let database = Arc::new(Database::init(config.database_path.clone())?);
+    let registry = build_registry(
+        config,
+        mcp_manager,
+        &raw_client,
+        model_name,
+        database.clone(),
+        event_tx,
+    )
+    .await?;
+    let agent_config = agent_config(config, behavior, system_prompt);
+    let memory_manager = load_repo_memory_manager().await?;
+
+    let mut skill_manager = SkillManager::new(skills_dir.to_path_buf());
+    if let Err(e) = skill_manager.load_all() {
+        warn!(
+            error = %e,
+            "Failed to load skills from {}",
+            skills_dir.display()
+        );
+    }
+
+    Ok(AgentCore {
+        raw_client,
+        database,
+        registry,
+        agent_config,
+        memory_manager,
+        skill_manager,
+    })
+}
+
+pub(crate) async fn create_runtime_agent(
+    config: &AppConfig,
+    behavior: &BehaviorSettings,
+    system_prompt: Option<&str>,
+    event_tx: mpsc::Sender<AgentEvent>,
+    mcp_manager: &McpManager,
+    skills_dir: &Path,
+) -> Result<OperantAgent> {
+    let core = build_agent_core(
+        config,
+        system_prompt,
+        mcp_manager,
+        skills_dir,
+        &behavior.model,
+        behavior,
+        Some(event_tx.clone()),
+    )
+    .await?;
+
+    Ok(OperantAgent::with_events(
+        core.agent_config,
+        Box::new(OpenAIModelClient::new(core.raw_client)),
+        core.registry,
+        core.database,
+        event_tx,
+    )
+    .with_memory_manager(core.memory_manager)
+    .with_skill_manager(core.skill_manager))
+}
+
+pub(crate) async fn create_agent_without_events(
+    config: &AppConfig,
+    system_prompt: Option<&str>,
+    mcp_manager: &McpManager,
+    skills_dir: &Path,
+) -> Result<OperantAgent> {
+    let core = build_agent_core(
+        config,
+        system_prompt,
+        mcp_manager,
+        skills_dir,
+        &config.agent.model,
+        &config.agent,
+        None,
+    )
+    .await?;
+
+    Ok(OperantAgent::new(
+        core.agent_config,
+        Box::new(OpenAIModelClient::new(core.raw_client)),
+        core.registry,
+        core.database,
+    )
+    .with_memory_manager(core.memory_manager)
+    .with_skill_manager(core.skill_manager))
+}
+
+async fn load_repo_memory_manager() -> Result<MemoryManager> {
+    let storage_dir = operant_core::platform::operant_home();
+    load_memory_manager(storage_dir).await
+}
+
+pub(crate) async fn load_memory_manager(storage_dir: PathBuf) -> Result<MemoryManager> {
+    let memory_manager = MemoryManager::with_storage_dir(storage_dir.clone());
+    memory_manager
+        .load_from_disk()
+        .await
+        .context("Failed to load long-term memory")?;
+
+    // If configured provider is not "builtin", initialise it now.
+    // The provider is available via operant_core::memory_provider::build_memory_provider.
+    let cfg = operant_core::config::runtime_config();
+    if cfg.memory.enabled && cfg.memory.provider != "builtin" && cfg.memory.provider != "disabled" {
+        let provider =
+            operant_core::memory_provider::build_memory_provider(&cfg.memory.provider, storage_dir);
+        // Initialize in the background; failures are non-fatal.
+        tokio::spawn(async move {
+            if let Err(e) = provider.initialize("main").await {
+                tracing::warn!(provider = %provider.name(), error = %e, "Memory provider init failed");
+            }
+        });
+    }
+
+    Ok(memory_manager)
+}
+
+async fn run_non_tui(config: &AppConfig, system_prompt: Option<&str>, query: &str) -> Result<()> {
+    let mcp_manager = McpManager::new();
+    let agent =
+        create_agent_without_events(config, system_prompt, &mcp_manager, &config.skills.root_dir)
+            .await?;
+    let response = agent.run(query.to_string()).await?;
+    println!("{}", response.content);
+    Ok(())
+}
+
+fn preview_tool_args(args: &str) -> Option<String> {
+    if let Ok(json) = serde_json::from_str::<serde_json::Value>(args) {
+        for key in &[
+            "query",
+            "command",
+            "url",
+            "file_path",
+            "path",
+            "code",
+            "text",
+        ] {
+            if let Some(val) = json.get(*key).and_then(|v| v.as_str()) {
+                let truncated = if val.len() > 80 {
+                    format!("{}...", &val[..80])
+                } else {
+                    val.to_string()
+                };
+                return Some(truncated);
+            }
+        }
+    }
+    None
+}
+
+async fn chat_non_tui(config: &AppConfig, system_prompt: Option<&str>) -> Result<()> {
+    use crate::commands::{CommandContext, CommandHandler, CommandRegistry};
+
+    let mcp_manager = McpManager::new();
+    let (event_tx, mut event_rx) = mpsc::channel::<AgentEvent>(256);
+    let agent = create_runtime_agent(
+        config,
+        &config.agent,
+        system_prompt,
+        event_tx,
+        &mcp_manager,
+        &config.skills.root_dir,
+    )
+    .await?;
+
+    // Spawn task to display tool events in real-time
+    tokio::spawn(async move {
+        while let Some(event) = event_rx.recv().await {
+            match event {
+                AgentEvent::ToolStart { name, arguments } => {
+                    let preview = preview_tool_args(&arguments)
+                        .map(|a| format!("{}: {}", name, a))
+                        .unwrap_or_else(|| name);
+                    println!("  Tool: {}...", preview);
+                }
+                AgentEvent::ToolComplete { result: _ } => {
+                    println!("  Tool: Done.");
+                }
+                AgentEvent::ToolError { name, error } => {
+                    eprintln!("  Tool Error {}: {}", name, error);
+                }
+                _ => {}
+            }
+        }
+    });
+
+    let mut registry = CommandRegistry::new();
+
+    struct NewHandler;
+    #[async_trait::async_trait]
+    impl CommandHandler for NewHandler {
+        async fn execute(&self, _ctx: &CommandContext<'_>) -> commands::CommandResult {
+            Ok("Use /exit or Ctrl+C to end the session.".to_string())
+        }
+    }
+    registry.register_handler("new", Box::new(NewHandler)).ok();
+
+    struct HelpHandler;
+    #[async_trait::async_trait]
+    impl CommandHandler for HelpHandler {
+        async fn execute(&self, _ctx: &CommandContext<'_>) -> commands::CommandResult {
+            Ok("System status: running. Use `operant status` for details.".to_string())
+        }
+    }
+    registry
+        .register_handler("help", Box::new(HelpHandler))
+        .ok();
+
+    struct StatusHandler;
+    #[async_trait::async_trait]
+    impl CommandHandler for StatusHandler {
+        async fn execute(&self, _ctx: &CommandContext<'_>) -> commands::CommandResult {
+            Ok("System status: running. Use `operant status` for details.".to_string())
+        }
+    }
+    registry
+        .register_handler("status", Box::new(StatusHandler))
+        .ok();
+
+    struct TimeHandler;
+    #[async_trait::async_trait]
+    impl CommandHandler for TimeHandler {
+        async fn execute(&self, _ctx: &CommandContext<'_>) -> commands::CommandResult {
+            use chrono::Local;
+            Ok(format!(
+                "Current time: {}",
+                Local::now().format("%Y-%m-%d %H:%M:%S")
+            ))
+        }
+    }
+    registry
+        .register_handler("time", Box::new(TimeHandler))
+        .ok();
+
+    struct SessionHandler;
+    #[async_trait::async_trait]
+    impl CommandHandler for SessionHandler {
+        async fn execute(&self, _ctx: &CommandContext<'_>) -> commands::CommandResult {
+            Ok("Conversation session active. Use /history to see messages.".to_string())
+        }
+    }
+    registry
+        .register_handler("session", Box::new(SessionHandler))
+        .ok();
+
+    struct SkillsHandler {
+        skills_dir: PathBuf,
+    }
+    #[async_trait::async_trait]
+    impl CommandHandler for SkillsHandler {
+        async fn execute(&self, _ctx: &CommandContext<'_>) -> commands::CommandResult {
+            let mut skill_manager = SkillManager::new(self.skills_dir.clone());
+            if let Err(e) = skill_manager.load_all() {
+                return Ok(format!("Failed to load skills: {}", e));
+            }
+            let skills = skill_manager.list();
+            if skills.is_empty() {
+                return Ok("No skills installed.".to_string());
+            }
+            let mut output = String::from("Installed skills:\n");
+            for (name, description) in &skills {
+                output.push_str(&format!("  /{} — {}\n", name, description));
+            }
+            Ok(output)
+        }
+    }
+    registry
+        .register_handler(
+            "skills",
+            Box::new(SkillsHandler {
+                skills_dir: config.skills.root_dir.clone(),
+            }),
+        )
+        .ok();
+
+    loop {
+        print!("You: ");
+        io::stdout().flush()?;
+        let mut input = String::new();
+        io::stdin().read_line(&mut input)?;
+        let input = input.trim().to_string();
+
+        if input.is_empty() {
+            continue;
+        }
+
+        if input.starts_with('/') {
+            let parts: Vec<&str> = input.splitn(2, char::is_whitespace).collect();
+            let cmd_name = parts[0];
+            let cmd_args = parts.get(1).copied().unwrap_or("");
+
+            match registry.resolve(cmd_name) {
+                Some("exit") => break,
+                Some("new") | Some("reset") => {
+                    agent.clear_history().await;
+                    println!("Conversation cleared. Starting new session.");
+                    continue;
+                }
+                Some("history") => {
+                    // TODO: print conversation history from agent
+                    println!("History not yet available in non-TUI mode.");
+                    continue;
+                }
+                Some(canonical) => {
+                    match registry.execute(canonical, cmd_args).await {
+                        Ok(output) => println!("{}", output),
+                        Err(e) => eprintln!("Command error: {}", e),
+                    }
+                    continue;
+                }
+                None => {
+                    println!(
+                        "Unknown command: {}. Type /help for available commands.",
+                        cmd_name
+                    );
+                    continue;
+                }
+            }
+        }
+
+        match agent.run(input.to_string()).await {
+            Ok(response) => println!("Assistant: {}\n", response.content),
+            Err(error) => eprintln!("Error: {}\n", error),
+        }
+    }
+
+    Ok(())
+}
+
+async fn list_tools(config: &AppConfig, verbose: bool) -> Result<()> {
+    let mcp_manager = McpManager::new();
+    let client = OpenAIClient::new(client_config(config));
+    let database = Arc::new(Database::init(config.database_path.clone())?);
+    let registry = build_registry(
+        config,
+        &mcp_manager,
+        &client,
+        &config.agent.model,
+        database,
+        None,
+    )
+    .await?;
+    let tools = registry.get_schemas().await;
+
+    for tool in tools {
+        println!("{}: {}", tool.name, tool.description);
+        if verbose {
+            println!("{}", serde_json::to_string_pretty(&tool.parameters)?);
+        }
+    }
+
+    Ok(())
+}
+
+async fn test_tool(config: &AppConfig, tool_name: &str, args: Option<&str>) -> Result<()> {
+    let mcp_manager = McpManager::new();
+    let client = OpenAIClient::new(client_config(config));
+    let database = Arc::new(Database::init(config.database_path.clone())?);
+    let registry = build_registry(
+        config,
+        &mcp_manager,
+        &client,
+        &config.agent.model,
+        database,
+        None,
+    )
+    .await?;
+    let parsed_args: Value = if let Some(args) = args {
+        if args.trim().is_empty() {
+            Value::Object(serde_json::Map::new())
+        } else {
+            serde_json::from_str(args).context("Failed to parse tool arguments as JSON")?
+        }
+    } else {
+        Value::Object(serde_json::Map::new())
+    };
+
+    let result = registry
+        .execute(
+            tool_name,
+            &format!("test_{}", tool_name),
+            parsed_args,
+            ToolContext::default(),
+        )
+        .await?;
+
+    println!("success: {}", result.success);
+    println!("content: {}", result.content);
+    if let Some(error) = result.error {
+        println!("error: {}", error);
+    }
+
+    Ok(())
+}
+
+struct EchoTool;
+
+impl EchoTool {
+    fn new() -> Self {
+        Self
+    }
+}
+
+#[async_trait::async_trait]
+impl OperantTool for EchoTool {
+    fn name(&self) -> &str {
+        "echo"
+    }
+
+    fn description(&self) -> &str {
+        "Echo back the input message. Useful for testing."
+    }
+
+    fn schema(&self) -> operant_core::schema::ToolSchema {
+        use schemars::JsonSchema;
+
+        #[derive(JsonSchema, Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        #[allow(dead_code)]
+        struct EchoArgs {
+            message: String,
+        }
+
+        operant_core::schema::ToolSchema::from_type::<EchoArgs>(
+            "echo",
+            "Echo back the input message",
+        )
+    }
+
+    async fn execute(&self, args: Value, _context: ToolContext) -> operant_core::tools::ToolResult {
+        if let Some(msg) = args.get("message").and_then(|value| value.as_str()) {
+            operant_core::tools::ToolResult::success("echo", serde_json::json!({ "echoed": msg }))
+        } else {
+            operant_core::tools::ToolResult::error("echo", "Missing 'message' argument")
+        }
+    }
+}
+
+struct CalculatorTool;
+
+impl CalculatorTool {
+    fn new() -> Self {
+        Self
+    }
+}
+
+#[async_trait::async_trait]
+impl OperantTool for CalculatorTool {
+    fn name(&self) -> &str {
+        "calculate"
+    }
+
+    fn description(&self) -> &str {
+        "Perform a calculation. Supports add, subtract, multiply, and divide."
+    }
+
+    fn schema(&self) -> operant_core::schema::ToolSchema {
+        use schemars::JsonSchema;
+
+        #[derive(JsonSchema, Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        #[allow(dead_code)]
+        struct CalcArgs {
+            operation: String,
+            a: f64,
+            b: f64,
+        }
+
+        operant_core::schema::ToolSchema::from_type::<CalcArgs>("calculate", "Perform calculations")
+    }
+
+    async fn execute(&self, args: Value, _context: ToolContext) -> operant_core::tools::ToolResult {
+        let operation = args
+            .get("operation")
+            .and_then(|value| value.as_str())
+            .unwrap_or("add");
+        let a = args
+            .get("a")
+            .and_then(|value| value.as_f64())
+            .unwrap_or(0.0);
+        let b = args
+            .get("b")
+            .and_then(|value| value.as_f64())
+            .unwrap_or(0.0);
+
+        let result = match operation {
+            "add" | "+" => a + b,
+            "subtract" | "-" => a - b,
+            "multiply" | "*" | "x" => a * b,
+            "divide" | "/" => {
+                if b == 0.0 {
+                    return operant_core::tools::ToolResult::error("calculate", "Division by zero");
+                }
+                a / b
+            }
+            _ => {
+                return operant_core::tools::ToolResult::error(
+                    "calculate",
+                    format!("Unknown operation: {}", operation),
+                )
+            }
+        };
+
+        operant_core::tools::ToolResult::success(
+            "calculate",
+            serde_json::json!({
+                "operation": operation,
+                "operand_a": a,
+                "operand_b": b,
+                "result": result
+            }),
+        )
+    }
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    let cli = Cli::parse();
+
+    // Load CLI-level config (YAML-based with deep merge, .env, env expansion)
+    let cli_config = CliConfig::load().unwrap_or_else(|e| {
+        eprintln!("Warning: Failed to load CLI config: {}. Using defaults.", e);
+        CliConfig::default()
+    });
+
+    // Load core AppConfig (TOML-based) and layer on any values from CliConfig
+    let mut loaded = load_app_config(cli.config.as_deref())?;
+
+    // Merge CliConfig-derived values into core AppConfig
+    let cli_app_config = cli_config.to_app_config();
+    if loaded.config.client.base_url.is_empty() {
+        loaded.config.client.base_url = cli_app_config.client.base_url;
+    }
+    if loaded.config.agent.model == "gpt-4" {
+        loaded.config.agent.model = cli_app_config.agent.model;
+    }
+    if loaded.config.client.api_key.is_none() {
+        loaded.config.client.api_key = cli_app_config.client.api_key.clone();
+    }
+    if !loaded.config.gateway.telegram_enabled && cli_app_config.gateway.telegram_enabled {
+        loaded.config.gateway.telegram_enabled = cli_app_config.gateway.telegram_enabled;
+        if loaded.config.gateway.telegram_token.is_none() {
+            loaded.config.gateway.telegram_token = cli_app_config.gateway.telegram_token;
+        }
+    }
+    if !loaded.config.gateway.discord_enabled && cli_app_config.gateway.discord_enabled {
+        loaded.config.gateway.discord_enabled = cli_app_config.gateway.discord_enabled;
+        if loaded.config.gateway.discord_token.is_none() {
+            loaded.config.gateway.discord_token = cli_app_config.gateway.discord_token;
+        }
+    }
+    if !loaded.config.gateway.slack_enabled && cli_app_config.gateway.slack_enabled {
+        loaded.config.gateway.slack_enabled = cli_app_config.gateway.slack_enabled;
+        if loaded.config.gateway.slack_token.is_none() {
+            loaded.config.gateway.slack_token = cli_app_config.gateway.slack_token;
+        }
+    }
+
+    loaded.config.apply_env_overrides()?;
+    apply_cli_overrides(&cli, &mut loaded.config);
+    install_runtime_config(loaded.config.clone());
+
+    // Wire delegation config to SubAgentTool statics
+    if let Some(depth) = cli_config.delegation.max_spawn_depth {
+        operant_core::tools::sub_agent_tool::set_max_spawn_depth(depth);
+    }
+    if let Some(enabled) = cli_config.delegation.orchestrator_enabled {
+        operant_core::tools::sub_agent_tool::set_orchestrator_enabled(enabled);
+    }
+    if let Some(count) = cli_config.delegation.max_concurrent_children {
+        operant_core::tools::sub_agent_tool::set_max_concurrent_children(count as usize);
+    }
+
+    init_logging(
+        cli.verbose,
+        cli.log_level.as_deref(),
+        &loaded.config.logging,
+        loaded.config.tui.rich_output,
+    );
+
+    match &cli.command {
+        Some(Commands::Run {
+            system,
+            query,
+            autonomous,
+        }) => {
+            if *autonomous {
+                if query.is_some() {
+                    anyhow::bail!(
+                        "Do not combine 'run --autonomous' with '--query'. Autonomous mode reads TODO.md from the workspace."
+                    );
+                }
+                autonomous::run_autonomous(loaded.config.clone(), system.clone()).await?;
+                return Ok(());
+            }
+            let query = query
+                .as_ref()
+                .context("No query provided. Use --query or start chat mode.")?;
+            if loaded.config.tui.rich_output {
+                TuiApp::enter(
+                    loaded.config.clone(),
+                    system.clone(),
+                    LaunchMode::Query(query.clone()),
+                )
+                .await?
+                .run()
+                .await?;
+            } else {
+                run_non_tui(&loaded.config, system.as_deref(), query).await?;
+            }
+        }
+        Some(Commands::Chat { system }) => {
+            if loaded.config.tui.rich_output {
+                TuiApp::enter(loaded.config.clone(), system.clone(), LaunchMode::Landing)
+                    .await?
+                    .run()
+                    .await?;
+            } else {
+                chat_non_tui(&loaded.config, system.as_deref()).await?;
+            }
+        }
+        Some(Commands::Tools { cmd }) => {
+            cmd_tools::handle_tools_command(&loaded.config, cmd.clone()).await?;
+        }
+        Some(Commands::Autonomous { system }) => {
+            autonomous::run_autonomous(loaded.config.clone(), system.clone()).await?;
+        }
+        Some(Commands::Test { tool_name, args }) => {
+            test_tool(&loaded.config, tool_name, args.as_deref()).await?;
+        }
+        Some(Commands::Config { cmd }) => {
+            cmd_config::handle_config_command(&loaded.config, cmd.clone()).await?;
+        }
+        Some(Commands::Sessions { cmd }) => {
+            cmd_sessions::handle_sessions_command(&loaded.config, cmd.clone()).await?;
+        }
+        Some(Commands::Mcp { cmd }) => {
+            let mcp_manager = operant_core::mcp::McpManager::new();
+            cmd_mcp::handle_mcp_command(&loaded.config, &mcp_manager, cmd.clone()).await?;
+        }
+        Some(Commands::Skills { cmd }) => {
+            cmd_skills::handle_skills_command(&loaded.config, cmd.clone()).await?;
+        }
+        Some(Commands::Model { cmd }) => {
+            cmd_model::handle_model_command(&loaded.config, cmd.clone()).await?;
+        }
+        Some(Commands::Completion { cmd }) => {
+            cmd_completion::handle_completion_command(cmd.clone())?;
+        }
+        Some(Commands::Cron { cmd }) => {
+            cmd_cron::handle_cron_command(&loaded.config, cmd.clone()).await?;
+        }
+        Some(Commands::Kanban { board, cmd }) => {
+            cmd_kanban::handle_kanban_command(&loaded.config, &board, cmd.clone()).await?;
+        }
+        Some(Commands::Gateway { cmd }) => {
+            cmd_gateway::handle_gateway_command(&loaded.config, cmd.clone()).await?;
+        }
+        Some(Commands::Checkpoints { cmd }) => {
+            cmd_checkpoints::handle_checkpoints_command(&loaded.config, cmd.clone()).await?;
+        }
+        Some(Commands::Memory { cmd }) => {
+            cmd_memory::handle_memory_command(&loaded.config, cmd.clone()).await?;
+        }
+        Some(Commands::Profile { cmd }) => {
+            cmd_profile::handle_profile_command(&loaded.config, cmd.clone()).await?;
+        }
+        Some(Commands::Auth { cmd }) => {
+            cmd_auth::handle_auth_command(&loaded.config, cmd.clone()).await?;
+        }
+        Some(Commands::Fallback { cmd }) => {
+            cmd_auth::handle_fallback_command(&loaded.config, cmd.clone()).await?;
+        }
+        Some(Commands::Login) => {
+            cmd_auth::handle_login(&loaded.config).await?;
+        }
+        Some(Commands::Logout) => {
+            cmd_auth::handle_logout(&loaded.config).await?;
+        }
+        Some(Commands::Version { detailed }) => {
+            cmd_version::handle_version_command(&loaded.config, *detailed).await?;
+        }
+        Some(Commands::Doctor { fix }) => {
+            cmd_doctor::handle_doctor_command(&loaded.config, *fix).await?;
+        }
+        Some(Commands::Status { deep }) => {
+            cmd_status::handle_status_command(&loaded.config, *deep).await?;
+        }
+        Some(Commands::Dump { all }) => {
+            cmd_dump::handle_dump_command(&loaded.config, *all).await?;
+        }
+        Some(Commands::Logs { cmd }) => {
+            cmd_logs::handle_logs_command(&loaded.config, cmd.clone()).await?;
+        }
+        Some(Commands::Backup { cmd }) => {
+            cmd_backup::handle_backup_command(&loaded.config, cmd.clone()).await?;
+        }
+        Some(Commands::Import { cmd }) => {
+            cmd_import::handle_import_command(&loaded.config, cmd.clone()).await?;
+        }
+        Some(Commands::Uninstall { cmd }) => {
+            cmd_uninstall::handle_uninstall_command(&loaded.config, cmd.clone()).await?;
+        }
+        Some(Commands::Update { cmd }) => {
+            cmd_update::handle_update_command(&loaded.config, cmd.clone()).await?;
+        }
+        Some(Commands::Insights { cmd }) => {
+            cmd_insights::handle_insights_command(&loaded.config, cmd.clone()).await?;
+        }
+        Some(Commands::Pairing { cmd }) => {
+            cmd_pairing::handle_pairing_command(&loaded.config, cmd.clone()).await?;
+        }
+        Some(Commands::Webhook { cmd }) => {
+            cmd_webhook::handle_webhook_command(&loaded.config, cmd.clone()).await?;
+        }
+        Some(Commands::Hooks { cmd }) => {
+            cmd_hooks::handle_hooks_command(&loaded.config, cmd.clone()).await?;
+        }
+        Some(Commands::Debug { cmd }) => {
+            cmd_debug::handle_debug_command(&loaded.config, cmd.clone()).await?;
+        }
+        Some(Commands::ComputerUse { cmd }) => {
+            cmd_computer_use::handle_computer_use_command(&loaded.config, cmd.clone()).await?;
+        }
+        Some(Commands::Plugins { cmd }) => {
+            cmd_plugins::handle_plugins_command(&loaded.config, cmd.clone()).await?;
+        }
+        Some(Commands::Curator { cmd }) => {
+            cmd_curator::handle_curator_command(&loaded.config, cmd.clone()).await?;
+        }
+        Some(Commands::Claw { cmd }) => {
+            cmd_claw::handle_claw_command(&loaded.config, cmd.clone()).await?;
+        }
+        Some(Commands::Slack { cmd }) => {
+            cmd_slack::handle_slack_command(&loaded.config, cmd.clone()).await?;
+        }
+        Some(Commands::Setup {
+            section,
+            non_interactive,
+            reset,
+            reconfigure,
+            quick,
+        }) => {
+            cmd_setup::handle_setup_command(
+                &loaded.config,
+                section.as_deref(),
+                *non_interactive,
+                *reset,
+                *reconfigure,
+                *quick,
+            )
+            .await?;
+        }
+        Some(Commands::Whatsapp { cmd }) => {
+            cmd_whatsapp::handle_whatsapp_command(&loaded.config, cmd.clone()).await?;
+        }
+        Some(Commands::Acp { cmd }) => {
+            cmd_acp::handle_acp_command(&loaded.config, cmd.clone()).await?;
+        }
+        Some(Commands::Dashboard { cmd }) => {
+            cmd_dashboard::handle_dashboard_command(&loaded.config, cmd.clone()).await?;
+        }
+        Some(Commands::Rl { cmd }) => {
+            cmd_rl::handle_rl_command(&loaded.config, cmd.clone()).await?;
+        }
+        None => {
+            // No command provided - launch TUI in interactive mode
+            if loaded.config.tui.rich_output {
+                TuiApp::enter(loaded.config.clone(), None, LaunchMode::Landing)
+                    .await?
+                    .run()
+                    .await?;
+            } else {
+                chat_non_tui(&loaded.config, None).await?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rich_tui_without_log_file_uses_sink() {
+        let logging = LoggingSettings::default();
+        assert_eq!(select_log_target(&logging, true), LogTarget::Sink);
+    }
+
+    #[test]
+    fn log_file_overrides_sink() {
+        let logging = LoggingSettings {
+            log_file: Some("operant.log".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(select_log_target(&logging, true), LogTarget::File);
+    }
+
+    #[tokio::test]
+    async fn load_memory_manager_reads_existing_memory_file() {
+        let dir =
+            std::env::temp_dir().join(format!("operant_cli_memory_load_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let seed = MemoryManager::with_storage_dir(dir.clone());
+        seed.store(
+            operant_core::memory::MemoryBlock::new("cli_fact", "fact", "Loaded memory fact")
+                .importance(90),
+        )
+        .await;
+
+        let loaded = load_memory_manager(dir.clone()).await.unwrap();
+
+        assert_eq!(loaded.search("Loaded memory").await.len(), 1);
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn autonomous_subcommand_parses() {
+        let cli = Cli::try_parse_from(["operant", "autonomous"]).unwrap();
+        assert!(matches!(cli.command, Some(Commands::Autonomous { .. })));
+    }
+
+    #[test]
+    fn run_autonomous_flag_parses() {
+        let cli = Cli::try_parse_from(["operant", "run", "--autonomous"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Run {
+                autonomous: true,
+                ..
+            })
+        ));
+    }
+}

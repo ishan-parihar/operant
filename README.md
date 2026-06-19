@@ -1,4 +1,4 @@
-# Hermes-RS ⚡
+# Operant ⚡
 
 **The Hardened Rust Substrate for Agentic Tool Orchestration.**
 
@@ -7,9 +7,9 @@
 [![TUI](https://img.shields.io/badge/UI-Ratatui-blue.svg)](https://github.com/ratatui-org/ratatui)
 [![Architecture](https://img.shields.io/badge/Architecture-ReAct-purple.svg)](https://arxiv.org/abs/2210.03629)
 
-`Hermes-RS` is a high-performance, production-grade implementation of the Hermes-Agent orchestration loop. It provides the critical infrastructure needed for LLMs to move from "text generation" to "system operation" by implementing a robust, streaming-first ReAct (Reason-Act) loop.
+`Operant` is a high-performance, production-grade implementation of the Hermes-Agent orchestration loop. It provides the critical infrastructure needed for LLMs to move from "text generation" to "system operation" by implementing a robust, streaming-first ReAct (Reason-Act) loop.
 
-Written entirely in Rust, `Hermes-RS` focuses on **Tolerant Parsing**, **Deterministic Execution**, and **Autonomous Workspace Management**, ensuring that agentic loops remain stable even when LLM outputs are malformed or inconsistent.
+Written entirely in Rust, `Operant` focuses on **Tolerant Parsing**, **Deterministic Execution**, and **Autonomous Workspace Management**, ensuring that agentic loops remain stable even when LLM outputs are malformed or inconsistent.
 
 ---
 
@@ -18,22 +18,22 @@ Building a reliable agentic loop (Think $\to$ Act $\to$ Observe) is deceptively 
 
 ## 💡 The Solution: A Hardened Orchestration Substrate
 
-`Hermes-RS` solves these problems through five core engineering pillars:
+`Operant` solves these problems through five core engineering pillars:
 
 ### 1. Streaming-First "Tolerant" Parsing
-Instead of waiting for a complete response, `Hermes-RS` uses a custom state-machine parser that detects tool calls **incrementally**. If an LLM produces a `<tool_call>` but the connection drops before the closing tag, the parser can still recover the intent and initiate execution.
+Instead of waiting for a complete response, `Operant` uses a custom state-machine parser that detects tool calls **incrementally**. If an LLM produces a `<tool_call>` but the connection drops before the closing tag, the parser can still recover the intent and initiate execution.
 
 ### 2. The "Validated" Autonomous Loop
-The `hermes autonomous` mode transforms the agent into a disciplined developer. It follows a strict **Plan $\to$ Implement $\to$ Validate $\to$ Push** cycle:
+The `operant autonomous` mode transforms the agent into a disciplined developer. It follows a strict **Plan $\to$ Implement $\to$ Validate $\to$ Push** cycle:
 - **Source of Truth**: Reads a `TODO.md` to determine the next task.
 - **Guardrails**: The agent *cannot* push to Git unless the configured `test_command` (e.g., `cargo test`) returns a success exit code.
 - **State Persistence**: Tracks progress in `autonomous-status.toml` to survive process restarts and avoid redundant work.
 
 ### 3. Cross-Platform Gateway Architecture
-To ensure total conversation continuity, `Hermes-RS` implements a centralized gateway process. This architecture bridges the core agent loop to multiple platforms (Telegram, Discord, Slack, etc.) through a single interface, allowing a user to start a task on the CLI and receive a completion notification via messaging without losing any state.
+To ensure total conversation continuity, `Operant` implements a centralized gateway process. This architecture bridges the core agent loop to multiple platforms (Telegram, Discord, Slack, etc.) through a single interface, allowing a user to start a task on the CLI and receive a completion notification via messaging without losing any state.
 
 ### 4. Kanban-Based Work Orchestration
-For complex, multi-agent collaboration, `Hermes-RS` provides a durable, SQLite-backed Kanban board. This allows tasks to be dispatched, claimed, and tracked across multiple profiles and worker agents, transforming the agent from a simple chatbot into a coordinated workforce.
+For complex, multi-agent collaboration, `Operant` provides a durable, SQLite-backed Kanban board. This allows tasks to be dispatched, claimed, and tracked across multiple profiles and worker agents, transforming the agent from a simple chatbot into a coordinated workforce.
 
 ### 5. Scheduled Automations (Cron)
 Built-in cron scheduling allows for high-reliability, unattended tasks. From daily reports to nightly backups, the system handles natural-language schedules and delivers results to any connected messaging platform.
@@ -55,7 +55,7 @@ Designed for "Human-in-the-Loop" monitoring, the Ratatui-based interface provide
 
 ## 🌌 Potentialities & Future Scope
 
-`Hermes-RS` is a foundation for **Autonomous Engineering Infrastructure**:
+`Operant` is a foundation for **Autonomous Engineering Infrastructure**:
 
 - **Multi-Agent Swarms**: Evolving the `delegate_to_sub_agent` tool into a full-fledged orchestration layer where multiple Hermes instances collaborate.
 - **Self-Optimizing Prompts**: Using the execution telemetry to automatically refine the system prompts based on which "reasoning paths" led to the fastest success.
@@ -71,19 +71,19 @@ Designed for "Human-in-the-Loop" monitoring, the Ratatui-based interface provide
 cargo build --release
 
 # Install the CLI
-cargo install --path crates/hermes-cli
+cargo install --path crates/operant-cli
 ```
 
 ### Usage Example
 ```bash
 # Start the interactive TUI
-hermes chat
+operant chat
 
 # Execute a one-shot task
-hermes run --query "Refactor the error handling in src/main.rs"
+operant run --query "Refactor the error handling in src/main.rs"
 
 # Launch the 24/7 autonomous developer
-hermes autonomous
+operant autonomous
 ```
 
 ## 🛠 Tech Stack

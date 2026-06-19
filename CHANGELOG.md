@@ -9,14 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Autonomous coding mode through `hermes autonomous` and the `hermes run --autonomous` compatibility alias
+- Autonomous coding mode through `operant autonomous` and the `operant run --autonomous` compatibility alias
 - Shared `[autonomous]` runtime configuration for autonomous polling interval, TODO path, status report path, validation command, git target, commit message, command timeout, and repeated-failure pause threshold
 - Repo-root `TODO.md` task ledger with `Implemented` and `Pending` sections for autonomous workspace planning
 - Repo-local `autonomous-status.toml` status reports that capture autonomous state, validation results, failure summaries, and last push targets
 - Disposable-repo autonomous validation coverage that exercises the full tick loop without a live model call
 - Long-term memory injection into agent system prompts via `<long_term_memory>` context built from durable `MEMORY.md` facts
 - Async state distillation that extracts durable session facts into repo-local `MEMORY.md` after completed agent runs
-- Workspace context-file auto-loading for `AGENTS.md`, `CLAUDE.md`, `.hermes.md`, `HERMES.md`, and `.cursorrules` with prompt-injection scanning and truncation
+- Workspace context-file auto-loading for `AGENTS.md`, `CLAUDE.md`, `.operant.md`, `HERMES.md`, and `.cursorrules` with prompt-injection scanning and truncation
 - `delegate_to_sub_agent` tool for opt-in isolated child-agent delegation from the parent ReAct loop
 
 ### Changed
@@ -56,7 +56,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Final assistant replies and tool outputs now land in the conversation pane more consistently instead of leaving the workspace stuck on older chat content
 - Non-Windows CI and tarpaulin coverage now pass the join-error TUI test by using terminal-free run-result assertions instead of any real TTY-backed terminal setup
 
-Full Changelog: [v0.1.2...v0.1.3](https://github.com/eikarna/hermes-rs/compare/v0.1.2...v0.1.3)
+Full Changelog: [v0.1.2...v0.1.3](https://github.com/eikarna/operant-rs/compare/v0.1.2...v0.1.3)
 
 ## [0.1.2] - 2026-04-20
 
@@ -69,7 +69,7 @@ Full Changelog: [v0.1.2...v0.1.3](https://github.com/eikarna/hermes-rs/compare/v
 
 - Runtime and operational errors in the rich TUI are now summarized in the footer while their detailed text is rendered in the `Activity` pane
 - Activity entries now render as compact single-line log rows so failures stay visible in narrow panel heights
-- README now documents the TOML configuration model, `hermes.example.toml`, and the current ratatui-based interactive workflow
+- README now documents the TOML configuration model, `operant.example.toml`, and the current ratatui-based interactive workflow
 
 ### Fixed
 
@@ -78,18 +78,18 @@ Full Changelog: [v0.1.2...v0.1.3](https://github.com/eikarna/hermes-rs/compare/v
 - Landing status/footer no longer duplicates `idle` or `run failed`
 - Current chat sessions can accept a new prompt after runtime errors without conflicting with agent self-healing logic
 
-Full Changelog: [v0.1.1...v0.1.2](https://github.com/eikarna/hermes-rs/compare/v0.1.1...v0.1.2)
+Full Changelog: [v0.1.1...v0.1.2](https://github.com/eikarna/operant-rs/compare/v0.1.1...v0.1.2)
 
 ## [0.1.1] - 2026-04-19
 
 ### Added
 
-- Shared TOML-backed `AppConfig` runtime configuration across `hermes-cli` and `hermes-core`
-- Config discovery with precedence `defaults < hermes.toml/.hermes.toml/config.toml < env vars < CLI flags`
+- Shared TOML-backed `AppConfig` runtime configuration across `operant-cli` and `operant-core`
+- Config discovery with precedence `defaults < operant.toml/.operant.toml/config.toml < env vars < CLI flags`
 - Config sections for client, agent behavior, TUI, MCP, skills, gateway, and tool/runtime defaults
 - Responsive ratatui application architecture with landing and workspace views split across dedicated state, action, form, render, and app modules
 - In-TUI panels for Session, MCP, Skills, and Behavior management, including modal forms for MCP server creation, skill creation, and behavior editing
-- Example-config parse coverage to keep `hermes.example.toml` synchronized with the Rust config schema
+- Example-config parse coverage to keep `operant.example.toml` synchronized with the Rust config schema
 - GitHub release workflow that extracts matching release notes from `CHANGELOG.md` and publishes tagged build artifacts to GitHub Releases
 
 ### Changed
@@ -141,7 +141,7 @@ Full Changelog: [v0.1.1...v0.1.2](https://github.com/eikarna/hermes-rs/compare/v
 - `tokio` 1.36, `reqwest` 0.12 (rustls), `serde` 1.0, `clap` 4.5
 - `schemars` 0.8, `tracing` 0.1, `anyhow` 1.0, `thiserror` 1.0
 
-[0.1.0]: https://github.com/eikarna/hermes-rs/releases/tag/v0.1.0
-[0.1.1]: https://github.com/eikarna/hermes-rs/releases/tag/v0.1.1
-[0.1.2]: https://github.com/eikarna/hermes-rs/releases/tag/v0.1.2
-[0.1.3]: https://github.com/eikarna/hermes-rs/releases/tag/v0.1.3
+[0.1.0]: https://github.com/eikarna/operant-rs/releases/tag/v0.1.0
+[0.1.1]: https://github.com/eikarna/operant-rs/releases/tag/v0.1.1
+[0.1.2]: https://github.com/eikarna/operant-rs/releases/tag/v0.1.2
+[0.1.3]: https://github.com/eikarna/operant-rs/releases/tag/v0.1.3

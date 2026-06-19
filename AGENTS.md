@@ -1,15 +1,15 @@
 # AGENTS.md
 
-## Hermes-RS Project Context
+## Operant Project Context
 
 - Current release line: `0.1.3`
-- Runtime config is TOML-first and shared through `crates/hermes-core/src/config.rs`
-- Rich CLI/TUI uses `ratatui` and lives under `crates/hermes-cli/src/tui/`
-- Autonomous coding mode lives in `crates/hermes-cli/src/autonomous.rs` and is launched through `hermes autonomous` or `hermes run --autonomous`
+- Runtime config is TOML-first and shared through `crates/operant-core/src/config.rs`
+- Rich CLI/TUI uses `ratatui` and lives under `crates/operant-cli/src/tui/`
+- Autonomous coding mode lives in `crates/operant-cli/src/autonomous.rs` and is launched through `operant autonomous` or `operant run --autonomous`
 - Repo-root `TODO.md` is the task ledger for autonomous mode; keep `Implemented` and `Pending` accurate when autonomous behavior changes
 - Autonomous runtime writes repo-local `autonomous-status.toml` state and reloads repeated-failure pause state across restarts; keep that workflow documented when changing autonomous behavior
 - The workspace view has `Conversation`, `Reasoning`, `Activity`, and management panels for `MCP`, `Skills`, and `Behavior`
-- When config fields change, update `hermes.example.toml` in the repo root in the same change
+- When config fields change, update `operant.example.toml` in the repo root in the same change
 - When user-facing behavior changes, update `README.md`, `CHANGELOG.md`, and screenshots in `assets/` if the UI changed materially
 - Tagged releases are created from `CHANGELOG.md`: push `vX.Y.Z`, then GitHub Actions builds artifacts and publishes the GitHub Release from the matching changelog section
 - Preferred verification commands:
@@ -20,9 +20,9 @@
 
 ## MVP Deployment (Current Focus)
 
-**Goal**: Make hermes-rs deployable and functional for testing
-**Config Defaults**: TDG memory provider, Kokoro TTS (set in hermes.example.toml)
-**Web Dashboard**: Copied from hermes-agent, wired to axum backend
+**Goal**: Make operant-rs deployable and functional for testing
+**Config Defaults**: TDG memory provider, Kokoro TTS (set in operant.example.toml)
+**Web Dashboard**: Copied from operant-agent, wired to axum backend
 
 ### Quick Start for AI Agents
 
@@ -34,36 +34,36 @@ cargo build --release
 cargo test --workspace
 
 # 3. Test CLI
-./target/release/hermes chat
-./target/release/hermes run --query "Hello"
-./target/release/hermes dashboard
+./target/release/operant chat
+./target/release/operant run --query "Hello"
+./target/release/operant dashboard
 
 # 4. Test specific module
-cargo test -p hermes-core --lib database
-cargo test -p hermes-core --lib agent
+cargo test -p operant-core --lib database
+cargo test -p operant-core --lib agent
 ```
 
 ### Common Development Tasks
 
 **Fix a bug:**
 1. Read the error message carefully
-2. Find the relevant file in `crates/hermes-core/src/` or `crates/hermes-cli/src/`
+2. Find the relevant file in `crates/operant-core/src/` or `crates/operant-cli/src/`
 3. Make the fix
 4. Run `cargo check --workspace` to verify compilation
 5. Run `cargo test --workspace` to verify tests pass
 6. Commit with descriptive message
 
 **Add a feature:**
-1. Check if similar feature exists in `hermes-agent/`
+1. Check if similar feature exists in `operant-agent/`
 2. Read the Python implementation for reference
 3. Implement in Rust following existing patterns
 4. Add tests
 5. Update documentation
 
 **Port from Python:**
-1. Find the Python file in `hermes-agent/`
+1. Find the Python file in `operant-agent/`
 2. Read and understand the implementation
-3. Create Rust equivalent in `hermes-rs/crates/hermes-core/src/`
+3. Create Rust equivalent in `operant-rs/crates/operant-core/src/`
 4. Follow existing Rust patterns (async/await, error handling)
 5. Add tests
 
@@ -135,7 +135,7 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 
 ## Recursive AI Development Mechanism
 
-**Purpose**: Enable AI agents to fix bugs and improve hermes-rs without human bottleneck
+**Purpose**: Enable AI agents to fix bugs and improve operant-rs without human bottleneck
 
 ### How It Works
 
@@ -148,7 +148,7 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 
 ### Issue Tracking
 
-**File**: `hermes-rs/BUGS.md`
+**File**: `operant-rs/BUGS.md`
 
 **Format:**
 ```markdown
@@ -170,7 +170,7 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 
 ### Self-Test Script
 
-**File**: `hermes-rs/scripts/self-test.sh`
+**File**: `operant-rs/scripts/self-test.sh`
 
 **Usage:**
 ```bash
@@ -178,7 +178,7 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 ./scripts/self-test.sh
 
 # Run specific test
-cargo test -p hermes-core --lib database
+cargo test -p operant-core --lib database
 ```
 
 ### Development Loop
@@ -196,7 +196,7 @@ while true; do
   cargo build --release
   
   # 4. If build succeeds, test manually
-  hermes run --query "Test query" --max-iterations 1
+  operant run --query "Test query" --max-iterations 1
   
   # 5. If all pass, commit
   git add .
@@ -222,13 +222,13 @@ If any command fails, the fix is not complete.
 
 ### Configuration
 
-**Default config file**: `hermes-rs/hermes.example.toml`
-**User config file**: `~/.hermes/hermes.toml`
+**Default config file**: `operant-rs/operant.example.toml`
+**User config file**: `~/.operant/operant.toml`
 
 To set defaults:
-1. Copy `hermes.example.toml` to `~/.hermes/hermes.toml`
-2. Edit `~/.hermes/hermes.toml` to set your preferences
-3. Set API keys in `~/.hermes/.env` (not in config file)
+1. Copy `operant.example.toml` to `~/.operant/operant.toml`
+2. Edit `~/.operant/operant.toml` to set your preferences
+3. Set API keys in `~/.operant/.env` (not in config file)
 
 Example config defaults:
 ```toml

@@ -1,7 +1,7 @@
 # CLI Parity Upgrade — Verification Report (Phase 4)
 
 **Date**: 2026-05-12
-**Project**: hermes-rs v0.1.3
+**Project**: operant-rs v0.1.3
 **Verification Script Reference**: `docs/superpowers/plans/VERIFICATION_PLAN.md`
 
 ---
@@ -108,7 +108,7 @@
 | Test | Result |
 |------|--------|
 | `mcp serve --help` | ✅ PASS |
-| Initialize request | ✅ **name=hermes-mcp, version=0.1.3, protocol=2024-11-05** |
+| Initialize request | ✅ **name=operant-mcp, version=0.1.3, protocol=2024-11-05** |
 | Tools list | ✅ **67 tools exposed** |
 | Graceful shutdown | ✅ PASS |
 | Native references | ✅ PASS (mcp_serve found) |
@@ -194,7 +194,7 @@ GET /api/config → 200
 
 ### 6.2 MCP Server E2E
 
-- **Initialize**: name=hermes-mcp, protocol=2024-11-05 ✅
+- **Initialize**: name=operant-mcp, protocol=2024-11-05 ✅
 - **Tools list**: 67 tools exposed ✅
 - **Graceful shutdown**: "MCP server shut down gracefully." ✅
 
@@ -254,13 +254,13 @@ GET /api/config → 200
 
 | AUDIT_CLI_PARITY.md Gap | Verification Section | Status |
 |-------------------------|---------------------|--------|
-| `hermes curator` Python-delegated | 2.1, 2.2, 5 | ✅ **CLOSED** — Native CuratorEngine |
-| `hermes plugins install` stub | 2.3, 5 | ✅ CLOSED (previously) |
-| `hermes claw migrate/cleanup` stubs | 2.4, 5 | ✅ CLOSED (previously) |
-| `hermes gateway` runtime Python-delegated | 3.1, 5 | ✅ CLOSED (previously) |
-| `hermes acp server` stub | 3.2, 5 | ✅ CLOSED (previously) |
-| `hermes dashboard server` stub | 3.3, 5 | ✅ CLOSED (previously) |
-| `hermes mcp serve` stub | 3.4, 5 | ✅ CLOSED (previously) |
+| `operant curator` Python-delegated | 2.1, 2.2, 5 | ✅ **CLOSED** — Native CuratorEngine |
+| `operant plugins install` stub | 2.3, 5 | ✅ CLOSED (previously) |
+| `operant claw migrate/cleanup` stubs | 2.4, 5 | ✅ CLOSED (previously) |
+| `operant gateway` runtime Python-delegated | 3.1, 5 | ✅ CLOSED (previously) |
+| `operant acp server` stub | 3.2, 5 | ✅ CLOSED (previously) |
+| `operant dashboard server` stub | 3.3, 5 | ✅ CLOSED (previously) |
+| `operant mcp serve` stub | 3.4, 5 | ✅ CLOSED (previously) |
 | Kanban multi-board missing | 4.1, 5 | ✅ CLOSED (previously) |
 | Slash command registry missing | 4.2, 5 | ✅ CLOSED (previously) |
 | RL CLI missing | 4.3, 5 | ✅ CLOSED (previously) |
@@ -275,8 +275,8 @@ GET /api/config → 200
 
 ### Pre-existing Warnings (Not Regressions)
 
-- 85 warnings in `hermes-core` (unused imports, dead code, non-snake-case fields)
-- 33 warnings in `hermes-cli` (unused imports, dead code, unused functions)
+- 85 warnings in `operant-core` (unused imports, dead code, non-snake-case fields)
+- 33 warnings in `operant-cli` (unused imports, dead code, unused functions)
 - These are pre-existing and unrelated to the parity upgrade
 
 ### Out-of-Scope Items
@@ -289,7 +289,7 @@ GET /api/config → 200
 
 ## 11. Final Verdict
 
-> **✅ CLI PARITY ACHIEVED. All 20 success criteria met or waived. All 12 audit gaps closed. Zero Python stubs remain. The hermes-rs CLI is fully native.**
+> **✅ CLI PARITY ACHIEVED. All 20 success criteria met or waived. All 12 audit gaps closed. Zero Python stubs remain. The operant-rs CLI is fully native.**
 
 | Metric | Before (AUDIT_FINAL.md) | After (VERIFICATION_REPORT.md) | Change |
 |--------|------------------------|-------------------------------|--------|

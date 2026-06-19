@@ -1,14 +1,14 @@
-# Hermes-RS TODO
+# Operant TODO
 
 ## Implemented
 
 - ReAct agent orchestration loop through `HermesAgent::run()`
-- Shared TOML runtime configuration across `hermes-core` and `hermes-cli`
+- Shared TOML runtime configuration across `operant-core` and `operant-cli`
 - Ratatui prompt-first TUI with conversation, reasoning, activity, MCP, skills, and behavior panels
 - Streaming and non-streaming LLM request handling with tolerant reasoning/tool-call parsing
 - Built-in file, patch, terminal, code execution, web, memory, and TODO tools
 - GitHub Actions build, test, coverage, and release workflows with changelog-driven release notes
-- Autonomous coding mode entrypoints: `hermes autonomous` and `hermes run --autonomous`
+- Autonomous coding mode entrypoints: `operant autonomous` and `operant run --autonomous`
 - Autonomous workspace loop that reads `TODO.md`, runs the agent, validates changes, and only pushes after passing tests
 - End-to-end autonomous mode validation against a disposable sample repository, with README operator workflow documentation
 - Dedicated repo-local `autonomous-status.toml` reporting for autonomous state, validation summaries, repeated failures, and paused states
@@ -26,7 +26,7 @@
 - All unregistered tools (checkpoint, cron, kanban) wired into built-in registry and compiled
 - Full RL training tool (`rl_training_tool.rs`) — PPO/GRPO curriculum training with mlx, wandb integration
 - Full Spotify control tool (`spotify_tool.rs`) — 7 action types (playback, queue, search, playlists, devices, library, repeat/shuffle)
-- Fixed 3 flaky/failing tests: test_agent_builder (missing DB), parse_args_rejects_empty_goal (whitespace validation), test_hermes_subdirs_are_children_of_home (env var race condition)
+- Fixed 3 flaky/failing tests: test_agent_builder (missing DB), parse_args_rejects_empty_goal (whitespace validation), test_operant_subdirs_are_children_of_home (env var race condition)
 - Comprehensive audit report generated (REPORT.md) with 291/291 tests passing
 - AUDIT.md generated with complete port mapping (58 HermesTool impls)
 - MCP management tool (`mcp_tool.rs`): add/remove/list MCP servers
@@ -37,17 +37,17 @@
 - **Phase 2**: skills_hub, mcp_oauth, security, voice_mode, skills_guard (all complete)
 - **Phase 3**: credential_files, skill_usage, skills_sync, website_policy, fuzzy_match, ansi_strip, schema_sanitizer, interrupt, budget_config, tool_result_storage, browser_camofox, managed_tool_gateway, path_security, env_passthrough (all complete)
 - **Phase 4**: credential_pool, ms_graph, yuanbao, environments (8 backends) (all complete)
-- **Phase 5a+5b**: 10 standalone tool stubs (binary_extensions, xai_http, camofox_state, debug_helpers, tool_output_limits, file_state, slash_confirm, tool_backend_helpers, openrouter_client, neutts_synth) — all in `crates/hermes-core/src/tools/`
+- **Phase 5a+5b**: 10 standalone tool stubs (binary_extensions, xai_http, camofox_state, debug_helpers, tool_output_limits, file_state, slash_confirm, tool_backend_helpers, openrouter_client, neutts_synth) — all in `crates/operant-core/src/tools/`
 - **Phase 6**: approval system (`approval.rs`) — 3-layer guard, 12 hardline categories, 47 dangerous patterns, 30+ tests
 - **Phase 7**: browser supervisor (`browser_supervisor.rs`) — CDPSupervisor + Browserbase/Browser Use/Firecrawl providers + 3 HermesTools + 24 tests
 - **Phase 8**: State DB expansion (`database.rs` → 1477 LOC) — FTS5 search, session_metadata/tags/events/tools_state tables, merge_sessions, retry engine
 - **Phase 9**: Gateway enhancement (`gateway.rs` → 1118 LOC) — PlatformAdapter trait, SessionStore, ChannelDirectory, WebhookAdapter, GatewayStats
-- **Phase 10**: CLI config system (`crates/hermes-cli/src/config.rs` → 3672 LOC) — CliConfig (40+ sections), env expansion, deep merge, 8-step migration, validation
+- **Phase 10**: CLI config system (`crates/operant-cli/src/config.rs` → 3672 LOC) — CliConfig (40+ sections), env expansion, deep merge, 8-step migration, validation
 - **843 tests passing** (755 core lib + 86 cli bin + 2 doctest) — 0 failures
 
 ## Pending
 
-All Python tool modules from hermes-agent have been fully ported to Rust across all 10 phases. Remaining items are infrastructure/hardening only:
+All Python tool modules from operant-agent have been fully ported to Rust across all 10 phases. Remaining items are infrastructure/hardening only:
 - Integrate environment backends with real SDK dependencies (Docker, SSH, Modal, Daytona, Vercel)
 - Reduce clippy warnings (~82 pre-existing)
 - Set up CI pipeline (GitHub Actions)
