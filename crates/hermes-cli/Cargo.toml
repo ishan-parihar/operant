@@ -60,7 +60,7 @@ tower-http = { workspace = true }
 open = "5"
 
 # SQLite (for WAL checkpoint in doctor --fix)
-rusqlite = { version = "0.31", features = ["bundled"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
 
 [dev-dependencies]
 tempfile = "3.10"

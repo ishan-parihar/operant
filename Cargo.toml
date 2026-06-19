@@ -63,6 +63,9 @@ flate2 = "1.0"
 rand = "0.8"
 tempfile = "3.10"
 
+# Graph memory infrastructure
+tdg-rust = { path = "../../tdg-rust" }
+
 [profile.release]
 lto = true
 strip = true
