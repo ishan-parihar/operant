@@ -10,7 +10,7 @@ use ratatui::{
 };
 use std::path::{Path, PathBuf};
 
-use crate::overlays::{
+use crate::tui::overlays::{
     begin_modal_buf, modal_header_line_area, render_modal_title_buf, CLAURST_ACCENT,
     CLAURST_MUTED, CLAURST_PANEL_BG, CLAURST_TEXT,
 };

@@ -35,9 +35,9 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 
-use claurst_api::{FreeUpstream, FREE_CATALOG};
+use crate::tui::adapter_types::{FreeUpstream, FREE_CATALOG};
 
-use crate::overlays::{centered_rect, render_dark_overlay, render_dialog_bg, CLAURST_PANEL_BG};
+use crate::tui::overlays::{centered_rect, render_dark_overlay, render_dialog_bg, CLAURST_PANEL_BG};
 
 /// One row in the dialog — one provider's name, URL, and the user's
 /// (possibly empty) typed key.

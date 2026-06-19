@@ -1,29 +1,29 @@
 // app.rs — App state struct and main event loop.
 
-use crate::bridge_state::BridgeConnectionState;
-use crate::context_viz::ContextVizState;
-use crate::dialog_select::{DialogSelectState, SelectItem};
-use crate::export_dialog::{ExportDialogState, ExportFormat};
-use crate::import_config_dialog::ImportConfigDialogState;
-use crate::dialogs::PermissionRequest;
-use crate::diff_viewer::{DiffViewerState, build_turn_diff};
-use crate::model_picker::{EffortLevel, ModelPickerState};
-use crate::session_browser::SessionBrowserState;
-use crate::tasks_overlay::TasksOverlay;
-use crate::dialogs::McpApprovalDialogState;
-use crate::mcp_view::{McpServerView, McpToolView, McpViewState, McpViewStatus};
-use crate::notifications::{NotificationKind, NotificationQueue};
-use crate::overlays::{
+use crate::tui::bridge_state::BridgeConnectionState;
+use crate::tui::context_viz::ContextVizState;
+use crate::tui::dialog_select::{DialogSelectState, SelectItem};
+use crate::tui::export_dialog::{ExportDialogState, ExportFormat};
+use crate::tui::import_config_dialog::ImportConfigDialogState;
+use crate::tui::dialogs::PermissionRequest;
+use crate::tui::diff_viewer::{DiffViewerState, build_turn_diff};
+use crate::tui::model_picker::{EffortLevel, ModelPickerState};
+use crate::tui::session_browser::SessionBrowserState;
+use crate::tui::tasks_overlay::TasksOverlay;
+use crate::tui::dialogs::McpApprovalDialogState;
+use crate::tui::mcp_view::{McpServerView, McpToolView, McpViewState, McpViewStatus};
+use crate::tui::notifications::{NotificationKind, NotificationQueue};
+use crate::tui::overlays::{
     GlobalSearchState, HelpEntry, HelpOverlay, HistorySearchOverlay, MessageSelectorOverlay,
     RewindFlowOverlay, SelectorMessage,
 };
-use crate::plugin_views::PluginHintBanner;
-use crate::prompt_input::{InputMode, PromptInputState, VimMode};
-use crate::render;
-use crate::settings_screen::SettingsScreen;
-use crate::stats_dialog::StatsDialogState;
-use crate::theme_screen::ThemeScreen;
-use crate::{agents_view::{AgentInfo, AgentStatus, AgentsMenuState, AgentsRoute}, diff_viewer::DiffPane};
+use crate::tui::plugin_views::PluginHintBanner;
+use crate::tui::prompt_input::{InputMode, PromptInputState, VimMode};
+use crate::tui::render;
+use crate::tui::settings_screen::SettingsScreen;
+use crate::tui::stats_dialog::StatsDialogState;
+use crate::tui::theme_screen::ThemeScreen;
+use crate::tui::{agents_view::{AgentInfo, AgentStatus, AgentsMenuState, AgentsRoute}, diff_viewer::DiffPane};
 use crate::tui::adapter_types::config::{Config, Settings, Theme};
 use crate::tui::adapter_types::cost::CostTracker;
 use crate::tui::adapter_types::file_history::FileHistory;
@@ -910,10 +910,10 @@ pub struct App {
     /// When set, the main loop should spawn the async auth task for this provider.
     pub device_auth_pending: Option<String>,
     /// Shared provider registry for dynamic model fetching.
-    pub provider_registry: Option<std::sync::Arc<claurst_api::ProviderRegistry>>,
+    pub provider_registry: Option<std::sync::Arc<crate::tui::adapter_types::ProviderRegistry>>,
     /// Model registry populated from models.dev — single source of truth for
     /// all provider models shown in the `/model` picker.
-    pub model_registry: claurst_api::ModelRegistry,
+    pub model_registry: crate::tui::adapter_types::ModelRegistry,
     /// When `true`, the main event loop should spawn an async task to fetch
     /// the model list from the current provider's `list_models()` API.
     pub model_picker_fetch_pending: bool,
@@ -990,7 +990,7 @@ pub struct App {
     /// Receiver for `UserQuestionEvent`s produced by the AskUserQuestion tool.
     /// When a question arrives, `ask_user_dialog` is populated and shown.
     pub user_question_rx:
-        Option<tokio::sync::mpsc::UnboundedReceiver<crate::tui::adapter_types::tools::UserQuestionEvent>>,
+        Option<tokio::sync::mpsc::UnboundedReceiver<claurst_tools::UserQuestionEvent>>,
     /// State for the model-initiated ask-user question dialog.
     pub ask_user_dialog: crate::ask_user_dialog::AskUserDialogState,
 
@@ -1311,7 +1311,7 @@ impl App {
             device_auth_pending: None,
             provider_registry: None,
             model_registry: {
-                let mut reg = claurst_api::ModelRegistry::new();
+                let mut reg = crate::tui::adapter_types::ModelRegistry::new();
                 // Try to load cached models.dev data from disk.
                 let cache_path = dirs::cache_dir()
                     .unwrap_or_else(|| std::path::PathBuf::from("."))
@@ -1918,7 +1918,7 @@ impl App {
     pub fn apply_provider_refresh(
         &mut self,
         config: Config,
-        provider_registry: Option<std::sync::Arc<claurst_api::ProviderRegistry>>,
+        provider_registry: Option<std::sync::Arc<crate::tui::adapter_types::ProviderRegistry>>,
         auth_store: crate::tui::adapter_types::AuthStore,
         has_credentials: bool,
         status_message: String,
@@ -1926,7 +1926,7 @@ impl App {
         self.close_secondary_views();
         self.config = config;
         self.provider_registry = provider_registry;
-        self.model_registry = claurst_api::ModelRegistry::new();
+        self.model_registry = crate::tui::adapter_types::ModelRegistry::new();
         self.auth_store = auth_store;
         self.connect_dialog = DialogSelectState::new("Connect a provider", provider_picker_items());
         self.import_config_picker = DialogSelectState::new("Import config", import_config_picker_items());
@@ -2304,7 +2304,7 @@ impl App {
 
     /// Perform the export based on the selected format. Returns the path written.
     pub fn perform_export(&mut self) -> Option<String> {
-        use crate::export_dialog::{export_as_json, export_as_markdown};
+        use crate::tui::export_dialog::{export_as_json, export_as_markdown};
         let ts = chrono::Local::now().format("%Y%m%d-%H%M%S");
         let (filename, content) = match self.export_dialog.selected {
             ExportFormat::Json => {
@@ -3224,7 +3224,7 @@ impl App {
                             // "Free" composite mode — collects any subset of the
                             // free-tier upstreams (min 1; more = better availability).
                             "free" => {
-                                let existing: Vec<(&'static str, String)> = claurst_api::FREE_CATALOG
+                                let existing: Vec<(&'static str, String)> = crate::tui::adapter_types::FREE_CATALOG
                                     .iter()
                                     .filter_map(|upstream| {
                                         let key = match upstream.id {
@@ -3412,7 +3412,7 @@ impl App {
 
         // Session branching overlay intercepts navigation and Esc
         if self.session_branching.visible {
-            use crate::session_branching::BranchBrowserMode;
+            use crate::tui::session_branching::BranchBrowserMode;
             match self.session_branching.mode {
                 BranchBrowserMode::Browse => {
                     match key.code {
@@ -3461,7 +3461,7 @@ impl App {
 
         // Session browser intercepts navigation and Esc
         if self.session_browser.visible {
-            use crate::session_browser::SessionBrowserMode;
+            use crate::tui::session_browser::SessionBrowserMode;
             match self.session_browser.mode {
                 SessionBrowserMode::Browse => {
                     match key.code {
@@ -3912,7 +3912,7 @@ impl App {
                     | crate::prompt_input::VimMode::VisualBlock
             )
         {
-            use crate::image_paste::{read_clipboard_image, read_clipboard_text, read_primary_text};
+            use crate::tui::image_paste::{read_clipboard_image, read_clipboard_text, read_primary_text};
             if let Some(img) = read_clipboard_image() {
                 let label = img.label.clone();
                 let dims = img.dimensions;
@@ -4570,7 +4570,7 @@ impl App {
     }
 
     fn handle_rewind_flow_key(&mut self, key: KeyEvent) -> bool {
-        use crate::overlays::RewindStep;
+        use crate::tui::overlays::RewindStep;
         match &self.rewind_flow.step {
             RewindStep::Selecting => match key.code {
                 KeyCode::Esc => {
@@ -5116,7 +5116,7 @@ impl App {
     /// to `bash_prefix_allowlist` so future requests with the same prefix are
     /// silently approved.
     fn maybe_record_bash_prefix(&mut self) {
-        use crate::dialogs::PermissionDialogKind;
+        use crate::tui::dialogs::PermissionDialogKind;
         let pr = match self.permission_request.as_ref() {
             Some(p) => p,
             None => return,
@@ -5407,8 +5407,8 @@ impl App {
     /// Otherwise the text goes through the normal `prompt_input.paste()` path
     /// which applies the multi-line summary placeholder for large pastes.
     fn handle_paste_data(&mut self, data: String) {
-        use crate::prompt_input::detect_pasted_path;
-        use crate::image_paste::PastedImage;
+        use crate::tui::prompt_input::detect_pasted_path;
+        use crate::tui::image_paste::PastedImage;
 
         if let Some(path) = detect_pasted_path(&data) {
             let ext = path
@@ -5880,15 +5880,15 @@ impl App {
                 }
                 self.is_streaming = true;
                 match stream_evt {
-                    claurst_api::AnthropicStreamEvent::ContentBlockDelta { delta, .. } => {
+                    crate::tui::adapter_types::AnthropicStreamEvent::ContentBlockDelta { delta, .. } => {
                         // Reset stall timer on any incoming delta — we're making progress.
                         self.stall_start = None;
                         match delta {
-                            claurst_api::streaming::ContentDelta::TextDelta { text } => {
+                            crate::tui::adapter_types::streaming::ContentDelta::TextDelta { text } => {
                                 self.streaming_text.push_str(&text);
                                 self.invalidate_transcript();
                             }
-                            claurst_api::streaming::ContentDelta::ThinkingDelta { thinking } => {
+                            crate::tui::adapter_types::streaming::ContentDelta::ThinkingDelta { thinking } => {
                                 debug!(len = thinking.len(), "Thinking delta received");
                                 self.streaming_thinking.push_str(&thinking);
                                 self.invalidate_transcript();
@@ -5896,7 +5896,7 @@ impl App {
                             _ => {}
                         }
                     }
-                    claurst_api::AnthropicStreamEvent::MessageStop => {
+                    crate::tui::adapter_types::AnthropicStreamEvent::MessageStop => {
                         self.is_streaming = false;
                         self.spinner_verb = None;
                         self.stall_start = None;
@@ -6691,7 +6691,7 @@ mod tests {
 
     #[test]
     fn test_bash_prefix_allowlist_after_p_key() {
-        use crate::dialogs::PermissionRequest;
+        use crate::tui::dialogs::PermissionRequest;
         use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
 
         let mut app = make_app();
@@ -6724,7 +6724,7 @@ mod tests {
 
     #[test]
     fn test_bash_prefix_allowlist_via_enter_on_p_option() {
-        use crate::dialogs::PermissionRequest;
+        use crate::tui::dialogs::PermissionRequest;
         use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
 
         let mut app = make_app();
@@ -6755,7 +6755,7 @@ mod tests {
 
     #[test]
     fn test_bash_prefix_allowlist_non_prefix_option_does_not_add() {
-        use crate::dialogs::PermissionRequest;
+        use crate::tui::dialogs::PermissionRequest;
         use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
 
         let mut app = make_app();

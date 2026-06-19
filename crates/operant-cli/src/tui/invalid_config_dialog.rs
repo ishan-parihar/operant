@@ -11,7 +11,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Widget, Wrap};
 use ratatui::Frame;
 
-use crate::overlays::centered_rect;
+use crate::tui::overlays::centered_rect;
 
 // ---------------------------------------------------------------------------
 // State

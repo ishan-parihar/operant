@@ -6,8 +6,8 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Padding, Paragraph, Widget, Wrap};
 use ratatui::Frame;
 
-use crate::file_injection::AtFileIssue;
-use crate::image_paste::PastedImage;
+use crate::tui::file_injection::AtFileIssue;
+use crate::tui::image_paste::PastedImage;
 
 /// Outcome of the file injection dialog.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

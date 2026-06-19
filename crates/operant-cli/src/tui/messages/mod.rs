@@ -8,9 +8,9 @@
 use std::collections::HashMap;
 
 use crate::tui::adapter_types::types::{ContentBlock, Message, Role, ToolResultContent};
-use crate::app::TurnMetadata;
-use crate::kitty_image::render_image;
-use crate::transcript_turn::reasoning_heading;
+use crate::tui::app::TurnMetadata;
+use crate::tui::kitty_image::render_image;
+use crate::tui::transcript_turn::reasoning_heading;
 use ratatui::{
     style::{Color, Modifier, Style},
     text::{Line, Span},

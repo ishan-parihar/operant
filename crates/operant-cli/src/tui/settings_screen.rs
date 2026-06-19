@@ -6,7 +6,7 @@
 
 use crate::tui::adapter_types::config::{Config, Settings};
 use crate::tui::adapter_types::output_styles::{builtin_styles, find_style};
-use crate::overlays::{
+use crate::tui::overlays::{
     centered_rect, modal_search_line, render_dark_overlay, render_dialog_bg, CLAURST_ACCENT,
     CLAURST_MUTED, CLAURST_PANEL_BG,
 };

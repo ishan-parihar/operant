@@ -12,7 +12,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Widget, Wrap};
 use ratatui::Frame;
 
-use crate::overlays::centered_rect;
+use crate::tui::overlays::centered_rect;
 
 // ---------------------------------------------------------------------------
 // State
@@ -224,7 +224,7 @@ fn render_provider_setup_page(frame: &mut Frame, area: Rect) {
 }
 
 fn render_welcome_page(frame: &mut Frame, area: Rect) {
-    use crate::overlays::{render_dark_overlay, render_dialog_bg, CLAURST_PANEL_BG};
+    use crate::tui::overlays::{render_dark_overlay, render_dialog_bg, CLAURST_PANEL_BG};
 
     let pink = Color::Rgb(233, 30, 99);
     let dim = Color::Rgb(90, 90, 90);
@@ -301,7 +301,7 @@ fn render_welcome_page(frame: &mut Frame, area: Rect) {
 }
 
 fn render_keybindings_page(frame: &mut Frame, area: Rect) {
-    use crate::overlays::{render_dark_overlay, render_dialog_bg, CLAURST_PANEL_BG};
+    use crate::tui::overlays::{render_dark_overlay, render_dialog_bg, CLAURST_PANEL_BG};
 
     let pink = Color::Rgb(233, 30, 99);
     let dim = Color::Rgb(90, 90, 90);

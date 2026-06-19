@@ -9,8 +9,8 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
 
-use crate::model_picker::EffortLevel;
-use crate::overlays::centered_rect;
+use crate::tui::model_picker::EffortLevel;
+use crate::tui::overlays::centered_rect;
 
 #[derive(Debug, Default, Clone)]
 pub struct EffortPickerState {

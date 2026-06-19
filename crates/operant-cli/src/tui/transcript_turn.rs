@@ -1,4 +1,4 @@
-use crate::app::{App, ToolStatus, ToolUseBlock, TurnMetadata};
+use crate::tui::app::{App, ToolStatus, ToolUseBlock, TurnMetadata};
 use crate::tui::adapter_types::types::{ContentBlock, Message, Role};
 
 #[derive(Debug)]
