@@ -7,7 +7,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget, Wrap};
 use ratatui::Frame;
 
-use crate::overlays::{
+use crate::tui::overlays::{
     begin_modal_frame, modal_header_line_area, render_modal_title_frame, CLAURST_ACCENT,
     CLAURST_MUTED, CLAURST_PANEL_BG,
 };

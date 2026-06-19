@@ -8,7 +8,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
-use crate::overlays::{centered_rect, modal_search_line, CLAURST_PANEL_BG};
+use crate::tui::overlays::{centered_rect, modal_search_line, CLAURST_PANEL_BG};
 
 // ---------------------------------------------------------------------------
 // Effort level
@@ -253,7 +253,7 @@ fn model_entry(id: &str, name: &str, desc: &str) -> ModelEntry {
 /// picker isn't blank.
 pub fn models_for_provider_from_registry(
     provider_id: &str,
-    registry: &claurst_api::ModelRegistry,
+    registry: &crate::tui::adapter_types::ModelRegistry,
 ) -> Vec<ModelEntry> {
     // "free" is the composite Zen → OpenRouter provider; the upstream
     // models.dev catalog has nothing under this id, so serve a curated list
@@ -327,7 +327,7 @@ pub fn models_for_provider_from_registry(
 /// a synthetic `free/auto` default that the wrapper translates per upstream.
 pub fn default_model_for_provider(
     provider_id: &str,
-    registry: &claurst_api::ModelRegistry,
+    registry: &crate::tui::adapter_types::ModelRegistry,
 ) -> String {
     if provider_id == "free" {
         return "free/auto".to_string();
@@ -376,7 +376,7 @@ fn free_provider_models() -> Vec<ModelEntry> {
         is_current: false,
     }];
 
-    for upstream in claurst_api::FREE_CATALOG {
+    for upstream in crate::tui::adapter_types::FREE_CATALOG {
         entries.push(ModelEntry {
             id: format!("{}/{}", upstream.id, upstream.default_model),
             display_name: format!("{} \u{2014} {}", upstream.title, upstream.default_model),
@@ -607,7 +607,7 @@ impl ModelPickerState {
     /// On success, models are sorted newest-first (by `created_at` descending).
     /// On any error, returns `default_models()` as a fallback so the picker is
     /// never left empty.
-    pub async fn fetch_models(client: &claurst_api::AnthropicClient) -> Vec<ModelEntry> {
+    pub async fn fetch_models(client: &crate::tui::adapter_types::AnthropicClient) -> Vec<ModelEntry> {
         match client.fetch_available_models().await {
             Ok(available) => {
                 if available.is_empty() {
@@ -1124,7 +1124,7 @@ mod tests {
     //     instead we check the family / provider-namespace shape.
     #[test]
     fn models_for_provider_anthropic() {
-        let registry = claurst_api::ModelRegistry::new();
+        let registry = crate::tui::adapter_types::ModelRegistry::new();
         let models = models_for_provider_from_registry("anthropic", &registry);
         assert!(!models.is_empty(), "anthropic must yield models");
         assert!(
@@ -1135,7 +1135,7 @@ mod tests {
 
     #[test]
     fn models_for_provider_openai() {
-        let registry = claurst_api::ModelRegistry::new();
+        let registry = crate::tui::adapter_types::ModelRegistry::new();
         let models = models_for_provider_from_registry("openai", &registry);
         assert!(!models.is_empty());
         // Must NOT contain Claude models
@@ -1149,7 +1149,7 @@ mod tests {
 
     #[test]
     fn models_for_provider_unknown_returns_default() {
-        let registry = claurst_api::ModelRegistry::new();
+        let registry = crate::tui::adapter_types::ModelRegistry::new();
         let models = models_for_provider_from_registry("some-unknown-provider", &registry);
         assert!(!models.is_empty());
         assert_eq!(models[0].id, "default");
@@ -1158,7 +1158,7 @@ mod tests {
     // 17. default_model_for_provider returns prefixed models for non-anthropic.
     #[test]
     fn default_model_for_provider_openai() {
-        let registry = claurst_api::ModelRegistry::new();
+        let registry = crate::tui::adapter_types::ModelRegistry::new();
         let m = default_model_for_provider("openai", &registry);
         assert!(m.starts_with("openai/"), "openai default must be prefixed: {m}");
     }
@@ -1166,7 +1166,7 @@ mod tests {
     #[test]
     fn default_model_for_provider_anthropic_bare() {
         // Anthropic models are bare (no prefix) for backwards compat.
-        let registry = claurst_api::ModelRegistry::new();
+        let registry = crate::tui::adapter_types::ModelRegistry::new();
         let m = default_model_for_provider("anthropic", &registry);
         assert!(!m.contains('/'), "anthropic default must be bare: {m}");
         assert!(m.starts_with("claude"), "anthropic default must be a claude variant: {m}");
@@ -1174,7 +1174,7 @@ mod tests {
 
     #[test]
     fn default_model_for_provider_unknown_falls_back() {
-        let registry = claurst_api::ModelRegistry::new();
+        let registry = crate::tui::adapter_types::ModelRegistry::new();
         assert_eq!(
             default_model_for_provider("some-self-hosted-thing", &registry),
             "some-self-hosted-thing/default"
@@ -1184,7 +1184,7 @@ mod tests {
     // 18. set_models replaces the model list.
     #[test]
     fn set_models_replaces_list() {
-        let registry = claurst_api::ModelRegistry::new();
+        let registry = crate::tui::adapter_types::ModelRegistry::new();
         let mut p = ModelPickerState::new();
         let openai_models = models_for_provider_from_registry("openai", &registry);
         p.set_models(openai_models);

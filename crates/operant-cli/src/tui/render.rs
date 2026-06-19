@@ -2,55 +2,55 @@
 
 use std::cell::RefCell;
 
-use crate::agents_view::render_agents_menu;
-use crate::context_viz::render_context_viz;
-use crate::export_dialog::render_export_dialog;
-use crate::app::{App, ContextMenuKind, SystemAnnotation, SystemMessageStyle, ToolStatus};
-use crate::rustle::rustle_lines;
-use crate::diff_viewer::render_diff_dialog;
-use crate::model_picker::render_model_picker;
-use crate::session_browser::render_session_browser;
-use crate::session_branching::render_session_branching;
-use crate::tasks_overlay::render_tasks_overlay;
-use crate::dialogs::{render_mcp_approval_dialog, render_permission_dialog};
-use crate::feedback_survey::render_feedback_survey;
-use crate::overage_upsell::render_overage_upsell;
-use crate::voice_mode_notice::render_voice_mode_notice;
-use crate::desktop_upsell_startup::render_desktop_upsell_startup;
-use crate::memory_update_notification::render_memory_update_notification;
-use crate::import_config_dialog::render_import_config_dialog;
-use crate::invalid_config_dialog::render_invalid_config_dialog;
-use crate::bypass_permissions_dialog::render_bypass_permissions_dialog;
-use crate::file_injection_dialog::render_file_injection_dialog;
-use crate::ask_user_dialog::render_ask_user_dialog;
-use crate::onboarding_dialog::render_onboarding_dialog;
-use crate::dialog_select::render_dialog_select;
-use crate::key_input_dialog::render_key_input_dialog;
-use crate::custom_provider_dialog::render_custom_provider_dialog;
-use crate::device_auth_dialog::render_device_auth_dialog;
-use crate::elicitation_dialog::render_elicitation_dialog;
-use crate::figures;
-use crate::hooks_config_menu::render_hooks_config_menu;
-use crate::mcp_view::render_mcp_view;
-use crate::memory_file_selector::render_memory_file_selector;
-use crate::messages::{
+use crate::tui::agents_view::render_agents_menu;
+use crate::tui::context_viz::render_context_viz;
+use crate::tui::export_dialog::render_export_dialog;
+use crate::tui::app::{App, ContextMenuKind, SystemAnnotation, SystemMessageStyle, ToolStatus};
+use crate::tui::rustle::rustle_lines;
+use crate::tui::diff_viewer::render_diff_dialog;
+use crate::tui::model_picker::render_model_picker;
+use crate::tui::session_browser::render_session_browser;
+use crate::tui::session_branching::render_session_branching;
+use crate::tui::tasks_overlay::render_tasks_overlay;
+use crate::tui::dialogs::{render_mcp_approval_dialog, render_permission_dialog};
+use crate::tui::feedback_survey::render_feedback_survey;
+use crate::tui::overage_upsell::render_overage_upsell;
+use crate::tui::voice_mode_notice::render_voice_mode_notice;
+use crate::tui::desktop_upsell_startup::render_desktop_upsell_startup;
+use crate::tui::memory_update_notification::render_memory_update_notification;
+use crate::tui::import_config_dialog::render_import_config_dialog;
+use crate::tui::invalid_config_dialog::render_invalid_config_dialog;
+use crate::tui::bypass_permissions_dialog::render_bypass_permissions_dialog;
+use crate::tui::file_injection_dialog::render_file_injection_dialog;
+use crate::tui::ask_user_dialog::render_ask_user_dialog;
+use crate::tui::onboarding_dialog::render_onboarding_dialog;
+use crate::tui::dialog_select::render_dialog_select;
+use crate::tui::key_input_dialog::render_key_input_dialog;
+use crate::tui::custom_provider_dialog::render_custom_provider_dialog;
+use crate::tui::device_auth_dialog::render_device_auth_dialog;
+use crate::tui::elicitation_dialog::render_elicitation_dialog;
+use crate::tui::figures;
+use crate::tui::hooks_config_menu::render_hooks_config_menu;
+use crate::tui::mcp_view::render_mcp_view;
+use crate::tui::memory_file_selector::render_memory_file_selector;
+use crate::tui::messages::{
     render_transcript_assistant_message_tagged,
     render_transcript_assistant_meta, render_transcript_live_text, render_transcript_user_message,
     render_thinking_live_content,
     RenderContext,
 };
-use crate::notifications::{render_notification_banner, Notification, NotificationKind};
-use crate::overlays::{
+use crate::tui::notifications::{render_notification_banner, Notification, NotificationKind};
+use crate::tui::overlays::{
     render_global_search, render_help_overlay, render_history_search_overlay, render_rewind_flow,
     CLAURST_ACCENT,
 };
-use crate::plugin_views::render_plugin_hints;
-use crate::prompt_input::{InputMode, TypeaheadSource, VimMode, input_height, render_prompt_input};
-use crate::settings_screen::render_settings_screen;
-use crate::stats_dialog::render_stats_dialog;
-use crate::theme_screen::render_theme_screen;
-use crate::transcript_turn::{build_transcript_turns, TranscriptTurn};
-use crate::virtual_list::{VirtualItem, VirtualList};
+use crate::tui::plugin_views::render_plugin_hints;
+use crate::tui::prompt_input::{InputMode, TypeaheadSource, VimMode, input_height, render_prompt_input};
+use crate::tui::settings_screen::render_settings_screen;
+use crate::tui::stats_dialog::render_stats_dialog;
+use crate::tui::theme_screen::render_theme_screen;
+use crate::tui::transcript_turn::{build_transcript_turns, TranscriptTurn};
+use crate::tui::virtual_list::{VirtualItem, VirtualList};
 use crate::tui::adapter_types::constants::APP_VERSION;
 use crate::tui::adapter_types::types::Role;
 use ratatui::buffer::Buffer;

@@ -13,7 +13,7 @@ use ratatui::{
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-use crate::overlays::{
+use crate::tui::overlays::{
     begin_modal_buf, modal_header_line_area, render_modal_title_buf, CLAURST_ACCENT,
     CLAURST_MUTED, CLAURST_PANEL_BG,
 };

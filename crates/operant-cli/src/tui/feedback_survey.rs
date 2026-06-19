@@ -6,7 +6,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 
-use crate::overlays::centered_rect;
+use crate::tui::overlays::centered_rect;
 
 // ---------------------------------------------------------------------------
 // Types

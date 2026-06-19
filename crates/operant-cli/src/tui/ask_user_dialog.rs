@@ -25,7 +25,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget};
 
-use crate::overlays::{centered_rect, CLAURST_PANEL_BG};
+use crate::tui::overlays::{centered_rect, CLAURST_PANEL_BG};
 
 const BORDER_FG: Color = Color::Rgb(120, 120, 170);
 const TITLE_FG: Color = Color::Rgb(200, 160, 255);

@@ -17,7 +17,7 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
 use std::sync::Arc;
 
-use crate::overlays::centered_rect;
+use crate::tui::overlays::centered_rect;
 use crate::tui::adapter_types::tools::TaskStatus;
 use chrono;
 

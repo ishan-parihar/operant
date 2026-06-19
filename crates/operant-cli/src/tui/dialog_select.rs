@@ -11,7 +11,7 @@ use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 use std::cell::{Cell, RefCell};
 
-use crate::overlays::{
+use crate::tui::overlays::{
     centered_rect, modal_search_line, render_dark_overlay, render_dialog_bg, CLAURST_PANEL_BG,
 };
 

@@ -8,7 +8,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use unicode_width::UnicodeWidthStr;
 
-use crate::overlays::centered_rect;
+use crate::tui::overlays::centered_rect;
 
 // ---------------------------------------------------------------------------
 // Types

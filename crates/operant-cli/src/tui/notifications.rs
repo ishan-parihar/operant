@@ -3,7 +3,7 @@
 use std::collections::VecDeque;
 use std::time::Instant;
 
-use crate::overlays::{
+use crate::tui::overlays::{
     CLAURST_ACCENT, CLAURST_MUTED, CLAURST_PANEL_BORDER, CLAURST_TEXT,
 };
 use unicode_width::UnicodeWidthStr;

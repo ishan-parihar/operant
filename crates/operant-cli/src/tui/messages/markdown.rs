@@ -1,6 +1,6 @@
 //! Markdown -> ratatui lines renderer used by transcript message families.
 
-use crate::figures;
+use crate::tui::figures;
 use once_cell::sync::Lazy;
 use regex::Regex;
 use ratatui::{

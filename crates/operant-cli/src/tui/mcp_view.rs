@@ -9,7 +9,7 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, Widget},
 };
 
-use crate::overlays::{
+use crate::tui::overlays::{
     centered_rect, render_dark_overlay_buf, render_dialog_bg_buf, CLAURST_ACCENT, CLAURST_MUTED,
     CLAURST_PANEL_BG, CLAURST_PANEL_BORDER, CLAURST_TEXT,
 };
