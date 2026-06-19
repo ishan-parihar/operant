@@ -519,10 +519,265 @@ pub fn build_memory_provider(
         "local-vector" | "local_vector" => Arc::new(LocalVectorProvider::new()),
         "retaindb" => Arc::new(RetainDbProvider::new()),
         "mem0" => Arc::new(Mem0Provider::new()),
+        "tdg" => Arc::new(TdgMemoryProvider::new(storage_dir)),
         _ => Arc::new(BuiltinProvider::new(
             crate::memory::MemoryManager::with_storage_dir(storage_dir),
         )),
     }
+}
+
+// ---------------------------------------------------------------------------
+// TDG — Graph memory via tdg-rust
+// ---------------------------------------------------------------------------
+
+pub struct TdgMemoryProvider {
+    pool: std::sync::Arc<tdg_rust::ConnectionPool>,
+    storage_dir: std::path::PathBuf,
+}
+
+impl TdgMemoryProvider {
+    pub fn new(storage_dir: std::path::PathBuf) -> Self {
+        let db_path = storage_dir.join("tdg").join("graph.db");
+        if let Some(parent) = db_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let pool = tdg_rust::ConnectionPool::new(
+            db_path.to_str().unwrap_or("~/.hermes/tdg/graph.db"),
+            5,
+            30_000,
+        )
+        .expect("failed to create TDG connection pool");
+        pool.with_connection(|conn| {
+            tdg_rust::init_schema(conn)?;
+            tdg_rust::init_fts(conn)?;
+            tdg_rust::run_migrations(conn)?;
+            Ok(())
+        })
+        .expect("failed to initialize TDG schema");
+        Self {
+            pool: std::sync::Arc::new(pool),
+            storage_dir,
+        }
+    }
+}
+
+#[async_trait]
+impl MemoryProvider for TdgMemoryProvider {
+    fn name(&self) -> &str {
+        "tdg"
+    }
+
+    fn is_available(&self) -> bool {
+        true
+    }
+
+    async fn initialize(&self, _session_id: &str) -> Result<()> {
+        Ok(())
+    }
+
+    fn system_prompt_block(&self) -> String {
+        "TDG graph memory active. Entities, relationships, and temporal context available via tdg_search, tdg_create, tdg_connect, tdg_get_related.".to_string()
+    }
+
+    async fn prefetch(&self, query: &str) -> String {
+        let pool = self.pool.clone();
+        let query = query.to_string();
+        let result = tokio::task::spawn_blocking(move || {
+            pool.with_connection(|conn| {
+                let mut stmt = conn.prepare(
+                    "SELECT id, node_type, name, description FROM nodes WHERE valid_to IS NULL AND name LIKE ?1 LIMIT 5"
+                )?;
+                let pattern = format!("%{}%", query);
+                let rows: Vec<String> = stmt
+                    .query_map(rusqlite::params![pattern], |row| {
+                        let id: String = row.get(0)?;
+                        let node_type: String = row.get(1)?;
+                        let name: String = row.get(2)?;
+                        let desc: String = row.get(3)?;
+                        Ok(format!("[{}] {}: {} — {}", node_type, id, name, desc))
+                    })?
+                    .filter_map(|r| r.ok())
+                    .collect();
+                Ok(rows)
+            })
+        })
+        .await;
+
+        match result {
+            Ok(Ok(rows)) if !rows.is_empty() => format!("[TDG]\n{}", rows.join("\n")),
+            _ => String::new(),
+        }
+    }
+
+    async fn sync_turn(&self, user: &str, _assistant: &str) -> Result<()> {
+        let pool = self.pool.clone();
+        let user_text = user.to_string();
+        let _ = tokio::task::spawn_blocking(move || {
+            pool.with_connection(|conn| {
+                let new_node = tdg_rust::NewNode {
+                    node_type: "observation".to_string(),
+                    name: user_text.chars().take(100).collect(),
+                    description: Some(user_text),
+                    properties: None,
+                    quadrants: None,
+                    drives: None,
+                    lifecycle_state: None,
+                    teleological_level: None,
+                    developmental_stage: 0,
+                    confidence: 0.5,
+                    source: Some("hermes-session".to_string()),
+                    parent_ids: None,
+                    agent_id: None,
+                };
+                tdg_rust::db::crud::add_node(conn, &new_node)?;
+                Ok::<(), tdg_rust::TdgError>(())
+            })
+        })
+        .await
+        .ok();
+        Ok(())
+    }
+
+    fn tool_schemas(&self) -> Vec<Value> {
+        vec![
+            serde_json::json!({
+                "name": "tdg_search",
+                "description": "Search graph memory using full-text search.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string"}
+                    },
+                    "required": ["query"]
+                }
+            }),
+            serde_json::json!({
+                "name": "tdg_create",
+                "description": "Create a new entity node in the graph.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "node_type": {"type": "string"},
+                        "name": {"type": "string"},
+                        "description": {"type": "string"}
+                    },
+                    "required": ["node_type", "name"]
+                }
+            }),
+            serde_json::json!({
+                "name": "tdg_connect",
+                "description": "Create a relationship between two nodes.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "source_id": {"type": "string"},
+                        "target_id": {"type": "string"},
+                        "edge_type": {"type": "string"}
+                    },
+                    "required": ["source_id", "target_id", "edge_type"]
+                }
+            }),
+            serde_json::json!({
+                "name": "tdg_get_related",
+                "description": "Get nodes connected to a given node.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "node_id": {"type": "string"}
+                    },
+                    "required": ["node_id"]
+                }
+            }),
+        ]
+    }
+
+    async fn handle_tool_call(&self, name: &str, args: Value) -> String {
+        let pool = self.pool.clone();
+        let name = name.to_string();
+        let args = args.clone();
+        let result = tokio::task::spawn_blocking(move || {
+            pool.with_connection(|conn| match name.as_str() {
+                "tdg_search" => {
+                    let query = args["query"].as_str().unwrap_or("");
+                    let mut stmt = conn.prepare(
+                        "SELECT id, node_type, name, description FROM nodes WHERE valid_to IS NULL AND name LIKE ?1 LIMIT 10"
+                    )?;
+                    let pattern = format!("%{}%", query);
+                    let rows: Vec<serde_json::Value> = stmt
+                        .query_map(rusqlite::params![pattern], |row| {
+                            Ok(serde_json::json!({
+                                "id": row.get::<_, String>(0)?,
+                                "node_type": row.get::<_, String>(1)?,
+                                "name": row.get::<_, String>(2)?,
+                                "description": row.get::<_, String>(3)?
+                            }))
+                        })?
+                        .filter_map(|r| r.ok())
+                        .collect();
+                    Ok(serde_json::json!({"results": rows}).to_string())
+                }
+                "tdg_create" => {
+                    let node_type = args["node_type"].as_str().unwrap_or("observation");
+                    let node_name = args["name"].as_str().unwrap_or("unnamed");
+                    let desc = args["description"].as_str().unwrap_or("");
+                    let new_node = tdg_rust::NewNode {
+                        node_type: node_type.to_string(),
+                        name: node_name.to_string(),
+                        description: Some(desc.to_string()),
+                        properties: None,
+                        quadrants: None,
+                        drives: None,
+                        lifecycle_state: None,
+                        teleological_level: None,
+                        developmental_stage: 0,
+                        confidence: 0.5,
+                        source: Some("hermes-agent".to_string()),
+                        parent_ids: None,
+                        agent_id: None,
+                    };
+                    let node = tdg_rust::db::crud::add_node(conn, &new_node)?;
+                    Ok(serde_json::json!({"id": node.id, "name": node.name}).to_string())
+                }
+                "tdg_connect" => {
+                    let src = args["source_id"].as_str().unwrap_or("");
+                    let tgt = args["target_id"].as_str().unwrap_or("");
+                    let edge_type = args["edge_type"].as_str().unwrap_or("RELATES_TO");
+                    let new_edge = tdg_rust::NewEdge {
+                        source_id: src.to_string(),
+                        target_id: tgt.to_string(),
+                        edge_type: edge_type.to_string(),
+                        description: None,
+                        properties: None,
+                        weight: None,
+                    };
+                    let edge = tdg_rust::db::crud::add_edge(conn, &new_edge)?;
+                    Ok(serde_json::json!({"edge_id": edge.id}).to_string())
+                }
+                "tdg_get_related" => {
+                    let node_id = args["node_id"].as_str().unwrap_or("");
+                    let edges = tdg_rust::db::crud::get_edges(conn, Some(node_id), None, None, None, 20)?;
+                    let results: Vec<serde_json::Value> = edges
+                        .iter()
+                        .map(|e| {
+                            let other = if e.source_id == node_id { &e.target_id } else { &e.source_id };
+                            serde_json::json!({"edge_id": e.id, "edge_type": e.edge_type, "connected_to": other})
+                        })
+                        .collect();
+                    Ok(serde_json::json!({"relations": results}).to_string())
+                }
+                _ => Ok(format!(r#"{{"error":"unknown tool {}"}}"#, name)),
+            })
+        })
+        .await;
+
+        match result {
+            Ok(Ok(s)) => s,
+            Ok(Err(e)) => format!(r#"{{"error":"{}"}}"#, e),
+            Err(e) => format!(r#"{{"error":"task failed: {}"}}"#, e),
+        }
+    }
+
+    async fn shutdown(&self) {}
 }
 
 #[cfg(test)]

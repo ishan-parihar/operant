@@ -41,6 +41,7 @@ pub mod skills_tool;
 pub mod slash_confirm;
 pub mod spotify_tool;
 pub mod sub_agent_tool;
+pub mod tdg_tools;
 pub mod terminal_tool;
 pub mod todo_tool;
 pub mod tool_backend_helpers;

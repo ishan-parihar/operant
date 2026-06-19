@@ -160,14 +160,17 @@ provider = "kokoro"
 enabled = false
 
 [memory]
-# provider: hindsight (default) | builtin | local-vector | retaindb | mem0
-# - hindsight:    cloud/local semantic memory (HINDSIGHT_API_KEY)
+# provider: tdg (default) | builtin | hindsight | local-vector | retaindb | mem0
+# - tdg:          graph memory via tdg-rust (entities, relationships, temporal context)
 # - builtin:      file-backed MEMORY.md / USER.md in working directory
+# - hindsight:    cloud/local semantic memory (HINDSIGHT_API_KEY)
 # - local-vector: fully local SQLite FTS5 store, no credentials needed
 # - retaindb:     RetainDB cloud (RETAINDB_API_KEY)
 # - mem0:         Mem0 API (MEM0_API_KEY)
-provider = "hindsight"
+provider = "tdg"
 enabled = true
+# tdg_db_path = "~/.hermes/tdg/graph.db"
+# tdg_lean = false
 # hindsight_api_url = "https://api.hindsight.vectorize.io"
 # hindsight_bank_id = "hermes"
 # hindsight_budget  = "mid"   # low | mid | high

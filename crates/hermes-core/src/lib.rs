@@ -155,7 +155,7 @@ pub use mcp::{McpClient, McpNamespacedTool, McpStdioClient, McpTool, McpTranspor
 pub use memory::{MemoryBlock, MemoryManager, Session, UserProfile};
 pub use memory_provider::{
     build_memory_provider, BuiltinProvider, HindsightProvider, LocalVectorProvider,
-    Mem0Provider, MemoryProvider, RetainDbProvider,
+    Mem0Provider, MemoryProvider, RetainDbProvider, TdgMemoryProvider,
 };
 pub use ms_graph::{
     CachedAccessToken, GraphCredentials, MicrosoftGraphClient, MicrosoftGraphError,

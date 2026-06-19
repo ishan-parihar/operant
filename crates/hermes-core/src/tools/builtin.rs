@@ -52,6 +52,7 @@ pub use super::spotify_tool::{
     SpotifyPlaylistsTool, SpotifyQueueTool, SpotifySearchTool,
 };
 pub use super::sub_agent_tool::SubAgentTool;
+pub use super::tdg_tools::{TdgConnectTool, TdgCreateTool, TdgGetRelatedTool, TdgSearchTool};
 pub use super::terminal_tool::TerminalTool;
 pub use super::todo_tool::TodoTool;
 pub use super::tool_backend_helpers::ToolBackendTool;
@@ -92,6 +93,10 @@ pub async fn register_builtin_tools(
     registry.register(MemoryStoreTool).await?;
     registry.register(MemorySearchTool).await?;
     registry.register(MemoryRecallTool).await?;
+    registry.register(TdgSearchTool).await?;
+    registry.register(TdgCreateTool).await?;
+    registry.register(TdgConnectTool).await?;
+    registry.register(TdgGetRelatedTool).await?;
     registry.register(HttpRequestTool).await?;
     registry.register(DateTimeTool).await?;
     registry.register(TimestampTool).await?;

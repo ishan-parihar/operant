@@ -624,16 +624,21 @@ impl Default for TtsSettings {
 /// Memory provider configuration.
 ///
 /// `provider` selects the long-term memory backend:
-/// - `"builtin"` (default) — file-backed MEMORY.md/USER.md in the working directory
+/// - `"tdg"` (default) — Graph memory via tdg-rust (entities, relationships, temporal context)
+/// - `"builtin"` — file-backed MEMORY.md/USER.md in the working directory
 /// - `"hindsight"` — Hindsight Cloud/local API (requires `HINDSIGHT_API_KEY`)
 /// - Any other string is passed through as-is for future/custom providers.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct MemorySettings {
-    /// Memory provider: builtin|hindsight
+    /// Memory provider: tdg|builtin|hindsight
     pub provider: String,
     /// Whether long-term memory is enabled at all
     pub enabled: bool,
+    /// Custom path for TDG database (default: ~/.hermes/tdg/graph.db)
+    pub tdg_db_path: Option<String>,
+    /// Lean mode for TDG (reduced memory usage)
+    pub tdg_lean: Option<bool>,
     /// Hindsight API URL (only used when provider = "hindsight")
     pub hindsight_api_url: Option<String>,
     /// Hindsight bank/collection identifier
@@ -645,8 +650,10 @@ pub struct MemorySettings {
 impl Default for MemorySettings {
     fn default() -> Self {
         Self {
-            provider: "hindsight".to_string(),
+            provider: "tdg".to_string(),
             enabled: true,
+            tdg_db_path: None,
+            tdg_lean: None,
             hindsight_api_url: None,
             hindsight_bank_id: None,
             hindsight_budget: None,
