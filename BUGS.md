@@ -1,4 +1,4 @@
-# Hermes-RS Bugs & Issues
+# Operant Bugs & Issues
 
 **Last Updated**: 2026-06-19
 **Status**: MVP Deployment Phase
@@ -18,7 +18,7 @@
 
 - [ ] **Memory provider defaults not set** - TDG memory provider exists but not set as default in config
 - [ ] **TTS provider defaults not set** - Kokoro TTS exists but not set as default in config
-- [ ] **Web dashboard not copied** - React frontend from hermes-agent not ported yet
+- [ ] **Web dashboard not copied** - React frontend from operant-agent not ported yet
 - [ ] **Dashboard API endpoints missing** - Axum backend lacks REST API endpoints
 - [ ] **WebSocket support missing** - No real-time event streaming in dashboard
 - [ ] **Session resume/switch missing** - Cannot resume or switch sessions
@@ -56,7 +56,7 @@
 
 ## Low (Nice to Have)
 
-- [ ] **Web dashboard not ported** - React SPA not copied from hermes-agent
+- [ ] **Web dashboard not ported** - React SPA not copied from operant-agent
 - [ ] **Desktop app missing** - No Electron app
 - [ ] **i18n missing** - No internationalization
 - [ ] **Batch processing missing** - No parallel batch runner
@@ -83,7 +83,7 @@
 
 - **Compilation errors** are blocking test execution - must fix first
 - **Web dashboard** is highest priority for visual parity
-- **Memory/TTS providers** have config defaults but need to be set in hermes.example.toml
+- **Memory/TTS providers** have config defaults but need to be set in operant.example.toml
 - **Session management** is critical for gateway operation
 
 ---

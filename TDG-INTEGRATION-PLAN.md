@@ -1,7 +1,7 @@
 # TDG Memory Infrastructure Integration Plan
 
 **Date**: 2026-06-19
-**Target**: hermes-rs (Rust agent runtime)
+**Target**: operant-rs (Rust agent runtime)
 **Source**: tdg-rust (graph memory infrastructure)
 **Status**: Planning
 
@@ -9,7 +9,7 @@
 
 ## Executive Summary
 
-Integrate TDG-rust as a pluggable memory provider in hermes-rs, completing the Rust port of the Python hermes-agent → TDGMemoryProvider integration. TDG provides graph-based memory (entity relationships, temporal edges, drive propagation) as the 6th backend in hermes-rs's existing `MemoryProvider` trait system.
+Integrate TDG-rust as a pluggable memory provider in operant-rs, completing the Rust port of the Python operant-agent → TDGMemoryProvider integration. TDG provides graph-based memory (entity relationships, temporal edges, drive propagation) as the 6th backend in operant-rs's existing `MemoryProvider` trait system.
 
 ---
 
@@ -18,7 +18,7 @@ Integrate TDG-rust as a pluggable memory provider in hermes-rs, completing the R
 ### Current State
 
 ```
-hermes-rs (Rust)
+operant-rs (Rust)
 ├── MemoryProvider trait (5 backends)
 │   ├── builtin (MEMORY.md files)
 │   ├── local-vector (SQLite FTS5)
@@ -31,7 +31,7 @@ hermes-rs (Rust)
 ### Target State
 
 ```
-hermes-rs (Rust)
+operant-rs (Rust)
 ├── MemoryProvider trait (6 backends)
 │   ├── builtin (MEMORY.md files)
 │   ├── local-vector (SQLite FTS5)
@@ -49,7 +49,7 @@ hermes-rs (Rust)
 
 ### 1. MemoryProvider Trait Implementation
 
-**File**: `crates/hermes-core/src/memory_provider.rs`
+**File**: `crates/operant-core/src/memory_provider.rs`
 
 Add `TdgMemoryProvider` struct implementing the 8-method `MemoryProvider` trait:
 
@@ -108,7 +108,7 @@ tdg-rust = { git = "https://github.com/ishan-parihar/tdg-rust.git", tag = "v0.2.
 
 ### 4. Config Extension
 
-**File**: `crates/hermes-core/src/config.rs`
+**File**: `crates/operant-core/src/config.rs`
 
 Extend `MemorySettings`:
 
@@ -126,7 +126,7 @@ pub struct MemorySettings {
 
 ### 5. Factory Registration
 
-**File**: `crates/hermes-core/src/memory_provider.rs`
+**File**: `crates/operant-core/src/memory_provider.rs`
 
 ```rust
 pub fn build_memory_provider(
@@ -205,13 +205,13 @@ Expose TDG graph operations as agent tools:
 
 | File | Change Type | Description |
 |------|-------------|-------------|
-| `crates/hermes-core/Cargo.toml` | Modify | Add tdg-rust dependency |
-| `crates/hermes-core/src/memory_provider.rs` | Modify | Add TdgMemoryProvider + factory registration |
-| `crates/hermes-core/src/config.rs` | Modify | Add TDG config options to MemorySettings |
-| `crates/hermes-core/src/tools/tdg_tools.rs` | Create | 6 TDG agent tools |
-| `crates/hermes-core/src/tools.rs` | Modify | Register tdg_tools module |
-| `crates/hermes-core/src/lib.rs` | Modify | Add tdg_tools module |
-| `hermes.example.toml` | Modify | Add TDG config example |
+| `crates/operant-core/Cargo.toml` | Modify | Add tdg-rust dependency |
+| `crates/operant-core/src/memory_provider.rs` | Modify | Add TdgMemoryProvider + factory registration |
+| `crates/operant-core/src/config.rs` | Modify | Add TDG config options to MemorySettings |
+| `crates/operant-core/src/tools/tdg_tools.rs` | Create | 6 TDG agent tools |
+| `crates/operant-core/src/tools.rs` | Modify | Register tdg_tools module |
+| `crates/operant-core/src/lib.rs` | Modify | Add tdg_tools module |
+| `operant.example.toml` | Modify | Add TDG config example |
 | `tests/tdg_integration.rs` | Create | Integration tests |
 
 ---
@@ -222,7 +222,7 @@ Expose TDG graph operations as agent tools:
 [memory]
 provider = "tdg"
 enabled = true
-tdg_db_path = "~/.hermes/tdg/graph.db"
+tdg_db_path = "~/.operant/tdg/graph.db"
 tdg_lean = false
 ```
 
@@ -232,7 +232,7 @@ tdg_lean = false
 
 | Risk | Mitigation |
 |------|------------|
-| **Binary size increase** | tdg-rust is ~9MB static; hermes-rs already bundles SQLite |
+| **Binary size increase** | tdg-rust is ~9MB static; operant-rs already bundles SQLite |
 | **Compile time** | tdg-rust has many deps; consider feature gating |
 | **Memory usage** | TDG adds ~50MB RSS; offset by removing other providers |
 | **Complexity** | Follow existing provider patterns exactly |

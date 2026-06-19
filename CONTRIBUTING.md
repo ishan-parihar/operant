@@ -1,6 +1,6 @@
-# Contributing to Hermes-RS
+# Contributing to Operant
 
-Thank you for your interest in contributing to Hermes-RS! This document outlines the process and conventions for contributing.
+Thank you for your interest in contributing to Operant! This document outlines the process and conventions for contributing.
 
 ## Table of Contents
 
@@ -22,8 +22,8 @@ Thank you for your interest in contributing to Hermes-RS! This document outlines
 ### Fork and Clone
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/hermes-rs.git
-cd hermes-rs
+git clone https://github.com/YOUR_USERNAME/operant-rs.git
+cd operant-rs
 ```
 
 ## Development Setup
@@ -48,9 +48,9 @@ cargo build --workspace --release
 ### Project Structure
 
 ```
-hermes-rs/
+operant-rs/
 ├── crates/
-│   ├── hermes-core/       # Core library (agent loop, tools, client, parser)
+│   ├── operant-core/       # Core library (agent loop, tools, client, parser)
 │   │   └── src/
 │   │       ├── agent.rs       # ReAct orchestration loop
 │   │       ├── client.rs      # OpenAI API client + SSE streaming
@@ -66,7 +66,7 @@ hermes-rs/
 │   │       ├── tools.rs       # Tool registry + trait
 │   │       ├── tools/         # Built-in tool implementations
 │   │       └── trajectory.rs  # RL trajectory export
-│   └── hermes-cli/        # CLI binary
+│   └── operant-cli/        # CLI binary
 │       └── src/
 │           └── main.rs        # CLI entry point + subcommands
 ├── Cargo.toml             # Workspace root
@@ -86,7 +86,7 @@ hermes-rs/
 
 | Item | Convention | Example |
 |------|-----------|---------|
-| Crates | `kebab-case` | `hermes-core`, `hermes-cli` |
+| Crates | `kebab-case` | `operant-core`, `operant-cli` |
 | Types/Structs/Enums | `PascalCase` | `AgentConfig`, `ToolRegistry` |
 | Functions/Methods | `snake_case` | `register_builtin_tools` |
 | Constants | `SCREAMING_SNAKE` | `MAX_RETRY_ATTEMPTS` |
@@ -175,7 +175,7 @@ mod tests {
 cargo test --workspace
 
 # Specific test
-cargo test -p hermes-core test_parser
+cargo test -p operant-core test_parser
 
 # With output
 cargo test --workspace -- --nocapture
@@ -248,7 +248,7 @@ ci(build): add cross-compilation for ARM64 and musl targets
 
 Use the **Bug Report** template. Include:
 
-1. **Hermes-RS version**: `hermes --version` or git commit hash
+1. **Operant version**: `operant --version` or git commit hash
 2. **Rust version**: `rustc --version`
 3. **OS and architecture**: e.g., `aarch64-linux-android`, `x86_64 Windows`
 4. **Steps to reproduce**: Minimal reproducer
@@ -262,7 +262,7 @@ Use the **Feature Request** template. Include:
 1. **Use case**: What problem does this solve?
 2. **Proposed solution**: How should it work?
 3. **Alternatives considered**: What else did you look at?
-4. **References**: Links to relevant docs, the Python hermes-agent, etc.
+4. **References**: Links to relevant docs, the Python operant-agent, etc.
 
 ## Release Process (Maintainers)
 

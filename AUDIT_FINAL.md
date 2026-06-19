@@ -1,4 +1,4 @@
-# Final Port Audit: hermes-agent (Python) → hermes-rs (Rust)
+# Final Port Audit: operant-agent (Python) → operant-rs (Rust)
 
 **Date**: 2026-05-11
 **Status**: Core tools & infrastructure ported. Full service layer pending.
@@ -137,13 +137,13 @@
 ### 1.9 CLI/TUI
 | Module | File | LOC | Status |
 |--------|------|-----|--------|
-| CLI entry (5 subcommands) | `hermes-cli/main.rs` | 689 | Complete |
-| Autonomous mode | `hermes-cli/autonomous.rs` | 1,719 | Complete |
-| TUI app | `hermes-cli/tui/app.rs` | 932 | Complete |
-| TUI rendering | `hermes-cli/tui/render.rs` | 2,000 | Complete |
-| TUI state | `hermes-cli/tui/state.rs` | 748 | Complete |
-| TUI forms | `hermes-cli/tui/forms.rs` | 264 | Complete |
-| TUI actions | `hermes-cli/tui/action.rs` | 194 | Complete |
+| CLI entry (5 subcommands) | `operant-cli/main.rs` | 689 | Complete |
+| Autonomous mode | `operant-cli/autonomous.rs` | 1,719 | Complete |
+| TUI app | `operant-cli/tui/app.rs` | 932 | Complete |
+| TUI rendering | `operant-cli/tui/render.rs` | 2,000 | Complete |
+| TUI state | `operant-cli/tui/state.rs` | 748 | Complete |
+| TUI forms | `operant-cli/tui/forms.rs` | 264 | Complete |
+| TUI actions | `operant-cli/tui/action.rs` | 194 | Complete |
 
 ---
 
@@ -188,7 +188,7 @@ This is the single largest gap. Python's `gateway/` directory has **52 files, ~7
 Telegram, Discord, Slack, Feishu, FeishuComment, DingTalk, WeChat, WeCom, WhatsApp, Signal, Matrix, Mattermost, BlueBubbles, Email, SMS, Webhook, QQBot (5 sub-files), HomeAssistant, API Server (SSE streaming), plus Yuanbao sub-adapters.
 
 ### 2.3 CRITICAL: CLI Subsystem (65 files, ~79K LOC)
-Python's `hermes_cli/` has **65 files, ~79K LOC**. Rust has ~7 files, ~6.5K LOC.
+Python's `operant_cli/` has **65 files, ~79K LOC**. Rust has ~7 files, ~6.5K LOC.
 
 Major unported CLI modules:
 | Module | Python LOC | Rust |
@@ -283,13 +283,13 @@ Python's `agent/` and `run_agent.py` contain the full agent architecture:
 ### 2.10 State/Session DB (~2.9K LOC)
 | Component | Python LOC | Rust |
 |-----------|-----------|------|
-| `hermes_state.py` (SQLite FTS5) | 2,863 | `database.rs` (454) — basic SQLite |
+| `operant_state.py` (SQLite FTS5) | 2,863 | `database.rs` (454) — basic SQLite |
 
 ### 2.11 Additional Root Modules (~10K LOC)
 | Component | Python LOC | Rust |
 |-----------|-----------|------|
-| `cli.py` | 12,967 | hermes-cli/main.rs (689) |
-| `hermes_state.py` | 2,863 | database.rs (454) |
+| `cli.py` | 12,967 | operant-cli/main.rs (689) |
+| `operant_state.py` | 2,863 | database.rs (454) |
 | `trajectory_compressor.py` | 1,508 | trajectory.rs (395) |
 | `model_tools.py` | 867 | None |
 | `toolsets.py` | 851 | None |
@@ -311,7 +311,7 @@ Full React SPA with 12 pages, 15+ components, i18n (English + Chinese), and a 4.
 | **Tests** | ~470 files, ~115K LOC | 619 tests | — |
 | **Agent core** (agent/ + run_agent) | 50+ files, ~47K LOC | agent.rs + client.rs (2K) | ~5% |
 | **Gateway** (gateway/) | 52 files, ~70K LOC | gateway.rs (751 LOC) | ~1% |
-| **CLI** (hermes_cli/) | 65 files, ~79K LOC | 8 files, ~6.5K LOC | ~8% |
+| **CLI** (operant_cli/) | 65 files, ~79K LOC | 8 files, ~6.5K LOC | ~8% |
 | **Environments** | 25 files, 7,354 LOC | 8 files, ~1K LOC | ~15% |
 | **Plugins** | ~90 files, ~29K LOC | None | 0% |
 | **OAuth/Integrations** | Several thousand LOC | ms_graph, yuanbao | ~20% |
@@ -339,11 +339,11 @@ Environments:        ██░░░░░░░░░░░░░░░░░�
 
 2. **Individual tool stubs** — `url_safety.py`, `osv_check.py`, `binary_extensions.py`, `slash_confirm.py`, `file_state.py`, `browser_camofox_state.py` — each is small (<350 LOC) and independent.
 
-3. **State/session DB** (`hermes_state.py` → `database.rs` expansion) — needed for session persistence with FTS5 search.
+3. **State/session DB** (`operant_state.py` → `database.rs` expansion) — needed for session persistence with FTS5 search.
 
 4. **Gateway base** (`gateway/platforms/base.py` + `gateway/session.py`) — port the base platform adapter trait and session management so individual platform adapters can be added.
 
-5. **CLI config** (`hermes_cli/config.py`) — port the YAML config system to complement existing TOML config.
+5. **CLI config** (`operant_cli/config.py`) — port the YAML config system to complement existing TOML config.
 
 ### 4.2 What NOT to Port (Keep as Python or React)
 
@@ -387,7 +387,7 @@ Environments:        ██░░░░░░░░░░░░░░░░░�
 ### 5.1 Rust Port: 106 files, 52,419 LOC
 
 ```
-crates/hermes-core/src/
+crates/operant-core/src/
 ├── lib.rs (127)
 ├── agent.rs (1,322)
 ├── client.rs (698)
@@ -436,7 +436,7 @@ crates/hermes-core/src/
 ├── build.rs (11)
 └── examples/simple_agent.rs (190)
 
-crates/hermes-cli/src/
+crates/operant-cli/src/
 ├── main.rs (689)
 ├── autonomous.rs (1,719)
 └── tui/ (6 files, ~4,145 LOC)
@@ -445,10 +445,10 @@ crates/hermes-cli/src/
 ### 5.2 Python Source (not ported): ~360 files, ~278K LOC
 
 ```
-hermes-agent/
+operant-agent/
 ├── agent/           — 50 files, 31,695 LOC
 ├── gateway/         — 52 files, 69,988 LOC
-├── hermes_cli/      — 65 files, 79,161 LOC
+├── operant_cli/      — 65 files, 79,161 LOC
 ├── environments/    — 25 files, 7,354 LOC
 ├── plugins/         — ~90 files, ~29,000 LOC
 ├── cron/            — 3 files, 2,976 LOC

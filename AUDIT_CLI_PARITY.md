@@ -1,4 +1,4 @@
-# CLI Parity Audit: @hermes-agent (Py) vs @hermes-rs (Rust)
+# CLI Parity Audit: @operant-agent (Py) vs @operant-rs (Rust)
 
 ## 1. Overview
 This report identifies the parity gap between the original Python implementation of the Hermes CLI and the Rust port. While the Rust CLI provides a nearly identical command surface, several critical subsystems are currently implemented as "delegated stubs" that call back into Python.
@@ -31,16 +31,16 @@ This report identifies the parity gap between the original Python implementation
 ## 3. Detailed Implementation Gaps
 
 ### 🔴 High Priority: The "Delegation Debt"
-The following commands are currently "liars"—they appear in `hermes --help` but are actually wrappers for `python3 -m hermes_agent ...`:
-- `hermes curator <subcommand>`
-- `hermes gateway start/stop/restart`
-- `hermes acp server`
-- `hermes dashboard server`
-- `hermes claw migrate/cleanup`
-- `hermes mcp serve`
+The following commands are currently "liars"—they appear in `operant --help` but are actually wrappers for `python3 -m operant_agent ...`:
+- `operant curator <subcommand>`
+- `operant gateway start/stop/restart`
+- `operant acp server`
+- `operant dashboard server`
+- `operant claw migrate/cleanup`
+- `operant mcp serve`
 
 ### 🟡 Medium Priority: Feature Depth
-- **Kanban Boards**: Python allows `hermes kanban boards create <name>` and `switch <name>`. Rust assumes a single global board.
+- **Kanban Boards**: Python allows `operant kanban boards create <name>` and `switch <name>`. Rust assumes a single global board.
 - **Interactive Registry**: Python's `COMMAND_REGISTRY` defines 50+ slash commands. Rust's interactive mode needs to implement the same registry to ensure the user experience is identical.
 
 ---
@@ -63,8 +63,8 @@ The following commands are currently "liars"—they appear in `hermes --help` bu
 **Goal**: Achieve 1:1 functional parity.
 - [ ] Add `kanban boards` (Multi-board support) to the Rust Kanban store.
 - [ ] Implement the full `COMMAND_REGISTRY` for in-chat slash commands.
-- [ ] Port `rl_cli` as a separate binary or a dedicated `hermes rl` subcommand suite.
+- [ ] Port `rl_cli` as a separate binary or a dedicated `operant rl` subcommand suite.
 
 ### Phase 4: Verification
-- [ ] Run `hermes doctor` and `hermes status` to verify all components are native.
+- [ ] Run `operant doctor` and `operant status` to verify all components are native.
 - [ ] Perform end-to-end validation of the `curator` $\rightarrow$ `skills` $\rightarrow$ `agent` pipeline without Python.
