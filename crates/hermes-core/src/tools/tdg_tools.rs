@@ -62,7 +62,7 @@ impl HermesTool for TdgSearchTool {
 
         let pool = tdg_pool();
         let query = args.query.clone();
-        let result = tokio::task::spawn_blocking(move || {
+        let result = tokio::task::spawn_blocking(move || -> std::result::Result<Vec<Value>, String> {
             pool.with_connection(|conn| {
                 let mut stmt = conn.prepare(
                     "SELECT id, node_type, name, description FROM nodes WHERE valid_to IS NULL AND (name LIKE ?1 OR description LIKE ?1) LIMIT 10"
@@ -79,8 +79,9 @@ impl HermesTool for TdgSearchTool {
                     })?
                     .filter_map(|r| r.ok())
                     .collect();
-                Ok::<_, Box<dyn std::error::Error>>(rows)
+                Ok(rows)
             })
+            .map_err(|e| e.to_string())
         })
         .await;
 
@@ -128,7 +129,7 @@ impl HermesTool for TdgCreateTool {
         let node_type = args.node_type.clone();
         let node_name = args.name.clone();
         let desc = args.description.clone().unwrap_or_default();
-        let result = tokio::task::spawn_blocking(move || {
+        let result = tokio::task::spawn_blocking(move || -> std::result::Result<tdg_rust::Node, String> {
             pool.with_connection(|conn| {
                 let new_node = tdg_rust::NewNode {
                     node_type,
@@ -139,15 +140,16 @@ impl HermesTool for TdgCreateTool {
                     drives: None,
                     lifecycle_state: None,
                     teleological_level: None,
-                    developmental_stage: 0,
-                    confidence: 0.5,
+                    developmental_stage: Some(0),
+                    confidence: Some(0.5),
                     source: Some("hermes-agent".to_string()),
                     parent_ids: None,
                     agent_id: None,
                 };
                 let node = tdg_rust::db::crud::add_node(conn, &new_node)?;
-                Ok::<_, Box<dyn std::error::Error>>(node)
+                Ok(node)
             })
+            .map_err(|e| e.to_string())
         })
         .await;
 
@@ -200,19 +202,20 @@ impl HermesTool for TdgConnectTool {
         let src = args.source_id.clone();
         let tgt = args.target_id.clone();
         let edge_type = args.edge_type.clone();
-        let result = tokio::task::spawn_blocking(move || {
+        let result = tokio::task::spawn_blocking(move || -> std::result::Result<tdg_rust::Edge, String> {
             pool.with_connection(|conn| {
                 let new_edge = tdg_rust::NewEdge {
                     source_id: src,
                     target_id: tgt,
                     edge_type,
-                    description: None,
-                    properties: None,
                     weight: None,
+                    properties: None,
+                    agent_id: None,
                 };
                 let edge = tdg_rust::db::crud::add_edge(conn, &new_edge)?;
-                Ok::<_, Box<dyn std::error::Error>>(edge)
+                Ok(edge)
             })
+            .map_err(|e| e.to_string())
         })
         .await;
 
@@ -261,7 +264,7 @@ impl HermesTool for TdgGetRelatedTool {
 
         let pool = tdg_pool();
         let node_id = args.node_id.clone();
-        let result = tokio::task::spawn_blocking(move || {
+        let result = tokio::task::spawn_blocking(move || -> std::result::Result<Vec<Value>, String> {
             pool.with_connection(|conn| {
                 let edges = tdg_rust::db::crud::get_edges(
                     conn, Some(&node_id), None, None, None, 20
@@ -277,8 +280,9 @@ impl HermesTool for TdgGetRelatedTool {
                         })
                     })
                     .collect();
-                Ok::<_, Box<dyn std::error::Error>>(relations)
+                Ok(relations)
             })
+            .map_err(|e| e.to_string())
         })
         .await;
 
@@ -293,12 +297,6 @@ impl HermesTool for TdgGetRelatedTool {
     }
 }
 
-pub fn register_tdg_tools(registry: &mut crate::tools::ToolRegistry) {
-    registry.register(Box::new(TdgSearchTool));
-    registry.register(Box::new(TdgCreateTool));
-    registry.register(Box::new(TdgConnectTool));
-    registry.register(Box::new(TdgGetRelatedTool));
-}
 
 #[cfg(test)]
 mod tests {
