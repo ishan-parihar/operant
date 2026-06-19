@@ -538,8 +538,22 @@ mod tests {
 
     #[test]
     fn test_list_profiles_includes_default() {
+        let _guard = env_lock().lock().unwrap();
+        let dir = temp_dir("list_profiles");
+        let original = env::var("HERMES_HOME").ok();
+
+        env::set_var("HERMES_HOME", &dir);
+
+        fs::create_dir_all(&dir).unwrap();
+
         let profiles = list_profiles().unwrap();
         assert!(profiles.iter().any(|p| p.name == "default" && p.is_default));
+
+        let _ = fs::remove_dir_all(dir);
+        match original {
+            Some(val) => env::set_var("HERMES_HOME", val),
+            None => env::remove_var("HERMES_HOME"),
+        }
     }
 
     #[test]
