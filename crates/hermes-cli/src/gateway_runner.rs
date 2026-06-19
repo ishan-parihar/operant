@@ -777,7 +777,7 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
     }
 
     // Write PID file for cross-process status checks
-    if let Ok(pid) = std::time::SystemTime::now()
+    if let Ok(_pid) = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
     {

@@ -155,9 +155,7 @@ impl AccessibilityTree {
 
         let root_children: Vec<AccessibilityNode> = roots
             .iter()
-            .flat_map(|root_id| {
-                build_children(root_id, &node_map, &mut ref_counter, &mut refs)
-            })
+            .flat_map(|root_id| build_children(root_id, &node_map, &mut ref_counter, &mut refs))
             .collect();
 
         let root = AccessibilityNode {
@@ -324,11 +322,20 @@ fn render_node_compact(node: &AccessibilityNode, output: &mut String, depth: usi
             } else {
                 format!("[{}] ", ref_tag)
             };
-            output.push_str(&format!("{}{}{} {}\n", indent, prefix, "#".repeat(level.len()), text));
+            output.push_str(&format!(
+                "{}{}{} {}\n",
+                indent,
+                prefix,
+                "#".repeat(level.len()),
+                text
+            ));
         }
         "button" | "link" => {
             let text = node.name.as_deref().unwrap_or("[no text]");
-            output.push_str(&format!("{}[{}] {} \"{}\"\n", indent, ref_tag, node.role, text));
+            output.push_str(&format!(
+                "{}[{}] {} \"{}\"\n",
+                indent, ref_tag, node.role, text
+            ));
         }
         "textbox" | "searchbox" => {
             let placeholder = node.name.as_deref().unwrap_or("");
@@ -426,7 +433,10 @@ fn find_by_ref_recursive<'a>(
     None
 }
 
-fn collect_interactive<'a>(node: &'a AccessibilityNode, out: &mut Vec<(String, &'a AccessibilityNode)>) {
+fn collect_interactive<'a>(
+    node: &'a AccessibilityNode,
+    out: &mut Vec<(String, &'a AccessibilityNode)>,
+) {
     if let Some(ref_id) = &node.ref_id {
         out.push((ref_id.clone(), node));
     }
@@ -660,8 +670,8 @@ mod tests {
     #[test]
     fn test_interactive_roles() {
         let roles = vec![
-            "button", "link", "textbox", "checkbox", "radio",
-            "combobox", "listbox", "menuitem", "slider", "switch", "tab",
+            "button", "link", "textbox", "checkbox", "radio", "combobox", "listbox", "menuitem",
+            "slider", "switch", "tab",
         ];
         for role in roles {
             let node = AccessibilityNode {

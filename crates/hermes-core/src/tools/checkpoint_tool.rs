@@ -376,7 +376,7 @@ impl HermesTool for CheckpointTool {
 
         match action {
             "ensure" => {
-                let reason = args
+                let _reason = args
                     .get("reason")
                     .and_then(|v| v.as_str())
                     .unwrap_or("manual checkpoint");
@@ -544,7 +544,7 @@ mod tests {
 /// Register the checkpoint tool
 pub fn register_checkpoint_tool() -> impl FnOnce() -> Result<()> {
     || {
-        let tool = CheckpointTool::new();
+        let _tool = CheckpointTool::new();
         // Registration would happen here via the registry
         // This is a placeholder for the registration function
         info!("Checkpoint tool loaded");

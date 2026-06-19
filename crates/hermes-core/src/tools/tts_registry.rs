@@ -9,8 +9,17 @@ use super::tts_provider::{AudioFormat, SynthesisResult, TtsError, TtsProvider};
 /// Built-in provider names that cannot be shadowed by plugins.
 /// Kept in sync with the match arms in `TtsTool::generate_speech`.
 const BUILTIN_NAMES: &[&str] = &[
-    "edge", "elevenlabs", "openai", "minimax", "mistral", "gemini",
-    "xai", "neutts", "kittentts", "piper", "kokoro",
+    "edge",
+    "elevenlabs",
+    "openai",
+    "minimax",
+    "mistral",
+    "gemini",
+    "xai",
+    "neutts",
+    "kittentts",
+    "piper",
+    "kokoro",
 ];
 
 /// Central map of registered TTS providers.
@@ -78,13 +87,12 @@ impl TtsPluginRegistry {
         model: Option<&str>,
         format: AudioFormat,
     ) -> Result<SynthesisResult, TtsError> {
-        let provider = self
-            .get_provider(provider_name)
-            .await
-            .ok_or_else(|| TtsError::ProviderUnavailable {
+        let provider = self.get_provider(provider_name).await.ok_or_else(|| {
+            TtsError::ProviderUnavailable {
                 provider: provider_name.to_string(),
                 reason: "not registered".into(),
-            })?;
+            }
+        })?;
 
         provider
             .synthesize(text, output_path, voice, model, format)
@@ -100,8 +108,8 @@ impl Default for TtsPluginRegistry {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::tts_provider::*;
+    use super::*;
 
     struct MockProvider {
         name: String,
@@ -167,9 +175,7 @@ mod tests {
     #[tokio::test]
     async fn test_empty_name_rejected() {
         let registry = TtsPluginRegistry::new();
-        let provider = Arc::new(MockProvider {
-            name: "".into(),
-        });
+        let provider = Arc::new(MockProvider { name: "".into() });
         assert!(registry.register(provider).await.is_err());
     }
 }

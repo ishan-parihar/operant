@@ -29,12 +29,24 @@ pub struct SkinColors {
     pub panel_alt: String,
 }
 
-fn default_ui_label() -> String { "#DAA520".into() }
-fn default_ui_ok() -> String { "#4caf50".into() }
-fn default_ui_error() -> String { "#ef5350".into() }
-fn default_ui_warn() -> String { "#ffa726".into() }
-fn default_panel() -> String { "#1a1816".into() }
-fn default_panel_alt() -> String { "#12110f".into() }
+fn default_ui_label() -> String {
+    "#DAA520".into()
+}
+fn default_ui_ok() -> String {
+    "#4caf50".into()
+}
+fn default_ui_error() -> String {
+    "#ef5350".into()
+}
+fn default_ui_warn() -> String {
+    "#ffa726".into()
+}
+fn default_panel() -> String {
+    "#1a1816".into()
+}
+fn default_panel_alt() -> String {
+    "#12110f".into()
+}
 
 impl Default for SkinColors {
     fn default() -> Self {
@@ -87,10 +99,18 @@ impl Default for BrandingConfig {
     }
 }
 
-fn default_agent_name() -> String { "Hermes Agent".into() }
-fn default_welcome() -> String { "Welcome to Hermes Agent! Type your message or /help for commands.".into() }
-fn default_response_label() -> String { " \u{2695} Hermes ".into() }
-fn default_prompt_symbol() -> String { "\u{276f}".into() }
+fn default_agent_name() -> String {
+    "Hermes Agent".into()
+}
+fn default_welcome() -> String {
+    "Welcome to Hermes Agent! Type your message or /help for commands.".into()
+}
+fn default_response_label() -> String {
+    " \u{2695} Hermes ".into()
+}
+fn default_prompt_symbol() -> String {
+    "\u{276f}".into()
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SkinConfig {
@@ -109,7 +129,9 @@ pub struct SkinConfig {
     pub tool_emojis: HashMap<String, String>,
 }
 
-fn default_tool_prefix() -> String { "\u{250a}".into() }
+fn default_tool_prefix() -> String {
+    "\u{250a}".into()
+}
 
 impl Default for SkinConfig {
     fn default() -> Self {
@@ -145,10 +167,18 @@ impl SkinConfig {
         }
     }
 
-    pub fn color(&self, hex: &str) -> Color { Self::parse_color(hex) }
-    pub fn accent(&self) -> Color { self.color(&self.colors.banner_accent) }
-    pub fn text(&self) -> Color { self.color(&self.colors.banner_text) }
-    pub fn muted(&self) -> Color { self.color(&self.colors.banner_dim) }
+    pub fn color(&self, hex: &str) -> Color {
+        Self::parse_color(hex)
+    }
+    pub fn accent(&self) -> Color {
+        self.color(&self.colors.banner_accent)
+    }
+    pub fn text(&self) -> Color {
+        self.color(&self.colors.banner_text)
+    }
+    pub fn muted(&self) -> Color {
+        self.color(&self.colors.banner_dim)
+    }
 
     pub fn help(&self) -> Color {
         let base = Self::parse_color(&self.colors.banner_dim);
@@ -162,12 +192,24 @@ impl SkinConfig {
         }
     }
 
-    pub fn success(&self) -> Color { self.color(&self.colors.ui_ok) }
-    pub fn error(&self) -> Color { self.color(&self.colors.ui_error) }
-    pub fn warn(&self) -> Color { self.color(&self.colors.ui_warn) }
-    pub fn panel(&self) -> Color { self.color(&self.colors.panel) }
-    pub fn panel_alt(&self) -> Color { self.color(&self.colors.panel_alt) }
-    pub fn border(&self) -> Color { self.color(&self.colors.banner_border) }
+    pub fn success(&self) -> Color {
+        self.color(&self.colors.ui_ok)
+    }
+    pub fn error(&self) -> Color {
+        self.color(&self.colors.ui_error)
+    }
+    pub fn warn(&self) -> Color {
+        self.color(&self.colors.ui_warn)
+    }
+    pub fn panel(&self) -> Color {
+        self.color(&self.colors.panel)
+    }
+    pub fn panel_alt(&self) -> Color {
+        self.color(&self.colors.panel_alt)
+    }
+    pub fn border(&self) -> Color {
+        self.color(&self.colors.banner_border)
+    }
 }
 
 fn builtin_default() -> SkinConfig {
@@ -360,7 +402,9 @@ pub fn list_skins() -> Vec<SkinInfo> {
         .iter()
         .map(|name| SkinInfo {
             name: name.to_string(),
-            description: builtin_skin(name).map(|s| s.description).unwrap_or_default(),
+            description: builtin_skin(name)
+                .map(|s| s.description)
+                .unwrap_or_default(),
             source: "builtin".into(),
         })
         .collect();
@@ -420,24 +464,60 @@ fn merge_with_default(mut skin: SkinConfig) -> SkinConfig {
     }
     let dc = &default.colors;
     let c = &mut skin.colors;
-    if c.banner_border.is_empty() { c.banner_border = dc.banner_border.clone(); }
-    if c.banner_title.is_empty() { c.banner_title = dc.banner_title.clone(); }
-    if c.banner_accent.is_empty() { c.banner_accent = dc.banner_accent.clone(); }
-    if c.banner_dim.is_empty() { c.banner_dim = dc.banner_dim.clone(); }
-    if c.banner_text.is_empty() { c.banner_text = dc.banner_text.clone(); }
-    if c.response_border.is_empty() { c.response_border = dc.response_border.clone(); }
-    if c.ui_accent.is_empty() { c.ui_accent = dc.ui_accent.clone(); }
-    if c.ui_label.is_empty() { c.ui_label = dc.ui_label.clone(); }
-    if c.ui_ok.is_empty() { c.ui_ok = dc.ui_ok.clone(); }
-    if c.ui_error.is_empty() { c.ui_error = dc.ui_error.clone(); }
-    if c.ui_warn.is_empty() { c.ui_warn = dc.ui_warn.clone(); }
-    if c.panel.is_empty() { c.panel = dc.panel.clone(); }
-    if c.panel_alt.is_empty() { c.panel_alt = dc.panel_alt.clone(); }
-    if skin.branding.agent_name.is_empty() { skin.branding.agent_name = default.branding.agent_name; }
-    if skin.branding.welcome.is_empty() { skin.branding.welcome = default.branding.welcome; }
-    if skin.branding.response_label.is_empty() { skin.branding.response_label = default.branding.response_label; }
-    if skin.branding.prompt_symbol.is_empty() { skin.branding.prompt_symbol = default.branding.prompt_symbol; }
-    if skin.tool_prefix.is_empty() { skin.tool_prefix = default.tool_prefix; }
+    if c.banner_border.is_empty() {
+        c.banner_border = dc.banner_border.clone();
+    }
+    if c.banner_title.is_empty() {
+        c.banner_title = dc.banner_title.clone();
+    }
+    if c.banner_accent.is_empty() {
+        c.banner_accent = dc.banner_accent.clone();
+    }
+    if c.banner_dim.is_empty() {
+        c.banner_dim = dc.banner_dim.clone();
+    }
+    if c.banner_text.is_empty() {
+        c.banner_text = dc.banner_text.clone();
+    }
+    if c.response_border.is_empty() {
+        c.response_border = dc.response_border.clone();
+    }
+    if c.ui_accent.is_empty() {
+        c.ui_accent = dc.ui_accent.clone();
+    }
+    if c.ui_label.is_empty() {
+        c.ui_label = dc.ui_label.clone();
+    }
+    if c.ui_ok.is_empty() {
+        c.ui_ok = dc.ui_ok.clone();
+    }
+    if c.ui_error.is_empty() {
+        c.ui_error = dc.ui_error.clone();
+    }
+    if c.ui_warn.is_empty() {
+        c.ui_warn = dc.ui_warn.clone();
+    }
+    if c.panel.is_empty() {
+        c.panel = dc.panel.clone();
+    }
+    if c.panel_alt.is_empty() {
+        c.panel_alt = dc.panel_alt.clone();
+    }
+    if skin.branding.agent_name.is_empty() {
+        skin.branding.agent_name = default.branding.agent_name;
+    }
+    if skin.branding.welcome.is_empty() {
+        skin.branding.welcome = default.branding.welcome;
+    }
+    if skin.branding.response_label.is_empty() {
+        skin.branding.response_label = default.branding.response_label;
+    }
+    if skin.branding.prompt_symbol.is_empty() {
+        skin.branding.prompt_symbol = default.branding.prompt_symbol;
+    }
+    if skin.tool_prefix.is_empty() {
+        skin.tool_prefix = default.tool_prefix;
+    }
     skin
 }
 
@@ -449,7 +529,10 @@ mod tests {
     fn parse_hex_colors() {
         assert_eq!(SkinConfig::parse_color("#FFD700"), Color::Rgb(255, 215, 0));
         assert_eq!(SkinConfig::parse_color("#000000"), Color::Rgb(0, 0, 0));
-        assert_eq!(SkinConfig::parse_color("#FFFFFF"), Color::Rgb(255, 255, 255));
+        assert_eq!(
+            SkinConfig::parse_color("#FFFFFF"),
+            Color::Rgb(255, 255, 255)
+        );
         assert_eq!(SkinConfig::parse_color("FFFFFF"), Color::Rgb(255, 255, 255));
         assert_eq!(SkinConfig::parse_color("#FFF"), Color::Rgb(255, 255, 255));
         assert_eq!(SkinConfig::parse_color("#F00"), Color::Rgb(255, 0, 0));

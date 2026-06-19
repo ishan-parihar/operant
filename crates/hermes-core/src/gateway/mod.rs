@@ -2596,7 +2596,6 @@ pub fn format_startup_message(config: &GatewayConfig) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use super::*;
 
     #[test]
     fn test_incoming_message() {
@@ -2710,9 +2709,9 @@ mod tests {
     #[test]
     fn test_session_hermes_lookup() {
         let store = SessionStore::new();
-        let mut session = store.create_session("test", "user", "chan").unwrap();
+        let session = store.create_session("test", "user", "chan").unwrap();
         // manually assign hermes_session_id via metadata
-        let sid = session.session_id.clone();
+        let _sid = session.session_id.clone();
 
         // get_hermes_session uses the field, which is empty by default
         let found = store.get_hermes_session(&String::new());

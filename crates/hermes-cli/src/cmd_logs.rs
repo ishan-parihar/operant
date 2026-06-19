@@ -90,7 +90,7 @@ async fn cmd_follow(config: &AppConfig, level: Option<&str>) -> Result<()> {
         if current_size > last_size {
             let file = fs::File::open(&path)?;
             let reader = BufReader::new(file);
-            let lines = reader.lines();
+            let _lines = reader.lines();
             // Seek to where we were
             let mut file2 = fs::File::open(&path)?;
             file2.seek(SeekFrom::Start(last_size))?;

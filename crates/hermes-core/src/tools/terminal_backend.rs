@@ -249,10 +249,7 @@ impl DockerBackend {
             return Ok(id.clone());
         }
 
-        let container_name = format!(
-            "hermes-{}",
-            &uuid::Uuid::new_v4().to_string()[..8]
-        );
+        let container_name = format!("hermes-{}", &uuid::Uuid::new_v4().to_string()[..8]);
 
         let mut run_args = vec![
             "run".to_string(),
@@ -277,7 +274,10 @@ impl DockerBackend {
             run_args.extend(["--cpus".to_string(), self.config.cpu.to_string()]);
         }
         if self.config.memory_mb > 0 {
-            run_args.extend(["--memory".to_string(), format!("{}m", self.config.memory_mb)]);
+            run_args.extend([
+                "--memory".to_string(),
+                format!("{}m", self.config.memory_mb),
+            ]);
         }
 
         // Security: drop all capabilities, add back minimal set
@@ -299,7 +299,11 @@ impl DockerBackend {
         run_args.push(self.config.image.clone());
         run_args.extend(["sleep".to_string(), "infinity".to_string()]);
 
-        debug!("Starting Docker container: {} {}", self.docker_exe, run_args.join(" "));
+        debug!(
+            "Starting Docker container: {} {}",
+            self.docker_exe,
+            run_args.join(" ")
+        );
 
         let output = Command::new(&self.docker_exe)
             .args(&run_args)
@@ -316,7 +320,11 @@ impl DockerBackend {
 
         let id = String::from_utf8_lossy(&output.stdout).trim().to_string();
         self.container_id = Some(id.clone());
-        debug!("Started container {} ({})", container_name, &id[..12.min(id.len())]);
+        debug!(
+            "Started container {} ({})",
+            container_name,
+            &id[..12.min(id.len())]
+        );
         Ok(id)
     }
 
@@ -466,7 +474,10 @@ impl SshBackend {
         }
 
         cmd.extend(["-o".to_string(), "BatchMode=yes".to_string()]);
-        cmd.extend(["-o".to_string(), "StrictHostKeyChecking=accept-new".to_string()]);
+        cmd.extend([
+            "-o".to_string(),
+            "StrictHostKeyChecking=accept-new".to_string(),
+        ]);
         cmd.extend(["-o".to_string(), "ConnectTimeout=10".to_string()]);
 
         if self.config.port != 22 {
@@ -484,7 +495,10 @@ impl SshBackend {
 
     /// Test SSH connectivity.
     fn test_connection(&self) -> bool {
-        let cmd = self.build_ssh_command(&["echo".to_string(), "'SSH connection established'".to_string()]);
+        let cmd = self.build_ssh_command(&[
+            "echo".to_string(),
+            "'SSH connection established'".to_string(),
+        ]);
         std::process::Command::new(&cmd[0])
             .args(&cmd[1..])
             .stdout(Stdio::null())
@@ -615,9 +629,13 @@ pub fn create_backend(config: &AppConfig) -> Box<dyn TerminalBackend> {
         BackendKind::Local => Box::new(LocalBackend),
         BackendKind::Docker => {
             let docker_config = DockerConfig {
-                image: config.tools.terminal.docker.image.clone().unwrap_or_else(|| {
-                    "nikolaik/python-nodejs:python3.11-nodejs20".to_string()
-                }),
+                image: config
+                    .tools
+                    .terminal
+                    .docker
+                    .image
+                    .clone()
+                    .unwrap_or_else(|| "nikolaik/python-nodejs:python3.11-nodejs20".to_string()),
                 volumes: config.tools.terminal.docker.volumes.clone(),
                 env: config.tools.terminal.docker.env.clone(),
                 cpu: config.tools.terminal.docker.cpu,

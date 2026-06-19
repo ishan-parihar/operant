@@ -65,17 +65,13 @@ impl CommandProvider {
 
     fn render_template(&self, placeholders: &HashMap<String, String>) -> Result<String, TtsError> {
         // Match {name} or {{name}} but not escaped {{}}
-        let re = Regex::new(r"\{\{(\w+)\}\}|\{(\w+)\}").map_err(|e| {
-            TtsError::ConfigError(format!("Invalid template regex: {}", e))
-        })?;
+        let re = Regex::new(r"\{\{(\w+)\}\}|\{(\w+)\}")
+            .map_err(|e| TtsError::ConfigError(format!("Invalid template regex: {}", e)))?;
 
         let mut result = self.command_template.clone();
         for cap in re.captures_iter(&self.command_template) {
             let name = cap.get(1).or_else(|| cap.get(2)).unwrap().as_str();
-            let value = placeholders
-                .get(name)
-                .cloned()
-                .unwrap_or_default();
+            let value = placeholders.get(name).cloned().unwrap_or_default();
             // Escape single quotes for shell safety
             let escaped = value.replace('\'', "'\\''");
             result = result.replace(&cap[0], &format!("'{}'", escaped));
@@ -109,23 +105,23 @@ impl TtsProvider for CommandProvider {
             .map_err(TtsError::Io)?;
 
         let mut placeholders = HashMap::new();
-        placeholders.insert("input_path".into(), input_path.to_string_lossy().into_owned());
-        placeholders.insert("text_path".into(), input_path.to_string_lossy().into_owned());
+        placeholders.insert(
+            "input_path".into(),
+            input_path.to_string_lossy().into_owned(),
+        );
+        placeholders.insert(
+            "text_path".into(),
+            input_path.to_string_lossy().into_owned(),
+        );
         placeholders.insert("output_path".into(), output_path.to_string());
         placeholders.insert("format".into(), format.to_string());
         placeholders.insert(
             "voice".into(),
-            voice
-                .or(self.voice.as_deref())
-                .unwrap_or("")
-                .to_string(),
+            voice.or(self.voice.as_deref()).unwrap_or("").to_string(),
         );
         placeholders.insert(
             "model".into(),
-            model
-                .or(self.model.as_deref())
-                .unwrap_or("")
-                .to_string(),
+            model.or(self.model.as_deref()).unwrap_or("").to_string(),
         );
 
         let command = self.render_template(&placeholders)?;
@@ -173,10 +169,7 @@ mod tests {
 
     #[test]
     fn test_template_substitution() {
-        let provider = CommandProvider::new(
-            "test".into(),
-            "echo {text} > {output_path}".into(),
-        );
+        let provider = CommandProvider::new("test".into(), "echo {text} > {output_path}".into());
         let mut placeholders = HashMap::new();
         placeholders.insert("text".into(), "hello world".into());
         placeholders.insert("output_path".into(), "/tmp/out.mp3".into());
@@ -188,10 +181,7 @@ mod tests {
 
     #[test]
     fn test_double_brace_escaping() {
-        let provider = CommandProvider::new(
-            "test".into(),
-            "echo {{literal}} {value}".into(),
-        );
+        let provider = CommandProvider::new("test".into(), "echo {{literal}} {value}".into());
         let mut placeholders = HashMap::new();
         placeholders.insert("value".into(), "replaced".into());
 

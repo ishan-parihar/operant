@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 
 #[derive(Debug, Clone)]
@@ -96,7 +96,10 @@ pub fn render_tool_trail(
         };
 
         lines.push(Line::from(vec![
-            Span::styled(format!("{} ", status_icon), Style::default().fg(status_color)),
+            Span::styled(
+                format!("{} ", status_icon),
+                Style::default().fg(status_color),
+            ),
             Span::styled(tool.format_tool_call(), style),
             Span::styled(format!(" ({})", elapsed_str), Style::default().fg(muted)),
         ]));
@@ -117,11 +120,7 @@ pub fn render_tool_trail(
     lines
 }
 
-pub fn render_tool_trail_summary(
-    tools: &[ToolCall],
-    accent: Color,
-    muted: Color,
-) -> Line<'static> {
+pub fn render_tool_trail_summary(tools: &[ToolCall], accent: Color, muted: Color) -> Line<'static> {
     let running = tools
         .iter()
         .filter(|t| t.status == ToolStatus::Running)
@@ -173,7 +172,10 @@ mod tests {
 
     #[test]
     fn test_tool_call_new() {
-        let tool = ToolCall::new("read_file".to_string(), r#"{"path": "test.rs"}"#.to_string());
+        let tool = ToolCall::new(
+            "read_file".to_string(),
+            r#"{"path": "test.rs"}"#.to_string(),
+        );
         assert_eq!(tool.name, "read_file");
         assert_eq!(tool.status, ToolStatus::Running);
         assert!(tool.end_time.is_none());
@@ -196,7 +198,10 @@ mod tests {
 
     #[test]
     fn test_format_tool_call() {
-        let tool = ToolCall::new("read_file".to_string(), r#"{"path": "test.rs"}"#.to_string());
+        let tool = ToolCall::new(
+            "read_file".to_string(),
+            r#"{"path": "test.rs"}"#.to_string(),
+        );
         let formatted = tool.format_tool_call();
         assert!(formatted.starts_with("read_file("));
     }

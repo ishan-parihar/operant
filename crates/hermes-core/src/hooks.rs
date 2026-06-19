@@ -721,10 +721,19 @@ mod tests {
                 self.0.store(true, Ordering::SeqCst);
                 Ok(HookAction::Modify(serde_json::json!({"key": "value"})))
             }
-            fn priority(&self) -> i32 { 0 }
+            fn priority(&self) -> i32 {
+                0
+            }
         }
-        registry.register("pre_tool_call", "modify_test", Arc::new(ModifyHandler(m))).await;
-        let action = registry.emit(&HookEvent::PreToolCall { tool_name: "t", args: &serde_json::json!({}) }).await;
+        registry
+            .register("pre_tool_call", "modify_test", Arc::new(ModifyHandler(m)))
+            .await;
+        let action = registry
+            .emit(&HookEvent::PreToolCall {
+                tool_name: "t",
+                args: &serde_json::json!({}),
+            })
+            .await;
         assert!(modified.load(Ordering::SeqCst));
         assert!(matches!(action, HookAction::Modify(_)));
     }
@@ -732,7 +741,12 @@ mod tests {
     #[tokio::test]
     async fn test_emit_no_handlers_returns_continue() {
         let registry = HookRegistry::new();
-        let action = registry.emit(&HookEvent::PreToolCall { tool_name: "t", args: &serde_json::json!({}) }).await;
+        let action = registry
+            .emit(&HookEvent::PreToolCall {
+                tool_name: "t",
+                args: &serde_json::json!({}),
+            })
+            .await;
         assert!(matches!(action, HookAction::Continue));
     }
 
@@ -746,11 +760,24 @@ mod tests {
                 async fn handle(&self, _event: &HookEvent<'_>) -> crate::error::Result<HookAction> {
                     Ok(HookAction::Modify(serde_json::json!({"i": self.0})))
                 }
-                fn priority(&self) -> i32 { self.0 }
+                fn priority(&self) -> i32 {
+                    self.0
+                }
             }
-            registry.register("pre_tool_call", &format!("h{}", i), Arc::new(ModifyHandler(i))).await;
+            registry
+                .register(
+                    "pre_tool_call",
+                    &format!("h{}", i),
+                    Arc::new(ModifyHandler(i)),
+                )
+                .await;
         }
-        let actions = registry.emit_collect(&HookEvent::PreToolCall { tool_name: "t", args: &serde_json::json!({}) }).await;
+        let actions = registry
+            .emit_collect(&HookEvent::PreToolCall {
+                tool_name: "t",
+                args: &serde_json::json!({}),
+            })
+            .await;
         assert_eq!(actions.len(), 5);
     }
 
@@ -760,11 +787,19 @@ mod tests {
         struct NoopHandler;
         #[async_trait]
         impl HookHandler for NoopHandler {
-            async fn handle(&self, _event: &HookEvent<'_>) -> crate::error::Result<HookAction> { Ok(HookAction::Continue) }
-            fn priority(&self) -> i32 { 0 }
+            async fn handle(&self, _event: &HookEvent<'_>) -> crate::error::Result<HookAction> {
+                Ok(HookAction::Continue)
+            }
+            fn priority(&self) -> i32 {
+                0
+            }
         }
-        registry.register("pre_tool_call", "n1", Arc::new(NoopHandler)).await;
-        registry.register("session_start", "n2", Arc::new(NoopHandler)).await;
+        registry
+            .register("pre_tool_call", "n1", Arc::new(NoopHandler))
+            .await;
+        registry
+            .register("session_start", "n2", Arc::new(NoopHandler))
+            .await;
         let types = registry.list_event_types().await;
         assert!(types.contains(&"pre_tool_call"));
         assert!(types.contains(&"session_start"));
@@ -782,11 +817,30 @@ mod tests {
                 self.0.fetch_add(1, Ordering::SeqCst);
                 Ok(HookAction::Continue)
             }
-            fn priority(&self) -> i32 { 0 }
+            fn priority(&self) -> i32 {
+                0
+            }
         }
-        registry.register("pre_tool_call", "handler_a", Arc::new(CountHandler(c.clone()))).await;
-        registry.register("pre_tool_call", "handler_b", Arc::new(CountHandler(c.clone()))).await;
-        registry.emit(&HookEvent::PreToolCall { tool_name: "t", args: &serde_json::json!({}) }).await;
+        registry
+            .register(
+                "pre_tool_call",
+                "handler_a",
+                Arc::new(CountHandler(c.clone())),
+            )
+            .await;
+        registry
+            .register(
+                "pre_tool_call",
+                "handler_b",
+                Arc::new(CountHandler(c.clone())),
+            )
+            .await;
+        registry
+            .emit(&HookEvent::PreToolCall {
+                tool_name: "t",
+                args: &serde_json::json!({}),
+            })
+            .await;
         assert_eq!(counter.load(Ordering::SeqCst), 2);
     }
 
@@ -801,18 +855,40 @@ mod tests {
                 self.0.fetch_add(1, Ordering::SeqCst);
                 Ok(HookAction::Continue)
             }
-            fn priority(&self) -> i32 { 0 }
+            fn priority(&self) -> i32 {
+                0
+            }
         }
-        registry.register("pre_tool_call", "keep", Arc::new(CountHandler(counter.clone()))).await;
-        registry.register("pre_tool_call", "remove_me", Arc::new(CountHandler(counter.clone()))).await;
+        registry
+            .register(
+                "pre_tool_call",
+                "keep",
+                Arc::new(CountHandler(counter.clone())),
+            )
+            .await;
+        registry
+            .register(
+                "pre_tool_call",
+                "remove_me",
+                Arc::new(CountHandler(counter.clone())),
+            )
+            .await;
         registry.unregister("pre_tool_call", "remove_me").await;
-        registry.emit(&HookEvent::PreToolCall { tool_name: "t", args: &serde_json::json!({}) }).await;
+        registry
+            .emit(&HookEvent::PreToolCall {
+                tool_name: "t",
+                args: &serde_json::json!({}),
+            })
+            .await;
         assert_eq!(counter.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]
     async fn test_hook_debug_format() {
-        let event = HookEvent::PreToolCall { tool_name: "bash", args: &serde_json::json!({}) };
+        let event = HookEvent::PreToolCall {
+            tool_name: "bash",
+            args: &serde_json::json!({}),
+        };
         let debug = format!("{:?}", event);
         assert!(debug.contains("PreToolCall"));
     }

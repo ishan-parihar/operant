@@ -251,7 +251,7 @@ fn cmd_status(config: &AppConfig, deep: bool) -> Result<()> {
 }
 
 /// Install systemd service for automatic gateway startup.
-fn cmd_install(config: &AppConfig, force: bool, system: bool) -> Result<()> {
+fn cmd_install(_config: &AppConfig, force: bool, system: bool) -> Result<()> {
     let hermes_bin = std::env::current_exe().context("Failed to determine hermes binary path")?;
 
     let (unit_dir, scope_label) = if system {

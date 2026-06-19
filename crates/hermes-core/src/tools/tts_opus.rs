@@ -26,11 +26,16 @@ pub async fn convert_to_opus(input_path: &str) -> Result<String, TtsError> {
 
     let output = Command::new("ffmpeg")
         .args([
-            "-i", input_path,
-            "-acodec", "libopus",
-            "-ac", "1",
-            "-b:a", "64k",
-            "-vbr", "off",
+            "-i",
+            input_path,
+            "-acodec",
+            "libopus",
+            "-ac",
+            "1",
+            "-b:a",
+            "64k",
+            "-vbr",
+            "off",
             "-y",
             ogg_path.to_str().unwrap_or("output.ogg"),
         ])

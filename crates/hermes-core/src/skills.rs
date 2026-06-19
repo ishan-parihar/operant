@@ -278,7 +278,10 @@ fn extract_metadata_extras(fm: &SkillFrontmatter) -> (Vec<String>, String) {
         if let Some(hermes) = meta.get("hermes") {
             if tags.is_empty() {
                 if let Some(t) = hermes.get("tags").and_then(|v| v.as_array()) {
-                    tags = t.iter().filter_map(|v| v.as_str().map(String::from)).collect();
+                    tags = t
+                        .iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect();
                 }
             }
             if category.is_empty() {
@@ -361,7 +364,9 @@ fn parse_flat_front_matter(fm_block: &str) -> SkillFrontmatter {
         tags: map.get("tags").map(|v| parse_list_value(v)),
         category: map.get("category").cloned(),
         prerequisites_env: map.get("prerequisites_env").map(|v| parse_list_value(v)),
-        prerequisites_commands: map.get("prerequisites_commands").map(|v| parse_list_value(v)),
+        prerequisites_commands: map
+            .get("prerequisites_commands")
+            .map(|v| parse_list_value(v)),
         metadata: None,
     }
 }
@@ -459,7 +464,10 @@ mod tests {
     fn test_parse_front_matter() {
         let fm = parse_front_matter(sample_skill_md()).unwrap();
         assert_eq!(fm.name.as_deref(), Some("test-skill"));
-        assert_eq!(fm.description.as_deref(), Some("A test skill for unit tests"));
+        assert_eq!(
+            fm.description.as_deref(),
+            Some("A test skill for unit tests")
+        );
         assert_eq!(fm.version.as_deref(), Some("1.0.0"));
         let body = extract_body(sample_skill_md());
         assert!(body.contains("# Test Skill"));

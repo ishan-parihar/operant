@@ -2330,8 +2330,13 @@ mod tests {
         let db = test_db();
         let dir = std::env::temp_dir().join(format!("ckpt_dir_{}", std::process::id()));
         std::fs::create_dir_all(&dir).ok();
-        db.store_checkpoint("abc123hash", "2024-06-01T12:00:00Z", Some("test checkpoint"), dir.to_str().unwrap())
-            .unwrap();
+        db.store_checkpoint(
+            "abc123hash",
+            "2024-06-01T12:00:00Z",
+            Some("test checkpoint"),
+            dir.to_str().unwrap(),
+        )
+        .unwrap();
         let list = db.list_checkpoints(dir.to_str().unwrap()).unwrap();
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].hash, "abc123hash");
@@ -2344,8 +2349,13 @@ mod tests {
         let db = test_db();
         let dir = std::env::temp_dir().join(format!("ckpt_get_{}", std::process::id()));
         std::fs::create_dir_all(&dir).ok();
-        db.store_checkpoint("hash_get", "2024-06-01T12:00:00Z", Some("reason"), dir.to_str().unwrap())
-            .unwrap();
+        db.store_checkpoint(
+            "hash_get",
+            "2024-06-01T12:00:00Z",
+            Some("reason"),
+            dir.to_str().unwrap(),
+        )
+        .unwrap();
         let ckpt = db.get_checkpoint("hash_get").unwrap();
         assert!(ckpt.is_some());
         assert_eq!(ckpt.unwrap().hash, "hash_get");
@@ -2357,8 +2367,13 @@ mod tests {
         let db = test_db();
         let dir = std::env::temp_dir().join(format!("ckpt_del_{}", std::process::id()));
         std::fs::create_dir_all(&dir).ok();
-        db.store_checkpoint("hash_del", "2024-06-01T12:00:00Z", Some("to delete"), dir.to_str().unwrap())
-            .unwrap();
+        db.store_checkpoint(
+            "hash_del",
+            "2024-06-01T12:00:00Z",
+            Some("to delete"),
+            dir.to_str().unwrap(),
+        )
+        .unwrap();
         db.delete_checkpoint("hash_del").unwrap();
         let ckpt = db.get_checkpoint("hash_del").unwrap();
         assert!(ckpt.is_none());
@@ -2380,10 +2395,20 @@ mod tests {
         let db = test_db();
         let dir = std::env::temp_dir().join(format!("ckpt_dup_{}", std::process::id()));
         std::fs::create_dir_all(&dir).ok();
-        db.store_checkpoint("same_hash", "2024-06-01T12:00:00Z", Some("first"), dir.to_str().unwrap())
-            .unwrap();
-        db.store_checkpoint("same_hash", "2024-06-02T12:00:00Z", Some("second"), dir.to_str().unwrap())
-            .unwrap();
+        db.store_checkpoint(
+            "same_hash",
+            "2024-06-01T12:00:00Z",
+            Some("first"),
+            dir.to_str().unwrap(),
+        )
+        .unwrap();
+        db.store_checkpoint(
+            "same_hash",
+            "2024-06-02T12:00:00Z",
+            Some("second"),
+            dir.to_str().unwrap(),
+        )
+        .unwrap();
         let list = db.list_checkpoints(dir.to_str().unwrap()).unwrap();
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].reason.as_deref(), Some("second"));
@@ -2395,8 +2420,21 @@ mod tests {
     #[test]
     fn test_search_sessions_basic() {
         let db = test_db();
-        db.save_session("s1", Some("Alpha Project"), "test", "2024-01-01T00:00:00Z", "2024-01-01T00:00:00Z").unwrap();
-        db.save_message("s1", "user", "alpha unique searchable content", "2024-01-01T00:00:00Z").unwrap();
+        db.save_session(
+            "s1",
+            Some("Alpha Project"),
+            "test",
+            "2024-01-01T00:00:00Z",
+            "2024-01-01T00:00:00Z",
+        )
+        .unwrap();
+        db.save_message(
+            "s1",
+            "user",
+            "alpha unique searchable content",
+            "2024-01-01T00:00:00Z",
+        )
+        .unwrap();
         let results = db.search_sessions("alpha", 10).unwrap();
         assert!(!results.is_empty());
     }
@@ -2404,8 +2442,16 @@ mod tests {
     #[test]
     fn test_search_sessions_no_match() {
         let db = test_db();
-        db.save_session("s1", Some("Unique Name"), "test", "2024-01-01T00:00:00Z", "2024-01-01T00:00:00Z").unwrap();
-        db.save_message("s1", "user", "hello world", "2024-01-01T00:00:00Z").unwrap();
+        db.save_session(
+            "s1",
+            Some("Unique Name"),
+            "test",
+            "2024-01-01T00:00:00Z",
+            "2024-01-01T00:00:00Z",
+        )
+        .unwrap();
+        db.save_message("s1", "user", "hello world", "2024-01-01T00:00:00Z")
+            .unwrap();
         let results = db.search_sessions("zzz_nonexistent_zzz", 10).unwrap();
         assert!(results.is_empty());
     }
@@ -2415,8 +2461,16 @@ mod tests {
         let db = test_db();
         for i in 0..10 {
             let id = format!("s{}", i);
-            db.save_session(&id, Some(&format!("Session {}", i)), "test", "2024-01-01T00:00:00Z", "2024-01-01T00:00:00Z").unwrap();
-            db.save_message(&id, "user", "alpha searchable", "2024-01-01T00:00:00Z").unwrap();
+            db.save_session(
+                &id,
+                Some(&format!("Session {}", i)),
+                "test",
+                "2024-01-01T00:00:00Z",
+                "2024-01-01T00:00:00Z",
+            )
+            .unwrap();
+            db.save_message(&id, "user", "alpha searchable", "2024-01-01T00:00:00Z")
+                .unwrap();
         }
         let results = db.search_sessions("alpha", 3).unwrap();
         assert!(results.len() <= 3);
@@ -2427,9 +2481,24 @@ mod tests {
     #[test]
     fn test_get_events_by_type() {
         let db = test_db();
-        db.record_event("test-session", "tool_call", &serde_json::json!({"tool": "bash"})).unwrap();
-        db.record_event("test-session", "llm_call", &serde_json::json!({"model": "gpt-4"})).unwrap();
-        db.record_event("test-session", "tool_call", &serde_json::json!({"tool": "ls"})).unwrap();
+        db.record_event(
+            "test-session",
+            "tool_call",
+            &serde_json::json!({"tool": "bash"}),
+        )
+        .unwrap();
+        db.record_event(
+            "test-session",
+            "llm_call",
+            &serde_json::json!({"model": "gpt-4"}),
+        )
+        .unwrap();
+        db.record_event(
+            "test-session",
+            "tool_call",
+            &serde_json::json!({"tool": "ls"}),
+        )
+        .unwrap();
         let tool_events = db.get_events_by_type("tool_call", None).unwrap();
         assert_eq!(tool_events.len(), 2);
         let llm_events = db.get_events_by_type("llm_call", None).unwrap();
@@ -2439,7 +2508,12 @@ mod tests {
     #[test]
     fn test_record_event_and_get() {
         let db = test_db();
-        db.record_event("test-session", "test_event", &serde_json::json!({"key": "value"})).unwrap();
+        db.record_event(
+            "test-session",
+            "test_event",
+            &serde_json::json!({"key": "value"}),
+        )
+        .unwrap();
         let events = db.get_session_events("test-session", Some(10)).unwrap();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].event_type, "test_event");
@@ -2450,7 +2524,8 @@ mod tests {
     #[test]
     fn test_update_session_title() {
         let db = test_db();
-        db.update_session_title("test-session", "New Title").unwrap();
+        db.update_session_title("test-session", "New Title")
+            .unwrap();
         let sessions = db.list_sessions(10).unwrap();
         let s = sessions.iter().find(|s| s.id == "test-session").unwrap();
         assert_eq!(s.title.as_deref(), Some("New Title"));
@@ -2494,10 +2569,20 @@ mod tests {
     #[test]
     fn test_merge_sessions_basic() {
         let db = test_db();
-        db.save_session("merge_source", Some("Source"), "test", "2024-01-01T00:00:00Z", "2024-01-01T00:00:00Z").unwrap();
-        db.save_message("merge_source", "user", "hello", "2024-01-01T00:00:00Z").unwrap();
-        db.save_message("merge_source", "assistant", "hi", "2024-01-01T00:00:01Z").unwrap();
-        db.merge_sessions("test-session", &["merge_source"]).unwrap();
+        db.save_session(
+            "merge_source",
+            Some("Source"),
+            "test",
+            "2024-01-01T00:00:00Z",
+            "2024-01-01T00:00:00Z",
+        )
+        .unwrap();
+        db.save_message("merge_source", "user", "hello", "2024-01-01T00:00:00Z")
+            .unwrap();
+        db.save_message("merge_source", "assistant", "hi", "2024-01-01T00:00:01Z")
+            .unwrap();
+        db.merge_sessions("test-session", &["merge_source"])
+            .unwrap();
         let msgs = db.get_session_messages("test-session").unwrap();
         assert!(msgs.len() >= 2);
     }
@@ -2507,8 +2592,13 @@ mod tests {
     #[test]
     fn test_compression_lock_acquire_release() {
         let db = test_db();
-        db.acquire_compression_lock("test-session", "holder1", "2024-01-01T00:00:00Z", "2099-01-01T00:00:00Z")
-            .unwrap();
+        db.acquire_compression_lock(
+            "test-session",
+            "holder1",
+            "2024-01-01T00:00:00Z",
+            "2099-01-01T00:00:00Z",
+        )
+        .unwrap();
         assert!(db.is_compression_locked("test-session"));
         db.release_compression_lock("test-session").unwrap();
         assert!(!db.is_compression_locked("test-session"));
@@ -2538,31 +2628,58 @@ mod tests {
     #[test]
     fn test_search_messages_fts_basic() {
         let db = test_db();
-        db.save_message("test-session", "user", "the quick brown fox", "2024-01-01T00:00:00Z")
+        db.save_message(
+            "test-session",
+            "user",
+            "the quick brown fox",
+            "2024-01-01T00:00:00Z",
+        )
+        .unwrap();
+        let results = db
+            .search_messages_fts("quick brown", None, Some(10))
             .unwrap();
-        let results = db.search_messages_fts("quick brown", None, Some(10)).unwrap();
         assert!(!results.is_empty());
     }
 
     #[test]
     fn test_search_messages_fts_no_match() {
         let db = test_db();
-        db.save_message("test-session", "user", "hello world", "2024-01-01T00:00:00Z")
+        db.save_message(
+            "test-session",
+            "user",
+            "hello world",
+            "2024-01-01T00:00:00Z",
+        )
+        .unwrap();
+        let results = db
+            .search_messages_fts("xyzzy_nonexistent", None, Some(10))
             .unwrap();
-        let results = db.search_messages_fts("xyzzy_nonexistent", None, Some(10)).unwrap();
         assert!(results.is_empty());
     }
 
     #[test]
     fn test_search_messages_fts_with_session_filter() {
         let db = test_db();
-        db.save_message("test-session", "user", "unique_term_alpha", "2024-01-01T00:00:00Z")
-            .unwrap();
-        db.save_session("other", Some("Other"), "test", "2024-01-01T00:00:00Z", "2024-01-01T00:00:00Z")
-            .unwrap();
+        db.save_message(
+            "test-session",
+            "user",
+            "unique_term_alpha",
+            "2024-01-01T00:00:00Z",
+        )
+        .unwrap();
+        db.save_session(
+            "other",
+            Some("Other"),
+            "test",
+            "2024-01-01T00:00:00Z",
+            "2024-01-01T00:00:00Z",
+        )
+        .unwrap();
         db.save_message("other", "user", "unique_term_alpha", "2024-01-01T00:00:00Z")
             .unwrap();
-        let results = db.search_messages_fts("unique_term_alpha", Some("test-session"), Some(10)).unwrap();
+        let results = db
+            .search_messages_fts("unique_term_alpha", Some("test-session"), Some(10))
+            .unwrap();
         assert!(results.iter().all(|r| r.session_id == "test-session"));
     }
 
@@ -2572,8 +2689,14 @@ mod tests {
     fn test_get_recent_sessions() {
         let db = test_db();
         for i in 0..5 {
-            db.save_session(&format!("recent_{}", i), Some(&format!("Session {}", i)), "test",
-                "2024-01-01T00:00:00Z", "2024-01-01T00:00:00Z").unwrap();
+            db.save_session(
+                &format!("recent_{}", i),
+                Some(&format!("Session {}", i)),
+                "test",
+                "2024-01-01T00:00:00Z",
+                "2024-01-01T00:00:00Z",
+            )
+            .unwrap();
         }
         let recent = db.get_recent_sessions(3).unwrap();
         assert!(recent.len() <= 3);
@@ -2582,7 +2705,11 @@ mod tests {
     #[test]
     fn test_get_recent_sessions_empty() {
         let counter = DB_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let path = std::env::temp_dir().join(format!("hermes_test_recent_{}_{}.db", std::process::id(), counter));
+        let path = std::env::temp_dir().join(format!(
+            "hermes_test_recent_{}_{}.db",
+            std::process::id(),
+            counter
+        ));
         let _ = std::fs::remove_file(&path);
         let db = Database::init(path).unwrap();
         let recent = db.get_recent_sessions(10).unwrap();
@@ -2595,7 +2722,14 @@ mod tests {
     fn test_get_session_count() {
         let db = test_db();
         let before = db.get_session_count().unwrap();
-        db.save_session("count_new", Some("Count"), "test", "2024-01-01T00:00:00Z", "2024-01-01T00:00:00Z").unwrap();
+        db.save_session(
+            "count_new",
+            Some("Count"),
+            "test",
+            "2024-01-01T00:00:00Z",
+            "2024-01-01T00:00:00Z",
+        )
+        .unwrap();
         let after = db.get_session_count().unwrap();
         assert_eq!(after, before + 1);
     }
@@ -2605,7 +2739,11 @@ mod tests {
     #[test]
     fn test_reconcile_adds_missing_column() {
         let counter = DB_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let path = std::env::temp_dir().join(format!("hermes_test_reconcile_extra_{}_{}.db", std::process::id(), counter));
+        let path = std::env::temp_dir().join(format!(
+            "hermes_test_reconcile_extra_{}_{}.db",
+            std::process::id(),
+            counter
+        ));
         let _ = std::fs::remove_file(&path);
         {
             let conn = Connection::open(&path).unwrap();
@@ -2627,7 +2765,12 @@ mod tests {
         db.save_session_full(&session).unwrap();
         let model: Option<String> = {
             let conn = db.conn.lock().unwrap();
-            conn.query_row("SELECT model FROM sessions WHERE id = ?1", params!["reconcile2"], |row| row.get(0)).unwrap()
+            conn.query_row(
+                "SELECT model FROM sessions WHERE id = ?1",
+                params!["reconcile2"],
+                |row| row.get(0),
+            )
+            .unwrap()
         };
         assert_eq!(model, Some("test-model".to_string()));
         drop(db);
@@ -2677,9 +2820,21 @@ mod tests {
         };
         db.save_session_full(&session).unwrap();
         let conn = db.conn.lock().unwrap();
-        let model: Option<String> = conn.query_row("SELECT model FROM sessions WHERE id = 'roundtrip'", [], |r| r.get(0)).unwrap();
+        let model: Option<String> = conn
+            .query_row(
+                "SELECT model FROM sessions WHERE id = 'roundtrip'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
         assert_eq!(model, Some("gpt-4-rt".to_string()));
-        let tokens: i64 = conn.query_row("SELECT input_tokens FROM sessions WHERE id = 'roundtrip'", [], |r| r.get(0)).unwrap();
+        let tokens: i64 = conn
+            .query_row(
+                "SELECT input_tokens FROM sessions WHERE id = 'roundtrip'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
         assert_eq!(tokens, 5000);
     }
 
@@ -2710,7 +2865,9 @@ mod tests {
         };
         db.save_message_full(&msg).unwrap();
         let msgs = db.get_session_messages_full("test-session").unwrap();
-        let found = msgs.iter().find(|m| m.content.as_deref() == Some("RT message content"));
+        let found = msgs
+            .iter()
+            .find(|m| m.content.as_deref() == Some("RT message content"));
         assert!(found.is_some());
         let m = found.unwrap();
         assert_eq!(m.tool_call_id.as_deref(), Some("call_rt123"));
@@ -2723,7 +2880,12 @@ mod tests {
     #[test]
     fn test_tool_state_set_get_clear() {
         let db = test_db();
-        db.set_tool_state("test-session", "my_tool", &serde_json::json!({"status": "active"})).unwrap();
+        db.set_tool_state(
+            "test-session",
+            "my_tool",
+            &serde_json::json!({"status": "active"}),
+        )
+        .unwrap();
         let state = db.get_tool_state("test-session", "my_tool");
         assert!(state.is_some());
         assert_eq!(state.unwrap()["status"], "active");
@@ -2734,8 +2896,10 @@ mod tests {
     #[test]
     fn test_clear_all_tool_states() {
         let db = test_db();
-        db.set_tool_state("test-session", "t1", &serde_json::json!({"a": 1})).unwrap();
-        db.set_tool_state("test-session", "t2", &serde_json::json!({"b": 2})).unwrap();
+        db.set_tool_state("test-session", "t1", &serde_json::json!({"a": 1}))
+            .unwrap();
+        db.set_tool_state("test-session", "t2", &serde_json::json!({"b": 2}))
+            .unwrap();
         db.clear_all_tool_states("test-session").unwrap();
         assert!(db.get_tool_state("test-session", "t1").is_none());
         assert!(db.get_tool_state("test-session", "t2").is_none());
@@ -2753,8 +2917,10 @@ mod tests {
     #[test]
     fn test_delete_metadata() {
         let db = test_db();
-        db.set_session_metadata("test-session", "del_key", "del_val").unwrap();
-        db.delete_session_metadata("test-session", "del_key").unwrap();
+        db.set_session_metadata("test-session", "del_key", "del_val")
+            .unwrap();
+        db.delete_session_metadata("test-session", "del_key")
+            .unwrap();
         assert!(db.get_session_metadata("test-session", "del_key").is_none());
     }
 
@@ -2763,7 +2929,11 @@ mod tests {
     #[test]
     fn test_database_path() {
         let counter = DB_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let path = std::env::temp_dir().join(format!("hermes_test_path_{}_{}.db", std::process::id(), counter));
+        let path = std::env::temp_dir().join(format!(
+            "hermes_test_path_{}_{}.db",
+            std::process::id(),
+            counter
+        ));
         let _ = std::fs::remove_file(&path);
         let db = Database::init(path.clone()).unwrap();
         assert_eq!(db.path(), Some(path));
@@ -2775,7 +2945,8 @@ mod tests {
     fn test_get_active_sessions() {
         let db = test_db();
         let now = chrono::Utc::now().to_rfc3339();
-        db.save_session("active_1", Some("Active"), "test", &now, &now).unwrap();
+        db.save_session("active_1", Some("Active"), "test", &now, &now)
+            .unwrap();
         let active = db.get_active_sessions(60 * 24 * 365).unwrap();
         assert!(!active.is_empty());
     }

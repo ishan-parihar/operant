@@ -627,8 +627,6 @@ impl HermesTool for SpotifyLibraryTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tools::ToolContext;
-    use serde_json::json;
 
     macro_rules! test_schema {
         ($name:ident, $tool:expr, $tool_name:expr) => {

@@ -7,7 +7,6 @@
 use chrono::Utc;
 use hermes_core::config::{AppConfig, ToolProgressMode};
 use hermes_core::gateway::Gateway;
-use std::sync::Arc;
 
 /// Runtime context passed to command handlers for stateful operations.
 ///

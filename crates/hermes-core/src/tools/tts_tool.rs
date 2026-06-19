@@ -111,17 +111,32 @@ impl TtsTool {
             if let Some(cmd_provider) = providers.get(provider) {
                 debug!(provider = %provider, "Dispatching to command provider");
                 let temp_dir = std::env::temp_dir();
-                let output_path = temp_dir.join(format!("tts_output.{}", cmd_provider.output_format()));
+                let output_path =
+                    temp_dir.join(format!("tts_output.{}", cmd_provider.output_format()));
                 match cmd_provider
-                    .synthesize(&args.text, output_path.to_str().unwrap_or("/tmp/tts_output.mp3"), Some(&args.voice), args.model.as_deref(), AudioFormat::Mp3)
+                    .synthesize(
+                        &args.text,
+                        output_path.to_str().unwrap_or("/tmp/tts_output.mp3"),
+                        Some(&args.voice),
+                        args.model.as_deref(),
+                        AudioFormat::Mp3,
+                    )
                     .await
                 {
                     Ok(result) => {
                         let audio_bytes = match std::fs::read(&result.output_path) {
                             Ok(b) => b,
-                            Err(e) => return ToolResult::error("text_to_speech", format!("Failed to read output: {}", e)),
+                            Err(e) => {
+                                return ToolResult::error(
+                                    "text_to_speech",
+                                    format!("Failed to read output: {}", e),
+                                )
+                            }
                         };
-                        let audio_base64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &audio_bytes);
+                        let audio_base64 = base64::Engine::encode(
+                            &base64::engine::general_purpose::STANDARD,
+                            &audio_bytes,
+                        );
                         let _ = std::fs::remove_file(&result.output_path);
                         return ToolResult::success(
                             "text_to_speech",
@@ -134,7 +149,12 @@ impl TtsTool {
                             }),
                         );
                     }
-                    Err(e) => return ToolResult::error("text_to_speech", format!("Command provider failed: {}", e)),
+                    Err(e) => {
+                        return ToolResult::error(
+                            "text_to_speech",
+                            format!("Command provider failed: {}", e),
+                        )
+                    }
                 }
             }
         }
@@ -146,15 +166,29 @@ impl TtsTool {
                 let temp_dir = std::env::temp_dir();
                 let output_path = temp_dir.join("tts_plugin_output.mp3");
                 match plugin
-                    .synthesize(&args.text, output_path.to_str().unwrap_or("/tmp/tts_plugin_output.mp3"), Some(&args.voice), args.model.as_deref(), AudioFormat::Mp3)
+                    .synthesize(
+                        &args.text,
+                        output_path.to_str().unwrap_or("/tmp/tts_plugin_output.mp3"),
+                        Some(&args.voice),
+                        args.model.as_deref(),
+                        AudioFormat::Mp3,
+                    )
                     .await
                 {
                     Ok(result) => {
                         let audio_bytes = match std::fs::read(&result.output_path) {
                             Ok(b) => b,
-                            Err(e) => return ToolResult::error("text_to_speech", format!("Failed to read output: {}", e)),
+                            Err(e) => {
+                                return ToolResult::error(
+                                    "text_to_speech",
+                                    format!("Failed to read output: {}", e),
+                                )
+                            }
                         };
-                        let audio_base64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &audio_bytes);
+                        let audio_base64 = base64::Engine::encode(
+                            &base64::engine::general_purpose::STANDARD,
+                            &audio_bytes,
+                        );
                         let _ = std::fs::remove_file(&result.output_path);
                         return ToolResult::success(
                             "text_to_speech",
@@ -167,7 +201,12 @@ impl TtsTool {
                             }),
                         );
                     }
-                    Err(e) => return ToolResult::error("text_to_speech", format!("Plugin provider failed: {}", e)),
+                    Err(e) => {
+                        return ToolResult::error(
+                            "text_to_speech",
+                            format!("Plugin provider failed: {}", e),
+                        )
+                    }
                 }
             }
         }
