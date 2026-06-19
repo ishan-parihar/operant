@@ -39,6 +39,7 @@
 //! └─────────────────────────────────────────────────────────────┘
 //! ```
 
+pub mod accessibility;
 pub mod acp;
 pub mod agent;
 pub mod ansi_strip;
@@ -67,6 +68,7 @@ pub mod gateway_hooks;
 pub mod gateway_markdown;
 pub mod gateway_pipeline;
 pub mod gateway_session;
+pub mod hooks;
 pub mod interrupt;
 pub mod kanban;
 pub mod managed_tool_gateway;
@@ -83,6 +85,7 @@ pub mod pii;
 pub mod platform;
 pub mod plugins;
 pub mod process_registry;
+pub mod profile;
 pub mod rate_limit_tracker;
 pub mod rate_limiter;
 pub mod retry;
@@ -103,13 +106,19 @@ pub mod website_policy;
 pub mod yuanbao;
 
 pub use acp::{server, AcpHandler, AgentState, RpcRequest, RpcResponse};
-pub use agent::{AgentConfig, AgentEvent, FallbackModelClient, HermesAgent};
+pub use agent::{
+    cache::{
+        new_shared_cache, new_shared_cache_with_config, AgentCache, AgentCacheConfig,
+        AgentCacheEntry, SharedAgentCache,
+    },
+    AgentConfig, AgentEvent, FallbackModelClient, HermesAgent,
+};
 pub use approval::{
     check_tool_approval, prompt_user_for_approval, ApprovalContext, ApprovalGuard, ApprovalMode,
     ApprovalVerdict, RiskLevel,
 };
 pub use browser_provider::{
-    build_browser_provider, BrowserProvider, BrowserbaseProvider, BrowserUseProvider,
+    build_browser_provider, BrowserProvider, BrowserUseProvider, BrowserbaseProvider,
     CamofoxProvider, FirecrawlProvider, LightpandaProvider,
 };
 pub use browser_supervisor::{
@@ -122,10 +131,6 @@ pub use config::{
     BehaviorSettings, ClientSettings, CodeExecutionSettings, GatewaySettings, HttpToolSettings,
     LoadedConfig, LoggingSettings, McpServerConfig, McpSettings, MemorySettings, RateLimitSettings,
     SkillsSettings, SttSettings, TerminalSettings, ToolSettings, TuiSettings, WebToolSettings,
-};
-pub use plugins::{
-    discover_plugins, get_plugin_commands, handle_plugin_command, is_plugin_command,
-    register_plugin_command, resolve_plugin_command, PluginCommand, PluginHandler, PluginManifest,
 };
 pub use context::{estimate_tokens, ContextConfig, ContextManager};
 pub use context_files::{
@@ -147,15 +152,23 @@ pub use gateway::{
     PlatformRegistry, PlatformSession, SessionStore, TelegramAdapter, TelegramPoller, UserInfo,
     WebhookAdapter,
 };
-pub use gateway_session::PersistentSessionStore;
+pub use gateway_session::{
+    build_session_key, hash_chat_id, hash_sender_id, is_shared_multi_user_session,
+    PersistentSessionStore, ResetMode, SessionEntry, SessionResetPolicy, SessionSource,
+    SessionStoreConfig,
+};
+pub use hooks::{
+    emit_hook, emit_hook_collect, global_hook_registry, register_hook, HookAction, HookEvent,
+    HookHandler as LifecycleHookHandler, HookRegistry,
+};
 pub use managed_tool_gateway::{
     GatewayConfig as ManagedGatewayConfig, ManagedToolGateway, UrlPattern,
 };
 pub use mcp::{McpClient, McpNamespacedTool, McpStdioClient, McpTool, McpTransport};
 pub use memory::{MemoryBlock, MemoryManager, Session, UserProfile};
 pub use memory_provider::{
-    build_memory_provider, BuiltinProvider, HindsightProvider, LocalVectorProvider,
-    Mem0Provider, MemoryProvider, RetainDbProvider, TdgMemoryProvider,
+    build_memory_provider, BuiltinProvider, HindsightProvider, LocalVectorProvider, Mem0Provider,
+    MemoryProvider, RetainDbProvider, TdgMemoryProvider,
 };
 pub use ms_graph::{
     CachedAccessToken, GraphCredentials, MicrosoftGraphClient, MicrosoftGraphError,
@@ -163,7 +176,17 @@ pub use ms_graph::{
 };
 pub use parser::ToolCallParser;
 pub use platform::PlatformInfo;
+pub use plugins::{
+    discover_plugins, get_plugin_commands, handle_plugin_command, is_plugin_command,
+    register_plugin_command, resolve_plugin_command, PluginCommand, PluginHandler, PluginManifest,
+};
 pub use process_registry::{ProcessRegistry, ProcessSession, ProcessStatus};
+pub use profile::{
+    clone_profile, create_profile, delete_profile, get_active_profile, get_hermes_home,
+    get_profile_dir, get_profiles_root, list_profiles, normalize_profile_name, profile_exists,
+    set_active_profile, set_hermes_home_override, use_profile, validate_profile_name,
+    HermesHomeToken, ProfileInfo,
+};
 pub use rl_training::{
     check_rl_env_vars, check_tinker_atropos, list_available_environments, ActionValue,
     EpisodeResult, QStateEntry, QTable, RlState, RlTrainer, StepResult, TrainingSummary,
@@ -190,12 +213,12 @@ pub use nous_rate_guard::{
     record_nous_rate_limit, NousRateLimitState,
 };
 pub use oauth_refresh::{
-    auth_store_path, load_auth_store, save_auth_store, OAuthRefresher, OAuthTokenResponse,
-    AuthStore, ProviderState,
+    auth_store_path, load_auth_store, save_auth_store, AuthStore, OAuthRefresher,
+    OAuthTokenResponse, ProviderState,
 };
 pub use rate_limit_tracker::{RateLimitBucket, RateLimitState};
 pub use rate_limiter::{
-    exponential_backoff_secs, parse_retry_after_header, RateLimitError, RateLimiter,
-    RateLimitStatus, TokenBucket,
+    exponential_backoff_secs, parse_retry_after_header, RateLimitError, RateLimitStatus,
+    RateLimiter, TokenBucket,
 };
 pub use retry::{default_backoff, jittered_backoff};

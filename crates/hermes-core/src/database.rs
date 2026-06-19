@@ -2,6 +2,11 @@
 //!
 //! Handles session storage, message history, and checkpoint metadata using SQLite.
 //! Uses rusqlite with bundled SQLite for simplicity and portability.
+//!
+//! Schema management follows the declarative reconciliation pattern (Python hermes-state.py):
+//! DESIRED_SCHEMA_SQL is the single source of truth. On existing databases,
+//! reconcile_columns() diffs live columns against DESIRED_SCHEMA_SQL and ADDs
+//! any missing ones. This makes column additions a declarative operation.
 
 use rusqlite::{params, Connection};
 use std::collections::HashMap;
@@ -14,6 +19,103 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::error::{Error, Result};
+
+/// Current schema version. Bump when adding data migrations that can't be
+/// expressed declaratively (column additions are handled by reconcile_columns).
+const SCHEMA_VERSION: i64 = 1;
+
+/// Desired schema SQL — single source of truth for table structure.
+/// Column additions are picked up automatically by reconcile_columns().
+const DESIRED_SCHEMA_SQL: &str = "
+CREATE TABLE IF NOT EXISTS schema_version (
+    version INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS sessions (
+    id TEXT PRIMARY KEY,
+    source TEXT NOT NULL DEFAULT 'local',
+    user_id TEXT,
+    model TEXT,
+    model_config TEXT,
+    system_prompt TEXT,
+    parent_session_id TEXT,
+    started_at TEXT NOT NULL,
+    ended_at TEXT,
+    end_reason TEXT,
+    message_count INTEGER DEFAULT 0,
+    tool_call_count INTEGER DEFAULT 0,
+    input_tokens INTEGER DEFAULT 0,
+    output_tokens INTEGER DEFAULT 0,
+    cache_read_tokens INTEGER DEFAULT 0,
+    cache_write_tokens INTEGER DEFAULT 0,
+    reasoning_tokens INTEGER DEFAULT 0,
+    cwd TEXT,
+    billing_provider TEXT,
+    billing_base_url TEXT,
+    billing_mode TEXT,
+    estimated_cost_usd REAL,
+    actual_cost_usd REAL,
+    cost_status TEXT,
+    cost_source TEXT,
+    pricing_version TEXT,
+    title TEXT,
+    api_call_count INTEGER DEFAULT 0,
+    handoff_state TEXT,
+    handoff_platform TEXT,
+    handoff_error TEXT,
+    rewind_count INTEGER NOT NULL DEFAULT 0,
+    archived INTEGER NOT NULL DEFAULT 0,
+    FOREIGN KEY (parent_session_id) REFERENCES sessions(id)
+);
+
+CREATE TABLE IF NOT EXISTS messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL,
+    role TEXT NOT NULL,
+    content TEXT,
+    tool_call_id TEXT,
+    tool_calls TEXT,
+    tool_name TEXT,
+    timestamp TEXT NOT NULL,
+    token_count INTEGER,
+    finish_reason TEXT,
+    reasoning TEXT,
+    reasoning_content TEXT,
+    reasoning_details TEXT,
+    codex_reasoning_items TEXT,
+    codex_message_items TEXT,
+    platform_message_id TEXT,
+    observed INTEGER DEFAULT 0,
+    active INTEGER NOT NULL DEFAULT 1,
+    FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS state_meta (
+    key TEXT PRIMARY KEY,
+    value TEXT
+);
+
+CREATE TABLE IF NOT EXISTS compression_locks (
+    session_id TEXT PRIMARY KEY,
+    holder TEXT NOT NULL,
+    acquired_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL
+);
+
+";
+
+/// Indexes created AFTER reconcile_columns() to avoid referencing columns
+/// that may not exist yet on legacy databases.
+const DEFERRED_INDEX_SQL: &str = "
+CREATE INDEX IF NOT EXISTS idx_sessions_source ON sessions(source);
+CREATE INDEX IF NOT EXISTS idx_sessions_source_id ON sessions(source, id);
+CREATE INDEX IF NOT EXISTS idx_sessions_parent ON sessions(parent_session_id);
+CREATE INDEX IF NOT EXISTS idx_sessions_started ON sessions(started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, timestamp);
+CREATE INDEX IF NOT EXISTS idx_messages_session_active
+    ON messages(session_id, active, timestamp);
+CREATE INDEX IF NOT EXISTS idx_compression_locks_expires ON compression_locks(expires_at);
+";
 
 /// Database manager for persistent storage.
 /// Thread-safe via Arc<Mutex<Connection>> pattern.
@@ -69,9 +171,18 @@ impl Database {
         conn.execute("PRAGMA foreign_keys = ON", [])
             .map_err(|e| Error::Agent(format!("Failed to enable foreign keys: {}", e)))?;
 
-        // Run each migration in order
-        self.create_sessions_table(&conn)?;
-        self.create_messages_table(&conn)?;
+        // Create tables using desired schema SQL
+        conn.execute_batch(DESIRED_SCHEMA_SQL)
+            .map_err(|e| Error::Agent(format!("Failed to create tables: {}", e)))?;
+
+        // Reconcile columns — add any missing columns to existing tables
+        Self::reconcile_columns(&conn)?;
+
+        // Deferred indexes referencing reconciler-added columns
+        conn.execute_batch(DEFERRED_INDEX_SQL)
+            .map_err(|e| Error::Agent(format!("Failed to create deferred indexes: {}", e)))?;
+
+        // Additional tables that weren't in original DESIRED_SCHEMA_SQL
         self.create_checkpoints_table(&conn)?;
         self.create_fts_index(&conn)?;
         self.create_session_metadata_table(&conn)?;
@@ -79,53 +190,164 @@ impl Database {
         self.create_session_tags_table(&conn)?;
         self.create_session_events_table(&conn)?;
 
+        // Schema version bookkeeping
+        Self::ensure_schema_version(&conn)?;
+
         debug!("Database migrations completed successfully");
         Ok(())
     }
 
-    fn create_sessions_table(&self, conn: &Connection) -> Result<()> {
-        conn.execute(
-            "CREATE TABLE IF NOT EXISTS sessions (
-                id TEXT PRIMARY KEY,
-                title TEXT,
-                source TEXT NOT NULL DEFAULT 'local',
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            )",
-            [],
-        )
-        .map_err(|e| Error::Agent(format!("Failed to create sessions table: {}", e)))?;
+    /// Parse desired columns from DESIRED_SCHEMA_SQL using an in-memory SQLite.
+    /// Returns table_name -> (col_name -> col_type_expr).
+    fn parse_desired_columns(schema_sql: &str) -> Result<HashMap<String, HashMap<String, String>>> {
+        let ref_conn = Connection::open_in_memory()
+            .map_err(|e| Error::Agent(format!("Failed to open in-memory DB: {}", e)))?;
 
-        // Index for recent sessions query
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_sessions_updated ON sessions(updated_at DESC)",
-            [],
-        )
-        .map_err(|e| Error::Agent(format!("Failed to create sessions index: {}", e)))?;
+        ref_conn
+            .execute_batch(schema_sql)
+            .map_err(|e| Error::Agent(format!("Failed to execute schema SQL: {}", e)))?;
+
+        let mut table_columns: HashMap<String, HashMap<String, String>> = HashMap::new();
+
+        let tables: Vec<String> = {
+            let mut stmt = ref_conn
+                .prepare(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'",
+                )
+                .map_err(|e| Error::Agent(format!("Failed to prepare table query: {}", e)))?;
+            let rows = stmt
+                .query_map([], |row| row.get(0))
+                .map_err(|e| Error::Agent(format!("Failed to query tables: {}", e)))?;
+            rows.filter_map(|r| r.ok()).collect()
+        };
+
+        for tbl in tables {
+            let mut cols: HashMap<String, String> = HashMap::new();
+            let mut stmt = ref_conn
+                .prepare(&format!("PRAGMA table_info(\"{}\")", tbl))
+                .map_err(|e| {
+                    Error::Agent(format!("Failed to prepare PRAGMA for {}: {}", tbl, e))
+                })?;
+            let rows = stmt
+                .query_map([], |row| {
+                    // PRAGMA table_info returns (cid, name, type, notnull, dflt_value, pk)
+                    let name: String = row.get(1)?;
+                    let col_type: String = row.get(2)?;
+                    let notnull: bool = row.get(3)?;
+                    let dflt_value: Option<String> = row.get(4)?;
+                    let pk: bool = row.get(5)?;
+                    Ok((name, col_type, notnull, dflt_value, pk))
+                })
+                .map_err(|e| Error::Agent(format!("Failed to query columns for {}: {}", tbl, e)))?;
+            for row in rows {
+                let (name, col_type, notnull, dflt_value, pk) =
+                    row.map_err(|e| Error::Agent(format!("Row error for {}: {}", tbl, e)))?;
+                // Reconstruct type expression for ALTER TABLE ADD COLUMN
+                let mut parts = Vec::new();
+                if !col_type.is_empty() {
+                    parts.push(col_type);
+                }
+                if notnull && !pk {
+                    parts.push("NOT NULL".to_string());
+                }
+                if let Some(ref default) = dflt_value {
+                    parts.push(format!("DEFAULT {}", default));
+                }
+                cols.insert(name, parts.join(" "));
+            }
+            table_columns.insert(tbl, cols);
+        }
+
+        Ok(table_columns)
+    }
+
+    /// Ensure live tables have every column declared in DESIRED_SCHEMA_SQL.
+    /// Diff live columns via PRAGMA table_info against the desired schema
+    /// and ADD any missing ones.
+    fn reconcile_columns(conn: &Connection) -> Result<()> {
+        let desired = Self::parse_desired_columns(DESIRED_SCHEMA_SQL)?;
+
+        for (table_name, declared_cols) in &desired {
+            // Get current columns from the live table
+            let live_cols = match Self::get_live_columns(conn, table_name) {
+                Ok(cols) => cols,
+                Err(_) => continue, // Table doesn't exist yet (shouldn't happen after CREATE)
+            };
+
+            for (col_name, col_type) in declared_cols {
+                if !live_cols.contains(col_name) {
+                    let safe_name = col_name.replace('"', "\"\"");
+                    let sql = format!(
+                        "ALTER TABLE \"{}\" ADD COLUMN \"{}\" {}",
+                        table_name, safe_name, col_type
+                    );
+                    match conn.execute_batch(&sql) {
+                        Ok(_) => {
+                            debug!("reconcile {}.{}: added", table_name, col_name);
+                        }
+                        Err(e) => {
+                            // Expected: "duplicate column name" from a race or re-run
+                            debug!("reconcile {}.{}: {}", table_name, col_name, e);
+                        }
+                    }
+                }
+            }
+        }
 
         Ok(())
     }
 
-    fn create_messages_table(&self, conn: &Connection) -> Result<()> {
-        conn.execute(
-            "CREATE TABLE IF NOT EXISTS messages (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                session_id TEXT NOT NULL,
-                role TEXT NOT NULL,
-                content TEXT NOT NULL,
-                timestamp TEXT NOT NULL,
-                FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE
-            )",
-            [],
-        )
-        .map_err(|e| Error::Agent(format!("Failed to create messages table: {}", e)))?;
+    /// Get live columns for a table via PRAGMA table_info.
+    fn get_live_columns(
+        conn: &Connection,
+        table_name: &str,
+    ) -> Result<std::collections::HashSet<String>> {
+        let mut stmt = conn
+            .prepare(&format!("PRAGMA table_info(\"{}\")", table_name))
+            .map_err(|e| {
+                Error::Agent(format!(
+                    "PRAGMA table_info failed for {}: {}",
+                    table_name, e
+                ))
+            })?;
+        let rows = stmt
+            .query_map([], |row| {
+                let name: String = row.get(1)?;
+                Ok(name)
+            })
+            .map_err(|e| Error::Agent(format!("Query error for {}: {}", table_name, e)))?;
+        let mut cols = std::collections::HashSet::new();
+        for row in rows {
+            if let Ok(name) = row {
+                cols.insert(name);
+            }
+        }
+        Ok(cols)
+    }
 
-        // Index for session message retrieval
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, timestamp)",
-            [],
-        )
-        .map_err(|e| Error::Agent(format!("Failed to create messages index: {}", e)))?;
+    /// Ensure schema_version table has the current version.
+    fn ensure_schema_version(conn: &Connection) -> Result<()> {
+        let current_version: i64 = conn
+            .query_row("SELECT version FROM schema_version LIMIT 1", [], |row| {
+                row.get(0)
+            })
+            .unwrap_or(0);
+
+        if current_version < SCHEMA_VERSION {
+            if current_version == 0 {
+                conn.execute(
+                    "INSERT INTO schema_version (version) VALUES (?1)",
+                    params![SCHEMA_VERSION],
+                )
+                .map_err(|e| Error::Agent(format!("Failed to insert schema version: {}", e)))?;
+            } else {
+                conn.execute(
+                    "UPDATE schema_version SET version = ?1",
+                    params![SCHEMA_VERSION],
+                )
+                .map_err(|e| Error::Agent(format!("Failed to update schema version: {}", e)))?;
+            }
+        }
 
         Ok(())
     }
@@ -283,7 +505,7 @@ impl Database {
 
     // === Session Management ===
 
-    /// Save or update a session.
+    /// Save or update a session with all Python-compatible fields.
     pub fn save_session(
         &self,
         id: &str,
@@ -294,13 +516,105 @@ impl Database {
     ) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
-            "INSERT INTO sessions (id, title, source, created_at, updated_at) 
+            "INSERT INTO sessions (id, title, source, started_at, ended_at)
              VALUES (?1, ?2, ?3, ?4, ?5)
-             ON CONFLICT(id) DO UPDATE SET 
-                 title = excluded.title, 
+             ON CONFLICT(id) DO UPDATE SET
+                 title = excluded.title,
                  source = excluded.source,
-                 updated_at = excluded.updated_at",
+                 ended_at = excluded.ended_at",
             params![id, title, source, created_at, updated_at],
+        )
+        .map_err(|e| Error::Agent(format!("Failed to save session: {}", e)))?;
+        Ok(())
+    }
+
+    /// Save a session with full Python-compatible fields.
+    pub fn save_session_full(&self, session: &SessionData) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO sessions (
+                id, source, user_id, model, model_config, system_prompt,
+                parent_session_id, started_at, ended_at, end_reason,
+                message_count, tool_call_count, input_tokens, output_tokens,
+                cache_read_tokens, cache_write_tokens, reasoning_tokens,
+                cwd, billing_provider, billing_base_url, billing_mode,
+                estimated_cost_usd, actual_cost_usd, cost_status, cost_source,
+                pricing_version, title, api_call_count, handoff_state,
+                handoff_platform, handoff_error, rewind_count, archived
+            ) VALUES (
+                ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10,
+                ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20,
+                ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30,
+                ?31, ?32, ?33
+            )
+            ON CONFLICT(id) DO UPDATE SET
+                source = excluded.source,
+                user_id = excluded.user_id,
+                model = excluded.model,
+                model_config = excluded.model_config,
+                system_prompt = excluded.system_prompt,
+                parent_session_id = excluded.parent_session_id,
+                started_at = excluded.started_at,
+                ended_at = excluded.ended_at,
+                end_reason = excluded.end_reason,
+                message_count = excluded.message_count,
+                tool_call_count = excluded.tool_call_count,
+                input_tokens = excluded.input_tokens,
+                output_tokens = excluded.output_tokens,
+                cache_read_tokens = excluded.cache_read_tokens,
+                cache_write_tokens = excluded.cache_write_tokens,
+                reasoning_tokens = excluded.reasoning_tokens,
+                cwd = excluded.cwd,
+                billing_provider = excluded.billing_provider,
+                billing_base_url = excluded.billing_base_url,
+                billing_mode = excluded.billing_mode,
+                estimated_cost_usd = excluded.estimated_cost_usd,
+                actual_cost_usd = excluded.actual_cost_usd,
+                cost_status = excluded.cost_status,
+                cost_source = excluded.cost_source,
+                pricing_version = excluded.pricing_version,
+                title = excluded.title,
+                api_call_count = excluded.api_call_count,
+                handoff_state = excluded.handoff_state,
+                handoff_platform = excluded.handoff_platform,
+                handoff_error = excluded.handoff_error,
+                rewind_count = excluded.rewind_count,
+                archived = excluded.archived",
+            params![
+                session.id,
+                session.source,
+                session.user_id,
+                session.model,
+                session.model_config,
+                session.system_prompt,
+                session.parent_session_id,
+                session.started_at,
+                session.ended_at,
+                session.end_reason,
+                session.message_count,
+                session.tool_call_count,
+                session.input_tokens,
+                session.output_tokens,
+                session.cache_read_tokens,
+                session.cache_write_tokens,
+                session.reasoning_tokens,
+                session.cwd,
+                session.billing_provider,
+                session.billing_base_url,
+                session.billing_mode,
+                session.estimated_cost_usd,
+                session.actual_cost_usd,
+                session.cost_status,
+                session.cost_source,
+                session.pricing_version,
+                session.title,
+                session.api_call_count,
+                session.handoff_state,
+                session.handoff_platform,
+                session.handoff_error,
+                session.rewind_count,
+                session.archived,
+            ],
         )
         .map_err(|e| Error::Agent(format!("Failed to save session: {}", e)))?;
         Ok(())
@@ -318,6 +632,42 @@ impl Database {
         conn.execute(
             "INSERT INTO messages (session_id, role, content, timestamp) VALUES (?1, ?2, ?3, ?4)",
             params![session_id, role, content, timestamp],
+        )
+        .map_err(|e| Error::Agent(format!("Failed to save message: {}", e)))?;
+        Ok(())
+    }
+
+    /// Save a message with full Python-compatible fields.
+    pub fn save_message_full(&self, message: &MessageData) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO messages (
+                session_id, role, content, tool_call_id, tool_calls, tool_name,
+                timestamp, token_count, finish_reason, reasoning, reasoning_content,
+                reasoning_details, codex_reasoning_items, codex_message_items,
+                platform_message_id, observed, active
+            ) VALUES (
+                ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17
+            )",
+            params![
+                message.session_id,
+                message.role,
+                message.content,
+                message.tool_call_id,
+                message.tool_calls,
+                message.tool_name,
+                message.timestamp,
+                message.token_count,
+                message.finish_reason,
+                message.reasoning,
+                message.reasoning_content,
+                message.reasoning_details,
+                message.codex_reasoning_items,
+                message.codex_message_items,
+                message.platform_message_id,
+                message.observed,
+                message.active,
+            ],
         )
         .map_err(|e| Error::Agent(format!("Failed to save message: {}", e)))?;
         Ok(())
@@ -347,16 +697,61 @@ impl Database {
         Ok(messages)
     }
 
+    /// Get all messages for a session with full fields, ordered by timestamp.
+    pub fn get_session_messages_full(&self, session_id: &str) -> Result<Vec<MessageData>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, session_id, role, content, tool_call_id, tool_calls, tool_name,
+                        timestamp, token_count, finish_reason, reasoning, reasoning_content,
+                        reasoning_details, codex_reasoning_items, codex_message_items,
+                        platform_message_id, observed, active
+                 FROM messages WHERE session_id = ?1 ORDER BY timestamp ASC",
+            )
+            .map_err(|e| Error::Agent(format!("Failed to prepare statement: {}", e)))?;
+
+        let rows = stmt
+            .query_map(params![session_id], |row| {
+                Ok(MessageData {
+                    id: row.get(0)?,
+                    session_id: row.get(1)?,
+                    role: row.get(2)?,
+                    content: row.get(3)?,
+                    tool_call_id: row.get(4)?,
+                    tool_calls: row.get(5)?,
+                    tool_name: row.get(6)?,
+                    timestamp: row.get(7)?,
+                    token_count: row.get(8)?,
+                    finish_reason: row.get(9)?,
+                    reasoning: row.get(10)?,
+                    reasoning_content: row.get(11)?,
+                    reasoning_details: row.get(12)?,
+                    codex_reasoning_items: row.get(13)?,
+                    codex_message_items: row.get(14)?,
+                    platform_message_id: row.get(15)?,
+                    observed: row.get(16)?,
+                    active: row.get(17)?,
+                })
+            })
+            .map_err(|e| Error::Agent(format!("Query error: {}", e)))?;
+
+        let mut messages = Vec::new();
+        for row in rows {
+            messages.push(row.map_err(|e| Error::Agent(format!("Row error: {}", e)))?);
+        }
+        Ok(messages)
+    }
+
     /// List recent sessions (for session_search_tool).
     pub fn list_sessions(&self, limit: usize) -> Result<Vec<DatabaseSession>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn
             .prepare(
-                "SELECT s.id, s.title, s.source, s.created_at, s.updated_at, COUNT(m.id) as msg_count 
+                "SELECT s.id, s.title, s.source, s.started_at, s.ended_at, COUNT(m.id) as msg_count 
                  FROM sessions s 
                  LEFT JOIN messages m ON s.id = m.session_id 
                  GROUP BY s.id 
-                 ORDER BY s.updated_at DESC 
+                 ORDER BY s.ended_at DESC 
                  LIMIT ?1",
             )
             .map_err(|e| Error::Agent(format!("Failed to prepare list_sessions: {}", e)))?;
@@ -389,7 +784,7 @@ impl Database {
         // Use FTS5 to find matching messages, join to get session info
         let mut stmt = conn
             .prepare(
-                "SELECT m.session_id, m.content, s.title, s.updated_at
+                "SELECT m.session_id, m.content, s.title, s.ended_at
                  FROM messages m
                  JOIN messages_fts fts ON m.id = fts.rowid
                  JOIN sessions s ON m.session_id = s.id
@@ -664,13 +1059,13 @@ impl Database {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn
             .prepare(
-                "SELECT s.id, s.title, s.source, s.created_at, s.updated_at, COUNT(m.id) as msg_count
+                "SELECT s.id, s.title, s.source, s.started_at, s.ended_at, COUNT(m.id) as msg_count
                  FROM sessions s
                  JOIN session_tags st ON s.id = st.session_id
                  LEFT JOIN messages m ON s.id = m.session_id
                  WHERE st.tag = ?1
                  GROUP BY s.id
-                 ORDER BY s.updated_at DESC",
+                 ORDER BY s.ended_at DESC",
             )
             .map_err(|e| Error::Agent(format!("Failed to prepare session-by-tag query: {}", e)))?;
         let rows = stmt
@@ -902,7 +1297,7 @@ impl Database {
         let now = chrono::Utc::now().to_rfc3339();
         let conn = self.conn.lock().unwrap();
         conn.execute(
-            "UPDATE sessions SET title = ?1, updated_at = ?2 WHERE id = ?3",
+            "UPDATE sessions SET title = ?1, ended_at = ?2 WHERE id = ?3",
             params![title, now, session_id],
         )
         .map_err(|e| Error::Agent(format!("Failed to update session title: {}", e)))?;
@@ -924,11 +1319,11 @@ impl Database {
         let limit = limit as i64;
         let mut stmt = conn
             .prepare(
-                "SELECT s.id, s.title, s.source, s.created_at, s.updated_at, COUNT(m.id) as msg_count
+                "SELECT s.id, s.title, s.source, s.started_at, s.ended_at, COUNT(m.id) as msg_count
                  FROM sessions s
                  LEFT JOIN messages m ON s.id = m.session_id
                  GROUP BY s.id
-                 ORDER BY s.updated_at DESC
+                 ORDER BY s.ended_at DESC
                  LIMIT ?1",
             )
             .map_err(|e| Error::Agent(format!("Failed to prepare recent sessions: {}", e)))?;
@@ -961,12 +1356,12 @@ impl Database {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn
             .prepare(
-                "SELECT s.id, s.title, s.source, s.created_at, s.updated_at, COUNT(m.id) as msg_count
+                "SELECT s.id, s.title, s.source, s.started_at, s.ended_at, COUNT(m.id) as msg_count
                  FROM sessions s
                  LEFT JOIN messages m ON s.id = m.session_id
-                 WHERE s.updated_at >= ?1
+                 WHERE s.ended_at >= ?1
                  GROUP BY s.id
-                 ORDER BY s.updated_at DESC",
+                 ORDER BY s.ended_at DESC",
             )
             .map_err(|e| Error::Agent(format!("Failed to prepare active sessions: {}", e)))?;
         let rows = stmt
@@ -1029,7 +1424,7 @@ impl Database {
         // Update target session timestamp
         let now = chrono::Utc::now().to_rfc3339();
         conn.execute(
-            "UPDATE sessions SET updated_at = ?1 WHERE id = ?2",
+            "UPDATE sessions SET ended_at = ?1 WHERE id = ?2",
             params![now, target_id],
         )
         .map_err(|e| Error::Agent(format!("Failed to update target session: {}", e)))?;
@@ -1055,16 +1450,149 @@ impl Database {
         }
         Ok(())
     }
+
+    // === State Meta ===
+
+    /// Set a state_meta key-value pair.
+    pub fn set_state_meta(&self, key: &str, value: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO state_meta (key, value) VALUES (?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![key, value],
+        )
+        .map_err(|e| Error::Agent(format!("Failed to set state_meta: {}", e)))?;
+        Ok(())
+    }
+
+    /// Get a state_meta value by key.
+    pub fn get_state_meta(&self, key: &str) -> Option<String> {
+        let conn = self.conn.lock().ok()?;
+        conn.query_row(
+            "SELECT value FROM state_meta WHERE key = ?1",
+            params![key],
+            |row| row.get(0),
+        )
+        .ok()
+    }
+
+    // === Compression Locks ===
+
+    /// Acquire a compression lock for a session.
+    pub fn acquire_compression_lock(
+        &self,
+        session_id: &str,
+        holder: &str,
+        acquired_at: &str,
+        expires_at: &str,
+    ) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT OR REPLACE INTO compression_locks (session_id, holder, acquired_at, expires_at)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![session_id, holder, acquired_at, expires_at],
+        )
+        .map_err(|e| Error::Agent(format!("Failed to acquire compression lock: {}", e)))?;
+        Ok(())
+    }
+
+    /// Check if a compression lock is held and not expired.
+    pub fn is_compression_locked(&self, session_id: &str) -> bool {
+        let conn = match self.conn.lock() {
+            Ok(c) => c,
+            Err(_) => return false,
+        };
+        let now = chrono::Utc::now().to_rfc3339();
+        conn.query_row(
+            "SELECT COUNT(*) FROM compression_locks WHERE session_id = ?1 AND expires_at > ?2",
+            params![session_id, now],
+            |row| row.get::<_, i64>(0),
+        )
+        .map(|count| count > 0)
+        .unwrap_or(false)
+    }
+
+    /// Release a compression lock for a session.
+    pub fn release_compression_lock(&self, session_id: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "DELETE FROM compression_locks WHERE session_id = ?1",
+            params![session_id],
+        )
+        .map_err(|e| Error::Agent(format!("Failed to release compression lock: {}", e)))?;
+        Ok(())
+    }
 }
 
 // === Data Types ===
 
-/// A message stored in the database.
+/// A message stored in the database (legacy simple format).
 #[derive(Debug, Clone)]
 pub struct Message {
     pub role: String,
     pub content: String,
     pub timestamp: String,
+}
+
+/// Full session data matching Python hermes_state.py schema.
+#[derive(Debug, Clone, Default)]
+pub struct SessionData {
+    pub id: String,
+    pub source: String,
+    pub user_id: Option<String>,
+    pub model: Option<String>,
+    pub model_config: Option<String>,
+    pub system_prompt: Option<String>,
+    pub parent_session_id: Option<String>,
+    pub started_at: String,
+    pub ended_at: Option<String>,
+    pub end_reason: Option<String>,
+    pub message_count: i64,
+    pub tool_call_count: i64,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub cache_read_tokens: i64,
+    pub cache_write_tokens: i64,
+    pub reasoning_tokens: i64,
+    pub cwd: Option<String>,
+    pub billing_provider: Option<String>,
+    pub billing_base_url: Option<String>,
+    pub billing_mode: Option<String>,
+    pub estimated_cost_usd: Option<f64>,
+    pub actual_cost_usd: Option<f64>,
+    pub cost_status: Option<String>,
+    pub cost_source: Option<String>,
+    pub pricing_version: Option<String>,
+    pub title: Option<String>,
+    pub api_call_count: i64,
+    pub handoff_state: Option<String>,
+    pub handoff_platform: Option<String>,
+    pub handoff_error: Option<String>,
+    pub rewind_count: i64,
+    pub archived: i64,
+}
+
+/// Full message data matching Python hermes_state.py schema.
+#[derive(Debug, Clone, Default)]
+pub struct MessageData {
+    pub id: i64,
+    pub session_id: String,
+    pub role: String,
+    pub content: Option<String>,
+    pub tool_call_id: Option<String>,
+    pub tool_calls: Option<String>,
+    pub tool_name: Option<String>,
+    pub timestamp: String,
+    pub token_count: Option<i64>,
+    pub finish_reason: Option<String>,
+    pub reasoning: Option<String>,
+    pub reasoning_content: Option<String>,
+    pub reasoning_details: Option<String>,
+    pub codex_reasoning_items: Option<String>,
+    pub codex_message_items: Option<String>,
+    pub platform_message_id: Option<String>,
+    pub observed: Option<i64>,
+    pub active: i64,
 }
 
 /// A session from the database (for listing).
@@ -1579,5 +2107,687 @@ mod tests {
         let events = db.get_session_events(session_id, None).unwrap();
         assert!(events.is_empty());
         assert!(db.get_tool_state(session_id, "tool1").is_none());
+    }
+
+    // === New Tests for Expanded Schema ===
+
+    #[test]
+    fn test_schema_version_tracking() {
+        let db = test_db();
+        let conn = db.conn.lock().unwrap();
+        let version: i64 = conn
+            .query_row("SELECT version FROM schema_version LIMIT 1", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn test_save_and_get_session_full() {
+        let db = test_db();
+        // Delete the test session first
+        db.delete_session("test-session").unwrap();
+
+        let session = SessionData {
+            id: "full-session".to_string(),
+            source: "test".to_string(),
+            user_id: Some("user123".to_string()),
+            model: Some("gpt-4".to_string()),
+            model_config: Some("{\"temperature\": 0.7}".to_string()),
+            system_prompt: Some("You are helpful.".to_string()),
+            parent_session_id: None,
+            started_at: "2024-01-01T00:00:00Z".to_string(),
+            ended_at: Some("2024-01-01T01:00:00Z".to_string()),
+            end_reason: Some("completed".to_string()),
+            message_count: 10,
+            tool_call_count: 5,
+            input_tokens: 1000,
+            output_tokens: 500,
+            cache_read_tokens: 100,
+            cache_write_tokens: 50,
+            reasoning_tokens: 200,
+            cwd: Some("/home/user/project".to_string()),
+            billing_provider: Some("openai".to_string()),
+            billing_base_url: None,
+            billing_mode: Some("api_key".to_string()),
+            estimated_cost_usd: Some(0.05),
+            actual_cost_usd: Some(0.048),
+            cost_status: Some("final".to_string()),
+            cost_source: Some("usage_api".to_string()),
+            pricing_version: Some("v1".to_string()),
+            title: Some("Test Session".to_string()),
+            api_call_count: 15,
+            handoff_state: None,
+            handoff_platform: None,
+            handoff_error: None,
+            rewind_count: 0,
+            archived: 0,
+        };
+
+        db.save_session_full(&session).unwrap();
+
+        // Verify by reading back with raw query
+        let conn = db.conn.lock().unwrap();
+        let retrieved: (Option<String>, Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT model, model_config, system_prompt FROM sessions WHERE id = ?1",
+                params!["full-session"],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(retrieved.0, Some("gpt-4".to_string()));
+        assert_eq!(retrieved.1, Some("{\"temperature\": 0.7}".to_string()));
+        assert_eq!(retrieved.2, Some("You are helpful.".to_string()));
+    }
+
+    #[test]
+    fn test_save_and_get_message_full() {
+        let db = test_db();
+        let session_id = "test-session";
+
+        let message = MessageData {
+            id: 0,
+            session_id: session_id.to_string(),
+            role: "assistant".to_string(),
+            content: Some("Here is the result.".to_string()),
+            tool_call_id: Some("call_abc123".to_string()),
+            tool_calls: Some("[{\"name\": \"bash\", \"args\": {\"command\": \"ls\"}}]".to_string()),
+            tool_name: Some("bash".to_string()),
+            timestamp: "2024-01-01T00:00:00Z".to_string(),
+            token_count: Some(50),
+            finish_reason: Some("tool_calls".to_string()),
+            reasoning: Some("Thinking about the problem...".to_string()),
+            reasoning_content: None,
+            reasoning_details: None,
+            codex_reasoning_items: None,
+            codex_message_items: None,
+            platform_message_id: None,
+            observed: Some(0),
+            active: 1,
+        };
+
+        db.save_message_full(&message).unwrap();
+
+        // Get full messages
+        let messages = db.get_session_messages_full(session_id).unwrap();
+        assert!(!messages.is_empty());
+        let msg = &messages[messages.len() - 1];
+        assert_eq!(msg.role, "assistant");
+        assert_eq!(msg.tool_call_id.as_deref(), Some("call_abc123"));
+        assert_eq!(msg.tool_name.as_deref(), Some("bash"));
+        assert_eq!(msg.token_count, Some(50));
+        assert_eq!(msg.finish_reason.as_deref(), Some("tool_calls"));
+        assert_eq!(
+            msg.reasoning.as_deref(),
+            Some("Thinking about the problem...")
+        );
+    }
+
+    #[test]
+    fn test_compression_locks() {
+        let db = test_db();
+        let session_id = "test-session";
+
+        // Initially not locked
+        assert!(!db.is_compression_locked(session_id));
+
+        // Acquire lock
+        let now = chrono::Utc::now().to_rfc3339();
+        let expires = (chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339();
+        db.acquire_compression_lock(session_id, "compressor-1", &now, &expires)
+            .unwrap();
+
+        // Now locked
+        assert!(db.is_compression_locked(session_id));
+
+        // Release lock
+        db.release_compression_lock(session_id).unwrap();
+        assert!(!db.is_compression_locked(session_id));
+    }
+
+    #[test]
+    fn test_state_meta() {
+        let db = test_db();
+
+        // Set and get
+        db.set_state_meta("last_sync", "2024-01-01T00:00:00Z")
+            .unwrap();
+        assert_eq!(
+            db.get_state_meta("last_sync"),
+            Some("2024-01-01T00:00:00Z".to_string())
+        );
+
+        // Update
+        db.set_state_meta("last_sync", "2024-01-02T00:00:00Z")
+            .unwrap();
+        assert_eq!(
+            db.get_state_meta("last_sync"),
+            Some("2024-01-02T00:00:00Z".to_string())
+        );
+
+        // Nonexistent
+        assert_eq!(db.get_state_meta("nonexistent"), None);
+    }
+
+    #[test]
+    fn test_reconcile_columns_adds_missing() {
+        // Create a DB with old schema, then init with new schema
+        let counter = DB_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "hermes_test_reconcile_{}_{}.db",
+            std::process::id(),
+            counter
+        ));
+        let _ = std::fs::remove_file(&path);
+
+        // Create with minimal schema
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE sessions (id TEXT PRIMARY KEY, title TEXT, source TEXT NOT NULL, started_at TEXT NOT NULL, ended_at TEXT NOT NULL);
+                 CREATE TABLE messages (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL, role TEXT NOT NULL, content TEXT NOT NULL, timestamp TEXT NOT NULL);",
+            )
+            .unwrap();
+            conn.close().unwrap();
+        }
+
+        // Now init with full schema — should reconcile columns
+        let db = Database::init(path.clone()).unwrap();
+
+        // Verify new columns exist by using save_session_full
+        let session = SessionData {
+            id: "reconcile-test".to_string(),
+            source: "test".to_string(),
+            model: Some("gpt-4".to_string()),
+            started_at: "2024-01-01T00:00:00Z".to_string(),
+            ended_at: Some("2024-01-01T01:00:00Z".to_string()),
+            ..Default::default()
+        };
+        db.save_session_full(&session).unwrap();
+
+        // Verify the model was saved
+        let model: Option<String> = {
+            let conn = db.conn.lock().unwrap();
+            conn.query_row(
+                "SELECT model FROM sessions WHERE id = ?1",
+                params!["reconcile-test"],
+                |row| row.get(0),
+            )
+            .unwrap()
+        };
+        assert_eq!(model, Some("gpt-4".to_string()));
+
+        // Cleanup
+        drop(db);
+        std::fs::remove_file(&path).ok();
+    }
+
+    // === Checkpoint CRUD ===
+
+    #[test]
+    fn test_checkpoint_store_and_list() {
+        let db = test_db();
+        let dir = std::env::temp_dir().join(format!("ckpt_dir_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).ok();
+        db.store_checkpoint("abc123hash", "2024-06-01T12:00:00Z", Some("test checkpoint"), dir.to_str().unwrap())
+            .unwrap();
+        let list = db.list_checkpoints(dir.to_str().unwrap()).unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].hash, "abc123hash");
+        assert_eq!(list[0].reason.as_deref(), Some("test checkpoint"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_checkpoint_get_by_hash() {
+        let db = test_db();
+        let dir = std::env::temp_dir().join(format!("ckpt_get_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).ok();
+        db.store_checkpoint("hash_get", "2024-06-01T12:00:00Z", Some("reason"), dir.to_str().unwrap())
+            .unwrap();
+        let ckpt = db.get_checkpoint("hash_get").unwrap();
+        assert!(ckpt.is_some());
+        assert_eq!(ckpt.unwrap().hash, "hash_get");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_checkpoint_delete() {
+        let db = test_db();
+        let dir = std::env::temp_dir().join(format!("ckpt_del_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).ok();
+        db.store_checkpoint("hash_del", "2024-06-01T12:00:00Z", Some("to delete"), dir.to_str().unwrap())
+            .unwrap();
+        db.delete_checkpoint("hash_del").unwrap();
+        let ckpt = db.get_checkpoint("hash_del").unwrap();
+        assert!(ckpt.is_none());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_checkpoint_list_empty() {
+        let db = test_db();
+        let dir = std::env::temp_dir().join(format!("ckpt_empty_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).ok();
+        let list = db.list_checkpoints(dir.to_str().unwrap()).unwrap();
+        assert!(list.is_empty());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_checkpoint_duplicate_overwrite() {
+        let db = test_db();
+        let dir = std::env::temp_dir().join(format!("ckpt_dup_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).ok();
+        db.store_checkpoint("same_hash", "2024-06-01T12:00:00Z", Some("first"), dir.to_str().unwrap())
+            .unwrap();
+        db.store_checkpoint("same_hash", "2024-06-02T12:00:00Z", Some("second"), dir.to_str().unwrap())
+            .unwrap();
+        let list = db.list_checkpoints(dir.to_str().unwrap()).unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].reason.as_deref(), Some("second"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // === Session-level search ===
+
+    #[test]
+    fn test_search_sessions_basic() {
+        let db = test_db();
+        db.save_session("s1", Some("Alpha Project"), "test", "2024-01-01T00:00:00Z", "2024-01-01T00:00:00Z").unwrap();
+        db.save_message("s1", "user", "alpha unique searchable content", "2024-01-01T00:00:00Z").unwrap();
+        let results = db.search_sessions("alpha", 10).unwrap();
+        assert!(!results.is_empty());
+    }
+
+    #[test]
+    fn test_search_sessions_no_match() {
+        let db = test_db();
+        db.save_session("s1", Some("Unique Name"), "test", "2024-01-01T00:00:00Z", "2024-01-01T00:00:00Z").unwrap();
+        db.save_message("s1", "user", "hello world", "2024-01-01T00:00:00Z").unwrap();
+        let results = db.search_sessions("zzz_nonexistent_zzz", 10).unwrap();
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_search_sessions_limit() {
+        let db = test_db();
+        for i in 0..10 {
+            let id = format!("s{}", i);
+            db.save_session(&id, Some(&format!("Session {}", i)), "test", "2024-01-01T00:00:00Z", "2024-01-01T00:00:00Z").unwrap();
+            db.save_message(&id, "user", "alpha searchable", "2024-01-01T00:00:00Z").unwrap();
+        }
+        let results = db.search_sessions("alpha", 3).unwrap();
+        assert!(results.len() <= 3);
+    }
+
+    // === Event filtering ===
+
+    #[test]
+    fn test_get_events_by_type() {
+        let db = test_db();
+        db.record_event("test-session", "tool_call", &serde_json::json!({"tool": "bash"})).unwrap();
+        db.record_event("test-session", "llm_call", &serde_json::json!({"model": "gpt-4"})).unwrap();
+        db.record_event("test-session", "tool_call", &serde_json::json!({"tool": "ls"})).unwrap();
+        let tool_events = db.get_events_by_type("tool_call", None).unwrap();
+        assert_eq!(tool_events.len(), 2);
+        let llm_events = db.get_events_by_type("llm_call", None).unwrap();
+        assert_eq!(llm_events.len(), 1);
+    }
+
+    #[test]
+    fn test_record_event_and_get() {
+        let db = test_db();
+        db.record_event("test-session", "test_event", &serde_json::json!({"key": "value"})).unwrap();
+        let events = db.get_session_events("test-session", Some(10)).unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event_type, "test_event");
+    }
+
+    // === Session title update ===
+
+    #[test]
+    fn test_update_session_title() {
+        let db = test_db();
+        db.update_session_title("test-session", "New Title").unwrap();
+        let sessions = db.list_sessions(10).unwrap();
+        let s = sessions.iter().find(|s| s.id == "test-session").unwrap();
+        assert_eq!(s.title.as_deref(), Some("New Title"));
+    }
+
+    // === Tag operations ===
+
+    #[test]
+    fn test_add_remove_tags() {
+        let db = test_db();
+        db.add_session_tag("test-session", "rust").unwrap();
+        db.add_session_tag("test-session", "testing").unwrap();
+        let tags = db.get_session_tags("test-session").unwrap();
+        assert!(tags.contains(&"rust".to_string()));
+        assert!(tags.contains(&"testing".to_string()));
+        db.remove_session_tag("test-session", "rust").unwrap();
+        let tags = db.get_session_tags("test-session").unwrap();
+        assert!(!tags.contains(&"rust".to_string()));
+        assert!(tags.contains(&"testing".to_string()));
+    }
+
+    #[test]
+    fn test_find_sessions_by_tag() {
+        let db = test_db();
+        db.add_session_tag("test-session", "searchable").unwrap();
+        let found = db.find_sessions_by_tag("searchable").unwrap();
+        assert!(!found.is_empty());
+    }
+
+    #[test]
+    fn test_duplicate_tags() {
+        let db = test_db();
+        db.add_session_tag("test-session", "dup").unwrap();
+        db.add_session_tag("test-session", "dup").unwrap();
+        let tags = db.get_session_tags("test-session").unwrap();
+        assert_eq!(tags.iter().filter(|t| t.as_str() == "dup").count(), 1);
+    }
+
+    // === Merge sessions ===
+
+    #[test]
+    fn test_merge_sessions_basic() {
+        let db = test_db();
+        db.save_session("merge_source", Some("Source"), "test", "2024-01-01T00:00:00Z", "2024-01-01T00:00:00Z").unwrap();
+        db.save_message("merge_source", "user", "hello", "2024-01-01T00:00:00Z").unwrap();
+        db.save_message("merge_source", "assistant", "hi", "2024-01-01T00:00:01Z").unwrap();
+        db.merge_sessions("test-session", &["merge_source"]).unwrap();
+        let msgs = db.get_session_messages("test-session").unwrap();
+        assert!(msgs.len() >= 2);
+    }
+
+    // === Compression lock ===
+
+    #[test]
+    fn test_compression_lock_acquire_release() {
+        let db = test_db();
+        db.acquire_compression_lock("test-session", "holder1", "2024-01-01T00:00:00Z", "2099-01-01T00:00:00Z")
+            .unwrap();
+        assert!(db.is_compression_locked("test-session"));
+        db.release_compression_lock("test-session").unwrap();
+        assert!(!db.is_compression_locked("test-session"));
+    }
+
+    // === State meta ===
+
+    #[test]
+    fn test_set_get_state_meta() {
+        let db = test_db();
+        db.set_state_meta("last_model", "gpt-4").unwrap();
+        let val = db.get_state_meta("last_model");
+        assert_eq!(val.as_deref(), Some("gpt-4"));
+    }
+
+    #[test]
+    fn test_state_meta_overwrite() {
+        let db = test_db();
+        db.set_state_meta("key", "v1").unwrap();
+        db.set_state_meta("key", "v2").unwrap();
+        let val = db.get_state_meta("key");
+        assert_eq!(val.as_deref(), Some("v2"));
+    }
+
+    // === FTS search ===
+
+    #[test]
+    fn test_search_messages_fts_basic() {
+        let db = test_db();
+        db.save_message("test-session", "user", "the quick brown fox", "2024-01-01T00:00:00Z")
+            .unwrap();
+        let results = db.search_messages_fts("quick brown", None, Some(10)).unwrap();
+        assert!(!results.is_empty());
+    }
+
+    #[test]
+    fn test_search_messages_fts_no_match() {
+        let db = test_db();
+        db.save_message("test-session", "user", "hello world", "2024-01-01T00:00:00Z")
+            .unwrap();
+        let results = db.search_messages_fts("xyzzy_nonexistent", None, Some(10)).unwrap();
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_search_messages_fts_with_session_filter() {
+        let db = test_db();
+        db.save_message("test-session", "user", "unique_term_alpha", "2024-01-01T00:00:00Z")
+            .unwrap();
+        db.save_session("other", Some("Other"), "test", "2024-01-01T00:00:00Z", "2024-01-01T00:00:00Z")
+            .unwrap();
+        db.save_message("other", "user", "unique_term_alpha", "2024-01-01T00:00:00Z")
+            .unwrap();
+        let results = db.search_messages_fts("unique_term_alpha", Some("test-session"), Some(10)).unwrap();
+        assert!(results.iter().all(|r| r.session_id == "test-session"));
+    }
+
+    // === Recent sessions ===
+
+    #[test]
+    fn test_get_recent_sessions() {
+        let db = test_db();
+        for i in 0..5 {
+            db.save_session(&format!("recent_{}", i), Some(&format!("Session {}", i)), "test",
+                "2024-01-01T00:00:00Z", "2024-01-01T00:00:00Z").unwrap();
+        }
+        let recent = db.get_recent_sessions(3).unwrap();
+        assert!(recent.len() <= 3);
+    }
+
+    #[test]
+    fn test_get_recent_sessions_empty() {
+        let counter = DB_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!("hermes_test_recent_{}_{}.db", std::process::id(), counter));
+        let _ = std::fs::remove_file(&path);
+        let db = Database::init(path).unwrap();
+        let recent = db.get_recent_sessions(10).unwrap();
+        assert!(recent.is_empty());
+    }
+
+    // === Session count ===
+
+    #[test]
+    fn test_get_session_count() {
+        let db = test_db();
+        let before = db.get_session_count().unwrap();
+        db.save_session("count_new", Some("Count"), "test", "2024-01-01T00:00:00Z", "2024-01-01T00:00:00Z").unwrap();
+        let after = db.get_session_count().unwrap();
+        assert_eq!(after, before + 1);
+    }
+
+    // === Reconcile columns ===
+
+    #[test]
+    fn test_reconcile_adds_missing_column() {
+        let counter = DB_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!("hermes_test_reconcile_extra_{}_{}.db", std::process::id(), counter));
+        let _ = std::fs::remove_file(&path);
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS schema_version (version INTEGER);
+                 CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, title TEXT, source TEXT NOT NULL);
+                 CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY, session_id TEXT NOT NULL, role TEXT NOT NULL, content TEXT NOT NULL, timestamp TEXT NOT NULL);",
+            ).unwrap();
+            conn.close().unwrap();
+        }
+        let db = Database::init(path.clone()).unwrap();
+        let session = SessionData {
+            id: "reconcile2".to_string(),
+            source: "test".to_string(),
+            model: Some("test-model".to_string()),
+            started_at: "2024-01-01T00:00:00Z".to_string(),
+            ..Default::default()
+        };
+        db.save_session_full(&session).unwrap();
+        let model: Option<String> = {
+            let conn = db.conn.lock().unwrap();
+            conn.query_row("SELECT model FROM sessions WHERE id = ?1", params!["reconcile2"], |row| row.get(0)).unwrap()
+        };
+        assert_eq!(model, Some("test-model".to_string()));
+        drop(db);
+        std::fs::remove_file(&path).ok();
+    }
+
+    // === Full session roundtrip ===
+
+    #[test]
+    fn test_save_get_session_full_roundtrip() {
+        let db = test_db();
+        db.delete_session("test-session").unwrap();
+        let session = SessionData {
+            id: "roundtrip".to_string(),
+            source: "rt_test".to_string(),
+            user_id: Some("user_rt".to_string()),
+            model: Some("gpt-4-rt".to_string()),
+            model_config: Some("{\"temp\": 0.5}".to_string()),
+            system_prompt: Some("Be helpful".to_string()),
+            parent_session_id: None,
+            started_at: "2024-06-01T00:00:00Z".to_string(),
+            ended_at: Some("2024-06-01T01:00:00Z".to_string()),
+            end_reason: Some("completed".to_string()),
+            message_count: 25,
+            tool_call_count: 12,
+            input_tokens: 5000,
+            output_tokens: 2500,
+            cache_read_tokens: 500,
+            cache_write_tokens: 250,
+            reasoning_tokens: 1000,
+            cwd: Some("/workspace".to_string()),
+            billing_provider: Some("openai".to_string()),
+            billing_base_url: None,
+            billing_mode: Some("api_key".to_string()),
+            estimated_cost_usd: Some(0.15),
+            actual_cost_usd: Some(0.148),
+            cost_status: Some("final".to_string()),
+            cost_source: Some("usage_api".to_string()),
+            pricing_version: Some("v2".to_string()),
+            title: Some("RT Session".to_string()),
+            api_call_count: 30,
+            handoff_state: None,
+            handoff_platform: None,
+            handoff_error: None,
+            rewind_count: 2,
+            archived: 0,
+        };
+        db.save_session_full(&session).unwrap();
+        let conn = db.conn.lock().unwrap();
+        let model: Option<String> = conn.query_row("SELECT model FROM sessions WHERE id = 'roundtrip'", [], |r| r.get(0)).unwrap();
+        assert_eq!(model, Some("gpt-4-rt".to_string()));
+        let tokens: i64 = conn.query_row("SELECT input_tokens FROM sessions WHERE id = 'roundtrip'", [], |r| r.get(0)).unwrap();
+        assert_eq!(tokens, 5000);
+    }
+
+    // === Full message roundtrip ===
+
+    #[test]
+    fn test_save_get_message_full_roundtrip() {
+        let db = test_db();
+        let msg = MessageData {
+            id: 0,
+            session_id: "test-session".to_string(),
+            role: "assistant".to_string(),
+            content: Some("RT message content".to_string()),
+            tool_call_id: Some("call_rt123".to_string()),
+            tool_calls: Some("[]".to_string()),
+            tool_name: Some("test_tool".to_string()),
+            timestamp: "2024-06-01T00:00:00Z".to_string(),
+            token_count: Some(100),
+            finish_reason: Some("stop".to_string()),
+            reasoning: None,
+            reasoning_content: Some("thinking...".to_string()),
+            reasoning_details: None,
+            codex_reasoning_items: None,
+            codex_message_items: None,
+            platform_message_id: None,
+            observed: None,
+            active: 1,
+        };
+        db.save_message_full(&msg).unwrap();
+        let msgs = db.get_session_messages_full("test-session").unwrap();
+        let found = msgs.iter().find(|m| m.content.as_deref() == Some("RT message content"));
+        assert!(found.is_some());
+        let m = found.unwrap();
+        assert_eq!(m.tool_call_id.as_deref(), Some("call_rt123"));
+        assert_eq!(m.tool_name.as_deref(), Some("test_tool"));
+        assert_eq!(m.token_count, Some(100));
+    }
+
+    // === Tool state tests ===
+
+    #[test]
+    fn test_tool_state_set_get_clear() {
+        let db = test_db();
+        db.set_tool_state("test-session", "my_tool", &serde_json::json!({"status": "active"})).unwrap();
+        let state = db.get_tool_state("test-session", "my_tool");
+        assert!(state.is_some());
+        assert_eq!(state.unwrap()["status"], "active");
+        db.clear_tool_state("test-session", "my_tool").unwrap();
+        assert!(db.get_tool_state("test-session", "my_tool").is_none());
+    }
+
+    #[test]
+    fn test_clear_all_tool_states() {
+        let db = test_db();
+        db.set_tool_state("test-session", "t1", &serde_json::json!({"a": 1})).unwrap();
+        db.set_tool_state("test-session", "t2", &serde_json::json!({"b": 2})).unwrap();
+        db.clear_all_tool_states("test-session").unwrap();
+        assert!(db.get_tool_state("test-session", "t1").is_none());
+        assert!(db.get_tool_state("test-session", "t2").is_none());
+    }
+
+    // === Metadata edge cases ===
+
+    #[test]
+    fn test_get_metadata_nonexistent() {
+        let db = test_db();
+        let val = db.get_session_metadata("test-session", "no_such_key");
+        assert!(val.is_none());
+    }
+
+    #[test]
+    fn test_delete_metadata() {
+        let db = test_db();
+        db.set_session_metadata("test-session", "del_key", "del_val").unwrap();
+        db.delete_session_metadata("test-session", "del_key").unwrap();
+        assert!(db.get_session_metadata("test-session", "del_key").is_none());
+    }
+
+    // === Path ===
+
+    #[test]
+    fn test_database_path() {
+        let counter = DB_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!("hermes_test_path_{}_{}.db", std::process::id(), counter));
+        let _ = std::fs::remove_file(&path);
+        let db = Database::init(path.clone()).unwrap();
+        assert_eq!(db.path(), Some(path));
+    }
+
+    // === Active sessions ===
+
+    #[test]
+    fn test_get_active_sessions() {
+        let db = test_db();
+        let now = chrono::Utc::now().to_rfc3339();
+        db.save_session("active_1", Some("Active"), "test", &now, &now).unwrap();
+        let active = db.get_active_sessions(60 * 24 * 365).unwrap();
+        assert!(!active.is_empty());
+    }
+
+    // === Update title edge cases ===
+
+    #[test]
+    fn test_update_session_title_empty() {
+        let db = test_db();
+        db.update_session_title("test-session", "").unwrap();
+        let sessions = db.list_sessions(10).unwrap();
+        let s = sessions.iter().find(|s| s.id == "test-session").unwrap();
+        assert_eq!(s.title.as_deref(), Some(""));
     }
 }

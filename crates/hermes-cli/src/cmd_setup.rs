@@ -1118,7 +1118,11 @@ async fn step_tts(config: &mut AppConfig, _reconfigure: bool) -> Result<()> {
 }
 
 /// Download a file from URL to a local path.
-async fn download_file_to(client: &reqwest::Client, url: &str, dest: &std::path::Path) -> Result<()> {
+async fn download_file_to(
+    client: &reqwest::Client,
+    url: &str,
+    dest: &std::path::Path,
+) -> Result<()> {
     let resp = client.get(url).send().await?;
     if !resp.status().is_success() {
         anyhow::bail!("HTTP {}", resp.status());
@@ -1134,10 +1138,16 @@ async fn step_browser_and_skills(config: &mut AppConfig) -> Result<()> {
 
     // ── Browser ──────────────────────────────────────────────────────────────
     let bin_path = hermes_core::tools::browser_downloader::BrowserDownloader::default_bin_path();
-    let browser_ok = hermes_core::tools::browser_downloader::BrowserDownloader::verify_binary(&bin_path).await.is_ok();
+    let browser_ok =
+        hermes_core::tools::browser_downloader::BrowserDownloader::verify_binary(&bin_path)
+            .await
+            .is_ok();
 
     if browser_ok {
-        print_success(&format!("Lightpanda browser already installed at {}", bin_path.display()));
+        print_success(&format!(
+            "Lightpanda browser already installed at {}",
+            bin_path.display()
+        ));
     } else if prompt_yes_no("Install Lightpanda browser for web automation?", true)? {
         print_info("Downloading Lightpanda browser binary...");
         match hermes_core::tools::browser_downloader::BrowserDownloader::download_binary().await {
@@ -1146,7 +1156,10 @@ async fn step_browser_and_skills(config: &mut AppConfig) -> Result<()> {
                 print_success(&format!("Browser installed at {}", path.display()));
             }
             Err(e) => {
-                print_warning(&format!("Browser install failed: {}. Will retry on first use.", e));
+                print_warning(&format!(
+                    "Browser install failed: {}. Will retry on first use.",
+                    e
+                ));
             }
         }
     }
@@ -1155,17 +1168,32 @@ async fn step_browser_and_skills(config: &mut AppConfig) -> Result<()> {
     let skills_dir = &config.skills.root_dir;
     if skills_dir.exists() {
         let count = std::fs::read_dir(skills_dir)
-            .map(|entries| entries.filter_map(|e| e.ok()).filter(|e| e.path().is_dir()).count())
+            .map(|entries| {
+                entries
+                    .filter_map(|e| e.ok())
+                    .filter(|e| e.path().is_dir())
+                    .count()
+            })
             .unwrap_or(0);
         if count > 0 {
-            print_success(&format!("Skills directory: {} ({} skills)", skills_dir.display(), count));
+            print_success(&format!(
+                "Skills directory: {} ({} skills)",
+                skills_dir.display(),
+                count
+            ));
         } else {
-            print_warning(&format!("Skills directory exists but is empty: {}", skills_dir.display()));
+            print_warning(&format!(
+                "Skills directory exists but is empty: {}",
+                skills_dir.display()
+            ));
             print_info("Add skills with: hermes skills install <name>");
         }
     } else {
         std::fs::create_dir_all(skills_dir).ok();
-        print_info(&format!("Created skills directory: {}", skills_dir.display()));
+        print_info(&format!(
+            "Created skills directory: {}",
+            skills_dir.display()
+        ));
         print_info("Add skills with: hermes skills install <name>");
     }
 

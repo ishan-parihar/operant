@@ -263,6 +263,10 @@ pub fn builtin_tool_names() -> Vec<&'static str> {
         "spotify_playlists",
         "spotify_albums",
         "spotify_library",
+        "tdg_search",
+        "tdg_create",
+        "tdg_connect",
+        "tdg_get_related",
     ]
 }
 

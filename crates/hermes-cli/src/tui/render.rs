@@ -5,20 +5,22 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph, Tabs, Wrap};
 use ratatui::Frame;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
+use crate::tui::skin;
 use crate::tui::state::{
     ActivePanel, AppState, InputMode, LayoutMode, McpServerItem, SkillItem, Tone, TranscriptEntry,
 };
 
 const BG: Color = Color::Black;
-const PANEL: Color = Color::Rgb(26, 24, 22);
-const PANEL_ALT: Color = Color::Rgb(18, 17, 15);
-const ACCENT: Color = Color::Rgb(232, 165, 54);
-const TEXT: Color = Color::Rgb(230, 228, 222);
-const MUTED: Color = Color::Rgb(134, 132, 126);
-const HELP: Color = Color::Rgb(188, 184, 176);
-const SUCCESS: Color = Color::Rgb(115, 185, 115);
-const ERROR: Color = Color::Rgb(220, 98, 87);
-const WARN: Color = Color::Rgb(208, 170, 82);
+
+fn skin_accent() -> Color { skin::get_active().accent() }
+fn skin_text() -> Color { skin::get_active().text() }
+fn skin_muted() -> Color { skin::get_active().muted() }
+fn skin_help() -> Color { skin::get_active().help() }
+fn skin_success() -> Color { skin::get_active().success() }
+fn skin_error() -> Color { skin::get_active().error() }
+fn skin_warn() -> Color { skin::get_active().warn() }
+fn skin_panel() -> Color { skin::get_active().panel() }
+fn skin_panel_alt() -> Color { skin::get_active().panel_alt() }
 const CONSTRAINED_WIDTH: u16 = 65;
 const CONSTRAINED_HEIGHT: u16 = 20;
 const DESKTOP_WIDTH: u16 = 120;
@@ -107,11 +109,11 @@ fn render_landing(frame: &mut Frame<'_>, state: &AppState, area: Rect) {
     let title = Paragraph::new(Text::from(vec![
         Line::from(Span::styled(
             state.persistent.config.tui.landing_title.clone(),
-            Style::default().fg(TEXT).add_modifier(Modifier::BOLD),
+            Style::default().fg(skin_text()).add_modifier(Modifier::BOLD),
         )),
         Line::from(Span::styled(
             "prompt-first terminal agent",
-            Style::default().fg(MUTED),
+            Style::default().fg(skin_muted()),
         )),
     ]))
     .style(Style::default().bg(BG))
@@ -120,9 +122,9 @@ fn render_landing(frame: &mut Frame<'_>, state: &AppState, area: Rect) {
 
     let prompt_block = Block::default()
         .borders(Borders::LEFT | Borders::BOTTOM)
-        .border_style(Style::default().fg(ACCENT))
-        .style(Style::default().bg(PANEL))
-        .title(Span::styled(" prompt ", Style::default().fg(ACCENT)));
+        .border_style(Style::default().fg(skin_accent()))
+        .style(Style::default().bg(skin_panel()))
+        .title(Span::styled(" prompt ", Style::default().fg(skin_accent())));
     let prompt_text = if state.ui.prompt_input.is_empty() {
         state.persistent.config.tui.prompt_placeholder.clone()
     } else {
@@ -133,9 +135,9 @@ fn render_landing(frame: &mut Frame<'_>, state: &AppState, area: Rect) {
             prompt_text,
             Style::default()
                 .fg(if state.ui.prompt_input.is_empty() {
-                    MUTED
+                    skin_muted()
                 } else {
-                    TEXT
+                    skin_text()
                 })
                 .add_modifier(if matches!(state.ui.input_mode, InputMode::Prompt) {
                     Modifier::BOLD
@@ -147,12 +149,12 @@ fn render_landing(frame: &mut Frame<'_>, state: &AppState, area: Rect) {
         Line::from(vec![
             Span::styled(
                 "Plan",
-                Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+                Style::default().fg(skin_accent()).add_modifier(Modifier::BOLD),
             ),
             Span::raw(" · "),
             Span::styled(
                 truncate_display(&state.persistent.behavior.model, area.width as usize / 2),
-                Style::default().fg(TEXT),
+                Style::default().fg(skin_text()),
             ),
         ]),
     ]))
@@ -169,19 +171,19 @@ fn render_landing(frame: &mut Frame<'_>, state: &AppState, area: Rect) {
     let footer = Paragraph::new(Text::from(vec![Line::from(vec![
         Span::styled(
             "tab",
-            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+            Style::default().fg(skin_accent()).add_modifier(Modifier::BOLD),
         ),
-        Span::styled(" panels   ", Style::default().fg(HELP)),
+        Span::styled(" panels   ", Style::default().fg(skin_help())),
         Span::styled(
             "i",
-            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+            Style::default().fg(skin_accent()).add_modifier(Modifier::BOLD),
         ),
-        Span::styled(" prompt   ", Style::default().fg(HELP)),
+        Span::styled(" prompt   ", Style::default().fg(skin_help())),
         Span::styled(
             "enter",
-            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+            Style::default().fg(skin_accent()).add_modifier(Modifier::BOLD),
         ),
-        Span::styled(" run", Style::default().fg(HELP)),
+        Span::styled(" run", Style::default().fg(skin_help())),
     ])]))
     .style(Style::default().bg(BG))
     .alignment(Alignment::Right);
@@ -202,11 +204,11 @@ fn build_compact_title<'a>(state: &'a AppState) -> Paragraph<'a> {
     Paragraph::new(Text::from(vec![
         Line::from(Span::styled(
             state.persistent.config.tui.landing_title.clone(),
-            Style::default().fg(TEXT).add_modifier(Modifier::BOLD),
+            Style::default().fg(skin_text()).add_modifier(Modifier::BOLD),
         )),
         Line::from(Span::styled(
             "prompt-first terminal agent",
-            Style::default().fg(MUTED),
+            Style::default().fg(skin_muted()),
         )),
     ]))
     .style(Style::default().bg(BG))
@@ -224,9 +226,9 @@ fn build_compact_prompt<'a>(state: &'a AppState, area_width: u16) -> Paragraph<'
             prompt_text,
             Style::default()
                 .fg(if state.ui.prompt_input.is_empty() {
-                    MUTED
+                    skin_muted()
                 } else {
-                    TEXT
+                    skin_text()
                 })
                 .add_modifier(if matches!(state.ui.input_mode, InputMode::Prompt) {
                     Modifier::BOLD
@@ -238,12 +240,12 @@ fn build_compact_prompt<'a>(state: &'a AppState, area_width: u16) -> Paragraph<'
         Line::from(vec![
             Span::styled(
                 "Plan",
-                Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+                Style::default().fg(skin_accent()).add_modifier(Modifier::BOLD),
             ),
             Span::raw(" · "),
             Span::styled(
                 truncate_display(&state.persistent.behavior.model, area_width as usize / 2),
-                Style::default().fg(TEXT),
+                Style::default().fg(skin_text()),
             ),
         ]),
     ]))
@@ -342,9 +344,9 @@ fn render_landing_constrained(frame: &mut Frame<'_>, state: &AppState, area: Rec
                 &state.persistent.config.tui.landing_title,
                 area.width as usize,
             ),
-            Style::default().fg(TEXT).add_modifier(Modifier::BOLD),
+            Style::default().fg(skin_text()).add_modifier(Modifier::BOLD),
         ),
-        Span::styled("  prompt-first", Style::default().fg(MUTED)),
+        Span::styled("  prompt-first", Style::default().fg(skin_muted())),
     ]))
     .style(Style::default().bg(BG))
     .alignment(Alignment::Left)
@@ -361,9 +363,9 @@ fn render_landing_constrained(frame: &mut Frame<'_>, state: &AppState, area: Rec
             prompt_text,
             Style::default()
                 .fg(if state.ui.prompt_input.is_empty() {
-                    MUTED
+                    skin_muted()
                 } else {
-                    TEXT
+                    skin_text()
                 })
                 .add_modifier(if matches!(state.ui.input_mode, InputMode::Prompt) {
                     Modifier::BOLD
@@ -374,7 +376,7 @@ fn render_landing_constrained(frame: &mut Frame<'_>, state: &AppState, area: Rec
         Line::from(vec![
             Span::styled(
                 "Plan",
-                Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+                Style::default().fg(skin_accent()).add_modifier(Modifier::BOLD),
             ),
             Span::raw(" "),
             Span::styled(
@@ -382,7 +384,7 @@ fn render_landing_constrained(frame: &mut Frame<'_>, state: &AppState, area: Rec
                     &state.persistent.behavior.model,
                     area.width.saturating_sub(7) as usize,
                 ),
-                Style::default().fg(TEXT),
+                Style::default().fg(skin_text()),
             ),
         ]),
     ]))
@@ -576,33 +578,48 @@ fn build_constrained_layout(area: Rect) -> ConstrainedWorkspaceLayout {
 }
 
 fn header_widget(state: &AppState) -> Paragraph<'_> {
+    let mut second_line = vec![
+        Span::styled("status ", Style::default().fg(skin_muted())),
+        Span::styled(state.session.status.clone(), Style::default().fg(skin_text())),
+    ];
+
+    if state.session.total_tokens > 0 {
+        second_line.push(Span::raw("  "));
+        second_line.push(Span::styled(
+            format!(
+                "{} in / {} out / {} total",
+                state.session.input_tokens,
+                state.session.output_tokens,
+                state.session.total_tokens,
+            ),
+            Style::default().fg(skin_muted()),
+        ));
+    }
+
     Paragraph::new(Text::from(vec![
         Line::from(vec![
             Span::styled(
                 " hermes ",
                 Style::default()
                     .fg(BG)
-                    .bg(ACCENT)
+                    .bg(skin_accent())
                     .add_modifier(Modifier::BOLD),
             ),
             Span::raw(" "),
             Span::styled(
                 truncate_display(&state.persistent.behavior.model, 42),
-                Style::default().fg(TEXT).add_modifier(Modifier::BOLD),
+                Style::default().fg(skin_text()).add_modifier(Modifier::BOLD),
             ),
             Span::raw("  "),
-            Span::styled(state.ui.active_panel.title(), Style::default().fg(ACCENT)),
+            Span::styled(state.ui.active_panel.title(), Style::default().fg(skin_accent())),
         ]),
-        Line::from(vec![
-            Span::styled("status ", Style::default().fg(MUTED)),
-            Span::styled(state.session.status.clone(), Style::default().fg(TEXT)),
-        ]),
+        Line::from(second_line),
     ]))
     .block(
         Block::default()
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(MUTED))
-            .style(Style::default().bg(PANEL_ALT)),
+            .border_style(Style::default().fg(skin_muted()))
+            .style(Style::default().bg(skin_panel_alt())),
     )
 }
 
@@ -613,18 +630,18 @@ fn constrained_header_widget(state: &AppState, width: u16) -> Paragraph<'_> {
             " hermes ",
             Style::default()
                 .fg(BG)
-                .bg(ACCENT)
+                .bg(skin_accent())
                 .add_modifier(Modifier::BOLD),
         ),
         Span::raw(" "),
         Span::styled(
             truncate_display(&state.persistent.behavior.model, model_width),
-            Style::default().fg(TEXT).add_modifier(Modifier::BOLD),
+            Style::default().fg(skin_text()).add_modifier(Modifier::BOLD),
         ),
         Span::raw(" "),
-        Span::styled(state.ui.active_panel.title(), Style::default().fg(ACCENT)),
+        Span::styled(state.ui.active_panel.title(), Style::default().fg(skin_accent())),
     ]))
-    .style(Style::default().bg(PANEL_ALT))
+    .style(Style::default().bg(skin_panel_alt()))
     .wrap(Wrap { trim: true })
 }
 
@@ -658,7 +675,7 @@ fn conversation_lines(state: &AppState) -> Vec<Line<'static>> {
         lines.push(Line::from(vec![
             Span::styled(
                 "Assistant",
-                Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+                Style::default().fg(skin_accent()).add_modifier(Modifier::BOLD),
             ),
             Span::raw(" "),
             Span::styled(
@@ -667,7 +684,7 @@ fn conversation_lines(state: &AppState) -> Vec<Line<'static>> {
                 } else {
                     "(responding)"
                 },
-                Style::default().fg(MUTED),
+                Style::default().fg(skin_muted()),
             ),
         ]));
         lines.extend(render_message_body(
@@ -682,7 +699,7 @@ fn conversation_lines(state: &AppState) -> Vec<Line<'static>> {
     if lines.is_empty() {
         lines.push(Line::from(Span::styled(
             "No conversation yet. Press i and type a prompt.",
-            Style::default().fg(MUTED),
+            Style::default().fg(skin_muted()),
         )));
     }
 
@@ -694,12 +711,12 @@ fn reasoning_widget(state: &AppState) -> Paragraph<'_> {
         if state.persistent.behavior.show_reasoning {
             vec![Line::from(Span::styled(
                 "Reasoning pane waiting for structured thinking.",
-                Style::default().fg(MUTED),
+                Style::default().fg(skin_muted()),
             ))]
         } else {
             vec![Line::from(Span::styled(
                 "Reasoning display disabled.",
-                Style::default().fg(MUTED),
+                Style::default().fg(skin_muted()),
             ))]
         }
     } else {
@@ -731,7 +748,7 @@ fn activity_widget(state: &AppState) -> Paragraph<'_> {
     if lines.is_empty() {
         lines.push(Line::from(Span::styled(
             "No activity yet.",
-            Style::default().fg(MUTED),
+            Style::default().fg(skin_muted()),
         )));
     }
 
@@ -744,7 +761,9 @@ fn render_activity_entry(entry: &crate::tui::state::ActivityItem) -> Vec<Line<'s
     let color = tone_color(entry.tone);
 
     if is_tool_activity(&entry.label) {
-        let title = truncate_text(&entry.label, 36);
+        let tool_name = entry.label.strip_prefix("Tool ").unwrap_or(&entry.label);
+        let emoji = tool_emoji(tool_name);
+        let title = format!("{} {}", emoji, truncate_text(tool_name, 32));
         let body = truncate_text(&entry.body, 96);
         return vec![
             Line::from(vec![
@@ -756,7 +775,7 @@ fn render_activity_entry(entry: &crate::tui::state::ActivityItem) -> Vec<Line<'s
             ]),
             Line::from(vec![
                 Span::styled("│ ", Style::default().fg(color)),
-                Span::styled(body, Style::default().fg(TEXT)),
+                Span::styled(body, Style::default().fg(skin_text())),
             ]),
             Line::from(Span::styled("╰─", Style::default().fg(color))),
         ];
@@ -764,12 +783,12 @@ fn render_activity_entry(entry: &crate::tui::state::ActivityItem) -> Vec<Line<'s
 
     if entry.label == "Thinking" {
         return vec![Line::from(vec![
-            Span::styled("▎ ", Style::default().fg(MUTED)),
+            Span::styled("▎ ", Style::default().fg(skin_muted())),
             Span::styled(
                 "Thinking: ",
-                Style::default().fg(HELP).add_modifier(Modifier::BOLD),
+                Style::default().fg(skin_help()).add_modifier(Modifier::BOLD),
             ),
-            Span::styled(truncate_text(&entry.body, 88), Style::default().fg(HELP)),
+            Span::styled(truncate_text(&entry.body, 88), Style::default().fg(skin_help())),
         ])];
     }
 
@@ -779,9 +798,27 @@ fn render_activity_entry(entry: &crate::tui::state::ActivityItem) -> Vec<Line<'s
             entry.label.clone(),
             Style::default().fg(color).add_modifier(Modifier::BOLD),
         ),
-        Span::styled(": ", Style::default().fg(MUTED)),
-        Span::styled(truncate_text(&entry.body, 72), Style::default().fg(TEXT)),
+        Span::styled(": ", Style::default().fg(skin_muted())),
+        Span::styled(truncate_text(&entry.body, 72), Style::default().fg(skin_text())),
     ])]
+}
+
+fn tool_emoji(name: &str) -> &'static str {
+    match name {
+        "terminal" | "execute_command" | "bash" | "run_command" => "⚡",
+        "read_file" | "write_file" | "edit_file" | "patch" => "📄",
+        "search_files" | "grep" | "find" => "🔍",
+        "web_search" | "web_extract" | "fetch" => "🌐",
+        "browser_navigate" | "browser" => "🖥️",
+        "memory" | "remember" | "recall" => "🧠",
+        "delegate_task" | "subagent" => "🔀",
+        "datetime" | "time" => "🕐",
+        "todo" | "task" => "📋",
+        "vision_analyze" | "image" | "screenshot" => "👁️",
+        "clarify" | "ask_user" => "❓",
+        "send_message" | "notify" => "📣",
+        _ => "🔧",
+    }
 }
 
 fn is_tool_activity(label: &str) -> bool {
@@ -796,13 +833,13 @@ fn footer_widget(state: &AppState) -> Paragraph<'_> {
     };
     let mut footer_line = vec![Span::styled(
         state.ui.footer_help.clone(),
-        Style::default().fg(MUTED),
+        Style::default().fg(skin_muted()),
     )];
     let status = status_summary(state);
     if let Some(notice) = &state.ui.footer_notice {
         if !notice.text.eq_ignore_ascii_case(&status) {
             footer_line.push(Span::raw("  "));
-            footer_line.push(Span::styled("•", Style::default().fg(MUTED)));
+            footer_line.push(Span::styled("•", Style::default().fg(skin_muted())));
             footer_line.push(Span::raw(" "));
             footer_line.push(Span::styled(
                 notice.text.clone(),
@@ -828,15 +865,15 @@ fn footer_widget(state: &AppState) -> Paragraph<'_> {
                 } else {
                     "COMMAND"
                 },
-                Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+                Style::default().fg(skin_accent()).add_modifier(Modifier::BOLD),
             ),
             Span::raw(" "),
             Span::styled(
                 truncate_display(&prompt, 180),
                 Style::default().fg(if state.ui.prompt_input.is_empty() {
-                    MUTED
+                    skin_muted()
                 } else {
-                    TEXT
+                    skin_text()
                 }),
             ),
         ]),
@@ -862,14 +899,14 @@ fn constrained_footer_widget(state: &AppState, width: u16) -> Paragraph<'_> {
             } else {
                 "CMD "
             },
-            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+            Style::default().fg(skin_accent()).add_modifier(Modifier::BOLD),
         ),
         Span::styled(
             truncate_display(&prompt, prompt_width),
             Style::default().fg(if state.ui.prompt_input.is_empty() {
-                MUTED
+                skin_muted()
             } else {
-                TEXT
+                skin_text()
             }),
         ),
         Span::raw(" "),
@@ -880,7 +917,7 @@ fn constrained_footer_widget(state: &AppState, width: u16) -> Paragraph<'_> {
                 .add_modifier(Modifier::BOLD),
         ),
     ])]))
-    .style(Style::default().bg(PANEL_ALT))
+    .style(Style::default().bg(skin_panel_alt()))
     .wrap(Wrap { trim: true })
 }
 
@@ -902,22 +939,22 @@ fn status_summary(state: &AppState) -> String {
 
 fn status_color(state: &AppState) -> Color {
     if state.session.running {
-        ACCENT
+        skin_accent()
     } else if state.session.error.is_some() {
-        ERROR
+        skin_error()
     } else if state.session.final_message.is_some() {
-        SUCCESS
+        skin_success()
     } else {
-        HELP
+        skin_help()
     }
 }
 
 fn tone_color(tone: Tone) -> Color {
     match tone {
-        Tone::Info => ACCENT,
-        Tone::Success => SUCCESS,
-        Tone::Warning => WARN,
-        Tone::Error => ERROR,
+        Tone::Info => skin_accent(),
+        Tone::Success => skin_success(),
+        Tone::Warning => skin_warn(),
+        Tone::Error => skin_error(),
     }
 }
 
@@ -934,8 +971,8 @@ fn panel_tabs(state: &AppState) -> Tabs<'_> {
     Tabs::new(titles)
         .select(index)
         .block(panel_block("Panels"))
-        .highlight_style(Style::default().fg(ACCENT).add_modifier(Modifier::BOLD))
-        .style(Style::default().fg(MUTED))
+        .highlight_style(Style::default().fg(skin_accent()).add_modifier(Modifier::BOLD))
+        .style(Style::default().fg(skin_muted()))
 }
 
 fn panel_widget(state: &AppState) -> Paragraph<'_> {
@@ -952,16 +989,16 @@ fn panel_widget(state: &AppState) -> Paragraph<'_> {
 }
 
 fn session_summary_widget(state: &AppState) -> Paragraph<'_> {
-    Paragraph::new(Text::from(vec![
+    let mut lines = vec![
         Line::from(vec![
-            Span::styled("query ", Style::default().fg(MUTED)),
+            Span::styled("query ", Style::default().fg(skin_muted())),
             Span::styled(
                 truncate_display(&state.session.active_query, 120),
-                Style::default().fg(TEXT),
+                Style::default().fg(skin_text()),
             ),
         ]),
         Line::from(vec![
-            Span::styled("responses ", Style::default().fg(MUTED)),
+            Span::styled("responses ", Style::default().fg(skin_muted())),
             Span::styled(
                 state
                     .session
@@ -970,33 +1007,50 @@ fn session_summary_widget(state: &AppState) -> Paragraph<'_> {
                     .filter(|entry| entry.role == "Assistant")
                     .count()
                     .to_string(),
-                Style::default().fg(TEXT),
+                Style::default().fg(skin_text()),
             ),
         ]),
         Line::from(vec![
-            Span::styled("reasoning chars ", Style::default().fg(MUTED)),
+            Span::styled("reasoning chars ", Style::default().fg(skin_muted())),
             Span::styled(
                 state.session.reasoning.chars().count().to_string(),
-                Style::default().fg(TEXT),
+                Style::default().fg(skin_text()),
             ),
         ]),
         Line::from(vec![
-            Span::styled("needs rebuild ", Style::default().fg(MUTED)),
+            Span::styled("needs rebuild ", Style::default().fg(skin_muted())),
             Span::styled(
                 state.persistent.needs_rebuild.to_string(),
-                Style::default().fg(TEXT),
+                Style::default().fg(skin_text()),
             ),
         ]),
-    ]))
-    .block(panel_block("Session"))
-    .wrap(Wrap { trim: true })
+    ];
+
+    if state.session.total_tokens > 0 {
+        lines.push(Line::from(vec![
+            Span::styled("tokens ", Style::default().fg(skin_muted())),
+            Span::styled(
+                format!(
+                    "{} in / {} out / {} total",
+                    state.session.input_tokens,
+                    state.session.output_tokens,
+                    state.session.total_tokens,
+                ),
+                Style::default().fg(skin_text()),
+            ),
+        ]));
+    }
+
+    Paragraph::new(Text::from(lines))
+        .block(panel_block("Session"))
+        .wrap(Wrap { trim: true })
 }
 
 fn render_session_compact_widget(frame: &mut Frame<'_>, state: &AppState, area: Rect) {
     let mut lines = Vec::new();
     lines.push(Line::from(Span::styled(
         "Conversation",
-        Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+        Style::default().fg(skin_accent()).add_modifier(Modifier::BOLD),
     )));
     for entry in state.session.transcript.iter().rev().take(4).rev() {
         lines.push(role_line(entry));
@@ -1005,7 +1059,7 @@ fn render_session_compact_widget(frame: &mut Frame<'_>, state: &AppState, area: 
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
         "Reasoning",
-        Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+        Style::default().fg(skin_accent()).add_modifier(Modifier::BOLD),
     )));
     lines.push(Line::from(truncate_text(
         if state.session.reasoning.is_empty() {
@@ -1055,14 +1109,14 @@ fn mcp_widget(servers: &[McpServerItem], selected: usize) -> Paragraph<'_> {
         Line::from(vec![
             Span::styled(
                 "a",
-                Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+                Style::default().fg(skin_accent()).add_modifier(Modifier::BOLD),
             ),
-            Span::styled(" add  ", Style::default().fg(MUTED)),
+            Span::styled(" add  ", Style::default().fg(skin_muted())),
             Span::styled(
                 "d",
-                Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+                Style::default().fg(skin_accent()).add_modifier(Modifier::BOLD),
             ),
-            Span::styled(" remove", Style::default().fg(MUTED)),
+            Span::styled(" remove", Style::default().fg(skin_muted())),
         ]),
         Line::from(""),
     ];
@@ -1070,17 +1124,17 @@ fn mcp_widget(servers: &[McpServerItem], selected: usize) -> Paragraph<'_> {
     if servers.is_empty() {
         lines.push(Line::from(Span::styled(
             "No MCP servers configured.",
-            Style::default().fg(MUTED),
+            Style::default().fg(skin_muted()),
         )));
     } else {
         for (index, server) in servers.iter().enumerate() {
             lines.push(mcp_line(server, index == selected));
             if index == selected {
                 lines.push(Line::from(vec![
-                    Span::styled("    endpoint ", Style::default().fg(MUTED)),
+                    Span::styled("    endpoint ", Style::default().fg(skin_muted())),
                     Span::styled(
                         truncate_display(&server.endpoint, 96),
-                        Style::default().fg(TEXT),
+                        Style::default().fg(skin_text()),
                     ),
                     Span::raw("  "),
                     Span::styled(
@@ -1089,7 +1143,7 @@ fn mcp_widget(servers: &[McpServerItem], selected: usize) -> Paragraph<'_> {
                         } else {
                             "disabled"
                         },
-                        Style::default().fg(if server.enabled { SUCCESS } else { WARN }),
+                        Style::default().fg(if server.enabled { skin_success() } else { skin_warn() }),
                     ),
                 ]));
             }
@@ -1106,25 +1160,25 @@ fn skills_widget(skills: &[SkillItem], selected: usize, skills_root: String) -> 
         Line::from(vec![
             Span::styled(
                 "n",
-                Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+                Style::default().fg(skin_accent()).add_modifier(Modifier::BOLD),
             ),
-            Span::styled(" new  ", Style::default().fg(MUTED)),
+            Span::styled(" new  ", Style::default().fg(skin_muted())),
             Span::styled(
                 "r",
-                Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+                Style::default().fg(skin_accent()).add_modifier(Modifier::BOLD),
             ),
-            Span::styled(" reload  ", Style::default().fg(MUTED)),
+            Span::styled(" reload  ", Style::default().fg(skin_muted())),
             Span::styled(
                 "d",
-                Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+                Style::default().fg(skin_accent()).add_modifier(Modifier::BOLD),
             ),
-            Span::styled(" delete", Style::default().fg(MUTED)),
+            Span::styled(" delete", Style::default().fg(skin_muted())),
         ]),
         Line::from(vec![
-            Span::styled("root ", Style::default().fg(MUTED)),
+            Span::styled("root ", Style::default().fg(skin_muted())),
             Span::styled(
                 truncate_display(&skills_root, 96),
-                Style::default().fg(TEXT),
+                Style::default().fg(skin_text()),
             ),
         ]),
         Line::from(""),
@@ -1133,17 +1187,17 @@ fn skills_widget(skills: &[SkillItem], selected: usize, skills_root: String) -> 
     if skills.is_empty() {
         lines.push(Line::from(Span::styled(
             "No skills loaded.",
-            Style::default().fg(MUTED),
+            Style::default().fg(skin_muted()),
         )));
     } else {
         for (index, skill) in skills.iter().enumerate() {
             lines.push(skill_line(skill, index == selected));
             if index == selected {
                 lines.push(Line::from(vec![
-                    Span::styled("    ", Style::default().fg(MUTED)),
+                    Span::styled("    ", Style::default().fg(skin_muted())),
                     Span::styled(
                         truncate_display(&skill.description, 140),
-                        Style::default().fg(MUTED),
+                        Style::default().fg(skin_muted()),
                     ),
                 ]));
             }
@@ -1160,14 +1214,14 @@ fn behavior_widget(state: &AppState) -> Paragraph<'_> {
         Line::from(vec![
             Span::styled(
                 "e",
-                Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+                Style::default().fg(skin_accent()).add_modifier(Modifier::BOLD),
             ),
-            Span::styled(" edit selected  ", Style::default().fg(MUTED)),
+            Span::styled(" edit selected  ", Style::default().fg(skin_muted())),
             Span::styled(
                 "space",
-                Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+                Style::default().fg(skin_accent()).add_modifier(Modifier::BOLD),
             ),
-            Span::styled(" toggle bool", Style::default().fg(MUTED)),
+            Span::styled(" toggle bool", Style::default().fg(skin_muted())),
         ]),
         Line::from(""),
     ];
@@ -1177,19 +1231,19 @@ fn behavior_widget(state: &AppState) -> Paragraph<'_> {
         lines.push(Line::from(vec![
             Span::styled(
                 if selected { "> " } else { "  " },
-                Style::default().fg(if selected { ACCENT } else { MUTED }),
+                Style::default().fg(if selected { skin_accent() } else { skin_muted() }),
             ),
             Span::styled(
                 format!("{key}: "),
                 Style::default()
-                    .fg(if selected { TEXT } else { MUTED })
+                    .fg(if selected { skin_text() } else { skin_muted() })
                     .add_modifier(if selected {
                         Modifier::BOLD
                     } else {
                         Modifier::empty()
                     }),
             ),
-            Span::styled(truncate_display(value, 120), Style::default().fg(TEXT)),
+            Span::styled(truncate_display(value, 120), Style::default().fg(skin_text())),
         ]));
     }
 
@@ -1210,26 +1264,26 @@ fn render_modal(
     frame.render_widget(Clear, modal_area);
 
     let mut lines = vec![
-        Line::from(Span::styled(help, Style::default().fg(MUTED))),
+        Line::from(Span::styled(help, Style::default().fg(skin_muted()))),
         Line::from(""),
     ];
     for (index, field) in fields.iter().enumerate() {
         lines.push(Line::from(vec![
             Span::styled(
                 if index == selected { "> " } else { "  " },
-                Style::default().fg(if index == selected { ACCENT } else { MUTED }),
+                Style::default().fg(if index == selected { skin_accent() } else { skin_muted() }),
             ),
             Span::styled(
                 format!("{}: ", field.label),
                 Style::default()
-                    .fg(if index == selected { TEXT } else { MUTED })
+                    .fg(if index == selected { skin_text() } else { skin_muted() })
                     .add_modifier(if index == selected {
                         Modifier::BOLD
                     } else {
                         Modifier::empty()
                     }),
             ),
-            Span::styled(field.display_value(), Style::default().fg(TEXT)),
+            Span::styled(field.display_value(), Style::default().fg(skin_text())),
         ]));
     }
 
@@ -1238,11 +1292,11 @@ fn render_modal(
             Block::default()
                 .title(Span::styled(
                     truncate_display(title, 48),
-                    Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+                    Style::default().fg(skin_accent()).add_modifier(Modifier::BOLD),
                 ))
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(ACCENT))
-                .style(Style::default().bg(PANEL)),
+                .border_style(Style::default().fg(skin_accent()))
+                .style(Style::default().bg(skin_panel())),
         )
         .wrap(Wrap { trim: true });
 
@@ -1251,9 +1305,9 @@ fn render_modal(
 
 fn role_line(entry: &TranscriptEntry) -> Line<'static> {
     let color = if entry.role == "User" {
-        SUCCESS
+        skin_success()
     } else {
-        ACCENT
+        skin_accent()
     };
     Line::from(vec![
         Span::styled(
@@ -1273,11 +1327,11 @@ fn mcp_line(server: &McpServerItem, selected: bool) -> Line<'static> {
     Line::from(vec![
         Span::styled(
             if selected { "> " } else { "  " },
-            Style::default().fg(if selected { ACCENT } else { MUTED }),
+            Style::default().fg(if selected { skin_accent() } else { skin_muted() }),
         ),
         Span::styled(
             server.name.clone(),
-            Style::default().fg(TEXT).add_modifier(if selected {
+            Style::default().fg(skin_text()).add_modifier(if selected {
                 Modifier::BOLD
             } else {
                 Modifier::empty()
@@ -1286,17 +1340,17 @@ fn mcp_line(server: &McpServerItem, selected: bool) -> Line<'static> {
         Span::raw(" "),
         Span::styled(
             format!("[{:?}]", server.transport).to_lowercase(),
-            Style::default().fg(MUTED),
+            Style::default().fg(skin_muted()),
         ),
         Span::raw(" "),
         Span::styled(
             status,
-            Style::default().fg(if server.connected { SUCCESS } else { WARN }),
+            Style::default().fg(if server.connected { skin_success() } else { skin_warn() }),
         ),
         Span::raw(" "),
         Span::styled(
             format!("{} tools", server.tool_count),
-            Style::default().fg(MUTED),
+            Style::default().fg(skin_muted()),
         ),
     ])
 }
@@ -1305,43 +1359,43 @@ fn skill_line(skill: &SkillItem, selected: bool) -> Line<'static> {
     Line::from(vec![
         Span::styled(
             if selected { "> " } else { "  " },
-            Style::default().fg(if selected { ACCENT } else { MUTED }),
+            Style::default().fg(if selected { skin_accent() } else { skin_muted() }),
         ),
         Span::styled(
             skill.name.clone(),
-            Style::default().fg(TEXT).add_modifier(if selected {
+            Style::default().fg(skin_text()).add_modifier(if selected {
                 Modifier::BOLD
             } else {
                 Modifier::empty()
             }),
         ),
         Span::raw(" "),
-        Span::styled(skill.version.clone(), Style::default().fg(MUTED)),
+        Span::styled(skill.version.clone(), Style::default().fg(skin_muted())),
         Span::raw(" "),
         Span::styled(
             if skill.available { "ready" } else { "blocked" },
-            Style::default().fg(if skill.available { SUCCESS } else { WARN }),
+            Style::default().fg(if skill.available { skin_success() } else { skin_warn() }),
         ),
     ])
 }
 
 fn panel_block(title: &str) -> Block<'static> {
     Block::default()
-        .title(Span::styled(title.to_string(), Style::default().fg(ACCENT)))
+        .title(Span::styled(title.to_string(), Style::default().fg(skin_accent())))
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(MUTED))
-        .style(Style::default().bg(PANEL))
+        .border_style(Style::default().fg(skin_muted()))
+        .style(Style::default().bg(skin_panel()))
 }
 
 fn keycap(text: &str) -> Span<'static> {
     Span::styled(
         text.to_string(),
-        Style::default().fg(TEXT).add_modifier(Modifier::BOLD),
+        Style::default().fg(skin_text()).add_modifier(Modifier::BOLD),
     )
 }
 
 fn label(text: &str) -> Span<'static> {
-    Span::styled(text.to_string(), Style::default().fg(HELP))
+    Span::styled(text.to_string(), Style::default().fg(skin_help()))
 }
 
 fn background_fill(area: Rect, color: Color) -> Paragraph<'static> {
@@ -1354,6 +1408,7 @@ fn background_fill(area: Rect, color: Color) -> Paragraph<'static> {
 }
 
 fn render_message_body(text: &str) -> Vec<Line<'static>> {
+    let text = strip_thinking_tags(text);
     if text.is_empty() {
         return vec![Line::from("")];
     }
@@ -1406,14 +1461,42 @@ fn render_reasoning_body(text: &str) -> Vec<Line<'static>> {
         .map(|raw_line| {
             let line = raw_line.trim_end_matches('\r');
             if line.trim().is_empty() {
-                return Line::from(Span::styled("▎", Style::default().fg(MUTED)));
+                return Line::from(Span::styled("▎", Style::default().fg(skin_muted())));
             }
 
-            let mut spans = vec![Span::styled("▎ ", Style::default().fg(MUTED))];
+            let mut spans = vec![Span::styled("▎ ", Style::default().fg(skin_muted()))];
             spans.extend(parse_inline_markdown(line, InlineStyle::Quote));
             Line::from(spans)
         })
         .collect()
+}
+
+const THINKING_OPEN_TAGS: &[&str] = &[
+    "<think>",
+    "<thinking>",
+    "<reasoning>",
+    "<thought>",
+    "<reasoning_scratchpad>",
+];
+
+const THINKING_CLOSE_TAGS: &[&str] = &[
+    "</think>",
+    "</thinking>",
+    "</reasoning>",
+    "</thought>",
+    "</reasoning_scratchpad>",
+];
+
+fn strip_thinking_tags(text: &str) -> String {
+    let mut result = text.to_string();
+    for tag in THINKING_OPEN_TAGS
+        .iter()
+        .chain(THINKING_CLOSE_TAGS.iter())
+    {
+        result = result.replace(tag, "");
+        result = result.replace(&tag.to_uppercase(), "");
+    }
+    result
 }
 
 fn render_markdown_line(line: &str) -> Line<'static> {
@@ -1422,18 +1505,18 @@ fn render_markdown_line(line: &str) -> Line<'static> {
     }
 
     if is_horizontal_rule(line) {
-        return Line::from(Span::styled("─".repeat(24), Style::default().fg(MUTED)));
+        return Line::from(Span::styled("─".repeat(24), Style::default().fg(skin_muted())));
     }
 
     if let Some(rest) = heading_text(line) {
         return Line::from(vec![Span::styled(
             rest.to_string(),
-            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+            Style::default().fg(skin_accent()).add_modifier(Modifier::BOLD),
         )]);
     }
 
     if let Some(rest) = blockquote_text(line) {
-        let mut spans = vec![Span::styled("▎ ", Style::default().fg(MUTED))];
+        let mut spans = vec![Span::styled("▎ ", Style::default().fg(skin_muted()))];
         spans.extend(parse_inline_markdown(rest, InlineStyle::Quote));
         return Line::from(spans);
     }
@@ -1442,16 +1525,16 @@ fn render_markdown_line(line: &str) -> Line<'static> {
         return Line::from(vec![
             Span::styled(
                 if checked { "☑ " } else { "☐ " },
-                Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+                Style::default().fg(skin_accent()).add_modifier(Modifier::BOLD),
             ),
-            Span::styled(body.to_string(), Style::default().fg(TEXT)),
+            Span::styled(body.to_string(), Style::default().fg(skin_text())),
         ]);
     }
 
     if let Some((prefix, body)) = list_prefix(line) {
         let mut spans = vec![Span::styled(
             prefix.to_string(),
-            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+            Style::default().fg(skin_accent()).add_modifier(Modifier::BOLD),
         )];
         spans.extend(parse_inline_markdown(body, InlineStyle::Default));
         return Line::from(spans);
@@ -1551,8 +1634,8 @@ fn parse_inline_markdown(line: &str, style: InlineStyle) -> Vec<Span<'static>> {
                 spans.push(Span::styled(
                     inner[..end].to_string(),
                     Style::default()
-                        .fg(ACCENT)
-                        .bg(PANEL_ALT)
+                        .fg(skin_accent())
+                        .bg(skin_panel_alt())
                         .add_modifier(Modifier::BOLD),
                 ));
                 remaining = &inner[end + 1..];
@@ -1573,10 +1656,10 @@ fn plain_span(text: &str, style: InlineStyle) -> Span<'static> {
 
 fn base_style(style: InlineStyle) -> Style {
     match style {
-        InlineStyle::Default => Style::default().fg(TEXT),
-        InlineStyle::Quote => Style::default().fg(HELP),
-        InlineStyle::TableHeader => Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
-        InlineStyle::TableCell => Style::default().fg(TEXT),
+        InlineStyle::Default => Style::default().fg(skin_text()),
+        InlineStyle::Quote => Style::default().fg(skin_help()),
+        InlineStyle::TableHeader => Style::default().fg(skin_accent()).add_modifier(Modifier::BOLD),
+        InlineStyle::TableCell => Style::default().fg(skin_text()),
     }
 }
 
@@ -1634,7 +1717,7 @@ fn render_table_row(line: &str, header: bool) -> Line<'static> {
     let mut spans = Vec::new();
     for (index, cell) in cells.iter().enumerate() {
         if index > 0 {
-            spans.push(Span::styled(" │ ", Style::default().fg(MUTED)));
+            spans.push(Span::styled(" │ ", Style::default().fg(skin_muted())));
         }
         spans.extend(parse_inline_markdown(
             cell,
@@ -1795,7 +1878,7 @@ mod tests {
         assert!(buffer
             .content
             .iter()
-            .all(|cell| cell.bg == BG || cell.bg == PANEL));
+            .all(|cell| cell.bg == BG || cell.bg == skin_panel()));
     }
 
     #[test]
@@ -1993,8 +2076,9 @@ mod tests {
         let text = buffer_text(&state, 160, 40);
 
         assert!(text.contains("▎ Thinking: Choosing a tool."));
-        assert!(text.contains("╭─ Tool file_read"));
-        assert!(text.contains("│ {\"path\":\"README.md\"}"));
+        assert!(text.contains("╭─ "));
+        assert!(text.contains("file_read"));
+        assert!(text.contains("{\"path\":\"README.md\"}"));
         assert!(text.contains("╰─"));
     }
 }

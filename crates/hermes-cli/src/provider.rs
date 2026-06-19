@@ -5,19 +5,294 @@
 //! source of truth for provider definitions, model lists, environment-variable
 //! names, base URLs, signup URLs, and default models.
 //!
+//! # Architecture
+//!
+//! Two layers coexist:
+//!
+//! - **Static layer** (`ProviderDef` + `PROVIDERS`): zero-overhead `const` data
+//!   for the built-in provider catalog.  Lookup via `provider_by_name()`.
+//!
+//! - **Dynamic layer** (`ProviderProfile` trait + `ProviderRegistry`): trait-based
+//!   profiles with overridable methods (`prepare_messages`, `build_extra_body`,
+//!   etc.) and runtime registration.  Matches Python's `ProviderProfile` class.
+//!
 //! # Usage
 //!
 //! ```ignore
-//! use crate::provider::{ProviderDef, PROVIDERS};
+//! use crate::provider::{ProviderDef, PROVIDERS, ProviderRegistry, ProviderProfile};
 //!
+//! // Static lookup (unchanged)
 //! for p in PROVIDERS {
 //!     println!("{}: {}", p.display_name, p.default_base_url);
 //! }
+//!
+//! // Dynamic registry
+//! let registry = ProviderRegistry::new();
+//! registry.register(Arc::new(MyCustomProvider));
+//! if let Some(profile) = registry.get("my_custom") {
+//!     println!("base_url: {:?}", profile.base_url());
+//! }
 //! ```
 
+use std::collections::HashMap;
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
+use async_trait::async_trait;
 use serde::Deserialize;
+use serde_json::Value;
+
+// ---------------------------------------------------------------------------
+// Dynamic provider profile trait
+// ---------------------------------------------------------------------------
+
+/// Trait for provider-specific behavior overrides.
+///
+/// Methods have default implementations that delegate to static `ProviderDef`
+/// fields, so providers that need no customization work out of the box.
+/// Override individual methods for providers with quirks (e.g. Anthropic's
+/// header requirements, Kimi's temperature omission).
+#[async_trait]
+pub trait ProviderProfile: Send + Sync {
+    fn name(&self) -> &str;
+    fn display_name(&self) -> &str {
+        self.name()
+    }
+    fn description(&self) -> &str {
+        ""
+    }
+    fn base_url(&self) -> Option<&str> {
+        None
+    }
+    fn api_key_env(&self) -> Option<&str> {
+        None
+    }
+    fn default_model(&self) -> &str {
+        ""
+    }
+    fn supports_vision(&self) -> bool {
+        false
+    }
+    fn supports_streaming(&self) -> bool {
+        true
+    }
+    fn auth_type(&self) -> &str {
+        "api_key"
+    }
+    fn signup_url(&self) -> &str {
+        ""
+    }
+    fn aliases(&self) -> Vec<&str> {
+        vec![]
+    }
+
+    fn get_max_tokens(&self) -> Option<usize> {
+        None
+    }
+    fn fallback_models(&self) -> Vec<String> {
+        vec![]
+    }
+
+    fn prepare_messages(
+        &self,
+        messages: Vec<hermes_core::client::Message>,
+    ) -> Vec<hermes_core::client::Message> {
+        messages
+    }
+
+    fn build_extra_body(&self) -> Value {
+        Value::Object(serde_json::Map::new())
+    }
+
+    async fn fetch_models(
+        &self,
+        _api_key: Option<&str>,
+        _base_url: Option<&str>,
+    ) -> Option<Vec<String>> {
+        None
+    }
+}
+
+/// Bridge: wraps a static `ProviderDef` to implement `ProviderProfile`.
+pub struct StaticProviderProfile(&'static ProviderDef);
+
+impl StaticProviderProfile {
+    pub fn new(def: &'static ProviderDef) -> Self {
+        Self(def)
+    }
+}
+
+#[async_trait]
+impl ProviderProfile for StaticProviderProfile {
+    fn name(&self) -> &str {
+        self.0.name
+    }
+    fn display_name(&self) -> &str {
+        self.0.display_name
+    }
+    fn description(&self) -> &str {
+        self.0.description
+    }
+    fn base_url(&self) -> Option<&str> {
+        Some(self.0.default_base_url)
+    }
+    fn api_key_env(&self) -> Option<&str> {
+        if self.0.env_var.is_empty() {
+            None
+        } else {
+            Some(self.0.env_var)
+        }
+    }
+    fn default_model(&self) -> &str {
+        self.0.default_model
+    }
+    fn auth_type(&self) -> &str {
+        self.0.auth_type
+    }
+    fn signup_url(&self) -> &str {
+        self.0.signup_url
+    }
+    fn aliases(&self) -> Vec<&str> {
+        vec![]
+    }
+
+    fn supports_vision(&self) -> bool {
+        matches!(
+            self.0.name,
+            "openai" | "anthropic" | "google" | "xai" | "mistral"
+        )
+    }
+
+    fn fallback_models(&self) -> Vec<String> {
+        self.0.models.iter().map(|s| s.to_string()).collect()
+    }
+
+    async fn fetch_models(
+        &self,
+        api_key: Option<&str>,
+        _base_url: Option<&str>,
+    ) -> Option<Vec<String>> {
+        let key = api_key?;
+        Some(fetch_models_for_provider(self.0, key).await)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Dynamic provider registry
+// ---------------------------------------------------------------------------
+
+/// Thread-safe registry for dynamic provider profiles.
+pub struct ProviderRegistry {
+    profiles: RwLock<HashMap<String, Arc<dyn ProviderProfile>>>,
+    aliases: RwLock<HashMap<String, String>>,
+    fallback_chains: RwLock<Vec<Vec<String>>>,
+}
+
+impl ProviderRegistry {
+    pub fn new() -> Self {
+        Self {
+            profiles: RwLock::new(HashMap::new()),
+            aliases: RwLock::new(HashMap::new()),
+            fallback_chains: RwLock::new(Vec::new()),
+        }
+    }
+
+    pub fn register(&self, profile: Arc<dyn ProviderProfile>) {
+        let name = profile.name().to_string();
+        let aliases: Vec<String> = profile.aliases().into_iter().map(String::from).collect();
+        let mut profiles = self.profiles.write().unwrap();
+        profiles.insert(name.clone(), profile);
+        let mut al = self.aliases.write().unwrap();
+        for alias in aliases {
+            al.insert(alias, name.clone());
+        }
+    }
+
+    pub fn get(&self, name: &str) -> Option<Arc<dyn ProviderProfile>> {
+        let profiles = self.profiles.read().unwrap();
+        if let Some(p) = profiles.get(name) {
+            return Some(Arc::clone(p));
+        }
+        let al = self.aliases.read().unwrap();
+        if let Some(resolved) = al.get(name) {
+            return profiles.get(resolved).cloned();
+        }
+        None
+    }
+
+    pub fn list(&self) -> Vec<Arc<dyn ProviderProfile>> {
+        let profiles = self.profiles.read().unwrap();
+        profiles.values().cloned().collect()
+    }
+
+    pub fn resolve_alias(&self, name: &str) -> Option<String> {
+        let al = self.aliases.read().unwrap();
+        al.get(name).cloned()
+    }
+
+    pub fn add_alias(&self, alias: String, target: String) {
+        let mut al = self.aliases.write().unwrap();
+        al.insert(alias, target);
+    }
+
+    pub fn set_fallback_chain(&self, chain: Vec<String>) {
+        let mut chains = self.fallback_chains.write().unwrap();
+        chains.push(chain);
+    }
+
+    pub fn get_fallback_chain(&self, name: &str) -> Option<Vec<String>> {
+        let chains = self.fallback_chains.read().unwrap();
+        chains
+            .iter()
+            .find(|c| c.first().map(|s| s.as_str()) == Some(name))
+            .cloned()
+    }
+
+    pub fn resolve_with_fallback(&self, name: &str) -> Vec<Arc<dyn ProviderProfile>> {
+        let mut result = vec![];
+        if let Some(p) = self.get(name) {
+            result.push(p);
+        }
+        if let Some(chain) = self.get_fallback_chain(name) {
+            for n in chain.iter().skip(1) {
+                if let Some(p) = self.get(n) {
+                    result.push(p);
+                }
+            }
+        }
+        result
+    }
+}
+
+impl Default for ProviderRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Global provider registry instance.
+pub fn global_registry() -> &'static ProviderRegistry {
+    use std::sync::OnceLock;
+    static REGISTRY: OnceLock<ProviderRegistry> = OnceLock::new();
+    REGISTRY.get_or_init(|| {
+        let registry = ProviderRegistry::new();
+        for def in PROVIDERS {
+            registry
+                .register(Arc::new(StaticProviderProfile::new(def)) as Arc<dyn ProviderProfile>);
+        }
+        registry.add_alias("claude".to_string(), "anthropic".to_string());
+        registry.add_alias("gpt".to_string(), "openai".to_string());
+        registry.add_alias("gemini".to_string(), "google".to_string());
+        registry.add_alias("grok".to_string(), "xai".to_string());
+        registry.add_alias("qwen".to_string(), "alibaba".to_string());
+        registry.add_alias("glm".to_string(), "zai".to_string());
+        registry.add_alias("kimi".to_string(), "kimi-coding".to_string());
+        registry.add_alias("llama".to_string(), "groq".to_string());
+        registry.add_alias("sonar".to_string(), "perplexity".to_string());
+        registry.add_alias("command-r".to_string(), "cohere".to_string());
+        registry
+    })
+}
 
 /// Static definition of an LLM provider.
 ///
@@ -1237,5 +1512,129 @@ mod tests {
                 name
             );
         }
+    }
+
+    #[test]
+    fn global_registry_has_all_providers() {
+        let registry = global_registry();
+        let list = registry.list();
+        assert_eq!(list.len(), 42);
+    }
+
+    #[test]
+    fn global_registry_alias_resolution() {
+        let registry = global_registry();
+        assert_eq!(
+            registry.resolve_alias("claude"),
+            Some("anthropic".to_string())
+        );
+        assert_eq!(registry.resolve_alias("gpt"), Some("openai".to_string()));
+        assert_eq!(registry.resolve_alias("gemini"), Some("google".to_string()));
+        assert_eq!(registry.resolve_alias("nonexistent"), None);
+    }
+
+    #[test]
+    fn global_registry_get_via_alias() {
+        let registry = global_registry();
+        let claude = registry.get("claude");
+        assert!(claude.is_some());
+        assert_eq!(claude.unwrap().name(), "anthropic");
+    }
+
+    #[test]
+    fn global_registry_get_direct() {
+        let registry = global_registry();
+        let openai = registry.get("openai");
+        assert!(openai.is_some());
+        assert_eq!(openai.unwrap().display_name(), "OpenAI");
+    }
+
+    #[test]
+    fn provider_profile_static_bridge() {
+        let def = provider_by_name("anthropic").unwrap();
+        let profile = StaticProviderProfile::new(def);
+        assert_eq!(profile.name(), "anthropic");
+        assert_eq!(profile.display_name(), "Anthropic");
+        assert_eq!(profile.base_url(), Some("https://api.anthropic.com"));
+        assert_eq!(profile.api_key_env(), Some("ANTHROPIC_API_KEY"));
+        assert!(profile.supports_vision());
+        assert!(profile.supports_streaming());
+        assert_eq!(profile.auth_type(), "api_key");
+        assert!(!profile.signup_url().is_empty());
+    }
+
+    #[test]
+    fn provider_profile_default_methods() {
+        struct DummyProvider;
+        impl ProviderProfile for DummyProvider {
+            fn name(&self) -> &str {
+                "dummy"
+            }
+        }
+
+        let p = DummyProvider;
+        assert_eq!(p.display_name(), "dummy");
+        assert_eq!(p.description(), "");
+        assert!(p.base_url().is_none());
+        assert!(p.api_key_env().is_none());
+        assert_eq!(p.default_model(), "");
+        assert!(!p.supports_vision());
+        assert!(p.supports_streaming());
+        assert_eq!(p.auth_type(), "api_key");
+        assert!(p.signup_url().is_empty());
+        assert!(p.aliases().is_empty());
+        assert!(p.get_max_tokens().is_none());
+        assert!(p.fallback_models().is_empty());
+        assert_eq!(p.build_extra_body(), serde_json::json!({}));
+    }
+
+    #[test]
+    fn custom_registry_register_and_get() {
+        struct CustomProvider;
+        impl ProviderProfile for CustomProvider {
+            fn name(&self) -> &str {
+                "custom"
+            }
+            fn display_name(&self) -> &str {
+                "Custom Provider"
+            }
+            fn base_url(&self) -> Option<&str> {
+                Some("https://custom.api/v1")
+            }
+            fn aliases(&self) -> Vec<&str> {
+                vec!["cstm"]
+            }
+        }
+
+        let registry = ProviderRegistry::new();
+        registry.register(Arc::new(CustomProvider) as Arc<dyn ProviderProfile>);
+        assert!(registry.get("custom").is_some());
+        assert_eq!(
+            registry.get("custom").unwrap().display_name(),
+            "Custom Provider"
+        );
+        assert_eq!(registry.resolve_alias("cstm"), Some("custom".to_string()));
+        assert_eq!(registry.list().len(), 1);
+    }
+
+    #[test]
+    fn custom_registry_fallback_chain() {
+        let registry = ProviderRegistry::new();
+        registry.set_fallback_chain(vec!["primary".to_string(), "secondary".to_string()]);
+        let chain = registry.get_fallback_chain("primary");
+        assert!(chain.is_some());
+        assert_eq!(
+            chain.unwrap(),
+            vec!["primary".to_string(), "secondary".to_string()]
+        );
+    }
+
+    #[test]
+    fn static_provider_profile_fallback_models() {
+        let def = provider_by_name("openai").unwrap();
+        let profile = StaticProviderProfile::new(def);
+        let models = profile.fallback_models();
+        assert!(!models.is_empty());
+        assert!(models.contains(&"gpt-5.4".to_string()));
     }
 }

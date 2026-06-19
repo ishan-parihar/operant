@@ -1,21 +1,19 @@
 //! Terminal/shell command execution tool
 //!
-//! Provides secure shell command execution capabilities.
+//! Provides secure shell command execution capabilities with pluggable backends
+//! (local, Docker, SSH).
 
 use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::Value;
 use std::collections::HashMap;
-use std::process::Stdio;
-use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio::process::Command;
 
 use crate::config::runtime_config;
 use crate::schema::ToolSchema;
+use crate::tools::terminal_backend::{self, CommandOutput};
 use crate::tools::{HermesTool, ToolContext, ToolResult};
 
-/// Tool for executing shell commands
 pub struct TerminalTool;
 
 #[derive(JsonSchema, Deserialize)]
@@ -57,122 +55,29 @@ impl HermesTool for TerminalTool {
         );
         let max_output = args.max_output.unwrap_or(settings.max_output_bytes);
 
-        let mut cmd = {
-            if args.use_shell.unwrap_or(false) {
-                let shell = crate::platform::detect_shell();
-                let mut c = Command::new(&shell.path);
-                for arg in &shell.args_pattern {
-                    c.arg(arg);
-                }
-                c.arg(&args.command);
-                c
-            } else {
-                let parts = match shell_words::split(&args.command) {
-                    Ok(p) => p,
-                    Err(e) => return ToolResult::error("terminal", format!("Failed to parse command string: {}. Consider using useShell=true if you have special shell characters.", e)),
-                };
-                if parts.is_empty() {
-                    return ToolResult::error("terminal", "Empty command string");
-                }
-                let mut c = Command::new(&parts[0]);
-                c.args(&parts[1..]);
-                c
-            }
+        let cwd = args.working_dir.as_deref().map(std::path::Path::new);
+        let env_vars = args.env_vars.unwrap_or_default();
+        let use_shell = args.use_shell.unwrap_or(false);
+
+        let backend = terminal_backend::create_backend(&runtime_config());
+
+        let output: CommandOutput = match backend
+            .execute_command(&args.command, cwd, &env_vars, use_shell, timeout, max_output)
+            .await
+        {
+            Ok(o) => o,
+            Err(e) => return ToolResult::error("terminal", format!("{}", e)),
         };
 
-        // Set working directory
-        if let Some(ref dir) = args.working_dir {
-            cmd.current_dir(dir);
-        } else {
-            // Use current directory as default
-            if let Ok(cwd) = std::env::current_dir() {
-                cmd.current_dir(cwd);
-            }
-        }
-
-        // Set environment variables
-        if let Some(ref env_vars) = args.env_vars {
-            // Start with current environment
-            let mut env = std::env::vars().collect::<HashMap<_, _>>();
-            // Add/override with provided variables
-            for (key, value) in env_vars {
-                env.insert(key.clone(), value.clone());
-            }
-            // Pass to command
-            cmd.envs(&env);
-        }
-
-        cmd.stdout(Stdio::piped());
-        cmd.stderr(Stdio::piped());
-
-        let mut child = match cmd.spawn() {
-            Ok(c) => c,
-            Err(e) => {
-                return ToolResult::error("terminal", format!("Failed to spawn process: {}", e))
-            }
-        };
-
-        let stdout = child.stdout.take();
-        let stderr = child.stderr.take();
-
-        let mut stdout_output = String::new();
-        let mut stderr_output = String::new();
-
-        // Read stdout
-        if let Some(stdout) = stdout {
-            let mut reader = BufReader::new(stdout).lines();
-            while let Ok(Ok(Some(l))) = tokio::time::timeout(timeout, reader.next_line()).await {
-                if stdout_output.len() + l.len() < max_output {
-                    stdout_output.push_str(&l);
-                    stdout_output.push('\n');
-                } else if stdout_output.len() < max_output {
-                    let remaining = max_output - stdout_output.len();
-                    stdout_output.push_str(&l[..remaining.min(l.len())]);
-                    stdout_output.push_str("\n[output truncated]");
-                } else {
-                    stdout_output.push_str("\n[output truncated]");
-                    break;
-                }
-            }
-        }
-
-        // Read stderr
-        if let Some(stderr) = stderr {
-            let mut reader = BufReader::new(stderr).lines();
-            while let Ok(Ok(Some(l))) = tokio::time::timeout(timeout, reader.next_line()).await {
-                if stderr_output.len() + l.len() < max_output / 4 {
-                    stderr_output.push_str(&l);
-                    stderr_output.push('\n');
-                }
-            }
-        }
-
-        // Wait for process to complete
-        let status = match tokio::time::timeout(timeout, child.wait()).await {
-            Ok(Ok(s)) => s,
-            Ok(Err(e)) => {
-                return ToolResult::error("terminal", format!("Failed to wait for process: {}", e))
-            }
-            Err(_) => {
-                let _ = child.kill().await;
-                return ToolResult::error(
-                    "terminal",
-                    format!("Command timed out after {:?}", timeout),
-                );
-            }
-        };
-
-        let exit_code = status.code();
-
-        if status.success() {
+        if output.success {
             ToolResult::success(
                 "terminal",
                 serde_json::json!({
                     "success": true,
-                    "exit_code": exit_code,
-                    "stdout": stdout_output,
-                    "stderr": stderr_output,
-                    "runtime": "Command completed successfully"
+                    "exit_code": output.exit_code,
+                    "stdout": output.stdout,
+                    "stderr": output.stderr,
+                    "runtime": backend.name(),
                 }),
             )
         } else {
@@ -180,10 +85,10 @@ impl HermesTool for TerminalTool {
                 "terminal",
                 serde_json::json!({
                     "success": false,
-                    "exit_code": exit_code,
-                    "stdout": stdout_output,
-                    "stderr": stderr_output,
-                    "runtime": "Command failed"
+                    "exit_code": output.exit_code,
+                    "stdout": output.stdout,
+                    "stderr": output.stderr,
+                    "runtime": backend.name(),
                 }),
             )
         }
@@ -273,5 +178,13 @@ mod tests {
         let v: Value = serde_json::from_str(&result.content).unwrap();
         let stdout = v["stdout"].as_str().unwrap();
         assert!(stdout.contains("/tmp"));
+    }
+
+    #[tokio::test]
+    async fn test_backend_factory_local() {
+        let config = crate::config::AppConfig::default();
+        let backend = terminal_backend::create_backend(&config);
+        assert_eq!(backend.name(), "local");
+        assert!(backend.is_available());
     }
 }

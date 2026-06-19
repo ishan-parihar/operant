@@ -109,6 +109,10 @@ pub enum Error {
 
     #[error("Missing required configuration: {key}")]
     MissingConfig { key: String },
+
+    // ========== Plugin Errors ==========
+    #[error("Plugin error: {0}")]
+    Plugin(String),
 }
 
 impl Error {

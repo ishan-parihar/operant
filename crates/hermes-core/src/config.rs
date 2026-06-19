@@ -425,6 +425,12 @@ pub struct GatewaySettings {
     pub microsoft_teams_enabled: bool,
     pub admins: Vec<String>,
     pub streaming_transport: String,
+    /// HTTP/SOCKS5 proxy URL for Telegram API requests (e.g. "socks5://127.0.0.1:1080")
+    pub telegram_proxy: Option<String>,
+    /// Bot username for @mention detection in groups
+    pub telegram_bot_username: Option<String>,
+    /// Enable DM topic creation for private chats (Bot API 9.4+)
+    pub telegram_dm_topics_enabled: bool,
 }
 
 impl Default for GatewaySettings {
@@ -480,6 +486,9 @@ impl Default for GatewaySettings {
             microsoft_teams_enabled: false,
             admins: Vec::new(),
             streaming_transport: "auto".to_string(),
+            telegram_proxy: None,
+            telegram_bot_username: None,
+            telegram_dm_topics_enabled: false,
         }
     }
 }
@@ -678,7 +687,9 @@ pub struct BrowserSettings {
 
 impl Default for BrowserSettings {
     fn default() -> Self {
-        Self { provider: "lightpanda".to_string() }
+        Self {
+            provider: "lightpanda".to_string(),
+        }
     }
 }
 
@@ -819,6 +830,8 @@ impl Default for HttpToolSettings {
 pub struct TerminalSettings {
     pub max_timeout_secs: u64,
     pub max_output_bytes: usize,
+    pub docker: DockerTerminalSettings,
+    pub ssh: SshTerminalSettings,
 }
 
 impl Default for TerminalSettings {
@@ -826,6 +839,51 @@ impl Default for TerminalSettings {
         Self {
             max_timeout_secs: 300,
             max_output_bytes: 1_000_000,
+            docker: DockerTerminalSettings::default(),
+            ssh: SshTerminalSettings::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct DockerTerminalSettings {
+    pub image: Option<String>,
+    pub volumes: Vec<String>,
+    #[serde(default)]
+    pub env: std::collections::HashMap<String, String>,
+    pub cpu: f64,
+    pub memory_mb: u64,
+}
+
+impl Default for DockerTerminalSettings {
+    fn default() -> Self {
+        Self {
+            image: Some("nikolaik/python-nodejs:python3.11-nodejs20".to_string()),
+            volumes: Vec::new(),
+            env: std::collections::HashMap::new(),
+            cpu: 1.0,
+            memory_mb: 5120,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct SshTerminalSettings {
+    pub host: Option<String>,
+    pub user: Option<String>,
+    pub port: u16,
+    pub key_path: Option<String>,
+}
+
+impl Default for SshTerminalSettings {
+    fn default() -> Self {
+        Self {
+            host: None,
+            user: None,
+            port: 22,
+            key_path: None,
         }
     }
 }

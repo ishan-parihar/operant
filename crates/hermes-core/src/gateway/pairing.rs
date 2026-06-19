@@ -20,21 +20,36 @@ pub struct PairingStore {
 impl PairingStore {
     pub fn new() -> Self {
         let paired_users = Self::load_paired_users();
-        Self { codes: HashMap::new(), paired_users, failed_attempts: HashMap::new() }
+        Self {
+            codes: HashMap::new(),
+            paired_users,
+            failed_attempts: HashMap::new(),
+        }
     }
 
     pub fn generate_code(&mut self) -> String {
-        self.codes.retain(|_, v| v.created_at.elapsed() < CODE_EXPIRY);
+        self.codes
+            .retain(|_, v| v.created_at.elapsed() < CODE_EXPIRY);
         let code: String = rand::thread_rng()
             .sample_iter(&rand::distributions::Alphanumeric)
             .take(CODE_LEN)
             .map(char::from)
             .collect();
-        self.codes.insert(code.clone(), PairingCode { created_at: Instant::now() });
+        self.codes.insert(
+            code.clone(),
+            PairingCode {
+                created_at: Instant::now(),
+            },
+        );
         code
     }
 
-    pub fn validate_code(&mut self, user_id: &str, platform: &str, code: &str) -> Result<bool, String> {
+    pub fn validate_code(
+        &mut self,
+        user_id: &str,
+        platform: &str,
+        code: &str,
+    ) -> Result<bool, String> {
         let key = format!("{}@{}", user_id, platform);
         if self.is_locked_out(user_id, platform) {
             return Err("Too many failed attempts. Try again later.".into());
@@ -46,28 +61,39 @@ impl PairingStore {
                 return Ok(true);
             }
         }
-        let entry = self.failed_attempts.entry(key).or_insert((0, Instant::now()));
-        if entry.1.elapsed() > LOCKOUT_DURATION { *entry = (0, Instant::now()); }
+        let entry = self
+            .failed_attempts
+            .entry(key)
+            .or_insert((0, Instant::now()));
+        if entry.1.elapsed() > LOCKOUT_DURATION {
+            *entry = (0, Instant::now());
+        }
         entry.0 += 1;
         Ok(false)
     }
 
     pub fn is_paired(&self, user_id: &str, platform: &str) -> bool {
-        self.paired_users.contains(&format!("{}@{}", user_id, platform))
+        self.paired_users
+            .contains(&format!("{}@{}", user_id, platform))
     }
 
     pub fn is_locked_out(&self, user_id: &str, platform: &str) -> bool {
         let key = format!("{}@{}", user_id, platform);
-        self.failed_attempts.get(&key).map_or(false, |(count, first)| {
-            *count >= MAX_ATTEMPTS && first.elapsed() < LOCKOUT_DURATION
-        })
+        self.failed_attempts
+            .get(&key)
+            .map_or(false, |(count, first)| {
+                *count >= MAX_ATTEMPTS && first.elapsed() < LOCKOUT_DURATION
+            })
     }
 
     fn persist_paired_users(&self) {
         if let Some(dir) = dirs::home_dir().map(|h| h.join(".hermes")) {
             let _ = std::fs::create_dir_all(&dir);
             let users: Vec<&String> = self.paired_users.iter().collect();
-            let _ = std::fs::write(dir.join("paired_users.json"), serde_json::to_string(&users).unwrap_or_default());
+            let _ = std::fs::write(
+                dir.join("paired_users.json"),
+                serde_json::to_string(&users).unwrap_or_default(),
+            );
         }
     }
 

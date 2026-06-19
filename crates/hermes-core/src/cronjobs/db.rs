@@ -1,8 +1,8 @@
+use crate::error::Error;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use crate::error::Error;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CronJob {

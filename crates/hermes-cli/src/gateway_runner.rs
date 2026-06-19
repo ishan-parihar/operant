@@ -16,7 +16,9 @@ use hermes_core::gateway::{
 use hermes_core::gateway_pipeline::{MessagePipeline, PipelineAction};
 use hermes_core::memory_provider::{build_memory_provider, MemoryProvider};
 
-use crate::gateway_commands::{handle_command, resolve_command, telegram_bot_commands, CommandContext};
+use crate::gateway_commands::{
+    handle_command, resolve_command, telegram_bot_commands, CommandContext,
+};
 use hermes_core::mcp::McpManager;
 use hermes_core::tools::{HermesTool, ToolContext, TranscriptionTool};
 use std::sync::Arc;
@@ -44,7 +46,10 @@ impl MessageHandler for GatewayMessageHandler {
         let session_key = if message.is_group_chat {
             format!("{}:{}", message.platform, message.channel_id)
         } else {
-            format!("{}:{}:{}", message.platform, message.channel_id, message.user_id)
+            format!(
+                "{}:{}:{}",
+                message.platform, message.channel_id, message.user_id
+            )
         };
 
         // Derive stable session_id from key hash
@@ -54,7 +59,10 @@ impl MessageHandler for GatewayMessageHandler {
 
         // Ensure session exists in DB
         let now = chrono::Utc::now().to_rfc3339();
-        let _ = self.agent.db().save_session(&session_id, None, "gateway", &now, &now);
+        let _ = self
+            .agent
+            .db()
+            .save_session(&session_id, None, "gateway", &now, &now);
 
         // Load conversation history (last 20 messages) instead of clearing
         self.agent.clear_history().await;
@@ -75,7 +83,10 @@ impl MessageHandler for GatewayMessageHandler {
         let query = if memory_context.is_empty() {
             message.content.clone()
         } else {
-            format!("[retrieved_memory]\n{}\n\n[/retrieved_memory]\n\n{}", memory_context, message.content)
+            format!(
+                "[retrieved_memory]\n{}\n\n[/retrieved_memory]\n\n{}",
+                memory_context, message.content
+            )
         };
 
         let user_content = message.content.clone();
@@ -103,17 +114,29 @@ impl MessageHandler for GatewayMessageHandler {
                 };
 
                 // Sync this turn to the memory provider
-                let _ = self.memory_provider.sync_turn(&user_content, &content).await;
+                let _ = self
+                    .memory_provider
+                    .sync_turn(&user_content, &content)
+                    .await;
 
                 // Save user message and assistant response to DB
-                let _ = self.agent.db().save_message(&session_id, "user", &user_content, &now);
-                let _ = self.agent.db().save_message(&session_id, "assistant", &content, &now);
+                let _ = self
+                    .agent
+                    .db()
+                    .save_message(&session_id, "user", &user_content, &now);
+                let _ = self
+                    .agent
+                    .db()
+                    .save_message(&session_id, "assistant", &content, &now);
 
                 Ok(OutgoingMessage::new(message.channel_id, content))
             }
             Err(e) => {
                 // Still save the user message on error
-                let _ = self.agent.db().save_message(&session_id, "user", &user_content, &now);
+                let _ = self
+                    .agent
+                    .db()
+                    .save_message(&session_id, "user", &user_content, &now);
                 Ok(OutgoingMessage::new(
                     &message.channel_id,
                     format!("Error: {}", e),
@@ -136,8 +159,11 @@ fn build_adapters(config: &GatewayConfig) -> Vec<Arc<dyn PlatformAdapter>> {
 
     // Telegram
     if config.telegram_enabled {
-        adapters.push(Arc::new(TelegramAdapter::new(
+        adapters.push(Arc::new(TelegramAdapter::with_config(
             config.telegram_token.clone(),
+            config.telegram_bot_username.clone(),
+            config.telegram_dm_topics_enabled,
+            config.telegram_proxy.as_deref(),
         )));
     }
 
@@ -165,10 +191,19 @@ fn build_adapters(config: &GatewayConfig) -> Vec<Arc<dyn PlatformAdapter>> {
 fn build_session_context(platform: &str, channel_id: &str, app_config: &AppConfig) -> String {
     let mut ctx = String::new();
     ctx.push_str(&format!("Connected platform: {}\n", platform));
-    ctx.push_str(&format!("Channel: {}\n", hermes_core::pii::redact_chat_id(channel_id)));
-    if app_config.gateway.telegram_enabled { ctx.push_str("Available: Telegram\n"); }
-    if app_config.gateway.discord_enabled { ctx.push_str("Available: Discord\n"); }
-    if app_config.gateway.slack_enabled { ctx.push_str("Available: Slack\n"); }
+    ctx.push_str(&format!(
+        "Channel: {}\n",
+        hermes_core::pii::redact_chat_id(channel_id)
+    ));
+    if app_config.gateway.telegram_enabled {
+        ctx.push_str("Available: Telegram\n");
+    }
+    if app_config.gateway.discord_enabled {
+        ctx.push_str("Available: Discord\n");
+    }
+    if app_config.gateway.slack_enabled {
+        ctx.push_str("Available: Slack\n");
+    }
     ctx
 }
 
@@ -199,6 +234,9 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
         webhooks_addr: app_config.gateway.webhooks_addr.clone(),
         admins: app_config.gateway.admins.clone(),
         streaming_transport: app_config.gateway.streaming_transport.clone(),
+        telegram_proxy: app_config.gateway.telegram_proxy.clone(),
+        telegram_bot_username: app_config.gateway.telegram_bot_username.clone(),
+        telegram_dm_topics_enabled: app_config.gateway.telegram_dm_topics_enabled,
     };
     let dispatch_config = gw_config.clone();
     let adapters = build_adapters(&gw_config);
@@ -210,7 +248,8 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
 
     // Attach persistent session store for cross-restart session tracking
     let session_db_path = hermes_core::platform::hermes_home().join("database.db");
-    if let Ok(store) = hermes_core::PersistentSessionStore::open(session_db_path.to_str().unwrap()) {
+    if let Ok(store) = hermes_core::PersistentSessionStore::open(session_db_path.to_str().unwrap())
+    {
         gateway = gateway.with_persistent_sessions(std::sync::Arc::new(store));
     }
 
@@ -235,11 +274,12 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
     // Initialize memory provider from config
     let mem_cfg = runtime_config().memory;
     let storage_dir = hermes_core::platform::hermes_home();
-    let memory_provider = if mem_cfg.enabled && mem_cfg.provider != "builtin" && mem_cfg.provider != "disabled" {
-        build_memory_provider(&mem_cfg.provider, storage_dir)
-    } else {
-        build_memory_provider("builtin", storage_dir)
-    };
+    let memory_provider =
+        if mem_cfg.enabled && mem_cfg.provider != "builtin" && mem_cfg.provider != "disabled" {
+            build_memory_provider(&mem_cfg.provider, storage_dir)
+        } else {
+            build_memory_provider("builtin", storage_dir)
+        };
 
     let handler = Arc::new(GatewayMessageHandler {
         agent,
@@ -266,10 +306,7 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
     if let Some(ref token) = telegram_token {
         let api_base = "https://api.telegram.org";
         let cmd_url = format!("{}/bot{}/setMyCommands", api_base, token);
-        let cmd_body = format!(
-            r#"{{"commands":{}}}"#,
-            telegram_bot_commands()
-        );
+        let cmd_body = format!(r#"{{"commands":{}}}"#, telegram_bot_commands());
         let client = reqwest::Client::new();
         match client
             .post(&cmd_url)
@@ -434,11 +471,18 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                 AgentEvent::ToolComplete { result } => {
                     // Intercept TTS audio results and send as voice message
                     if result.name == "text_to_speech" && result.success {
-                        if let Ok(data) = serde_json::from_str::<serde_json::Value>(&result.content) {
+                        if let Ok(data) = serde_json::from_str::<serde_json::Value>(&result.content)
+                        {
                             if let Some(audio_b64) = data.get("audio").and_then(|a| a.as_str()) {
-                                let format = data.get("format").and_then(|f| f.as_str()).unwrap_or("wav");
-                                if let Ok(audio_bytes) = base64::engine::general_purpose::STANDARD.decode(audio_b64) {
-                                    if let Err(e) = gw_for_events.send_voice(&platform, &channel_id, &audio_bytes, format).await {
+                                let format =
+                                    data.get("format").and_then(|f| f.as_str()).unwrap_or("wav");
+                                if let Ok(audio_bytes) =
+                                    base64::engine::general_purpose::STANDARD.decode(audio_b64)
+                                {
+                                    if let Err(e) = gw_for_events
+                                        .send_voice(&platform, &channel_id, &audio_bytes, format)
+                                        .await
+                                    {
                                         tracing::warn!(error = %e, "Failed to send TTS voice message");
                                     }
                                 }
@@ -499,9 +543,7 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                             &platform,
                             &msg.channel_id,
                         );
-                        if let Some(response_text) =
-                            handle_command(cmd_def.name, cmd_args, &ctx)
-                        {
+                        if let Some(response_text) = handle_command(cmd_def.name, cmd_args, &ctx) {
                             let response = OutgoingMessage::new(&msg.channel_id, response_text);
                             gw.send_to_platform(&platform, response).await?;
                         }
@@ -553,40 +595,47 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
 
                 // ── 4. Session management ─────────────────────────────────────
                 if msg.is_group_chat {
-                    match gw.get_session_store().find_or_create_shared_session(&msg.platform, &msg.channel_id) {
-                        Ok(s) => tracing::info!("Shared session {} for channel {}", s.session_id, msg.channel_id),
+                    match gw
+                        .get_session_store()
+                        .find_or_create_shared_session(&msg.platform, &msg.channel_id)
+                    {
+                        Ok(s) => tracing::info!(
+                            "Shared session {} for channel {}",
+                            s.session_id,
+                            msg.channel_id
+                        ),
                         Err(e) => tracing::warn!("Failed to get shared session: {}", e),
                     }
                     msg.content = format!("[{}]: {}", msg.username, msg.content);
                 } else {
-                let existing = gw.get_session_store().find_session(
-                    &msg.platform,
-                    &msg.user_id,
-                    &msg.channel_id,
-                );
-                if let Some(s) = existing {
-                    tracing::info!(
-                        "Found existing session {} for {}@{}",
-                        s.session_id,
-                        msg.user_id,
-                        msg.platform
-                    );
-                    let _ = gw.get_session_store().update_activity(&s.session_id);
-                } else {
-                    match gw.get_session_store().create_session(
+                    let existing = gw.get_session_store().find_session(
                         &msg.platform,
                         &msg.user_id,
                         &msg.channel_id,
-                    ) {
-                        Ok(s) => tracing::info!(
-                            "Created new session {} for {}@{}",
+                    );
+                    if let Some(s) = existing {
+                        tracing::info!(
+                            "Found existing session {} for {}@{}",
                             s.session_id,
                             msg.user_id,
                             msg.platform
-                        ),
-                        Err(e) => tracing::warn!("Failed to create session: {}", e),
+                        );
+                        let _ = gw.get_session_store().update_activity(&s.session_id);
+                    } else {
+                        match gw.get_session_store().create_session(
+                            &msg.platform,
+                            &msg.user_id,
+                            &msg.channel_id,
+                        ) {
+                            Ok(s) => tracing::info!(
+                                "Created new session {} for {}@{}",
+                                s.session_id,
+                                msg.user_id,
+                                msg.platform
+                            ),
+                            Err(e) => tracing::warn!("Failed to create session: {}", e),
+                        }
                     }
-                }
                 }
 
                 // ── 5. Typing indicator ───────────────────────────────────────
@@ -620,10 +669,8 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                         loop {
                             let elapsed = start.elapsed().as_secs();
                             let minutes = elapsed / 60;
-                            let body = format!(
-                                "\u{23F3} Still working... ({}m elapsed...)",
-                                minutes
-                            );
+                            let body =
+                                format!("\u{23F3} Still working... ({}m elapsed...)", minutes);
                             let msg = OutgoingMessage::new(&ch, &body).no_markdown();
                             if gw.send_to_platform("telegram", msg).await.is_err() {
                                 break;
@@ -709,7 +756,8 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
     let cron_db_path = hermes_core::platform::hermes_home().join("hermes_cron.db");
     if let Ok(cron_db) = hermes_core::cronjobs::CronDb::init(cron_db_path) {
         let cron_db = Arc::new(cron_db);
-        let (cron_tx, mut cron_rx) = tokio::sync::mpsc::unbounded_channel::<hermes_core::cronjobs::CronDelivery>();
+        let (cron_tx, mut cron_rx) =
+            tokio::sync::mpsc::unbounded_channel::<hermes_core::cronjobs::CronDelivery>();
 
         let scheduler = hermes_core::cronjobs::CronScheduler::new(cron_db, cron_agent.clone())
             .with_delivery(cron_tx);
@@ -969,6 +1017,9 @@ mod tests {
             webhooks_addr: None,
             admins: vec![],
             streaming_transport: "auto".to_string(),
+            telegram_proxy: None,
+            telegram_bot_username: None,
+            telegram_dm_topics_enabled: false,
         };
         let adapters = build_adapters(&config);
         assert_eq!(adapters.len(), 0);
@@ -987,6 +1038,9 @@ mod tests {
             webhooks_addr: None,
             admins: vec![],
             streaming_transport: "auto".to_string(),
+            telegram_proxy: None,
+            telegram_bot_username: None,
+            telegram_dm_topics_enabled: false,
         };
         let adapters = build_adapters(&config);
         assert_eq!(adapters.len(), 1);
@@ -1006,6 +1060,9 @@ mod tests {
             webhooks_addr: Some("0.0.0.0:9090".to_string()),
             admins: vec![],
             streaming_transport: "auto".to_string(),
+            telegram_proxy: None,
+            telegram_bot_username: None,
+            telegram_dm_topics_enabled: false,
         };
         let adapters = build_adapters(&config);
         assert_eq!(adapters.len(), 4);
@@ -1040,6 +1097,9 @@ mod tests {
             webhooks_addr: app_config.gateway.webhooks_addr.clone(),
             admins: app_config.gateway.admins.clone(),
             streaming_transport: "auto".to_string(),
+            telegram_proxy: app_config.gateway.telegram_proxy.clone(),
+            telegram_bot_username: app_config.gateway.telegram_bot_username.clone(),
+            telegram_dm_topics_enabled: app_config.gateway.telegram_dm_topics_enabled,
         };
 
         assert!(gw_config.telegram_enabled);
@@ -1051,10 +1111,17 @@ mod tests {
 
     #[tokio::test]
     async fn test_gateway_start_stop_with_disabled_platforms() {
-        // Stop any prior gateway first
         stop_gateway().await.ok();
 
+        let tmp = tempfile::tempdir().unwrap();
+        let _guard = hermes_core::profile::set_hermes_home_override(tmp.path().to_path_buf());
+
+        // Ensure a fresh DB exists with the full schema before gateway touches it
+        let db_path = tmp.path().join("database.db");
+        let _db = hermes_core::database::Database::init(db_path.clone()).expect("init test db");
+
         let config = AppConfig {
+            database_path: db_path,
             gateway: GatewaySettings {
                 telegram_enabled: false,
                 discord_enabled: false,

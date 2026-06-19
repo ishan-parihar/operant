@@ -43,6 +43,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 futures = "0.3"
 pin-project = "1.1"
 bytes = "1.6"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
 futures-util = "0.3"
 url = "2.5"
 tokio-tungstenite = "0.24"

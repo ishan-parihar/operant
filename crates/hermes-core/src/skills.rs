@@ -5,8 +5,27 @@
 //! directories containing a SKILL.md file with YAML front matter.
 
 use crate::error::{Error, Result};
+use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+
+/// Parsed YAML frontmatter from a SKILL.md file.
+#[derive(Debug, Deserialize, Default)]
+#[serde(default)]
+struct SkillFrontmatter {
+    name: Option<String>,
+    description: Option<String>,
+    version: Option<String>,
+    author: Option<String>,
+    license: Option<String>,
+    platforms: Option<Vec<String>>,
+    tags: Option<Vec<String>>,
+    category: Option<String>,
+    prerequisites_env: Option<Vec<String>>,
+    prerequisites_commands: Option<Vec<String>>,
+    /// Nested metadata (e.g. metadata.hermes.tags, metadata.hermes.category)
+    metadata: Option<serde_json::Value>,
+}
 
 /// A loaded skill with parsed metadata and content.
 #[derive(Debug, Clone)]
@@ -21,6 +40,10 @@ pub struct Skill {
     pub content: String,
     /// Supported platforms (e.g. ["linux", "macos", "windows"])
     pub platforms: Vec<String>,
+    /// Tags for categorization
+    pub tags: Vec<String>,
+    /// Skill category
+    pub category: String,
     /// Required environment variables
     pub prerequisites_env: Vec<String>,
     /// Required commands on PATH
@@ -203,20 +226,17 @@ fn load_skill(skill_dir: &Path) -> Result<Skill> {
     let raw = std::fs::read_to_string(&skill_file)
         .map_err(|e| Error::Config(format!("Failed to read SKILL.md in '{}': {}", dir_name, e)))?;
 
-    let (front_matter, body) = parse_front_matter(&raw)?;
+    let fm = parse_front_matter(&raw)?;
+    let body = extract_body(&raw);
 
-    let name = front_matter
-        .get("name")
-        .cloned()
-        .unwrap_or_else(|| dir_name.clone());
-    let description = front_matter.get("description").cloned().unwrap_or_default();
-    let version = front_matter
-        .get("version")
-        .cloned()
-        .unwrap_or_else(|| "0.1.0".into());
-    let platforms = parse_list(front_matter.get("platforms"));
-    let prerequisites_env = parse_list(front_matter.get("prerequisites_env"));
-    let prerequisites_commands = parse_list(front_matter.get("prerequisites_commands"));
+    let (tags, category) = extract_metadata_extras(&fm);
+
+    let name = fm.name.unwrap_or_else(|| dir_name.clone());
+    let description = fm.description.unwrap_or_default();
+    let version = fm.version.unwrap_or_else(|| "0.1.0".into());
+    let platforms = fm.platforms.unwrap_or_default();
+    let prerequisites_env = fm.prerequisites_env.unwrap_or_default();
+    let prerequisites_commands = fm.prerequisites_commands.unwrap_or_default();
 
     // Load reference files (everything in the skill dir that isn't SKILL.md)
     let mut references = HashMap::new();
@@ -241,42 +261,82 @@ fn load_skill(skill_dir: &Path) -> Result<Skill> {
         version,
         content: body,
         platforms,
+        tags,
+        category,
         prerequisites_env,
         prerequisites_commands,
         references,
     })
 }
 
-/// Parse YAML-like front matter delimited by `---` lines.
-///
-/// Returns a map of key-value pairs and the remaining body content.
-/// Values that look like YAML lists (`[a, b, c]`) are stored as-is;
-/// use `parse_list` to expand them.
-fn parse_front_matter(raw: &str) -> Result<(HashMap<String, String>, String)> {
+/// Extract tags and category from top-level fields or metadata.hermes.*.
+fn extract_metadata_extras(fm: &SkillFrontmatter) -> (Vec<String>, String) {
+    let mut tags = fm.tags.clone().unwrap_or_default();
+    let mut category = fm.category.clone().unwrap_or_default();
+
+    if let Some(meta) = &fm.metadata {
+        if let Some(hermes) = meta.get("hermes") {
+            if tags.is_empty() {
+                if let Some(t) = hermes.get("tags").and_then(|v| v.as_array()) {
+                    tags = t.iter().filter_map(|v| v.as_str().map(String::from)).collect();
+                }
+            }
+            if category.is_empty() {
+                if let Some(c) = hermes.get("category").and_then(|v| v.as_str()) {
+                    category = c.to_string();
+                }
+            }
+        }
+    }
+
+    (tags, category)
+}
+
+fn extract_body(raw: &str) -> String {
+    let trimmed = raw.trim_start();
+    if !trimmed.starts_with("---") {
+        return raw.to_string();
+    }
+    let after_open = &trimmed[3..];
+    match after_open.find("\n---") {
+        Some(pos) => {
+            let body_start = 3 + pos + 4;
+            if body_start < trimmed.len() {
+                trimmed[body_start..].trim_start_matches('\n').to_string()
+            } else {
+                String::new()
+            }
+        }
+        None => raw.to_string(),
+    }
+}
+
+fn parse_front_matter(raw: &str) -> Result<SkillFrontmatter> {
     let trimmed = raw.trim_start();
 
     if !trimmed.starts_with("---") {
-        // No front matter — treat entire content as body, use defaults
-        return Ok((HashMap::new(), raw.to_string()));
+        return Ok(SkillFrontmatter::default());
     }
 
-    // Find the closing `---`
     let after_open = &trimmed[3..];
     let close_pos = after_open
         .find("\n---")
         .ok_or_else(|| Error::Config("SKILL.md front matter missing closing '---'".into()))?;
 
     let fm_block = &after_open[..close_pos];
-    // Body starts after the closing `---` line
-    let body_start = 3 + close_pos + 4; // "---" + "\n---"
-    let body = if body_start < trimmed.len() {
-        trimmed[body_start..].trim_start_matches('\n').to_string()
-    } else {
-        String::new()
-    };
 
+    // Try full YAML parse first
+    if let Ok(fm) = serde_yaml::from_str::<SkillFrontmatter>(fm_block) {
+        return Ok(fm);
+    }
+
+    // Fall back to flat key-value parsing for backward compatibility
+    Ok(parse_flat_front_matter(fm_block))
+}
+
+/// Flat key-value fallback for legacy SKILL.md files.
+fn parse_flat_front_matter(fm_block: &str) -> SkillFrontmatter {
     let mut map = HashMap::new();
-
     for line in fm_block.lines() {
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') {
@@ -291,28 +351,28 @@ fn parse_front_matter(raw: &str) -> Result<(HashMap<String, String>, String)> {
         }
     }
 
-    Ok((map, body))
+    SkillFrontmatter {
+        name: map.get("name").cloned(),
+        description: map.get("description").cloned(),
+        version: map.get("version").cloned(),
+        author: map.get("author").cloned(),
+        license: map.get("license").cloned(),
+        platforms: map.get("platforms").map(|v| parse_list_value(v)),
+        tags: map.get("tags").map(|v| parse_list_value(v)),
+        category: map.get("category").cloned(),
+        prerequisites_env: map.get("prerequisites_env").map(|v| parse_list_value(v)),
+        prerequisites_commands: map.get("prerequisites_commands").map(|v| parse_list_value(v)),
+        metadata: None,
+    }
 }
 
-/// Parse a YAML-like list value.
-///
-/// Supports both inline `[a, b, c]` and bare `a, b, c` formats.
-/// Returns an empty vec for `None` or empty strings.
-fn parse_list(value: Option<&String>) -> Vec<String> {
-    let s = match value {
-        Some(s) if !s.is_empty() => s,
-        _ => return Vec::new(),
-    };
-
+fn parse_list_value(s: &str) -> Vec<String> {
     let s = s.trim();
-
-    // Strip surrounding brackets if present
     let inner = if s.starts_with('[') && s.ends_with(']') {
         &s[1..s.len() - 1]
     } else {
         s
     };
-
     inner
         .split(',')
         .map(|item| item.trim().trim_matches('"').trim_matches('\'').to_string())
@@ -397,43 +457,39 @@ mod tests {
 
     #[test]
     fn test_parse_front_matter() {
-        let (fm, body) = parse_front_matter(sample_skill_md()).unwrap();
-        assert_eq!(fm.get("name").unwrap(), "test-skill");
-        assert_eq!(
-            fm.get("description").unwrap(),
-            "A test skill for unit tests"
-        );
-        assert_eq!(fm.get("version").unwrap(), "1.0.0");
+        let fm = parse_front_matter(sample_skill_md()).unwrap();
+        assert_eq!(fm.name.as_deref(), Some("test-skill"));
+        assert_eq!(fm.description.as_deref(), Some("A test skill for unit tests"));
+        assert_eq!(fm.version.as_deref(), Some("1.0.0"));
+        let body = extract_body(sample_skill_md());
         assert!(body.contains("# Test Skill"));
         assert!(body.contains("This is the skill content."));
     }
 
     #[test]
     fn test_parse_front_matter_no_front_matter() {
-        let (fm, body) = parse_front_matter("# Just content\nNo front matter here").unwrap();
-        assert!(fm.is_empty());
+        let fm = parse_front_matter("# Just content\nNo front matter here").unwrap();
+        assert!(fm.name.is_none());
+        let body = extract_body("# Just content\nNo front matter here");
         assert!(body.contains("# Just content"));
     }
 
     #[test]
     fn test_parse_list_inline() {
-        let val = "[linux, macos, windows]".to_string();
-        let result = parse_list(Some(&val));
+        let result = parse_list_value("[linux, macos, windows]");
         assert_eq!(result, vec!["linux", "macos", "windows"]);
     }
 
     #[test]
     fn test_parse_list_bare() {
-        let val = "linux, macos".to_string();
-        let result = parse_list(Some(&val));
+        let result = parse_list_value("linux, macos");
         assert_eq!(result, vec!["linux", "macos"]);
     }
 
     #[test]
     fn test_parse_list_empty() {
-        assert!(parse_list(None).is_empty());
-        let val = "[]".to_string();
-        assert!(parse_list(Some(&val)).is_empty());
+        assert!(parse_list_value("").is_empty());
+        assert!(parse_list_value("[]").is_empty());
     }
 
     #[test]
@@ -530,6 +586,8 @@ mod tests {
             version: "1.0.0".into(),
             content: String::new(),
             platforms: vec![current_platform().to_string()],
+            tags: vec![],
+            category: String::new(),
             prerequisites_env: vec![],
             prerequisites_commands: vec![],
             references: HashMap::new(),
@@ -547,6 +605,8 @@ mod tests {
             version: "1.0.0".into(),
             content: String::new(),
             platforms: vec!["plan9".to_string()],
+            tags: vec![],
+            category: String::new(),
             prerequisites_env: vec![],
             prerequisites_commands: vec![],
             references: HashMap::new(),
@@ -564,6 +624,8 @@ mod tests {
             version: "1.0.0".into(),
             content: String::new(),
             platforms: vec![],
+            tags: vec![],
+            category: String::new(),
             prerequisites_env: vec![],
             prerequisites_commands: vec![],
             references: HashMap::new(),
@@ -581,6 +643,8 @@ mod tests {
             version: "1.0.0".into(),
             content: String::new(),
             platforms: vec![],
+            tags: vec![],
+            category: String::new(),
             prerequisites_env: vec!["HERMES_NONEXISTENT_VAR_12345".into()],
             prerequisites_commands: vec![],
             references: HashMap::new(),

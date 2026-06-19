@@ -10,9 +10,16 @@ use super::{Gateway, OutgoingMessage};
 use crate::error::Result;
 
 const THINK_TAGS: &[&str] = &[
-    "<think>", "</think>", "<reasoning>", "</reasoning>",
-    "<THINKING>", "</THINKING>", "<thought>", "</thought>",
-    "<REASONING_SCRATCHPAD>", "</REASONING_SCRATCHPAD>",
+    "<think>",
+    "</think>",
+    "<reasoning>",
+    "</reasoning>",
+    "<THINKING>",
+    "</THINKING>",
+    "<thought>",
+    "</thought>",
+    "<REASONING_SCRATCHPAD>",
+    "</REASONING_SCRATCHPAD>",
 ];
 
 #[derive(Debug, Clone)]
@@ -171,7 +178,10 @@ impl GatewayStreamConsumer {
         let msg = OutgoingMessage::new(&self.channel_id, &self.buffer);
 
         if fresh || self.message_id.is_none() {
-            let _ = self.gateway.send_message_return_id(&self.platform, msg).await;
+            let _ = self
+                .gateway
+                .send_message_return_id(&self.platform, msg)
+                .await;
         } else if let Some(mid) = &self.message_id {
             let _ = self
                 .gateway

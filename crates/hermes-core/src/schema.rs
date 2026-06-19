@@ -24,7 +24,9 @@ pub fn sanitize_tool_name(name: &str) -> String {
         }
     }
     // Ensure starts with letter or underscore
-    if result.is_empty() || (!result.as_bytes()[0].is_ascii_alphabetic() && result.as_bytes()[0] != b'_') {
+    if result.is_empty()
+        || (!result.as_bytes()[0].is_ascii_alphabetic() && result.as_bytes()[0] != b'_')
+    {
         result.insert(0, '_');
     }
     // Truncate to 128 chars

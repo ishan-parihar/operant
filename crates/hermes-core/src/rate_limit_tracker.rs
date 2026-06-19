@@ -45,15 +45,49 @@ impl RateLimitState {
     pub fn from_headers(headers: &reqwest::header::HeaderMap, provider: &str) -> Option<Self> {
         let captured_at = Utc::now();
 
-        let requests_min = parse_bucket(headers, "x-ratelimit-limit-requests-minute", "x-ratelimit-remaining-requests-minute", "x-ratelimit-reset-requests-minute")
-            .or_else(|| parse_bucket(headers, "x-ratelimit-limit-requests", "x-ratelimit-remaining-requests", "x-ratelimit-reset-requests"));
+        let requests_min = parse_bucket(
+            headers,
+            "x-ratelimit-limit-requests-minute",
+            "x-ratelimit-remaining-requests-minute",
+            "x-ratelimit-reset-requests-minute",
+        )
+        .or_else(|| {
+            parse_bucket(
+                headers,
+                "x-ratelimit-limit-requests",
+                "x-ratelimit-remaining-requests",
+                "x-ratelimit-reset-requests",
+            )
+        });
 
-        let requests_hour = parse_bucket(headers, "x-ratelimit-limit-requests-hour", "x-ratelimit-remaining-requests-hour", "x-ratelimit-reset-requests-hour");
+        let requests_hour = parse_bucket(
+            headers,
+            "x-ratelimit-limit-requests-hour",
+            "x-ratelimit-remaining-requests-hour",
+            "x-ratelimit-reset-requests-hour",
+        );
 
-        let tokens_min = parse_bucket(headers, "x-ratelimit-limit-tokens-minute", "x-ratelimit-remaining-tokens-minute", "x-ratelimit-reset-tokens-minute")
-            .or_else(|| parse_bucket(headers, "x-ratelimit-limit-tokens", "x-ratelimit-remaining-tokens", "x-ratelimit-reset-tokens"));
+        let tokens_min = parse_bucket(
+            headers,
+            "x-ratelimit-limit-tokens-minute",
+            "x-ratelimit-remaining-tokens-minute",
+            "x-ratelimit-reset-tokens-minute",
+        )
+        .or_else(|| {
+            parse_bucket(
+                headers,
+                "x-ratelimit-limit-tokens",
+                "x-ratelimit-remaining-tokens",
+                "x-ratelimit-reset-tokens",
+            )
+        });
 
-        let tokens_hour = parse_bucket(headers, "x-ratelimit-limit-tokens-hour", "x-ratelimit-remaining-tokens-hour", "x-ratelimit-reset-tokens-hour");
+        let tokens_hour = parse_bucket(
+            headers,
+            "x-ratelimit-limit-tokens-hour",
+            "x-ratelimit-remaining-tokens-hour",
+            "x-ratelimit-reset-tokens-hour",
+        );
 
         if requests_min.is_none()
             && requests_hour.is_none()
@@ -161,7 +195,10 @@ mod tests {
     fn make_headers(pairs: &[(&str, &str)]) -> HeaderMap {
         let mut h = HeaderMap::new();
         for (k, v) in pairs {
-            h.insert(HeaderName::from_bytes(k.as_bytes()).unwrap(), HeaderValue::from_str(v).unwrap());
+            h.insert(
+                HeaderName::from_bytes(k.as_bytes()).unwrap(),
+                HeaderValue::from_str(v).unwrap(),
+            );
         }
         h
     }

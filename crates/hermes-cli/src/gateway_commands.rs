@@ -4,9 +4,9 @@
 //! for the Hermes gateway. It handles command resolution, admin gating, and
 //! generates the JSON payload used by Telegram's `setMyCommands` API.
 
+use chrono::Utc;
 use hermes_core::config::{AppConfig, ToolProgressMode};
 use hermes_core::gateway::Gateway;
-use chrono::Utc;
 use std::sync::Arc;
 
 /// Runtime context passed to command handlers for stateful operations.
