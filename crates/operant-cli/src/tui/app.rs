@@ -771,12 +771,12 @@ pub struct App {
     /// Instant the session started (used for elapsed-time in the status bar).
     pub session_start: std::time::Instant,
     /// Current Rustle pose for rendering (updated each frame).
-    pub rustle_current_pose: crate::rustle::RustlePose,
+    pub rustle_current_pose: crate::tui::rustle::RustlePose,
     /// Temporary Rustle pose override (e.g. look-down on Tab). Reverts to
     /// default after this instant passes.
     pub rustle_pose_until: Option<std::time::Instant>,
     /// The temporary pose to show until `rustle_pose_until`.
-    pub rustle_temp_pose: Option<crate::rustle::RustlePose>,
+    pub rustle_temp_pose: Option<crate::tui::rustle::RustlePose>,
     /// Frame counter at which the next random eye-shift should fire.
     pub rustle_next_blink: u64,
     /// Instant the current turn's streaming began (reset each time streaming starts).
@@ -816,7 +816,7 @@ pub struct App {
     /// Remote session URL (set when bridge connects; readable by commands).
     pub remote_session_url: Option<String>,
     /// Live MCP manager snapshot source when available.
-    pub mcp_manager: Option<Arc<claurst_mcp::McpManager>>,
+    pub mcp_manager: Option<Arc<crate::tui::adapter_types::mcp::McpManager>>,
     /// Queued request for a real MCP reconnect from the interactive loop.
     pub pending_mcp_reconnect: bool,
     /// Pending MCP panel-auth request for the interactive loop.
@@ -990,7 +990,7 @@ pub struct App {
     /// Receiver for `UserQuestionEvent`s produced by the AskUserQuestion tool.
     /// When a question arrives, `ask_user_dialog` is populated and shown.
     pub user_question_rx:
-        Option<tokio::sync::mpsc::UnboundedReceiver<claurst_tools::UserQuestionEvent>>,
+        Option<tokio::sync::mpsc::UnboundedReceiver<crate::tui::adapter_types::tools::UserQuestionEvent>>,
     /// State for the model-initiated ask-user question dialog.
     pub ask_user_dialog: crate::ask_user_dialog::AskUserDialogState,
 
@@ -1240,7 +1240,7 @@ impl App {
             new_messages_while_scrolled: 0,
             token_warning_threshold_shown: 0,
             session_start: std::time::Instant::now(),
-            rustle_current_pose: crate::rustle::RustlePose::Default,
+            rustle_current_pose: crate::tui::rustle::RustlePose::Default,
             rustle_pose_until: None,
             rustle_temp_pose: None,
             rustle_next_blink: 200 + (std::time::SystemTime::now()
@@ -1768,7 +1768,7 @@ impl App {
         if self.is_streaming {
             if let Some(start) = self.stall_start {
                 if start.elapsed() > std::time::Duration::from_secs(3) {
-                    self.rustle_current_pose = crate::rustle::RustlePose::Loading {
+                    self.rustle_current_pose = crate::tui::rustle::RustlePose::Loading {
                         frame: self.frame_count,
                     };
                     return;
@@ -1780,7 +1780,7 @@ impl App {
         if let Some(until) = self.rustle_pose_until {
             if std::time::Instant::now() < until {
                 self.rustle_current_pose = self.rustle_temp_pose.clone()
-                    .unwrap_or(crate::rustle::RustlePose::Default);
+                    .unwrap_or(crate::tui::rustle::RustlePose::Default);
                 return;
             }
             // Expired — clear it.
@@ -1790,23 +1790,23 @@ impl App {
 
         // Random eye-shift: every ~200-500 frames, briefly look right.
         if self.frame_count >= self.rustle_next_blink {
-            self.rustle_temp_pose = Some(crate::rustle::RustlePose::LookRight);
+            self.rustle_temp_pose = Some(crate::tui::rustle::RustlePose::LookRight);
             self.rustle_pose_until = Some(
                 std::time::Instant::now() + std::time::Duration::from_millis(800)
             );
             // Schedule next blink 200-500 frames from now (random-ish).
             let jitter = (self.frame_count.wrapping_mul(7) % 300) + 200;
             self.rustle_next_blink = self.frame_count + jitter;
-            self.rustle_current_pose = crate::rustle::RustlePose::LookRight;
+            self.rustle_current_pose = crate::tui::rustle::RustlePose::LookRight;
             return;
         }
 
-        self.rustle_current_pose = crate::rustle::RustlePose::Default;
+        self.rustle_current_pose = crate::tui::rustle::RustlePose::Default;
     }
 
     /// Trigger Rustle looking down briefly (called on Tab / mode switch).
     pub fn rustle_look_down(&mut self) {
-        self.rustle_temp_pose = Some(crate::rustle::RustlePose::LookDown);
+        self.rustle_temp_pose = Some(crate::tui::rustle::RustlePose::LookDown);
         self.rustle_pose_until = Some(
             std::time::Instant::now() + std::time::Duration::from_secs(1)
         );
@@ -2369,20 +2369,20 @@ impl App {
                         .collect();
 
                     let (status, error_message) = match manager.server_status(&server.name) {
-                        claurst_mcp::McpServerStatus::Connected { .. } => {
+                        crate::tui::adapter_types::mcp::McpServerStatus::Connected { .. } => {
                             (McpViewStatus::Connected, None)
                         }
-                        claurst_mcp::McpServerStatus::Connecting => {
+                        crate::tui::adapter_types::mcp::McpServerStatus::Connecting => {
                             (McpViewStatus::Connecting, None)
                         }
-                        claurst_mcp::McpServerStatus::Disconnected { last_error } => {
+                        crate::tui::adapter_types::mcp::McpServerStatus::Disconnected { last_error } => {
                             if last_error.is_some() {
                                 (McpViewStatus::Error, last_error)
                             } else {
                                 (McpViewStatus::Disconnected, None)
                             }
                         }
-                        claurst_mcp::McpServerStatus::Failed { error, .. } => {
+                        crate::tui::adapter_types::mcp::McpServerStatus::Failed { error, .. } => {
                             (McpViewStatus::Error, Some(error))
                         }
                     };
@@ -2752,7 +2752,7 @@ impl App {
         self.refresh_turn_diff_from_history();
     }
 
-    pub fn attach_mcp_manager(&mut self, mcp_manager: Arc<claurst_mcp::McpManager>) {
+    pub fn attach_mcp_manager(&mut self, mcp_manager: Arc<crate::tui::adapter_types::mcp::McpManager>) {
         self.mcp_manager = Some(mcp_manager);
     }
 

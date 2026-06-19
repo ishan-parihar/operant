@@ -1,16 +1,77 @@
 pub mod config {
     pub use operant_core::config::AppConfig as Config;
 
+    impl Config {
+        pub fn effective_model(&self) -> &str {
+            &self.agent.model
+        }
+        pub fn resolve_api_key(&self, _provider: &str) -> Option<String> {
+            self.client.api_key.clone()
+        }
+        pub fn api_key_for(&self, _provider: &str) -> Option<String> {
+            self.client.api_key.clone()
+        }
+        pub fn set_model(&mut self, model: &str) {
+            self.agent.model = model.to_string();
+        }
+        pub fn config_dir() -> std::path::PathBuf {
+            dirs::home_dir().unwrap_or_default().join(".operant")
+        }
+    }
+
     #[derive(Debug, Clone, Default)]
     pub struct Settings {
         pub theme: Theme,
         pub permission_mode: PermissionMode,
         pub max_output_tokens: usize,
+        pub model: Option<String>,
+        pub provider: Option<String>,
+        pub output_style: Option<String>,
+        pub reduce_motion: bool,
+        pub show_cwd: bool,
+        pub auto_compact: bool,
+        pub auto_copy_on_highlight: bool,
+        pub compact_threshold: Option<usize>,
+        pub notifications: bool,
+        pub show_turn_duration: bool,
+        pub terminal_progress_bar: bool,
+        pub show_git_branch: bool,
+        pub config: InnerConfig,
+    }
+
+    #[derive(Debug, Clone, Default)]
+    pub struct InnerConfig {
+        pub verbose: bool,
+        pub cursor_blink_enabled: bool,
+        pub auto_commits: Option<bool>,
+        pub disable_claude_mds: bool,
+        pub file_injection_enabled: bool,
+        pub file_autocomplete_limit: usize,
+        pub file_autocomplete_show_hidden_files: bool,
+        pub file_injection_max_size: usize,
+        pub output_style: Option<String>,
+        pub output_format: OutputFormat,
+        pub compact_threshold: f64,
+    }
+
+    impl Settings {
+        pub fn save_sync(&self) -> Result<(), String> { Ok(()) }
+        pub fn load_sync() -> Result<Self, String> { Ok(Self::default()) }
+        pub fn config_dir() -> std::path::PathBuf {
+            dirs::home_dir().unwrap_or_default().join(".operant")
+        }
     }
 
     #[derive(Debug, Clone, Default)]
     pub struct Theme {
         pub name: String,
+    }
+
+    impl Theme {
+        pub fn dark() -> Self { Self { name: "dark".to_string() } }
+        pub fn light() -> Self { Self { name: "light".to_string() } }
+        pub fn deuteranopia() -> Self { Self { name: "deuteranopia".to_string() } }
+        pub fn custom(name: &str) -> Self { Self { name: name.to_string() } }
     }
 
     #[derive(Debug, Clone, PartialEq)]
@@ -26,9 +87,17 @@ pub mod config {
         }
     }
 
-    #[derive(Debug, Clone, Default)]
-    pub struct OutputFormat {
-        pub format: String,
+    #[derive(Debug, Clone, PartialEq)]
+    pub enum OutputFormat {
+        Text,
+        Json,
+        StreamJson,
+    }
+
+    impl Default for OutputFormat {
+        fn default() -> Self {
+            Self::Text
+        }
     }
 }
 
@@ -66,6 +135,8 @@ pub mod file_history {
         pub fn new() -> Self { Self::default() }
         pub fn push(&mut self, entry: String) { self.entries.push(entry); }
         pub fn entries(&self) -> &[String] { &self.entries }
+        pub fn snapshots_for_turn(&self, _turn: usize) -> Vec<String> { vec![] }
+        pub fn latest_turn_index(&self) -> Option<usize> { None }
     }
 }
 
@@ -74,6 +145,12 @@ pub enum ImageSource {
     Clipboard,
     File(String),
     Url(String),
+    Paste {
+        source_type: String,
+        url: Option<String>,
+        data: Option<Vec<u8>>,
+        media_type: String,
+    },
 }
 
 pub mod keybindings {
@@ -142,7 +219,14 @@ pub mod types {
         Thinking { thinking: String, signature: Option<String> },
         ToolUse { id: String, name: String, input: serde_json::Value },
         ToolResult { tool_use_id: String, content: ToolResultContent, is_error: bool },
-        Image { data: String, media_type: String },
+        Image { source: String, data: String, media_type: String },
+        Document { title: String, context: String, source: String },
+        UserLocalCommandOutput { command: String, output: String },
+        UserCommand { name: String, args: String },
+        UserMemoryInput { key: String, value: String },
+        SystemAPIError { message: String, retry_secs: Option<u64> },
+        CollapsedReadSearch { tool_name: String, paths: Vec<String>, n_hidden: usize },
+        TaskAssignment { id: String, subject: String, description: String },
     }
 
     #[derive(Debug, Clone)]
@@ -184,6 +268,10 @@ pub mod types {
                     .join(""),
             }
         }
+        pub fn get_all_text(&self) -> String {
+            self.text_content()
+        }
+        pub fn total_tokens(&self) -> u32 { 0 }
     }
 
     #[derive(Debug, Clone)]
@@ -439,20 +527,28 @@ pub enum PreviewAction {
     Cancel,
 }
 
+#[derive(Debug, Clone)]
 pub struct FreeUpstream {
     pub id: &'static str,
     pub name: &'static str,
+    pub title: &'static str,
     pub api_key_env: &'static str,
+    pub default_model: &'static str,
+    pub note: &'static str,
+    pub key_url: &'static str,
 }
 
 pub const FREE_CATALOG: &[FreeUpstream] = &[
-    FreeUpstream { id: "anthropic", name: "Anthropic", api_key_env: "ANTHROPIC_API_KEY" },
+    FreeUpstream { id: "anthropic", name: "Anthropic", title: "Claude", api_key_env: "ANTHROPIC_API_KEY", default_model: "claude-3-5-sonnet", note: "Fast, capable", key_url: "" },
 ];
 
 pub struct ModelRegistry;
 
 impl ModelRegistry {
     pub fn new() -> Self { Self }
+    pub fn list_visible_by_provider(&self, _provider: &str) -> Vec<crate::tui::model_picker::ModelEntry> { vec![] }
+    pub fn list_by_provider(&self, _provider: &str) -> Vec<crate::tui::model_picker::ModelEntry> { vec![] }
+    pub fn best_model_for_provider(&self, _provider: &str) -> Option<String> { None }
 }
 
 pub struct ProviderRegistry;
@@ -465,6 +561,97 @@ pub struct AnthropicClient;
 
 pub struct LoadedPlugin {
     pub name: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ProviderId {
+    OPENCODE_GO,
+    OPENCODE_ZEN,
+    Other(String),
+}
+
+pub mod streaming {
+    #[derive(Debug, Clone)]
+    pub enum AnthropicStreamEvent {
+        ContentBlockStart { index: usize },
+        ContentBlockDelta { index: usize, delta: String },
+        ContentBlockStop { index: usize },
+        MessageStart,
+        MessageStop,
+        Ping,
+    }
+
+    #[derive(Debug, Clone)]
+    pub struct ContentDelta {
+        pub text: Option<String>,
+        pub thinking: Option<String>,
+    }
+}
+
+pub mod mcp {
+    use std::sync::Arc;
+
+    pub struct McpManager;
+
+    impl McpManager {
+        pub fn new() -> Arc<Self> {
+            Arc::new(Self)
+        }
+    }
+
+    #[derive(Debug, Clone, PartialEq)]
+    pub enum McpServerStatus {
+        Connected { name: String },
+        Connecting,
+        Disconnected { last_error: Option<String> },
+        Failed { error: String, .. },
+    }
+}
+
+pub mod tools {
+    use std::sync::OnceLock;
+    use std::collections::HashMap;
+
+    #[derive(Debug, Clone, PartialEq)]
+    pub enum TaskStatus { Pending, Running, Completed, Failed, InProgress, Deleted }
+
+    impl TaskStatus {
+        pub fn emoji(&self) -> &'static str {
+            match self {
+                TaskStatus::Pending => "⏳",
+                TaskStatus::Running => "🔄",
+                TaskStatus::Completed => "✅",
+                TaskStatus::Failed => "❌",
+                TaskStatus::InProgress => "🟡",
+                TaskStatus::Deleted => "🗑",
+            }
+        }
+    }
+
+    #[derive(Debug, Clone)]
+    pub struct Task {
+        pub id: String,
+        pub status: TaskStatus,
+        pub description: String,
+        pub subject: String,
+    }
+
+    pub struct TaskStore {
+        tasks: HashMap<String, Task>,
+    }
+
+    impl TaskStore {
+        pub fn new() -> Self { Self { tasks: HashMap::new() } }
+    }
+
+    pub static TASK_STORE: once_cell::sync::Lazy<std::sync::Mutex<TaskStore>> =
+        once_cell::sync::Lazy::new(|| std::sync::Mutex::new(TaskStore::new()));
+
+    #[derive(Debug, Clone)]
+    pub struct UserQuestionEvent {
+        pub question: String,
+        pub options: Vec<String>,
+    }
 }
 
 pub struct TuiApp;

@@ -54,6 +54,9 @@ pub mod voice_mode_notice;
 pub mod plugin_views;
 pub mod theme_screen;
 
-pub use app::{App, LaunchMode};
+pub use adapter_types::TuiApp;
+pub use adapter_types::LaunchMode;
+pub use adapter_types::streaming::AnthropicStreamEvent;
+pub use app::App;
 pub use render::render_app;
 pub use skin::SkinConfig;
