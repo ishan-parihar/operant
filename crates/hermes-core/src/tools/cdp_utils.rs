@@ -70,7 +70,6 @@ pub async fn send_cdp_command(url: &str, command: &Value) -> Result<Value> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
 
     #[test]
     fn test_cdp_command_serializes_correctly() {

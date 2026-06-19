@@ -1830,15 +1830,16 @@ impl SkillSource for SkillsShSource {
                 _ => return vec![],
             };
 
-            let re = Regex::new(
-                r#"href=["']/(?P<id>(?!agents/|_next/|api/)[^"'/]+/[^"'/]+/[^"'/]+)["']"#,
-            )
-            .unwrap();
+            let re = Regex::new(r#"href=["']/(?P<id>[^"'/]+/[^"'/]+/[^"'/]+)["']"#).unwrap();
             let mut results = Vec::new();
             let mut seen = std::collections::HashSet::new();
+            let excluded_prefixes = ["agents/", "_next/", "api/"];
 
             for cap in re.captures_iter(&html) {
                 let canonical = cap["id"].to_string();
+                if excluded_prefixes.iter().any(|p| canonical.starts_with(p)) {
+                    continue;
+                }
                 if !seen.insert(canonical.clone()) {
                     continue;
                 }

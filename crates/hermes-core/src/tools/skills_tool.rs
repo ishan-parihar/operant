@@ -158,7 +158,7 @@ impl HermesTool for SkillsTool {
         )
     }
 
-    async fn execute(&self, args: Value, _context: ToolContext) -> ToolResult {
+    async fn execute(&self, _args: Value, _context: ToolContext) -> ToolResult {
         let skills_dir = self.root_dir.clone();
 
         if !skills_dir.exists() {
@@ -493,7 +493,7 @@ mod tests {
     #[test]
     fn test_parse_frontmatter_invalid_yaml() {
         let content = "---\nname: test\nbroken: [asd\n---\nbody";
-        let (frontmatter, body) = parse_frontmatter(content);
+        let (frontmatter, _body) = parse_frontmatter(content);
         assert!(frontmatter.is_null());
     }
 

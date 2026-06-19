@@ -427,21 +427,16 @@ mod tests {
             "original",
             test_handler,
         ));
-        register_plugin_command(PluginCommand::new(
-            "overwrite-test",
-            "replacement",
-            |_| "replaced".to_string(),
-        ));
+        register_plugin_command(PluginCommand::new("overwrite-test", "replacement", |_| {
+            "replaced".to_string()
+        }));
         let result = handle_plugin_command("overwrite-test", "");
         assert_eq!(result.unwrap(), "replaced");
     }
 
     #[test]
     fn test_discover_plugins_empty_dir() {
-        let dir = std::env::temp_dir().join(format!(
-            "hermes_plugin_test_{}",
-            std::process::id()
-        ));
+        let dir = std::env::temp_dir().join(format!("hermes_plugin_test_{}", std::process::id()));
         let _ = fs::create_dir_all(&dir);
         let manifests = discover_plugins(&[dir.clone()]);
         assert!(manifests.is_empty());
@@ -457,10 +452,8 @@ mod tests {
 
     #[test]
     fn test_discover_plugins_toml() {
-        let dir = std::env::temp_dir().join(format!(
-            "hermes_plugin_toml_test_{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("hermes_plugin_toml_test_{}", std::process::id()));
         let plugin_dir = dir.join("my-plugin");
         fs::create_dir_all(&plugin_dir).unwrap();
         fs::write(
@@ -486,10 +479,8 @@ author = "Test Author"
 
     #[test]
     fn test_discover_plugins_yaml() {
-        let dir = std::env::temp_dir().join(format!(
-            "hermes_plugin_yaml_test_{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("hermes_plugin_yaml_test_{}", std::process::id()));
         let plugin_dir = dir.join("yaml-plugin");
         fs::create_dir_all(&plugin_dir).unwrap();
         fs::write(

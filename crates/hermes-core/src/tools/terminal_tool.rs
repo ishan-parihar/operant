@@ -62,7 +62,14 @@ impl HermesTool for TerminalTool {
         let backend = terminal_backend::create_backend(&runtime_config());
 
         let output: CommandOutput = match backend
-            .execute_command(&args.command, cwd, &env_vars, use_shell, timeout, max_output)
+            .execute_command(
+                &args.command,
+                cwd,
+                &env_vars,
+                use_shell,
+                timeout,
+                max_output,
+            )
             .await
         {
             Ok(o) => o,

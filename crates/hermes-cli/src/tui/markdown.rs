@@ -35,7 +35,9 @@ pub fn render_markdown(text: &str, accent: Color, muted: Color) -> Vec<Line<'sta
 
         while !remaining.is_empty() {
             if remaining.starts_with("**") || remaining.starts_with("__") {
-                let end = remaining[2..].find("**").or_else(|| remaining[2..].find("__"));
+                let end = remaining[2..]
+                    .find("**")
+                    .or_else(|| remaining[2..].find("__"));
                 if let Some(end) = end {
                     let bold_text = &remaining[2..end + 2];
                     spans.push(Span::styled(
@@ -70,9 +72,7 @@ pub fn render_markdown(text: &str, accent: Color, muted: Color) -> Vec<Line<'sta
                     let code_text = &remaining[1..end + 1];
                     spans.push(Span::styled(
                         code_text.to_string(),
-                        Style::default()
-                            .fg(Color::Cyan)
-                            .bg(Color::Rgb(40, 40, 40)),
+                        Style::default().fg(Color::Cyan).bg(Color::Rgb(40, 40, 40)),
                     ));
                     remaining = &remaining[end + 2..];
                 } else {
@@ -82,25 +82,19 @@ pub fn render_markdown(text: &str, accent: Color, muted: Color) -> Vec<Line<'sta
             } else if remaining.starts_with("# ") {
                 spans.push(Span::styled(
                     remaining[2..].to_string(),
-                    Style::default()
-                        .fg(accent)
-                        .add_modifier(Modifier::BOLD),
+                    Style::default().fg(accent).add_modifier(Modifier::BOLD),
                 ));
                 remaining = "";
             } else if remaining.starts_with("## ") {
                 spans.push(Span::styled(
                     remaining[3..].to_string(),
-                    Style::default()
-                        .fg(accent)
-                        .add_modifier(Modifier::BOLD),
+                    Style::default().fg(accent).add_modifier(Modifier::BOLD),
                 ));
                 remaining = "";
             } else if remaining.starts_with("### ") {
                 spans.push(Span::styled(
                     remaining[4..].to_string(),
-                    Style::default()
-                        .fg(accent)
-                        .add_modifier(Modifier::BOLD),
+                    Style::default().fg(accent).add_modifier(Modifier::BOLD),
                 ));
                 remaining = "";
             } else if remaining.starts_with("- ") || remaining.starts_with("* ") {
@@ -108,10 +102,7 @@ pub fn render_markdown(text: &str, accent: Color, muted: Color) -> Vec<Line<'sta
                 spans.push(Span::raw(remaining[2..].to_string()));
                 remaining = "";
             } else if remaining.starts_with("> ") {
-                spans.push(Span::styled(
-                    "  │ ",
-                    Style::default().fg(accent),
-                ));
+                spans.push(Span::styled("  │ ", Style::default().fg(accent)));
                 spans.push(Span::styled(
                     remaining[2..].to_string(),
                     Style::default().fg(muted),
@@ -151,11 +142,16 @@ pub fn render_markdown(text: &str, accent: Color, muted: Color) -> Vec<Line<'sta
 pub fn strip_thinking_tags(text: &str) -> String {
     let mut result = text.to_string();
     let tags = [
-        "<think>", "</think>",
-        "<thinking>", "</thinking>",
-        "<reasoning>", "</reasoning>",
-        "<thought>", "</thought>",
-        "<reasoning_scratchpad>", "</reasoning_scratchpad>",
+        "<think>",
+        "</think>",
+        "<thinking>",
+        "</thinking>",
+        "<reasoning>",
+        "</reasoning>",
+        "<thought>",
+        "</thought>",
+        "<reasoning_scratchpad>",
+        "</reasoning_scratchpad>",
     ];
 
     for tag in &tags {
@@ -174,7 +170,10 @@ mod tests {
         let lines = render_markdown("**bold text**", Color::Yellow, Color::Gray);
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0].spans.len(), 1);
-        assert!(lines[0].spans[0].style.add_modifier.contains(Modifier::BOLD));
+        assert!(lines[0].spans[0]
+            .style
+            .add_modifier
+            .contains(Modifier::BOLD));
     }
 
     #[test]

@@ -495,7 +495,7 @@ mod tests {
     fn test_acronym_match() {
         let candidates = vec!["getCurrentWorkingDirectory".to_string(), "foo".to_string()];
         // Try matching the acronym
-        let result = find_best_match("gcwd", &candidates);
+        let _result = find_best_match("gcwd", &candidates);
         // This won't match by acronym because we split by non-alphanumeric only
         // But let's test with actual word-splittable candidate
         let candidates2 = vec!["get_current_working_directory".to_string()];

@@ -242,7 +242,7 @@ mod tests {
             self.provider
         }
 
-        async fn chat(&self, request: ChatRequest) -> Result<ChatResponse> {
+        async fn chat(&self, _request: ChatRequest) -> Result<ChatResponse> {
             let idx = self.call_count.fetch_add(1, Ordering::SeqCst);
             match self.results.get(idx) {
                 Some(MockResult::Ok(r)) => Ok(r.clone()),

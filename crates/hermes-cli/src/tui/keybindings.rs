@@ -59,9 +59,7 @@ pub fn resolve_shortcut(key: KeyEvent) -> Option<Shortcut> {
         KeyCode::Char('k') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             Some(Shortcut::CtrlK)
         }
-        KeyCode::Enter if key.modifiers.contains(KeyModifiers::SHIFT) => {
-            Some(Shortcut::ShiftEnter)
-        }
+        KeyCode::Enter if key.modifiers.contains(KeyModifiers::SHIFT) => Some(Shortcut::ShiftEnter),
         KeyCode::Enter => Some(Shortcut::Enter),
         KeyCode::Esc => Some(Shortcut::Escape),
         KeyCode::Backspace => Some(Shortcut::Backspace),

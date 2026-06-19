@@ -491,9 +491,9 @@ mod tests {
 
     #[test]
     fn coerce_float_value() {
-        let v = coerce_json_value("3.14");
+        let v = coerce_json_value("2.71");
         assert!(v.is_number());
-        assert_eq!(v.as_f64(), Some(3.14));
+        assert_eq!(v.as_f64(), Some(2.71));
     }
 
     #[test]

@@ -152,9 +152,7 @@ fn main_model_supports_vision() -> bool {
         "azure",
     ];
 
-    vision_providers
-        .iter()
-        .any(|p| base_url.contains(p))
+    vision_providers.iter().any(|p| base_url.contains(p))
 }
 
 /// Resize image bytes to fit within dimension and byte limits.
@@ -348,10 +346,7 @@ fn build_native_vision_envelope(
 }
 
 /// Call auxiliary vision LLM to describe the image
-async fn call_auxiliary_vision_llm(
-    image_data_url: &str,
-    question: &str,
-) -> Result<String, String> {
+async fn call_auxiliary_vision_llm(image_data_url: &str, question: &str) -> Result<String, String> {
     let cfg = runtime_config();
     let aux_vision = cfg.auxiliary_models.vision.as_ref();
 
@@ -376,11 +371,7 @@ async fn call_auxiliary_vision_llm(
             .filter(|k| !k.is_empty());
         let model = std::env::var("AUXILIARY_VISION_MODEL")
             .unwrap_or_else(|_| DEFAULT_VISION_MODEL.to_string());
-        (
-            model,
-            api_key,
-            "https://openrouter.ai/api/v1".to_string(),
-        )
+        (model, api_key, "https://openrouter.ai/api/v1".to_string())
     };
 
     let api_key = api_key.ok_or_else(|| {
@@ -591,12 +582,7 @@ impl HermesTool for VisionTool {
             if use_native_path {
                 return ToolResult::success(
                     "vision_analyze",
-                    build_native_vision_envelope(
-                        image_url,
-                        question,
-                        image_url,
-                        image_url.len(),
-                    ),
+                    build_native_vision_envelope(image_url, question, image_url, image_url.len()),
                 );
             }
 
@@ -612,10 +598,9 @@ impl HermesTool for VisionTool {
                         "native_vision": false
                     }),
                 ),
-                Err(e) => ToolResult::error(
-                    "vision_analyze",
-                    format!("Vision model failed: {}", e),
-                ),
+                Err(e) => {
+                    ToolResult::error("vision_analyze", format!("Vision model failed: {}", e))
+                }
             };
         }
 
@@ -695,13 +680,14 @@ impl HermesTool for VisionTool {
                             "native_vision": false
                         }),
                     ),
-                    Err(e) => ToolResult::error(
-                        "vision_analyze",
-                        format!("Vision model failed: {}", e),
-                    ),
+                    Err(e) => {
+                        ToolResult::error("vision_analyze", format!("Vision model failed: {}", e))
+                    }
                 }
             }
-            Err(e) => ToolResult::error("vision_analyze", format!("Failed to download image: {}", e)),
+            Err(e) => {
+                ToolResult::error("vision_analyze", format!("Failed to download image: {}", e))
+            }
         }
     }
 }

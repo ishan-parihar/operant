@@ -816,7 +816,7 @@ impl PersistentSessionStore {
                 if let Some(reason) = self.should_reset(entry, &config.reset_policy) {
                     let was_auto_reset = true;
                     let auto_reset_reason = Some(reason);
-                    let reset_had_activity = entry.total_tokens > 0;
+                    let _reset_had_activity = entry.total_tokens > 0;
                     drop(entries);
                     return self.reset_session_inner(
                         &session_key,
@@ -1235,7 +1235,7 @@ impl PersistentSessionStore {
         platform: &str,
         user_id: &str,
         channel_id: &str,
-        updates: &[(String, String)],
+        _updates: &[(String, String)],
     ) -> bool {
         let mut entries = self.entries.write().unwrap();
         if let Some(entry) = entries.values_mut().find(|e| {
@@ -1537,8 +1537,8 @@ mod tests {
         assert!(!entry.session_id.is_empty());
 
         // Reload from DB
-        let store2 = {
-            let conn = Connection::open_in_memory().unwrap();
+        let _store2 = {
+            let _conn = Connection::open_in_memory().unwrap();
             // We can't reload from the same in-memory DB, so just test the cache
         };
 
@@ -1801,7 +1801,9 @@ mod tests {
         let store = test_store();
         let source = test_source("telegram", "u1", "c1", "dm");
         let entry = store.get_or_create_session(&source, false).unwrap();
-        store.update_tokens(&entry.session_key, 100, 50, 20, 10, 0.001).unwrap();
+        store
+            .update_tokens(&entry.session_key, 100, 50, 20, 10, 0.001)
+            .unwrap();
         let updated = store.get_entry(&entry.session_key).unwrap();
         assert_eq!(updated.input_tokens, 100);
         assert_eq!(updated.output_tokens, 50);

@@ -34,7 +34,10 @@ impl BrowserTool {
     }
 
     async fn handle_accessibility_tree(&self, args: &BrowserArgs) -> ToolResult {
-        let cdp_url = args.cdp_url.clone().or_else(|| std::env::var("BROWSER_CDP_URL").ok());
+        let cdp_url = args
+            .cdp_url
+            .clone()
+            .or_else(|| std::env::var("BROWSER_CDP_URL").ok());
 
         let cdp_url = match cdp_url {
             Some(url) => url,
@@ -266,10 +269,7 @@ mod tests {
             std::env::set_var("BROWSER_CDP_URL", url);
         }
         assert!(!result.success);
-        assert!(result
-            .error
-            .unwrap_or_default()
-            .contains("No CDP URL"));
+        assert!(result.error.unwrap_or_default().contains("No CDP URL"));
     }
 
     #[tokio::test]

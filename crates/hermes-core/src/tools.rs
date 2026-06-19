@@ -48,11 +48,11 @@ pub mod todo_tool;
 pub mod tool_backend_helpers;
 pub mod tool_output_limits;
 pub mod transcription_tool;
-pub mod tts_tool;
-pub mod tts_provider;
-pub mod tts_registry;
 pub mod tts_command_provider;
 pub mod tts_opus;
+pub mod tts_provider;
+pub mod tts_registry;
+pub mod tts_tool;
 pub mod video_analysis_tool;
 pub mod vision_tool;
 pub mod web_providers;
@@ -98,9 +98,9 @@ pub use spotify_tool::{
     SpotifyPlaylistsTool, SpotifyQueueTool, SpotifySearchTool,
 };
 pub use transcription_tool::TranscriptionTool;
-pub use tts_provider::{AudioFormat, TtsProvider, TtsError};
-pub use tts_registry::TtsPluginRegistry;
 pub use tts_command_provider::CommandProvider;
+pub use tts_provider::{AudioFormat, TtsError, TtsProvider};
+pub use tts_registry::TtsPluginRegistry;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;

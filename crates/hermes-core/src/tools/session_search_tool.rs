@@ -160,7 +160,7 @@ impl HermesTool for SessionSearchTool {
             .and_then(|v| v.as_str())
             .map(|s| s.trim().to_string());
 
-        let role_filter = args
+        let _role_filter = args
             .get("role_filter")
             .and_then(|v| v.as_str())
             .map(|s| s.trim().to_string());

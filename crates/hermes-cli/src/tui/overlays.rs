@@ -1,12 +1,9 @@
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
+use crossterm::event::{KeyCode, KeyEvent};
+use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
-
-use crate::tui::skin;
-use crate::tui::state::Tone;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum OverlayType {
@@ -83,15 +80,27 @@ pub fn render_approval_overlay(
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
         "1. Allow Once",
-        Style::default().fg(if data.selected == 0 { accent } else { Color::White }),
+        Style::default().fg(if data.selected == 0 {
+            accent
+        } else {
+            Color::White
+        }),
     )));
     lines.push(Line::from(Span::styled(
         "2. Allow Always",
-        Style::default().fg(if data.selected == 1 { accent } else { Color::White }),
+        Style::default().fg(if data.selected == 1 {
+            accent
+        } else {
+            Color::White
+        }),
     )));
     lines.push(Line::from(Span::styled(
         "3. Deny",
-        Style::default().fg(if data.selected == 2 { accent } else { Color::White }),
+        Style::default().fg(if data.selected == 2 {
+            accent
+        } else {
+            Color::White
+        }),
     )));
 
     let paragraph = Paragraph::new(Text::from(lines));
@@ -150,7 +159,7 @@ pub fn render_confirm_overlay(
     area: Rect,
     data: &ConfirmData,
     accent: Color,
-    muted: Color,
+    _muted: Color,
 ) {
     let area = centered_rect(50, 30, area);
     frame.render_widget(Clear, area);
@@ -170,7 +179,11 @@ pub fn render_confirm_overlay(
     )));
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
-        if data.selected { "[Yes]  No" } else { "Yes  [No]" },
+        if data.selected {
+            "[Yes]  No"
+        } else {
+            "Yes  [No]"
+        },
         Style::default().fg(accent),
     )));
 
@@ -193,9 +206,7 @@ pub fn render_help_overlay(frame: &mut Frame, area: Rect, accent: Color, muted: 
     let lines = vec![
         Line::from(Span::styled(
             "Keyboard Shortcuts",
-            Style::default()
-                .fg(accent)
-                .add_modifier(Modifier::BOLD),
+            Style::default().fg(accent).add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
         Line::from(Span::styled("Ctrl+C", Style::default().fg(accent))),
@@ -245,10 +256,7 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
         .split(popup_layout[1])[1]
 }
 
-pub fn handle_overlay_key(
-    overlay: &mut OverlayType,
-    key: KeyEvent,
-) -> Option<OverlayAction> {
+pub fn handle_overlay_key(overlay: &mut OverlayType, key: KeyEvent) -> Option<OverlayAction> {
     match overlay {
         OverlayType::None => None,
         OverlayType::Approval(data) => match key.code {

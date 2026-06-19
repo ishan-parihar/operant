@@ -1,12 +1,9 @@
-use std::path::PathBuf;
-
-use anyhow::{Context, Result};
+use anyhow::Result;
 use clap::Subcommand;
 use hermes_core::config::AppConfig;
 use hermes_core::profile::{
-    self, clone_profile, create_profile, delete_profile, get_active_profile, get_hermes_home,
-    get_profile_dir, list_profiles, normalize_profile_name, profile_exists, set_active_profile,
-    use_profile, validate_profile_name,
+    clone_profile, create_profile, delete_profile, get_active_profile, get_profile_dir,
+    list_profiles, normalize_profile_name, use_profile,
 };
 
 #[derive(Debug, Clone, Subcommand)]

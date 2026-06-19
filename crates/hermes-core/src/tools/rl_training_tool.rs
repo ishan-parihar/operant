@@ -100,7 +100,7 @@ impl HermesTool for RlTrainingTool {
         ToolSchema::from_type::<RlArgs>(self.name(), self.description())
     }
 
-    async fn execute(&self, args: Value, context: ToolContext) -> ToolResult {
+    async fn execute(&self, args: Value, _context: ToolContext) -> ToolResult {
         let parsed: RlArgs = match serde_json::from_value(args) {
             Ok(a) => a,
             Err(e) => return ToolResult::error(self.name(), format!("Invalid args: {}", e)),

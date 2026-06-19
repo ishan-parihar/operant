@@ -184,27 +184,50 @@ impl CommandDef {
 /// [`CommandRegistry`] at startup.
 pub static COMMAND_REGISTRY: &[CommandDef] = &[
     // ── Session ─────────────────────────────────────────────────────────────
-    CommandDef::new("start", "Acknowledge platform start pings without a reply", "Session")
-        .gateway_only(),
-    CommandDef::new("new", "Start a new session (fresh session ID + history)", "Session")
-        .with_args("[name]")
-        .with_aliases(&["n", "clear"]),
-    CommandDef::new("topic", "Enable or inspect Telegram DM topic sessions", "Session")
-        .gateway_only()
-        .with_args("[off|help|session-id]"),
-    CommandDef::new("redraw", "Force a full UI repaint (recovers from terminal drift)", "Session")
-        .cli_only(),
+    CommandDef::new(
+        "start",
+        "Acknowledge platform start pings without a reply",
+        "Session",
+    )
+    .gateway_only(),
+    CommandDef::new(
+        "new",
+        "Start a new session (fresh session ID + history)",
+        "Session",
+    )
+    .with_args("[name]")
+    .with_aliases(&["n", "clear"]),
+    CommandDef::new(
+        "topic",
+        "Enable or inspect Telegram DM topic sessions",
+        "Session",
+    )
+    .gateway_only()
+    .with_args("[off|help|session-id]"),
+    CommandDef::new(
+        "redraw",
+        "Force a full UI repaint (recovers from terminal drift)",
+        "Session",
+    )
+    .cli_only(),
     CommandDef::new("history", "Show conversation history", "Session")
         .cli_only()
         .with_aliases(&["h"]),
     CommandDef::new("save", "Save the current conversation", "Session")
         .cli_only()
         .with_aliases(&["export"]),
-    CommandDef::new("retry", "Retry the last message (resend to agent)", "Session"),
-    CommandDef::new("undo", "Back up N user turns and re-prompt (default 1)", "Session")
-        .with_args("[N]"),
-    CommandDef::new("title", "Set a title for the current session", "Session")
-        .with_args("[name]"),
+    CommandDef::new(
+        "retry",
+        "Retry the last message (resend to agent)",
+        "Session",
+    ),
+    CommandDef::new(
+        "undo",
+        "Back up N user turns and re-prompt (default 1)",
+        "Session",
+    )
+    .with_args("[N]"),
+    CommandDef::new("title", "Set a title for the current session", "Session").with_args("[name]"),
     CommandDef::new(
         "handoff",
         "Hand off this session to a messaging platform (Telegram, Discord, etc.)",
@@ -212,9 +235,13 @@ pub static COMMAND_REGISTRY: &[CommandDef] = &[
     )
     .with_args("<platform>")
     .cli_only(),
-    CommandDef::new("branch", "Branch the current session (explore a different path)", "Session")
-        .with_aliases(&["fork"])
-        .with_args("[name]"),
+    CommandDef::new(
+        "branch",
+        "Branch the current session (explore a different path)",
+        "Session",
+    )
+    .with_aliases(&["fork"])
+    .with_args("[name]"),
     CommandDef::new(
         "compress",
         "Compress conversation context (add 'here [N]' to keep recent N turns)",
@@ -236,22 +263,22 @@ pub static COMMAND_REGISTRY: &[CommandDef] = &[
     .with_aliases(&["snap"])
     .with_args("[create|restore <id>|prune]"),
     CommandDef::new("stop", "Kill all running background processes", "Session"),
-    CommandDef::new(
-        "approve",
-        "Approve a pending dangerous command",
-        "Session",
-    )
-    .gateway_only()
-    .with_args("[session|always]"),
+    CommandDef::new("approve", "Approve a pending dangerous command", "Session")
+        .gateway_only()
+        .with_args("[session|always]"),
     CommandDef::new("deny", "Deny a pending dangerous command", "Session").gateway_only(),
     CommandDef::new("background", "Run a prompt in the background", "Session")
         .with_aliases(&["bg", "btw"])
         .with_args("<prompt>"),
     CommandDef::new("agents", "Show active agents and running tasks", "Session")
         .with_aliases(&["tasks"]),
-    CommandDef::new("queue", "Queue a prompt for the next turn (doesn't interrupt)", "Session")
-        .with_aliases(&["q"])
-        .with_args("<prompt>"),
+    CommandDef::new(
+        "queue",
+        "Queue a prompt for the next turn (doesn't interrupt)",
+        "Session",
+    )
+    .with_aliases(&["q"])
+    .with_args("<prompt>"),
     CommandDef::new(
         "steer",
         "Inject a message after the next tool call without interrupting",
@@ -275,12 +302,7 @@ pub static COMMAND_REGISTRY: &[CommandDef] = &[
         "Show session, model, token, and context info",
         "Session",
     ),
-    CommandDef::new(
-        "resume",
-        "Resume a previously-named session",
-        "Session",
-    )
-    .with_args("[name]"),
+    CommandDef::new("resume", "Resume a previously-named session", "Session").with_args("[name]"),
     CommandDef::new("sethome", "Set this chat as the home channel", "Session")
         .gateway_only()
         .with_aliases(&["set-home"]),
@@ -288,8 +310,7 @@ pub static COMMAND_REGISTRY: &[CommandDef] = &[
     // ── Configuration ───────────────────────────────────────────────────────
     CommandDef::new("model", "Switch model for this session", "Configuration")
         .with_args("[model] [--provider name] [--global] [--refresh]"),
-    CommandDef::new("provider", "Switch LLM provider", "Configuration")
-        .with_args("<name>"),
+    CommandDef::new("provider", "Switch LLM provider", "Configuration").with_args("<name>"),
     CommandDef::new("config", "Show current configuration", "Configuration")
         .cli_only()
         .with_args("[key] [value]"),
@@ -303,7 +324,11 @@ pub static COMMAND_REGISTRY: &[CommandDef] = &[
     )
     .with_aliases(&["codex_runtime"])
     .with_args("[auto|codex_app_server]"),
-    CommandDef::new("profile", "Show active profile name and home directory", "Info"),
+    CommandDef::new(
+        "profile",
+        "Show active profile name and home directory",
+        "Info",
+    ),
     CommandDef::new(
         "personality",
         "Set a predefined personality",
@@ -347,9 +372,13 @@ pub static COMMAND_REGISTRY: &[CommandDef] = &[
         "Configuration",
     )
     .with_args("[normal|fast|status]"),
-    CommandDef::new("skin", "Show or change the display skin/theme", "Configuration")
-        .cli_only()
-        .with_args("[name]"),
+    CommandDef::new(
+        "skin",
+        "Show or change the display skin/theme",
+        "Configuration",
+    )
+    .cli_only()
+    .with_args("[name]"),
     CommandDef::new(
         "indicator",
         "Pick the TUI busy-indicator style",
@@ -357,8 +386,7 @@ pub static COMMAND_REGISTRY: &[CommandDef] = &[
     )
     .cli_only()
     .with_args("[kaomoji|emoji|unicode|ascii]"),
-    CommandDef::new("voice", "Toggle voice mode", "Configuration")
-        .with_args("[on|off|tts|status]"),
+    CommandDef::new("voice", "Toggle voice mode", "Configuration").with_args("[on|off|tts|status]"),
     CommandDef::new(
         "busy",
         "Control what Enter does while Hermes is working",
@@ -450,8 +478,12 @@ pub static COMMAND_REGISTRY: &[CommandDef] = &[
     )
     .cli_only()
     .with_args("[connect|disconnect|status]"),
-    CommandDef::new("plugins", "List installed plugins and their status", "Tools & Skills")
-        .cli_only(),
+    CommandDef::new(
+        "plugins",
+        "List installed plugins and their status",
+        "Tools & Skills",
+    )
+    .cli_only(),
     // ── Info ─────────────────────────────────────────────────────────────────
     CommandDef::new(
         "commands",
@@ -460,8 +492,7 @@ pub static COMMAND_REGISTRY: &[CommandDef] = &[
     )
     .gateway_only()
     .with_args("[page]"),
-    CommandDef::new("help", "Show available commands", "Info")
-        .with_aliases(&["?", "h"]),
+    CommandDef::new("help", "Show available commands", "Info").with_aliases(&["?", "h"]),
     CommandDef::new(
         "restart",
         "Gracefully restart the gateway after draining active runs",
@@ -473,22 +504,13 @@ pub static COMMAND_REGISTRY: &[CommandDef] = &[
         "Show token usage and rate limits for the current session",
         "Info",
     ),
-    CommandDef::new(
-        "credits",
-        "Show Nous credit balance and top up",
-        "Info",
-    ),
+    CommandDef::new("credits", "Show Nous credit balance and top up", "Info"),
     CommandDef::new(
         "billing",
         "Manage Nous terminal billing — buy credits, auto-reload, limits",
         "Info",
     ),
-    CommandDef::new(
-        "insights",
-        "Show usage insights and analytics",
-        "Info",
-    )
-    .with_args("[days]"),
+    CommandDef::new("insights", "Show usage insights and analytics", "Info").with_args("[days]"),
     CommandDef::new(
         "platforms",
         "Show gateway/messaging platform status",
@@ -528,14 +550,17 @@ pub static COMMAND_REGISTRY: &[CommandDef] = &[
         "Update Hermes Agent to the latest version",
         "Info",
     ),
-    CommandDef::new("version", "Show Hermes Agent version", "Info")
-        .with_aliases(&["v"]),
+    CommandDef::new("version", "Show Hermes Agent version", "Info").with_aliases(&["v"]),
     CommandDef::new(
         "debug",
         "Upload debug report (system info + logs) and get shareable links",
         "Info",
     ),
-    CommandDef::new("whoami", "Show your slash command access (admin / user)", "Info"),
+    CommandDef::new(
+        "whoami",
+        "Show your slash command access (admin / user)",
+        "Info",
+    ),
     CommandDef::new(
         "gquota",
         "Show Google Gemini Code Assist quota usage",
@@ -543,8 +568,7 @@ pub static COMMAND_REGISTRY: &[CommandDef] = &[
     )
     .cli_only(),
     CommandDef::new("time", "Show the current time", "Info"),
-    CommandDef::new("session", "Show current session info", "Info")
-        .with_aliases(&["s"]),
+    CommandDef::new("session", "Show current session info", "Info").with_aliases(&["s"]),
     // ── Exit ─────────────────────────────────────────────────────────────────
     CommandDef::new("exit", "Exit the CLI", "Exit")
         .cli_only()
@@ -1369,12 +1393,18 @@ mod tests {
         let has = COMMAND_REGISTRY.iter().any(|c| c.name == "agents");
         assert!(has, "Registry must contain an 'agents' command");
         let map = build_command_map();
-        assert!(map.contains_key("tasks"), "Alias 'tasks' must resolve to 'agents'");
+        assert!(
+            map.contains_key("tasks"),
+            "Alias 'tasks' must resolve to 'agents'"
+        );
     }
 
     #[test]
     fn test_approve_deny_gateway_only() {
-        let approve = COMMAND_REGISTRY.iter().find(|c| c.name == "approve").unwrap();
+        let approve = COMMAND_REGISTRY
+            .iter()
+            .find(|c| c.name == "approve")
+            .unwrap();
         assert!(approve.gateway_only, "/approve must be gateway_only");
         let deny = COMMAND_REGISTRY.iter().find(|c| c.name == "deny").unwrap();
         assert!(deny.gateway_only, "/deny must be gateway_only");
@@ -1392,7 +1422,10 @@ mod tests {
         let known = gateway_known_commands();
         // /clear is cli_only (mapped to "new" alias), /history is cli_only
         // but we check raw cli_only commands
-        let history = COMMAND_REGISTRY.iter().find(|c| c.name == "history").unwrap();
+        let history = COMMAND_REGISTRY
+            .iter()
+            .find(|c| c.name == "history")
+            .unwrap();
         assert!(history.cli_only, "/history should be cli_only");
         // Gateway should NOT include purely cli_only commands
         assert!(
@@ -1434,9 +1467,15 @@ mod tests {
     #[test]
     fn test_background_aliases() {
         let map = build_command_map();
-        assert!(map.contains_key("bg"), "Alias 'bg' must resolve to 'background'");
+        assert!(
+            map.contains_key("bg"),
+            "Alias 'bg' must resolve to 'background'"
+        );
         assert_eq!(map.get("bg").unwrap().name, "background");
-        assert!(map.contains_key("btw"), "Alias 'btw' must resolve to 'background'");
+        assert!(
+            map.contains_key("btw"),
+            "Alias 'btw' must resolve to 'background'"
+        );
         assert_eq!(map.get("btw").unwrap().name, "background");
     }
 
@@ -1472,7 +1511,10 @@ mod tests {
 
     #[test]
     fn test_config_gate_on_verbose() {
-        let verbose = COMMAND_REGISTRY.iter().find(|c| c.name == "verbose").unwrap();
+        let verbose = COMMAND_REGISTRY
+            .iter()
+            .find(|c| c.name == "verbose")
+            .unwrap();
         assert_eq!(
             verbose.gateway_config_gate,
             Some("display.tool_progress_command")
@@ -1482,7 +1524,10 @@ mod tests {
 
     #[test]
     fn test_config_gate_on_skills() {
-        let skills = COMMAND_REGISTRY.iter().find(|c| c.name == "skills").unwrap();
+        let skills = COMMAND_REGISTRY
+            .iter()
+            .find(|c| c.name == "skills")
+            .unwrap();
         assert_eq!(skills.gateway_config_gate, Some("skills.write_approval"));
     }
 }

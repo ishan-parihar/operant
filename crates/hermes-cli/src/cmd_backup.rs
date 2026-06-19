@@ -39,7 +39,7 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> io::Result<()> {
     Ok(())
 }
 
-async fn cmd_create(config: &AppConfig, output: Option<PathBuf>) -> Result<()> {
+async fn cmd_create(_config: &AppConfig, output: Option<PathBuf>) -> Result<()> {
     let secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
