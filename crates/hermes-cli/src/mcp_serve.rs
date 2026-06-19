@@ -174,8 +174,15 @@ async fn build_tool_registry(config: &AppConfig) -> Result<ToolRegistry> {
             .context("Failed to initialize database for MCP serve")?,
     );
 
-    let registry =
-        crate::build_registry(config, &mcp_manager, &client, &config.agent.model, database, None).await?;
+    let registry = crate::build_registry(
+        config,
+        &mcp_manager,
+        &client,
+        &config.agent.model,
+        database,
+        None,
+    )
+    .await?;
 
     // Sync MCP client tools into the registry if autoload is enabled.
     if config.mcp.autoload {

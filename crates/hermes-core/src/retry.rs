@@ -24,12 +24,7 @@ lazy_static::lazy_static! {
 /// * `base_delay` - Base delay in seconds (default: 5)
 /// * `max_delay` - Maximum delay in seconds (default: 120)
 /// * `jitter_ratio` - Jitter as a fraction of the computed delay (default: 0.5)
-pub fn jittered_backoff(
-    attempt: u32,
-    base_delay: f64,
-    max_delay: f64,
-    jitter_ratio: f64,
-) -> f64 {
+pub fn jittered_backoff(attempt: u32, base_delay: f64, max_delay: f64, jitter_ratio: f64) -> f64 {
     let exponential = base_delay * 2.0_f64.powi(attempt as i32 - 1);
     let capped = exponential.min(max_delay);
 

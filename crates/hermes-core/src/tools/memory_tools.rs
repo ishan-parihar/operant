@@ -35,7 +35,10 @@ fn save_store(store: &HashMap<String, MemoryEntry>) {
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    let _ = std::fs::write(&path, serde_json::to_string_pretty(store).unwrap_or_default());
+    let _ = std::fs::write(
+        &path,
+        serde_json::to_string_pretty(store).unwrap_or_default(),
+    );
 }
 
 lazy_static::lazy_static! {

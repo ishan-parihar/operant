@@ -106,6 +106,9 @@ pub struct SessionState {
     pub error: Option<String>,
     pub final_message: Option<String>,
     pub running: bool,
+    pub input_tokens: u32,
+    pub output_tokens: u32,
+    pub total_tokens: u32,
 }
 
 impl SessionState {
@@ -126,6 +129,9 @@ impl SessionState {
             error: None,
             final_message: None,
             running: false,
+            input_tokens: 0,
+            output_tokens: 0,
+            total_tokens: 0,
         }
     }
 }
@@ -329,6 +335,15 @@ impl AppState {
                 self.session.error = Some(error.clone());
                 self.session.status = "Errored".to_string();
                 self.push_activity("Error", error, Tone::Error);
+            }
+            AgentEvent::Usage {
+                input_tokens,
+                output_tokens,
+                total_tokens,
+            } => {
+                self.session.input_tokens += input_tokens;
+                self.session.output_tokens += output_tokens;
+                self.session.total_tokens += total_tokens;
             }
         }
     }

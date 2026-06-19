@@ -141,10 +141,12 @@ impl OAuthRefresher {
         provider: &str,
         entry: &PooledCredential,
     ) -> Result<OAuthTokenResponse> {
-        let refresh_token = entry
-            .refresh_token
-            .as_ref()
-            .ok_or_else(|| Error::Authentication(format!("No refresh token for OAuth credential '{}'", entry.name)))?;
+        let refresh_token = entry.refresh_token.as_ref().ok_or_else(|| {
+            Error::Authentication(format!(
+                "No refresh token for OAuth credential '{}'",
+                entry.name
+            ))
+        })?;
 
         match provider.to_lowercase().as_str() {
             "anthropic" => self.refresh_anthropic(refresh_token, entry).await,
@@ -194,15 +196,18 @@ impl OAuthRefresher {
                 .await
             {
                 Ok(resp) if resp.status().is_success() => {
-                    let result: serde_json::Value = resp
-                        .json()
-                        .await
-                        .map_err(|e| Error::ParseResponse(format!("Anthropic refresh invalid JSON: {e}")))?;
+                    let result: serde_json::Value = resp.json().await.map_err(|e| {
+                        Error::ParseResponse(format!("Anthropic refresh invalid JSON: {e}"))
+                    })?;
 
                     let access_token = result
                         .get("access_token")
                         .and_then(|v| v.as_str())
-                        .ok_or_else(|| Error::Authentication("Anthropic refresh response missing access_token".to_string()))?;
+                        .ok_or_else(|| {
+                            Error::Authentication(
+                                "Anthropic refresh response missing access_token".to_string(),
+                            )
+                        })?;
 
                     let next_refresh = result
                         .get("refresh_token")
@@ -236,14 +241,17 @@ impl OAuthRefresher {
         }
 
         Err(last_error.unwrap_or_else(|| {
-            Error::Authentication("Anthropic token refresh failed — all endpoints exhausted".to_string())
+            Error::Authentication(
+                "Anthropic token refresh failed — all endpoints exhausted".to_string(),
+            )
         }))
     }
 
     async fn refresh_codex(&self, refresh_token: &str) -> Result<OAuthTokenResponse> {
         if refresh_token.trim().is_empty() {
             return Err(Error::Authentication(
-                "Codex auth is missing refresh_token. Re-authenticate with `hermes auth`.".to_string(),
+                "Codex auth is missing refresh_token. Re-authenticate with `hermes auth`."
+                    .to_string(),
             ));
         }
 
@@ -271,7 +279,11 @@ impl OAuthRefresher {
             if let Ok(err) = serde_json::from_str::<serde_json::Value>(&text) {
                 if let Some(err_obj) = err.get("error") {
                     if let Some(obj) = err_obj.as_object() {
-                        if let Some(nested_code) = obj.get("code").or_else(|| obj.get("type")).and_then(|v| v.as_str()) {
+                        if let Some(nested_code) = obj
+                            .get("code")
+                            .or_else(|| obj.get("type"))
+                            .and_then(|v| v.as_str())
+                        {
                             code = nested_code.to_string();
                         }
                         if let Some(nested_msg) = obj.get("message").and_then(|v| v.as_str()) {
@@ -286,11 +298,16 @@ impl OAuthRefresher {
                 }
             }
 
-            if matches!(code.as_str(), "invalid_grant" | "invalid_token" | "invalid_request") {
+            if matches!(
+                code.as_str(),
+                "invalid_grant" | "invalid_token" | "invalid_request"
+            ) {
                 _relogin_required = true;
             }
             if code == "refresh_token_reused" {
-                message = "Codex refresh token was already consumed by another client. Re-authenticate.".to_string();
+                message =
+                    "Codex refresh token was already consumed by another client. Re-authenticate."
+                        .to_string();
                 _relogin_required = true;
             }
             if status.as_u16() == 401 || status.as_u16() == 403 {
@@ -308,7 +325,9 @@ impl OAuthRefresher {
         let access_token = payload
             .get("access_token")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| Error::Authentication("Codex refresh response missing access_token".to_string()))?;
+            .ok_or_else(|| {
+                Error::Authentication("Codex refresh response missing access_token".to_string())
+            })?;
 
         Ok(OAuthTokenResponse {
             access_token: access_token.to_string(),
@@ -318,8 +337,14 @@ impl OAuthRefresher {
                 .unwrap_or(refresh_token)
                 .to_string(),
             expires_in: payload.get("expires_in").and_then(|v| v.as_u64()),
-            token_type: payload.get("token_type").and_then(|v| v.as_str()).map(|s| s.to_string()),
-            id_token: payload.get("id_token").and_then(|v| v.as_str()).map(|s| s.to_string()),
+            token_type: payload
+                .get("token_type")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
+            id_token: payload
+                .get("id_token")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
         })
     }
 
@@ -374,7 +399,9 @@ impl OAuthRefresher {
         let access_token = payload
             .get("access_token")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| Error::Authentication("xAI refresh response missing access_token".to_string()))?;
+            .ok_or_else(|| {
+                Error::Authentication("xAI refresh response missing access_token".to_string())
+            })?;
 
         Ok(OAuthTokenResponse {
             access_token: access_token.to_string(),
@@ -389,7 +416,10 @@ impl OAuthRefresher {
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string())
                 .or_else(|| Some("Bearer".to_string())),
-            id_token: payload.get("id_token").and_then(|v| v.as_str()).map(|s| s.to_string()),
+            id_token: payload
+                .get("id_token")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
         })
     }
 
@@ -399,10 +429,7 @@ impl OAuthRefresher {
             .as_deref()
             .ok_or_else(|| Error::Authentication("Nous OAuth missing refresh_token".to_string()))?;
 
-        let client_id = entry
-            .client_id
-            .as_deref()
-            .unwrap_or(NOUS_CLIENT_ID);
+        let client_id = entry.client_id.as_deref().unwrap_or(NOUS_CLIENT_ID);
         let portal_base_url = entry
             .portal_base_url
             .as_deref()
@@ -416,10 +443,7 @@ impl OAuthRefresher {
             .post(&token_url)
             .header("x-nous-refresh-token", refresh_token)
             .header("Accept", "application/json")
-            .form(&[
-                ("grant_type", "refresh_token"),
-                ("client_id", client_id),
-            ])
+            .form(&[("grant_type", "refresh_token"), ("client_id", client_id)])
             .send()
             .await
             .map_err(|e| Error::Network(e))?;
@@ -431,7 +455,10 @@ impl OAuthRefresher {
             let mut relogin = false;
 
             if let Ok(err) = serde_json::from_str::<serde_json::Value>(&text) {
-                let code = err.get("error").and_then(|v| v.as_str()).unwrap_or("invalid_grant");
+                let code = err
+                    .get("error")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("invalid_grant");
                 let desc = err
                     .get("error_description")
                     .and_then(|v| v.as_str())
@@ -465,7 +492,9 @@ impl OAuthRefresher {
         let access_token = payload
             .get("access_token")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| Error::Authentication("Nous refresh response missing access_token".to_string()))?;
+            .ok_or_else(|| {
+                Error::Authentication("Nous refresh response missing access_token".to_string())
+            })?;
 
         let _inference_base_url = payload
             .get("inference_base_url")
@@ -474,9 +503,14 @@ impl OAuthRefresher {
 
         let expires_in = payload.get("expires_in").and_then(|v| v.as_u64());
 
-        info!(provider = "nous", "Nous OAuth access token refreshed successfully");
+        info!(
+            provider = "nous",
+            "Nous OAuth access token refreshed successfully"
+        );
 
-        let _ = self.mint_nous_agent_key(access_token, portal_base_url).await;
+        let _ = self
+            .mint_nous_agent_key(access_token, portal_base_url)
+            .await;
 
         Ok(OAuthTokenResponse {
             access_token: access_token.to_string(),
@@ -495,11 +529,7 @@ impl OAuthRefresher {
         })
     }
 
-    async fn mint_nous_agent_key(
-        &self,
-        access_token: &str,
-        portal_base_url: &str,
-    ) -> Result<()> {
+    async fn mint_nous_agent_key(&self, access_token: &str, portal_base_url: &str) -> Result<()> {
         let mint_url = format!("{portal_base_url}/api/keys/agent");
 
         let resp = self
@@ -612,8 +642,7 @@ impl OAuthRefresher {
         entry: &PooledCredential,
         response: &OAuthTokenResponse,
     ) -> Result<()> {
-        let mut store = load_auth_store(&self.auth_store_path)
-            .unwrap_or_default();
+        let mut store = load_auth_store(&self.auth_store_path).unwrap_or_default();
 
         let state = store.providers.entry(provider.to_string()).or_default();
 
@@ -670,8 +699,7 @@ pub fn auth_store_path() -> PathBuf {
 }
 
 pub fn load_auth_store(path: &Path) -> Result<AuthStore> {
-    let content = fs::read_to_string(path)
-        .map_err(|e| Error::Io(e))?;
+    let content = fs::read_to_string(path).map_err(|e| Error::Io(e))?;
     let store: AuthStore = serde_json::from_str(&content)
         .map_err(|e| Error::ParseResponse(format!("auth.json parse error: {e}")))?;
     Ok(store)
@@ -679,20 +707,16 @@ pub fn load_auth_store(path: &Path) -> Result<AuthStore> {
 
 pub fn save_auth_store(path: &Path, store: &AuthStore) -> Result<()> {
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|e| Error::Io(e))?;
+        fs::create_dir_all(parent).map_err(|e| Error::Io(e))?;
     }
 
     let json = serde_json::to_string_pretty(store)
         .map_err(|e| Error::ParseResponse(format!("auth.json serialize error: {e}")))?;
 
     let dir = path.parent().unwrap_or(Path::new("."));
-    let mut tmp = tempfile::NamedTempFile::new_in(dir)
-        .map_err(|e| Error::Io(e))?;
-    std::io::Write::write_all(&mut tmp, json.as_bytes())
-        .map_err(|e| Error::Io(e))?;
-    tmp.persist(path)
-        .map_err(|e| Error::Io(e.into()))?;
+    let mut tmp = tempfile::NamedTempFile::new_in(dir).map_err(|e| Error::Io(e))?;
+    std::io::Write::write_all(&mut tmp, json.as_bytes()).map_err(|e| Error::Io(e))?;
+    tmp.persist(path).map_err(|e| Error::Io(e.into()))?;
 
     Ok(())
 }
@@ -703,9 +727,7 @@ mod urlencoding {
     pub fn encode(s: &str) -> String {
         s.chars()
             .map(|c| match c {
-                'A'..='Z' | 'a'..='z' | '0'..='9' | '-' | '_' | '.' | '~' => {
-                    c.to_string()
-                }
+                'A'..='Z' | 'a'..='z' | '0'..='9' | '-' | '_' | '.' | '~' => c.to_string(),
                 ' ' => "%20".to_string(),
                 _ => {
                     let mut encoded = String::new();
@@ -726,16 +748,17 @@ mod tests {
     #[test]
     fn test_auth_store_roundtrip() {
         let store = AuthStore {
-            providers: HashMap::from([
-                ("anthropic".to_string(), ProviderState {
+            providers: HashMap::from([(
+                "anthropic".to_string(),
+                ProviderState {
                     tokens: Some(TokenState {
                         access_token: "test-token".to_string(),
                         refresh_token: Some("test-refresh".to_string()),
                         id_token: None,
                     }),
                     ..Default::default()
-                }),
-            ]),
+                },
+            )]),
             active_provider: Some("anthropic".to_string()),
         };
 

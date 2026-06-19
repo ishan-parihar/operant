@@ -79,11 +79,15 @@ impl AnthropicModelClient {
             body["temperature"] = json!(temp);
         }
         if !request.tools.is_empty() {
-            body["tools"] = json!(request.tools.iter().map(|t| json!({
-                "name": t.name,
-                "description": t.description,
-                "input_schema": t.parameters
-            })).collect::<Vec<_>>());
+            body["tools"] = json!(request
+                .tools
+                .iter()
+                .map(|t| json!({
+                    "name": t.name,
+                    "description": t.description,
+                    "input_schema": t.parameters
+                }))
+                .collect::<Vec<_>>());
         }
         if request.stream {
             body["stream"] = json!(true);
@@ -150,7 +154,8 @@ impl AnthropicModelClient {
             prompt_tokens: usage_obj["input_tokens"].as_u64().unwrap_or(0) as u32,
             completion_tokens: usage_obj["output_tokens"].as_u64().unwrap_or(0) as u32,
             total_tokens: (usage_obj["input_tokens"].as_u64().unwrap_or(0)
-                + usage_obj["output_tokens"].as_u64().unwrap_or(0)) as u32,
+                + usage_obj["output_tokens"].as_u64().unwrap_or(0))
+                as u32,
         };
 
         let tc = if tool_calls.is_empty() {
@@ -211,7 +216,9 @@ impl ModelClient for AnthropicModelClient {
         let status = resp.status();
         let text = resp.text().await?;
         if !status.is_success() {
-            return Err(Error::Agent(format!("Anthropic API error {status}: {text}")));
+            return Err(Error::Agent(format!(
+                "Anthropic API error {status}: {text}"
+            )));
         }
 
         let json: Value =
@@ -240,7 +247,9 @@ impl ModelClient for AnthropicModelClient {
         let status = resp.status();
         if !status.is_success() {
             let text = resp.text().await?;
-            return Err(Error::Agent(format!("Anthropic API error {status}: {text}")));
+            return Err(Error::Agent(format!(
+                "Anthropic API error {status}: {text}"
+            )));
         }
 
         let byte_stream = resp.bytes_stream();

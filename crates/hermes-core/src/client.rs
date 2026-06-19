@@ -20,7 +20,9 @@ use tracing::{debug, error, info, instrument, warn};
 
 use crate::config::{runtime_config, ClientSettings};
 use crate::error::{Error, Result};
-use crate::rate_limiter::{exponential_backoff_secs, parse_retry_after_header, RateLimiter, RateLimitError};
+use crate::rate_limiter::{
+    exponential_backoff_secs, parse_retry_after_header, RateLimitError, RateLimiter,
+};
 use crate::schema::ToolSchema;
 
 /// OpenAI API client configuration
@@ -313,8 +315,7 @@ impl OpenAIClient {
                 Ok(r) => r,
                 Err(e) => {
                     if attempt < max_retries {
-                        let delay_s =
-                            exponential_backoff_secs(attempt, base_delay, max_delay);
+                        let delay_s = exponential_backoff_secs(attempt, base_delay, max_delay);
                         warn!(
                             model = %model,
                             attempt,
@@ -338,9 +339,7 @@ impl OpenAIClient {
                 self.rate_limiter.drain_bucket(model).await;
 
                 let retry_after = retry_after_hdr.unwrap_or_else(|| {
-                    Duration::from_secs(
-                        exponential_backoff_secs(attempt, base_delay, max_delay),
-                    )
+                    Duration::from_secs(exponential_backoff_secs(attempt, base_delay, max_delay))
                 });
 
                 if attempt < max_retries {

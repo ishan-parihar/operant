@@ -34,11 +34,7 @@ impl std::fmt::Display for RateLimitError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::TooManyRequests { retry_after_secs } => {
-                write!(
-                    f,
-                    "Rate limit exceeded, retry after {}s",
-                    retry_after_secs
-                )
+                write!(f, "Rate limit exceeded, retry after {}s", retry_after_secs)
             }
             Self::QuotaExceeded => write!(f, "Rate limit quota exceeded"),
         }
@@ -192,10 +188,7 @@ impl RateLimiter {
     /// On success a token is consumed from the model's bucket.
     /// On failure (bucket empty) a [`RateLimitError`] describing the
     /// necessary wait time is returned.
-    pub async fn check_rate_limit(
-        &self,
-        model: &str,
-    ) -> std::result::Result<(), RateLimitError> {
+    pub async fn check_rate_limit(&self, model: &str) -> std::result::Result<(), RateLimitError> {
         let mut buckets = self.inner.lock().await;
         let bucket = self.bucket_or_create(&mut buckets, model);
 
@@ -204,7 +197,9 @@ impl RateLimiter {
             Ok(())
         } else {
             let retry_after = bucket.time_until_next_token().as_secs().max(1);
-            Err(RateLimitError::TooManyRequests { retry_after_secs: retry_after })
+            Err(RateLimitError::TooManyRequests {
+                retry_after_secs: retry_after,
+            })
         }
     }
 
@@ -260,9 +255,9 @@ impl RateLimiter {
         buckets: &'a mut HashMap<String, TokenBucket>,
         model: &str,
     ) -> &'a mut TokenBucket {
-        buckets.entry(model.to_string()).or_insert_with(|| {
-            TokenBucket::new(self.default_capacity, self.default_refill_rate)
-        })
+        buckets
+            .entry(model.to_string())
+            .or_insert_with(|| TokenBucket::new(self.default_capacity, self.default_refill_rate))
     }
 }
 
@@ -350,7 +345,7 @@ mod tests {
     fn token_bucket_refill_adds_tokens() {
         let mut tb = TokenBucket::new(100, 1000.0); // very fast refill
         tb.try_consume(); // 99 remaining
-        // Force last_refill into the past
+                          // Force last_refill into the past
         tb.last_refill = Instant::now() - Duration::from_millis(100);
         tb.refill();
         // Should have added >= 100 tokens, but capped at capacity
@@ -408,7 +403,7 @@ mod tests {
     #[tokio::test]
     async fn rate_limiter_blocks_when_bucket_empty() {
         let limiter = RateLimiter::new(1, 0.01); // very slow refill
-        // consume the single token
+                                                 // consume the single token
         assert!(limiter.check_rate_limit("gpt-4").await.is_ok());
         // second call should fail
         let err = limiter.check_rate_limit("gpt-4").await.unwrap_err();

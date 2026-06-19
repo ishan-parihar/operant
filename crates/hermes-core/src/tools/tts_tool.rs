@@ -18,17 +18,21 @@ use reqwest::Client;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::process::Command;
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use tracing::debug;
 
 use crate::config::runtime_config;
 use crate::schema::ToolSchema;
+use crate::tools::tts_command_provider::CommandProvider;
+use crate::tools::tts_provider::{AudioFormat, TtsProvider};
+use crate::tools::tts_registry::TtsPluginRegistry;
 use crate::tools::{HermesTool, ToolContext, ToolResult};
 
 pub struct TtsTool {
     client: Client,
-    // API Keys
     elevenlabs_key: String,
     openai_key: String,
     minimax_key: String,
@@ -36,6 +40,8 @@ pub struct TtsTool {
     gemini_key: String,
     xai_key: String,
     kokoro_engine: Arc<Mutex<Option<TtsEngine>>>,
+    plugin_registry: Arc<TtsPluginRegistry>,
+    command_providers: Arc<Mutex<HashMap<String, CommandProvider>>>,
 }
 
 #[derive(JsonSchema, Deserialize)]
@@ -72,7 +78,24 @@ impl TtsTool {
             gemini_key: std::env::var("GEMINI_API_KEY").unwrap_or_default(),
             xai_key: std::env::var("XAI_API_KEY").unwrap_or_default(),
             kokoro_engine: Arc::new(Mutex::new(None)),
+            plugin_registry: Arc::new(TtsPluginRegistry::new()),
+            command_providers: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+
+    pub fn with_plugin_registry(registry: Arc<TtsPluginRegistry>) -> Self {
+        let mut tool = Self::new();
+        tool.plugin_registry = registry;
+        tool
+    }
+
+    pub async fn register_command_provider(&self, name: String, provider: CommandProvider) {
+        let mut providers = self.command_providers.lock().await;
+        providers.insert(name, provider);
+    }
+
+    pub async fn get_plugin_registry(&self) -> Arc<TtsPluginRegistry> {
+        self.plugin_registry.clone()
     }
 
     async fn generate_speech(&self, args: &TtsArgs) -> ToolResult {
@@ -80,7 +103,77 @@ impl TtsTool {
             return ToolResult::error("text_to_speech", "Text is required");
         }
 
-        match args.provider.as_str() {
+        let provider = args.provider.as_str();
+
+        // Command providers win over plugins (config is more local than plugin install)
+        {
+            let providers = self.command_providers.lock().await;
+            if let Some(cmd_provider) = providers.get(provider) {
+                debug!(provider = %provider, "Dispatching to command provider");
+                let temp_dir = std::env::temp_dir();
+                let output_path = temp_dir.join(format!("tts_output.{}", cmd_provider.output_format()));
+                match cmd_provider
+                    .synthesize(&args.text, output_path.to_str().unwrap_or("/tmp/tts_output.mp3"), Some(&args.voice), args.model.as_deref(), AudioFormat::Mp3)
+                    .await
+                {
+                    Ok(result) => {
+                        let audio_bytes = match std::fs::read(&result.output_path) {
+                            Ok(b) => b,
+                            Err(e) => return ToolResult::error("text_to_speech", format!("Failed to read output: {}", e)),
+                        };
+                        let audio_base64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &audio_bytes);
+                        let _ = std::fs::remove_file(&result.output_path);
+                        return ToolResult::success(
+                            "text_to_speech",
+                            json!({
+                                "success": true,
+                                "audio": audio_base64,
+                                "format": result.format.to_string(),
+                                "provider": provider,
+                                "voice": args.voice
+                            }),
+                        );
+                    }
+                    Err(e) => return ToolResult::error("text_to_speech", format!("Command provider failed: {}", e)),
+                }
+            }
+        }
+
+        // Plugin-registered providers (dispatched when name is not a built-in)
+        if !TtsPluginRegistry::is_builtin(provider) {
+            if let Some(plugin) = self.plugin_registry.get_provider(provider).await {
+                debug!(provider = %provider, "Dispatching to plugin provider");
+                let temp_dir = std::env::temp_dir();
+                let output_path = temp_dir.join("tts_plugin_output.mp3");
+                match plugin
+                    .synthesize(&args.text, output_path.to_str().unwrap_or("/tmp/tts_plugin_output.mp3"), Some(&args.voice), args.model.as_deref(), AudioFormat::Mp3)
+                    .await
+                {
+                    Ok(result) => {
+                        let audio_bytes = match std::fs::read(&result.output_path) {
+                            Ok(b) => b,
+                            Err(e) => return ToolResult::error("text_to_speech", format!("Failed to read output: {}", e)),
+                        };
+                        let audio_base64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &audio_bytes);
+                        let _ = std::fs::remove_file(&result.output_path);
+                        return ToolResult::success(
+                            "text_to_speech",
+                            json!({
+                                "success": true,
+                                "audio": audio_base64,
+                                "format": result.format.to_string(),
+                                "provider": provider,
+                                "voice": args.voice
+                            }),
+                        );
+                    }
+                    Err(e) => return ToolResult::error("text_to_speech", format!("Plugin provider failed: {}", e)),
+                }
+            }
+        }
+
+        // Built-in providers
+        match provider {
             "edge" => self.edge_tts(args).await,
             "elevenlabs" => self.elevenlabs_tts(args).await,
             "openai" => self.openai_tts(args).await,
@@ -92,7 +185,7 @@ impl TtsTool {
             "kittentts" => self.kittentts_local(args).await,
             "piper" => self.piper_local(args).await,
             "kokoro" => self.kokoro_local(args).await,
-            _ => ToolResult::error("text_to_speech", format!("Unknown provider: {}. Available: edge, elevenlabs, openai, minimax, mistral, gemini, xai, neutts, kittentts, piper, kokoro", args.provider)),
+            _ => ToolResult::error("text_to_speech", format!("Unknown provider: {}. Available: edge, elevenlabs, openai, minimax, mistral, gemini, xai, neutts, kittentts, piper, kokoro, or registered command/plugin providers", args.provider)),
         }
     }
 

@@ -57,7 +57,11 @@ pub trait MemoryProvider: Send + Sync {
 
     /// Dispatch a tool call; return a JSON result string.
     async fn handle_tool_call(&self, name: &str, _args: Value) -> String {
-        format!(r#"{{"error":"provider {} does not handle tool {}"}}"#, self.name(), name)
+        format!(
+            r#"{{"error":"provider {} does not handle tool {}"}}"#,
+            self.name(),
+            name
+        )
     }
 
     /// Flush queues and close connections.
@@ -80,8 +84,12 @@ impl BuiltinProvider {
 
 #[async_trait]
 impl MemoryProvider for BuiltinProvider {
-    fn name(&self) -> &str { "builtin" }
-    fn is_available(&self) -> bool { true }
+    fn name(&self) -> &str {
+        "builtin"
+    }
+    fn is_available(&self) -> bool {
+        true
+    }
 
     async fn initialize(&self, session_id: &str) -> Result<()> {
         self.manager.load_from_disk().await?;
@@ -119,7 +127,9 @@ pub struct LocalVectorProvider {
 impl LocalVectorProvider {
     pub fn new() -> Self {
         let home = crate::platform::hermes_home();
-        Self { db_path: home.join("memory").join("local.db") }
+        Self {
+            db_path: home.join("memory").join("local.db"),
+        }
     }
 
     fn open_db(&self) -> std::result::Result<rusqlite::Connection, rusqlite::Error> {
@@ -142,11 +152,17 @@ impl LocalVectorProvider {
 
 #[async_trait]
 impl MemoryProvider for LocalVectorProvider {
-    fn name(&self) -> &str { "local-vector" }
-    fn is_available(&self) -> bool { true }
+    fn name(&self) -> &str {
+        "local-vector"
+    }
+    fn is_available(&self) -> bool {
+        true
+    }
 
     async fn initialize(&self, _session_id: &str) -> Result<()> {
-        self.open_db().map(|_| ()).map_err(|e| crate::error::Error::Agent(e.to_string()))
+        self.open_db()
+            .map(|_| ())
+            .map_err(|e| crate::error::Error::Agent(e.to_string()))
     }
 
     fn system_prompt_block(&self) -> String {
@@ -156,20 +172,27 @@ impl MemoryProvider for LocalVectorProvider {
     async fn prefetch(&self, query: &str) -> String {
         let db_path = self.db_path.clone();
         let query = query.to_string();
-        let result = tokio::task::spawn_blocking(move || -> std::result::Result<Vec<String>, rusqlite::Error> {
-            if let Some(p) = db_path.parent() { let _ = std::fs::create_dir_all(p); }
-            let conn = rusqlite::Connection::open(&db_path)?;
-            // FTS5 match query — escape special chars
-            let safe_q = query.replace('"', "\"\"");
-            let mut stmt = conn.prepare(
-                "SELECT m.text FROM memories_fts f
+        let result = tokio::task::spawn_blocking(
+            move || -> std::result::Result<Vec<String>, rusqlite::Error> {
+                if let Some(p) = db_path.parent() {
+                    let _ = std::fs::create_dir_all(p);
+                }
+                let conn = rusqlite::Connection::open(&db_path)?;
+                // FTS5 match query — escape special chars
+                let safe_q = query.replace('"', "\"\"");
+                let mut stmt = conn.prepare(
+                    "SELECT m.text FROM memories_fts f
                  JOIN memories m ON m.id = f.rowid
-                 WHERE memories_fts MATCH ?1 LIMIT 5"
-            )?;
-            let rows = stmt.query_map([format!("\"{}\"", safe_q)], |r| r.get(0))?
-                .flatten().collect();
-            Ok(rows)
-        }).await;
+                 WHERE memories_fts MATCH ?1 LIMIT 5",
+                )?;
+                let rows = stmt
+                    .query_map([format!("\"{}\"", safe_q)], |r| r.get(0))?
+                    .flatten()
+                    .collect();
+                Ok(rows)
+            },
+        )
+        .await;
 
         match result {
             Ok(Ok(rows)) if !rows.is_empty() => format!("[local-vector]\n{}", rows.join("\n")),
@@ -182,16 +205,26 @@ impl MemoryProvider for LocalVectorProvider {
         let text = format!("User: {}\nAssistant: {}", user, assistant);
         let ts = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs() as i64).unwrap_or(0);
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
 
         tokio::task::spawn_blocking(move || -> std::result::Result<(), rusqlite::Error> {
-            if let Some(p) = db_path.parent() { let _ = std::fs::create_dir_all(p); }
+            if let Some(p) = db_path.parent() {
+                let _ = std::fs::create_dir_all(p);
+            }
             let conn = rusqlite::Connection::open(&db_path)?;
-            conn.execute("INSERT INTO memories (text, ts) VALUES (?1, ?2)", [&text, &ts.to_string()])?;
+            conn.execute(
+                "INSERT INTO memories (text, ts) VALUES (?1, ?2)",
+                [&text, &ts.to_string()],
+            )?;
             let id = conn.last_insert_rowid();
-            conn.execute("INSERT INTO memories_fts(rowid, text) VALUES (?1, ?2)", rusqlite::params![id, text])?;
+            conn.execute(
+                "INSERT INTO memories_fts(rowid, text) VALUES (?1, ?2)",
+                rusqlite::params![id, text],
+            )?;
             Ok(())
-        }).await
+        })
+        .await
         .map_err(|e| crate::error::Error::Agent(e.to_string()))?
         .map_err(|e| crate::error::Error::Agent(e.to_string()))
     }
@@ -207,19 +240,27 @@ pub struct HindsightProvider {
 
 impl HindsightProvider {
     pub fn new() -> Self {
-        Self { client: crate::memory::HindsightMemoryClient::from_config() }
+        Self {
+            client: crate::memory::HindsightMemoryClient::from_config(),
+        }
     }
 }
 
 #[async_trait]
 impl MemoryProvider for HindsightProvider {
-    fn name(&self) -> &str { "hindsight" }
-
-    fn is_available(&self) -> bool {
-        !std::env::var("HINDSIGHT_API_KEY").unwrap_or_default().is_empty()
+    fn name(&self) -> &str {
+        "hindsight"
     }
 
-    async fn initialize(&self, _session_id: &str) -> Result<()> { Ok(()) }
+    fn is_available(&self) -> bool {
+        !std::env::var("HINDSIGHT_API_KEY")
+            .unwrap_or_default()
+            .is_empty()
+    }
+
+    async fn initialize(&self, _session_id: &str) -> Result<()> {
+        Ok(())
+    }
 
     fn system_prompt_block(&self) -> String {
         "Hindsight memory active. Use hindsight_retain to store, hindsight_recall to search, hindsight_reflect to synthesize.".to_string()
@@ -284,7 +325,11 @@ impl MemoryProvider for HindsightProvider {
                 let content = args["content"].as_str().unwrap_or("");
                 let tags: Vec<String> = args["tags"]
                     .as_array()
-                    .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|v| v.as_str().map(String::from))
+                            .collect()
+                    })
                     .unwrap_or_default();
                 match self.client.retain(content, tags).await {
                     Ok(_) => r#"{"success":true}"#.to_string(),
@@ -327,13 +372,14 @@ impl RetainDbProvider {
             api_key: std::env::var("RETAINDB_API_KEY").unwrap_or_default(),
             base_url: std::env::var("RETAINDB_BASE_URL")
                 .unwrap_or_else(|_| "https://api.retaindb.com".to_string()),
-            project: std::env::var("RETAINDB_PROJECT")
-                .unwrap_or_else(|_| "default".to_string()),
+            project: std::env::var("RETAINDB_PROJECT").unwrap_or_else(|_| "default".to_string()),
             client: reqwest::Client::new(),
         }
     }
 
-    fn auth(&self) -> String { format!("Bearer {}", self.api_key) }
+    fn auth(&self) -> String {
+        format!("Bearer {}", self.api_key)
+    }
 
     async fn search_memories(&self, query: &str) -> Result<Vec<String>> {
         let resp = self
@@ -362,11 +408,17 @@ impl RetainDbProvider {
 
 #[async_trait]
 impl MemoryProvider for RetainDbProvider {
-    fn name(&self) -> &str { "retaindb" }
+    fn name(&self) -> &str {
+        "retaindb"
+    }
 
-    fn is_available(&self) -> bool { !self.api_key.is_empty() }
+    fn is_available(&self) -> bool {
+        !self.api_key.is_empty()
+    }
 
-    async fn initialize(&self, _session_id: &str) -> Result<()> { Ok(()) }
+    async fn initialize(&self, _session_id: &str) -> Result<()> {
+        Ok(())
+    }
 
     fn system_prompt_block(&self) -> String {
         format!("RetainDB memory active (project: {}).", self.project)
@@ -462,44 +514,61 @@ impl Mem0Provider {
 
 #[async_trait]
 impl MemoryProvider for Mem0Provider {
-    fn name(&self) -> &str { "mem0" }
+    fn name(&self) -> &str {
+        "mem0"
+    }
 
-    fn is_available(&self) -> bool { !self.api_key.is_empty() }
+    fn is_available(&self) -> bool {
+        !self.api_key.is_empty()
+    }
 
-    async fn initialize(&self, _session_id: &str) -> Result<()> { Ok(()) }
+    async fn initialize(&self, _session_id: &str) -> Result<()> {
+        Ok(())
+    }
 
     fn system_prompt_block(&self) -> String {
         "Mem0 memory active.".to_string()
     }
 
     async fn prefetch(&self, query: &str) -> String {
-        let resp = self.client
+        let resp = self
+            .client
             .post(format!("{}/v1/memories/search/", self.base_url))
             .header("Authorization", format!("Token {}", self.api_key))
             .json(&serde_json::json!({"query": query, "user_id": "default", "limit": 5}))
-            .send().await;
+            .send()
+            .await;
         match resp {
             Ok(r) => {
                 let json: Value = r.json().await.unwrap_or_default();
                 let empty = vec![];
-                let results: Vec<&str> = json.as_array().unwrap_or(&empty)
-                    .iter().filter_map(|m| m["memory"].as_str()).collect();
-                if results.is_empty() { String::new() }
-                else { format!("[Mem0]\n{}", results.join("\n")) }
+                let results: Vec<&str> = json
+                    .as_array()
+                    .unwrap_or(&empty)
+                    .iter()
+                    .filter_map(|m| m["memory"].as_str())
+                    .collect();
+                if results.is_empty() {
+                    String::new()
+                } else {
+                    format!("[Mem0]\n{}", results.join("\n"))
+                }
             }
             Err(_) => String::new(),
         }
     }
 
     async fn sync_turn(&self, user: &str, _assistant: &str) -> Result<()> {
-        let _ = self.client
+        let _ = self
+            .client
             .post(format!("{}/v1/memories/", self.base_url))
             .header("Authorization", format!("Token {}", self.api_key))
             .json(&serde_json::json!({
                 "messages": [{"role": "user", "content": user}],
                 "user_id": "default"
             }))
-            .send().await;
+            .send()
+            .await;
         Ok(())
     }
 }

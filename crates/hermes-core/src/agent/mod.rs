@@ -91,6 +91,12 @@ pub enum AgentEvent {
     IterationComplete { iteration: usize },
     /// Agent error
     Error { error: String },
+    /// API usage statistics from the last completed request
+    Usage {
+        input_tokens: u32,
+        output_tokens: u32,
+        total_tokens: u32,
+    },
 }
 
 /// Hermes Agent for tool orchestration
@@ -635,6 +641,13 @@ impl HermesAgent {
             .await;
         }
 
+        self.emit(AgentEvent::Usage {
+            input_tokens: response.usage.prompt_tokens,
+            output_tokens: response.usage.completion_tokens,
+            total_tokens: response.usage.total_tokens,
+        })
+        .await;
+
         Ok((content, reasoning, tool_calls))
     }
 
@@ -866,16 +879,27 @@ fn truncate_tool_result(tool_name: &str, content: &str) -> String {
             let had_audio = obj.remove("audio").is_some();
             let had_data = obj.remove("data").is_some();
             if had_audio {
-                obj.insert("audio".to_string(), serde_json::json!("[audio data delivered to user]"));
+                obj.insert(
+                    "audio".to_string(),
+                    serde_json::json!("[audio data delivered to user]"),
+                );
             }
             if had_data {
-                obj.insert("data".to_string(), serde_json::json!("[large data truncated]"));
+                obj.insert(
+                    "data".to_string(),
+                    serde_json::json!("[large data truncated]"),
+                );
             }
-            return serde_json::to_string(&val).unwrap_or_else(|_| content[..MAX_TOOL_RESULT_LEN].to_string());
+            return serde_json::to_string(&val)
+                .unwrap_or_else(|_| content[..MAX_TOOL_RESULT_LEN].to_string());
         }
     }
     // Fallback: hard truncate
-    format!("{}... [truncated, tool: {}]", &content[..MAX_TOOL_RESULT_LEN], tool_name)
+    format!(
+        "{}... [truncated, tool: {}]",
+        &content[..MAX_TOOL_RESULT_LEN],
+        tool_name
+    )
 }
 
 fn strip_reasoning_tags(text: &str) -> String {
@@ -1152,6 +1176,8 @@ impl Default for HermesAgentBuilder {
         Self::new()
     }
 }
+
+pub mod cache;
 
 mod context_compressor;
 pub use context_compressor::{CompressionStrategy, ContextCompressor};

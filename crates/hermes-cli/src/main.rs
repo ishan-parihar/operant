@@ -722,10 +722,8 @@ pub(crate) async fn load_memory_manager(storage_dir: PathBuf) -> Result<MemoryMa
     // The provider is available via hermes_core::memory_provider::build_memory_provider.
     let cfg = hermes_core::config::runtime_config();
     if cfg.memory.enabled && cfg.memory.provider != "builtin" && cfg.memory.provider != "disabled" {
-        let provider = hermes_core::memory_provider::build_memory_provider(
-            &cfg.memory.provider,
-            storage_dir,
-        );
+        let provider =
+            hermes_core::memory_provider::build_memory_provider(&cfg.memory.provider, storage_dir);
         // Initialize in the background; failures are non-fatal.
         tokio::spawn(async move {
             if let Err(e) = provider.initialize("main").await {
@@ -954,8 +952,15 @@ async fn list_tools(config: &AppConfig, verbose: bool) -> Result<()> {
     let mcp_manager = McpManager::new();
     let client = OpenAIClient::new(client_config(config));
     let database = Arc::new(Database::init(config.database_path.clone())?);
-    let registry =
-        build_registry(config, &mcp_manager, &client, &config.agent.model, database, None).await?;
+    let registry = build_registry(
+        config,
+        &mcp_manager,
+        &client,
+        &config.agent.model,
+        database,
+        None,
+    )
+    .await?;
     let tools = registry.get_schemas().await;
 
     for tool in tools {
@@ -972,8 +977,15 @@ async fn test_tool(config: &AppConfig, tool_name: &str, args: Option<&str>) -> R
     let mcp_manager = McpManager::new();
     let client = OpenAIClient::new(client_config(config));
     let database = Arc::new(Database::init(config.database_path.clone())?);
-    let registry =
-        build_registry(config, &mcp_manager, &client, &config.agent.model, database, None).await?;
+    let registry = build_registry(
+        config,
+        &mcp_manager,
+        &client,
+        &config.agent.model,
+        database,
+        None,
+    )
+    .await?;
     let parsed_args: Value = if let Some(args) = args {
         if args.trim().is_empty() {
             Value::Object(serde_json::Map::new())

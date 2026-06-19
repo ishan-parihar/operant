@@ -239,7 +239,8 @@ impl McpClient {
         }
 
         // Send initialized notification
-        self.send_notification("notifications/initialized", Value::Null).await?;
+        self.send_notification("notifications/initialized", Value::Null)
+            .await?;
 
         // List available tools
         self.list_tools().await?;
@@ -514,7 +515,8 @@ impl McpStdioClient {
         }
 
         // Send initialized notification
-        self.send_notification("notifications/initialized", Value::Null).await?;
+        self.send_notification("notifications/initialized", Value::Null)
+            .await?;
 
         // List available tools
         self.list_tools().await?;

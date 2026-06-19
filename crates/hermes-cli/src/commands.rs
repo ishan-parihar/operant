@@ -11,8 +11,64 @@
 //! - Command resolution (name + alias → canonical name)
 
 use std::collections::HashMap;
+use std::fmt;
 
 use anyhow::Result;
+
+// ---------------------------------------------------------------------------
+// CommandCategory
+// ---------------------------------------------------------------------------
+
+/// Category for grouping slash commands in help output.
+///
+/// Mirrors Python's `CommandDef.category` field with typed variants.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum CommandCategory {
+    /// Session management (new, stop, history, etc.)
+    Session,
+    /// Configuration (model, provider, config, etc.)
+    Configuration,
+    /// Tools and skills management
+    ToolsAndSkills,
+    /// Informational commands (help, status, memory, etc.)
+    Info,
+    /// Exit commands
+    Exit,
+}
+
+impl CommandCategory {
+    /// Return the display string matching the Python convention.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Session => "Session",
+            Self::Configuration => "Configuration",
+            Self::ToolsAndSkills => "Tools & Skills",
+            Self::Info => "Info",
+            Self::Exit => "Exit",
+        }
+    }
+}
+
+impl fmt::Display for CommandCategory {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl TryFrom<&str> for CommandCategory {
+    type Error = anyhow::Error;
+
+    fn try_from(s: &str) -> Result<Self> {
+        match s {
+            "Session" => Ok(Self::Session),
+            "Configuration" => Ok(Self::Configuration),
+            "Tools & Skills" | "ToolsAndSkills" => Ok(Self::ToolsAndSkills),
+            "Info" => Ok(Self::Info),
+            "Exit" => Ok(Self::Exit),
+            _ => anyhow::bail!("Unknown command category: {}", s),
+        }
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Types
@@ -63,6 +119,10 @@ pub struct CommandDef {
     pub cli_only: bool,
     /// Only available in messaging platforms (not in CLI).
     pub gateway_only: bool,
+    /// Config dotpath that gates this command in gateway mode.
+    /// When set on a `cli_only` command, the command becomes available
+    /// in the gateway if the config value is truthy.
+    pub gateway_config_gate: Option<&'static str>,
 }
 
 impl CommandDef {
@@ -80,6 +140,7 @@ impl CommandDef {
             args_hint: "",
             cli_only: false,
             gateway_only: false,
+            gateway_config_gate: None,
         }
     }
 
@@ -106,6 +167,11 @@ impl CommandDef {
         self.gateway_only = true;
         self
     }
+
+    pub const fn with_config_gate(mut self, gate: &'static str) -> Self {
+        self.gateway_config_gate = Some(gate);
+        self
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -117,41 +183,372 @@ impl CommandDef {
 /// Each entry is metadata only; handlers are registered dynamically in
 /// [`CommandRegistry`] at startup.
 pub static COMMAND_REGISTRY: &[CommandDef] = &[
-    // ── Session ──
-    CommandDef::new("new", "Start a new conversation", "Session").with_aliases(&["n", "clear"]),
-    CommandDef::new("reset", "Reset the current conversation", "Session").with_aliases(&["r"]),
-    CommandDef::new("continue", "Continue the last conversation", "Session")
-        .with_aliases(&["c", "resume"]),
-    CommandDef::new("save", "Save the current conversation", "Session").with_aliases(&["export"]),
-    CommandDef::new("background", "Run a task in the background", "Session")
-        .with_args("<prompt>")
-        .with_aliases(&["bg"]),
-    CommandDef::new("fork", "Fork the conversation from a message", "Session").with_args("<id>"),
-    CommandDef::new("history", "Show conversation history", "Session").with_aliases(&["h"]),
-    // ── Configuration ──
-    CommandDef::new("model", "Switch the active model", "Configuration").with_args("<name>"),
-    CommandDef::new("provider", "Switch LLM provider", "Configuration").with_args("<name>"),
-    CommandDef::new("config", "View or change configuration", "Configuration")
+    // ── Session ─────────────────────────────────────────────────────────────
+    CommandDef::new("start", "Acknowledge platform start pings without a reply", "Session")
+        .gateway_only(),
+    CommandDef::new("new", "Start a new session (fresh session ID + history)", "Session")
+        .with_args("[name]")
+        .with_aliases(&["n", "clear"]),
+    CommandDef::new("topic", "Enable or inspect Telegram DM topic sessions", "Session")
+        .gateway_only()
+        .with_args("[off|help|session-id]"),
+    CommandDef::new("redraw", "Force a full UI repaint (recovers from terminal drift)", "Session")
+        .cli_only(),
+    CommandDef::new("history", "Show conversation history", "Session")
+        .cli_only()
+        .with_aliases(&["h"]),
+    CommandDef::new("save", "Save the current conversation", "Session")
+        .cli_only()
+        .with_aliases(&["export"]),
+    CommandDef::new("retry", "Retry the last message (resend to agent)", "Session"),
+    CommandDef::new("undo", "Back up N user turns and re-prompt (default 1)", "Session")
+        .with_args("[N]"),
+    CommandDef::new("title", "Set a title for the current session", "Session")
+        .with_args("[name]"),
+    CommandDef::new(
+        "handoff",
+        "Hand off this session to a messaging platform (Telegram, Discord, etc.)",
+        "Session",
+    )
+    .with_args("<platform>")
+    .cli_only(),
+    CommandDef::new("branch", "Branch the current session (explore a different path)", "Session")
+        .with_aliases(&["fork"])
+        .with_args("[name]"),
+    CommandDef::new(
+        "compress",
+        "Compress conversation context (add 'here [N]' to keep recent N turns)",
+        "Session",
+    )
+    .with_args("[here [N] | focus topic]"),
+    CommandDef::new(
+        "rollback",
+        "List or restore filesystem checkpoints",
+        "Session",
+    )
+    .with_args("[number]"),
+    CommandDef::new(
+        "snapshot",
+        "Create or restore state snapshots of Hermes config/state",
+        "Session",
+    )
+    .cli_only()
+    .with_aliases(&["snap"])
+    .with_args("[create|restore <id>|prune]"),
+    CommandDef::new("stop", "Kill all running background processes", "Session"),
+    CommandDef::new(
+        "approve",
+        "Approve a pending dangerous command",
+        "Session",
+    )
+    .gateway_only()
+    .with_args("[session|always]"),
+    CommandDef::new("deny", "Deny a pending dangerous command", "Session").gateway_only(),
+    CommandDef::new("background", "Run a prompt in the background", "Session")
+        .with_aliases(&["bg", "btw"])
+        .with_args("<prompt>"),
+    CommandDef::new("agents", "Show active agents and running tasks", "Session")
+        .with_aliases(&["tasks"]),
+    CommandDef::new("queue", "Queue a prompt for the next turn (doesn't interrupt)", "Session")
+        .with_aliases(&["q"])
+        .with_args("<prompt>"),
+    CommandDef::new(
+        "steer",
+        "Inject a message after the next tool call without interrupting",
+        "Session",
+    )
+    .with_args("<prompt>"),
+    CommandDef::new(
+        "goal",
+        "Set a standing goal Hermes works on across turns until achieved",
+        "Session",
+    )
+    .with_args("[text | pause | resume | clear | status]"),
+    CommandDef::new(
+        "subgoal",
+        "Add or manage extra criteria on the active goal",
+        "Session",
+    )
+    .with_args("[text | remove N | clear]"),
+    CommandDef::new(
+        "status",
+        "Show session, model, token, and context info",
+        "Session",
+    ),
+    CommandDef::new(
+        "resume",
+        "Resume a previously-named session",
+        "Session",
+    )
+    .with_args("[name]"),
+    CommandDef::new("sethome", "Set this chat as the home channel", "Session")
+        .gateway_only()
+        .with_aliases(&["set-home"]),
+    CommandDef::new("sessions", "Browse and resume previous sessions", "Session"),
+    // ── Configuration ───────────────────────────────────────────────────────
+    CommandDef::new("model", "Switch model for this session", "Configuration")
+        .with_args("[model] [--provider name] [--global] [--refresh]"),
+    CommandDef::new("provider", "Switch LLM provider", "Configuration")
+        .with_args("<name>"),
+    CommandDef::new("config", "Show current configuration", "Configuration")
+        .cli_only()
         .with_args("[key] [value]"),
     CommandDef::new("env", "View or set environment variables", "Configuration")
+        .cli_only()
         .with_args("[key] [value]"),
-    CommandDef::new("profile", "Switch or manage profiles", "Configuration").with_args("<name>"),
-    CommandDef::new("skin", "Change the CLI theme", "Configuration").with_args("<name>"),
-    // ── Tools & Skills ──
-    CommandDef::new("skills", "Manage installed skills", "Tools & Skills").with_aliases(&["skill"]),
-    CommandDef::new("tools", "List available tools", "Tools & Skills"),
-    CommandDef::new("mcp", "Manage MCP servers", "Tools & Skills"),
-    CommandDef::new("plugins", "Manage plugins", "Tools & Skills"),
-    CommandDef::new("kanban", "Manage kanban tasks", "Tools & Skills").with_aliases(&["k"]),
-    // ── Info ──
-    CommandDef::new("help", "Show this help message", "Info").with_aliases(&["h", "?"]),
-    CommandDef::new("status", "Show system status", "Info"),
-    CommandDef::new("memory", "Show or search memories", "Info").with_aliases(&["mem"]),
-    CommandDef::new("session", "Show current session info", "Info").with_aliases(&["s"]),
-    CommandDef::new("cost", "Show token usage and cost", "Info"),
+    CommandDef::new(
+        "codex-runtime",
+        "Toggle codex app-server runtime for OpenAI/Codex models",
+        "Configuration",
+    )
+    .with_aliases(&["codex_runtime"])
+    .with_args("[auto|codex_app_server]"),
+    CommandDef::new("profile", "Show active profile name and home directory", "Info"),
+    CommandDef::new(
+        "personality",
+        "Set a predefined personality",
+        "Configuration",
+    )
+    .with_args("[name]"),
+    CommandDef::new(
+        "statusbar",
+        "Toggle the context/model status bar",
+        "Configuration",
+    )
+    .cli_only()
+    .with_aliases(&["sb"]),
+    CommandDef::new(
+        "verbose",
+        "Cycle tool progress display: off -> new -> all -> verbose",
+        "Configuration",
+    )
+    .cli_only()
+    .with_config_gate("display.tool_progress_command"),
+    CommandDef::new(
+        "footer",
+        "Toggle gateway runtime-metadata footer on final replies",
+        "Configuration",
+    )
+    .with_args("[on|off|status]"),
+    CommandDef::new(
+        "yolo",
+        "Toggle YOLO mode (skip all dangerous command approvals)",
+        "Configuration",
+    ),
+    CommandDef::new(
+        "reasoning",
+        "Manage reasoning effort and display",
+        "Configuration",
+    )
+    .with_args("[level|show|hide]"),
+    CommandDef::new(
+        "fast",
+        "Toggle fast mode — OpenAI Priority Processing / Anthropic Fast Mode",
+        "Configuration",
+    )
+    .with_args("[normal|fast|status]"),
+    CommandDef::new("skin", "Show or change the display skin/theme", "Configuration")
+        .cli_only()
+        .with_args("[name]"),
+    CommandDef::new(
+        "indicator",
+        "Pick the TUI busy-indicator style",
+        "Configuration",
+    )
+    .cli_only()
+    .with_args("[kaomoji|emoji|unicode|ascii]"),
+    CommandDef::new("voice", "Toggle voice mode", "Configuration")
+        .with_args("[on|off|tts|status]"),
+    CommandDef::new(
+        "busy",
+        "Control what Enter does while Hermes is working",
+        "Configuration",
+    )
+    .cli_only()
+    .with_args("[queue|steer|interrupt|status]"),
+    // ── Tools & Skills ──────────────────────────────────────────────────────
+    CommandDef::new(
+        "tools",
+        "Manage tools: /tools [list|disable|enable] [name...]",
+        "Tools & Skills",
+    )
+    .cli_only()
+    .with_args("[list|disable|enable] [name...]"),
+    CommandDef::new("toolsets", "List available toolsets", "Tools & Skills").cli_only(),
+    CommandDef::new(
+        "skills",
+        "Search, install, inspect, or manage skills",
+        "Tools & Skills",
+    )
+    .cli_only()
+    .with_aliases(&["skill"])
+    .with_config_gate("skills.write_approval"),
+    CommandDef::new(
+        "memory",
+        "Review pending memory writes / toggle the approval gate",
+        "Tools & Skills",
+    )
+    .with_aliases(&["mem"])
+    .with_args("[pending|approve|reject|approval] [id|on|off]"),
+    CommandDef::new(
+        "bundles",
+        "List skill bundles (aliases /<name> for multiple skills)",
+        "Tools & Skills",
+    ),
+    CommandDef::new("cron", "Manage scheduled tasks", "Tools & Skills")
+        .cli_only()
+        .with_args("[subcommand]"),
+    CommandDef::new(
+        "suggestions",
+        "Review suggested automations (accept/dismiss)",
+        "Tools & Skills",
+    )
+    .with_aliases(&["suggest"])
+    .with_args("[accept|dismiss N | catalog]"),
+    CommandDef::new(
+        "blueprint",
+        "Set up an automation from a blueprint template",
+        "Tools & Skills",
+    )
+    .with_aliases(&["bp"])
+    .with_args("[name] [slot=value ...]"),
+    CommandDef::new(
+        "curator",
+        "Background skill maintenance (status, run, pin, archive, list-archived)",
+        "Tools & Skills",
+    )
+    .with_args("[subcommand]"),
+    CommandDef::new(
+        "kanban",
+        "Multi-profile collaboration board (tasks, links, comments)",
+        "Tools & Skills",
+    )
+    .with_aliases(&["k"])
+    .with_args("[subcommand]"),
+    CommandDef::new(
+        "reload",
+        "Reload .env variables into the running session",
+        "Tools & Skills",
+    )
+    .cli_only(),
+    CommandDef::new(
+        "reload-mcp",
+        "Reload MCP servers from config",
+        "Tools & Skills",
+    )
+    .with_aliases(&["reload_mcp"]),
+    CommandDef::new(
+        "reload-skills",
+        "Re-scan ~/.hermes/skills/ for newly installed or removed skills",
+        "Tools & Skills",
+    )
+    .with_aliases(&["reload_skills"]),
+    CommandDef::new(
+        "browser",
+        "Connect browser tools to your live Chromium-family browser via CDP",
+        "Tools & Skills",
+    )
+    .cli_only()
+    .with_args("[connect|disconnect|status]"),
+    CommandDef::new("plugins", "List installed plugins and their status", "Tools & Skills")
+        .cli_only(),
+    // ── Info ─────────────────────────────────────────────────────────────────
+    CommandDef::new(
+        "commands",
+        "Browse all commands and skills (paginated)",
+        "Info",
+    )
+    .gateway_only()
+    .with_args("[page]"),
+    CommandDef::new("help", "Show available commands", "Info")
+        .with_aliases(&["?", "h"]),
+    CommandDef::new(
+        "restart",
+        "Gracefully restart the gateway after draining active runs",
+        "Session",
+    )
+    .gateway_only(),
+    CommandDef::new(
+        "usage",
+        "Show token usage and rate limits for the current session",
+        "Info",
+    ),
+    CommandDef::new(
+        "credits",
+        "Show Nous credit balance and top up",
+        "Info",
+    ),
+    CommandDef::new(
+        "billing",
+        "Manage Nous terminal billing — buy credits, auto-reload, limits",
+        "Info",
+    ),
+    CommandDef::new(
+        "insights",
+        "Show usage insights and analytics",
+        "Info",
+    )
+    .with_args("[days]"),
+    CommandDef::new(
+        "platforms",
+        "Show gateway/messaging platform status",
+        "Info",
+    )
+    .cli_only()
+    .with_aliases(&["gateway"]),
+    CommandDef::new(
+        "platform",
+        "Pause, resume, or list a failing gateway platform",
+        "Info",
+    )
+    .gateway_only()
+    .with_args("<pause|resume|list> [name]"),
+    CommandDef::new(
+        "copy",
+        "Copy the last assistant response to clipboard",
+        "Info",
+    )
+    .cli_only()
+    .with_args("[number]"),
+    CommandDef::new(
+        "paste",
+        "Attach clipboard image from your clipboard",
+        "Info",
+    )
+    .cli_only(),
+    CommandDef::new(
+        "image",
+        "Attach a local image file for your next prompt",
+        "Info",
+    )
+    .cli_only()
+    .with_args("<path>"),
+    CommandDef::new(
+        "update",
+        "Update Hermes Agent to the latest version",
+        "Info",
+    ),
+    CommandDef::new("version", "Show Hermes Agent version", "Info")
+        .with_aliases(&["v"]),
+    CommandDef::new(
+        "debug",
+        "Upload debug report (system info + logs) and get shareable links",
+        "Info",
+    ),
+    CommandDef::new("whoami", "Show your slash command access (admin / user)", "Info"),
+    CommandDef::new(
+        "gquota",
+        "Show Google Gemini Code Assist quota usage",
+        "Info",
+    )
+    .cli_only(),
     CommandDef::new("time", "Show the current time", "Info"),
-    // ── Exit ──
-    CommandDef::new("exit", "Exit the CLI", "Exit").with_aliases(&["quit", "q"]),
+    CommandDef::new("session", "Show current session info", "Info")
+        .with_aliases(&["s"]),
+    // ── Exit ─────────────────────────────────────────────────────────────────
+    CommandDef::new("exit", "Exit the CLI", "Exit")
+        .cli_only()
+        .with_aliases(&["quit", "q"]),
 ];
 
 // ---------------------------------------------------------------------------
@@ -303,6 +700,34 @@ impl CommandRegistry {
 
         output
     }
+
+    pub fn all_commands(&self) -> Vec<&'static CommandDef> {
+        let mut seen = std::collections::HashSet::new();
+        let mut cmds = Vec::new();
+        for cmd in COMMAND_REGISTRY {
+            if seen.insert(cmd.name) {
+                cmds.push(cmd);
+            }
+        }
+        cmds
+    }
+
+    pub fn slash_completions(&self, prefix: &str) -> Vec<String> {
+        let trimmed = prefix.trim_start_matches('/');
+        COMMAND_REGISTRY
+            .iter()
+            .filter(|cmd| {
+                cmd.name.starts_with(trimmed) || cmd.aliases.iter().any(|a| a.starts_with(trimmed))
+            })
+            .flat_map(|cmd| {
+                let mut names = vec![format!("/{}", cmd.name)];
+                for alias in cmd.aliases {
+                    names.push(format!("/{}", alias));
+                }
+                names
+            })
+            .collect()
+    }
 }
 
 impl Default for CommandRegistry {
@@ -368,24 +793,53 @@ pub fn format_help_text() -> String {
 
 /// Return commands grouped by category in display order.
 ///
-/// Uses explicit indices into [`COMMAND_REGISTRY`] to define category boundaries.
+/// Dynamically builds category boundaries from the registry instead of
+/// relying on hardcoded index ranges.
 pub fn commands_by_category() -> Vec<(&'static str, Vec<&'static CommandDef>)> {
-    // Build from explicit indices (can't use slices in static context on stable Rust)
-    let indices: &[(&str, std::ops::Range<usize>)] = &[
-        ("Session", 0..7),
-        ("Configuration", 7..13),
-        ("Tools & Skills", 13..18),
-        ("Info", 18..24),
-        ("Exit", 24..25),
-    ];
+    let mut categories: Vec<(&str, Vec<&CommandDef>)> = Vec::new();
+    let mut seen_canonical = std::collections::HashSet::new();
 
-    indices
+    for cmd in COMMAND_REGISTRY {
+        if seen_canonical.insert(cmd.name) {
+            let cat = cmd.category;
+            match categories.iter_mut().find(|(c, _)| *c == cat) {
+                Some((_, list)) => list.push(cmd),
+                None => categories.push((cat, vec![cmd])),
+            }
+        }
+    }
+    categories
+}
+
+// ---------------------------------------------------------------------------
+// Gateway helpers
+// ---------------------------------------------------------------------------
+
+/// Set of all command names + aliases recognized by the gateway.
+/// Includes config-gated commands so the gateway can dispatch them
+/// (the handler checks the config gate at runtime).
+pub fn gateway_known_commands() -> std::collections::HashSet<&'static str> {
+    COMMAND_REGISTRY
         .iter()
-        .map(|(cat, range)| {
-            let refs: Vec<&CommandDef> = COMMAND_REGISTRY[range.clone()].iter().collect();
-            (*cat, refs)
+        .filter(|cmd| !cmd.cli_only || cmd.gateway_config_gate.is_some())
+        .flat_map(|cmd| {
+            let mut names = vec![cmd.name];
+            for alias in cmd.aliases {
+                names.push(alias);
+            }
+            names
         })
         .collect()
+}
+
+/// Check if a command name resolves to a gateway-dispatchable slash command.
+pub fn is_gateway_known_command(name: &str) -> bool {
+    let trimmed = name.trim().trim_start_matches('/');
+    let map = build_command_map();
+    match map.get(trimmed) {
+        Some(cmd) => !cmd.cli_only || cmd.gateway_config_gate.is_some(),
+        None => false,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -436,6 +890,44 @@ mod tests {
         assert!(!def.cli_only);
     }
 
+    #[test]
+    fn test_command_def_with_config_gate() {
+        let def = CommandDef::new("cmd", "Gated", "Test")
+            .cli_only()
+            .with_config_gate("display.tool_progress_command");
+        assert!(def.cli_only);
+        assert_eq!(
+            def.gateway_config_gate,
+            Some("display.tool_progress_command")
+        );
+    }
+
+    #[test]
+    fn test_command_category_display() {
+        assert_eq!(CommandCategory::Session.as_str(), "Session");
+        assert_eq!(CommandCategory::Configuration.as_str(), "Configuration");
+        assert_eq!(CommandCategory::ToolsAndSkills.as_str(), "Tools & Skills");
+        assert_eq!(CommandCategory::Info.as_str(), "Info");
+        assert_eq!(CommandCategory::Exit.as_str(), "Exit");
+    }
+
+    #[test]
+    fn test_command_category_try_from_str() {
+        assert_eq!(
+            CommandCategory::try_from("Session").unwrap(),
+            CommandCategory::Session
+        );
+        assert_eq!(
+            CommandCategory::try_from("Tools & Skills").unwrap(),
+            CommandCategory::ToolsAndSkills
+        );
+        assert_eq!(
+            CommandCategory::try_from("ToolsAndSkills").unwrap(),
+            CommandCategory::ToolsAndSkills
+        );
+        assert!(CommandCategory::try_from("Unknown").is_err());
+    }
+
     // -- Static registry tests ----------------------------------------------
 
     #[test]
@@ -453,6 +945,15 @@ mod tests {
     fn test_static_registry_has_exit() {
         let has_exit = COMMAND_REGISTRY.iter().any(|c| c.name == "exit");
         assert!(has_exit, "Registry must contain an 'exit' command");
+    }
+
+    #[test]
+    fn test_static_registry_count_gte_70() {
+        assert!(
+            COMMAND_REGISTRY.len() >= 70,
+            "Registry should have >= 70 commands, got {}",
+            COMMAND_REGISTRY.len()
+        );
     }
 
     #[test]
@@ -497,11 +998,9 @@ mod tests {
     #[test]
     fn test_build_command_map_size() {
         let map = build_command_map();
-        // Total entries should be at least 25 canonicals + most aliases
-        // (Note: some aliases like "h" are shared, so the total is slightly less)
         let unique_canonical: usize = COMMAND_REGISTRY.len();
         assert!(map.len() >= unique_canonical);
-        assert!(map.len() <= unique_canonical + 20); // reasonable upper bound
+        assert!(map.len() <= unique_canonical + 80); // reasonable upper bound
     }
 
     // -- resolve_command tests ----------------------------------------------
@@ -521,8 +1020,8 @@ mod tests {
     #[test]
     fn test_resolve_alias() {
         assert_eq!(resolve_command("q"), Some("exit"));
-        assert_eq!(resolve_command("h"), Some("help"));
         assert_eq!(resolve_command("n"), Some("new"));
+        assert_eq!(resolve_command("bg"), Some("background"));
     }
 
     #[test]
@@ -559,8 +1058,8 @@ mod tests {
     #[test]
     fn test_format_help_text_includes_descriptions() {
         let help = format_help_text();
-        assert!(help.contains("Show this help message"));
-        assert!(help.contains("Start a new conversation"));
+        assert!(help.contains("Show available commands"));
+        assert!(help.contains("Start a new session"));
     }
 
     #[test]
@@ -692,8 +1191,9 @@ mod tests {
         let cats = commands_by_category();
         assert_eq!(cats[0].0, "Session");
         assert_eq!(cats[1].0, "Configuration");
-        assert_eq!(cats[2].0, "Tools & Skills");
-        assert_eq!(cats[3].0, "Info");
+        // Info appears before Tools & Skills in COMMAND_REGISTRY (profile cmd)
+        assert_eq!(cats[2].0, "Info");
+        assert_eq!(cats[3].0, "Tools & Skills");
         assert_eq!(cats[4].0, "Exit");
     }
 
@@ -707,5 +1207,282 @@ mod tests {
         assert!(cat_names.contains(&"Session"));
         assert!(cat_names.contains(&"Info"));
         assert!(cat_names.contains(&"Exit"));
+    }
+
+    // -- Core 10 commands tests ----------------------------------------------
+
+    #[test]
+    fn test_core_commands_present() {
+        let registry = CommandRegistry::new();
+        let core = [
+            "help", "status", "new", "stop", "model", "skills", "tools", "memory", "sessions",
+            "quit",
+        ];
+        for name in &core {
+            assert!(
+                registry.resolve(name).is_some(),
+                "Core command /{} must be resolvable",
+                name
+            );
+        }
+    }
+
+    #[test]
+    fn test_stop_command_exists() {
+        let has = COMMAND_REGISTRY.iter().any(|c| c.name == "stop");
+        assert!(has, "Registry must contain a 'stop' command");
+    }
+
+    #[test]
+    fn test_sessions_command_exists() {
+        let has = COMMAND_REGISTRY.iter().any(|c| c.name == "sessions");
+        assert!(has, "Registry must contain a 'sessions' command");
+    }
+
+    // -- all_commands tests --------------------------------------------------
+
+    #[test]
+    fn test_all_commands_returns_all_canonicals() {
+        let registry = CommandRegistry::new();
+        let all = registry.all_commands();
+        assert_eq!(all.len(), COMMAND_REGISTRY.len());
+        let names: Vec<&str> = all.iter().map(|c| c.name).collect();
+        assert!(names.contains(&"help"));
+        assert!(names.contains(&"stop"));
+        assert!(names.contains(&"sessions"));
+    }
+
+    // -- slash_completions tests ---------------------------------------------
+
+    #[test]
+    fn test_slash_completions_empty_prefix() {
+        let registry = CommandRegistry::new();
+        let completions = registry.slash_completions("/");
+        assert!(!completions.is_empty());
+        assert!(completions.contains(&"/help".to_string()));
+        assert!(completions.contains(&"/exit".to_string()));
+    }
+
+    #[test]
+    fn test_slash_completions_partial_match() {
+        let registry = CommandRegistry::new();
+        let completions = registry.slash_completions("/he");
+        assert!(completions.contains(&"/help".to_string()));
+        assert!(!completions.contains(&"/exit".to_string()));
+    }
+
+    #[test]
+    fn test_slash_completions_alias_match() {
+        let registry = CommandRegistry::new();
+        let completions = registry.slash_completions("/q");
+        assert!(completions.contains(&"/quit".to_string()));
+        assert!(completions.contains(&"/q".to_string()));
+    }
+
+    #[test]
+    fn test_slash_completions_no_match() {
+        let registry = CommandRegistry::new();
+        let completions = registry.slash_completions("/zzz");
+        assert!(completions.is_empty());
+    }
+
+    #[test]
+    fn test_gateway_config_gate_default_none() {
+        let def = CommandDef::new("test", "Test", "Info");
+        assert!(def.gateway_config_gate.is_none());
+    }
+
+    // -- New Python-ported command tests -------------------------------------
+
+    #[test]
+    fn test_retry_command_exists() {
+        let has = COMMAND_REGISTRY.iter().any(|c| c.name == "retry");
+        assert!(has, "Registry must contain a 'retry' command");
+    }
+
+    #[test]
+    fn test_undo_command_exists() {
+        let has = COMMAND_REGISTRY.iter().any(|c| c.name == "undo");
+        assert!(has, "Registry must contain an 'undo' command");
+    }
+
+    #[test]
+    fn test_compress_command_exists() {
+        let has = COMMAND_REGISTRY.iter().any(|c| c.name == "compress");
+        assert!(has, "Registry must contain a 'compress' command");
+    }
+
+    #[test]
+    fn test_rollback_command_exists() {
+        let has = COMMAND_REGISTRY.iter().any(|c| c.name == "rollback");
+        assert!(has, "Registry must contain a 'rollback' command");
+    }
+
+    #[test]
+    fn test_personality_command_exists() {
+        let has = COMMAND_REGISTRY.iter().any(|c| c.name == "personality");
+        assert!(has, "Registry must contain a 'personality' command");
+    }
+
+    #[test]
+    fn test_reasoning_command_exists() {
+        let has = COMMAND_REGISTRY.iter().any(|c| c.name == "reasoning");
+        assert!(has, "Registry must contain a 'reasoning' command");
+    }
+
+    #[test]
+    fn test_cron_command_exists() {
+        let has = COMMAND_REGISTRY.iter().any(|c| c.name == "cron");
+        assert!(has, "Registry must contain a 'cron' command");
+    }
+
+    #[test]
+    fn test_browser_command_exists() {
+        let has = COMMAND_REGISTRY.iter().any(|c| c.name == "browser");
+        assert!(has, "Registry must contain a 'browser' command");
+    }
+
+    #[test]
+    fn test_usage_command_exists() {
+        let has = COMMAND_REGISTRY.iter().any(|c| c.name == "usage");
+        assert!(has, "Registry must contain a 'usage' command");
+    }
+
+    #[test]
+    fn test_version_command_exists() {
+        let has = COMMAND_REGISTRY.iter().any(|c| c.name == "version");
+        assert!(has, "Registry must contain a 'version' command");
+        // Also check alias "v"
+        let map = build_command_map();
+        assert!(map.contains_key("v"), "Alias 'v' must resolve to 'version'");
+        assert_eq!(map.get("v").unwrap().name, "version");
+    }
+
+    #[test]
+    fn test_debug_command_exists() {
+        let has = COMMAND_REGISTRY.iter().any(|c| c.name == "debug");
+        assert!(has, "Registry must contain a 'debug' command");
+    }
+
+    #[test]
+    fn test_agents_command_exists() {
+        let has = COMMAND_REGISTRY.iter().any(|c| c.name == "agents");
+        assert!(has, "Registry must contain an 'agents' command");
+        let map = build_command_map();
+        assert!(map.contains_key("tasks"), "Alias 'tasks' must resolve to 'agents'");
+    }
+
+    #[test]
+    fn test_approve_deny_gateway_only() {
+        let approve = COMMAND_REGISTRY.iter().find(|c| c.name == "approve").unwrap();
+        assert!(approve.gateway_only, "/approve must be gateway_only");
+        let deny = COMMAND_REGISTRY.iter().find(|c| c.name == "deny").unwrap();
+        assert!(deny.gateway_only, "/deny must be gateway_only");
+    }
+
+    #[test]
+    fn test_gateway_known_commands_includes_approve() {
+        let known = gateway_known_commands();
+        assert!(known.contains("approve"), "Gateway must know /approve");
+        assert!(known.contains("deny"), "Gateway must know /deny");
+    }
+
+    #[test]
+    fn test_gateway_known_commands_excludes_cli_only() {
+        let known = gateway_known_commands();
+        // /clear is cli_only (mapped to "new" alias), /history is cli_only
+        // but we check raw cli_only commands
+        let history = COMMAND_REGISTRY.iter().find(|c| c.name == "history").unwrap();
+        assert!(history.cli_only, "/history should be cli_only");
+        // Gateway should NOT include purely cli_only commands
+        assert!(
+            !known.contains("history"),
+            "Gateway must not include /history (cli_only)"
+        );
+    }
+
+    #[test]
+    fn test_snapshot_alias_snap() {
+        let map = build_command_map();
+        assert!(
+            map.contains_key("snap"),
+            "Alias 'snap' must resolve to 'snapshot'"
+        );
+        assert_eq!(map.get("snap").unwrap().name, "snapshot");
+    }
+
+    #[test]
+    fn test_branch_alias_fork() {
+        let map = build_command_map();
+        assert!(
+            map.contains_key("fork"),
+            "Alias 'fork' must resolve to 'branch'"
+        );
+        assert_eq!(map.get("fork").unwrap().name, "branch");
+    }
+
+    #[test]
+    fn test_statusbar_alias_sb() {
+        let map = build_command_map();
+        assert!(
+            map.contains_key("sb"),
+            "Alias 'sb' must resolve to 'statusbar'"
+        );
+        assert_eq!(map.get("sb").unwrap().name, "statusbar");
+    }
+
+    #[test]
+    fn test_background_aliases() {
+        let map = build_command_map();
+        assert!(map.contains_key("bg"), "Alias 'bg' must resolve to 'background'");
+        assert_eq!(map.get("bg").unwrap().name, "background");
+        assert!(map.contains_key("btw"), "Alias 'btw' must resolve to 'background'");
+        assert_eq!(map.get("btw").unwrap().name, "background");
+    }
+
+    #[test]
+    fn test_platforms_alias_gateway() {
+        let map = build_command_map();
+        assert!(
+            map.contains_key("gateway"),
+            "Alias 'gateway' must resolve to 'platforms'"
+        );
+        assert_eq!(map.get("gateway").unwrap().name, "platforms");
+    }
+
+    #[test]
+    fn test_suggestions_alias_suggest() {
+        let map = build_command_map();
+        assert!(
+            map.contains_key("suggest"),
+            "Alias 'suggest' must resolve to 'suggestions'"
+        );
+        assert_eq!(map.get("suggest").unwrap().name, "suggestions");
+    }
+
+    #[test]
+    fn test_blueprint_alias_bp() {
+        let map = build_command_map();
+        assert!(
+            map.contains_key("bp"),
+            "Alias 'bp' must resolve to 'blueprint'"
+        );
+        assert_eq!(map.get("bp").unwrap().name, "blueprint");
+    }
+
+    #[test]
+    fn test_config_gate_on_verbose() {
+        let verbose = COMMAND_REGISTRY.iter().find(|c| c.name == "verbose").unwrap();
+        assert_eq!(
+            verbose.gateway_config_gate,
+            Some("display.tool_progress_command")
+        );
+        assert!(verbose.cli_only);
+    }
+
+    #[test]
+    fn test_config_gate_on_skills() {
+        let skills = COMMAND_REGISTRY.iter().find(|c| c.name == "skills").unwrap();
+        assert_eq!(skills.gateway_config_gate, Some("skills.write_approval"));
     }
 }

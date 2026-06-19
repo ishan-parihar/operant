@@ -25,7 +25,11 @@ pub struct CronScheduler {
 
 impl CronScheduler {
     pub fn new(db: Arc<CronDb>, agent: Arc<HermesAgent>) -> Self {
-        Self { db, agent, delivery_tx: None }
+        Self {
+            db,
+            agent,
+            delivery_tx: None,
+        }
     }
 
     pub fn with_delivery(mut self, tx: mpsc::UnboundedSender<CronDelivery>) -> Self {
@@ -149,11 +153,9 @@ impl CronScheduler {
     async fn deliver_result(&self, job: &CronJob, content: &str) -> Result<(), Error> {
         info!("Delivering result for job {}: {}", job.id, job.name);
 
-        if let (Some(tx), Some(platform), Some(chat_id)) = (
-            &self.delivery_tx,
-            &job.origin_platform,
-            &job.origin_chat_id,
-        ) {
+        if let (Some(tx), Some(platform), Some(chat_id)) =
+            (&self.delivery_tx, &job.origin_platform, &job.origin_chat_id)
+        {
             let header = format!("📋 **Cron: {}**\n\n", job.name);
             let _ = tx.send(CronDelivery {
                 platform: platform.clone(),
@@ -161,7 +163,10 @@ impl CronScheduler {
                 content: format!("{}{}", header, content),
             });
         } else {
-            debug!("No delivery target for job {} (deliver={})", job.id, job.deliver);
+            debug!(
+                "No delivery target for job {} (deliver={})",
+                job.id, job.deliver
+            );
         }
         Ok(())
     }

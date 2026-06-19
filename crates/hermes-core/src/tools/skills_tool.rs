@@ -42,8 +42,14 @@ fn find_skills_in_dir(skills_dir: &PathBuf) -> Vec<SkillMeta> {
     skills
 }
 
-fn collect_skills_recursive(base_dir: &PathBuf, current_dir: &PathBuf, skills: &mut Vec<SkillMeta>) {
-    let Ok(entries) = fs::read_dir(current_dir) else { return };
+fn collect_skills_recursive(
+    base_dir: &PathBuf,
+    current_dir: &PathBuf,
+    skills: &mut Vec<SkillMeta>,
+) {
+    let Ok(entries) = fs::read_dir(current_dir) else {
+        return;
+    };
     for entry in entries.flatten() {
         let path = entry.path();
         if !path.is_dir() {
@@ -336,7 +342,9 @@ pub struct SkillManageTool {
 
 impl SkillManageTool {
     pub fn new(skills_dir: PathBuf) -> Self {
-        Self { root_dir: skills_dir }
+        Self {
+            root_dir: skills_dir,
+        }
     }
 }
 
@@ -367,29 +375,44 @@ impl HermesTool for SkillManageTool {
             "create" => {
                 let content = match &parsed.content {
                     Some(c) => c.as_str(),
-                    None => return ToolResult::error("skill_manage", "content is required for create"),
+                    None => {
+                        return ToolResult::error("skill_manage", "content is required for create")
+                    }
                 };
                 let mut mgr = crate::skills::SkillManager::new(self.root_dir.clone());
                 match mgr.create(&parsed.name, content) {
-                    Ok(_) => ToolResult::success("skill_manage", json!({"success": true, "action": "create", "name": parsed.name})),
+                    Ok(_) => ToolResult::success(
+                        "skill_manage",
+                        json!({"success": true, "action": "create", "name": parsed.name}),
+                    ),
                     Err(e) => ToolResult::error("skill_manage", format!("{}", e)),
                 }
             }
             "patch" => {
                 let content = match &parsed.content {
                     Some(c) => c.as_str(),
-                    None => return ToolResult::error("skill_manage", "content is required for patch"),
+                    None => {
+                        return ToolResult::error("skill_manage", "content is required for patch")
+                    }
                 };
                 let skill_md = self.root_dir.join(&parsed.name).join("SKILL.md");
                 if !skill_md.exists() {
-                    return ToolResult::error("skill_manage", format!("Skill '{}' not found", parsed.name));
+                    return ToolResult::error(
+                        "skill_manage",
+                        format!("Skill '{}' not found", parsed.name),
+                    );
                 }
                 match fs::read_to_string(&skill_md) {
                     Ok(existing) => {
                         let updated = format!("{}\n{}", existing, content);
                         match fs::write(&skill_md, updated) {
-                            Ok(_) => ToolResult::success("skill_manage", json!({"success": true, "action": "patch", "name": parsed.name})),
-                            Err(e) => ToolResult::error("skill_manage", format!("Failed to write: {}", e)),
+                            Ok(_) => ToolResult::success(
+                                "skill_manage",
+                                json!({"success": true, "action": "patch", "name": parsed.name}),
+                            ),
+                            Err(e) => {
+                                ToolResult::error("skill_manage", format!("Failed to write: {}", e))
+                            }
                         }
                     }
                     Err(e) => ToolResult::error("skill_manage", format!("Failed to read: {}", e)),
@@ -398,11 +421,17 @@ impl HermesTool for SkillManageTool {
             "delete" => {
                 let mut mgr = crate::skills::SkillManager::new(self.root_dir.clone());
                 match mgr.delete(&parsed.name) {
-                    Ok(_) => ToolResult::success("skill_manage", json!({"success": true, "action": "delete", "name": parsed.name})),
+                    Ok(_) => ToolResult::success(
+                        "skill_manage",
+                        json!({"success": true, "action": "delete", "name": parsed.name}),
+                    ),
                     Err(e) => ToolResult::error("skill_manage", format!("{}", e)),
                 }
             }
-            other => ToolResult::error("skill_manage", format!("Unknown action '{}'. Use create, patch, or delete.", other)),
+            other => ToolResult::error(
+                "skill_manage",
+                format!("Unknown action '{}'. Use create, patch, or delete.", other),
+            ),
         }
     }
 }

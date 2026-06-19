@@ -18,6 +18,55 @@
   - `cargo test --workspace`
   - `cargo clippy --workspace --all-targets --all-features -- -D warnings`
 
+## MVP Deployment (Current Focus)
+
+**Goal**: Make hermes-rs deployable and functional for testing
+**Config Defaults**: TDG memory provider, Kokoro TTS (set in hermes.example.toml)
+**Web Dashboard**: Copied from hermes-agent, wired to axum backend
+
+### Quick Start for AI Agents
+
+```bash
+# 1. Build the project
+cargo build --release
+
+# 2. Run tests
+cargo test --workspace
+
+# 3. Test CLI
+./target/release/hermes chat
+./target/release/hermes run --query "Hello"
+./target/release/hermes dashboard
+
+# 4. Test specific module
+cargo test -p hermes-core --lib database
+cargo test -p hermes-core --lib agent
+```
+
+### Common Development Tasks
+
+**Fix a bug:**
+1. Read the error message carefully
+2. Find the relevant file in `crates/hermes-core/src/` or `crates/hermes-cli/src/`
+3. Make the fix
+4. Run `cargo check --workspace` to verify compilation
+5. Run `cargo test --workspace` to verify tests pass
+6. Commit with descriptive message
+
+**Add a feature:**
+1. Check if similar feature exists in `hermes-agent/`
+2. Read the Python implementation for reference
+3. Implement in Rust following existing patterns
+4. Add tests
+5. Update documentation
+
+**Port from Python:**
+1. Find the Python file in `hermes-agent/`
+2. Read and understand the implementation
+3. Create Rust equivalent in `hermes-rs/crates/hermes-core/src/`
+4. Follow existing Rust patterns (async/await, error handling)
+5. Add tests
+
 Behavioral guidelines to reduce common LLM coding mistakes. Merge with project-specific instructions as needed.
 
 **Tradeoff:** These guidelines bias toward caution over speed. For trivial tasks, use judgment.
@@ -81,3 +130,114 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 ---
 
 **These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.
+
+---
+
+## Recursive AI Development Mechanism
+
+**Purpose**: Enable AI agents to fix bugs and improve hermes-rs without human bottleneck
+
+### How It Works
+
+1. **AI agent reads this file** (AGENTS.md) to understand the project
+2. **AI agent finds a bug** (from BUGS.md, user report, or test failure)
+3. **AI agent fixes the bug** following the guidelines above
+4. **AI agent runs tests** to verify the fix
+5. **AI agent commits the change** with descriptive message
+6. **Repeat** until all bugs are fixed
+
+### Issue Tracking
+
+**File**: `hermes-rs/BUGS.md`
+
+**Format:**
+```markdown
+# Open Issues
+
+## Critical (Blocks Deployment)
+- [ ] Issue 1: [Description]
+- [ ] Issue 2: [Description]
+
+## High (Affects Functionality)
+- [ ] Issue 3: [Description]
+
+## Medium (Enhancement)
+- [ ] Issue 5: [Description]
+
+## Low (Nice to Have)
+- [ ] Issue 6: [Description]
+```
+
+### Self-Test Script
+
+**File**: `hermes-rs/scripts/self-test.sh`
+
+**Usage:**
+```bash
+# Run all tests
+./scripts/self-test.sh
+
+# Run specific test
+cargo test -p hermes-core --lib database
+```
+
+### Development Loop
+
+```bash
+# AI agent development loop
+while true; do
+  # 1. Pull latest changes
+  git pull
+  
+  # 2. Run tests
+  cargo test --workspace
+  
+  # 3. If tests pass, build
+  cargo build --release
+  
+  # 4. If build succeeds, test manually
+  hermes run --query "Test query" --max-iterations 1
+  
+  # 5. If all pass, commit
+  git add .
+  git commit -m "Fix: [description]"
+  git push
+  
+  # 6. Wait for next issue
+  sleep 60
+done
+```
+
+### Verification Commands
+
+Before claiming any fix is complete, run:
+```bash
+cargo fmt --all
+cargo check --workspace
+cargo test --workspace
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+```
+
+If any command fails, the fix is not complete.
+
+### Configuration
+
+**Default config file**: `hermes-rs/hermes.example.toml`
+**User config file**: `~/.hermes/hermes.toml`
+
+To set defaults:
+1. Copy `hermes.example.toml` to `~/.hermes/hermes.toml`
+2. Edit `~/.hermes/hermes.toml` to set your preferences
+3. Set API keys in `~/.hermes/.env` (not in config file)
+
+Example config defaults:
+```toml
+[memory]
+provider = "tdg"  # Default memory provider
+
+[tts]
+provider = "kokoro"  # Default TTS provider
+
+[agent]
+model = "gpt-4"  # Default model
+```

@@ -92,8 +92,7 @@ impl EnvPassthrough {
 /// and sets each `KEY=VALUE` pair into the process environment, enabling
 /// credential rotation without restarting the long-lived gateway daemon.
 pub fn reload_dotenv() {
-    let path = std::env::var("HERMES_ENV_FILE")
-        .unwrap_or_else(|_| ".env".to_string());
+    let path = std::env::var("HERMES_ENV_FILE").unwrap_or_else(|_| ".env".to_string());
     let content = match std::fs::read_to_string(&path) {
         Ok(c) => c,
         Err(_) => return,

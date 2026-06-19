@@ -16,10 +16,12 @@ use tokio::sync::RwLock;
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
+use crate::agent::cache::new_shared_cache;
+use crate::agent::cache::SharedAgentCache;
 use crate::config::runtime_config;
 use crate::error::Result;
-use crate::gateway_session::PersistentSessionStore;
 use crate::gateway_markdown::markdown_to_telegram_html;
+use crate::gateway_session::{PersistentSessionStore, SessionSource};
 
 pub mod pairing;
 pub mod platforms;
@@ -50,6 +52,12 @@ pub struct GatewayConfig {
     pub admins: Vec<String>,
     /// Streaming transport mode: "auto", "edit", "draft", "off"
     pub streaming_transport: String,
+    /// HTTP/SOCKS5 proxy URL for Telegram API requests
+    pub telegram_proxy: Option<String>,
+    /// Bot username for @mention detection in groups
+    pub telegram_bot_username: Option<String>,
+    /// Enable DM topic creation for private chats (Bot API 9.4+)
+    pub telegram_dm_topics_enabled: bool,
 }
 
 impl Default for GatewayConfig {
@@ -66,6 +74,9 @@ impl Default for GatewayConfig {
             webhooks_addr: settings.webhooks_addr,
             admins: settings.admins,
             streaming_transport: settings.streaming_transport,
+            telegram_proxy: settings.telegram_proxy,
+            telegram_bot_username: settings.telegram_bot_username,
+            telegram_dm_topics_enabled: settings.telegram_dm_topics_enabled,
         }
     }
 }
@@ -89,6 +100,8 @@ pub struct IncomingMessage {
     pub timestamp: i64,
     /// Whether this message is from a group chat
     pub is_group_chat: bool,
+    /// Forum thread/topic ID (Telegram-specific)
+    pub thread_id: Option<i64>,
 }
 
 impl IncomingMessage {
@@ -112,6 +125,7 @@ impl IncomingMessage {
                 .map(|d| d.as_secs() as i64)
                 .unwrap_or(0),
             is_group_chat: false,
+            thread_id: None,
         }
     }
 
@@ -124,6 +138,12 @@ impl IncomingMessage {
     /// Mark as group chat message
     pub fn with_group_chat(mut self, is_group: bool) -> Self {
         self.is_group_chat = is_group;
+        self
+    }
+
+    /// Set the thread/topic ID (Telegram forum topics)
+    pub fn with_thread_id(mut self, thread_id: Option<i64>) -> Self {
+        self.thread_id = thread_id;
         self
     }
 }
@@ -324,7 +344,11 @@ impl SessionStore {
     }
 
     /// Find or create a shared session keyed by channel_id only (for group chats).
-    pub fn find_or_create_shared_session(&self, platform: &str, channel_id: &str) -> Result<PlatformSession> {
+    pub fn find_or_create_shared_session(
+        &self,
+        platform: &str,
+        channel_id: &str,
+    ) -> Result<PlatformSession> {
         if let Some(s) = self.find_session(platform, "__shared__", channel_id) {
             let _ = self.update_activity(&s.session_id);
             return Ok(s);
@@ -539,6 +563,7 @@ pub struct Gateway {
     session_store: SessionStore,
     persistent_sessions: Option<Arc<PersistentSessionStore>>,
     channel_directory: ChannelDirectory,
+    agent_cache: SharedAgentCache,
     start_time: Instant,
     start_time_formatted: String,
     messages_processed: Arc<AtomicU64>,
@@ -562,6 +587,7 @@ impl Gateway {
             session_store: SessionStore::new(),
             persistent_sessions: None,
             channel_directory: ChannelDirectory::new(),
+            agent_cache: new_shared_cache(),
             start_time: Instant::now(),
             start_time_formatted: Utc::now().to_rfc3339(),
             messages_processed: Arc::new(AtomicU64::new(0)),
@@ -663,11 +689,24 @@ impl Gateway {
 
         // Track session in persistent store if available
         if let Some(ref store) = self.persistent_sessions {
-            let _ = if message.is_group_chat {
-                store.find_or_create_shared_session(&message.platform, &message.channel_id)
-            } else {
-                store.create_session(&message.platform, &message.user_id, &message.channel_id)
+            let source = SessionSource {
+                platform: message.platform.clone(),
+                chat_id: message.channel_id.clone(),
+                chat_name: None,
+                chat_type: if message.is_group_chat { "group" } else { "dm" }.to_string(),
+                user_id: Some(message.user_id.clone()),
+                user_name: Some(message.username.clone()),
+                thread_id: None,
+                chat_topic: None,
+                user_id_alt: None,
+                chat_id_alt: None,
+                is_bot: false,
+                guild_id: None,
+                parent_chat_id: None,
+                message_id: None,
+                role_authorized: false,
             };
+            let _ = store.get_or_create_session(&source, false);
         }
 
         // Check if user is admin
@@ -746,7 +785,13 @@ impl Gateway {
     }
 
     /// Send a voice/audio message to a platform channel.
-    pub async fn send_voice(&self, platform: &str, channel_id: &str, audio_data: &[u8], format: &str) -> Result<()> {
+    pub async fn send_voice(
+        &self,
+        platform: &str,
+        channel_id: &str,
+        audio_data: &[u8],
+        format: &str,
+    ) -> Result<()> {
         let adapter = match self.adapters.get(platform) {
             Some(a) => a,
             None => return Ok(()), // silently skip unsupported platforms
@@ -777,8 +822,10 @@ impl Gateway {
 
         GatewayStats {
             uptime_seconds: uptime,
-            active_sessions: self.persistent_sessions.as_ref()
-                .map(|s| s.get_session_count())
+            active_sessions: self
+                .persistent_sessions
+                .as_ref()
+                .map(|s| s.session_count())
                 .unwrap_or_else(|| self.session_store.get_session_count()),
             registered_channels: self.channel_directory.list_channels(None).len(),
             active_adapters: self.adapters.len(),
@@ -806,6 +853,10 @@ impl Gateway {
     pub fn get_channel_directory(&self) -> &ChannelDirectory {
         &self.channel_directory
     }
+
+    pub fn get_agent_cache(&self) -> &SharedAgentCache {
+        &self.agent_cache
+    }
 }
 
 /// Telegram adapter
@@ -814,6 +865,9 @@ pub struct TelegramAdapter {
     enabled: bool,
     running: Arc<AtomicBool>,
     client: reqwest::Client,
+    bot_username: Option<String>,
+    dm_topics_enabled: bool,
+    dm_topic_map: Arc<RwLock<HashMap<String, i64>>>,
 }
 
 impl TelegramAdapter {
@@ -825,6 +879,41 @@ impl TelegramAdapter {
             enabled,
             running: Arc::new(AtomicBool::new(false)),
             client: reqwest::Client::new(),
+            bot_username: None,
+            dm_topics_enabled: false,
+            dm_topic_map: Arc::new(RwLock::new(HashMap::new())),
+        }
+    }
+
+    /// Create a Telegram adapter with full configuration
+    pub fn with_config(
+        token: Option<String>,
+        bot_username: Option<String>,
+        dm_topics_enabled: bool,
+        proxy_url: Option<&str>,
+    ) -> Self {
+        let enabled = token.is_some();
+        let mut client_builder = reqwest::Client::builder();
+        if let Some(proxy) = proxy_url {
+            if let Ok(proxy_obj) = reqwest::Proxy::all(proxy) {
+                client_builder = client_builder.proxy(proxy_obj);
+                tracing::info!("Telegram adapter using proxy: {}", proxy);
+            } else {
+                tracing::warn!("Invalid proxy URL, ignoring: {}", proxy);
+            }
+        }
+        let client = client_builder
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new());
+
+        Self {
+            token,
+            enabled,
+            running: Arc::new(AtomicBool::new(false)),
+            client,
+            bot_username,
+            dm_topics_enabled,
+            dm_topic_map: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -1452,7 +1541,10 @@ impl PlatformAdapter for TelegramAdapter {
         let resp = self.client.post(&url).multipart(form).send().await?;
         if !resp.status().is_success() {
             let body = resp.text().await.unwrap_or_default();
-            return Err(crate::error::Error::Agent(format!("sendVoice failed: {}", body)));
+            return Err(crate::error::Error::Agent(format!(
+                "sendVoice failed: {}",
+                body
+            )));
         }
         Ok(())
     }
@@ -1515,6 +1607,8 @@ impl TelegramAdapter {
             "[sent an attachment]".to_string()
         };
 
+        let thread_id = message.get("message_thread_id").and_then(|t| t.as_i64());
+
         if content.is_empty() {
             return Ok(None);
         }
@@ -1535,8 +1629,12 @@ impl TelegramAdapter {
                     .unwrap_or_default(),
                 content,
             )
-            .with_group_chat(matches!(chat.get("type").and_then(|t| t.as_str()), Some("group" | "supergroup")))
-            .with_raw(update),
+            .with_group_chat(matches!(
+                chat.get("type").and_then(|t| t.as_str()),
+                Some("group" | "supergroup")
+            ))
+            .with_raw(update)
+            .with_thread_id(thread_id),
         ))
     }
 }
@@ -1711,6 +1809,225 @@ impl TelegramAdapter {
                 }
             }
         })
+    }
+}
+
+// ── Telegram hardening: DM topics, media, mentions, commands ──
+
+impl TelegramAdapter {
+    pub async fn create_dm_topic(&self, chat_id: &str, name: &str) -> Result<Option<i64>> {
+        let url = format!("{}/createForumTopic", self.api_url());
+        let body = serde_json::json!({
+            "chat_id": chat_id,
+            "name": name,
+        });
+        let resp = self.client.post(&url).json(&body).send().await?;
+        let data: serde_json::Value = resp.json().await?;
+        if let Some(thread_id) = data["result"]["message_thread_id"].as_i64() {
+            tracing::info!(
+                "Created DM topic '{}' in chat {} -> thread_id={}",
+                name,
+                chat_id,
+                thread_id
+            );
+            self.dm_topic_map
+                .write()
+                .await
+                .insert(chat_id.to_string(), thread_id);
+            Ok(Some(thread_id))
+        } else {
+            let desc = data["description"].as_str().unwrap_or("unknown error");
+            tracing::debug!("createForumTopic failed for chat {}: {}", chat_id, desc);
+            Ok(None)
+        }
+    }
+
+    pub async fn get_or_create_dm_topic(&self, chat_id: &str) -> Result<Option<i64>> {
+        if let Some(&tid) = self.dm_topic_map.read().await.get(chat_id) {
+            return Ok(Some(tid));
+        }
+        let topic_name = "Hermes";
+        match self.create_dm_topic(chat_id, topic_name).await? {
+            Some(tid) => Ok(Some(tid)),
+            None => {
+                let fallback = self.dm_topic_map.read().await.get(chat_id).copied();
+                Ok(fallback)
+            }
+        }
+    }
+
+    pub async fn send_to_dm_topic(
+        &self,
+        chat_id: &str,
+        text: &str,
+        reply_to: Option<&str>,
+    ) -> Result<String> {
+        let thread_id = self.get_or_create_dm_topic(chat_id).await?;
+        let html = markdown_to_telegram_html(text);
+        let mut body = serde_json::json!({
+            "chat_id": chat_id,
+            "text": html,
+            "parse_mode": "HTML",
+        });
+        if let Some(tid) = thread_id {
+            body["message_thread_id"] = serde_json::json!(tid);
+        }
+        if let Some(reply) = reply_to {
+            body["reply_to_message_id"] = serde_json::json!(reply);
+        }
+        let resp = self
+            .client
+            .post(format!("{}/sendMessage", self.api_url()))
+            .json(&body)
+            .send()
+            .await?;
+        let data: serde_json::Value = resp.json().await?;
+        Ok(data["result"]["message_id"]
+            .as_i64()
+            .map(|id| id.to_string())
+            .unwrap_or_default())
+    }
+
+    pub fn strip_mention(&self, text: &str) -> String {
+        match &self.bot_username {
+            Some(username) => {
+                let pattern = format!("@{}", username);
+                text.replace(&pattern, "").trim().to_string()
+            }
+            None => text.to_string(),
+        }
+    }
+
+    pub fn should_respond_in_group(&self, text: &str, entities: &serde_json::Value) -> bool {
+        if self.bot_username.is_none() {
+            return true;
+        }
+        let username = self.bot_username.as_ref().unwrap();
+        if text.contains(&format!("@{}", username)) {
+            return true;
+        }
+        if let Some(entity_list) = entities.as_array() {
+            for entity in entity_list {
+                let entity_type = entity["type"].as_str().unwrap_or("");
+                if entity_type == "mention" || entity_type == "text_mention" {
+                    let mention_text = entity["user"]["username"].as_str().unwrap_or("");
+                    if mention_text.eq_ignore_ascii_case(username) {
+                        return true;
+                    }
+                }
+                if entity_type == "bot_command" {
+                    let offset = entity["offset"].as_u64().unwrap_or(0) as usize;
+                    let length = entity["length"].as_u64().unwrap_or(0) as usize;
+                    let cmd_text = text.get(offset..offset + length).unwrap_or("");
+                    if cmd_text.contains('@') {
+                        let after_at = cmd_text.split('@').nth(1).unwrap_or("");
+                        if after_at.eq_ignore_ascii_case(username) {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    pub async fn set_my_commands(&self, commands: &[(&str, &str)]) -> Result<()> {
+        let url = format!("{}/setMyCommands", self.api_url());
+        let cmd_list: Vec<serde_json::Value> = commands
+            .iter()
+            .map(|(name, desc)| serde_json::json!({"command": name, "description": desc}))
+            .collect();
+        let body = serde_json::json!({
+            "commands": cmd_list,
+        });
+        let resp = self.client.post(&url).json(&body).send().await?;
+        if resp.status().is_success() {
+            tracing::info!("Registered {} bot commands", commands.len());
+        } else {
+            let err = resp.text().await.unwrap_or_default();
+            tracing::warn!("setMyCommands failed: {}", err);
+        }
+        Ok(())
+    }
+
+    pub async fn download_file(&self, file_id: &str) -> Result<Vec<u8>> {
+        let get_file_url = format!("{}/getFile", self.api_url());
+        let body = serde_json::json!({"file_id": file_id});
+        let resp = self.client.post(&get_file_url).json(&body).send().await?;
+        let data: serde_json::Value = resp.json().await?;
+        let file_path = data["result"]["file_path"]
+            .as_str()
+            .ok_or_else(|| crate::error::Error::Agent("No file_path in getFile response".into()))?;
+        let base = runtime_config().gateway.telegram_api_base;
+        let file_url = format!(
+            "{}/file/bot{}/{}",
+            base.trim_end_matches('/'),
+            self.token.as_deref().unwrap_or(""),
+            file_path
+        );
+        let bytes = self
+            .client
+            .get(&file_url)
+            .send()
+            .await?
+            .bytes()
+            .await?
+            .to_vec();
+        Ok(bytes)
+    }
+
+    pub async fn upload_document(
+        &self,
+        chat_id: &str,
+        filename: &str,
+        data: &[u8],
+        mime: &str,
+        caption: Option<&str>,
+    ) -> Result<String> {
+        let part = reqwest::multipart::Part::bytes(data.to_vec())
+            .file_name(filename.to_string())
+            .mime_str(mime)
+            .map_err(|e| crate::error::Error::Agent(e.to_string()))?;
+        let mut form = reqwest::multipart::Form::new()
+            .text("chat_id", chat_id.to_string())
+            .part("document", part);
+        if let Some(cap) = caption {
+            form = form.text("caption", cap.to_string());
+        }
+        let url = format!("{}/sendDocument", self.api_url());
+        let resp = self.client.post(&url).multipart(form).send().await?;
+        let data: serde_json::Value = resp.json().await?;
+        Ok(data["result"]["message_id"]
+            .as_i64()
+            .map(|id| id.to_string())
+            .unwrap_or_default())
+    }
+
+    pub async fn upload_photo(
+        &self,
+        chat_id: &str,
+        filename: &str,
+        data: &[u8],
+        mime: &str,
+        caption: Option<&str>,
+    ) -> Result<String> {
+        let part = reqwest::multipart::Part::bytes(data.to_vec())
+            .file_name(filename.to_string())
+            .mime_str(mime)
+            .map_err(|e| crate::error::Error::Agent(e.to_string()))?;
+        let mut form = reqwest::multipart::Form::new()
+            .text("chat_id", chat_id.to_string())
+            .part("photo", part);
+        if let Some(cap) = caption {
+            form = form.text("caption", cap.to_string());
+        }
+        let url = format!("{}/sendPhoto", self.api_url());
+        let resp = self.client.post(&url).multipart(form).send().await?;
+        let data: serde_json::Value = resp.json().await?;
+        Ok(data["result"]["message_id"]
+            .as_i64()
+            .map(|id| id.to_string())
+            .unwrap_or_default())
     }
 }
 
@@ -2507,6 +2824,9 @@ mod tests {
             webhooks_addr: None,
             admins: vec![],
             streaming_transport: "auto".to_string(),
+            telegram_proxy: None,
+            telegram_bot_username: None,
+            telegram_dm_topics_enabled: false,
         };
         let gw = Gateway::new(config);
         let stats = gw.get_stats().await;
@@ -2661,6 +2981,9 @@ mod tests {
             webhooks_addr: None,
             admins: vec!["admin1".to_string()],
             streaming_transport: "auto".to_string(),
+            telegram_proxy: None,
+            telegram_bot_username: None,
+            telegram_dm_topics_enabled: false,
         };
         let msg = format_startup_message(&config);
         assert!(msg.contains("Hermes Gateway"));
@@ -2724,12 +3047,7 @@ mod tests {
         assert!(chunks.len() >= 2);
         for chunk in &chunks {
             let opens = chunk.matches("```").count();
-            assert_eq!(
-                opens % 2,
-                0,
-                "chunk has unbalanced code fences: {}",
-                chunk
-            );
+            assert_eq!(opens % 2, 0, "chunk has unbalanced code fences: {}", chunk);
         }
     }
 

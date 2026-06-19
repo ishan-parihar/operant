@@ -42,12 +42,21 @@ pub trait BrowserProvider: Send + Sync {
             "navigate" => self.navigate(args["url"].as_str().unwrap_or("")).await,
             "snapshot" => self.snapshot().await,
             "click" => self.click(args["selector"].as_str().unwrap_or("")).await,
-            "type" => self.type_text(
-                args["selector"].as_str().unwrap_or(""),
-                args["text"].as_str().unwrap_or(""),
-            ).await,
-            "scroll" => self.scroll(args["direction"].as_str().unwrap_or("down")).await,
-            _ => Err(Error::Agent(format!("Unknown browser command: {}", command))),
+            "type" => {
+                self.type_text(
+                    args["selector"].as_str().unwrap_or(""),
+                    args["text"].as_str().unwrap_or(""),
+                )
+                .await
+            }
+            "scroll" => {
+                self.scroll(args["direction"].as_str().unwrap_or("down"))
+                    .await
+            }
+            _ => Err(Error::Agent(format!(
+                "Unknown browser command: {}",
+                command
+            ))),
         }
     }
 }
@@ -87,22 +96,34 @@ impl LightpandaProvider {
 
 #[async_trait]
 impl BrowserProvider for LightpandaProvider {
-    fn name(&self) -> &str { "lightpanda" }
-    fn is_configured(&self) -> bool { true }
+    fn name(&self) -> &str {
+        "lightpanda"
+    }
+    fn is_configured(&self) -> bool {
+        true
+    }
     async fn navigate(&self, url: &str) -> Result<String> {
         self.run(&["fetch", "--dump", "markdown", url]).await
     }
     async fn snapshot(&self) -> Result<String> {
-        Err(Error::Agent("Lightpanda fetch mode: use navigate(url) to get page content".into()))
+        Err(Error::Agent(
+            "Lightpanda fetch mode: use navigate(url) to get page content".into(),
+        ))
     }
     async fn click(&self, _selector: &str) -> Result<String> {
-        Err(Error::Agent("Lightpanda fetch mode does not support click interactions".into()))
+        Err(Error::Agent(
+            "Lightpanda fetch mode does not support click interactions".into(),
+        ))
     }
     async fn type_text(&self, _selector: &str, _text: &str) -> Result<String> {
-        Err(Error::Agent("Lightpanda fetch mode does not support type interactions".into()))
+        Err(Error::Agent(
+            "Lightpanda fetch mode does not support type interactions".into(),
+        ))
     }
     async fn scroll(&self, _direction: &str) -> Result<String> {
-        Err(Error::Agent("Lightpanda fetch mode does not support scroll".into()))
+        Err(Error::Agent(
+            "Lightpanda fetch mode does not support scroll".into(),
+        ))
     }
 }
 
@@ -125,35 +146,47 @@ impl CamofoxProvider {
     }
 
     async fn post(&self, path: &str, body: Value) -> Result<String> {
-        let resp = self.client
+        let resp = self
+            .client
             .post(format!("{}{}", self.base_url, path))
             .json(&body)
-            .send().await?
-            .text().await?;
+            .send()
+            .await?
+            .text()
+            .await?;
         Ok(resp)
     }
 }
 
 #[async_trait]
 impl BrowserProvider for CamofoxProvider {
-    fn name(&self) -> &str { "camofox" }
+    fn name(&self) -> &str {
+        "camofox"
+    }
     fn is_configured(&self) -> bool {
         std::env::var("CAMOFOX_URL").is_ok()
     }
     async fn navigate(&self, url: &str) -> Result<String> {
-        self.post("/navigate", serde_json::json!({"url": url})).await
+        self.post("/navigate", serde_json::json!({"url": url}))
+            .await
     }
     async fn snapshot(&self) -> Result<String> {
         self.post("/snapshot", serde_json::json!({})).await
     }
     async fn click(&self, selector: &str) -> Result<String> {
-        self.post("/click", serde_json::json!({"selector": selector})).await
+        self.post("/click", serde_json::json!({"selector": selector}))
+            .await
     }
     async fn type_text(&self, selector: &str, text: &str) -> Result<String> {
-        self.post("/type", serde_json::json!({"selector": selector, "text": text})).await
+        self.post(
+            "/type",
+            serde_json::json!({"selector": selector, "text": text}),
+        )
+        .await
     }
     async fn scroll(&self, direction: &str) -> Result<String> {
-        self.post("/scroll", serde_json::json!({"direction": direction})).await
+        self.post("/scroll", serde_json::json!({"direction": direction}))
+            .await
     }
 }
 
@@ -178,21 +211,30 @@ impl BrowserbaseProvider {
 
     async fn run_task(&self, task: &str, url: Option<&str>) -> Result<String> {
         let mut body = serde_json::json!({"task": task, "projectId": self.project_id});
-        if let Some(u) = url { body["url"] = u.into(); }
-        let resp = self.client
+        if let Some(u) = url {
+            body["url"] = u.into();
+        }
+        let resp = self
+            .client
             .post("https://api.browserbase.com/v1/sessions")
             .header("X-BB-API-Key", &self.api_key)
             .json(&body)
-            .send().await?
-            .json::<Value>().await?;
+            .send()
+            .await?
+            .json::<Value>()
+            .await?;
         Ok(resp.to_string())
     }
 }
 
 #[async_trait]
 impl BrowserProvider for BrowserbaseProvider {
-    fn name(&self) -> &str { "browserbase" }
-    fn is_configured(&self) -> bool { !self.api_key.is_empty() && !self.project_id.is_empty() }
+    fn name(&self) -> &str {
+        "browserbase"
+    }
+    fn is_configured(&self) -> bool {
+        !self.api_key.is_empty() && !self.project_id.is_empty()
+    }
     async fn navigate(&self, url: &str) -> Result<String> {
         self.run_task("navigate", Some(url)).await
     }
@@ -203,7 +245,8 @@ impl BrowserProvider for BrowserbaseProvider {
         self.run_task(&format!("click {}", selector), None).await
     }
     async fn type_text(&self, selector: &str, text: &str) -> Result<String> {
-        self.run_task(&format!("type '{}' into {}", text, selector), None).await
+        self.run_task(&format!("type '{}' into {}", text, selector), None)
+            .await
     }
     async fn scroll(&self, direction: &str) -> Result<String> {
         self.run_task(&format!("scroll {}", direction), None).await
@@ -230,47 +273,65 @@ impl BrowserUseProvider {
 
 #[async_trait]
 impl BrowserProvider for BrowserUseProvider {
-    fn name(&self) -> &str { "browser-use" }
-    fn is_configured(&self) -> bool { !self.api_key.is_empty() }
+    fn name(&self) -> &str {
+        "browser-use"
+    }
+    fn is_configured(&self) -> bool {
+        !self.api_key.is_empty()
+    }
 
     async fn navigate(&self, url: &str) -> Result<String> {
-        let resp = self.client
+        let resp = self
+            .client
             .post("https://api.browser-use.com/api/v1/run-sync")
             .header("Authorization", format!("Bearer {}", self.api_key))
             .json(&serde_json::json!({"task": format!("Navigate to {}", url)}))
-            .send().await?
-            .json::<Value>().await?;
+            .send()
+            .await?
+            .json::<Value>()
+            .await?;
         Ok(resp["result"].as_str().unwrap_or("").to_string())
     }
 
     async fn snapshot(&self) -> Result<String> {
-        Err(Error::Agent("Browser Use does not support snapshots directly; use navigate".into()))
+        Err(Error::Agent(
+            "Browser Use does not support snapshots directly; use navigate".into(),
+        ))
     }
     async fn click(&self, selector: &str) -> Result<String> {
-        let resp = self.client
+        let resp = self
+            .client
             .post("https://api.browser-use.com/api/v1/run-sync")
             .header("Authorization", format!("Bearer {}", self.api_key))
             .json(&serde_json::json!({"task": format!("Click on element: {}", selector)}))
-            .send().await?
-            .json::<Value>().await?;
+            .send()
+            .await?
+            .json::<Value>()
+            .await?;
         Ok(resp["result"].as_str().unwrap_or("").to_string())
     }
     async fn type_text(&self, selector: &str, text: &str) -> Result<String> {
-        let resp = self.client
+        let resp = self
+            .client
             .post("https://api.browser-use.com/api/v1/run-sync")
             .header("Authorization", format!("Bearer {}", self.api_key))
             .json(&serde_json::json!({"task": format!("Type '{}' into {}", text, selector)}))
-            .send().await?
-            .json::<Value>().await?;
+            .send()
+            .await?
+            .json::<Value>()
+            .await?;
         Ok(resp["result"].as_str().unwrap_or("").to_string())
     }
     async fn scroll(&self, direction: &str) -> Result<String> {
-        let resp = self.client
+        let resp = self
+            .client
             .post("https://api.browser-use.com/api/v1/run-sync")
             .header("Authorization", format!("Bearer {}", self.api_key))
             .json(&serde_json::json!({"task": format!("Scroll {}", direction)}))
-            .send().await?
-            .json::<Value>().await?;
+            .send()
+            .await?
+            .json::<Value>()
+            .await?;
         Ok(resp["result"].as_str().unwrap_or("").to_string())
     }
 }
@@ -298,30 +359,45 @@ impl FirecrawlProvider {
 
 #[async_trait]
 impl BrowserProvider for FirecrawlProvider {
-    fn name(&self) -> &str { "firecrawl" }
-    fn is_configured(&self) -> bool { !self.api_key.is_empty() }
+    fn name(&self) -> &str {
+        "firecrawl"
+    }
+    fn is_configured(&self) -> bool {
+        !self.api_key.is_empty()
+    }
 
     async fn navigate(&self, url: &str) -> Result<String> {
-        let resp = self.client
+        let resp = self
+            .client
             .post(format!("{}/v1/scrape", self.base_url))
             .header("Authorization", format!("Bearer {}", self.api_key))
             .json(&serde_json::json!({"url": url, "formats": ["markdown"]}))
-            .send().await?
-            .json::<Value>().await?;
+            .send()
+            .await?
+            .json::<Value>()
+            .await?;
         Ok(resp["data"]["markdown"].as_str().unwrap_or("").to_string())
     }
 
     async fn snapshot(&self) -> Result<String> {
-        Err(Error::Agent("Firecrawl: call navigate(url) to scrape a page".into()))
+        Err(Error::Agent(
+            "Firecrawl: call navigate(url) to scrape a page".into(),
+        ))
     }
     async fn click(&self, _selector: &str) -> Result<String> {
-        Err(Error::Agent("Firecrawl does not support interactive commands".into()))
+        Err(Error::Agent(
+            "Firecrawl does not support interactive commands".into(),
+        ))
     }
     async fn type_text(&self, _selector: &str, _text: &str) -> Result<String> {
-        Err(Error::Agent("Firecrawl does not support interactive commands".into()))
+        Err(Error::Agent(
+            "Firecrawl does not support interactive commands".into(),
+        ))
     }
     async fn scroll(&self, _direction: &str) -> Result<String> {
-        Err(Error::Agent("Firecrawl does not support interactive commands".into()))
+        Err(Error::Agent(
+            "Firecrawl does not support interactive commands".into(),
+        ))
     }
 }
 

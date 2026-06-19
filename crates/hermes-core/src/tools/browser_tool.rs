@@ -11,6 +11,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::Value;
 
+use crate::accessibility;
 use crate::error::Result;
 use crate::tools::{HermesTool, ToolContext, ToolResult, ToolSchema};
 
@@ -31,6 +32,41 @@ impl BrowserTool {
         let provider = crate::browser_provider::build_browser_provider(&provider_name);
         provider.execute(command, args).await
     }
+
+    async fn handle_accessibility_tree(&self, args: &BrowserArgs) -> ToolResult {
+        let cdp_url = args.cdp_url.clone().or_else(|| std::env::var("BROWSER_CDP_URL").ok());
+
+        let cdp_url = match cdp_url {
+            Some(url) => url,
+            None => {
+                return ToolResult::error(
+                    self.name(),
+                    "No CDP URL available. Set BROWSER_CDP_URL or pass cdp_url parameter.",
+                );
+            }
+        };
+
+        let tree = match accessibility::fetch_accessibility_tree(&cdp_url).await {
+            Ok(t) => t,
+            Err(e) => return ToolResult::error(self.name(), e),
+        };
+
+        let full = args.full.unwrap_or(false);
+        let text = if full {
+            tree.render_full()
+        } else {
+            tree.render_compact()
+        };
+
+        ToolResult::success(
+            self.name(),
+            serde_json::json!({
+                "snapshot": text,
+                "element_count": tree.element_count,
+                "refs": tree.refs,
+            }),
+        )
+    }
 }
 
 #[derive(JsonSchema, Deserialize)]
@@ -40,6 +76,10 @@ struct BrowserArgs {
     url: Option<String>,
     selector: Option<String>,
     text: Option<String>,
+    /// For `accessibility_tree`: optional CDP URL override.
+    cdp_url: Option<String>,
+    /// For `accessibility_tree`: if true, render full tree instead of compact.
+    full: Option<bool>,
 }
 
 #[async_trait]
@@ -50,7 +90,8 @@ impl HermesTool for BrowserTool {
 
     fn description(&self) -> &str {
         "Browser automation tool for navigating and interacting with websites using Lightpanda. \
-         The binary is downloaded automatically on first use."
+         The binary is downloaded automatically on first use. Supports accessibility_tree \
+         command for CDP-based accessibility tree extraction with ref selectors."
     }
 
     fn schema(&self) -> ToolSchema {
@@ -63,18 +104,26 @@ impl HermesTool for BrowserTool {
             Err(e) => return ToolResult::error(self.name(), format!("Invalid arguments: {}", e)),
         };
 
-        // Validate required fields per command.
         match args.command.as_str() {
-            "navigate" if args.url.is_none() =>
-                return ToolResult::error(self.name(), "Missing 'url' for navigate"),
-            "click" if args.selector.is_none() =>
-                return ToolResult::error(self.name(), "Missing 'selector' for click"),
-            "type" if args.selector.is_none() =>
-                return ToolResult::error(self.name(), "Missing 'selector' for type"),
-            "type" if args.text.is_none() =>
-                return ToolResult::error(self.name(), "Missing 'text' for type"),
+            "accessibility_tree" => {
+                return self.handle_accessibility_tree(&args).await;
+            }
+            "navigate" if args.url.is_none() => {
+                return ToolResult::error(self.name(), "Missing 'url' for navigate")
+            }
+            "click" if args.selector.is_none() => {
+                return ToolResult::error(self.name(), "Missing 'selector' for click")
+            }
+            "type" if args.selector.is_none() => {
+                return ToolResult::error(self.name(), "Missing 'selector' for type")
+            }
+            "type" if args.text.is_none() => {
+                return ToolResult::error(self.name(), "Missing 'text' for type")
+            }
             "navigate" | "snapshot" | "click" | "type" | "scroll" => {}
-            _ => return ToolResult::error(self.name(), format!("Unknown command: {}", args.command)),
+            _ => {
+                return ToolResult::error(self.name(), format!("Unknown command: {}", args.command))
+            }
         }
 
         let cmd_args = serde_json::json!({
@@ -191,15 +240,44 @@ mod tests {
     #[tokio::test]
     async fn test_browser_scroll_default_direction() {
         let tool = BrowserTool::new();
-        // Default scroll direction should be "down" when no text provided
         let result = tool
             .execute(
                 serde_json::json!({ "command": "scroll" }),
                 ToolContext::default(),
             )
             .await;
-        // Will fail with "browser not available" but should parse correctly,
-        // proving default direction was applied
         assert!(!result.success); // browser not available in test env
+    }
+
+    #[tokio::test]
+    async fn test_browser_accessibility_tree_missing_cdp_url() {
+        let saved = std::env::var("BROWSER_CDP_URL").ok();
+        std::env::remove_var("BROWSER_CDP_URL");
+
+        let tool = BrowserTool::new();
+        let result = tool
+            .execute(
+                serde_json::json!({ "command": "accessibility_tree" }),
+                ToolContext::default(),
+            )
+            .await;
+
+        if let Some(url) = saved {
+            std::env::set_var("BROWSER_CDP_URL", url);
+        }
+        assert!(!result.success);
+        assert!(result
+            .error
+            .unwrap_or_default()
+            .contains("No CDP URL"));
+    }
+
+    #[tokio::test]
+    async fn test_browser_accessibility_tree_invalid_args() {
+        let tool = BrowserTool::new();
+        let result = tool
+            .execute(serde_json::json!("not an object"), ToolContext::default())
+            .await;
+        assert!(!result.success);
     }
 }

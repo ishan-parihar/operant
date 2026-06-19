@@ -71,7 +71,9 @@ fn now_secs() -> f64 {
 
 /// Fetch models.dev catalog with offline-first cache hierarchy:
 /// in-memory → disk cache → network → stale disk fallback.
-pub async fn fetch_models_dev(force_refresh: bool) -> Result<(Vec<serde_json::Value>, Vec<serde_json::Value>), String> {
+pub async fn fetch_models_dev(
+    force_refresh: bool,
+) -> Result<(Vec<serde_json::Value>, Vec<serde_json::Value>), String> {
     let cache_path = cache_path();
 
     if !force_refresh {
@@ -123,10 +125,7 @@ async fn fetch_from_network() -> Result<(Vec<serde_json::Value>, Vec<serde_json:
         return Err(format!("models.dev returned {}", resp.status()));
     }
 
-    let body: serde_json::Value = resp
-        .json()
-        .await
-        .map_err(|e| e.to_string())?;
+    let body: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
 
     let models = body
         .get("models")
@@ -163,13 +162,19 @@ pub async fn get_model_capabilities(provider: &str, model: &str) -> Option<Model
             return Some(ModelCapabilities {
                 context_window: m.get("context_window").and_then(|v| v.as_u64()),
                 max_output: m.get("max_output").and_then(|v| v.as_u64()),
-                supports_tools: m.get("tool_call").and_then(|v| v.as_bool()).unwrap_or(false),
+                supports_tools: m
+                    .get("tool_call")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false),
                 supports_vision: m
                     .get("input_modalities")
                     .and_then(|v| v.as_array())
                     .map(|arr| arr.iter().any(|v| v.as_str() == Some("image")))
                     .unwrap_or(false),
-                supports_reasoning: m.get("reasoning").and_then(|v| v.as_bool()).unwrap_or(false),
+                supports_reasoning: m
+                    .get("reasoning")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false),
                 supports_structured_output: m
                     .get("structured_output")
                     .and_then(|v| v.as_bool())
@@ -192,12 +197,8 @@ pub async fn get_model_capabilities(provider: &str, model: &str) -> Option<Model
                             .collect()
                     })
                     .unwrap_or_default(),
-                cost_input_per_million: m
-                    .get("cost_input")
-                    .and_then(|v| v.as_f64()),
-                cost_output_per_million: m
-                    .get("cost_output")
-                    .and_then(|v| v.as_f64()),
+                cost_input_per_million: m.get("cost_input").and_then(|v| v.as_f64()),
+                cost_output_per_million: m.get("cost_output").and_then(|v| v.as_f64()),
             });
         }
     }
@@ -218,8 +219,15 @@ pub async fn list_agentic_models(provider: &str) -> Vec<String> {
     };
 
     let noise_keywords = [
-        "tts", "text-to-speech", "embedding", "noise", "whisper",
-        "music", "audio-generation", "speech-to-text", "stt",
+        "tts",
+        "text-to-speech",
+        "embedding",
+        "noise",
+        "whisper",
+        "music",
+        "audio-generation",
+        "speech-to-text",
+        "stt",
     ];
 
     models
@@ -230,7 +238,10 @@ pub async fn list_agentic_models(provider: &str) -> Vec<String> {
                 return None;
             }
 
-            let tool_call = m.get("tool_call").and_then(|v| v.as_bool()).unwrap_or(false);
+            let tool_call = m
+                .get("tool_call")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
             if !tool_call {
                 return None;
             }

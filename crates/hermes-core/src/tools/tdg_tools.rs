@@ -129,29 +129,30 @@ impl HermesTool for TdgCreateTool {
         let node_type = args.node_type.clone();
         let node_name = args.name.clone();
         let desc = args.description.clone().unwrap_or_default();
-        let result = tokio::task::spawn_blocking(move || -> std::result::Result<tdg_rust::Node, String> {
-            pool.with_connection(|conn| {
-                let new_node = tdg_rust::NewNode {
-                    node_type,
-                    name: node_name,
-                    description: Some(desc),
-                    properties: None,
-                    quadrants: None,
-                    drives: None,
-                    lifecycle_state: None,
-                    teleological_level: None,
-                    developmental_stage: Some(0),
-                    confidence: Some(0.5),
-                    source: Some("hermes-agent".to_string()),
-                    parent_ids: None,
-                    agent_id: None,
-                };
-                let node = tdg_rust::db::crud::add_node(conn, &new_node)?;
-                Ok(node)
+        let result =
+            tokio::task::spawn_blocking(move || -> std::result::Result<tdg_rust::Node, String> {
+                pool.with_connection(|conn| {
+                    let new_node = tdg_rust::NewNode {
+                        node_type,
+                        name: node_name,
+                        description: Some(desc),
+                        properties: None,
+                        quadrants: None,
+                        drives: None,
+                        lifecycle_state: None,
+                        teleological_level: None,
+                        developmental_stage: Some(0),
+                        confidence: Some(0.5),
+                        source: Some("hermes-agent".to_string()),
+                        parent_ids: None,
+                        agent_id: None,
+                    };
+                    let node = tdg_rust::db::crud::add_node(conn, &new_node)?;
+                    Ok(node)
+                })
+                .map_err(|e| e.to_string())
             })
-            .map_err(|e| e.to_string())
-        })
-        .await;
+            .await;
 
         match result {
             Ok(Ok(node)) => ToolResult::success(
@@ -202,22 +203,23 @@ impl HermesTool for TdgConnectTool {
         let src = args.source_id.clone();
         let tgt = args.target_id.clone();
         let edge_type = args.edge_type.clone();
-        let result = tokio::task::spawn_blocking(move || -> std::result::Result<tdg_rust::Edge, String> {
-            pool.with_connection(|conn| {
-                let new_edge = tdg_rust::NewEdge {
-                    source_id: src,
-                    target_id: tgt,
-                    edge_type,
-                    weight: None,
-                    properties: None,
-                    agent_id: None,
-                };
-                let edge = tdg_rust::db::crud::add_edge(conn, &new_edge)?;
-                Ok(edge)
+        let result =
+            tokio::task::spawn_blocking(move || -> std::result::Result<tdg_rust::Edge, String> {
+                pool.with_connection(|conn| {
+                    let new_edge = tdg_rust::NewEdge {
+                        source_id: src,
+                        target_id: tgt,
+                        edge_type,
+                        weight: None,
+                        properties: None,
+                        agent_id: None,
+                    };
+                    let edge = tdg_rust::db::crud::add_edge(conn, &new_edge)?;
+                    Ok(edge)
+                })
+                .map_err(|e| e.to_string())
             })
-            .map_err(|e| e.to_string())
-        })
-        .await;
+            .await;
 
         match result {
             Ok(Ok(edge)) => ToolResult::success(
@@ -259,32 +261,38 @@ impl HermesTool for TdgGetRelatedTool {
     async fn execute(&self, args: Value, _context: ToolContext) -> ToolResult {
         let args: TdgGetRelatedArgs = match serde_json::from_value(args) {
             Ok(a) => a,
-            Err(e) => return ToolResult::error("tdg_get_related", format!("Invalid arguments: {}", e)),
+            Err(e) => {
+                return ToolResult::error("tdg_get_related", format!("Invalid arguments: {}", e))
+            }
         };
 
         let pool = tdg_pool();
         let node_id = args.node_id.clone();
-        let result = tokio::task::spawn_blocking(move || -> std::result::Result<Vec<Value>, String> {
-            pool.with_connection(|conn| {
-                let edges = tdg_rust::db::crud::get_edges(
-                    conn, Some(&node_id), None, None, None, 20
-                )?;
-                let relations: Vec<Value> = edges
-                    .iter()
-                    .map(|e| {
-                        let other = if e.source_id == node_id { &e.target_id } else { &e.source_id };
-                        serde_json::json!({
-                            "edge_id": e.id,
-                            "edge_type": e.edge_type,
-                            "connected_to": other
+        let result =
+            tokio::task::spawn_blocking(move || -> std::result::Result<Vec<Value>, String> {
+                pool.with_connection(|conn| {
+                    let edges =
+                        tdg_rust::db::crud::get_edges(conn, Some(&node_id), None, None, None, 20)?;
+                    let relations: Vec<Value> = edges
+                        .iter()
+                        .map(|e| {
+                            let other = if e.source_id == node_id {
+                                &e.target_id
+                            } else {
+                                &e.source_id
+                            };
+                            serde_json::json!({
+                                "edge_id": e.id,
+                                "edge_type": e.edge_type,
+                                "connected_to": other
+                            })
                         })
-                    })
-                    .collect();
-                Ok(relations)
+                        .collect();
+                    Ok(relations)
+                })
+                .map_err(|e| e.to_string())
             })
-            .map_err(|e| e.to_string())
-        })
-        .await;
+            .await;
 
         match result {
             Ok(Ok(relations)) => ToolResult::success(
@@ -296,7 +304,6 @@ impl HermesTool for TdgGetRelatedTool {
         }
     }
 }
-
 
 #[cfg(test)]
 mod tests {

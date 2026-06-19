@@ -139,9 +139,8 @@ impl FallbackModelClient {
             }
         }
 
-        Err(last_error.unwrap_or_else(|| {
-            Error::Agent("All models in fallback chain failed".to_string())
-        }))
+        Err(last_error
+            .unwrap_or_else(|| Error::Agent("All models in fallback chain failed".to_string())))
     }
 }
 
@@ -157,8 +156,7 @@ impl ModelClient for FallbackModelClient {
             return self.inner.chat(request).await;
         }
 
-        self.try_models(&request, |req| self.inner.chat(req))
-            .await
+        self.try_models(&request, |req| self.inner.chat(req)).await
     }
 
     async fn chat_streaming(
@@ -256,9 +254,7 @@ mod tests {
                 Some(MockResult::RateLimited) => Err(Error::RateLimited {
                     retry_after: Duration::from_secs(5),
                 }),
-                Some(MockResult::AuthError) => {
-                    Err(Error::Authentication("invalid key".into()))
-                }
+                Some(MockResult::AuthError) => Err(Error::Authentication("invalid key".into())),
                 Some(MockResult::BadRequest) => Err(Error::Provider {
                     status: 400,
                     body: "Bad Request".into(),
@@ -284,17 +280,10 @@ mod tests {
 
     #[tokio::test]
     async fn primary_succeeds_no_fallback_attempted() {
-        let inner = MockModelClient::new(
-            "test",
-            vec![MockResult::Ok(chat_response("primary"))],
-        );
+        let inner = MockModelClient::new("test", vec![MockResult::Ok(chat_response("primary"))]);
 
-        let client = FallbackModelClient::new(
-            inner,
-            "primary".into(),
-            vec!["fallback1".into()],
-            true,
-        );
+        let client =
+            FallbackModelClient::new(inner, "primary".into(), vec!["fallback1".into()], true);
 
         let result = client.chat(make_request()).await.unwrap();
         assert_eq!(result.model, "primary");
@@ -310,12 +299,8 @@ mod tests {
             ],
         );
 
-        let client = FallbackModelClient::new(
-            inner,
-            "primary".into(),
-            vec!["fallback1".into()],
-            true,
-        );
+        let client =
+            FallbackModelClient::new(inner, "primary".into(), vec!["fallback1".into()], true);
 
         let result = client.chat(make_request()).await.unwrap();
         // Response model reflects the fallback model that succeeded
@@ -349,17 +334,10 @@ mod tests {
 
     #[tokio::test]
     async fn non_retryable_error_no_fallback_attempted() {
-        let inner = MockModelClient::new(
-            "test",
-            vec![MockResult::BadRequest],
-        );
+        let inner = MockModelClient::new("test", vec![MockResult::BadRequest]);
 
-        let client = FallbackModelClient::new(
-            inner,
-            "primary".into(),
-            vec!["fallback1".into()],
-            true,
-        );
+        let client =
+            FallbackModelClient::new(inner, "primary".into(), vec!["fallback1".into()], true);
 
         let err = client.chat(make_request()).await.unwrap_err();
         assert!(
@@ -370,17 +348,10 @@ mod tests {
 
     #[tokio::test]
     async fn auth_error_no_fallback_attempted() {
-        let inner = MockModelClient::new(
-            "test",
-            vec![MockResult::AuthError],
-        );
+        let inner = MockModelClient::new("test", vec![MockResult::AuthError]);
 
-        let client = FallbackModelClient::new(
-            inner,
-            "primary".into(),
-            vec!["fallback1".into()],
-            true,
-        );
+        let client =
+            FallbackModelClient::new(inner, "primary".into(), vec!["fallback1".into()], true);
 
         let err = client.chat(make_request()).await.unwrap_err();
         assert!(
@@ -391,17 +362,9 @@ mod tests {
 
     #[tokio::test]
     async fn empty_fallback_list_passthrough() {
-        let inner = MockModelClient::new(
-            "test",
-            vec![MockResult::Ok(chat_response("primary"))],
-        );
+        let inner = MockModelClient::new("test", vec![MockResult::Ok(chat_response("primary"))]);
 
-        let client = FallbackModelClient::new(
-            inner,
-            "primary".into(),
-            vec![],
-            true,
-        );
+        let client = FallbackModelClient::new(inner, "primary".into(), vec![], true);
 
         let result = client.chat(make_request()).await.unwrap();
         assert_eq!(result.model, "primary");
@@ -409,17 +372,10 @@ mod tests {
 
     #[tokio::test]
     async fn fallback_disabled_passthrough() {
-        let inner = MockModelClient::new(
-            "test",
-            vec![MockResult::Ok(chat_response("primary"))],
-        );
+        let inner = MockModelClient::new("test", vec![MockResult::Ok(chat_response("primary"))]);
 
-        let client = FallbackModelClient::new(
-            inner,
-            "primary".into(),
-            vec!["fallback1".into()],
-            false,
-        );
+        let client =
+            FallbackModelClient::new(inner, "primary".into(), vec!["fallback1".into()], false);
 
         let result = client.chat(make_request()).await.unwrap();
         assert_eq!(result.model, "primary");
@@ -429,17 +385,10 @@ mod tests {
     async fn fallback_disabled_still_returns_errors() {
         // When fallback is disabled, even retryable errors should be
         // returned as-is without attempting fallback.
-        let inner = MockModelClient::new(
-            "test",
-            vec![MockResult::ServerError],
-        );
+        let inner = MockModelClient::new("test", vec![MockResult::ServerError]);
 
-        let client = FallbackModelClient::new(
-            inner,
-            "primary".into(),
-            vec!["fallback1".into()],
-            false,
-        );
+        let client =
+            FallbackModelClient::new(inner, "primary".into(), vec!["fallback1".into()], false);
 
         let err = client.chat(make_request()).await.unwrap_err();
         assert!(
@@ -458,12 +407,8 @@ mod tests {
             ],
         );
 
-        let client = FallbackModelClient::new(
-            inner,
-            "primary".into(),
-            vec!["fallback1".into()],
-            true,
-        );
+        let client =
+            FallbackModelClient::new(inner, "primary".into(), vec!["fallback1".into()], true);
 
         let result = client.chat(make_request()).await.unwrap();
         assert_eq!(result.model, "fallback1");
@@ -533,12 +478,8 @@ mod tests {
             ],
         );
 
-        let client = FallbackModelClient::new(
-            inner,
-            "primary".into(),
-            vec!["fallback1".into()],
-            true,
-        );
+        let client =
+            FallbackModelClient::new(inner, "primary".into(), vec!["fallback1".into()], true);
 
         let mut req = ChatRequest::new("some-model", vec![Message::user("hello")]);
         req.stream = true;

@@ -149,7 +149,12 @@ const RATE_LIMIT_PATTERNS: &[&str] = &[
     "servicequotaexceededexception",
 ];
 
-const USAGE_LIMIT_PATTERNS: &[&str] = &["usage limit", "quota", "limit exceeded", "key limit exceeded"];
+const USAGE_LIMIT_PATTERNS: &[&str] = &[
+    "usage limit",
+    "quota",
+    "limit exceeded",
+    "key limit exceeded",
+];
 
 const USAGE_LIMIT_TRANSIENT_SIGNALS: &[&str] = &[
     "try again",
@@ -310,10 +315,7 @@ fn extract_message_from_body(body: &serde_json::Value) -> String {
     String::new()
 }
 
-fn build_error_msg(
-    error_str: &str,
-    body: &serde_json::Value,
-) -> String {
+fn build_error_msg(error_str: &str, body: &serde_json::Value) -> String {
     let raw_msg = error_str.to_lowercase();
     let mut body_msg = String::new();
     let mut metadata_msg = String::new();
@@ -411,14 +413,9 @@ pub fn classify_api_error(
     // ── 1. Provider-specific patterns (highest priority) ────────────
 
     // Anthropic thinking block signature invalid (400)
-    if status_code == Some(400)
-        && error_msg.contains("signature")
-        && error_msg.contains("thinking")
+    if status_code == Some(400) && error_msg.contains("signature") && error_msg.contains("thinking")
     {
-        return result(
-            FailoverReason::ThinkingSignature,
-            true, false, false, false,
-        );
+        return result(FailoverReason::ThinkingSignature, true, false, false, false);
     }
 
     // Anthropic long-context tier gate (429 "extra usage" + "long context")
@@ -426,10 +423,7 @@ pub fn classify_api_error(
         && error_msg.contains("extra usage")
         && error_msg.contains("long context")
     {
-        return result(
-            FailoverReason::LongContextTier,
-            true, true, false, false,
-        );
+        return result(FailoverReason::LongContextTier, true, true, false, false);
     }
 
     // Anthropic OAuth subscription rejects 1M-context beta
@@ -439,7 +433,10 @@ pub fn classify_api_error(
     {
         return result(
             FailoverReason::OauthLongContextBetaForbidden,
-            true, false, false, false,
+            true,
+            false,
+            false,
+            false,
         );
     }
 
@@ -447,12 +444,14 @@ pub fn classify_api_error(
     if status_code == Some(400)
         && (error_msg.contains("error parsing grammar")
             || error_msg.contains("json-schema-to-grammar")
-            || (error_msg.contains("unable to generate parser")
-                && error_msg.contains("template")))
+            || (error_msg.contains("unable to generate parser") && error_msg.contains("template")))
     {
         return result(
             FailoverReason::LlamaCppGrammarPattern,
-            true, false, false, false,
+            true,
+            false,
+            false,
+            false,
         );
     }
 
@@ -477,9 +476,7 @@ pub fn classify_api_error(
     // ── 3. Error code classification ────────────────────────────────
 
     if !error_code.is_empty() {
-        if let Some(classified) =
-            classify_by_error_code(&error_code, &error_msg, &result)
-        {
+        if let Some(classified) = classify_by_error_code(&error_code, &error_msg, &result) {
             return classified;
         }
     }
@@ -507,13 +504,9 @@ pub fn classify_api_error(
     let is_disconnect = contains_any(&error_msg, SERVER_DISCONNECT_PATTERNS);
     if is_disconnect && status_code.is_none() {
         let is_large = approx_tokens > context_length * 60 / 100
-            || (context_length <= 256000
-                && (approx_tokens > 120000 || num_messages > 200));
+            || (context_length <= 256000 && (approx_tokens > 120000 || num_messages > 200));
         if is_large {
-            return result(
-                FailoverReason::ContextOverflow,
-                true, true, false, false,
-            );
+            return result(FailoverReason::ContextOverflow, true, true, false, false);
         }
         return result(FailoverReason::Timeout, true, false, false, false);
     }
@@ -566,23 +559,12 @@ fn classify_by_status(
     };
 
     match status_code {
-        401 => Some(result(
-            FailoverReason::Auth,
-            false, false, true, true,
-        )),
+        401 => Some(result(FailoverReason::Auth, false, false, true, true)),
         403 => {
-            if error_msg.contains("key limit exceeded")
-                || error_msg.contains("spending limit")
-            {
-                Some(result(
-                    FailoverReason::Billing,
-                    false, false, true, true,
-                ))
+            if error_msg.contains("key limit exceeded") || error_msg.contains("spending limit") {
+                Some(result(FailoverReason::Billing, false, false, true, true))
             } else {
-                Some(result(
-                    FailoverReason::Auth,
-                    false, false, false, true,
-                ))
+                Some(result(FailoverReason::Auth, false, false, false, true))
             }
         }
         402 => Some(classify_402(error_msg, &result)),
@@ -590,12 +572,18 @@ fn classify_by_status(
             if contains_any(error_msg, PROVIDER_POLICY_BLOCKED_PATTERNS) {
                 Some(result(
                     FailoverReason::ProviderPolicyBlocked,
-                    false, false, false, false,
+                    false,
+                    false,
+                    false,
+                    false,
                 ))
             } else if contains_any(error_msg, MODEL_NOT_FOUND_PATTERNS) {
                 Some(result(
                     FailoverReason::ModelNotFound,
-                    false, false, false, true,
+                    false,
+                    false,
+                    false,
+                    true,
                 ))
             } else {
                 Some(result(FailoverReason::Unknown, true, false, false, false))
@@ -603,12 +591,12 @@ fn classify_by_status(
         }
         413 => Some(result(
             FailoverReason::PayloadTooLarge,
-            true, true, false, false,
+            true,
+            true,
+            false,
+            false,
         )),
-        429 => Some(result(
-            FailoverReason::RateLimit,
-            true, false, true, true,
-        )),
+        429 => Some(result(FailoverReason::RateLimit, true, false, true, true)),
         400 => Some(classify_400(
             error_msg,
             error_code,
@@ -622,19 +610,31 @@ fn classify_by_status(
         )),
         500 | 502 => Some(result(
             FailoverReason::ServerError,
-            true, false, false, false,
+            true,
+            false,
+            false,
+            false,
         )),
         503 | 529 => Some(result(
             FailoverReason::Overloaded,
-            true, false, false, false,
+            true,
+            false,
+            false,
+            false,
         )),
         400..=499 => Some(result(
             FailoverReason::FormatError,
-            false, false, false, true,
+            false,
+            false,
+            false,
+            true,
         )),
         500..=599 => Some(result(
             FailoverReason::ServerError,
-            true, false, false, false,
+            true,
+            false,
+            false,
+            false,
         )),
         _ => None,
     }
@@ -642,27 +642,15 @@ fn classify_by_status(
 
 fn classify_402<F>(error_msg: &str, result: &F) -> ClassifiedError
 where
-    F: Fn(
-        FailoverReason,
-        bool,
-        bool,
-        bool,
-        bool,
-    ) -> ClassifiedError,
+    F: Fn(FailoverReason, bool, bool, bool, bool) -> ClassifiedError,
 {
     let has_usage_limit = contains_any(error_msg, USAGE_LIMIT_PATTERNS);
     let has_transient_signal = contains_any(error_msg, USAGE_LIMIT_TRANSIENT_SIGNALS);
 
     if has_usage_limit && has_transient_signal {
-        result(
-            FailoverReason::RateLimit,
-            true, false, true, true,
-        )
+        result(FailoverReason::RateLimit, true, false, true, true)
     } else {
-        result(
-            FailoverReason::Billing,
-            false, false, true, true,
-        )
+        result(FailoverReason::Billing, false, false, true, true)
     }
 }
 
@@ -678,13 +666,7 @@ fn classify_400<F>(
     result: &F,
 ) -> ClassifiedError
 where
-    F: Fn(
-        FailoverReason,
-        bool,
-        bool,
-        bool,
-        bool,
-    ) -> ClassifiedError,
+    F: Fn(FailoverReason, bool, bool, bool, bool) -> ClassifiedError,
 {
     // Image-too-large from 400 (Anthropic's 5 MB per-image check)
     if contains_any(error_msg, IMAGE_TOO_LARGE_PATTERNS) {
@@ -693,62 +675,44 @@ where
 
     // Context overflow from 400
     if contains_any(error_msg, CONTEXT_OVERFLOW_PATTERNS) {
-        return result(
-            FailoverReason::ContextOverflow,
-            true, true, false, false,
-        );
+        return result(FailoverReason::ContextOverflow, true, true, false, false);
     }
 
     // Provider policy blocked
     if contains_any(error_msg, PROVIDER_POLICY_BLOCKED_PATTERNS) {
         return result(
             FailoverReason::ProviderPolicyBlocked,
-            false, false, false, false,
+            false,
+            false,
+            false,
+            false,
         );
     }
 
     // Model not found
     if contains_any(error_msg, MODEL_NOT_FOUND_PATTERNS) {
-        return result(
-            FailoverReason::ModelNotFound,
-            false, false, false, true,
-        );
+        return result(FailoverReason::ModelNotFound, false, false, false, true);
     }
 
     // Rate limit / billing as 400
     if contains_any(error_msg, RATE_LIMIT_PATTERNS) {
-        return result(
-            FailoverReason::RateLimit,
-            true, false, true, true,
-        );
+        return result(FailoverReason::RateLimit, true, false, true, true);
     }
     if contains_any(error_msg, BILLING_PATTERNS) {
-        return result(
-            FailoverReason::Billing,
-            false, false, true, true,
-        );
+        return result(FailoverReason::Billing, false, false, true, true);
     }
 
     // Generic 400 + large session → probable context overflow
     let err_body_msg = extract_message_from_body(body).to_lowercase();
-    let is_generic = err_body_msg.len() < 30
-        || err_body_msg.is_empty()
-        || err_body_msg == "error";
+    let is_generic = err_body_msg.len() < 30 || err_body_msg.is_empty() || err_body_msg == "error";
     let is_large = approx_tokens > context_length * 40 / 100
-        || (context_length <= 256000
-            && (approx_tokens > 80000 || num_messages > 80));
+        || (context_length <= 256000 && (approx_tokens > 80000 || num_messages > 80));
 
     if is_generic && is_large {
-        return result(
-            FailoverReason::ContextOverflow,
-            true, true, false, false,
-        );
+        return result(FailoverReason::ContextOverflow, true, true, false, false);
     }
 
-    result(
-        FailoverReason::FormatError,
-        false, false, false, true,
-    )
+    result(FailoverReason::FormatError, false, false, false, true)
 }
 
 fn classify_by_error_code<F>(
@@ -757,41 +721,31 @@ fn classify_by_error_code<F>(
     result: &F,
 ) -> Option<ClassifiedError>
 where
-    F: Fn(
-        FailoverReason,
-        bool,
-        bool,
-        bool,
-        bool,
-    ) -> ClassifiedError,
+    F: Fn(FailoverReason, bool, bool, bool, bool) -> ClassifiedError,
 {
     let code_lower = error_code.to_lowercase();
 
     match code_lower.as_str() {
         "resource_exhausted" | "throttled" | "rate_limit_exceeded" => {
-            Some(result(
-                FailoverReason::RateLimit,
-                true, false, true, false,
-            ))
+            Some(result(FailoverReason::RateLimit, true, false, true, false))
         }
         "insufficient_quota" | "billing_not_active" | "payment_required" => {
-            Some(result(
-                FailoverReason::Billing,
-                false, false, true, true,
-            ))
+            Some(result(FailoverReason::Billing, false, false, true, true))
         }
-        "model_not_found" | "model_not_available" | "invalid_model" => {
-            Some(result(
-                FailoverReason::ModelNotFound,
-                false, false, false, true,
-            ))
-        }
-        "context_length_exceeded" | "max_tokens_exceeded" => {
-            Some(result(
-                FailoverReason::ContextOverflow,
-                true, true, false, false,
-            ))
-        }
+        "model_not_found" | "model_not_available" | "invalid_model" => Some(result(
+            FailoverReason::ModelNotFound,
+            false,
+            false,
+            false,
+            true,
+        )),
+        "context_length_exceeded" | "max_tokens_exceeded" => Some(result(
+            FailoverReason::ContextOverflow,
+            true,
+            true,
+            false,
+            false,
+        )),
         _ => None,
     }
 }
@@ -804,19 +758,16 @@ fn classify_by_message<F>(
     result: &F,
 ) -> Option<ClassifiedError>
 where
-    F: Fn(
-        FailoverReason,
-        bool,
-        bool,
-        bool,
-        bool,
-    ) -> ClassifiedError,
+    F: Fn(FailoverReason, bool, bool, bool, bool) -> ClassifiedError,
 {
     // Payload-too-large patterns
     if contains_any(error_msg, PAYLOAD_TOO_LARGE_PATTERNS) {
         return Some(result(
             FailoverReason::PayloadTooLarge,
-            true, true, false, false,
+            true,
+            true,
+            false,
+            false,
         ));
     }
 
@@ -824,64 +775,57 @@ where
     if contains_any(error_msg, IMAGE_TOO_LARGE_PATTERNS) {
         return Some(result(
             FailoverReason::ImageTooLarge,
-            true, false, false, false,
+            true,
+            false,
+            false,
+            false,
         ));
     }
 
     // Usage-limit patterns with disambiguation
     if contains_any(error_msg, USAGE_LIMIT_PATTERNS) {
-        let has_transient_signal =
-            contains_any(error_msg, USAGE_LIMIT_TRANSIENT_SIGNALS);
+        let has_transient_signal = contains_any(error_msg, USAGE_LIMIT_TRANSIENT_SIGNALS);
         return Some(if has_transient_signal {
-            result(
-                FailoverReason::RateLimit,
-                true, false, true, true,
-            )
+            result(FailoverReason::RateLimit, true, false, true, true)
         } else {
-            result(
-                FailoverReason::Billing,
-                false, false, true, true,
-            )
+            result(FailoverReason::Billing, false, false, true, true)
         });
     }
 
     // Billing patterns
     if contains_any(error_msg, BILLING_PATTERNS) {
-        return Some(result(
-            FailoverReason::Billing,
-            false, false, true, true,
-        ));
+        return Some(result(FailoverReason::Billing, false, false, true, true));
     }
 
     // Rate limit patterns
     if contains_any(error_msg, RATE_LIMIT_PATTERNS) {
-        return Some(result(
-            FailoverReason::RateLimit,
-            true, false, true, true,
-        ));
+        return Some(result(FailoverReason::RateLimit, true, false, true, true));
     }
 
     // Context overflow patterns
     if contains_any(error_msg, CONTEXT_OVERFLOW_PATTERNS) {
         return Some(result(
             FailoverReason::ContextOverflow,
-            true, true, false, false,
+            true,
+            true,
+            false,
+            false,
         ));
     }
 
     // Auth patterns
     if contains_any(error_msg, AUTH_PATTERNS) {
-        return Some(result(
-            FailoverReason::Auth,
-            false, false, true, true,
-        ));
+        return Some(result(FailoverReason::Auth, false, false, true, true));
     }
 
     // Provider policy-block
     if contains_any(error_msg, PROVIDER_POLICY_BLOCKED_PATTERNS) {
         return Some(result(
             FailoverReason::ProviderPolicyBlocked,
-            false, false, false, false,
+            false,
+            false,
+            false,
+            false,
         ));
     }
 
@@ -889,16 +833,16 @@ where
     if contains_any(error_msg, MODEL_NOT_FOUND_PATTERNS) {
         return Some(result(
             FailoverReason::ModelNotFound,
-            false, false, false, true,
+            false,
+            false,
+            false,
+            true,
         ));
     }
 
     // Timeout message patterns
     if contains_any(error_msg, TIMEOUT_MESSAGE_PATTERNS) {
-        return Some(result(
-            FailoverReason::Timeout,
-            true, false, false, false,
-        ));
+        return Some(result(FailoverReason::Timeout, true, false, false, false));
     }
 
     None
