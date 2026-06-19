@@ -77,6 +77,8 @@ pub enum ImageSource {
 }
 
 pub mod keybindings {
+    use std::collections::HashMap;
+
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub enum KeyBinding {
         Copy, Paste, Interrupt, Exit, Clear, Redraw,
@@ -84,6 +86,49 @@ pub mod keybindings {
         Tab, ShiftTab, Enter, Escape, Backspace, Delete,
         CtrlC, CtrlD, CtrlL, CtrlR, CtrlA, CtrlE, CtrlW, CtrlU, CtrlK,
         ShiftEnter,
+    }
+
+    #[derive(Debug, Clone, PartialEq)]
+    pub enum KeyContext {
+        Global,
+        Chat,
+        Overlay,
+        Settings,
+    }
+
+    #[derive(Debug, Clone)]
+    pub struct ParsedKeystroke {
+        pub key: String,
+        pub modifiers: Vec<String>,
+    }
+
+    #[derive(Debug, Clone)]
+    pub struct KeybindingResult {
+        pub action: String,
+        pub context: KeyContext,
+    }
+
+    pub struct KeybindingResolver {
+        bindings: HashMap<String, KeybindingResult>,
+    }
+
+    impl KeybindingResolver {
+        pub fn new() -> Self {
+            Self { bindings: HashMap::new() }
+        }
+        pub fn resolve(&self, _keystroke: &ParsedKeystroke) -> Option<KeybindingResult> {
+            None
+        }
+    }
+
+    pub struct UserKeybindings {
+        pub bindings: HashMap<String, String>,
+    }
+
+    impl UserKeybindings {
+        pub fn load() -> Self {
+            Self { bindings: HashMap::new() }
+        }
     }
 }
 
@@ -229,6 +274,9 @@ pub mod tools {
         INSTANCE.get_or_init(|| std::sync::Mutex::new(TaskStore::new()))
     }
 
+    pub static TASK_STORE: once_cell::sync::Lazy<std::sync::Mutex<TaskStore>> =
+        once_cell::sync::Lazy::new(|| std::sync::Mutex::new(TaskStore::new()));
+
     #[derive(Debug, Clone)]
     pub struct UserQuestionEvent {
         pub question: String,
@@ -271,6 +319,10 @@ pub mod query {
     pub mod compact {
         pub use super::TokenWarningState;
     }
+}
+
+pub mod types_query {
+    pub use super::query::{QueryEvent, StreamEvent, UsageInfo, TokenWarningState};
 }
 
 pub use query::{QueryEvent, StreamEvent, UsageInfo, TokenWarningState};
@@ -345,7 +397,7 @@ pub mod spinner {
 }
 
 pub mod compact {
-    pub use crate::tui::query::TokenWarningState;
+    pub use super::query::TokenWarningState;
 }
 
 pub struct AuthStore;
@@ -373,6 +425,20 @@ pub fn summarize_import_result(_result: &str) -> String {
 
 pub use import_config::{ImportPaths, ImportSelection};
 
+#[derive(Debug, Clone)]
+pub struct ImportPreview {
+    pub settings: bool,
+    pub claude_md: bool,
+    pub auth: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum PreviewAction {
+    Apply,
+    Skip,
+    Cancel,
+}
+
 pub struct FreeUpstream {
     pub id: &'static str,
     pub name: &'static str,
@@ -389,8 +455,36 @@ impl ModelRegistry {
     pub fn new() -> Self { Self }
 }
 
+pub struct ProviderRegistry;
+
+impl ProviderRegistry {
+    pub fn new() -> Self { Self }
+}
+
 pub struct AnthropicClient;
 
 pub struct LoadedPlugin {
     pub name: String,
+}
+
+pub struct TuiApp;
+
+impl TuiApp {
+    pub async fn enter(
+        _config: operant_core::config::AppConfig,
+        _system: Option<String>,
+        _mode: LaunchMode,
+    ) -> anyhow::Result<Self> {
+        Ok(Self)
+    }
+
+    pub async fn run(self) -> anyhow::Result<()> {
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum LaunchMode {
+    Landing,
+    Query(String),
 }
