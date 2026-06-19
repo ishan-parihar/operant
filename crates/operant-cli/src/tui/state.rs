@@ -183,6 +183,7 @@ pub struct UiState {
     pub footer_notice: Option<FooterNotice>,
     pub modal: Option<Modal>,
     pub should_quit: bool,
+    pub notifications: crate::tui::notifications::NotificationQueue,
 }
 
 #[derive(Debug, Clone)]
@@ -231,6 +232,7 @@ impl AppState {
                 footer_notice: None,
                 modal: None,
                 should_quit: false,
+                notifications: crate::tui::notifications::NotificationQueue::new(),
             },
         }
     }
@@ -285,6 +287,8 @@ impl AppState {
     }
 
     pub fn apply_agent_event(&mut self, event: AgentEvent) {
+        use crate::tui::notifications::NotificationKind;
+
         match event {
             AgentEvent::Thinking { content } => {
                 self.session.status = content.clone();
@@ -313,16 +317,35 @@ impl AppState {
                     },
                 );
                 self.session.status = "Tool completed".to_string();
+                if !result.success {
+                    self.ui.notifications.push(
+                        NotificationKind::Warning,
+                        format!("Tool {} failed", result.tool_call_id),
+                        Some(5),
+                    );
+                }
             }
             AgentEvent::ToolError { name, error } => {
                 self.push_activity(format!("Tool {}", name), error.clone(), Tone::Error);
                 self.session.status = format!("{} failed", name);
+                self.ui.notifications.push(
+                    NotificationKind::Error,
+                    format!("{}: {}", name, error),
+                    Some(8),
+                );
             }
             AgentEvent::Content { text } => {
                 self.session.streaming_response.push_str(&text);
                 self.session.status = "Streaming response".to_string();
             }
-            AgentEvent::Done { message } => self.finish_run(message),
+            AgentEvent::Done { message } => {
+                self.ui.notifications.push(
+                    NotificationKind::Success,
+                    "Response complete".to_string(),
+                    Some(3),
+                );
+                self.finish_run(message);
+            }
             AgentEvent::IterationComplete { iteration } => {
                 self.session.current_iteration = iteration;
                 self.push_activity(
@@ -334,7 +357,12 @@ impl AppState {
             AgentEvent::Error { error } => {
                 self.session.error = Some(error.clone());
                 self.session.status = "Errored".to_string();
-                self.push_activity("Error", error, Tone::Error);
+                self.push_activity("Error", error.clone(), Tone::Error);
+                self.ui.notifications.push(
+                    NotificationKind::Error,
+                    error,
+                    Some(10),
+                );
             }
             AgentEvent::Usage {
                 input_tokens,
