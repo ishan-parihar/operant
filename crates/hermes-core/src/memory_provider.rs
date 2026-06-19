@@ -582,7 +582,7 @@ impl MemoryProvider for TdgMemoryProvider {
     async fn prefetch(&self, query: &str) -> String {
         let pool = self.pool.clone();
         let query = query.to_string();
-        let result = tokio::task::spawn_blocking(move || {
+        let result = tokio::task::spawn_blocking(move || -> std::result::Result<Vec<String>, String> {
             pool.with_connection(|conn| {
                 let mut stmt = conn.prepare(
                     "SELECT id, node_type, name, description FROM nodes WHERE valid_to IS NULL AND name LIKE ?1 LIMIT 5"
@@ -600,6 +600,7 @@ impl MemoryProvider for TdgMemoryProvider {
                     .collect();
                 Ok(rows)
             })
+            .map_err(|e| e.to_string())
         })
         .await;
 
@@ -612,7 +613,7 @@ impl MemoryProvider for TdgMemoryProvider {
     async fn sync_turn(&self, user: &str, _assistant: &str) -> Result<()> {
         let pool = self.pool.clone();
         let user_text = user.to_string();
-        let _ = tokio::task::spawn_blocking(move || {
+        let _ = tokio::task::spawn_blocking(move || -> std::result::Result<(), String> {
             pool.with_connection(|conn| {
                 let new_node = tdg_rust::NewNode {
                     node_type: "observation".to_string(),
@@ -623,15 +624,16 @@ impl MemoryProvider for TdgMemoryProvider {
                     drives: None,
                     lifecycle_state: None,
                     teleological_level: None,
-                    developmental_stage: 0,
-                    confidence: 0.5,
+                    developmental_stage: Some(0),
+                    confidence: Some(0.5),
                     source: Some("hermes-session".to_string()),
                     parent_ids: None,
                     agent_id: None,
                 };
                 tdg_rust::db::crud::add_node(conn, &new_node)?;
-                Ok::<(), tdg_rust::TdgError>(())
+                Ok(())
             })
+            .map_err(|e| e.to_string())
         })
         .await
         .ok();
@@ -695,7 +697,7 @@ impl MemoryProvider for TdgMemoryProvider {
         let pool = self.pool.clone();
         let name = name.to_string();
         let args = args.clone();
-        let result = tokio::task::spawn_blocking(move || {
+        let result = tokio::task::spawn_blocking(move || -> std::result::Result<String, String> {
             pool.with_connection(|conn| match name.as_str() {
                 "tdg_search" => {
                     let query = args["query"].as_str().unwrap_or("");
@@ -729,8 +731,8 @@ impl MemoryProvider for TdgMemoryProvider {
                         drives: None,
                         lifecycle_state: None,
                         teleological_level: None,
-                        developmental_stage: 0,
-                        confidence: 0.5,
+                        developmental_stage: Some(0),
+                        confidence: Some(0.5),
                         source: Some("hermes-agent".to_string()),
                         parent_ids: None,
                         agent_id: None,
@@ -742,14 +744,14 @@ impl MemoryProvider for TdgMemoryProvider {
                     let src = args["source_id"].as_str().unwrap_or("");
                     let tgt = args["target_id"].as_str().unwrap_or("");
                     let edge_type = args["edge_type"].as_str().unwrap_or("RELATES_TO");
-                    let new_edge = tdg_rust::NewEdge {
-                        source_id: src.to_string(),
-                        target_id: tgt.to_string(),
-                        edge_type: edge_type.to_string(),
-                        description: None,
-                        properties: None,
-                        weight: None,
-                    };
+                let new_edge = tdg_rust::NewEdge {
+                    source_id: src.to_string(),
+                    target_id: tgt.to_string(),
+                    edge_type: edge_type.to_string(),
+                    weight: None,
+                    properties: None,
+                    agent_id: None,
+                };
                     let edge = tdg_rust::db::crud::add_edge(conn, &new_edge)?;
                     Ok(serde_json::json!({"edge_id": edge.id}).to_string())
                 }
@@ -767,6 +769,7 @@ impl MemoryProvider for TdgMemoryProvider {
                 }
                 _ => Ok(format!(r#"{{"error":"unknown tool {}"}}"#, name)),
             })
+            .map_err(|e| e.to_string())
         })
         .await;
 
