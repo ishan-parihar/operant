@@ -34,6 +34,15 @@ pub struct NotificationQueue {
     next_id: u64,
 }
 
+impl Clone for NotificationQueue {
+    fn clone(&self) -> Self {
+        Self {
+            notifications: self.notifications.clone(),
+            next_id: self.next_id,
+        }
+    }
+}
+
 impl NotificationQueue {
     pub fn new() -> Self {
         Self {

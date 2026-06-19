@@ -100,6 +100,8 @@ pub fn render(frame: &mut Frame<'_>, state: &AppState) {
             modal.form().selected,
         );
     }
+
+    crate::tui::notifications::render_notification_banner(frame, &state.ui.notifications, area);
 }
 
 fn render_landing(frame: &mut Frame<'_>, state: &AppState, area: Rect) {
