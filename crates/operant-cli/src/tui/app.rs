@@ -667,6 +667,7 @@ fn key_event_to_keystroke(key: &KeyEvent) -> Option<ParsedKeystroke> {
     };
 
     Some(ParsedKeystroke {
+        modifiers: vec![],
         key: normalized_key,
         ctrl,
         alt,
@@ -850,29 +851,29 @@ pub struct App {
     /// Diff viewer overlay.
     pub diff_viewer: DiffViewerState,
     /// Session-quality feedback survey overlay.
-    pub feedback_survey: crate::feedback_survey::FeedbackSurveyState,
+    pub feedback_survey: crate::tui::feedback_survey::FeedbackSurveyState,
     /// Memory file selector overlay (AGENTS.md browser).
-    pub memory_file_selector: crate::memory_file_selector::MemoryFileSelectorState,
+    pub memory_file_selector: crate::tui::memory_file_selector::MemoryFileSelectorState,
     /// Read-only hooks configuration browser.
-    pub hooks_config_menu: crate::hooks_config_menu::HooksConfigMenuState,
+    pub hooks_config_menu: crate::tui::hooks_config_menu::HooksConfigMenuState,
     /// Overage credit upsell banner.
-    pub overage_upsell: crate::overage_upsell::OverageCreditUpsellState,
+    pub overage_upsell: crate::tui::overage_upsell::OverageCreditUpsellState,
     /// Voice mode availability notice.
-    pub voice_mode_notice: crate::voice_mode_notice::VoiceModeNoticeState,
+    pub voice_mode_notice: crate::tui::voice_mode_notice::VoiceModeNoticeState,
     /// Desktop app upsell startup dialog.
-    pub desktop_upsell: crate::desktop_upsell_startup::DesktopUpsellStartupState,
+    pub desktop_upsell: crate::tui::desktop_upsell_startup::DesktopUpsellStartupState,
     /// Startup error dialog for malformed settings.json or AGENTS.md.
-    pub invalid_config_dialog: crate::invalid_config_dialog::InvalidConfigDialogState,
+    pub invalid_config_dialog: crate::tui::invalid_config_dialog::InvalidConfigDialogState,
     /// Memory update notification banner.
-    pub memory_update_notification: crate::memory_update_notification::MemoryUpdateNotificationState,
+    pub memory_update_notification: crate::tui::memory_update_notification::MemoryUpdateNotificationState,
     /// MCP elicitation dialog (form requested by an MCP server).
-    pub elicitation: crate::elicitation_dialog::ElicitationDialogState,
+    pub elicitation: crate::tui::elicitation_dialog::ElicitationDialogState,
     /// Model picker overlay (/model command).
     pub model_picker: ModelPickerState,
     /// Session browser overlay (/session, /resume, /rename, /export).
     pub session_browser: SessionBrowserState,
     /// Session branching overlay (Ctrl+B) — create and switch branches.
-    pub session_branching: crate::session_branching::SessionBranchingState,
+    pub session_branching: crate::tui::session_branching::SessionBranchingState,
     /// Task progress overlay (Ctrl+T) — shows task status with toggle capability.
     pub tasks_overlay: TasksOverlay,
     /// Export format picker dialog (/export).
@@ -886,27 +887,27 @@ pub struct App {
     /// Bypass-permissions startup confirmation dialog.
     /// Shown at startup when --dangerously-skip-permissions was passed.
     /// User must explicitly accept or the session exits.
-    pub bypass_permissions_dialog: crate::bypass_permissions_dialog::BypassPermissionsDialogState,
+    pub bypass_permissions_dialog: crate::tui::bypass_permissions_dialog::BypassPermissionsDialogState,
     /// Whether the bypass-permissions dialog has been shown this session.
     pub bypass_permissions_dialog_shown: bool,
     /// File injection warning dialog.
     /// Shown when oversized or binary files are detected in @refs.
-    pub file_injection_dialog: crate::file_injection_dialog::FileInjectionDialogState,
+    pub file_injection_dialog: crate::tui::file_injection_dialog::FileInjectionDialogState,
     /// When true, the next file injection size check uses limit 0 (no limit),
     /// letting files that were "allowed" through the warning dialog be injected.
     pub file_injection_force: bool,
     /// First-launch onboarding welcome dialog.
-    pub onboarding_dialog: crate::onboarding_dialog::OnboardingDialogState,
+    pub onboarding_dialog: crate::tui::onboarding_dialog::OnboardingDialogState,
     /// Effort-level picker (/effort with no args).
-    pub effort_picker: crate::effort_picker::EffortPickerState,
+    pub effort_picker: crate::tui::effort_picker::EffortPickerState,
     /// API key input dialog (opened from /connect for key-based providers).
-    pub key_input_dialog: crate::key_input_dialog::KeyInputDialogState,
+    pub key_input_dialog: crate::tui::key_input_dialog::KeyInputDialogState,
     /// Custom provider dialog for URL + API key input.
-    pub custom_provider_dialog: crate::custom_provider_dialog::CustomProviderDialogState,
+    pub custom_provider_dialog: crate::tui::custom_provider_dialog::CustomProviderDialogState,
     /// "Free" composite-provider setup dialog (warning + 2 API keys).
-    pub free_mode_dialog: crate::free_mode_dialog::FreeModeDialogState,
+    pub free_mode_dialog: crate::tui::free_mode_dialog::FreeModeDialogState,
     /// Device code / browser auth dialog (GitHub Copilot device flow, Anthropic OAuth).
-    pub device_auth_dialog: crate::device_auth_dialog::DeviceAuthDialogState,
+    pub device_auth_dialog: crate::tui::device_auth_dialog::DeviceAuthDialogState,
     /// When set, the main loop should spawn the async auth task for this provider.
     pub device_auth_pending: Option<String>,
     /// Shared provider registry for dynamic model fetching.
@@ -925,7 +926,7 @@ pub struct App {
     pub session_list_pending: bool,
     /// Receiver for background session-list results.
     pub session_list_rx:
-        Option<tokio::sync::mpsc::Receiver<Vec<crate::session_browser::SessionEntry>>>,
+        Option<tokio::sync::mpsc::Receiver<Vec<crate::tui::session_browser::SessionEntry>>>,
     /// Credential store for provider API keys and OAuth tokens.
     pub auth_store: crate::tui::adapter_types::AuthStore,
     /// Messages typed by the user while a query was streaming. They will be
@@ -986,13 +987,13 @@ pub struct App {
     /// /model picker opens.  Drained each frame so models appear as soon as
     /// the fetch completes.
     pub model_fetch_rx:
-        Option<tokio::sync::mpsc::Receiver<Result<Vec<crate::model_picker::ModelEntry>, ()>>>,
+        Option<tokio::sync::mpsc::Receiver<Result<Vec<crate::tui::model_picker::ModelEntry>, ()>>>,
     /// Receiver for `UserQuestionEvent`s produced by the AskUserQuestion tool.
     /// When a question arrives, `ask_user_dialog` is populated and shown.
     pub user_question_rx:
         Option<tokio::sync::mpsc::UnboundedReceiver<crate::tui::adapter_types::tools::UserQuestionEvent>>,
     /// State for the model-initiated ask-user question dialog.
-    pub ask_user_dialog: crate::ask_user_dialog::AskUserDialogState,
+    pub ask_user_dialog: crate::tui::ask_user_dialog::AskUserDialogState,
 
     // ---- Context window & rate limit info ----------------------------------
 
@@ -1281,33 +1282,33 @@ impl App {
             mcp_view: McpViewState::new(),
             agents_menu: AgentsMenuState::new(),
             diff_viewer: DiffViewerState::new(),
-            feedback_survey: crate::feedback_survey::FeedbackSurveyState::new(),
-            memory_file_selector: crate::memory_file_selector::MemoryFileSelectorState::new(),
-            hooks_config_menu: crate::hooks_config_menu::HooksConfigMenuState::new(),
-            overage_upsell: crate::overage_upsell::OverageCreditUpsellState::new(),
-            voice_mode_notice: crate::voice_mode_notice::VoiceModeNoticeState::new(),
-            desktop_upsell: crate::desktop_upsell_startup::DesktopUpsellStartupState::new(),
-            invalid_config_dialog: crate::invalid_config_dialog::InvalidConfigDialogState::new(),
-            memory_update_notification: crate::memory_update_notification::MemoryUpdateNotificationState::new(),
-            elicitation: crate::elicitation_dialog::ElicitationDialogState::new(),
+            feedback_survey: crate::tui::feedback_survey::FeedbackSurveyState::new(),
+            memory_file_selector: crate::tui::memory_file_selector::MemoryFileSelectorState::new(),
+            hooks_config_menu: crate::tui::hooks_config_menu::HooksConfigMenuState::new(),
+            overage_upsell: crate::tui::overage_upsell::OverageCreditUpsellState::new(),
+            voice_mode_notice: crate::tui::voice_mode_notice::VoiceModeNoticeState::new(),
+            desktop_upsell: crate::tui::desktop_upsell_startup::DesktopUpsellStartupState::new(),
+            invalid_config_dialog: crate::tui::invalid_config_dialog::InvalidConfigDialogState::new(),
+            memory_update_notification: crate::tui::memory_update_notification::MemoryUpdateNotificationState::new(),
+            elicitation: crate::tui::elicitation_dialog::ElicitationDialogState::new(),
             model_picker: ModelPickerState::new(),
             session_browser: SessionBrowserState::new(),
-            session_branching: crate::session_branching::SessionBranchingState::new(),
+            session_branching: crate::tui::session_branching::SessionBranchingState::new(),
             tasks_overlay: TasksOverlay::new(),
             export_dialog: ExportDialogState::new(),
             context_viz: ContextVizState::new(),
             mcp_approval: McpApprovalDialogState::new(),
             go_to_line_dialog: GoToLineDialog::new(),
-            bypass_permissions_dialog: crate::bypass_permissions_dialog::BypassPermissionsDialogState::new(),
+            bypass_permissions_dialog: crate::tui::bypass_permissions_dialog::BypassPermissionsDialogState::new(),
             bypass_permissions_dialog_shown: false,
-            file_injection_dialog: crate::file_injection_dialog::FileInjectionDialogState::new(),
+            file_injection_dialog: crate::tui::file_injection_dialog::FileInjectionDialogState::new(),
             file_injection_force: false,
-            onboarding_dialog: crate::onboarding_dialog::OnboardingDialogState::new(),
-            effort_picker: crate::effort_picker::EffortPickerState::new(),
-            key_input_dialog: crate::key_input_dialog::KeyInputDialogState::new(),
-            custom_provider_dialog: crate::custom_provider_dialog::CustomProviderDialogState::new(),
-            free_mode_dialog: crate::free_mode_dialog::FreeModeDialogState::new(),
-            device_auth_dialog: crate::device_auth_dialog::DeviceAuthDialogState::new(),
+            onboarding_dialog: crate::tui::onboarding_dialog::OnboardingDialogState::new(),
+            effort_picker: crate::tui::effort_picker::EffortPickerState::new(),
+            key_input_dialog: crate::tui::key_input_dialog::KeyInputDialogState::new(),
+            custom_provider_dialog: crate::tui::custom_provider_dialog::CustomProviderDialogState::new(),
+            free_mode_dialog: crate::tui::free_mode_dialog::FreeModeDialogState::new(),
+            device_auth_dialog: crate::tui::device_auth_dialog::DeviceAuthDialogState::new(),
             device_auth_pending: None,
             provider_registry: None,
             model_registry: {
@@ -1391,7 +1392,7 @@ impl App {
             pending_key: None,
             model_fetch_rx: None,
             user_question_rx: None,
-            ask_user_dialog: crate::ask_user_dialog::AskUserDialogState::new(),
+            ask_user_dialog: crate::tui::ask_user_dialog::AskUserDialogState::new(),
             context_window_size: 0,
             context_used_tokens: 0,
             rate_limit_5h_pct: None,
@@ -1619,7 +1620,7 @@ impl App {
     }
 
     fn display_default_model_for_provider(&self, provider_id: &str) -> String {
-        crate::model_picker::default_model_for_provider(provider_id, &self.model_registry)
+        crate::tui::model_picker::default_model_for_provider(provider_id, &self.model_registry)
     }
 
     fn open_model_picker_for_provider(&mut self, provider_id: &str, title: Option<String>) {
@@ -1633,7 +1634,7 @@ impl App {
             self.model_registry.load_cache(&cache_path);
         }
 
-        let models = crate::model_picker::models_for_provider_from_registry(
+        let models = crate::tui::model_picker::models_for_provider_from_registry(
             provider_id,
             &self.model_registry,
         );
@@ -1932,10 +1933,10 @@ impl App {
         self.import_config_picker = DialogSelectState::new("Import config", import_config_picker_items());
         self.import_config_dialog = ImportConfigDialogState::new();
         self.model_picker = ModelPickerState::new();
-        self.key_input_dialog = crate::key_input_dialog::KeyInputDialogState::new();
-        self.custom_provider_dialog = crate::custom_provider_dialog::CustomProviderDialogState::new();
-        self.free_mode_dialog = crate::free_mode_dialog::FreeModeDialogState::new();
-        self.device_auth_dialog = crate::device_auth_dialog::DeviceAuthDialogState::new();
+        self.key_input_dialog = crate::tui::key_input_dialog::KeyInputDialogState::new();
+        self.custom_provider_dialog = crate::tui::custom_provider_dialog::CustomProviderDialogState::new();
+        self.free_mode_dialog = crate::tui::free_mode_dialog::FreeModeDialogState::new();
+        self.device_auth_dialog = crate::tui::device_auth_dialog::DeviceAuthDialogState::new();
         self.device_auth_pending = None;
         self.pending_mcp_panel_auth = None;
         self.model_picker_fetch_pending = false;
@@ -2166,7 +2167,7 @@ impl App {
                         r.set_enabled(true);
                     }
                     self.voice_recorder = Some(recorder);
-                    self.voice_mode_notice = crate::voice_mode_notice::VoiceModeNoticeState::new();
+                    self.voice_mode_notice = crate::tui::voice_mode_notice::VoiceModeNoticeState::new();
                     self.status_message = Some(
                         "Voice mode enabled. Press Alt+V to start recording.".to_string(),
                     );
@@ -3000,9 +3001,9 @@ impl App {
                     self.device_auth_dialog.close();
                     self.device_auth_pending = None;
                 }
-                _ if matches!(self.device_auth_dialog.status, crate::device_auth_dialog::DeviceAuthStatus::Success(_)) => {
+                _ if matches!(self.device_auth_dialog.status, crate::tui::device_auth_dialog::DeviceAuthStatus::Success(_)) => {
                     // Any key after success -> store credential and close
-                    if let crate::device_auth_dialog::DeviceAuthStatus::Success(ref token) = self.device_auth_dialog.status {
+                    if let crate::tui::device_auth_dialog::DeviceAuthStatus::Success(ref token) = self.device_auth_dialog.status {
                         let provider_id = self.device_auth_dialog.provider_id.clone();
                         let provider_name = self.device_auth_dialog.provider_name.clone();
                         let token = token.clone();
@@ -3025,7 +3026,7 @@ impl App {
                         return false;
                     }
                 }
-                _ if matches!(self.device_auth_dialog.status, crate::device_auth_dialog::DeviceAuthStatus::Error(_)) => {
+                _ if matches!(self.device_auth_dialog.status, crate::tui::device_auth_dialog::DeviceAuthStatus::Error(_)) => {
                     // Any key after error -> close
                     self.device_auth_dialog.close();
                     self.device_auth_pending = None;
@@ -5880,7 +5881,7 @@ impl App {
                 }
                 self.is_streaming = true;
                 match stream_evt {
-                    crate::tui::adapter_types::AnthropicStreamEvent::ContentBlockDelta { delta, .. } => {
+                    crate::tui::adapter_types::streaming::AnthropicStreamEvent::ContentBlockDelta { delta, .. } => {
                         // Reset stall timer on any incoming delta — we're making progress.
                         self.stall_start = None;
                         match delta {
@@ -5896,7 +5897,7 @@ impl App {
                             _ => {}
                         }
                     }
-                    crate::tui::adapter_types::AnthropicStreamEvent::MessageStop => {
+                    crate::tui::adapter_types::streaming::AnthropicStreamEvent::MessageStop => {
                         self.is_streaming = false;
                         self.spinner_verb = None;
                         self.stall_start = None;
@@ -6083,7 +6084,7 @@ impl App {
                 self.session_list_rx = Some(rx);
                 tokio::spawn(async move {
                     let sessions = crate::tui::adapter_types::history::list_sessions().await;
-                    let entries: Vec<crate::session_browser::SessionEntry> = sessions
+                    let entries: Vec<crate::tui::session_browser::SessionEntry> = sessions
                         .into_iter()
                         .map(|s| {
                             let age = chrono::Utc::now()
@@ -6097,7 +6098,7 @@ impl App {
                             } else {
                                 format!("{}d ago", age.num_days())
                             };
-                            crate::session_browser::SessionEntry {
+                            crate::tui::session_browser::SessionEntry {
                                 id: s.id,
                                 title: s.title.unwrap_or_else(|| "(untitled)".to_string()),
                                 last_updated,

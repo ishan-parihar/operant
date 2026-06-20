@@ -177,6 +177,10 @@ pub mod keybindings {
     pub struct ParsedKeystroke {
         pub key: String,
         pub modifiers: Vec<String>,
+        pub ctrl: bool,
+        pub alt: bool,
+        pub shift: bool,
+        pub meta: bool,
     }
 
     #[derive(Debug, Clone)]
@@ -185,12 +189,18 @@ pub mod keybindings {
         pub context: KeyContext,
     }
 
+    impl KeybindingResult {
+        pub fn new(action: &str, context: KeyContext) -> Self {
+            Self { action: action.to_string(), context }
+        }
+    }
+
     pub struct KeybindingResolver {
         bindings: HashMap<String, KeybindingResult>,
     }
 
     impl KeybindingResolver {
-        pub fn new() -> Self {
+        pub fn new(_user_keybindings: &UserKeybindings) -> Self {
             Self { bindings: HashMap::new() }
         }
         pub fn resolve(&self, _keystroke: &ParsedKeystroke) -> Option<KeybindingResult> {
@@ -203,7 +213,7 @@ pub mod keybindings {
     }
 
     impl UserKeybindings {
-        pub fn load() -> Self {
+        pub fn load(_config_dir: &std::path::Path) -> Self {
             Self { bindings: HashMap::new() }
         }
     }
@@ -308,8 +318,8 @@ pub fn format_permission_reason(_kind: &str, _detail: &str) -> String {
     format!("{}: {}", _kind, _detail)
 }
 
-pub fn sample_completion_verb() -> &'static str { "done" }
-pub fn sample_spinner_verb() -> &'static str { "thinking" }
+pub fn sample_completion_verb(_seed: u64) -> &'static str { "done" }
+pub fn sample_spinner_verb(_seed: u64) -> &'static str { "thinking" }
 
 pub mod voice {
     #[derive(Debug, Clone)]
@@ -335,50 +345,14 @@ pub mod voice {
     }
 }
 
-pub mod tools {
-    use std::sync::OnceLock;
-    use std::collections::HashMap;
-
-    #[derive(Debug, Clone, PartialEq)]
-    pub enum TaskStatus { Pending, Running, Completed, Failed }
-
-    #[derive(Debug, Clone)]
-    pub struct Task {
-        pub id: String,
-        pub status: TaskStatus,
-        pub description: String,
-    }
-
-    pub struct TaskStore {
-        tasks: HashMap<String, Task>,
-    }
-
-    impl TaskStore {
-        pub fn new() -> Self { Self { tasks: HashMap::new() } }
-    }
-
-    pub fn task_store() -> &'static std::sync::Mutex<TaskStore> {
-        static INSTANCE: OnceLock<std::sync::Mutex<TaskStore>> = OnceLock::new();
-        INSTANCE.get_or_init(|| std::sync::Mutex::new(TaskStore::new()))
-    }
-
-    pub static TASK_STORE: once_cell::sync::Lazy<std::sync::Mutex<TaskStore>> =
-        once_cell::sync::Lazy::new(|| std::sync::Mutex::new(TaskStore::new()));
-
-    #[derive(Debug, Clone)]
-    pub struct UserQuestionEvent {
-        pub question: String,
-        pub options: Vec<String>,
-    }
-}
 
 pub mod query {
     #[derive(Debug, Clone)]
     pub enum QueryEvent {
         Stream(StreamEvent),
         ToolStart { tool_name: String, tool_id: String, input_json: String },
-        ToolEnd { tool_id: String, result: String, is_error: bool },
-        TurnComplete { stop_reason: String, usage: Option<UsageInfo> },
+        ToolEnd { tool_id: String, tool_name: String, result: String, is_error: bool },
+        TurnComplete { turn: usize, stop_reason: String, usage: Option<UsageInfo> },
         Error(String),
         TokenWarning { state: TokenWarningState, pct_used: f64 },
     }
@@ -447,8 +421,22 @@ pub mod import_config {
     #[derive(Debug, Clone)]
     pub enum CredentialKind { ApiKey(String), OAuthToken(String) }
 
-    pub fn build_import_preview(_paths: &ImportPaths, _sel: ImportSelection) -> String {
-        "Import preview".to_string()
+    #[derive(Debug, Clone)]
+    pub struct ImportPreview {
+        pub settings: bool,
+        pub claude_md: bool,
+        pub auth: bool,
+    }
+
+    #[derive(Debug, Clone, PartialEq)]
+    pub enum PreviewAction {
+        Apply,
+        Skip,
+        Cancel,
+    }
+
+    pub fn build_import_preview(_paths: &ImportPaths, _sel: ImportSelection) -> ImportPreview {
+        ImportPreview { settings: false, claude_md: false, auth: false }
     }
 
     pub fn execute_import(_paths: &ImportPaths, _sel: ImportSelection) -> String {
@@ -472,12 +460,12 @@ pub mod history {
 }
 
 pub mod tips {
-    pub fn select_tip() -> Option<String> { None }
+    pub fn select_tip(_seed: u64) -> Option<String> { None }
 }
 
 pub mod git_utils {
-    pub fn get_current_branch() -> Option<String> { None }
-    pub fn get_repo_root() -> Option<std::path::PathBuf> { None }
+    pub fn get_current_branch(_repo_root: &std::path::Path) -> Option<String> { None }
+    pub fn get_repo_root(_start: &std::path::Path) -> Option<std::path::PathBuf> { None }
 }
 
 pub mod spinner {
@@ -511,20 +499,37 @@ pub fn summarize_import_result(_result: &str) -> String {
     _result.to_string()
 }
 
-pub use import_config::{ImportPaths, ImportSelection};
+pub use import_config::{ImportPaths, ImportSelection, ImportPreview, PreviewAction};
 
-#[derive(Debug, Clone)]
-pub struct ImportPreview {
-    pub settings: bool,
-    pub claude_md: bool,
-    pub auth: bool,
-}
+pub mod file_injection {
+    #[derive(Debug, Clone)]
+    pub struct AtFileRef {
+        pub path: String,
+        pub line_start: Option<usize>,
+        pub line_end: Option<usize>,
+    }
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum PreviewAction {
-    Apply,
-    Skip,
-    Cancel,
+    #[derive(Debug, Clone)]
+    pub struct AtFileIssue {
+        pub path: String,
+        pub error: String,
+    }
+
+    pub fn parse_at_refs(text: &str) -> (Vec<super::AtFileRef>, Vec<AtFileIssue>) {
+        let mut refs = Vec::new();
+        let mut issues = Vec::new();
+        for word in text.split_whitespace() {
+            if word.starts_with('@') && word.len() > 1 {
+                let path = word[1..].to_string();
+                refs.push(super::AtFileRef { path, line_start: None, line_end: None });
+            }
+        }
+        (refs, issues)
+    }
+
+    pub fn build_file_blocks(_refs: &[super::AtFileRef]) -> Vec<String> {
+        vec![]
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -615,6 +620,19 @@ pub mod tools {
     #[derive(Debug, Clone, PartialEq)]
     pub enum TaskStatus { Pending, Running, Completed, Failed, InProgress, Deleted }
 
+    impl std::fmt::Display for TaskStatus {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                TaskStatus::Pending => write!(f, "Pending"),
+                TaskStatus::Running => write!(f, "Running"),
+                TaskStatus::Completed => write!(f, "Completed"),
+                TaskStatus::Failed => write!(f, "Failed"),
+                TaskStatus::InProgress => write!(f, "In Progress"),
+                TaskStatus::Deleted => write!(f, "Deleted"),
+            }
+        }
+    }
+
     impl TaskStatus {
         pub fn emoji(&self) -> &'static str {
             match self {
@@ -675,3 +693,4 @@ pub enum LaunchMode {
     Landing,
     Query(String),
 }
+
