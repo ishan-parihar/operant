@@ -72,6 +72,11 @@ pub mod config {
         pub fn light() -> Self { Self { name: "light".to_string() } }
         pub fn deuteranopia() -> Self { Self { name: "deuteranopia".to_string() } }
         pub fn custom(name: &str) -> Self { Self { name: name.to_string() } }
+
+        pub const Dark: Self = Self { name: "dark" };
+        pub const Light: Self = Self { name: "light" };
+        pub const Default: Self = Self { name: "default" };
+        pub const Deuteranopia: Self = Self { name: "deuteranopia" };
     }
 
     #[derive(Debug, Clone, PartialEq)]
@@ -193,6 +198,10 @@ pub mod keybindings {
         pub fn new(action: &str, context: KeyContext) -> Self {
             Self { action: action.to_string(), context }
         }
+
+        pub fn action() -> Self { Self { action: String::new(), context: KeyContext::Global } }
+        pub fn pending() -> Self { Self { action: "pending".to_string(), context: KeyContext::Global } }
+        pub fn no_match() -> Self { Self { action: "no_match".to_string(), context: KeyContext::Global } }
     }
 
     pub struct KeybindingResolver {
@@ -387,7 +396,6 @@ pub mod types_query {
     pub use super::query::{QueryEvent, StreamEvent, UsageInfo, TokenWarningState};
 }
 
-pub use query::{QueryEvent, StreamEvent, UsageInfo, TokenWarningState};
 
 pub mod import_config {
     #[derive(Debug, Clone)]
@@ -487,19 +495,8 @@ pub struct StoredCredential {
     pub provider: String,
 }
 
-pub fn build_import_preview(_paths: &import_config::ImportPaths, _sel: import_config::ImportSelection) -> String {
-    String::new()
-}
 
-pub fn execute_import(_paths: &import_config::ImportPaths, _sel: import_config::ImportSelection) -> String {
-    String::new()
-}
-
-pub fn summarize_import_result(_result: &str) -> String {
-    _result.to_string()
-}
-
-pub use import_config::{ImportPaths, ImportSelection, ImportPreview, PreviewAction};
+pub use import_config::{ImportPaths, ImportSelection, ImportPreview, PreviewAction, build_import_preview, execute_import, summarize_import_result};
 
 pub mod file_injection {
     #[derive(Debug, Clone)]
@@ -510,24 +507,26 @@ pub mod file_injection {
     }
 
     #[derive(Debug, Clone)]
-    pub struct AtFileIssue {
-        pub path: String,
-        pub error: String,
+    pub enum AtFileIssue {
+        Binary,
+        IsDirectory,
+        NoMatch,
+        TooLarge,
     }
 
-    pub fn parse_at_refs(text: &str) -> (Vec<super::AtFileRef>, Vec<AtFileIssue>) {
+    pub fn parse_at_refs(text: &str) -> (Vec<AtFileRef>, Vec<AtFileIssue>) {
         let mut refs = Vec::new();
         let mut issues = Vec::new();
         for word in text.split_whitespace() {
             if word.starts_with('@') && word.len() > 1 {
                 let path = word[1..].to_string();
-                refs.push(super::AtFileRef { path, line_start: None, line_end: None });
+                refs.push(AtFileRef { path, line_start: None, line_end: None });
             }
         }
         (refs, issues)
     }
 
-    pub fn build_file_blocks(_refs: &[super::AtFileRef]) -> Vec<String> {
+    pub fn build_file_blocks(_refs: &[AtFileRef]) -> Vec<String> {
         vec![]
     }
 }
@@ -609,7 +608,7 @@ pub mod mcp {
         Connected { name: String },
         Connecting,
         Disconnected { last_error: Option<String> },
-        Failed { error: String, .. },
+        Failed { error: String },
     }
 }
 
