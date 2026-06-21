@@ -1,17 +1,24 @@
 // app.rs — App state struct and main event loop.
 
+use crate::tui::adapter_types::config::{Config, Settings, Theme};
+use crate::tui::adapter_types::cost::CostTracker;
+use crate::tui::adapter_types::file_history::FileHistory;
+use crate::tui::adapter_types::keybindings::{
+    KeyContext, KeybindingResolver, KeybindingResult, ParsedKeystroke, UserKeybindings,
+};
+use crate::tui::adapter_types::query::QueryEvent;
+use crate::tui::adapter_types::types::{ContentBlock, Message, Role};
+use crate::tui::adapter_types::{sample_completion_verb, sample_spinner_verb};
 use crate::tui::bridge_state::BridgeConnectionState;
 use crate::tui::context_viz::ContextVizState;
 use crate::tui::dialog_select::{DialogSelectState, SelectItem};
+use crate::tui::dialogs::McpApprovalDialogState;
+use crate::tui::dialogs::PermissionRequest;
+use crate::tui::diff_viewer::{build_turn_diff, DiffViewerState};
 use crate::tui::export_dialog::{ExportDialogState, ExportFormat};
 use crate::tui::import_config_dialog::ImportConfigDialogState;
-use crate::tui::dialogs::PermissionRequest;
-use crate::tui::diff_viewer::{DiffViewerState, build_turn_diff};
-use crate::tui::model_picker::{EffortLevel, ModelPickerState};
-use crate::tui::session_browser::SessionBrowserState;
-use crate::tui::tasks_overlay::TasksOverlay;
-use crate::tui::dialogs::McpApprovalDialogState;
 use crate::tui::mcp_view::{McpServerView, McpToolView, McpViewState, McpViewStatus};
+use crate::tui::model_picker::{EffortLevel, ModelPickerState};
 use crate::tui::notifications::{NotificationKind, NotificationQueue};
 use crate::tui::overlays::{
     GlobalSearchState, HelpEntry, HelpOverlay, HistorySearchOverlay, MessageSelectorOverlay,
@@ -20,19 +27,15 @@ use crate::tui::overlays::{
 use crate::tui::plugin_views::PluginHintBanner;
 use crate::tui::prompt_input::{InputMode, PromptInputState, VimMode};
 use crate::tui::render;
+use crate::tui::session_browser::SessionBrowserState;
 use crate::tui::settings_screen::SettingsScreen;
 use crate::tui::stats_dialog::StatsDialogState;
+use crate::tui::tasks_overlay::TasksOverlay;
 use crate::tui::theme_screen::ThemeScreen;
-use crate::tui::{agents_view::{AgentInfo, AgentStatus, AgentsMenuState, AgentsRoute}, diff_viewer::DiffPane};
-use crate::tui::adapter_types::config::{Config, Settings, Theme};
-use crate::tui::adapter_types::cost::CostTracker;
-use crate::tui::adapter_types::file_history::FileHistory;
-use crate::tui::adapter_types::{sample_completion_verb, sample_spinner_verb};
-use crate::tui::adapter_types::keybindings::{
-    KeyContext, KeybindingResolver, KeybindingResult, ParsedKeystroke, UserKeybindings,
+use crate::tui::{
+    agents_view::{AgentInfo, AgentStatus, AgentsMenuState, AgentsRoute},
+    diff_viewer::DiffPane,
 };
-use crate::tui::adapter_types::types::{ContentBlock, Message, Role};
-use crate::tui::adapter_types::query::QueryEvent;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
 use ratatui::backend::CrosstermBackend;
 use ratatui::style::Color;
@@ -57,7 +60,7 @@ const PROMPT_SLASH_COMMANDS: &[(&str, &str)] = &[
     ("diff", "Inspect the current git diff"),
     ("doctor", "Run diagnostics"),
     ("effort", "Set effort level (low/medium/high/max)"),
-    ("exit", "Quit Claurst"),
+    ("exit", "Quit Operant"),
     ("export", "Export conversation"),
     ("fast", "Toggle fast mode"),
     ("feedback", "Open session feedback survey"),
@@ -66,15 +69,24 @@ const PROMPT_SLASH_COMMANDS: &[(&str, &str)] = &[
     ("heapdump", "Show process memory and diagnostic information"),
     ("help", "Show help"),
     ("hooks", "Browse configured hooks (read-only)"),
-    ("import-config", "Import CLAUDE.md and settings.json from ~/.claude"),
+    (
+        "import-config",
+        "Import CLAUDE.md and settings.json from ~/.claude",
+    ),
     ("init", "Initialize AGENTS.md for this project"),
-    ("insights", "Generate a session analysis report with conversation statistics"),
-    ("install-slack-app", "Install the Claurst Slack integration"),
+    (
+        "insights",
+        "Generate a session analysis report with conversation statistics",
+    ),
+    ("install-slack-app", "Install the Operant Slack integration"),
     ("keybindings", "Show keybinding configuration"),
     ("links", "Open URLs from this session in your browser"),
-    ("login", "Log in to Claurst"),
-    ("logout", "Log out of Claurst"),
-    ("managed-agents", "Configure manager-executor managed agent system"),
+    ("login", "Log in to Operant"),
+    ("logout", "Log out of Operant"),
+    (
+        "managed-agents",
+        "Configure manager-executor managed agent system",
+    ),
     ("mcp", "Browse configured MCP servers"),
     ("memory", "Browse and open AGENTS.md memory files"),
     ("model", "Change the AI model"),
@@ -84,7 +96,7 @@ const PROMPT_SLASH_COMMANDS: &[(&str, &str)] = &[
     ("caveman", "Caveman speech mode — save big token"),
     ("rocky", "Rocky speech mode — amaze amaze amaze"),
     ("normal", "Deactivate speech mode"),
-    ("quit", "Exit Claurst"),
+    ("quit", "Exit Operant"),
     ("refresh", "Clear saved provider auth and model caches"),
     ("rename", "Rename this session"),
     ("resume", "Resume a previous session"),
@@ -92,22 +104,44 @@ const PROMPT_SLASH_COMMANDS: &[(&str, &str)] = &[
     ("rewind", "Rewind to an earlier turn"),
     ("session", "Browse and manage sessions"),
     ("settings", "Open settings"),
-    ("share", "Upload the current session as a secret gist and get a shareable URL"),
+    (
+        "share",
+        "Upload the current session as a secret gist and get a shareable URL",
+    ),
     ("stats", "Open token and cost stats"),
     ("survey", "Open session feedback survey"),
     ("theme", "Open the theme picker"),
-    ("ultrareview", "Run an exhaustive multi-dimensional code review"),
-    ("update", "Check for updates and upgrade to the latest version"),
-    ("upgrade", "Check for updates and upgrade to the latest version"),
+    (
+        "ultrareview",
+        "Run an exhaustive multi-dimensional code review",
+    ),
+    (
+        "update",
+        "Check for updates and upgrade to the latest version",
+    ),
+    (
+        "upgrade",
+        "Check for updates and upgrade to the latest version",
+    ),
     ("vim", "Toggle vim keybindings"),
     ("voice", "Toggle voice input mode"),
+    (
+        "tui-doctor",
+        "Run TUI adapter diagnostics and show debug overlay",
+    ),
+    ("debug", "Toggle debug overlay visibility"),
 ];
 
 fn help_command_category(name: &str) -> &'static str {
     match name {
-        "connect" | "model" | "providers" | "refresh" | "fast" | "effort" | "voice" => "Model & Provider",
-        "changes" | "diff" | "review" | "rewind" | "export" | "copy" | "share" | "links" => "Review & History",
-        "stats" | "cost" | "context" | "insights" | "heapdump" | "doctor" => "Diagnostics",
+        "connect" | "model" | "providers" | "refresh" | "fast" | "effort" | "voice" => {
+            "Model & Provider"
+        }
+        "changes" | "diff" | "review" | "rewind" | "export" | "copy" | "share" | "links" => {
+            "Review & History"
+        }
+        "stats" | "cost" | "context" | "insights" | "heapdump" | "doctor" | "tui-doctor"
+        | "debug" => "Diagnostics",
         "config" | "settings" | "theme" | "keybindings" | "hooks" | "mcp" | "import-config" => {
             "Workspace"
         }
@@ -214,7 +248,6 @@ fn get_url_for_provider(id: &str) -> &'static str {
     }
 }
 
-
 fn import_config_picker_items() -> Vec<SelectItem> {
     vec![
         SelectItem {
@@ -243,60 +276,384 @@ fn import_config_picker_items() -> Vec<SelectItem> {
 
 fn provider_picker_items() -> Vec<SelectItem> {
     vec![
-        SelectItem { id: "free".into(), title: "Free Mode".into(), description: "OpenCode Zen → OpenRouter free fallback (no spend)".into(), category: "Popular".into(), badge: Some("FREE".into()) },
-        SelectItem { id: "openai".into(), title: "OpenAI".into(), description: "(API key)".into(), category: "Popular".into(), badge: None },
-        SelectItem { id: "openai-codex".into(), title: "OpenAI Codex".into(), description: "(ChatGPT Plus/Pro — browser login)".into(), category: "Popular".into(), badge: None },
-        SelectItem { id: "github-copilot".into(), title: "GitHub Copilot".into(), description: "(GitHub subscription or token)".into(), category: "Popular".into(), badge: None },
-        SelectItem { id: "google".into(), title: "Google".into(), description: "(API key)".into(), category: "Popular".into(), badge: None },
-        SelectItem { id: "anthropic".into(), title: "Anthropic".into(), description: "(API key)".into(), category: "Popular".into(), badge: None },
-        SelectItem { id: "custom-openai".into(), title: "Custom OpenAI-Compatible".into(), description: "Custom URL + API key".into(), category: "Advanced".into(), badge: None },
-        SelectItem { id: "openrouter".into(), title: "OpenRouter".into(), description: "100+ models with one key".into(), category: "Popular".into(), badge: None },
-        SelectItem { id: "vercel".into(), title: "Vercel AI Gateway".into(), description: "Gateway for AI SDK models".into(), category: "Popular".into(), badge: None },
-        SelectItem { id: "groq".into(), title: "Groq".into(), description: "Fast hosted inference".into(), category: "Popular".into(), badge: Some("FREE".into()) },
-        SelectItem { id: "ollama".into(), title: "Ollama".into(), description: "Local inference + cloud models".into(), category: "Popular".into(), badge: None },
-        SelectItem { id: "zai".into(), title: "Z.AI".into(), description: "GLM-5.1 / GLM-5 / GLM-4.7 Coding Plan".into(), category: "Popular".into(), badge: None },
-        SelectItem { id: "opencode-go".into(), title: "OpenCode Go".into(), description: "$10/mo flat-rate · Kimi · DeepSeek · GLM · MiniMax".into(), category: "Popular".into(), badge: None },
-        SelectItem { id: "opencode-zen".into(), title: "OpenCode Zen".into(), description: "Free models + paid · Nemotron · Ring · MiniMax · DeepSeek".into(), category: "Popular".into(), badge: Some("FREE".into()) },
-        SelectItem { id: "synthetic".into(), title: "Synthetic.dev".into(), description: "Hosted open weights".into(), category: "Popular".into(), badge: None },
-        SelectItem { id: "routing".into(), title: "routing.run".into(), description: "Hosted open weights · DeepSeek · Llama · Mixtral · Qwen".into(), category: "Popular".into(), badge: None },
-        SelectItem { id: "neuralwatt".into(), title: "NeuralWatt".into(), description: "Hosted open weights - energy-efficient".into(), category: "Popular".into(), badge: None },
-        SelectItem { id: "cerebras".into(), title: "Cerebras".into(), description: "Fast hosted inference".into(), category: "Other".into(), badge: Some("FREE".into()) },
-        SelectItem { id: "sambanova".into(), title: "SambaNova".into(), description: "Fast hosted inference".into(), category: "Other".into(), badge: Some("FREE".into()) },
-        SelectItem { id: "lmstudio".into(), title: "LM Studio".into(), description: "Local model server".into(), category: "Other".into(), badge: Some("LOCAL".into()) },
-        SelectItem { id: "llamacpp".into(), title: "llama.cpp".into(), description: "Local inference server".into(), category: "Other".into(), badge: Some("LOCAL".into()) },
-        SelectItem { id: "deepseek".into(), title: "DeepSeek".into(), description: "Reasoning and coding models".into(), category: "Other".into(), badge: None },
-        SelectItem { id: "mistral".into(), title: "Mistral".into(), description: "Hosted Mistral models".into(), category: "Other".into(), badge: None },
-        SelectItem { id: "togetherai".into(), title: "Together AI".into(), description: "Open model hosting".into(), category: "Other".into(), badge: None },
-        SelectItem { id: "perplexity".into(), title: "Perplexity".into(), description: "Search-augmented models".into(), category: "Other".into(), badge: None },
-        SelectItem { id: "cohere".into(), title: "Cohere".into(), description: "Command models".into(), category: "Other".into(), badge: None },
-        SelectItem { id: "xai".into(), title: "xAI".into(), description: "Grok models".into(), category: "Other".into(), badge: None },
-        SelectItem { id: "deepinfra".into(), title: "DeepInfra".into(), description: "Hosted open models".into(), category: "Other".into(), badge: None },
-        SelectItem { id: "azure".into(), title: "Azure OpenAI".into(), description: "Enterprise OpenAI deployments".into(), category: "Other".into(), badge: None },
-        SelectItem { id: "amazon-bedrock".into(), title: "AWS Bedrock".into(), description: "Enterprise foundation models".into(), category: "Other".into(), badge: None },
-        SelectItem { id: "google-vertex".into(), title: "Google Vertex AI".into(), description: "Enterprise Google models".into(), category: "Other".into(), badge: None },
-        SelectItem { id: "sap-ai-core".into(), title: "SAP AI Core".into(), description: "Enterprise AI platform".into(), category: "Other".into(), badge: None },
-        SelectItem { id: "gitlab".into(), title: "GitLab Duo".into(), description: "AI in GitLab".into(), category: "Other".into(), badge: None },
-        SelectItem { id: "cloudflare-ai-gateway".into(), title: "Cloudflare AI Gateway".into(), description: "Gateway for multiple providers".into(), category: "Other".into(), badge: None },
-        SelectItem { id: "cloudflare-workers-ai".into(), title: "Cloudflare Workers AI".into(), description: "Edge AI inference".into(), category: "Other".into(), badge: None },
-        SelectItem { id: "helicone".into(), title: "Helicone".into(), description: "AI gateway and observability".into(), category: "Other".into(), badge: None },
-        SelectItem { id: "huggingface".into(), title: "Hugging Face".into(), description: "Hosted community models".into(), category: "Other".into(), badge: None },
-        SelectItem { id: "nvidia".into(), title: "NVIDIA".into(), description: "Hosted NVIDIA models".into(), category: "Other".into(), badge: None },
-        SelectItem { id: "alibaba".into(), title: "Alibaba".into(), description: "Qwen and hosted models".into(), category: "Other".into(), badge: None },
-        SelectItem { id: "venice".into(), title: "Venice AI".into(), description: "Privacy-first AI".into(), category: "Other".into(), badge: None },
-        SelectItem { id: "moonshotai".into(), title: "Moonshot AI".into(), description: "Hosted Moonshot models".into(), category: "Other".into(), badge: None },
-        SelectItem { id: "zhipuai".into(), title: "Zhipu AI".into(), description: "Hosted GLM models".into(), category: "Other".into(), badge: None },
-        SelectItem { id: "siliconflow".into(), title: "SiliconFlow".into(), description: "Hosted open models".into(), category: "Other".into(), badge: None },
-        SelectItem { id: "nebius".into(), title: "Nebius".into(), description: "Cloud inference".into(), category: "Other".into(), badge: None },
-        SelectItem { id: "novita".into(), title: "Novita".into(), description: "Cloud inference".into(), category: "Other".into(), badge: None },
-        SelectItem { id: "minimax".into(), title: "MiniMax".into(), description: "Anthropic-compatible (M2.7)".into(), category: "Other".into(), badge: None },
-        SelectItem { id: "ovhcloud".into(), title: "OVHcloud".into(), description: "EU-hosted AI".into(), category: "Other".into(), badge: None },
-        SelectItem { id: "scaleway".into(), title: "Scaleway".into(), description: "EU cloud AI".into(), category: "Other".into(), badge: None },
-        SelectItem { id: "vultr".into(), title: "Vultr".into(), description: "Cloud inference".into(), category: "Other".into(), badge: None },
-        SelectItem { id: "baseten".into(), title: "Baseten".into(), description: "Model serving".into(), category: "Other".into(), badge: None },
-        SelectItem { id: "friendli".into(), title: "Friendli".into(), description: "Serverless inference".into(), category: "Other".into(), badge: None },
-        SelectItem { id: "upstage".into(), title: "Upstage".into(), description: "Hosted Upstage models".into(), category: "Other".into(), badge: None },
-        SelectItem { id: "stepfun".into(), title: "StepFun".into(), description: "Hosted reasoning models".into(), category: "Other".into(), badge: None },
-        SelectItem { id: "fireworks".into(), title: "Fireworks AI".into(), description: "Fast inference".into(), category: "Other".into(), badge: None },
+        SelectItem {
+            id: "free".into(),
+            title: "Free Mode".into(),
+            description: "OpenCode Zen → OpenRouter free fallback (no spend)".into(),
+            category: "Popular".into(),
+            badge: Some("FREE".into()),
+        },
+        SelectItem {
+            id: "openai".into(),
+            title: "OpenAI".into(),
+            description: "(API key)".into(),
+            category: "Popular".into(),
+            badge: None,
+        },
+        SelectItem {
+            id: "openai-codex".into(),
+            title: "OpenAI Codex".into(),
+            description: "(ChatGPT Plus/Pro — browser login)".into(),
+            category: "Popular".into(),
+            badge: None,
+        },
+        SelectItem {
+            id: "github-copilot".into(),
+            title: "GitHub Copilot".into(),
+            description: "(GitHub subscription or token)".into(),
+            category: "Popular".into(),
+            badge: None,
+        },
+        SelectItem {
+            id: "google".into(),
+            title: "Google".into(),
+            description: "(API key)".into(),
+            category: "Popular".into(),
+            badge: None,
+        },
+        SelectItem {
+            id: "anthropic".into(),
+            title: "Anthropic".into(),
+            description: "(API key)".into(),
+            category: "Popular".into(),
+            badge: None,
+        },
+        SelectItem {
+            id: "custom-openai".into(),
+            title: "Custom OpenAI-Compatible".into(),
+            description: "Custom URL + API key".into(),
+            category: "Advanced".into(),
+            badge: None,
+        },
+        SelectItem {
+            id: "openrouter".into(),
+            title: "OpenRouter".into(),
+            description: "100+ models with one key".into(),
+            category: "Popular".into(),
+            badge: None,
+        },
+        SelectItem {
+            id: "vercel".into(),
+            title: "Vercel AI Gateway".into(),
+            description: "Gateway for AI SDK models".into(),
+            category: "Popular".into(),
+            badge: None,
+        },
+        SelectItem {
+            id: "groq".into(),
+            title: "Groq".into(),
+            description: "Fast hosted inference".into(),
+            category: "Popular".into(),
+            badge: Some("FREE".into()),
+        },
+        SelectItem {
+            id: "ollama".into(),
+            title: "Ollama".into(),
+            description: "Local inference + cloud models".into(),
+            category: "Popular".into(),
+            badge: None,
+        },
+        SelectItem {
+            id: "zai".into(),
+            title: "Z.AI".into(),
+            description: "GLM-5.1 / GLM-5 / GLM-4.7 Coding Plan".into(),
+            category: "Popular".into(),
+            badge: None,
+        },
+        SelectItem {
+            id: "opencode-go".into(),
+            title: "OpenCode Go".into(),
+            description: "$10/mo flat-rate · Kimi · DeepSeek · GLM · MiniMax".into(),
+            category: "Popular".into(),
+            badge: None,
+        },
+        SelectItem {
+            id: "opencode-zen".into(),
+            title: "OpenCode Zen".into(),
+            description: "Free models + paid · Nemotron · Ring · MiniMax · DeepSeek".into(),
+            category: "Popular".into(),
+            badge: Some("FREE".into()),
+        },
+        SelectItem {
+            id: "synthetic".into(),
+            title: "Synthetic.dev".into(),
+            description: "Hosted open weights".into(),
+            category: "Popular".into(),
+            badge: None,
+        },
+        SelectItem {
+            id: "routing".into(),
+            title: "routing.run".into(),
+            description: "Hosted open weights · DeepSeek · Llama · Mixtral · Qwen".into(),
+            category: "Popular".into(),
+            badge: None,
+        },
+        SelectItem {
+            id: "neuralwatt".into(),
+            title: "NeuralWatt".into(),
+            description: "Hosted open weights - energy-efficient".into(),
+            category: "Popular".into(),
+            badge: None,
+        },
+        SelectItem {
+            id: "cerebras".into(),
+            title: "Cerebras".into(),
+            description: "Fast hosted inference".into(),
+            category: "Other".into(),
+            badge: Some("FREE".into()),
+        },
+        SelectItem {
+            id: "sambanova".into(),
+            title: "SambaNova".into(),
+            description: "Fast hosted inference".into(),
+            category: "Other".into(),
+            badge: Some("FREE".into()),
+        },
+        SelectItem {
+            id: "lmstudio".into(),
+            title: "LM Studio".into(),
+            description: "Local model server".into(),
+            category: "Other".into(),
+            badge: Some("LOCAL".into()),
+        },
+        SelectItem {
+            id: "llamacpp".into(),
+            title: "llama.cpp".into(),
+            description: "Local inference server".into(),
+            category: "Other".into(),
+            badge: Some("LOCAL".into()),
+        },
+        SelectItem {
+            id: "deepseek".into(),
+            title: "DeepSeek".into(),
+            description: "Reasoning and coding models".into(),
+            category: "Other".into(),
+            badge: None,
+        },
+        SelectItem {
+            id: "mistral".into(),
+            title: "Mistral".into(),
+            description: "Hosted Mistral models".into(),
+            category: "Other".into(),
+            badge: None,
+        },
+        SelectItem {
+            id: "togetherai".into(),
+            title: "Together AI".into(),
+            description: "Open model hosting".into(),
+            category: "Other".into(),
+            badge: None,
+        },
+        SelectItem {
+            id: "perplexity".into(),
+            title: "Perplexity".into(),
+            description: "Search-augmented models".into(),
+            category: "Other".into(),
+            badge: None,
+        },
+        SelectItem {
+            id: "cohere".into(),
+            title: "Cohere".into(),
+            description: "Command models".into(),
+            category: "Other".into(),
+            badge: None,
+        },
+        SelectItem {
+            id: "xai".into(),
+            title: "xAI".into(),
+            description: "Grok models".into(),
+            category: "Other".into(),
+            badge: None,
+        },
+        SelectItem {
+            id: "deepinfra".into(),
+            title: "DeepInfra".into(),
+            description: "Hosted open models".into(),
+            category: "Other".into(),
+            badge: None,
+        },
+        SelectItem {
+            id: "azure".into(),
+            title: "Azure OpenAI".into(),
+            description: "Enterprise OpenAI deployments".into(),
+            category: "Other".into(),
+            badge: None,
+        },
+        SelectItem {
+            id: "amazon-bedrock".into(),
+            title: "AWS Bedrock".into(),
+            description: "Enterprise foundation models".into(),
+            category: "Other".into(),
+            badge: None,
+        },
+        SelectItem {
+            id: "google-vertex".into(),
+            title: "Google Vertex AI".into(),
+            description: "Enterprise Google models".into(),
+            category: "Other".into(),
+            badge: None,
+        },
+        SelectItem {
+            id: "sap-ai-core".into(),
+            title: "SAP AI Core".into(),
+            description: "Enterprise AI platform".into(),
+            category: "Other".into(),
+            badge: None,
+        },
+        SelectItem {
+            id: "gitlab".into(),
+            title: "GitLab Duo".into(),
+            description: "AI in GitLab".into(),
+            category: "Other".into(),
+            badge: None,
+        },
+        SelectItem {
+            id: "cloudflare-ai-gateway".into(),
+            title: "Cloudflare AI Gateway".into(),
+            description: "Gateway for multiple providers".into(),
+            category: "Other".into(),
+            badge: None,
+        },
+        SelectItem {
+            id: "cloudflare-workers-ai".into(),
+            title: "Cloudflare Workers AI".into(),
+            description: "Edge AI inference".into(),
+            category: "Other".into(),
+            badge: None,
+        },
+        SelectItem {
+            id: "helicone".into(),
+            title: "Helicone".into(),
+            description: "AI gateway and observability".into(),
+            category: "Other".into(),
+            badge: None,
+        },
+        SelectItem {
+            id: "huggingface".into(),
+            title: "Hugging Face".into(),
+            description: "Hosted community models".into(),
+            category: "Other".into(),
+            badge: None,
+        },
+        SelectItem {
+            id: "nvidia".into(),
+            title: "NVIDIA".into(),
+            description: "Hosted NVIDIA models".into(),
+            category: "Other".into(),
+            badge: None,
+        },
+        SelectItem {
+            id: "alibaba".into(),
+            title: "Alibaba".into(),
+            description: "Qwen and hosted models".into(),
+            category: "Other".into(),
+            badge: None,
+        },
+        SelectItem {
+            id: "venice".into(),
+            title: "Venice AI".into(),
+            description: "Privacy-first AI".into(),
+            category: "Other".into(),
+            badge: None,
+        },
+        SelectItem {
+            id: "moonshotai".into(),
+            title: "Moonshot AI".into(),
+            description: "Hosted Moonshot models".into(),
+            category: "Other".into(),
+            badge: None,
+        },
+        SelectItem {
+            id: "zhipuai".into(),
+            title: "Zhipu AI".into(),
+            description: "Hosted GLM models".into(),
+            category: "Other".into(),
+            badge: None,
+        },
+        SelectItem {
+            id: "siliconflow".into(),
+            title: "SiliconFlow".into(),
+            description: "Hosted open models".into(),
+            category: "Other".into(),
+            badge: None,
+        },
+        SelectItem {
+            id: "nebius".into(),
+            title: "Nebius".into(),
+            description: "Cloud inference".into(),
+            category: "Other".into(),
+            badge: None,
+        },
+        SelectItem {
+            id: "novita".into(),
+            title: "Novita".into(),
+            description: "Cloud inference".into(),
+            category: "Other".into(),
+            badge: None,
+        },
+        SelectItem {
+            id: "minimax".into(),
+            title: "MiniMax".into(),
+            description: "Anthropic-compatible (M2.7)".into(),
+            category: "Other".into(),
+            badge: None,
+        },
+        SelectItem {
+            id: "ovhcloud".into(),
+            title: "OVHcloud".into(),
+            description: "EU-hosted AI".into(),
+            category: "Other".into(),
+            badge: None,
+        },
+        SelectItem {
+            id: "scaleway".into(),
+            title: "Scaleway".into(),
+            description: "EU cloud AI".into(),
+            category: "Other".into(),
+            badge: None,
+        },
+        SelectItem {
+            id: "vultr".into(),
+            title: "Vultr".into(),
+            description: "Cloud inference".into(),
+            category: "Other".into(),
+            badge: None,
+        },
+        SelectItem {
+            id: "baseten".into(),
+            title: "Baseten".into(),
+            description: "Model serving".into(),
+            category: "Other".into(),
+            badge: None,
+        },
+        SelectItem {
+            id: "friendli".into(),
+            title: "Friendli".into(),
+            description: "Serverless inference".into(),
+            category: "Other".into(),
+            badge: None,
+        },
+        SelectItem {
+            id: "upstage".into(),
+            title: "Upstage".into(),
+            description: "Hosted Upstage models".into(),
+            category: "Other".into(),
+            badge: None,
+        },
+        SelectItem {
+            id: "stepfun".into(),
+            title: "StepFun".into(),
+            description: "Hosted reasoning models".into(),
+            category: "Other".into(),
+            badge: None,
+        },
+        SelectItem {
+            id: "fireworks".into(),
+            title: "Fireworks AI".into(),
+            description: "Fast inference".into(),
+            category: "Other".into(),
+            badge: None,
+        },
     ]
 }
 
@@ -332,7 +689,10 @@ pub enum DisplayMessage {
     /// A real conversation turn.
     Conversation(Message),
     /// An injected system notice (e.g. compact boundary).
-    System { text: String, style: SystemMessageStyle },
+    System {
+        text: String,
+        style: SystemMessageStyle,
+    },
 }
 
 /// Context menu state: position and currently selected item index.
@@ -523,7 +883,11 @@ pub fn try_copy_to_clipboard(text: &str) -> bool {
     #[cfg(target_os = "linux")]
     {
         use std::io::Write;
-        for cmd in &["wl-copy", "xclip -selection clipboard", "xsel --clipboard --input"] {
+        for cmd in &[
+            "wl-copy",
+            "xclip -selection clipboard",
+            "xsel --clipboard --input",
+        ] {
             let parts: Vec<&str> = cmd.split_whitespace().collect();
             if let Some((prog, args)) = parts.split_first() {
                 if let Ok(mut child) = std::process::Command::new(prog)
@@ -565,20 +929,38 @@ fn layout_to_latin(c: char) -> String {
     let lower = c.to_lowercase().next().unwrap_or(c);
     let mapped: Option<char> = match lower {
         // Row 1
-        'й' => Some('q'), 'ц' => Some('w'), 'у' => Some('e'),
-        'к' => Some('r'), 'е' => Some('t'), 'н' => Some('y'),
-        'г' => Some('u'), 'ш' => Some('i'), 'щ' => Some('o'),
+        'й' => Some('q'),
+        'ц' => Some('w'),
+        'у' => Some('e'),
+        'к' => Some('r'),
+        'е' => Some('t'),
+        'н' => Some('y'),
+        'г' => Some('u'),
+        'ш' => Some('i'),
+        'щ' => Some('o'),
         'з' => Some('p'),
         // Row 2
-        'ф' => Some('a'), 'ы' => Some('s'), 'в' => Some('d'),
-        'а' => Some('f'), 'п' => Some('g'), 'р' => Some('h'),
-        'о' => Some('j'), 'л' => Some('k'), 'д' => Some('l'),
+        'ф' => Some('a'),
+        'ы' => Some('s'),
+        'в' => Some('d'),
+        'а' => Some('f'),
+        'п' => Some('g'),
+        'р' => Some('h'),
+        'о' => Some('j'),
+        'л' => Some('k'),
+        'д' => Some('l'),
         // Row 3
-        'я' => Some('z'), 'ч' => Some('x'), 'с' => Some('c'),
-        'м' => Some('v'), 'и' => Some('b'), 'т' => Some('n'),
+        'я' => Some('z'),
+        'ч' => Some('x'),
+        'с' => Some('c'),
+        'м' => Some('v'),
+        'и' => Some('b'),
+        'т' => Some('n'),
         'ь' => Some('m'),
         // Ukrainian-specific letters on standard positions
-        'і' => Some('s'), 'ї' => Some(']'), 'є' => Some('\''),
+        'і' => Some('s'),
+        'ї' => Some(']'),
+        'є' => Some('\''),
         _ => None,
     };
     mapped.unwrap_or(lower).to_string()
@@ -634,23 +1016,23 @@ fn normalize_char_with_shift(c: char, modifiers: KeyModifiers) -> char {
 
 fn key_event_to_keystroke(key: &KeyEvent) -> Option<ParsedKeystroke> {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-    let alt  = key.modifiers.contains(KeyModifiers::ALT);
+    let alt = key.modifiers.contains(KeyModifiers::ALT);
 
     let normalized_key = match key.code {
         KeyCode::Backspace => "backspace".to_string(),
-        KeyCode::Delete    => "delete".to_string(),
-        KeyCode::Down      => "down".to_string(),
-        KeyCode::End       => "end".to_string(),
-        KeyCode::Enter     => "enter".to_string(),
-        KeyCode::Esc       => "escape".to_string(),
-        KeyCode::Home      => "home".to_string(),
-        KeyCode::Left      => "left".to_string(),
-        KeyCode::PageDown  => "pagedown".to_string(),
-        KeyCode::PageUp    => "pageup".to_string(),
-        KeyCode::Right     => "right".to_string(),
-        KeyCode::Tab       => "tab".to_string(),
-        KeyCode::Up        => "up".to_string(),
-        KeyCode::BackTab   => "tab".to_string(),
+        KeyCode::Delete => "delete".to_string(),
+        KeyCode::Down => "down".to_string(),
+        KeyCode::End => "end".to_string(),
+        KeyCode::Enter => "enter".to_string(),
+        KeyCode::Esc => "escape".to_string(),
+        KeyCode::Home => "home".to_string(),
+        KeyCode::Left => "left".to_string(),
+        KeyCode::PageDown => "pagedown".to_string(),
+        KeyCode::PageUp => "pageup".to_string(),
+        KeyCode::Right => "right".to_string(),
+        KeyCode::Tab => "tab".to_string(),
+        KeyCode::Up => "up".to_string(),
+        KeyCode::BackTab => "tab".to_string(),
         KeyCode::Char(' ') => "space".to_string(),
         KeyCode::Char(c) => {
             // For modifier-key combos (Ctrl/Alt + letter), normalize to the
@@ -690,6 +1072,48 @@ pub enum FocusTarget {
 }
 
 // ---------------------------------------------------------------------------
+/// Streaming-related state (displayed during active streaming).
+pub struct StreamingState {
+}
+
+impl StreamingState {
+    pub fn new() -> Self {
+        Self {
+        }
+    }
+}
+
+/// Overlay / dialog state — all screen-level UI surfaces.
+pub struct OverlayState {
+    pub memory_update_notification: crate::tui::memory_update_notification::MemoryUpdateNotificationState,
+    pub bypass_permissions_dialog: crate::tui::bypass_permissions_dialog::BypassPermissionsDialogState,
+}
+
+impl OverlayState {
+    pub fn new() -> Self {
+        Self {
+            invalid_config_dialog: crate::tui::invalid_config_dialog::InvalidConfigDialogState::new(),
+            memory_update_notification: crate::tui::memory_update_notification::MemoryUpdateNotificationState::new(),
+            bypass_permissions_dialog: crate::tui::bypass_permissions_dialog::BypassPermissionsDialogState::new(),
+            file_injection_dialog: crate::tui::file_injection_dialog::FileInjectionDialogState::new(),
+            custom_provider_dialog: crate::tui::custom_provider_dialog::CustomProviderDialogState::new(),
+            import_config_picker: DialogSelectState::new("Import config", import_config_picker_items()),
+        }
+    }
+}
+
+/// Permission-request dialog state.
+pub struct PermissionDialog {
+}
+
+impl PermissionDialog {
+    pub fn new() -> Self {
+        Self {
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // App struct
 // ---------------------------------------------------------------------------
 
@@ -722,6 +1146,8 @@ pub struct App {
     // Extended state
     pub tool_use_blocks: Vec<ToolUseBlock>,
     pub permission_request: Option<PermissionRequest>,
+    pub permission_response_tx:
+        Option<tokio::sync::oneshot::Sender<operant_core::agent::ToolPermissionResponse>>,
     pub frame_count: u64,
     pub token_count: u32,
     /// Maximum token budget (from env var or model context window) — P2 feature flag
@@ -751,24 +1177,26 @@ pub struct App {
     pub history_search: Option<HistorySearch>,
     pub keybindings: KeybindingResolver,
 
+    // Grouped sub-structs
+    pub streaming: StreamingState,
+    pub overlays: OverlayState,
+    pub permission: PermissionDialog,
+
     // Cursor position within input (byte offset)
     pub cursor_pos: usize,
 
     // ---- Scrollback / auto-scroll -----------------------------------------
-
     /// When `true`, the message pane follows the latest messages automatically.
     pub auto_scroll: bool,
     /// Count of messages that arrived while the user was scrolled up.
     pub new_messages_while_scrolled: usize,
 
     // ---- Token warning tracking -------------------------------------------
-
     /// Which threshold (0 = none, 80, 95, 100) was last notified so we only
     /// show each banner once.
     pub token_warning_threshold_shown: u8,
 
     // ---- Session timing ---------------------------------------------------
-
     /// Instant the session started (used for elapsed-time in the status bar).
     pub session_start: std::time::Instant,
     /// Current Rustle pose for rendering (updated each frame).
@@ -793,7 +1221,6 @@ pub struct App {
     pub transcript_version: Cell<u64>,
 
     // ---- New overlay / notification fields --------------------------------
-
     /// Full-screen help overlay (? / F1).
     pub help_overlay: HelpOverlay,
     /// Ctrl+R history search overlay.
@@ -828,7 +1255,6 @@ pub struct App {
     pub current_turn: Option<Arc<std::sync::atomic::AtomicUsize>>,
 
     // ---- Visual mode indicators -------------------------------------------
-
     /// Plan mode — input border turns blue, [PLAN] shown in status bar.
     pub plan_mode: bool,
     /// "While you were away" summary text shown on the welcome screen.
@@ -837,7 +1263,6 @@ pub struct App {
     pub stall_start: Option<std::time::Instant>,
 
     // ---- Settings / theme / privacy screens --------------------------------
-
     /// Full-screen tabbed settings screen (/config, /settings).
     pub settings_screen: SettingsScreen,
     /// Theme picker overlay (/theme).
@@ -865,7 +1290,6 @@ pub struct App {
     /// Startup error dialog for malformed settings.json or AGENTS.md.
     pub invalid_config_dialog: crate::tui::invalid_config_dialog::InvalidConfigDialogState,
     /// Memory update notification banner.
-    pub memory_update_notification: crate::tui::memory_update_notification::MemoryUpdateNotificationState,
     /// MCP elicitation dialog (form requested by an MCP server).
     pub elicitation: crate::tui::elicitation_dialog::ElicitationDialogState,
     /// Model picker overlay (/model command).
@@ -887,7 +1311,6 @@ pub struct App {
     /// Bypass-permissions startup confirmation dialog.
     /// Shown at startup when --dangerously-skip-permissions was passed.
     /// User must explicitly accept or the session exits.
-    pub bypass_permissions_dialog: crate::tui::bypass_permissions_dialog::BypassPermissionsDialogState,
     /// Whether the bypass-permissions dialog has been shown this session.
     pub bypass_permissions_dialog_shown: bool,
     /// File injection warning dialog.
@@ -943,8 +1366,8 @@ pub struct App {
     pub import_config_dialog: ImportConfigDialogState,
     /// Ctrl+K command palette overlay.
     pub command_palette: DialogSelectState,
-    /// Whether Claurst was launched from the user's home directory.
-    /// Shown as a startup notice: "Note: You have launched Claurst in your home directory…"
+    /// Whether Operant was launched from the user's home directory.
+    /// Shown as a startup notice: "Note: You have launched Operant in your home directory…"
     pub home_dir_warning: bool,
     /// Output style: "auto" | "stream" | "verbose".
     pub output_style: String,
@@ -972,13 +1395,13 @@ pub struct App {
     pub auto_compact_running: bool,
 
     // ---- Voice hold-to-talk ------------------------------------------------
-
     /// The global voice recorder, Some when voice is enabled in config.
     pub voice_recorder: Option<Arc<Mutex<crate::tui::adapter_types::voice::VoiceRecorder>>>,
     /// True while recording is active (Alt+V toggled on).
     pub voice_recording: bool,
     /// Receiver for VoiceEvent messages produced by the recorder task.
-    pub voice_event_rx: Option<tokio::sync::mpsc::Receiver<crate::tui::adapter_types::voice::VoiceEvent>>,
+    pub voice_event_rx:
+        Option<tokio::sync::mpsc::Receiver<crate::tui::adapter_types::voice::VoiceEvent>>,
     /// A single key event that was drained from the queue during paste-burst
     /// detection but wasn't part of the burst (e.g. a modifier key that stopped
     /// the burst). Replayed at the top of the next loop iteration.
@@ -990,13 +1413,13 @@ pub struct App {
         Option<tokio::sync::mpsc::Receiver<Result<Vec<crate::tui::model_picker::ModelEntry>, ()>>>,
     /// Receiver for `UserQuestionEvent`s produced by the AskUserQuestion tool.
     /// When a question arrives, `ask_user_dialog` is populated and shown.
-    pub user_question_rx:
-        Option<tokio::sync::mpsc::UnboundedReceiver<crate::tui::adapter_types::tools::UserQuestionEvent>>,
+    pub user_question_rx: Option<
+        tokio::sync::mpsc::UnboundedReceiver<crate::tui::adapter_types::tools::UserQuestionEvent>,
+    >,
     /// State for the model-initiated ask-user question dialog.
     pub ask_user_dialog: crate::tui::ask_user_dialog::AskUserDialogState,
 
     // ---- Context window & rate limit info ----------------------------------
-
     /// Total context window size for the current model (tokens).
     pub context_window_size: u64,
     /// How many tokens are currently used in the context window.
@@ -1084,6 +1507,14 @@ pub struct App {
     pub last_exit_key_warning: Option<std::time::Instant>,
     /// Which exit key ('c' or 'd') started the current confirmation sequence.
     pub exit_key_sequence_start: Option<char>,
+    /// When true, render a debug overlay in the bottom-right corner.
+    pub show_debug_overlay: bool,
+    /// Debug tracing state for the TUI adapter wiring.
+    pub tui_debug_state: Option<crate::tui::tui_debug::TuiDebugState>,
+    /// Receiver for query events from the agent (streaming, tool calls, completion).
+    /// When present, the main event loop drains this channel and feeds events into
+    /// `handle_query_event()` so the TUI displays real agent output.
+    pub query_rx: Option<tokio::sync::mpsc::Receiver<crate::tui::adapter_types::query::QueryEvent>>,
 }
 
 // Spinner verbs are now imported from crate::tui::adapter_types::spinner
@@ -1148,17 +1579,26 @@ The goal: sound like Rocky while being genuinely helpful. Rocky is smart. \
 Rocky gives complete technical answers. Rocky just uses fewer unnecessary words.";
 
     match level {
-        "lite" => format!("{}\n\nLight touch. Mostly normal English but drop pleasantries, \
-occasionally drop an article, use 'question?' on one or two questions. Subtle.", base),
-        "ultra" => format!("{}\n\nStrong Rocky voice. Drop most articles and auxiliaries. \
+        "lite" => format!(
+            "{}\n\nLight touch. Mostly normal English but drop pleasantries, \
+occasionally drop an article, use 'question?' on one or two questions. Subtle.",
+            base
+        ),
+        "ultra" => format!(
+            "{}\n\nStrong Rocky voice. Drop most articles and auxiliaries. \
 Use 'big' liberally. Triple emphasis ('good good good', 'amaze amaze amaze') \
 2-3 times per response. Occasionally comment on human code patterns as fascinating. \
-Still give complete, correct technical answers.", base),
-        _ => format!("{}\n\nBalanced Rocky. Drop articles naturally, use Rocky vocabulary \
+Still give complete, correct technical answers.",
+            base
+        ),
+        _ => format!(
+            "{}\n\nBalanced Rocky. Drop articles naturally, use Rocky vocabulary \
 ('big', 'no can', 'question?'), triple emphasis once or twice when warranted. \
 Full technical accuracy.\n\
 Example: 'Borrow checker found mismatch. Immutable ref still live when you take mutable. \
-Move immutable borrow out of scope first, then take mutable. Good good good after fix.'", base),
+Move immutable borrow out of scope first, then take mutable. Good good good after fix.'",
+            base
+        ),
     }
 }
 
@@ -1220,6 +1660,7 @@ impl App {
             show_help: false,
             tool_use_blocks: Vec::new(),
             permission_request: None,
+            permission_response_tx: None,
             frame_count: 0,
             token_count: 0,
             token_budget: Self::load_token_budget(),
@@ -1236,6 +1677,10 @@ impl App {
             agent_status: Vec::new(),
             history_search: None,
             keybindings: KeybindingResolver::new(&user_keybindings),
+
+            streaming: StreamingState::new(),
+            overlays: OverlayState::new(),
+            permission: PermissionDialog::new(),
             cursor_pos: 0,
             auto_scroll: true,
             new_messages_while_scrolled: 0,
@@ -1244,10 +1689,12 @@ impl App {
             rustle_current_pose: crate::tui::rustle::RustlePose::Default,
             rustle_pose_until: None,
             rustle_temp_pose: None,
-            rustle_next_blink: 200 + (std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .subsec_nanos() as u64 % 300),
+            rustle_next_blink: 200
+                + (std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .subsec_nanos() as u64
+                    % 300),
             turn_start: None,
             last_turn_elapsed: None,
             last_turn_verb: None,
@@ -1288,8 +1735,6 @@ impl App {
             overage_upsell: crate::tui::overage_upsell::OverageCreditUpsellState::new(),
             voice_mode_notice: crate::tui::voice_mode_notice::VoiceModeNoticeState::new(),
             desktop_upsell: crate::tui::desktop_upsell_startup::DesktopUpsellStartupState::new(),
-            invalid_config_dialog: crate::tui::invalid_config_dialog::InvalidConfigDialogState::new(),
-            memory_update_notification: crate::tui::memory_update_notification::MemoryUpdateNotificationState::new(),
             elicitation: crate::tui::elicitation_dialog::ElicitationDialogState::new(),
             model_picker: ModelPickerState::new(),
             session_browser: SessionBrowserState::new(),
@@ -1299,14 +1744,11 @@ impl App {
             context_viz: ContextVizState::new(),
             mcp_approval: McpApprovalDialogState::new(),
             go_to_line_dialog: GoToLineDialog::new(),
-            bypass_permissions_dialog: crate::tui::bypass_permissions_dialog::BypassPermissionsDialogState::new(),
             bypass_permissions_dialog_shown: false,
-            file_injection_dialog: crate::tui::file_injection_dialog::FileInjectionDialogState::new(),
             file_injection_force: false,
             onboarding_dialog: crate::tui::onboarding_dialog::OnboardingDialogState::new(),
             effort_picker: crate::tui::effort_picker::EffortPickerState::new(),
             key_input_dialog: crate::tui::key_input_dialog::KeyInputDialogState::new(),
-            custom_provider_dialog: crate::tui::custom_provider_dialog::CustomProviderDialogState::new(),
             free_mode_dialog: crate::tui::free_mode_dialog::FreeModeDialogState::new(),
             device_auth_dialog: crate::tui::device_auth_dialog::DeviceAuthDialogState::new(),
             device_auth_pending: None,
@@ -1316,7 +1758,7 @@ impl App {
                 // Try to load cached models.dev data from disk.
                 let cache_path = dirs::cache_dir()
                     .unwrap_or_else(|| std::path::PathBuf::from("."))
-                    .join("claurst")
+                    .join("operant")
                     .join("models.json");
                 reg.load_cache(&cache_path);
                 reg
@@ -1329,7 +1771,6 @@ impl App {
             queued_messages: std::collections::VecDeque::new(),
             pending_auto_submit: false,
             connect_dialog: DialogSelectState::new("Connect a provider", provider_picker_items()),
-            import_config_picker: DialogSelectState::new("Import config", import_config_picker_items()),
             import_config_dialog: ImportConfigDialogState::new(),
             command_palette: {
                 let items: Vec<SelectItem> = PROMPT_SLASH_COMMANDS
@@ -1349,12 +1790,17 @@ impl App {
             pr_number: None,
             pr_url: None,
             pr_state: None,
-            current_dir: std::env::current_dir().ok().and_then(|p| {
-                p.to_str().map(|s| s.to_string())
-            }),
+            current_dir: std::env::current_dir()
+                .ok()
+                .and_then(|p| p.to_str().map(|s| s.to_string())),
             git_branch: crate::tui::adapter_types::git_utils::get_repo_root(
-                std::env::current_dir().as_deref().unwrap_or_else(|_| std::path::Path::new("."))
-            ).map(|repo_root| crate::tui::adapter_types::git_utils::get_current_branch(&repo_root)),
+                std::env::current_dir()
+                    .as_deref()
+                    .unwrap_or_else(|_| std::path::Path::new(".")),
+            )
+            .and_then(|repo_root| {
+                crate::tui::adapter_types::git_utils::get_current_branch(&repo_root)
+            }),
             background_task_count: 0,
             background_task_status: None,
             status_line_override: None,
@@ -1363,9 +1809,9 @@ impl App {
             auto_compact_running: false,
             voice_recorder: {
                 // Check whether voice input has been enabled via the /voice command
-                // (stored in ~/.claurst/ui-settings.json).  We also accept
-                // CLAURST_VOICE_ENABLED=1 as an override for easier testing.
-                let voice_on = std::env::var("CLAURST_VOICE_ENABLED")
+                // (stored in ~/.operant/ui-settings.json).  We also accept
+                // OPERANT_VOICE_ENABLED=1 as an override for easier testing.
+                let voice_on = std::env::var("OPERANT_VOICE_ENABLED")
                     .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
                     .unwrap_or(false)
                     || {
@@ -1427,6 +1873,9 @@ impl App {
             managed_agents_active: false,
             last_exit_key_warning: None,
             exit_key_sequence_start: None,
+            show_debug_overlay: false,
+            tui_debug_state: None,
+            query_rx: None,
         }
     }
 
@@ -1451,11 +1900,14 @@ impl App {
     }
 
     pub fn open_import_config_picker(&mut self) {
-        self.import_config_picker = DialogSelectState::new("Import config", import_config_picker_items());
-        self.import_config_picker.open();
+        self.overlays.import_config_picker =
+            DialogSelectState::new("Import config", import_config_picker_items());
+        self.overlays.import_config_picker.open();
     }
 
-    fn import_selection_from_picker(id: &str) -> Option<crate::tui::adapter_types::ImportSelection> {
+    fn import_selection_from_picker(
+        id: &str,
+    ) -> Option<crate::tui::adapter_types::ImportSelection> {
         match id {
             "claude-md" => Some(crate::tui::adapter_types::ImportSelection::ClaudeMd),
             "settings" => Some(crate::tui::adapter_types::ImportSelection::Settings),
@@ -1464,10 +1916,13 @@ impl App {
         }
     }
 
-    fn open_import_config_preview(&mut self, selection: crate::tui::adapter_types::ImportSelection) {
+    fn open_import_config_preview(
+        &mut self,
+        selection: crate::tui::adapter_types::ImportSelection,
+    ) {
         match crate::tui::adapter_types::build_import_preview(selection) {
             Ok(preview) => {
-                self.import_config_dialog.open(preview);
+                self.overlays.import_config_dialog.open(preview);
             }
             Err(err) => {
                 self.status_message = Some(format!("Import failed: {}", err));
@@ -1476,16 +1931,17 @@ impl App {
     }
 
     fn perform_import_config(&mut self) {
-        let Some(selection) = self.import_config_dialog.selection else {
-            self.import_config_dialog.close();
+        let Some(ref selection) = self.overlays.import_config_dialog.selection else {
+            self.overlays.import_config_dialog.close();
             return;
         };
-        match crate::tui::adapter_types::execute_import(selection) {
+        match crate::tui::adapter_types::execute_import(selection.clone()) {
             Ok(result) => {
                 let paths = crate::tui::adapter_types::ImportPaths::detect();
                 let new_settings = Settings::load_sync().unwrap_or_default();
                 let new_config = new_settings.effective_config();
-                let result_message = crate::tui::adapter_types::summarize_import_result(&result, &paths);
+                let result_message =
+                    crate::tui::adapter_types::summarize_import_result(&result, &paths);
                 let imported_mcp = result.imported_fields.iter().any(|f| f == "mcpServers");
                 self.config = new_config.clone();
                 self.model_name = self.config.effective_model().to_string();
@@ -1507,11 +1963,11 @@ impl App {
                     self.pending_mcp_reconnect = true;
                 }
                 self.status_message = Some(result_message);
-                self.import_config_dialog.close();
+                self.overlays.import_config_dialog.close();
             }
             Err(err) => {
                 self.status_message = Some(format!("Import failed: {}", err));
-                self.import_config_dialog.close();
+                self.overlays.import_config_dialog.close();
             }
         }
     }
@@ -1531,7 +1987,7 @@ impl App {
     }
 
     fn begin_user_turn_snapshot(&mut self) {
-        self.turn_metadata.push(TurnMetadata {
+        self.streaming.turn_metadata.push(TurnMetadata {
             submitted_at: Some(format_turn_time_label()),
             model_name: Some(self.model_name.clone()),
             agent_mode: Some(self.current_agent_mode_snapshot()),
@@ -1541,9 +1997,9 @@ impl App {
         // Start the latency timer now — at prompt-submission time — so it
         // measures actual round-trip time even when the provider buffers its
         // full response before yielding any stream events (e.g. Gemini flash).
-        self.turn_start = Some(std::time::Instant::now());
-        self.last_turn_elapsed = None;
-        self.last_turn_verb = None;
+        self.streaming.turn_start = Some(std::time::Instant::now());
+        self.streaming.last_turn_elapsed = None;
+        self.streaming.last_turn_verb = None;
     }
 
     fn sync_turn_metadata_to_messages(&mut self) {
@@ -1553,26 +2009,26 @@ impl App {
             .filter(|msg| msg.role == Role::User)
             .count();
 
-        if self.turn_metadata.len() > user_count {
-            self.turn_metadata.truncate(user_count);
+        if self.streaming.turn_metadata.len() > user_count {
+            self.streaming.turn_metadata.truncate(user_count);
             return;
         }
 
-        while self.turn_metadata.len() < user_count {
-            self.turn_metadata.push(TurnMetadata::default());
+        while self.streaming.turn_metadata.len() < user_count {
+            self.streaming.turn_metadata.push(TurnMetadata::default());
         }
     }
 
     fn complete_current_turn_snapshot(&mut self, interrupted: bool) {
         if let Some(index) = self.current_user_turn_index() {
-            if self.turn_metadata.len() <= index {
+            if self.streaming.turn_metadata.len() <= index {
                 self.sync_turn_metadata_to_messages();
             }
 
             let model_name = self.model_name.clone();
             let agent_mode = self.current_agent_mode_snapshot();
-            if let Some(meta) = self.turn_metadata.get_mut(index) {
-                meta.duration = self.last_turn_elapsed.clone();
+            if let Some(meta) = self.streaming.turn_metadata.get_mut(index) {
+                meta.duration = self.streaming.last_turn_elapsed.clone();
                 meta.interrupted = interrupted;
                 if meta.model_name.is_none() {
                     meta.model_name = Some(model_name);
@@ -1585,20 +2041,20 @@ impl App {
     }
 
     fn flush_streamed_assistant_message(&mut self) {
-        if self.streaming_text.trim().is_empty() && self.streaming_thinking.trim().is_empty() {
-            self.streaming_text.clear();
-            self.streaming_thinking.clear();
+        if self.streaming.streaming_text.trim().is_empty() && self.streaming.streaming_thinking.trim().is_empty() {
+            self.streaming.streaming_text.clear();
+            self.streaming.streaming_thinking.clear();
             return;
         }
 
-        let thinking = std::mem::take(&mut self.streaming_thinking);
-        let text = std::mem::take(&mut self.streaming_text);
+        let thinking = std::mem::take(&mut self.streaming.streaming_thinking);
+        let text = std::mem::take(&mut self.streaming.streaming_text);
 
         let mut blocks = Vec::new();
         if !thinking.trim().is_empty() {
             blocks.push(ContentBlock::Thinking {
                 thinking,
-                signature: String::new(),
+                signature: Some(String::new()),
             });
         }
         if !text.is_empty() {
@@ -1628,7 +2084,7 @@ impl App {
 
         let cache_path = dirs::cache_dir()
             .unwrap_or_else(|| std::path::PathBuf::from("."))
-            .join("claurst")
+            .join("operant")
             .join("models.json");
         if cache_path.exists() {
             self.model_registry.load_cache(&cache_path);
@@ -1638,8 +2094,8 @@ impl App {
             provider_id,
             &self.model_registry,
         );
-        self.model_picker.set_models(models);
-        self.model_picker.loading_models = true;
+        self.overlays.model_picker.set_models(models);
+        self.overlays.model_picker.loading_models = true;
         self.model_picker_provider_id = Some(provider_id.to_string());
         self.model_picker_fetch_pending = true;
 
@@ -1657,7 +2113,7 @@ impl App {
                 .to_string()
         };
 
-        self.model_picker.open_with_title(
+        self.overlays.model_picker.open_with_title(
             title.unwrap_or_else(|| "Select model".to_string()),
             &current_model,
             self.effort_level,
@@ -1665,7 +2121,12 @@ impl App {
         );
     }
 
-    fn activate_provider(&mut self, provider_id: String, provider_name: String, status_prefix: &str) {
+    fn activate_provider(
+        &mut self,
+        provider_id: String,
+        provider_name: String,
+        status_prefix: &str,
+    ) {
         let picker_title = provider_name.clone();
         self.fast_mode = false;
         self.set_provider_default(provider_id.clone());
@@ -1677,7 +2138,10 @@ impl App {
 
     fn persist_custom_provider_base_url(&self, base_url: &str) {
         let mut settings = Settings::load_sync().unwrap_or_default();
-        let entry = settings.providers.entry("custom-openai".to_string()).or_default();
+        let entry = settings
+            .providers
+            .entry("custom-openai".to_string())
+            .or_default();
         entry.api_base = Some(base_url.to_string());
         entry.enabled = true;
         let _ = settings.save_sync();
@@ -1766,8 +2230,8 @@ impl App {
     /// Call once per frame before rendering.
     pub fn tick_rustle_pose(&mut self) {
         // Loading spinner: shown when streaming has stalled (no data for 3s+).
-        if self.is_streaming {
-            if let Some(start) = self.stall_start {
+        if self.streaming.is_streaming {
+            if let Some(start) = self.streaming.stall_start {
                 if start.elapsed() > std::time::Duration::from_secs(3) {
                     self.rustle_current_pose = crate::tui::rustle::RustlePose::Loading {
                         frame: self.frame_count,
@@ -1780,7 +2244,9 @@ impl App {
         // Check if a temporary pose is active.
         if let Some(until) = self.rustle_pose_until {
             if std::time::Instant::now() < until {
-                self.rustle_current_pose = self.rustle_temp_pose.clone()
+                self.rustle_current_pose = self
+                    .rustle_temp_pose
+                    .clone()
                     .unwrap_or(crate::tui::rustle::RustlePose::Default);
                 return;
             }
@@ -1792,9 +2258,8 @@ impl App {
         // Random eye-shift: every ~200-500 frames, briefly look right.
         if self.frame_count >= self.rustle_next_blink {
             self.rustle_temp_pose = Some(crate::tui::rustle::RustlePose::LookRight);
-            self.rustle_pose_until = Some(
-                std::time::Instant::now() + std::time::Duration::from_millis(800)
-            );
+            self.rustle_pose_until =
+                Some(std::time::Instant::now() + std::time::Duration::from_millis(800));
             // Schedule next blink 200-500 frames from now (random-ish).
             let jitter = (self.frame_count.wrapping_mul(7) % 300) + 200;
             self.rustle_next_blink = self.frame_count + jitter;
@@ -1808,9 +2273,8 @@ impl App {
     /// Trigger Rustle looking down briefly (called on Tab / mode switch).
     pub fn rustle_look_down(&mut self) {
         self.rustle_temp_pose = Some(crate::tui::rustle::RustlePose::LookDown);
-        self.rustle_pose_until = Some(
-            std::time::Instant::now() + std::time::Duration::from_secs(1)
-        );
+        self.rustle_pose_until =
+            Some(std::time::Instant::now() + std::time::Duration::from_secs(1));
     }
 
     /// Cycle to the next agent mode: build → plan → explore → build.
@@ -1870,7 +2334,8 @@ impl App {
     /// Update the context window size from the model registry for the current model.
     pub fn refresh_context_window_size(&mut self) {
         let provider = self.config.provider.as_deref().unwrap_or("anthropic");
-        let model_id = self.model_name
+        let model_id = self
+            .model_name
             .strip_prefix(&format!("{}/", provider))
             .unwrap_or(&self.model_name);
         if let Some(entry) = self.model_registry.get(provider, model_id) {
@@ -1929,14 +2394,16 @@ impl App {
         self.provider_registry = provider_registry;
         self.model_registry = crate::tui::adapter_types::ModelRegistry::new();
         self.auth_store = auth_store;
-        self.connect_dialog = DialogSelectState::new("Connect a provider", provider_picker_items());
-        self.import_config_picker = DialogSelectState::new("Import config", import_config_picker_items());
-        self.import_config_dialog = ImportConfigDialogState::new();
-        self.model_picker = ModelPickerState::new();
-        self.key_input_dialog = crate::tui::key_input_dialog::KeyInputDialogState::new();
-        self.custom_provider_dialog = crate::tui::custom_provider_dialog::CustomProviderDialogState::new();
-        self.free_mode_dialog = crate::tui::free_mode_dialog::FreeModeDialogState::new();
-        self.device_auth_dialog = crate::tui::device_auth_dialog::DeviceAuthDialogState::new();
+        self.overlays.connect_dialog = DialogSelectState::new("Connect a provider", provider_picker_items());
+        self.overlays.import_config_picker =
+            DialogSelectState::new("Import config", import_config_picker_items());
+        self.overlays.import_config_dialog = ImportConfigDialogState::new();
+        self.overlays.model_picker = ModelPickerState::new();
+        self.overlays.key_input_dialog = crate::tui::key_input_dialog::KeyInputDialogState::new();
+        self.overlays.custom_provider_dialog =
+            crate::tui::custom_provider_dialog::CustomProviderDialogState::new();
+        self.overlays.free_mode_dialog = crate::tui::free_mode_dialog::FreeModeDialogState::new();
+        self.overlays.device_auth_dialog = crate::tui::device_auth_dialog::DeviceAuthDialogState::new();
         self.device_auth_pending = None;
         self.pending_mcp_panel_auth = None;
         self.model_picker_fetch_pending = false;
@@ -1963,7 +2430,7 @@ impl App {
         self.dismiss_error_notifications();
         match cmd {
             "config" | "settings" => {
-                self.settings_screen.open();
+                self.overlays.settings_screen.open();
                 true
             }
             "theme" => {
@@ -1974,16 +2441,16 @@ impl App {
                     Theme::Deuteranopia => "deuteranopia",
                     Theme::Custom(s) => s.as_str(),
                 };
-                self.theme_screen.open(current);
+                self.overlays.theme_screen.open(current);
                 true
             }
             "stats" => {
-                self.stats_dialog.open();
+                self.overlays.stats_dialog.open();
                 true
             }
             "mcp" => {
                 let servers = self.load_mcp_servers();
-                self.mcp_view.open(servers);
+                self.overlays.mcp_view.open(servers);
                 true
             }
             "agents" => {
@@ -1992,30 +2459,30 @@ impl App {
             }
             "diff" | "review" => {
                 let root = self.project_root();
-                self.diff_viewer.open(&root);
+                self.overlays.diff_viewer.open(&root);
                 true
             }
             "changes" => {
                 let root = self.project_root();
                 self.refresh_turn_diff_from_history();
-                self.diff_viewer.open_turn(&root);
+                self.overlays.diff_viewer.open_turn(&root);
                 true
             }
             "search" | "find" => {
-                self.global_search.open();
+                self.overlays.global_search.open();
                 true
             }
             "survey" | "feedback" => {
-                self.feedback_survey.open();
+                self.overlays.feedback_survey.open();
                 true
             }
             "memory" => {
                 let root = self.project_root();
-                self.memory_file_selector.open(&root);
+                self.overlays.memory_file_selector.open(&root);
                 true
             }
             "hooks" => {
-                self.hooks_config_menu.open();
+                self.overlays.hooks_config_menu.open();
                 true
             }
             "import-config" => {
@@ -2023,12 +2490,12 @@ impl App {
                 true
             }
             "connect" => {
-                self.connect_dialog.open();
+                self.overlays.connect_dialog.open();
                 true
             }
             "model" => {
                 if !self.has_credentials {
-                    self.connect_dialog.open();
+                    self.overlays.connect_dialog.open();
                     self.status_message = Some("Connect a provider to choose a model.".to_string());
                     return true;
                 }
@@ -2041,7 +2508,7 @@ impl App {
                 true
             }
             "session" | "resume" => {
-                self.session_browser.open(vec![]);
+                self.overlays.session_browser.open(vec![]);
                 self.session_list_pending = true;
                 true
             }
@@ -2049,10 +2516,10 @@ impl App {
                 self.messages.clear();
                 self.system_annotations.clear();
                 self.display_messages.clear();
-                self.streaming_text.clear();
-                self.streaming_thinking.clear();
+                self.streaming.streaming_text.clear();
+                self.streaming.streaming_thinking.clear();
                 self.tool_use_blocks.clear();
-                self.turn_metadata.clear();
+                self.streaming.turn_metadata.clear();
                 self.cost_usd = 0.0;
                 self.invalidate_transcript();
                 self.status_message = Some("Conversation cleared.".to_string());
@@ -2064,14 +2531,22 @@ impl App {
             }
             "vim" => {
                 self.prompt_input.vim_enabled = !self.prompt_input.vim_enabled;
-                let status = if self.prompt_input.vim_enabled { "enabled" } else { "disabled" };
+                let status = if self.prompt_input.vim_enabled {
+                    "enabled"
+                } else {
+                    "disabled"
+                };
                 self.status_message = Some(format!("Vim mode {}.", status));
                 self.refresh_prompt_input();
                 true
             }
             "fast" => {
                 self.fast_mode = !self.fast_mode;
-                let status = if self.fast_mode { "enabled" } else { "disabled" };
+                let status = if self.fast_mode {
+                    "enabled"
+                } else {
+                    "disabled"
+                };
                 self.status_message = Some(format!("Fast mode {}.", status));
                 true
             }
@@ -2084,20 +2559,38 @@ impl App {
                     PermissionMode::Default
                 };
                 self.status_message = Some(if self.plan_mode {
-                    "Plan mode ON — Claurst will plan before acting.".to_string()
+                    "Plan mode ON — Operant will plan before acting.".to_string()
                 } else {
                     "Plan mode OFF.".to_string()
                 });
-                // Allow CLI path to also run (sends UserMessage to Claurst).
-                false
+                true
             }
             "compact" => {
-                // Handled by execute_command in the CLI loop (real LLM compaction).
-                false
+                // Compact conversation context in TUI mode
+                self.push_notification(
+                    NotificationKind::Info,
+                    "Compacting conversation context...".to_string(),
+                    Some(3),
+                );
+                // Clear old messages to free context window
+                let msg_count = self.messages.len();
+                if msg_count > 10 {
+                    let keep = 5; // Keep last 5 messages for context
+                    self.messages.drain(0..msg_count - keep);
+                    self.display_messages
+                        .drain(0..self.display_messages.len().saturating_sub(keep));
+                    self.status_message = Some(format!("Compacted: kept last {} messages.", keep));
+                } else {
+                    self.status_message = Some("Nothing to compact.".to_string());
+                }
+                true
             }
             "copy" => {
                 // Copy last assistant message to clipboard. Attempt arboard; fall back to notification.
-                let last = self.messages.iter().rev()
+                let last = self
+                    .messages
+                    .iter()
+                    .rev()
                     .find(|m| m.role == Role::Assistant)
                     .map(|m| m.get_all_text());
                 if let Some(text) = last {
@@ -2112,7 +2605,10 @@ impl App {
                     } else {
                         self.push_notification(
                             NotificationKind::Info,
-                            format!("Last response: {} chars (clipboard unavailable)", text.len()),
+                            format!(
+                                "Last response: {} chars (clipboard unavailable)",
+                                text.len()
+                            ),
                             Some(5),
                         );
                     }
@@ -2137,7 +2633,7 @@ impl App {
             "effort" => {
                 // Open the picker dialog so users can pick an effort level
                 // visually instead of cycling/typing the level (issue #149).
-                self.effort_picker.open(self.effort_level);
+                self.overlays.effort_picker.open(self.effort_level);
                 true
             }
             "voice" => {
@@ -2159,7 +2655,7 @@ impl App {
                         }
                     }
                     self.voice_recorder = None;
-                    self.voice_mode_notice.dismiss();
+                    self.overlays.voice_mode_notice.dismiss();
                     self.status_message = Some("Voice mode disabled.".to_string());
                 } else {
                     let recorder = crate::tui::adapter_types::voice::global_voice_recorder();
@@ -2167,19 +2663,44 @@ impl App {
                         r.set_enabled(true);
                     }
                     self.voice_recorder = Some(recorder);
-                    self.voice_mode_notice = crate::tui::voice_mode_notice::VoiceModeNoticeState::new();
-                    self.status_message = Some(
-                        "Voice mode enabled. Press Alt+V to start recording.".to_string(),
-                    );
+                    self.overlays.voice_mode_notice =
+                        crate::tui::voice_mode_notice::VoiceModeNoticeState::new();
+                    self.status_message =
+                        Some("Voice mode enabled. Press Alt+V to start recording.".to_string());
                 }
                 true
             }
             "doctor" => {
-                // Handled by execute_command (DoctorCommand).
-                false
+                // Run TUI diagnostics
+                let config = operant_core::config::runtime_config();
+                let mut debug_state = crate::tui::tui_debug::TuiDebugState::check_config(&config);
+                debug_state.run_all_checks(&config);
+                self.tui_debug_state = Some(debug_state.clone());
+                self.show_debug_overlay = true;
+                self.status_message = Some(debug_state.summary());
+                true
+            }
+            "tui-doctor" => {
+                let config = operant_core::config::runtime_config();
+                let mut debug_state = crate::tui::tui_debug::TuiDebugState::check_config(&config);
+                debug_state.run_all_checks(&config);
+                self.tui_debug_state = Some(debug_state.clone());
+                self.show_debug_overlay = true;
+                self.status_message = Some(debug_state.summary());
+                true
+            }
+            "debug" => {
+                self.show_debug_overlay = !self.show_debug_overlay;
+                let status = if self.show_debug_overlay {
+                    "shown"
+                } else {
+                    "hidden"
+                };
+                self.status_message = Some(format!("Debug overlay {}.", status));
+                true
             }
             "cost" => {
-                self.stats_dialog.open();
+                self.overlays.stats_dialog.open();
                 true
             }
             "rewind" => {
@@ -2187,26 +2708,68 @@ impl App {
                 true
             }
             "export" => {
-                self.export_dialog.open();
+                self.overlays.export_dialog.open();
                 true
             }
             "context" => {
-                self.context_viz.toggle();
+                self.overlays.context_viz.toggle();
                 true
             }
             "rename" => {
-                self.session_browser.open(vec![]);
+                self.overlays.session_browser.open(vec![]);
                 self.session_list_pending = true;
-                self.session_browser.start_rename();
+                self.overlays.session_browser.start_rename();
                 true
             }
-            "init" | "login" | "logout" => {
-                // Handled by execute_command (CLI-level operations).
-                false
+            "init" => {
+                // Initialize AGENTS.md in the project root
+                let root = self.project_root();
+                let agents_path = root.join("AGENTS.md");
+                if agents_path.exists() {
+                    self.status_message = Some("AGENTS.md already exists.".to_string());
+                } else {
+                    match std::fs::write(
+                        &agents_path,
+                        "# Agent Instructions\n\nProject-specific instructions for AI agents.\n",
+                    ) {
+                        Ok(_) => self.status_message = Some("Created AGENTS.md.".to_string()),
+                        Err(e) => {
+                            self.status_message = Some(format!("Failed to create AGENTS.md: {}", e))
+                        }
+                    }
+                }
+                true
+            }
+            "login" => {
+                // Open connect dialog for provider authentication
+                self.overlays.connect_dialog.open();
+                self.status_message = Some("Connect a provider to log in.".to_string());
+                true
+            }
+            "logout" => {
+                // Clear saved credentials
+                let config_dir = crate::tui::adapter_types::config::Settings::config_dir();
+                let env_path = config_dir.join(".env");
+                if env_path.exists() {
+                    match std::fs::remove_file(&env_path) {
+                        Ok(_) => {
+                            self.status_message =
+                                Some("Logged out. Credentials cleared.".to_string())
+                        }
+                        Err(e) => {
+                            self.status_message =
+                                Some(format!("Failed to clear credentials: {}", e))
+                        }
+                    }
+                } else {
+                    self.status_message = Some("No credentials found.".to_string());
+                }
+                true
             }
             "keybindings" => {
                 // Open the keybindings.json file in the external editor
-                let keybindings_path = crate::tui::adapter_types::config::Settings::config_dir().join("keybindings.json");
+                let keybindings_path = crate::tui::adapter_types::config::Settings::config_dir()
+                    .join("keybindings.json");
 
                 if let Err(e) = open_file_externally(&keybindings_path) {
                     eprintln!("Failed to open keybindings file: {}", e);
@@ -2215,9 +2778,9 @@ impl App {
             }
             "help" => {
                 // Open the help overlay (same as pressing `?` or F1).
-                if !self.help_overlay.visible {
-                    self.show_help = true;
-                    self.help_overlay.toggle();
+                if !self.overlays.help_overlay.visible {
+                    self.overlays.show_help = true;
+                    self.overlays.help_overlay.toggle();
                 }
                 true
             }
@@ -2226,88 +2789,88 @@ impl App {
     }
 
     fn close_secondary_views(&mut self) {
-        self.stats_dialog.close();
-        self.mcp_view.close();
-        self.agents_menu.close();
-        self.diff_viewer.close();
-        self.feedback_survey.close();
-        self.memory_file_selector.close();
-        self.hooks_config_menu.close();
-        self.model_picker.close();
-        self.session_browser.close();
-        self.session_branching.close();
-        self.tasks_overlay.close();
-        self.export_dialog.dismiss();
-        self.context_viz.close();
-        self.connect_dialog.close();
-        self.import_config_picker.close();
-        self.import_config_dialog.close();
-        self.command_palette.close();
-        self.key_input_dialog.close();
-        self.custom_provider_dialog.close();
-        self.free_mode_dialog.close();
-        self.device_auth_dialog.close();
-        self.settings_screen.close();
-        self.theme_screen.close();
+        self.overlays.stats_dialog.close();
+        self.overlays.mcp_view.close();
+        self.overlays.agents_menu.close();
+        self.overlays.diff_viewer.close();
+        self.overlays.feedback_survey.close();
+        self.overlays.memory_file_selector.close();
+        self.overlays.hooks_config_menu.close();
+        self.overlays.model_picker.close();
+        self.overlays.session_browser.close();
+        self.overlays.session_branching.close();
+        self.overlays.tasks_overlay.close();
+        self.overlays.export_dialog.dismiss();
+        self.overlays.context_viz.close();
+        self.overlays.connect_dialog.close();
+        self.overlays.import_config_picker.close();
+        self.overlays.import_config_dialog.close();
+        self.overlays.command_palette.close();
+        self.overlays.key_input_dialog.close();
+        self.overlays.custom_provider_dialog.close();
+        self.overlays.free_mode_dialog.close();
+        self.overlays.device_auth_dialog.close();
+        self.overlays.settings_screen.close();
+        self.overlays.theme_screen.close();
     }
 
     pub fn any_modal_open(&self) -> bool {
-        self.permission_request.is_some()
-            || self.rewind_flow.visible
-            || self.tasks_overlay.visible
-            || self.help_overlay.visible
-            || self.show_help
-            || self.history_search_overlay.visible
+        self.permission.permission_request.is_some()
+            || self.overlays.rewind_flow.visible
+            || self.overlays.tasks_overlay.visible
+            || self.overlays.help_overlay.visible
+            || self.overlays.show_help
+            || self.overlays.history_search_overlay.visible
             || self.history_search.is_some()
-            || self.settings_screen.visible
-            || self.theme_screen.visible
-            || self.stats_dialog.visible
-            || self.mcp_view.visible
-            || self.agents_menu.visible
-            || self.diff_viewer.visible
-            || self.global_search.visible
-            || self.feedback_survey.visible
-            || self.memory_file_selector.visible
-            || self.hooks_config_menu.visible
-            || self.overage_upsell.visible
-            || self.voice_mode_notice.visible
-            || self.memory_update_notification.visible
-            || self.desktop_upsell.visible
-            || self.import_config_dialog.visible
-            || self.invalid_config_dialog.visible
-            || self.bypass_permissions_dialog.visible
-            || self.ask_user_dialog.visible
-            || self.onboarding_dialog.visible
-            || self.import_config_picker.visible
-            || self.connect_dialog.visible
-            || self.key_input_dialog.visible
-            || self.custom_provider_dialog.visible
-            || self.free_mode_dialog.visible
-            || self.device_auth_dialog.visible
-            || self.command_palette.visible
-            || self.elicitation.visible
-            || self.model_picker.visible
-            || self.session_browser.visible
-            || self.session_branching.visible
-            || self.export_dialog.visible
-            || self.context_viz.visible
-            || self.mcp_approval.visible
-            || self.file_injection_dialog.visible
-            || self.context_menu_state.is_some()
+            || self.overlays.settings_screen.visible
+            || self.overlays.theme_screen.visible
+            || self.overlays.stats_dialog.visible
+            || self.overlays.mcp_view.visible
+            || self.overlays.agents_menu.visible
+            || self.overlays.diff_viewer.visible
+            || self.overlays.global_search.visible
+            || self.overlays.feedback_survey.visible
+            || self.overlays.memory_file_selector.visible
+            || self.overlays.hooks_config_menu.visible
+            || self.overlays.overage_upsell.visible
+            || self.overlays.voice_mode_notice.visible
+            || self.overlays.memory_update_notification.visible
+            || self.overlays.desktop_upsell.visible
+            || self.overlays.import_config_dialog.visible
+            || self.overlays.invalid_config_dialog.visible
+            || self.overlays.bypass_permissions_dialog.visible
+            || self.overlays.ask_user_dialog.visible
+            || self.overlays.onboarding_dialog.visible
+            || self.overlays.import_config_picker.visible
+            || self.overlays.connect_dialog.visible
+            || self.overlays.key_input_dialog.visible
+            || self.overlays.custom_provider_dialog.visible
+            || self.overlays.free_mode_dialog.visible
+            || self.overlays.device_auth_dialog.visible
+            || self.overlays.command_palette.visible
+            || self.overlays.elicitation.visible
+            || self.overlays.model_picker.visible
+            || self.overlays.session_browser.visible
+            || self.overlays.session_branching.visible
+            || self.overlays.export_dialog.visible
+            || self.overlays.context_viz.visible
+            || self.overlays.mcp_approval.visible
+            || self.overlays.file_injection_dialog.visible
+            || self.overlays.context_menu_state.is_some()
     }
 
     fn dismiss_error_notifications(&mut self) {
-        while self.notifications.current_is_error() {
-            self.notifications.dismiss_current();
+        while self.overlays.notifications.current_is_error() {
+            self.overlays.notifications.dismiss_current();
         }
-        self.error_modal_scroll_offset = 0;
+        self.overlays.error_modal_scroll_offset = 0;
     }
 
     /// Perform the export based on the selected format. Returns the path written.
     pub fn perform_export(&mut self) -> Option<String> {
         use crate::tui::export_dialog::{export_as_json, export_as_markdown};
         let ts = chrono::Local::now().format("%Y%m%d-%H%M%S");
-        let (filename, content) = match self.export_dialog.selected {
+        let (filename, content) = match self.overlays.export_dialog.selected {
             ExportFormat::Json => {
                 let json = export_as_json(&self.messages, self.session_title.as_deref());
                 let s = serde_json::to_string_pretty(&json).unwrap_or_default();
@@ -2319,7 +2882,7 @@ impl App {
             }
         };
         if std::fs::write(&filename, &content).is_ok() {
-            self.export_dialog.dismiss();
+            self.overlays.export_dialog.dismiss();
             Some(filename)
         } else {
             None
@@ -2336,7 +2899,7 @@ impl App {
 
     fn refresh_global_search(&mut self) {
         let root = self.project_root();
-        self.global_search.run_search(&root);
+        self.overlays.global_search.run_search(&root);
     }
 
     fn load_mcp_servers(&self) -> Vec<McpServerView> {
@@ -2376,16 +2939,18 @@ impl App {
                         crate::tui::adapter_types::mcp::McpServerStatus::Connecting => {
                             (McpViewStatus::Connecting, None)
                         }
-                        crate::tui::adapter_types::mcp::McpServerStatus::Disconnected { last_error } => {
+                        crate::tui::adapter_types::mcp::McpServerStatus::Disconnected {
+                            last_error,
+                        } => {
                             if last_error.is_some() {
                                 (McpViewStatus::Error, last_error)
                             } else {
                                 (McpViewStatus::Disconnected, None)
                             }
                         }
-                        crate::tui::adapter_types::mcp::McpServerStatus::Failed { error, .. } => {
-                            (McpViewStatus::Error, Some(error))
-                        }
+                        crate::tui::adapter_types::mcp::McpServerStatus::Failed {
+                            error, ..
+                        } => (McpViewStatus::Error, Some(error)),
                     };
 
                     let catalog = manager.server_catalog(&server.name);
@@ -2465,8 +3030,8 @@ impl App {
 
     fn open_agents_menu(&mut self) {
         let root = self.project_root();
-        self.agents_menu.open(&root);
-        self.agents_menu.active_agents = self
+        self.overlays.agents_menu.open(&root);
+        self.overlays.agents_menu.active_agents = self
             .agent_status
             .iter()
             .enumerate()
@@ -2525,11 +3090,16 @@ impl App {
     /// It will appear after the current last message.
     /// Push a notification and, for Error-kind notifications, reset the error
     /// modal scroll offset so a newly arrived error is always shown from the top.
-    pub fn push_notification(&mut self, kind: NotificationKind, msg: String, duration_secs: Option<u64>) {
+    pub fn push_notification(
+        &mut self,
+        kind: NotificationKind,
+        msg: String,
+        duration_secs: Option<u64>,
+    ) {
         if kind == NotificationKind::Error {
-            self.error_modal_scroll_offset = 0;
+            self.overlays.error_modal_scroll_offset = 0;
         }
-        self.notifications.push(kind, msg, duration_secs);
+        self.overlays.notifications.push(kind, msg, duration_secs);
     }
 
     pub fn push_system_message(&mut self, text: String, style: SystemMessageStyle) {
@@ -2543,19 +3113,18 @@ impl App {
 
     /// Called whenever a new message is appended to `messages`.
     /// Manages the auto-scroll / new-message-counter state.
-    fn on_new_message(&mut self) {
+    pub(crate) fn on_new_message(&mut self) {
         if self.auto_scroll {
             // Auto-scroll: keep offset at 0 so render shows the bottom.
             self.scroll_offset = 0;
         } else {
-            self.new_messages_while_scrolled =
-                self.new_messages_while_scrolled.saturating_add(1);
+            self.new_messages_while_scrolled = self.new_messages_while_scrolled.saturating_add(1);
         }
     }
 
     pub fn invalidate_transcript(&self) {
-        self.transcript_version
-            .set(self.transcript_version.get().wrapping_add(1));
+        self.streaming.transcript_version
+            .set(self.streaming.transcript_version.get().wrapping_add(1));
     }
 
     /// Check current token usage and push token warning notifications as
@@ -2613,7 +3182,8 @@ impl App {
     /// wheel) stay at the base 3-line step.
     fn scroll_step(&mut self) -> usize {
         let now = std::time::Instant::now();
-        let elapsed_ms = self.scroll_last_time
+        let elapsed_ms = self
+            .scroll_last_time
             .map(|t| now.duration_since(t).as_millis())
             .unwrap_or(u128::MAX);
         self.scroll_last_time = Some(now);
@@ -2646,7 +3216,7 @@ impl App {
                 }
             })
             .collect();
-        self.rewind_flow.open(selector_msgs);
+        self.overlays.rewind_flow.open(selector_msgs);
     }
 
     /// Return the elapsed session time as a human-readable string, e.g. "2m 5s".
@@ -2678,14 +3248,18 @@ impl App {
 
     pub fn refresh_prompt_input(&mut self) {
         self.prompt_input.mode = self.prompt_mode();
-        if self.file_injection_dialog.visible {
+        if self.overlays.file_injection_dialog.visible {
             // Don't update suggestions while the injection dialog is open.
             self.sync_legacy_prompt_fields();
             return;
         }
         let file_autocomplete_limit = self.config.file_autocomplete_limit;
         let file_autocomplete_show_hidden = self.config.file_autocomplete_show_hidden_files;
-        self.prompt_input.update_suggestions(PROMPT_SLASH_COMMANDS, file_autocomplete_limit, file_autocomplete_show_hidden);
+        self.prompt_input.update_suggestions(
+            PROMPT_SLASH_COMMANDS,
+            file_autocomplete_limit,
+            file_autocomplete_show_hidden,
+        );
         self.sync_legacy_prompt_fields();
     }
 
@@ -2718,7 +3292,8 @@ impl App {
                 }
             });
         }
-        self.status_message = Some("Recording\u{2026} release V or press Enter to transcribe".to_string());
+        self.status_message =
+            Some("Recording\u{2026} release V or press Enter to transcribe".to_string());
     }
 
     /// Stop PTT recording: flip the AtomicBool inside VoiceRecorder so the
@@ -2753,13 +3328,16 @@ impl App {
         self.refresh_turn_diff_from_history();
     }
 
-    pub fn attach_mcp_manager(&mut self, mcp_manager: Arc<crate::tui::adapter_types::mcp::McpManager>) {
+    pub fn attach_mcp_manager(
+        &mut self,
+        mcp_manager: Arc<crate::tui::adapter_types::mcp::McpManager>,
+    ) {
         self.mcp_manager = Some(mcp_manager);
     }
 
     pub fn refresh_mcp_view(&mut self) {
         let servers = self.load_mcp_servers();
-        self.mcp_view.open(servers);
+        self.overlays.mcp_view.open(servers);
     }
 
     pub fn take_pending_mcp_panel_auth(&mut self) -> Option<String> {
@@ -2774,7 +3352,7 @@ impl App {
 
     /// Returns and clears any pending MCP approval result.
     pub fn take_mcp_approval_result(&mut self) -> Option<crate::dialogs::McpApprovalChoice> {
-        if !self.mcp_approval.visible {
+        if !self.overlays.mcp_approval.visible {
             return None;
         }
         // The dialog closes itself on confirm; we check if it's now closed
@@ -2824,17 +3402,17 @@ impl App {
 
     fn refresh_turn_diff_from_history(&mut self) {
         let Some(file_history) = self.file_history.as_ref() else {
-            self.diff_viewer.set_turn_diff(Vec::new());
+            self.overlays.diff_viewer.set_turn_diff(Vec::new());
             return;
         };
         let Some(current_turn) = self.current_turn.as_ref() else {
-            self.diff_viewer.set_turn_diff(Vec::new());
+            self.overlays.diff_viewer.set_turn_diff(Vec::new());
             return;
         };
 
         let turn_index = current_turn.load(std::sync::atomic::Ordering::Relaxed);
         if turn_index == 0 {
-            self.diff_viewer.set_turn_diff(Vec::new());
+            self.overlays.diff_viewer.set_turn_diff(Vec::new());
             return;
         }
 
@@ -2843,7 +3421,7 @@ impl App {
             let history = file_history.lock();
             build_turn_diff(&history, turn_index, &root)
         };
-        self.diff_viewer.set_turn_diff(files);
+        self.overlays.diff_viewer.set_turn_diff(files);
     }
 
     // -------------------------------------------------------------------
@@ -2868,18 +3446,17 @@ impl App {
     /// submitted (Enter pressed with no blocking dialog).
     pub fn handle_key_event(&mut self, key: KeyEvent) -> bool {
         // Dismiss error modal with Esc
-        if key.code == KeyCode::Esc && self.notifications.current_is_error() {
+        if key.code == KeyCode::Esc && self.overlays.notifications.current_is_error() {
             self.dismiss_error_notifications();
             return false;
         }
 
-
-        if self.global_search.visible {
+        if self.overlays.global_search.visible {
             return self.handle_global_search_key(key);
         }
 
         // ---- Context menu handling (highest priority for menu navigation) ----
-        if self.context_menu_state.is_some() {
+        if self.overlays.context_menu_state.is_some() {
             match key.code {
                 KeyCode::Esc => {
                     self.dismiss_context_menu();
@@ -2899,7 +3476,7 @@ impl App {
 
         // Bypass-permissions dialog: highest-priority gate — user must accept or the
         // session exits immediately. Mirrors TS BypassPermissionsModeDialog.tsx.
-        if self.bypass_permissions_dialog.visible {
+        if self.overlays.bypass_permissions_dialog.visible {
             match key.code {
                 KeyCode::Char('1') | KeyCode::Esc => {
                     // "No, exit" — quit immediately
@@ -2907,13 +3484,13 @@ impl App {
                 }
                 KeyCode::Char('2') => {
                     // "Yes, I accept" — dismiss and continue
-                    self.bypass_permissions_dialog.dismiss();
+                    self.overlays.bypass_permissions_dialog.dismiss();
                 }
-                KeyCode::Up | KeyCode::Char('k') => self.bypass_permissions_dialog.select_prev(),
-                KeyCode::Down | KeyCode::Char('j') => self.bypass_permissions_dialog.select_next(),
+                KeyCode::Up | KeyCode::Char('k') => self.overlays.bypass_permissions_dialog.select_prev(),
+                KeyCode::Down | KeyCode::Char('j') => self.overlays.bypass_permissions_dialog.select_next(),
                 KeyCode::Enter => {
-                    if self.bypass_permissions_dialog.is_accept_selected() {
-                        self.bypass_permissions_dialog.dismiss();
+                    if self.overlays.bypass_permissions_dialog.is_accept_selected() {
+                        self.overlays.bypass_permissions_dialog.dismiss();
                     } else {
                         self.should_exit = true;
                     }
@@ -2924,28 +3501,28 @@ impl App {
         }
 
         // File injection dialog: shown when oversized files are detected in @refs.
-        if self.file_injection_dialog.visible {
-            let is_directory_only = self.file_injection_dialog.is_directory_only();
+        if self.overlays.file_injection_dialog.visible {
+            let is_directory_only = self.overlays.file_injection_dialog.is_directory_only();
             match key.code {
                 KeyCode::Enter => {
                     if is_directory_only {
                         // Directories can't be injected; Enter = abort, restore input.
-                        if let Some(input) = self.file_injection_dialog.pending_input.clone() {
+                        if let Some(input) = self.overlays.file_injection_dialog.pending_input.clone() {
                             self.set_prompt_text(input);
                         }
-                        self.file_injection_dialog.dismiss();
+                        self.overlays.file_injection_dialog.dismiss();
                     } else {
                         // Enter = inject (Allow).
-                        self.file_injection_dialog.selected = 0;
-                        self.file_injection_dialog.confirm();
+                        self.overlays.file_injection_dialog.selected = 0;
+                        self.overlays.file_injection_dialog.confirm();
                     }
                 }
                 KeyCode::Esc => {
                     // Esc = abort, restore input.
-                    if let Some(input) = self.file_injection_dialog.pending_input.clone() {
+                    if let Some(input) = self.overlays.file_injection_dialog.pending_input.clone() {
                         self.set_prompt_text(input);
                     }
-                    self.file_injection_dialog.dismiss();
+                    self.overlays.file_injection_dialog.dismiss();
                 }
                 _ => {}
             }
@@ -2953,20 +3530,20 @@ impl App {
         }
 
         // Onboarding dialog: shown on first launch, dismissed with Enter/→/Esc.
-        if self.onboarding_dialog.visible {
+        if self.overlays.onboarding_dialog.visible {
             match key.code {
                 KeyCode::Esc => {
-                    self.onboarding_dialog.dismiss();
+                    self.overlays.onboarding_dialog.dismiss();
                 }
                 KeyCode::Enter | KeyCode::Right => {
-                    if self.onboarding_dialog.next_page() {
-                        self.onboarding_dialog.dismiss();
+                    if self.overlays.onboarding_dialog.next_page() {
+                        self.overlays.onboarding_dialog.dismiss();
                         // Persist that onboarding is complete (best-effort).
                         let _ = Self::persist_onboarding_complete();
                     }
                 }
                 KeyCode::Left => {
-                    self.onboarding_dialog.prev_page();
+                    self.overlays.onboarding_dialog.prev_page();
                 }
                 _ => {}
             }
@@ -2974,15 +3551,15 @@ impl App {
         }
 
         // Effort picker dialog (/effort).
-        if self.effort_picker.visible {
+        if self.overlays.effort_picker.visible {
             match key.code {
-                KeyCode::Esc => self.effort_picker.close(),
-                KeyCode::Up | KeyCode::Char('k') => self.effort_picker.select_prev(),
-                KeyCode::Down | KeyCode::Char('j') => self.effort_picker.select_next(),
+                KeyCode::Esc => self.overlays.effort_picker.close(),
+                KeyCode::Up | KeyCode::Char('k') => self.overlays.effort_picker.select_prev(),
+                KeyCode::Down | KeyCode::Char('j') => self.overlays.effort_picker.select_next(),
                 KeyCode::Enter => {
-                    let chosen = self.effort_picker.current();
+                    let chosen = self.overlays.effort_picker.current();
                     self.effort_level = chosen;
-                    self.effort_picker.close();
+                    self.overlays.effort_picker.close();
                     self.status_message = Some(format!(
                         "Effort set to {} {}.",
                         chosen.symbol(),
@@ -2995,17 +3572,23 @@ impl App {
         }
 
         // Device code / browser auth dialog (GitHub Copilot, Anthropic OAuth)
-        if self.device_auth_dialog.visible {
+        if self.overlays.device_auth_dialog.visible {
             match key.code {
                 KeyCode::Esc => {
-                    self.device_auth_dialog.close();
+                    self.overlays.device_auth_dialog.close();
                     self.device_auth_pending = None;
                 }
-                _ if matches!(self.device_auth_dialog.status, crate::tui::device_auth_dialog::DeviceAuthStatus::Success(_)) => {
+                _ if matches!(
+                    self.overlays.device_auth_dialog.status,
+                    crate::tui::device_auth_dialog::DeviceAuthStatus::Success(_)
+                ) =>
+                {
                     // Any key after success -> store credential and close
-                    if let crate::tui::device_auth_dialog::DeviceAuthStatus::Success(ref token) = self.device_auth_dialog.status {
-                        let provider_id = self.device_auth_dialog.provider_id.clone();
-                        let provider_name = self.device_auth_dialog.provider_name.clone();
+                    if let crate::tui::device_auth_dialog::DeviceAuthStatus::Success(ref token) =
+                        self.overlays.device_auth_dialog.status
+                    {
+                        let provider_id = self.overlays.device_auth_dialog.provider_id.clone();
+                        let provider_name = self.overlays.device_auth_dialog.provider_name.clone();
                         let token = token.clone();
                         let credential = if provider_id == "github-copilot" {
                             crate::tui::adapter_types::StoredCredential::OAuthToken {
@@ -3016,19 +3599,20 @@ impl App {
                         } else {
                             crate::tui::adapter_types::StoredCredential::ApiKey { key: token }
                         };
-                        self.auth_store.set(
-                            &provider_id,
-                            credential,
-                        );
+                        self.auth_store.set(&provider_id, credential);
                         self.device_auth_pending = None;
-                        self.device_auth_dialog.close();
+                        self.overlays.device_auth_dialog.close();
                         self.activate_provider(provider_id, provider_name, "Connected to");
                         return false;
                     }
                 }
-                _ if matches!(self.device_auth_dialog.status, crate::tui::device_auth_dialog::DeviceAuthStatus::Error(_)) => {
+                _ if matches!(
+                    self.overlays.device_auth_dialog.status,
+                    crate::tui::device_auth_dialog::DeviceAuthStatus::Error(_)
+                ) =>
+                {
                     // Any key after error -> close
-                    self.device_auth_dialog.close();
+                    self.overlays.device_auth_dialog.close();
                     self.device_auth_pending = None;
                 }
                 _ => {} // Ignore other keys while waiting
@@ -3038,54 +3622,54 @@ impl App {
 
         // API key input dialog (opened from /connect for key-based providers)
         // Ask-user question dialog (AskUserQuestion tool)
-        if self.ask_user_dialog.visible {
+        if self.overlays.ask_user_dialog.visible {
             match key.code {
                 KeyCode::Esc => {
-                    self.ask_user_dialog.dismiss();
+                    self.overlays.ask_user_dialog.dismiss();
                 }
                 KeyCode::Enter => {
-                    self.ask_user_dialog.confirm();
+                    self.overlays.ask_user_dialog.confirm();
                 }
                 KeyCode::Up | KeyCode::BackTab => {
-                    self.ask_user_dialog.select_prev();
+                    self.overlays.ask_user_dialog.select_prev();
                 }
                 KeyCode::Down | KeyCode::Tab => {
-                    self.ask_user_dialog.select_next();
+                    self.overlays.ask_user_dialog.select_next();
                 }
                 KeyCode::Char(c)
                     if c.is_ascii_digit()
-                        && self.ask_user_dialog.options.is_some()
-                        && !self.ask_user_dialog.in_custom_input =>
+                        && self.overlays.ask_user_dialog.options.is_some()
+                        && !self.overlays.ask_user_dialog.in_custom_input =>
                 {
                     // Digit keys select an option by number ONLY when the user
                     // is not already typing a custom answer.  Once in custom
                     // mode, digits flow through to push_char like any other char.
                     let n = (c as u8 - b'0') as usize;
                     if n >= 1 {
-                        self.ask_user_dialog.select_by_number(n);
+                        self.overlays.ask_user_dialog.select_by_number(n);
                     }
                 }
                 KeyCode::Char(c) => {
                     let c = normalize_char_with_shift(c, key.modifiers);
-                    self.ask_user_dialog.push_char(c);
+                    self.overlays.ask_user_dialog.push_char(c);
                 }
                 KeyCode::Backspace => {
-                    self.ask_user_dialog.pop_char();
+                    self.overlays.ask_user_dialog.pop_char();
                 }
                 _ => {}
             }
             return false;
         }
 
-        if self.key_input_dialog.visible {
+        if self.overlays.key_input_dialog.visible {
             match key.code {
                 KeyCode::Esc => {
-                    self.key_input_dialog.close();
+                    self.overlays.key_input_dialog.close();
                 }
                 KeyCode::Enter => {
-                    let provider_id = self.key_input_dialog.provider_id.clone();
-                    let provider_name = self.key_input_dialog.provider_name.clone();
-                    let api_key = self.key_input_dialog.take_key();
+                    let provider_id = self.overlays.key_input_dialog.provider_id.clone();
+                    let provider_name = self.overlays.key_input_dialog.provider_name.clone();
+                    let api_key = self.overlays.key_input_dialog.take_key();
                     if !api_key.is_empty() {
                         self.auth_store.set(
                             &provider_id,
@@ -3095,24 +3679,35 @@ impl App {
                     }
                 }
                 KeyCode::Backspace => {
-                    self.key_input_dialog.backspace();
+                    self.overlays.key_input_dialog.backspace();
                 }
-                KeyCode::Char('v') if key.modifiers.contains(KeyModifiers::CONTROL) || key.modifiers.contains(KeyModifiers::SUPER) => {
+                KeyCode::Char('v')
+                    if key.modifiers.contains(KeyModifiers::CONTROL)
+                        || key.modifiers.contains(KeyModifiers::SUPER) =>
+                {
                     if let Some(text) = crate::image_paste::read_clipboard_text() {
                         if text.is_empty() {
-                            self.push_notification(NotificationKind::Warning, "Clipboard is empty".to_string(), Some(2));
+                            self.push_notification(
+                                NotificationKind::Warning,
+                                "Clipboard is empty".to_string(),
+                                Some(2),
+                            );
                         } else {
                             for ch in text.chars() {
-                                self.key_input_dialog.insert_char(ch);
+                                self.overlays.key_input_dialog.insert_char(ch);
                             }
                         }
                     } else {
-                        self.push_notification(NotificationKind::Warning, "Could not read clipboard".to_string(), Some(2));
+                        self.push_notification(
+                            NotificationKind::Warning,
+                            "Could not read clipboard".to_string(),
+                            Some(2),
+                        );
                     }
                 }
                 KeyCode::Char(c) => {
                     let c = normalize_char_with_shift(c, key.modifiers);
-                    self.key_input_dialog.insert_char(c);
+                    self.overlays.key_input_dialog.insert_char(c);
                 }
                 _ => {}
             }
@@ -3121,20 +3716,20 @@ impl App {
 
         // "Free" composite-provider setup dialog (collects any subset of the
         // free-tier upstream keys; min 1 to enable, more = better).
-        if self.free_mode_dialog.visible {
+        if self.overlays.free_mode_dialog.visible {
             match key.code {
                 KeyCode::Esc => {
-                    self.free_mode_dialog.close();
+                    self.overlays.free_mode_dialog.close();
                 }
                 KeyCode::Tab | KeyCode::Down => {
-                    self.free_mode_dialog.move_next();
+                    self.overlays.free_mode_dialog.move_next();
                 }
                 KeyCode::BackTab | KeyCode::Up => {
-                    self.free_mode_dialog.move_prev();
+                    self.overlays.free_mode_dialog.move_prev();
                 }
                 KeyCode::Enter => {
-                    if self.free_mode_dialog.can_submit() {
-                        let values = self.free_mode_dialog.take_values();
+                    if self.overlays.free_mode_dialog.can_submit() {
+                        let values = self.overlays.free_mode_dialog.take_values();
                         for (provider_id, key) in values {
                             self.auth_store.set(
                                 provider_id,
@@ -3147,15 +3742,15 @@ impl App {
                             "Connected to",
                         );
                     } else {
-                        self.free_mode_dialog.move_next();
+                        self.overlays.free_mode_dialog.move_next();
                     }
                 }
                 KeyCode::Backspace => {
-                    self.free_mode_dialog.backspace();
+                    self.overlays.free_mode_dialog.backspace();
                 }
                 KeyCode::Char(c) => {
                     let c = normalize_char_with_shift(c, key.modifiers);
-                    self.free_mode_dialog.insert_char(c);
+                    self.overlays.free_mode_dialog.insert_char(c);
                 }
                 _ => {}
             }
@@ -3163,22 +3758,22 @@ impl App {
         }
 
         // Custom provider dialog (URL + API key for OpenAI-compatible providers)
-        if self.custom_provider_dialog.visible {
+        if self.overlays.custom_provider_dialog.visible {
             match key.code {
                 KeyCode::Esc => {
-                    self.custom_provider_dialog.close();
+                    self.overlays.custom_provider_dialog.close();
                 }
                 KeyCode::Tab | KeyCode::Down => {
-                    self.custom_provider_dialog.move_next_field();
+                    self.overlays.custom_provider_dialog.move_next_field();
                 }
                 KeyCode::Up => {
-                    self.custom_provider_dialog.move_prev_field();
+                    self.overlays.custom_provider_dialog.move_prev_field();
                 }
                 KeyCode::Enter => {
-                    if self.custom_provider_dialog.can_submit() {
-                        let provider_id = self.custom_provider_dialog.provider_id.clone();
-                        let provider_name = self.custom_provider_dialog.provider_name.clone();
-                        let (base_url, api_key) = self.custom_provider_dialog.take_values();
+                    if self.overlays.custom_provider_dialog.can_submit() {
+                        let provider_id = self.overlays.custom_provider_dialog.provider_id.clone();
+                        let provider_name = self.overlays.custom_provider_dialog.provider_name.clone();
+                        let (base_url, api_key) = self.overlays.custom_provider_dialog.take_values();
                         self.persist_custom_provider_base_url(&base_url);
                         self.auth_store.set(
                             &provider_id,
@@ -3186,15 +3781,15 @@ impl App {
                         );
                         self.activate_provider(provider_id, provider_name, "Connected to");
                     } else {
-                        self.custom_provider_dialog.move_next_field();
+                        self.overlays.custom_provider_dialog.move_next_field();
                     }
                 }
                 KeyCode::Backspace => {
-                    self.custom_provider_dialog.backspace();
+                    self.overlays.custom_provider_dialog.backspace();
                 }
                 KeyCode::Char(c) => {
                     let c = normalize_char_with_shift(c, key.modifiers);
-                    self.custom_provider_dialog.insert_char(c);
+                    self.overlays.custom_provider_dialog.insert_char(c);
                 }
                 _ => {}
             }
@@ -3202,25 +3797,47 @@ impl App {
         }
 
         // Connect-a-provider dialog (/connect command)
-        if self.connect_dialog.visible {
+        if self.overlays.connect_dialog.visible {
             match key.code {
-                KeyCode::Esc => { self.connect_dialog.close(); }
-                KeyCode::Home => { self.connect_dialog.move_home(); }
-                KeyCode::End => { self.connect_dialog.move_end(); }
-                KeyCode::Up => { self.connect_dialog.move_up(); }
-                KeyCode::Down => { self.connect_dialog.move_down(); }
-                KeyCode::PageUp => { self.connect_dialog.page_up(); }
-                KeyCode::PageDown => { self.connect_dialog.page_down(); }
-                KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => { self.connect_dialog.move_up(); }
-                KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => { self.connect_dialog.move_down(); }
+                KeyCode::Esc => {
+                    self.overlays.connect_dialog.close();
+                }
+                KeyCode::Home => {
+                    self.overlays.connect_dialog.move_home();
+                }
+                KeyCode::End => {
+                    self.overlays.connect_dialog.move_end();
+                }
+                KeyCode::Up => {
+                    self.overlays.connect_dialog.move_up();
+                }
+                KeyCode::Down => {
+                    self.overlays.connect_dialog.move_down();
+                }
+                KeyCode::PageUp => {
+                    self.overlays.connect_dialog.page_up();
+                }
+                KeyCode::PageDown => {
+                    self.overlays.connect_dialog.page_down();
+                }
+                KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    self.overlays.connect_dialog.move_up();
+                }
+                KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    self.overlays.connect_dialog.move_down();
+                }
                 KeyCode::Enter => {
-                    if let Some(selected) = self.connect_dialog.selected().cloned() {
-                        self.connect_dialog.close();
+                    if let Some(selected) = self.overlays.connect_dialog.selected().cloned() {
+                        self.overlays.connect_dialog.close();
 
                         match selected.id.as_str() {
                             // Local providers — activate immediately, no key needed
                             "ollama" | "lmstudio" | "llamacpp" => {
-                                self.activate_provider(selected.id.clone(), selected.title.clone(), "Switched to");
+                                self.activate_provider(
+                                    selected.id.clone(),
+                                    selected.title.clone(),
+                                    "Switched to",
+                                );
                             }
                             // "Free" composite mode — collects any subset of the
                             // free-tier upstreams (min 1; more = better availability).
@@ -3243,81 +3860,116 @@ impl App {
                                             .map(|k| (upstream.id, k))
                                     })
                                     .collect();
-                                self.free_mode_dialog.open(&existing);
+                                self.overlays.free_mode_dialog.open(&existing);
                             }
                             "anthropic" => {
                                 // Anthropic: use API key from console.anthropic.com
                                 // (OAuth requires a registered app which Claurst doesn't have)
-                                self.key_input_dialog.open(selected.id.clone(), selected.title.clone());
+                                self.overlays.key_input_dialog
+                                    .open(selected.id.clone(), selected.title.clone());
                             }
                             "custom-openai" => {
-                                let current_url = Settings::load_sync()
-                                    .ok()
-                                    .and_then(|settings| settings.providers.get("custom-openai").and_then(|p| p.api_base.clone()));
-                                self.custom_provider_dialog
-                                    .open(selected.id.clone(), selected.title.clone(), current_url);
+                                let current_url = Settings::load_sync().ok().and_then(|settings| {
+                                    settings
+                                        .providers
+                                        .get("custom-openai")
+                                        .and_then(|p| p.api_base.clone())
+                                });
+                                self.overlays.custom_provider_dialog.open(
+                                    selected.id.clone(),
+                                    selected.title.clone(),
+                                    current_url,
+                                );
                             }
                             "github-copilot" => {
                                 // GitHub Copilot: device code flow
-                                self.device_auth_dialog.open(selected.id.clone(), selected.title.clone());
+                                self.overlays.device_auth_dialog
+                                    .open(selected.id.clone(), selected.title.clone());
                                 self.device_auth_pending = Some("github-copilot".to_string());
                             }
                             "codex" | "openai-codex" => {
                                 // OpenAI Codex: browser OAuth flow (spawned by main loop)
-                                self.device_auth_dialog.open("openai-codex".into(), "OpenAI Codex".into());
+                                self.overlays.device_auth_dialog
+                                    .open("openai-codex".into(), "OpenAI Codex".into());
                                 self.device_auth_pending = Some("openai-codex".to_string());
                             }
                             // AWS Bedrock — accept a bearer token via key input dialog
                             "amazon-bedrock" => {
-                                self.key_input_dialog
+                                self.overlays.key_input_dialog
                                     .open(selected.id.clone(), selected.title.clone());
                             }
                             // All other providers — open API key input dialog
                             _ => {
-                                self.key_input_dialog
+                                self.overlays.key_input_dialog
                                     .open(selected.id.clone(), selected.title.clone());
                             }
                         }
                     }
                 }
-                KeyCode::Backspace => { self.connect_dialog.filter_pop(); }
-                KeyCode::Char(c) => { self.connect_dialog.filter_push(c); }
+                KeyCode::Backspace => {
+                    self.overlays.connect_dialog.filter_pop();
+                }
+                KeyCode::Char(c) => {
+                    self.overlays.connect_dialog.filter_push(c);
+                }
                 _ => {}
             }
             return false;
         }
 
         // Import-config source picker
-        if self.import_config_picker.visible {
+        if self.overlays.import_config_picker.visible {
             match key.code {
-                KeyCode::Esc => { self.import_config_picker.close(); }
-                KeyCode::Home => { self.import_config_picker.move_home(); }
-                KeyCode::End => { self.import_config_picker.move_end(); }
-                KeyCode::Up => { self.import_config_picker.move_up(); }
-                KeyCode::Down => { self.import_config_picker.move_down(); }
-                KeyCode::PageUp => { self.import_config_picker.page_up(); }
-                KeyCode::PageDown => { self.import_config_picker.page_down(); }
-                KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => { self.import_config_picker.move_up(); }
-                KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => { self.import_config_picker.move_down(); }
+                KeyCode::Esc => {
+                    self.overlays.import_config_picker.close();
+                }
+                KeyCode::Home => {
+                    self.overlays.import_config_picker.move_home();
+                }
+                KeyCode::End => {
+                    self.overlays.import_config_picker.move_end();
+                }
+                KeyCode::Up => {
+                    self.overlays.import_config_picker.move_up();
+                }
+                KeyCode::Down => {
+                    self.overlays.import_config_picker.move_down();
+                }
+                KeyCode::PageUp => {
+                    self.overlays.import_config_picker.page_up();
+                }
+                KeyCode::PageDown => {
+                    self.overlays.import_config_picker.page_down();
+                }
+                KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    self.overlays.import_config_picker.move_up();
+                }
+                KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    self.overlays.import_config_picker.move_down();
+                }
                 KeyCode::Enter => {
-                    if let Some(selected) = self.import_config_picker.selected().cloned() {
-                        self.import_config_picker.close();
+                    if let Some(selected) = self.overlays.import_config_picker.selected().cloned() {
+                        self.overlays.import_config_picker.close();
                         if let Some(selection) = Self::import_selection_from_picker(&selected.id) {
                             self.open_import_config_preview(selection);
                         }
                     }
                 }
-                KeyCode::Backspace => { self.import_config_picker.filter_pop(); }
-                KeyCode::Char(c) => { self.import_config_picker.filter_push(c); }
+                KeyCode::Backspace => {
+                    self.overlays.import_config_picker.filter_pop();
+                }
+                KeyCode::Char(c) => {
+                    self.overlays.import_config_picker.filter_push(c);
+                }
                 _ => {}
             }
             return false;
         }
 
         // Import-config preview dialog
-        if self.import_config_dialog.visible {
+        if self.overlays.import_config_dialog.visible {
             match key.code {
-                KeyCode::Esc => self.import_config_dialog.close(),
+                KeyCode::Esc => self.overlays.import_config_dialog.close(),
                 KeyCode::Enter => self.perform_import_config(),
                 _ => {}
             }
@@ -3325,60 +3977,88 @@ impl App {
         }
 
         // Command palette (Ctrl+K)
-        if self.command_palette.visible {
+        if self.overlays.command_palette.visible {
             match key.code {
-                KeyCode::Esc => { self.command_palette.close(); }
-                KeyCode::Home => { self.command_palette.move_home(); }
-                KeyCode::End => { self.command_palette.move_end(); }
-                KeyCode::Up => { self.command_palette.move_up(); }
-                KeyCode::Down => { self.command_palette.move_down(); }
-                KeyCode::PageUp => { self.command_palette.page_up(); }
-                KeyCode::PageDown => { self.command_palette.page_down(); }
-                KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => { self.command_palette.move_up(); }
-                KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => { self.command_palette.move_down(); }
+                KeyCode::Esc => {
+                    self.overlays.command_palette.close();
+                }
+                KeyCode::Home => {
+                    self.overlays.command_palette.move_home();
+                }
+                KeyCode::End => {
+                    self.overlays.command_palette.move_end();
+                }
+                KeyCode::Up => {
+                    self.overlays.command_palette.move_up();
+                }
+                KeyCode::Down => {
+                    self.overlays.command_palette.move_down();
+                }
+                KeyCode::PageUp => {
+                    self.overlays.command_palette.page_up();
+                }
+                KeyCode::PageDown => {
+                    self.overlays.command_palette.page_down();
+                }
+                KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    self.overlays.command_palette.move_up();
+                }
+                KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    self.overlays.command_palette.move_down();
+                }
                 KeyCode::Enter => {
-                    if let Some(selected) = self.command_palette.selected().cloned() {
-                        self.command_palette.close();
+                    if let Some(selected) = self.overlays.command_palette.selected().cloned() {
+                        self.overlays.command_palette.close();
                         // Put the command in the input and signal for execution
                         self.prompt_input.replace_text(selected.id.clone());
                         return true; // signal to submit this as input
                     }
                 }
-                KeyCode::Backspace => { self.command_palette.filter_pop(); }
-                KeyCode::Char(c) => { self.command_palette.filter_push(c); }
+                KeyCode::Backspace => {
+                    self.overlays.command_palette.filter_pop();
+                }
+                KeyCode::Char(c) => {
+                    self.overlays.command_palette.filter_push(c);
+                }
                 _ => {}
             }
             return false;
         }
 
         // Invalid-config dialog intercepts Enter/Esc to dismiss
-        if self.invalid_config_dialog.visible {
+        if self.overlays.invalid_config_dialog.visible {
             match key.code {
-                KeyCode::Enter | KeyCode::Esc => self.invalid_config_dialog.dismiss(),
-                KeyCode::Up => self.invalid_config_dialog.scroll_up(),
-                KeyCode::Down => self.invalid_config_dialog.scroll_down(20),
+                KeyCode::Enter | KeyCode::Esc => self.overlays.invalid_config_dialog.dismiss(),
+                KeyCode::Up => self.overlays.invalid_config_dialog.scroll_up(),
+                KeyCode::Down => self.overlays.invalid_config_dialog.scroll_down(20),
                 _ => {}
             }
             return false;
         }
 
         // Model picker intercepts navigation and Esc
-        if self.model_picker.visible {
+        if self.overlays.model_picker.visible {
             match key.code {
-                KeyCode::Esc => self.model_picker.close(),
-                KeyCode::Home => self.model_picker.select_first(),
-                KeyCode::End => self.model_picker.select_last(),
-                KeyCode::Up => self.model_picker.select_prev(),
-                KeyCode::Down => self.model_picker.select_next(),
-                KeyCode::Left => self.model_picker.effort_prev(),
-                KeyCode::Right => self.model_picker.effort_next(),
-                KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => self.model_picker.select_prev(),
-                KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => self.model_picker.select_next(),
+                KeyCode::Esc => self.overlays.model_picker.close(),
+                KeyCode::Home => self.overlays.model_picker.select_first(),
+                KeyCode::End => self.overlays.model_picker.select_last(),
+                KeyCode::Up => self.overlays.model_picker.select_prev(),
+                KeyCode::Down => self.overlays.model_picker.select_next(),
+                KeyCode::Left => self.overlays.model_picker.effort_prev(),
+                KeyCode::Right => self.overlays.model_picker.effort_next(),
+                KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    self.overlays.model_picker.select_prev()
+                }
+                KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    self.overlays.model_picker.select_next()
+                }
                 KeyCode::Enter => {
-                    if let Some((model_id, effort)) = self.model_picker.confirm() {
+                    if let Some((model_id, effort)) = self.overlays.model_picker.confirm() {
                         // If user picked a model other than the fast-mode model
                         // while fast mode was active, turn fast mode off.
-                        if self.fast_mode && !self.model_picker.is_selected_fast_mode_model(&model_id) {
+                        if self.fast_mode
+                            && !self.overlays.model_picker.is_selected_fast_mode_model(&model_id)
+                        {
                             self.fast_mode = false;
                         }
                         if let Some(e) = effort {
@@ -3400,114 +4080,108 @@ impl App {
                         };
                         self.set_model(full_model.clone());
                         self.persist_provider_and_model();
-                        let effort_hint = effort.map(|e| format!(" [{}]", e.label())).unwrap_or_default();
+                        let effort_hint = effort
+                            .map(|e| format!(" [{}]", e.label()))
+                            .unwrap_or_default();
                         self.status_message = Some(format!("Model: {}{}", full_model, effort_hint));
                     }
                 }
-                KeyCode::Backspace => self.model_picker.pop_filter_char(),
-                KeyCode::Char(c) => self.model_picker.push_filter_char(c),
+                KeyCode::Backspace => self.overlays.model_picker.pop_filter_char(),
+                KeyCode::Char(c) => self.overlays.model_picker.push_filter_char(c),
                 _ => {}
             }
             return false;
         }
 
         // Session branching overlay intercepts navigation and Esc
-        if self.session_branching.visible {
+        if self.overlays.session_branching.visible {
             use crate::tui::session_branching::BranchBrowserMode;
-            match self.session_branching.mode {
-                BranchBrowserMode::Browse => {
-                    match key.code {
-                        KeyCode::Esc => self.session_branching.cancel(),
-                        KeyCode::Up => self.session_branching.select_prev(),
-                        KeyCode::Down => self.session_branching.select_next(),
-                        KeyCode::Char('n') => self.session_branching.start_create_new(),
-                        KeyCode::Char('d') => self.session_branching.start_delete_confirm(),
-                        KeyCode::Enter => {
-                            if let Some(branch) = self.session_branching.selected_branch() {
-                                self.status_message = Some(format!("Switched to branch: {}", branch.name));
-                                self.session_branching.close();
-                            }
+            match self.overlays.session_branching.mode {
+                BranchBrowserMode::Browse => match key.code {
+                    KeyCode::Esc => self.overlays.session_branching.cancel(),
+                    KeyCode::Up => self.overlays.session_branching.select_prev(),
+                    KeyCode::Down => self.overlays.session_branching.select_next(),
+                    KeyCode::Char('n') => self.overlays.session_branching.start_create_new(),
+                    KeyCode::Char('d') => self.overlays.session_branching.start_delete_confirm(),
+                    KeyCode::Enter => {
+                        if let Some(branch) = self.overlays.session_branching.selected_branch() {
+                            self.status_message =
+                                Some(format!("Switched to branch: {}", branch.name));
+                            self.overlays.session_branching.close();
                         }
-                        _ => {}
                     }
-                }
-                BranchBrowserMode::CreateNew => {
-                    match key.code {
-                        KeyCode::Esc => self.session_branching.cancel(),
-                        KeyCode::Enter => {
-                            if let Some((name, at_msg)) = self.session_branching.confirm_create_new() {
-                                self.status_message = Some(format!("Created branch: {} at message {}", name, at_msg));
-                                self.session_branching.close();
-                            }
+                    _ => {}
+                },
+                BranchBrowserMode::CreateNew => match key.code {
+                    KeyCode::Esc => self.overlays.session_branching.cancel(),
+                    KeyCode::Enter => {
+                        if let Some((name, at_msg)) = self.overlays.session_branching.confirm_create_new() {
+                            self.status_message =
+                                Some(format!("Created branch: {} at message {}", name, at_msg));
+                            self.overlays.session_branching.close();
                         }
-                        KeyCode::Backspace => self.session_branching.pop_create_char(),
-                        KeyCode::Char(c) => self.session_branching.push_create_char(c),
-                        _ => {}
                     }
-                }
-                BranchBrowserMode::ConfirmDelete => {
-                    match key.code {
-                        KeyCode::Esc | KeyCode::Char('n') => self.session_branching.cancel(),
-                        KeyCode::Enter | KeyCode::Char('y') => {
-                            if let Some(branch_id) = self.session_branching.confirm_delete() {
-                                self.status_message = Some(format!("Deleted branch: {}", branch_id));
-                            }
+                    KeyCode::Backspace => self.overlays.session_branching.pop_create_char(),
+                    KeyCode::Char(c) => self.overlays.session_branching.push_create_char(c),
+                    _ => {}
+                },
+                BranchBrowserMode::ConfirmDelete => match key.code {
+                    KeyCode::Esc | KeyCode::Char('n') => self.overlays.session_branching.cancel(),
+                    KeyCode::Enter | KeyCode::Char('y') => {
+                        if let Some(branch_id) = self.overlays.session_branching.confirm_delete() {
+                            self.status_message = Some(format!("Deleted branch: {}", branch_id));
                         }
-                        _ => {}
                     }
-                }
+                    _ => {}
+                },
             }
             return false;
         }
 
         // Session browser intercepts navigation and Esc
-        if self.session_browser.visible {
+        if self.overlays.session_browser.visible {
             use crate::tui::session_browser::SessionBrowserMode;
-            match self.session_browser.mode {
-                SessionBrowserMode::Browse => {
-                    match key.code {
-                        KeyCode::Esc => self.session_browser.close(),
-                        KeyCode::Up => self.session_browser.select_prev(),
-                        KeyCode::Down => self.session_browser.select_next(),
-                        KeyCode::Char('r') => self.session_browser.start_rename(),
-                        _ => {}
-                    }
-                }
-                SessionBrowserMode::Rename => {
-                    match key.code {
-                        KeyCode::Esc => self.session_browser.cancel(),
-                        KeyCode::Enter => {
-                            if let Some((_id, name)) = self.session_browser.confirm_rename() {
-                                self.session_title = Some(name.clone());
-                                self.status_message = Some(format!("Renamed to: {}", name));
-                            }
+            match self.overlays.session_browser.mode {
+                SessionBrowserMode::Browse => match key.code {
+                    KeyCode::Esc => self.overlays.session_browser.close(),
+                    KeyCode::Up => self.overlays.session_browser.select_prev(),
+                    KeyCode::Down => self.overlays.session_browser.select_next(),
+                    KeyCode::Char('r') => self.overlays.session_browser.start_rename(),
+                    _ => {}
+                },
+                SessionBrowserMode::Rename => match key.code {
+                    KeyCode::Esc => self.overlays.session_browser.cancel(),
+                    KeyCode::Enter => {
+                        if let Some((_id, name)) = self.overlays.session_browser.confirm_rename() {
+                            self.session_title = Some(name.clone());
+                            self.status_message = Some(format!("Renamed to: {}", name));
                         }
-                        KeyCode::Backspace => self.session_browser.pop_rename_char(),
-                        KeyCode::Char(c) => self.session_browser.push_rename_char(c),
-                        _ => {}
                     }
-                }
-                SessionBrowserMode::Confirm => {
-                    match key.code {
-                        KeyCode::Esc | KeyCode::Char('n') => self.session_browser.cancel(),
-                        KeyCode::Enter | KeyCode::Char('y') => {
-                            self.session_browser.close();
-                        }
-                        _ => {}
+                    KeyCode::Backspace => self.overlays.session_browser.pop_rename_char(),
+                    KeyCode::Char(c) => self.overlays.session_browser.push_rename_char(c),
+                    _ => {}
+                },
+                SessionBrowserMode::Confirm => match key.code {
+                    KeyCode::Esc | KeyCode::Char('n') => self.overlays.session_browser.cancel(),
+                    KeyCode::Enter | KeyCode::Char('y') => {
+                        self.overlays.session_browser.close();
                     }
-                }
+                    _ => {}
+                },
             }
             return false;
         }
 
         // Tasks overlay intercepts navigation and Esc
-        if self.tasks_overlay.visible {
+        if self.overlays.tasks_overlay.visible {
             match key.code {
-                KeyCode::Esc | KeyCode::Char('q') => self.tasks_overlay.close(),
-                KeyCode::Up => self.tasks_overlay.select_prev(),
-                KeyCode::Down => self.tasks_overlay.select_next(),
+                KeyCode::Esc | KeyCode::Char('q') => self.overlays.tasks_overlay.close(),
+                KeyCode::Up => self.overlays.tasks_overlay.select_prev(),
+                KeyCode::Down => self.overlays.tasks_overlay.select_next(),
                 KeyCode::Enter => {
-                    if let Some((task_id, new_status)) = self.tasks_overlay.cycle_and_persist_status() {
+                    if let Some((task_id, new_status)) =
+                        self.overlays.tasks_overlay.cycle_and_persist_status()
+                    {
                         self.status_message = Some(format!("Task {} → {}", task_id, new_status));
                     }
                 }
@@ -3517,10 +4191,10 @@ impl App {
         }
 
         // Export dialog key handling
-        if self.export_dialog.visible {
+        if self.overlays.export_dialog.visible {
             match key.code {
                 KeyCode::Esc => {
-                    self.export_dialog.dismiss();
+                    self.overlays.export_dialog.dismiss();
                 }
                 KeyCode::Enter => {
                     if let Some(path) = self.perform_export() {
@@ -3538,13 +4212,13 @@ impl App {
                     }
                 }
                 KeyCode::Tab | KeyCode::Left | KeyCode::Right => {
-                    self.export_dialog.toggle();
+                    self.overlays.export_dialog.toggle();
                 }
                 KeyCode::Char('1') => {
-                    self.export_dialog.selected = ExportFormat::Json;
+                    self.overlays.export_dialog.selected = ExportFormat::Json;
                 }
                 KeyCode::Char('2') => {
-                    self.export_dialog.selected = ExportFormat::Markdown;
+                    self.overlays.export_dialog.selected = ExportFormat::Markdown;
                 }
                 _ => {}
             }
@@ -3552,10 +4226,10 @@ impl App {
         }
 
         // Context visualization overlay key handling
-        if self.context_viz.visible {
+        if self.overlays.context_viz.visible {
             match key.code {
                 KeyCode::Esc | KeyCode::Enter => {
-                    self.context_viz.close();
+                    self.overlays.context_viz.close();
                 }
                 _ => {}
             }
@@ -3563,8 +4237,8 @@ impl App {
         }
 
         // MCP approval dialog
-        if self.mcp_approval.visible {
-            let result = crate::dialogs::handle_mcp_approval_key(&mut self.mcp_approval, key);
+        if self.overlays.mcp_approval.visible {
+            let result = crate::dialogs::handle_mcp_approval_key(&mut self.overlays.mcp_approval, key);
             if result.is_some() {
                 // Result processed by CLI loop via take_mcp_approval_result()
             }
@@ -3572,14 +4246,14 @@ impl App {
         }
 
         // Feedback survey intercepts digit keys and Esc
-        if self.feedback_survey.visible {
+        if self.overlays.feedback_survey.visible {
             if key.code == KeyCode::Esc {
-                self.feedback_survey.close();
+                self.overlays.feedback_survey.close();
                 return false;
             }
             if let KeyCode::Char(c) = key.code {
                 if let Some(d) = c.to_digit(10) {
-                    self.feedback_survey.handle_digit(d as u8);
+                    self.overlays.feedback_survey.handle_digit(d as u8);
                     return false;
                 }
             }
@@ -3587,14 +4261,14 @@ impl App {
         }
 
         // Memory file selector intercepts navigation and Esc
-        if self.memory_file_selector.visible {
+        if self.overlays.memory_file_selector.visible {
             match key.code {
-                KeyCode::Esc => self.memory_file_selector.close(),
-                KeyCode::Up => self.memory_file_selector.select_prev(),
-                KeyCode::Down => self.memory_file_selector.select_next(),
+                KeyCode::Esc => self.overlays.memory_file_selector.close(),
+                KeyCode::Up => self.overlays.memory_file_selector.select_prev(),
+                KeyCode::Down => self.overlays.memory_file_selector.select_next(),
                 KeyCode::Enter => {
                     // Selection acknowledged — consumer can read selected_path()
-                    self.memory_file_selector.close();
+                    self.overlays.memory_file_selector.close();
                 }
                 _ => {}
             }
@@ -3602,40 +4276,40 @@ impl App {
         }
 
         // Hooks config menu intercepts navigation and Esc
-        if self.hooks_config_menu.visible {
+        if self.overlays.hooks_config_menu.visible {
             match key.code {
-                KeyCode::Esc | KeyCode::Char('q') => self.hooks_config_menu.back(),
-                KeyCode::Enter => self.hooks_config_menu.enter(),
-                KeyCode::Up | KeyCode::Char('k') => self.hooks_config_menu.select_prev(),
-                KeyCode::Down | KeyCode::Char('j') => self.hooks_config_menu.select_next(),
+                KeyCode::Esc | KeyCode::Char('q') => self.overlays.hooks_config_menu.back(),
+                KeyCode::Enter => self.overlays.hooks_config_menu.enter(),
+                KeyCode::Up | KeyCode::Char('k') => self.overlays.hooks_config_menu.select_prev(),
+                KeyCode::Down | KeyCode::Char('j') => self.overlays.hooks_config_menu.select_next(),
                 _ => {}
             }
             return false;
         }
 
-        if self.diff_viewer.visible {
+        if self.overlays.diff_viewer.visible {
             self.handle_diff_viewer_key(key);
             return false;
         }
 
-        if self.agents_menu.visible {
+        if self.overlays.agents_menu.visible {
             self.handle_agents_menu_key(key);
             return false;
         }
 
-        if self.mcp_view.visible {
+        if self.overlays.mcp_view.visible {
             return self.handle_mcp_view_key(key);
         }
 
-        if self.stats_dialog.visible {
+        if self.overlays.stats_dialog.visible {
             self.handle_stats_dialog_key(key);
             return false;
         }
 
         // Settings screen intercepts keys
-        if self.settings_screen.visible {
+        if self.overlays.settings_screen.visible {
             crate::settings_screen::handle_settings_key(
-                &mut self.settings_screen,
+                &mut self.overlays.settings_screen,
                 &mut self.config,
                 key,
             );
@@ -3643,9 +4317,9 @@ impl App {
         }
 
         // Theme picker intercepts keys
-        if self.theme_screen.visible {
+        if self.overlays.theme_screen.visible {
             if let Some(theme_name) =
-                crate::theme_screen::handle_theme_key(&mut self.theme_screen, key)
+                crate::theme_screen::handle_theme_key(&mut self.overlays.theme_screen, key)
             {
                 self.apply_theme(&theme_name);
             }
@@ -3654,21 +4328,21 @@ impl App {
 
         // Privacy screen intercepts keys
         // Rewind flow overlay intercepts keys first
-        if self.rewind_flow.visible {
+        if self.overlays.rewind_flow.visible {
             return self.handle_rewind_flow_key(key);
         }
 
         // Help overlay intercepts keys next
-        if self.help_overlay.visible {
+        if self.overlays.help_overlay.visible {
             return self.handle_help_overlay_key(key);
         }
 
         // New history-search overlay
-        if self.history_search_overlay.visible {
+        if self.overlays.history_search_overlay.visible {
             return self.handle_history_search_overlay_key(key);
         }
 
-        if self.global_search.visible {
+        if self.overlays.global_search.visible {
             return self.handle_global_search_key(key);
         }
 
@@ -3678,14 +4352,14 @@ impl App {
         }
 
         // Permission dialog mode intercepts most keys
-        if self.permission_request.is_some() {
+        if self.permission.permission_request.is_some() {
             self.handle_permission_key(key);
             return false;
         }
 
         // Notification dismiss
-        if key.code == KeyCode::Esc && !self.notifications.is_empty() {
-            self.notifications.dismiss_current();
+        if key.code == KeyCode::Esc && !self.overlays.notifications.is_empty() {
+            self.overlays.notifications.dismiss_current();
             return false;
         }
 
@@ -3698,14 +4372,14 @@ impl App {
         }
 
         // Overage upsell dismiss
-        if key.code == KeyCode::Esc && self.overage_upsell.visible {
-            self.overage_upsell.dismiss();
+        if key.code == KeyCode::Esc && self.overlays.overage_upsell.visible {
+            self.overlays.overage_upsell.dismiss();
             return false;
         }
 
         // Voice mode notice dismiss
-        if key.code == KeyCode::Esc && self.voice_mode_notice.visible {
-            self.voice_mode_notice.dismiss();
+        if key.code == KeyCode::Esc && self.overlays.voice_mode_notice.visible {
+            self.overlays.voice_mode_notice.dismiss();
             return false;
         }
 
@@ -3728,22 +4402,22 @@ impl App {
         }
 
         // Desktop upsell startup dialog
-        if self.desktop_upsell.visible {
+        if self.overlays.desktop_upsell.visible {
             match key.code {
                 KeyCode::Up | KeyCode::BackTab => {
-                    self.desktop_upsell.select_prev();
+                    self.overlays.desktop_upsell.select_prev();
                     return false;
                 }
                 KeyCode::Down | KeyCode::Tab => {
-                    self.desktop_upsell.select_next();
+                    self.overlays.desktop_upsell.select_next();
                     return false;
                 }
                 KeyCode::Enter => {
-                    self.desktop_upsell.confirm();
+                    self.overlays.desktop_upsell.confirm();
                     return false;
                 }
                 KeyCode::Esc => {
-                    self.desktop_upsell.dismiss_temporarily();
+                    self.overlays.desktop_upsell.dismiss_temporarily();
                     return false;
                 }
                 _ => return false,
@@ -3751,53 +4425,53 @@ impl App {
         }
 
         // Memory update notification dismiss
-        if key.code == KeyCode::Esc && self.memory_update_notification.visible {
-            self.memory_update_notification.dismiss();
+        if key.code == KeyCode::Esc && self.overlays.memory_update_notification.visible {
+            self.overlays.memory_update_notification.dismiss();
             return false;
         }
 
         // MCP elicitation dialog — highest priority modal
-        if self.elicitation.visible {
+        if self.overlays.elicitation.visible {
             match key.code {
                 KeyCode::Esc => {
-                    self.elicitation.cancel();
+                    self.overlays.elicitation.cancel();
                     return false;
                 }
                 KeyCode::Enter => {
-                    self.elicitation.submit();
+                    self.overlays.elicitation.submit();
                     return false;
                 }
                 KeyCode::Tab | KeyCode::Down => {
                     if let crossterm::event::KeyModifiers::SHIFT = key.modifiers {
-                        self.elicitation.prev_field();
+                        self.overlays.elicitation.prev_field();
                     } else {
-                        self.elicitation.next_field();
+                        self.overlays.elicitation.next_field();
                     }
                     return false;
                 }
                 KeyCode::BackTab | KeyCode::Up => {
-                    self.elicitation.prev_field();
+                    self.overlays.elicitation.prev_field();
                     return false;
                 }
                 KeyCode::Left => {
-                    self.elicitation.cycle_enum_prev();
+                    self.overlays.elicitation.cycle_enum_prev();
                     return false;
                 }
                 KeyCode::Right => {
-                    self.elicitation.cycle_enum_next();
+                    self.overlays.elicitation.cycle_enum_next();
                     return false;
                 }
                 KeyCode::Char(' ') => {
-                    self.elicitation.toggle_active();
+                    self.overlays.elicitation.toggle_active();
                     return false;
                 }
                 KeyCode::Backspace => {
-                    self.elicitation.backspace();
+                    self.overlays.elicitation.backspace();
                     return false;
                 }
                 KeyCode::Char(c) => {
                     let c = normalize_char_with_shift(c, key.modifiers);
-                    self.elicitation.insert_char(c);
+                    self.overlays.elicitation.insert_char(c);
                     return false;
                 }
                 _ => return false,
@@ -3808,7 +4482,7 @@ impl App {
         let key_context = self.current_key_context();
         if let Some(keystroke) = key_event_to_keystroke(&key) {
             let had_pending_chord = self.keybindings.has_pending_chord();
-            match self.keybindings.process(keystroke, &key_context) {
+            match self.keybindings.process(&keystroke, &key_context) {
                 KeybindingResult::Action(action) => {
                     return self.handle_keybinding_action(&action);
                 }
@@ -3822,8 +4496,24 @@ impl App {
             self.keybindings.cancel_chord();
         }
 
+        // ---- Hardcoded keybinding fallbacks ----
+        // (Bridges gap while KeybindingResolver adapter is a stub)
+        if key.code == KeyCode::Char('a') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            if !self.streaming.is_streaming && !self.overlays.model_picker.visible {
+                self.intercept_slash_command("model");
+            }
+            return false;
+        }
+        if key.code == KeyCode::Char('k') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            if !self.streaming.is_streaming && !self.overlays.command_palette.visible {
+                self.overlays.command_palette.open();
+            }
+            return false;
+        }
+
         // Clear any active text selection on key press (except Ctrl+C which copies it).
-        let is_copy = key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL);
+        let is_copy =
+            key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL);
         if !is_copy && self.selection_anchor.is_some() {
             self.selection_anchor = None;
             self.selection_focus = None;
@@ -3913,7 +4603,9 @@ impl App {
                     | crate::prompt_input::VimMode::VisualBlock
             )
         {
-            use crate::tui::image_paste::{read_clipboard_image, read_clipboard_text, read_primary_text};
+            use crate::tui::image_paste::{
+                read_clipboard_image, read_clipboard_text, read_primary_text,
+            };
             if let Some(img) = read_clipboard_image() {
                 let label = img.label.clone();
                 let dims = img.dimensions;
@@ -3938,10 +4630,7 @@ impl App {
         }
 
         // ---- Enter while PTT recording: stop capture instead of submitting ----
-        if key.code == KeyCode::Enter
-            && self.voice_recording
-            && self.voice_recorder.is_some()
-        {
+        if key.code == KeyCode::Enter && self.voice_recording && self.voice_recorder.is_some() {
             self.handle_voice_ptt_stop();
             return false;
         }
@@ -3959,8 +4648,9 @@ impl App {
                 KeyCode::PageUp | KeyCode::PageDown => {
                     // Let these fall through to the normal scroll handling below.
                 }
-                KeyCode::Char(_) if !key.modifiers.contains(KeyModifiers::CONTROL)
-                    && !key.modifiers.contains(KeyModifiers::ALT) =>
+                KeyCode::Char(_)
+                    if !key.modifiers.contains(KeyModifiers::CONTROL)
+                        && !key.modifiers.contains(KeyModifiers::ALT) =>
                 {
                     // Printable char: switch focus to Input and process normally.
                     self.focus = FocusTarget::Input;
@@ -3971,11 +4661,11 @@ impl App {
 
         match key.code {
             // ---- ESC: cancel streaming (status bar advertises "esc interrupt") ----
-            KeyCode::Esc if self.is_streaming => {
-                self.is_streaming = false;
-                self.spinner_verb = None;
-                self.streaming_text.clear();
-                self.streaming_thinking.clear();
+            KeyCode::Esc if self.streaming.is_streaming => {
+                self.streaming.is_streaming = false;
+                self.streaming.spinner_verb = None;
+                self.streaming.streaming_text.clear();
+                self.streaming.streaming_thinking.clear();
                 self.tool_use_blocks.clear();
                 self.status_message = Some("Cancelled.".to_string());
                 self.complete_current_turn_snapshot(true);
@@ -3984,7 +4674,9 @@ impl App {
             // ---- Quit / cancel ----------------------------------------
             // Accept both 'c' and 'C' so Shift+Ctrl+C also triggers copy
             // (issue #149 follow-up).
-            KeyCode::Char(c) if (c == 'c' || c == 'C') && key.modifiers.contains(KeyModifiers::CONTROL) => {
+            KeyCode::Char(c)
+                if (c == 'c' || c == 'C') && key.modifiers.contains(KeyModifiers::CONTROL) =>
+            {
                 // If text is selected, copy it to clipboard instead of quitting.
                 let sel_text = self.selection_text.borrow().clone();
                 if self.selection_anchor.is_some() && !sel_text.is_empty() {
@@ -3994,14 +4686,18 @@ impl App {
                     self.selection_focus = None;
                     *self.selection_text.borrow_mut() = String::new();
                     if copied {
-                        self.push_notification(NotificationKind::Info, "Copied to clipboard".to_string(), Some(2));
+                        self.push_notification(
+                            NotificationKind::Info,
+                            "Copied to clipboard".to_string(),
+                            Some(2),
+                        );
                     }
-                } else if self.is_streaming {
+                } else if self.streaming.is_streaming {
                     // Cancel streaming.
-                    self.is_streaming = false;
-                    self.spinner_verb = None;
-                    self.streaming_text.clear();
-                    self.streaming_thinking.clear();
+                    self.streaming.is_streaming = false;
+                    self.streaming.spinner_verb = None;
+                    self.streaming.streaming_text.clear();
+                    self.streaming.streaming_thinking.clear();
                     self.tool_use_blocks.clear();
                     self.status_message = Some("Cancelled.".to_string());
                     self.complete_current_turn_snapshot(true);
@@ -4026,49 +4722,57 @@ impl App {
             KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 // Open the new overlay-based history search
                 let overlay = HistorySearchOverlay::open(&self.prompt_input.history);
-                self.history_search_overlay = overlay;
+                self.overlays.history_search_overlay = overlay;
                 // Also open legacy for backwards compat
                 let mut hs = HistorySearch::new();
                 hs.update_matches(&self.prompt_input.history);
                 self.history_search = Some(hs);
             }
             KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.global_search.open();
+                self.overlays.global_search.open();
                 self.refresh_global_search();
             }
 
             // ---- Tasks overlay (Ctrl+T) --------------------------------
             KeyCode::Char('t') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.tasks_overlay.toggle();
+                self.overlays.tasks_overlay.toggle();
+            }
+
+            // ---- Debug overlay (Ctrl+Shift+D) ----------------------------
+            KeyCode::Char('d')
+                if key.modifiers.contains(KeyModifiers::CONTROL)
+                    && key.modifiers.contains(KeyModifiers::SHIFT) =>
+            {
+                self.intercept_slash_command("debug");
             }
 
             // ---- Help overlay ------------------------------------------
             KeyCode::F(1) => {
-                self.show_help = !self.show_help;
-                self.help_overlay.toggle();
+                self.overlays.show_help = !self.overlays.show_help;
+                self.overlays.help_overlay.toggle();
             }
             KeyCode::Char('?')
-                if !self.is_streaming
+                if !self.streaming.is_streaming
                     && self.prompt_input.is_empty()
                     && !key.modifiers.contains(KeyModifiers::CONTROL)
                     && !key.modifiers.contains(KeyModifiers::ALT)
                     && !key.modifiers.contains(KeyModifiers::SUPER) =>
             {
-                self.show_help = !self.show_help;
-                self.help_overlay.toggle();
+                self.overlays.show_help = !self.overlays.show_help;
+                self.overlays.help_overlay.toggle();
             }
             // With the kitty keyboard protocol, Shift+/ is reported as Char('/') with
             // SHIFT rather than Char('?'), so also accept that form for the help toggle.
             KeyCode::Char('/')
                 if key.modifiers.contains(KeyModifiers::SHIFT)
-                    && !self.is_streaming
+                    && !self.streaming.is_streaming
                     && self.prompt_input.is_empty()
                     && !key.modifiers.contains(KeyModifiers::CONTROL)
                     && !key.modifiers.contains(KeyModifiers::ALT)
                     && !key.modifiers.contains(KeyModifiers::SUPER) =>
             {
-                self.show_help = !self.show_help;
-                self.help_overlay.toggle();
+                self.overlays.show_help = !self.overlays.show_help;
+                self.overlays.help_overlay.toggle();
             }
 
             KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -4175,7 +4879,7 @@ impl App {
                     }
                     self.prompt_input.accept_suggestion();
                     self.refresh_prompt_input();
-                } else if !self.is_streaming && self.prompt_input.is_empty() {
+                } else if !self.streaming.is_streaming && self.prompt_input.is_empty() {
                     // Cycle agent mode: build → plan → explore → build
                     self.cycle_agent_mode();
                     self.rustle_look_down();
@@ -4185,7 +4889,7 @@ impl App {
             // ---- Shift+Tab: cycle permission mode ----------------------
             // Default → AcceptEdits → BypassPermissions → Default
             // Mirrors TS bottom-left indicator cycling behaviour.
-            KeyCode::BackTab if !self.is_streaming => {
+            KeyCode::BackTab if !self.streaming.is_streaming => {
                 use crate::tui::adapter_types::config::PermissionMode;
                 self.config.permission_mode = match self.config.permission_mode {
                     PermissionMode::Default => PermissionMode::AcceptEdits,
@@ -4207,7 +4911,7 @@ impl App {
             // so users can compose multi-line prompts before sending
             // (issue #149 follow-up).
             KeyCode::Enter
-                if !self.is_streaming
+                if !self.streaming.is_streaming
                     && (key.modifiers.contains(KeyModifiers::SHIFT)
                         || key.modifiers.contains(KeyModifiers::ALT)
                         || key.modifiers.contains(KeyModifiers::CONTROL)) =>
@@ -4215,20 +4919,24 @@ impl App {
                 self.prompt_input.insert_newline();
                 self.refresh_prompt_input();
             }
-            KeyCode::Enter if !self.is_streaming => {
+            KeyCode::Enter if !self.streaming.is_streaming => {
                 // If a suggestion is selected, accept it instead of submitting.
-                if !self.prompt_input.suggestions.is_empty()
-                    && self.prompt_input.suggestion_index.is_some()
-                {
-                    let is_file_ref = self.prompt_input.suggestions
-                        .get(self.prompt_input.suggestion_index.unwrap())
-                        .map_or(false, |s| s.source == crate::prompt_input::TypeaheadSource::FileRef);
-                    self.prompt_input.accept_suggestion();
-                    if is_file_ref {
-                        self.prompt_input.insert_char(' ');
+                if !self.prompt_input.suggestions.is_empty() {
+                    if let Some(idx) = self.prompt_input.suggestion_index {
+                        let is_file_ref = self
+                            .prompt_input
+                            .suggestions
+                            .get(idx)
+                            .map_or(false, |s| {
+                                s.source == crate::prompt_input::TypeaheadSource::FileRef
+                            });
+                        self.prompt_input.accept_suggestion();
+                        if is_file_ref {
+                            self.prompt_input.insert_char(' ');
+                        }
+                        self.refresh_prompt_input();
+                        return false;
                     }
-                    self.refresh_prompt_input();
-                    return false;
                 }
                 // Auto-dismiss all error notifications when user sends a message
                 self.dismiss_error_notifications();
@@ -4261,7 +4969,10 @@ impl App {
             // when the cursor is already on the first/last visual row
             // (issue #149 follow-up).
             KeyCode::Up => {
-                if !self.prompt_input.suggestions.is_empty() && (self.prompt_input.text.starts_with('/') || self.prompt_input.has_active_file_ref()) {
+                if !self.prompt_input.suggestions.is_empty()
+                    && (self.prompt_input.text.starts_with('/')
+                        || self.prompt_input.has_active_file_ref())
+                {
                     self.prompt_input.suggestion_prev();
                 } else {
                     let area = self.last_input_area.get();
@@ -4275,7 +4986,10 @@ impl App {
                 self.refresh_prompt_input();
             }
             KeyCode::Down => {
-                if !self.prompt_input.suggestions.is_empty() && (self.prompt_input.text.starts_with('/') || self.prompt_input.has_active_file_ref()) {
+                if !self.prompt_input.suggestions.is_empty()
+                    && (self.prompt_input.text.starts_with('/')
+                        || self.prompt_input.has_active_file_ref())
+                {
                     self.prompt_input.suggestion_next();
                 } else {
                     let area = self.last_input_area.get();
@@ -4307,12 +5021,12 @@ impl App {
 
             // ---- Toggle last thinking block (t key) -------------------
             // (Removed: shadowed by KeyCode::Char(c) prompt input handler.)
-
             _ => {}
         }
 
         // Reset exit confirmation sequence if user presses any key other than Ctrl+C or Ctrl+D.
-        let is_exit_key = key.modifiers.contains(KeyModifiers::CONTROL) && matches!(key.code, KeyCode::Char(c) if c == 'c' || c == 'd' || c == 'C' || c == 'D');
+        let is_exit_key = key.modifiers.contains(KeyModifiers::CONTROL)
+            && matches!(key.code, KeyCode::Char(c) if c == 'c' || c == 'd' || c == 'C' || c == 'D');
         if !is_exit_key {
             self.last_exit_key_warning = None;
             self.exit_key_sequence_start = None;
@@ -4322,25 +5036,25 @@ impl App {
     }
 
     fn current_key_context(&self) -> KeyContext {
-        if self.diff_viewer.visible {
+        if self.overlays.diff_viewer.visible {
             KeyContext::DiffDialog
-        } else if self.agents_menu.visible || self.mcp_view.visible || self.stats_dialog.visible {
+        } else if self.overlays.agents_menu.visible || self.overlays.mcp_view.visible || self.overlays.stats_dialog.visible {
             KeyContext::Select
-        } else if self.import_config_dialog.visible {
+        } else if self.overlays.import_config_dialog.visible {
             KeyContext::Confirmation
-        } else if self.settings_screen.visible {
+        } else if self.overlays.settings_screen.visible {
             KeyContext::Settings
-        } else if self.theme_screen.visible {
+        } else if self.overlays.theme_screen.visible {
             KeyContext::ThemePicker
-        } else if self.rewind_flow.visible {
+        } else if self.overlays.rewind_flow.visible {
             KeyContext::Confirmation
-        } else if self.help_overlay.visible {
+        } else if self.overlays.help_overlay.visible {
             KeyContext::Help
-        } else if self.history_search_overlay.visible || self.history_search.is_some() {
+        } else if self.overlays.history_search_overlay.visible || self.history_search.is_some() {
             KeyContext::HistorySearch
-        } else if self.permission_request.is_some() {
+        } else if self.permission.permission_request.is_some() {
             KeyContext::Confirmation
-        } else if self.show_help {
+        } else if self.overlays.show_help {
             KeyContext::Help
         } else {
             KeyContext::Chat
@@ -4353,35 +5067,35 @@ impl App {
 
     fn handle_stats_dialog_key(&mut self, key: KeyEvent) {
         match key.code {
-            KeyCode::Esc | KeyCode::Char('q') => self.stats_dialog.close(),
-            KeyCode::Tab | KeyCode::Right => self.stats_dialog.next_tab(),
-            KeyCode::BackTab | KeyCode::Left => self.stats_dialog.prev_tab(),
-            KeyCode::Char('r') => self.stats_dialog.cycle_range(),
-            KeyCode::Up => self.stats_dialog.scroll = self.stats_dialog.scroll.saturating_sub(1),
-            KeyCode::Down => self.stats_dialog.scroll = self.stats_dialog.scroll.saturating_add(1),
+            KeyCode::Esc | KeyCode::Char('q') => self.overlays.stats_dialog.close(),
+            KeyCode::Tab | KeyCode::Right => self.overlays.stats_dialog.next_tab(),
+            KeyCode::BackTab | KeyCode::Left => self.overlays.stats_dialog.prev_tab(),
+            KeyCode::Char('r') => self.overlays.stats_dialog.cycle_range(),
+            KeyCode::Up => self.overlays.stats_dialog.scroll = self.overlays.stats_dialog.scroll.saturating_sub(1),
+            KeyCode::Down => self.overlays.stats_dialog.scroll = self.overlays.stats_dialog.scroll.saturating_add(1),
             _ => {}
         }
     }
 
     fn handle_mcp_view_key(&mut self, key: KeyEvent) -> bool {
         match key.code {
-            KeyCode::Esc | KeyCode::Char('q') => self.mcp_view.close(),
-            KeyCode::Tab | KeyCode::Left | KeyCode::Right => self.mcp_view.switch_pane(),
-            KeyCode::Up => self.mcp_view.select_prev(),
-            KeyCode::Down => self.mcp_view.select_next(),
-            KeyCode::Backspace => self.mcp_view.pop_search_char(),
-            KeyCode::Char('e') => self.mcp_view.toggle_error_detail(),
+            KeyCode::Esc | KeyCode::Char('q') => self.overlays.mcp_view.close(),
+            KeyCode::Tab | KeyCode::Left | KeyCode::Right => self.overlays.mcp_view.switch_pane(),
+            KeyCode::Up => self.overlays.mcp_view.select_prev(),
+            KeyCode::Down => self.overlays.mcp_view.select_next(),
+            KeyCode::Backspace => self.overlays.mcp_view.pop_search_char(),
+            KeyCode::Char('e') => self.overlays.mcp_view.toggle_error_detail(),
             KeyCode::Char('a')
-                if self.mcp_view.active_pane == crate::mcp_view::McpViewPane::ServerList =>
+                if self.overlays.mcp_view.active_pane == crate::mcp_view::McpViewPane::ServerList =>
             {
                 let selected_server = self
                     .mcp_view
                     .servers
-                    .get(self.mcp_view.selected_server)
+                    .get(self.overlays.mcp_view.selected_server)
                     .map(|server| server.name.clone());
                 if let Some(server_name) = selected_server {
                     self.pending_mcp_panel_auth = Some(server_name);
-                    self.mcp_view.close();
+                    self.overlays.mcp_view.close();
                     self.status_message = Some("Starting MCP auth...".to_string());
                 }
             }
@@ -4390,8 +5104,8 @@ impl App {
                 self.status_message = Some("Reconnecting MCP runtime...".to_string());
             }
             KeyCode::Char(c) if key.modifiers.is_empty() => {
-                if self.mcp_view.active_pane != crate::mcp_view::McpViewPane::ServerList {
-                    self.mcp_view.push_search_char(c);
+                if self.overlays.mcp_view.active_pane != crate::mcp_view::McpViewPane::ServerList {
+                    self.overlays.mcp_view.push_search_char(c);
                 }
             }
             _ => {}
@@ -4400,69 +5114,68 @@ impl App {
     }
 
     fn handle_agents_menu_key(&mut self, key: KeyEvent) {
-        if matches!(self.agents_menu.route, AgentsRoute::Editor(_)) {
+        if matches!(self.overlays.agents_menu.route, AgentsRoute::Editor(_)) {
             match key.code {
-                KeyCode::Esc => self.agents_menu.go_back(),
-                KeyCode::Tab | KeyCode::Down => self.agents_menu.editor_next_field(),
-                KeyCode::BackTab | KeyCode::Up => self.agents_menu.editor_prev_field(),
-                KeyCode::Enter => self.agents_menu.editor_insert_newline(),
-                KeyCode::Backspace => self.agents_menu.editor_backspace(),
+                KeyCode::Esc => self.overlays.agents_menu.go_back(),
+                KeyCode::Tab | KeyCode::Down => self.overlays.agents_menu.editor_next_field(),
+                KeyCode::BackTab | KeyCode::Up => self.overlays.agents_menu.editor_prev_field(),
+                KeyCode::Enter => self.overlays.agents_menu.editor_insert_newline(),
+                KeyCode::Backspace => self.overlays.agents_menu.editor_backspace(),
                 KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    match self.agents_menu.save_editor() {
+                    match self.overlays.agents_menu.save_editor() {
                         Ok(msg) => self.status_message = Some(msg),
                         Err(err) => {
-                            self.agents_menu.editor.error = Some(err.clone());
-                            self.agents_menu.editor.saved_message = None;
+                            self.overlays.agents_menu.editor.error = Some(err.clone());
+                            self.overlays.agents_menu.editor.saved_message = None;
                             self.status_message = Some(err);
                         }
                     }
                 }
                 KeyCode::Char(ch) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
                     let ch = normalize_char_with_shift(ch, key.modifiers);
-                    self.agents_menu.editor_insert_char(ch);
+                    self.overlays.agents_menu.editor_insert_char(ch);
                 }
                 _ => {}
             }
-            return;
         }
 
         match key.code {
-            KeyCode::Esc | KeyCode::Char('q') | KeyCode::Backspace => self.agents_menu.go_back(),
-            KeyCode::Up => self.agents_menu.select_prev(),
-            KeyCode::Down => self.agents_menu.select_next(),
-            KeyCode::Enter | KeyCode::Right => self.agents_menu.confirm_selection(),
-            KeyCode::Left => self.agents_menu.go_back(),
+            KeyCode::Esc | KeyCode::Char('q') | KeyCode::Backspace => self.overlays.agents_menu.go_back(),
+            KeyCode::Up => self.overlays.agents_menu.select_prev(),
+            KeyCode::Down => self.overlays.agents_menu.select_next(),
+            KeyCode::Enter | KeyCode::Right => self.overlays.agents_menu.confirm_selection(),
+            KeyCode::Left => self.overlays.agents_menu.go_back(),
             _ => {}
         }
     }
 
     fn handle_diff_viewer_key(&mut self, key: KeyEvent) {
         match key.code {
-            KeyCode::Esc | KeyCode::Char('q') => self.diff_viewer.close(),
-            KeyCode::Tab | KeyCode::Left | KeyCode::Right => self.diff_viewer.switch_pane(),
+            KeyCode::Esc | KeyCode::Char('q') => self.overlays.diff_viewer.close(),
+            KeyCode::Tab | KeyCode::Left | KeyCode::Right => self.overlays.diff_viewer.switch_pane(),
             KeyCode::Char('d') => {
                 let root = self.project_root();
-                self.diff_viewer.toggle_diff_type(&root);
+                self.overlays.diff_viewer.toggle_diff_type(&root);
             }
             KeyCode::Up => {
-                if self.diff_viewer.active_pane == DiffPane::FileList {
-                    self.diff_viewer.select_prev();
+                if self.overlays.diff_viewer.active_pane == DiffPane::FileList {
+                    self.overlays.diff_viewer.select_prev();
                 } else {
-                    self.diff_viewer.scroll_detail_up();
+                    self.overlays.diff_viewer.scroll_detail_up();
                 }
             }
             KeyCode::Down => {
-                if self.diff_viewer.active_pane == DiffPane::FileList {
-                    self.diff_viewer.select_next();
+                if self.overlays.diff_viewer.active_pane == DiffPane::FileList {
+                    self.overlays.diff_viewer.select_next();
                 } else {
-                    self.diff_viewer.scroll_detail_down();
+                    self.overlays.diff_viewer.scroll_detail_down();
                 }
             }
-            KeyCode::PageUp => self.diff_viewer.scroll_detail_up(),
-            KeyCode::PageDown => self.diff_viewer.scroll_detail_down(),
+            KeyCode::PageUp => self.overlays.diff_viewer.scroll_detail_up(),
+            KeyCode::PageDown => self.overlays.diff_viewer.scroll_detail_down(),
             KeyCode::Char(' ') => {
-                if self.diff_viewer.active_pane == DiffPane::FileList {
-                    self.diff_viewer.toggle_file_collapse();
+                if self.overlays.diff_viewer.active_pane == DiffPane::FileList {
+                    self.overlays.diff_viewer.toggle_file_collapse();
                 }
             }
             _ => {}
@@ -4472,29 +5185,29 @@ impl App {
     fn handle_help_overlay_key(&mut self, key: KeyEvent) -> bool {
         match key.code {
             KeyCode::Esc | KeyCode::F(1) => {
-                self.help_overlay.close();
-                self.show_help = false;
+                self.overlays.help_overlay.close();
+                self.overlays.show_help = false;
             }
             KeyCode::Char('?')
                 if !key.modifiers.contains(KeyModifiers::CONTROL)
                     && !key.modifiers.contains(KeyModifiers::ALT)
                     && !key.modifiers.contains(KeyModifiers::SUPER) =>
             {
-                self.help_overlay.close();
-                self.show_help = false;
+                self.overlays.help_overlay.close();
+                self.overlays.show_help = false;
             }
             KeyCode::Up => {
-                self.help_overlay.scroll_up();
+                self.overlays.help_overlay.scroll_up();
             }
             KeyCode::Down => {
                 let max = 50u16; // generous upper bound; renderer will clamp
-                self.help_overlay.scroll_down(max);
+                self.overlays.help_overlay.scroll_down(max);
             }
             KeyCode::Backspace => {
-                self.help_overlay.pop_filter_char();
+                self.overlays.help_overlay.pop_filter_char();
             }
             KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.help_overlay.push_filter_char(c);
+                self.overlays.help_overlay.push_filter_char(c);
             }
             _ => {}
         }
@@ -4504,7 +5217,7 @@ impl App {
     fn handle_history_search_overlay_key(&mut self, key: KeyEvent) -> bool {
         match key.code {
             KeyCode::Esc => {
-                self.history_search_overlay.close();
+                self.overlays.history_search_overlay.close();
                 self.history_search = None;
             }
             KeyCode::Enter => {
@@ -4514,11 +5227,11 @@ impl App {
                 {
                     self.set_prompt_text(entry.to_string());
                 }
-                self.history_search_overlay.close();
+                self.overlays.history_search_overlay.close();
                 self.history_search = None;
             }
             KeyCode::Up => {
-                self.history_search_overlay.select_prev();
+                self.overlays.history_search_overlay.select_prev();
                 if let Some(hs) = self.history_search.as_mut() {
                     let count = hs.matches.len();
                     if count > 0 {
@@ -4531,7 +5244,7 @@ impl App {
                 }
             }
             KeyCode::Down => {
-                self.history_search_overlay.select_next();
+                self.overlays.history_search_overlay.select_next();
                 if let Some(hs) = self.history_search.as_mut() {
                     let count = hs.matches.len();
                     if count > 0 {
@@ -4541,7 +5254,7 @@ impl App {
             }
             KeyCode::Backspace => {
                 let history = self.prompt_input.history.clone();
-                self.history_search_overlay.pop_char(&history);
+                self.overlays.history_search_overlay.pop_char(&history);
                 if let Some(hs) = self.history_search.as_mut() {
                     hs.query.pop();
                     hs.update_matches(&history);
@@ -4552,14 +5265,14 @@ impl App {
             // the user can still search for prompts containing the letter 'p'.
             KeyCode::Char('p')
                 if !key.modifiers.contains(KeyModifiers::CONTROL)
-                    && self.history_search_overlay.query.is_empty() =>
+                    && self.overlays.history_search_overlay.query.is_empty() =>
             {
-                self.history_search_overlay.toggle_pin();
+                self.overlays.history_search_overlay.toggle_pin();
             }
             KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
                 let c = normalize_char_with_shift(c, key.modifiers);
                 let history = self.prompt_input.history.clone();
-                self.history_search_overlay.push_char(c, &history);
+                self.overlays.history_search_overlay.push_char(c, &history);
                 if let Some(hs) = self.history_search.as_mut() {
                     hs.query.push(c);
                     hs.update_matches(&history);
@@ -4572,25 +5285,25 @@ impl App {
 
     fn handle_rewind_flow_key(&mut self, key: KeyEvent) -> bool {
         use crate::tui::overlays::RewindStep;
-        match &self.rewind_flow.step {
+        match &self.overlays.rewind_flow.step {
             RewindStep::Selecting => match key.code {
                 KeyCode::Esc => {
-                    self.rewind_flow.close();
+                    self.overlays.rewind_flow.close();
                 }
                 KeyCode::Enter => {
-                    self.rewind_flow.confirm_selection();
+                    self.overlays.rewind_flow.confirm_selection();
                 }
                 KeyCode::Up => {
-                    self.rewind_flow.selector.select_prev();
+                    self.overlays.rewind_flow.selector.select_prev();
                 }
                 KeyCode::Down => {
-                    self.rewind_flow.selector.select_next();
+                    self.overlays.rewind_flow.selector.select_next();
                 }
                 _ => {}
             },
             RewindStep::Confirming { .. } => match key.code {
                 KeyCode::Char('y') | KeyCode::Char('Y') => {
-                    if let Some(idx) = self.rewind_flow.accept_confirm() {
+                    if let Some(idx) = self.overlays.rewind_flow.accept_confirm() {
                         // Truncate conversation to the selected message index.
                         self.messages.truncate(idx);
                         // Remove system annotations placed after the truncation point.
@@ -4603,7 +5316,7 @@ impl App {
                     }
                 }
                 KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
-                    self.rewind_flow.reject_confirm();
+                    self.overlays.rewind_flow.reject_confirm();
                 }
                 _ => {}
             },
@@ -4614,23 +5327,23 @@ impl App {
     fn handle_global_search_key(&mut self, key: KeyEvent) -> bool {
         match key.code {
             KeyCode::Esc => {
-                self.global_search.close();
+                self.overlays.global_search.close();
             }
             KeyCode::Enter => {
-                if let Some(selected) = self.global_search.selected_ref() {
+                if let Some(selected) = self.overlays.global_search.selected_ref() {
                     self.set_prompt_text(selected);
                 }
-                self.global_search.close();
+                self.overlays.global_search.close();
             }
-            KeyCode::Up => self.global_search.select_prev(),
-            KeyCode::Down => self.global_search.select_next(),
+            KeyCode::Up => self.overlays.global_search.select_prev(),
+            KeyCode::Down => self.overlays.global_search.select_next(),
             KeyCode::Backspace => {
-                self.global_search.pop_char();
+                self.overlays.global_search.pop_char();
                 self.refresh_global_search();
             }
             KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
                 let c = normalize_char_with_shift(c, key.modifiers);
-                self.global_search.push_char(c);
+                self.overlays.global_search.push_char(c);
                 self.refresh_global_search();
             }
             _ => {}
@@ -4665,7 +5378,11 @@ impl App {
         }
 
         // Start new sequence (or show message for wrong key)
-        self.push_notification(NotificationKind::Info, exit_message(key_char).to_string(), Some(2));
+        self.push_notification(
+            NotificationKind::Info,
+            exit_message(key_char).to_string(),
+            Some(2),
+        );
         self.last_exit_key_warning = Some(std::time::Instant::now());
         self.exit_key_sequence_start = Some(key_char);
     }
@@ -4673,11 +5390,11 @@ impl App {
     fn handle_keybinding_action(&mut self, action: &str) -> bool {
         match action {
             "interrupt" => {
-                if self.is_streaming {
-                    self.is_streaming = false;
-                    self.spinner_verb = None;
-                    self.streaming_text.clear();
-                    self.streaming_thinking.clear();
+                if self.streaming.is_streaming {
+                    self.streaming.is_streaming = false;
+                    self.streaming.spinner_verb = None;
+                    self.streaming.streaming_text.clear();
+                    self.streaming.streaming_thinking.clear();
                     self.tool_use_blocks.clear();
                     self.status_message = Some("Cancelled.".to_string());
                 } else {
@@ -4688,7 +5405,9 @@ impl App {
                         self.refresh_prompt_input();
                     }
 
-                    let elapsed = self.last_exit_key_warning.map(|t| t.elapsed().as_secs_f64());
+                    let elapsed = self
+                        .last_exit_key_warning
+                        .map(|t| t.elapsed().as_secs_f64());
                     let is_valid = elapsed.map(|e| e <= 2.0).unwrap_or(false);
 
                     if self.last_exit_key_warning.is_some() && is_valid {
@@ -4698,7 +5417,11 @@ impl App {
                         self.exit_key_sequence_start = None;
                     } else {
                         // First press or timeout expired: show exit confirmation.
-                        self.push_notification(NotificationKind::Info, "Press Ctrl+C again to exit".to_string(), Some(2));
+                        self.push_notification(
+                            NotificationKind::Info,
+                            "Press Ctrl+C again to exit".to_string(),
+                            Some(2),
+                        );
                         self.last_exit_key_warning = Some(std::time::Instant::now());
                         self.exit_key_sequence_start = Some('c');
                     }
@@ -4714,19 +5437,19 @@ impl App {
             "redraw" => false,
             "historySearch" => {
                 let overlay = HistorySearchOverlay::open(&self.prompt_input.history);
-                self.history_search_overlay = overlay;
+                self.overlays.history_search_overlay = overlay;
                 let mut hs = HistorySearch::new();
                 hs.update_matches(&self.prompt_input.history);
                 self.history_search = Some(hs);
                 false
             }
             "openSearch" => {
-                self.global_search.open();
+                self.overlays.global_search.open();
                 self.refresh_global_search();
                 false
             }
             "submit" => {
-                if !self.is_streaming {
+                if !self.streaming.is_streaming {
                     if !self.prompt_input.suggestions.is_empty()
                         && self.prompt_input.suggestion_index.is_some()
                     {
@@ -4743,7 +5466,8 @@ impl App {
             "historyPrev" => {
                 // Suggestions (slash commands or file refs) take priority over cursor/history.
                 if !self.prompt_input.suggestions.is_empty()
-                    && (self.prompt_input.text.starts_with('/') || self.prompt_input.has_active_file_ref())
+                    && (self.prompt_input.text.starts_with('/')
+                        || self.prompt_input.has_active_file_ref())
                 {
                     self.prompt_input.suggestion_prev();
                     self.refresh_prompt_input();
@@ -4761,7 +5485,8 @@ impl App {
             "historyNext" => {
                 // Suggestions (slash commands or file refs) take priority over cursor/history.
                 if !self.prompt_input.suggestions.is_empty()
-                    && (self.prompt_input.text.starts_with('/') || self.prompt_input.has_active_file_ref())
+                    && (self.prompt_input.text.starts_with('/')
+                        || self.prompt_input.has_active_file_ref())
                 {
                     self.prompt_input.suggestion_next();
                     self.refresh_prompt_input();
@@ -4777,28 +5502,28 @@ impl App {
                 false
             }
             "goLineStart" => {
-                if !self.is_streaming {
+                if !self.streaming.is_streaming {
                     self.prompt_input.cursor = 0;
                     self.sync_legacy_prompt_fields();
                 }
                 false
             }
             "goLineEnd" => {
-                if !self.is_streaming {
+                if !self.streaming.is_streaming {
                     self.prompt_input.cursor = self.prompt_input.text.len();
                     self.sync_legacy_prompt_fields();
                 }
                 false
             }
             "killToStart" => {
-                if !self.is_streaming {
+                if !self.streaming.is_streaming {
                     self.prompt_input.kill_line_backward();
                     self.refresh_prompt_input();
                 }
                 false
             }
             "killWord" => {
-                if !self.is_streaming {
+                if !self.streaming.is_streaming {
                     self.prompt_input.kill_word_backward();
                     self.refresh_prompt_input();
                 }
@@ -4819,15 +5544,17 @@ impl App {
                 false
             }
             "yes" => {
-                self.permission_request = None;
+                self.send_pending_permission_response();
+                self.permission.permission_request = None;
                 false
             }
             "no" => {
-                self.permission_request = None;
+                self.send_pending_permission_response();
+                self.permission.permission_request = None;
                 false
             }
             "prevOption" => {
-                if let Some(pr) = self.permission_request.as_mut() {
+                if let Some(pr) = self.permission.permission_request.as_mut() {
                     if pr.selected_option > 0 {
                         pr.selected_option -= 1;
                     }
@@ -4835,7 +5562,7 @@ impl App {
                 false
             }
             "nextOption" => {
-                if let Some(pr) = self.permission_request.as_mut() {
+                if let Some(pr) = self.permission.permission_request.as_mut() {
                     if pr.selected_option + 1 < pr.options.len() {
                         pr.selected_option += 1;
                     }
@@ -4843,8 +5570,8 @@ impl App {
                 false
             }
             "close" => {
-                self.show_help = false;
-                self.help_overlay.close();
+                self.overlays.show_help = false;
+                self.overlays.help_overlay.close();
                 false
             }
             "select" => {
@@ -4855,12 +5582,12 @@ impl App {
                     }
                 }
                 self.history_search = None;
-                self.history_search_overlay.close();
+                self.overlays.history_search_overlay.close();
                 false
             }
             "cancel" => {
                 self.history_search = None;
-                self.history_search_overlay.close();
+                self.overlays.history_search_overlay.close();
                 false
             }
             "prevResult" => {
@@ -4874,7 +5601,7 @@ impl App {
                         }
                     }
                 }
-                self.history_search_overlay.select_prev();
+                self.overlays.history_search_overlay.select_prev();
                 false
             }
             "nextResult" => {
@@ -4884,13 +5611,13 @@ impl App {
                         hs.selected = (hs.selected + 1) % count;
                     }
                 }
-                self.history_search_overlay.select_next();
+                self.overlays.history_search_overlay.select_next();
                 false
             }
             // ========== NEW KEYBINDING ACTIONS (Phase 1) ==========
             "clearLine" => {
                 // Ctrl+L: Clear the current input line (like bash Ctrl+L)
-                if !self.is_streaming {
+                if !self.streaming.is_streaming {
                     self.prompt_input.text.clear();
                     self.prompt_input.cursor = 0;
                     self.refresh_prompt_input();
@@ -4899,7 +5626,7 @@ impl App {
             }
             "deleteCharBefore" => {
                 // Ctrl+H: Delete character before cursor (backspace equivalent)
-                if !self.is_streaming {
+                if !self.streaming.is_streaming {
                     self.prompt_input.backspace();
                     self.refresh_prompt_input();
                 }
@@ -4950,25 +5677,29 @@ impl App {
             }
             "openHelp" => {
                 // Alt+H: Open help (alternative to F1)
-                self.show_help = !self.show_help;
-                self.help_overlay.toggle();
+                self.overlays.show_help = !self.overlays.show_help;
+                self.overlays.help_overlay.toggle();
+                false
+            }
+            "toggleDebugOverlay" => {
+                self.intercept_slash_command("debug");
                 false
             }
             "openModelPicker" => {
-                if !self.is_streaming {
+                if !self.streaming.is_streaming {
                     self.intercept_slash_command("model");
                 }
                 false
             }
             "openCommandPalette" => {
-                if !self.is_streaming {
-                    self.command_palette.open();
+                if !self.streaming.is_streaming {
+                    self.overlays.command_palette.open();
                 }
                 false
             }
             "deleteWord" => {
                 // Alt+D: Delete word forward
-                if !self.is_streaming {
+                if !self.streaming.is_streaming {
                     self.prompt_input.delete_word_at_cursor();
                     self.refresh_prompt_input();
                 }
@@ -4976,7 +5707,7 @@ impl App {
             }
             "newline" => {
                 // Shift+Enter: insert a literal newline into the prompt.
-                if !self.is_streaming {
+                if !self.streaming.is_streaming {
                     self.prompt_input.insert_newline();
                     self.refresh_prompt_input();
                 }
@@ -4985,7 +5716,7 @@ impl App {
             "indent" => {
                 // Tab: cycle agent mode when prompt is empty, accept
                 // slash-command suggestion otherwise.
-                if !self.is_streaming {
+                if !self.streaming.is_streaming {
                     if !self.prompt_input.suggestions.is_empty() {
                         if self.prompt_input.suggestion_index.is_none() {
                             self.prompt_input.suggestion_index = Some(0);
@@ -4994,7 +5725,7 @@ impl App {
                         self.refresh_prompt_input();
                     } else if self.prompt_input.is_empty() {
                         self.cycle_agent_mode();
-                    self.rustle_look_down();
+                        self.rustle_look_down();
                     }
                 }
                 false
@@ -5012,14 +5743,14 @@ impl App {
         match key.code {
             KeyCode::Esc => {
                 self.history_search = None;
-                self.history_search_overlay.close();
+                self.overlays.history_search_overlay.close();
             }
             KeyCode::Enter => {
                 if let Some(entry) = hs.current_entry(&self.prompt_input.history) {
                     self.set_prompt_text(entry.to_string());
                 }
                 self.history_search = None;
-                self.history_search_overlay.close();
+                self.overlays.history_search_overlay.close();
             }
             KeyCode::Up => {
                 let count = hs.matches.len();
@@ -5058,7 +5789,7 @@ impl App {
 
     /// Handle a key event while a permission dialog is active.
     fn handle_permission_key(&mut self, key: KeyEvent) {
-        let pr = match self.permission_request.as_mut() {
+        let pr = match self.permission.permission_request.as_mut() {
             Some(p) => p,
             None => return,
         };
@@ -5083,7 +5814,8 @@ impl App {
                         pr.selected_option = idx;
                         // If this is the prefix-allow option ('P'), record the prefix.
                         self.maybe_record_bash_prefix();
-                        self.permission_request = None;
+                        self.send_pending_permission_response();
+                        self.permission.permission_request = None;
                         return;
                     }
                 }
@@ -5091,24 +5823,42 @@ impl App {
             KeyCode::Enter => {
                 // If the currently selected option is the prefix-allow option, record it.
                 self.maybe_record_bash_prefix();
-                self.permission_request = None;
+                self.send_pending_permission_response();
+                self.permission.permission_request = None;
             }
             KeyCode::Up => {
-                let pr = self.permission_request.as_mut().unwrap();
                 if pr.selected_option > 0 {
                     pr.selected_option -= 1;
                 }
             }
             KeyCode::Down => {
-                let pr = self.permission_request.as_mut().unwrap();
                 if pr.selected_option + 1 < pr.options.len() {
                     pr.selected_option += 1;
                 }
             }
             KeyCode::Esc => {
-                self.permission_request = None;
+                self.send_pending_permission_response();
+                self.permission.permission_request = None;
             }
             _ => {}
+        }
+    }
+
+    fn send_pending_permission_response(&mut self) {
+        use operant_core::agent::ToolPermissionResponse;
+        let response = match self.permission.permission_request.as_ref() {
+            Some(pr) => {
+                let key = pr.options.get(pr.selected_option).map(|o| o.key);
+                match key {
+                    Some('y') => ToolPermissionResponse::AllowOnce,
+                    Some('Y') | Some('P') | Some('p') => ToolPermissionResponse::AllowSession,
+                    _ => ToolPermissionResponse::Deny,
+                }
+            }
+            None => ToolPermissionResponse::Deny,
+        };
+        if let Some(tx) = self.permission.permission_response_tx.take() {
+            let _ = tx.send(response);
         }
     }
 
@@ -5118,7 +5868,7 @@ impl App {
     /// silently approved.
     fn maybe_record_bash_prefix(&mut self) {
         use crate::tui::dialogs::PermissionDialogKind;
-        let pr = match self.permission_request.as_ref() {
+        let pr = match self.permission.permission_request.as_ref() {
             Some(p) => p,
             None => return,
         };
@@ -5156,7 +5906,8 @@ impl App {
             (Some(last_time), Some(last_pos)) => {
                 let elapsed = now.duration_since(last_time);
                 let distance = ((current_pos.0 as i32 - last_pos.0 as i32).abs()
-                    + (current_pos.1 as i32 - last_pos.1 as i32).abs()) as u16;
+                    + (current_pos.1 as i32 - last_pos.1 as i32).abs())
+                    as u16;
                 elapsed.as_millis() < 500 && distance <= 5
             }
             _ => false,
@@ -5193,7 +5944,10 @@ impl App {
         while end + 1 < chars.len() && is_word(chars[end + 1]) {
             end += 1;
         }
-        Some((selectable_area.x + start as u16, selectable_area.x + end as u16))
+        Some((
+            selectable_area.x + start as u16,
+            selectable_area.x + end as u16,
+        ))
     }
 
     /// Find paragraph boundaries (run of non-blank rows) around `row` and
@@ -5218,7 +5972,11 @@ impl App {
         let mut start = row;
         while start > selectable_area.y {
             let prev = start - 1;
-            if cache.get(&prev).map(|s| s.trim().is_empty()).unwrap_or(true) {
+            if cache
+                .get(&prev)
+                .map(|s| s.trim().is_empty())
+                .unwrap_or(true)
+            {
                 break;
             }
             start = prev;
@@ -5226,7 +5984,11 @@ impl App {
         let mut end = row;
         while end < max_row {
             let next = end + 1;
-            if cache.get(&next).map(|s| s.trim().is_empty()).unwrap_or(true) {
+            if cache
+                .get(&next)
+                .map(|s| s.trim().is_empty())
+                .unwrap_or(true)
+            {
                 break;
             }
             end = next;
@@ -5243,7 +6005,10 @@ impl App {
     fn find_line_boundaries(&self, row: u16) -> Option<(u16, u16)> {
         let selectable_area = self.last_selectable_area.get();
         let line_start = selectable_area.y;
-        let line_end = selectable_area.y.saturating_add(selectable_area.height).saturating_sub(1);
+        let line_end = selectable_area
+            .y
+            .saturating_add(selectable_area.height)
+            .saturating_sub(1);
 
         if row >= line_start && row <= line_end {
             Some((row, row))
@@ -5271,7 +6036,7 @@ impl App {
 
     /// Show context menu at the given position.
     fn show_context_menu(&mut self, x: u16, y: u16, kind: ContextMenuKind) {
-        self.context_menu_state = Some(ContextMenuState {
+        self.overlays.context_menu_state = Some(ContextMenuState {
             x,
             y,
             selected_index: 0,
@@ -5281,15 +6046,15 @@ impl App {
 
     /// Dismiss the context menu.
     fn dismiss_context_menu(&mut self) {
-        self.context_menu_state = None;
+        self.overlays.context_menu_state = None;
     }
 
     /// Handle context menu navigation with arrow keys.
     fn navigate_context_menu(&mut self, direction: KeyCode) {
-        if let Some(mut menu) = self.context_menu_state {
+        if let Some(mut menu) = self.overlays.context_menu_state {
             let item_count = Self::context_menu_items(menu.kind).len();
             if item_count == 0 {
-                self.context_menu_state = Some(menu);
+                self.overlays.context_menu_state = Some(menu);
                 return;
             }
             match direction {
@@ -5305,13 +6070,13 @@ impl App {
                 }
                 _ => return,
             }
-            self.context_menu_state = Some(menu);
+            self.overlays.context_menu_state = Some(menu);
         }
     }
 
     /// Execute the currently selected context menu item.
     fn execute_context_menu_item(&mut self) {
-        if let Some(menu) = self.context_menu_state {
+        if let Some(menu) = self.overlays.context_menu_state {
             let items = Self::context_menu_items(menu.kind);
 
             if menu.selected_index < items.len() {
@@ -5361,18 +6126,21 @@ impl App {
             ContextMenuItem::Fork => {
                 if let ContextMenuKind::Message { message_index } = kind {
                     let branch_point = message_index + 1;
-                    self.prompt_input.replace_text(format!("/fork {}", branch_point));
-                    self.status_message =
-                        Some(format!("Fork at message {} - press Enter to confirm", branch_point));
+                    self.prompt_input
+                        .replace_text(format!("/fork {}", branch_point));
+                    self.status_message = Some(format!(
+                        "Fork at message {} - press Enter to confirm",
+                        branch_point
+                    ));
                 }
             }
         }
     }
 
     fn prompt_can_accept_selection_paste(&self) -> bool {
-        !self.is_streaming
-            && self.permission_request.is_none()
-            && !self.history_search_overlay.visible
+        !self.streaming.is_streaming
+            && self.permission.permission_request.is_none()
+            && !self.overlays.history_search_overlay.visible
             && self.history_search.is_none()
             && !matches!(
                 self.prompt_input.vim_mode,
@@ -5387,8 +6155,8 @@ impl App {
             return false;
         }
 
-        if let Some(text) = crate::image_paste::read_primary_text()
-            .or_else(crate::image_paste::read_clipboard_text)
+        if let Some(text) =
+            crate::image_paste::read_primary_text().or_else(crate::image_paste::read_clipboard_text)
         {
             self.focus = FocusTarget::Input;
             self.clear_selection();
@@ -5408,8 +6176,8 @@ impl App {
     /// Otherwise the text goes through the normal `prompt_input.paste()` path
     /// which applies the multi-line summary placeholder for large pastes.
     fn handle_paste_data(&mut self, data: String) {
-        use crate::tui::prompt_input::detect_pasted_path;
         use crate::tui::image_paste::PastedImage;
+        use crate::tui::prompt_input::detect_pasted_path;
 
         if let Some(path) = detect_pasted_path(&data) {
             let ext = path
@@ -5426,7 +6194,11 @@ impl App {
                     .and_then(|n| n.to_str())
                     .unwrap_or("image")
                     .to_string();
-                let img = PastedImage { path, label: label.clone(), dimensions: None };
+                let img = PastedImage {
+                    path,
+                    label: label.clone(),
+                    dimensions: None,
+                };
                 self.prompt_input.add_image(img);
                 self.push_notification(
                     crate::notifications::NotificationKind::Info,
@@ -5447,13 +6219,13 @@ impl App {
     /// Returns `true` when the app is in a state where the prompt can accept
     /// regular text input — used to gate paste-burst detection.
     fn prompt_is_accepting_text(&self) -> bool {
-        !self.is_streaming
-            && self.permission_request.is_none()
-            && !self.ask_user_dialog.visible
-            && !self.history_search_overlay.visible
+        !self.streaming.is_streaming
+            && self.permission.permission_request.is_none()
+            && !self.overlays.ask_user_dialog.visible
+            && !self.overlays.history_search_overlay.visible
             && self.history_search.is_none()
-            && !self.settings_screen.visible
-            && !self.theme_screen.visible
+            && !self.overlays.settings_screen.visible
+            && !self.overlays.theme_screen.visible
             && self.prompt_input.vim_mode == crate::prompt_input::VimMode::Insert
     }
 
@@ -5475,10 +6247,7 @@ impl App {
     /// single keystroke.  If a non-character key is encountered while
     /// draining, it is stored in `self.pending_key` and will be replayed at
     /// the top of the next event-loop iteration.
-    fn try_detect_paste_burst(
-        &mut self,
-        first: char,
-    ) -> Option<String> {
+    fn try_detect_paste_burst(&mut self, first: char) -> Option<String> {
         use crossterm::event::{Event, KeyCode, KeyEventKind};
 
         // Minimum number of chars (including `first`) to classify as a paste.
@@ -5536,17 +6305,31 @@ impl App {
         // need hover tracking. Exception: context menu needs hover to update
         // the selected item highlight.
         if matches!(mouse_event.kind, MouseEventKind::Moved) {
-            if let Some(menu) = self.context_menu_state.as_mut() {
+            if let Some(menu) = self.overlays.context_menu_state.as_mut() {
                 let items = Self::context_menu_items(menu.kind);
-                let item_labels: Vec<&str> = items.iter().map(|i| match i {
-                    ContextMenuItem::Copy => "Copy",
-                    ContextMenuItem::Fork => "Fork new chat",
-                }).collect();
-                let menu_width = (item_labels.iter().map(|l| l.len()).max().unwrap_or(4) + 4) as u16;
+                let item_labels: Vec<&str> = items
+                    .iter()
+                    .map(|i| match i {
+                        ContextMenuItem::Copy => "Copy",
+                        ContextMenuItem::Fork => "Fork new chat",
+                    })
+                    .collect();
+                let menu_width =
+                    (item_labels.iter().map(|l| l.len()).max().unwrap_or(4) + 4) as u16;
                 let menu_height = items.len() as u16 + 2;
                 let screen = self.last_msg_area.get();
-                let menu_x = menu.x.min(screen.x.saturating_add(screen.width).saturating_sub(menu_width + 1));
-                let menu_y = menu.y.min(screen.y.saturating_add(screen.height).saturating_sub(menu_height + 1));
+                let menu_x = menu.x.min(
+                    screen
+                        .x
+                        .saturating_add(screen.width)
+                        .saturating_sub(menu_width + 1),
+                );
+                let menu_y = menu.y.min(
+                    screen
+                        .y
+                        .saturating_add(screen.height)
+                        .saturating_sub(menu_height + 1),
+                );
                 let inner_y = menu_y + 1;
                 let col = mouse_event.column;
                 let row = mouse_event.row;
@@ -5567,27 +6350,30 @@ impl App {
         // ---- Dialog interaction: dismiss on click-outside, scroll/click inside ----
         // Key-input and device-auth stay outside this gate so their visible text
         // can still be selected and copied with the mouse.
-        let any_dialog = self.connect_dialog.visible
-            || self.import_config_picker.visible
-            || self.import_config_dialog.visible
-            || self.command_palette.visible
-            || self.model_picker.visible
-            || self.export_dialog.visible
-            || self.settings_screen.visible
-            || self.stats_dialog.visible
-            || self.context_viz.visible
-            || self.session_browser.visible;
+        let any_dialog = self.overlays.connect_dialog.visible
+            || self.overlays.import_config_picker.visible
+            || self.overlays.import_config_dialog.visible
+            || self.overlays.command_palette.visible
+            || self.overlays.model_picker.visible
+            || self.overlays.export_dialog.visible
+            || self.overlays.settings_screen.visible
+            || self.overlays.stats_dialog.visible
+            || self.overlays.context_viz.visible
+            || self.overlays.session_browser.visible;
 
         if any_dialog {
             match mouse_event.kind {
                 MouseEventKind::Down(MouseButton::Left) => {
                     // DialogSelect dialogs — check if click is inside for item selection
-                    let in_dialog = if self.connect_dialog.visible {
-                        self.connect_dialog.contains(mouse_event.column, mouse_event.row)
-                    } else if self.import_config_picker.visible {
-                        self.import_config_picker.contains(mouse_event.column, mouse_event.row)
-                    } else if self.command_palette.visible {
-                        self.command_palette.contains(mouse_event.column, mouse_event.row)
+                    let in_dialog = if self.overlays.connect_dialog.visible {
+                        self.overlays.connect_dialog
+                            .contains(mouse_event.column, mouse_event.row)
+                    } else if self.overlays.import_config_picker.visible {
+                        self.overlays.import_config_picker
+                            .contains(mouse_event.column, mouse_event.row)
+                    } else if self.overlays.command_palette.visible {
+                        self.overlays.command_palette
+                            .contains(mouse_event.column, mouse_event.row)
                     } else {
                         // Other dialogs (model_picker, settings, export, etc.) —
                         // treat any click as "inside" to prevent accidental dismiss.
@@ -5597,12 +6383,13 @@ impl App {
 
                     if in_dialog {
                         // Click inside a DialogSelect — select the clicked item
-                        if self.connect_dialog.visible {
-                            self.connect_dialog.handle_mouse_click(mouse_event.row);
-                        } else if self.import_config_picker.visible {
-                            self.import_config_picker.handle_mouse_click(mouse_event.row);
-                        } else if self.command_palette.visible {
-                            self.command_palette.handle_mouse_click(mouse_event.row);
+                        if self.overlays.connect_dialog.visible {
+                            self.overlays.connect_dialog.handle_mouse_click(mouse_event.row);
+                        } else if self.overlays.import_config_picker.visible {
+                            self.overlays.import_config_picker
+                                .handle_mouse_click(mouse_event.row);
+                        } else if self.overlays.command_palette.visible {
+                            self.overlays.command_palette.handle_mouse_click(mouse_event.row);
                         }
                         // Other dialogs: click absorbed, no action needed
                     } else {
@@ -5613,14 +6400,22 @@ impl App {
                 }
                 MouseEventKind::ScrollUp => {
                     // Scroll through dialog items
-                    if self.connect_dialog.visible { self.connect_dialog.move_up(); }
-                    else if self.import_config_picker.visible { self.import_config_picker.move_up(); }
-                    else if self.command_palette.visible { self.command_palette.move_up(); }
+                    if self.overlays.connect_dialog.visible {
+                        self.overlays.connect_dialog.move_up();
+                    } else if self.overlays.import_config_picker.visible {
+                        self.overlays.import_config_picker.move_up();
+                    } else if self.overlays.command_palette.visible {
+                        self.overlays.command_palette.move_up();
+                    }
                 }
                 MouseEventKind::ScrollDown => {
-                    if self.connect_dialog.visible { self.connect_dialog.move_down(); }
-                    else if self.import_config_picker.visible { self.import_config_picker.move_down(); }
-                    else if self.command_palette.visible { self.command_palette.move_down(); }
+                    if self.overlays.connect_dialog.visible {
+                        self.overlays.connect_dialog.move_down();
+                    } else if self.overlays.import_config_picker.visible {
+                        self.overlays.import_config_picker.move_down();
+                    } else if self.overlays.command_palette.visible {
+                        self.overlays.command_palette.move_down();
+                    }
                 }
                 _ => {}
             }
@@ -5685,18 +6480,32 @@ impl App {
             MouseEventKind::Down(MouseButton::Left) => {
                 // If a context menu is open, check if the click is on a menu item.
                 // Must replicate the same position clamping as the renderer.
-                if let Some(menu) = self.context_menu_state {
+                if let Some(menu) = self.overlays.context_menu_state {
                     let items = Self::context_menu_items(menu.kind);
-                    let item_labels: Vec<&str> = items.iter().map(|i| match i {
-                        ContextMenuItem::Copy => "Copy",
-                        ContextMenuItem::Fork => "Fork new chat",
-                    }).collect();
-                    let menu_width = (item_labels.iter().map(|l| l.len()).max().unwrap_or(4) + 4) as u16;
+                    let item_labels: Vec<&str> = items
+                        .iter()
+                        .map(|i| match i {
+                            ContextMenuItem::Copy => "Copy",
+                            ContextMenuItem::Fork => "Fork new chat",
+                        })
+                        .collect();
+                    let menu_width =
+                        (item_labels.iter().map(|l| l.len()).max().unwrap_or(4) + 4) as u16;
                     let menu_height = items.len() as u16 + 2; // +2 for border
-                    // Clamp to screen bounds (same as render_context_menu)
+                                                              // Clamp to screen bounds (same as render_context_menu)
                     let screen = self.last_msg_area.get();
-                    let menu_x = menu.x.min(screen.x.saturating_add(screen.width).saturating_sub(menu_width + 1));
-                    let menu_y = menu.y.min(screen.y.saturating_add(screen.height).saturating_sub(menu_height + 1));
+                    let menu_x = menu.x.min(
+                        screen
+                            .x
+                            .saturating_add(screen.width)
+                            .saturating_sub(menu_width + 1),
+                    );
+                    let menu_y = menu.y.min(
+                        screen
+                            .y
+                            .saturating_add(screen.height)
+                            .saturating_sub(menu_height + 1),
+                    );
                     let col = mouse_event.column;
                     let row = mouse_event.row;
                     // Inner area starts 1 past the border
@@ -5708,7 +6517,8 @@ impl App {
                     {
                         let clicked_index = (row - inner_y) as usize;
                         if clicked_index < items.len() {
-                            self.context_menu_state.as_mut().unwrap().selected_index = clicked_index;
+                            self.overlays.context_menu_state.as_mut().unwrap().selected_index =
+                                clicked_index;
                             self.execute_context_menu_item();
                             return;
                         }
@@ -5721,13 +6531,15 @@ impl App {
                 let input_area = self.last_input_area.get();
                 let selectable_area = self.last_selectable_area.get();
 
-                let in_input = input_area.width > 0 && input_area.height > 0
+                let in_input = input_area.width > 0
+                    && input_area.height > 0
                     && mouse_event.row >= input_area.y
                     && mouse_event.row < input_area.y.saturating_add(input_area.height)
                     && mouse_event.column >= input_area.x
                     && mouse_event.column < input_area.x.saturating_add(input_area.width);
 
-                let in_selectable = selectable_area.width > 0 && selectable_area.height > 0
+                let in_selectable = selectable_area.width > 0
+                    && selectable_area.height > 0
                     && mouse_event.row >= selectable_area.y
                     && mouse_event.row < selectable_area.y.saturating_add(selectable_area.height)
                     && mouse_event.column >= selectable_area.x
@@ -5780,7 +6592,9 @@ impl App {
                             self.click_count = 0; // Reset for next click sequence
                         } else {
                             // Double-click: select word
-                            if let Some((start, end)) = self.find_word_boundaries(current_pos.0, current_pos.1) {
+                            if let Some((start, end)) =
+                                self.find_word_boundaries(current_pos.0, current_pos.1)
+                            {
                                 self.selection_anchor = Some((start, current_pos.1));
                                 self.selection_focus = Some((end, current_pos.1));
                             }
@@ -5809,12 +6623,18 @@ impl App {
                 if self.selection_anchor.is_some() {
                     let selectable_area = self.last_selectable_area.get();
                     if selectable_area.width > 0 && selectable_area.height > 0 {
-                        let clamped_col = mouse_event.column
-                            .max(selectable_area.x)
-                            .min(selectable_area.x.saturating_add(selectable_area.width).saturating_sub(1));
-                        let clamped_row = mouse_event.row
-                            .max(selectable_area.y)
-                            .min(selectable_area.y.saturating_add(selectable_area.height).saturating_sub(1));
+                        let clamped_col = mouse_event.column.max(selectable_area.x).min(
+                            selectable_area
+                                .x
+                                .saturating_add(selectable_area.width)
+                                .saturating_sub(1),
+                        );
+                        let clamped_row = mouse_event.row.max(selectable_area.y).min(
+                            selectable_area
+                                .y
+                                .saturating_add(selectable_area.height)
+                                .saturating_sub(1),
+                        );
                         self.selection_focus = Some((clamped_col, clamped_row));
                         self.click_count = 0; // Reset on drag to prevent further double-clicks
                     }
@@ -5824,7 +6644,7 @@ impl App {
                 // Clear if no actual drag (single click = no selection)
                 if self.selection_anchor == self.selection_focus {
                     self.clear_selection();
-                } else if self.settings_screen.auto_copy_enabled {
+                } else if self.overlays.settings_screen.auto_copy_enabled {
                     // Auto-copy finalized selection to clipboard.
                     let sel_text = self.selection_text.borrow().clone();
                     if !sel_text.is_empty() {
@@ -5867,63 +6687,65 @@ impl App {
 
         match event {
             QueryEvent::Stream(stream_evt) => {
-                if !self.is_streaming {
+                if !self.streaming.is_streaming {
                     let seed = self.frame_count as usize ^ (self.messages.len() * 17);
-                    self.spinner_verb = Some(sample_spinner_verb(seed).to_string());
+                    self.streaming.spinner_verb = Some(sample_spinner_verb(seed).to_string());
                     // turn_start is set in begin_user_turn_snapshot (prompt
                     // submission time).  Only fall back here if somehow no
                     // user message was pushed before streaming began (e.g.
                     // headless / programmatic callers).
-                    if self.turn_start.is_none() {
-                        self.turn_start = Some(std::time::Instant::now());
+                    if self.streaming.turn_start.is_none() {
+                        self.streaming.turn_start = Some(std::time::Instant::now());
                     }
-                    self.streaming_thinking.clear();
+                    self.streaming.streaming_thinking.clear();
                 }
-                self.is_streaming = true;
+                self.streaming.is_streaming = true;
                 match stream_evt {
                     crate::tui::adapter_types::streaming::AnthropicStreamEvent::ContentBlockDelta { delta, .. } => {
                         // Reset stall timer on any incoming delta — we're making progress.
-                        self.stall_start = None;
+                        self.streaming.stall_start = None;
                         match delta {
                             crate::tui::adapter_types::streaming::ContentDelta::TextDelta { text } => {
-                                self.streaming_text.push_str(&text);
+                                self.streaming.streaming_text.push_str(&text);
                                 self.invalidate_transcript();
                             }
                             crate::tui::adapter_types::streaming::ContentDelta::ThinkingDelta { thinking } => {
                                 debug!(len = thinking.len(), "Thinking delta received");
-                                self.streaming_thinking.push_str(&thinking);
+                                self.streaming.streaming_thinking.push_str(&thinking);
                                 self.invalidate_transcript();
                             }
                             _ => {}
                         }
                     }
                     crate::tui::adapter_types::streaming::AnthropicStreamEvent::MessageStop => {
-                        self.is_streaming = false;
-                        self.spinner_verb = None;
-                        self.stall_start = None;
+                        self.streaming.is_streaming = false;
+                        self.streaming.spinner_verb = None;
+                        self.streaming.stall_start = None;
                         self.flush_streamed_assistant_message();
                     }
                     _ => {
                         // Any other stream event: if we have no stall_start yet,
                         // record now so the red-spinner timer can begin.
-                        if self.stall_start.is_none() {
-                            self.stall_start = Some(std::time::Instant::now());
+                        if self.streaming.stall_start.is_none() {
+                            self.streaming.stall_start = Some(std::time::Instant::now());
                         }
                     }
                 }
             }
 
-            QueryEvent::ToolStart { tool_name, tool_id, input_json } => {
-                if !self.is_streaming && self.spinner_verb.is_none() {
+            QueryEvent::ToolStart {
+                tool_name,
+                tool_id,
+                input_json,
+            } => {
+                if !self.streaming.is_streaming && self.streaming.spinner_verb.is_none() {
                     let seed = self.frame_count as usize ^ (self.messages.len() * 17);
-                    self.spinner_verb = Some(sample_spinner_verb(seed).to_string());
+                    self.streaming.spinner_verb = Some(sample_spinner_verb(seed).to_string());
                 }
-                self.is_streaming = true;
+                self.streaming.is_streaming = true;
                 self.status_message = Some(format!("Running {}…", tool_name));
                 let turn_index = self.current_user_turn_index();
-                if let Some(existing) =
-                    self.tool_use_blocks.iter_mut().find(|b| b.id == tool_id)
-                {
+                if let Some(existing) = self.tool_use_blocks.iter_mut().find(|b| b.id == tool_id) {
                     existing.turn_index = turn_index;
                     existing.status = ToolStatus::Running;
                     existing.output_preview = None;
@@ -5955,9 +6777,7 @@ impl App {
                 if remaining > 0 {
                     preview.push_str(&format!("\n\u{2026} {} more lines", remaining));
                 }
-                if let Some(block) =
-                    self.tool_use_blocks.iter_mut().find(|b| b.id == tool_id)
-                {
+                if let Some(block) = self.tool_use_blocks.iter_mut().find(|b| b.id == tool_id) {
                     block.status = if is_error {
                         ToolStatus::Error
                     } else {
@@ -5974,28 +6794,38 @@ impl App {
                 self.refresh_turn_diff_from_history();
             }
 
-            QueryEvent::TurnComplete { turn, stop_reason, usage, .. } => {
+            QueryEvent::TurnComplete {
+                turn,
+                stop_reason,
+                usage,
+                ..
+            } => {
                 debug!(turn, stop_reason, "Turn complete");
-                self.is_streaming = false;
-                self.spinner_verb = None;
+                self.streaming.is_streaming = false;
+                self.streaming.spinner_verb = None;
 
                 // Update context window usage from the usage info.
                 if let Some(ref u) = usage {
-                    let turn_tokens = u.input_tokens + u.output_tokens
-                        + u.cache_creation_input_tokens + u.cache_read_input_tokens;
+                    let turn_tokens = u.input_tokens
+                        + u.output_tokens
+                        + u.cache_creation_input_tokens
+                        + u.cache_read_input_tokens;
                     self.context_used_tokens = self.context_used_tokens.saturating_add(turn_tokens);
                 }
                 // Record elapsed time and pick a completion verb
                 let seed = self.frame_count as usize ^ (self.messages.len() * 7);
-                let elapsed = self.turn_start.take()
+                let elapsed = self
+                    .turn_start
+                    .take()
                     .map(|start| format_elapsed_ms(start.elapsed().as_millis()));
-                self.last_turn_elapsed = Some(
-                    elapsed.unwrap_or_else(|| "0s".to_string())
-                );
-                self.last_turn_verb = Some(sample_completion_verb(seed));
+                self.streaming.last_turn_elapsed = Some(elapsed.unwrap_or_else(|| "0s".to_string()));
+                self.streaming.last_turn_verb = Some(sample_completion_verb(seed));
                 self.flush_streamed_assistant_message();
-                self.tool_use_blocks.retain(|b| b.status != ToolStatus::Running);
-                self.complete_current_turn_snapshot(stop_reason.contains("abort") || stop_reason.contains("cancel"));
+                self.tool_use_blocks
+                    .retain(|b| b.status != ToolStatus::Running);
+                self.complete_current_turn_snapshot(
+                    stop_reason.contains("abort") || stop_reason.contains("cancel"),
+                );
                 self.invalidate_transcript();
                 self.refresh_turn_diff_from_history();
             }
@@ -6005,10 +6835,10 @@ impl App {
             }
 
             QueryEvent::Error(msg) => {
-                self.is_streaming = false;
-                self.spinner_verb = None;
-                self.streaming_text.clear();
-                self.streaming_thinking.clear();
+                self.streaming.is_streaming = false;
+                self.streaming.spinner_verb = None;
+                self.streaming.streaming_text.clear();
+                self.streaming.streaming_thinking.clear();
                 self.invalidate_transcript();
                 let err_msg = format!("Error: {}", msg);
                 self.push_assistant_message(err_msg.clone());
@@ -6028,7 +6858,10 @@ impl App {
                         self.token_warning_threshold_shown = 80;
                         self.push_notification(
                             NotificationKind::Warning,
-                            format!("Context window {:.0}% full. Consider /compact.", pct_used * 100.0),
+                            format!(
+                                "Context window {:.0}% full. Consider /compact.",
+                                pct_used * 100.0
+                            ),
                             Some(30),
                         );
                     }
@@ -6036,12 +6869,36 @@ impl App {
                         self.token_warning_threshold_shown = 95;
                         self.push_notification(
                             NotificationKind::Error,
-                            format!("Context window {:.0}% full! Run /compact now.", pct_used * 100.0),
+                            format!(
+                                "Context window {:.0}% full! Run /compact now.",
+                                pct_used * 100.0
+                            ),
                             None,
                         );
                     }
                     _ => {}
                 }
+            }
+            QueryEvent::ToolPermissionRequest {
+                tool_name,
+                tool_id,
+                description,
+                danger_explanation,
+                input_preview,
+                response_tx,
+            } => {
+                let reason = if danger_explanation.is_empty() {
+                    description
+                } else {
+                    format!("{}\n{}", description, danger_explanation)
+                };
+                self.permission.permission_request = Some(PermissionRequest::from_reason(
+                    tool_id,
+                    tool_name.clone(),
+                    reason,
+                    input_preview,
+                ));
+                self.permission.permission_response_tx = Some(response_tx);
             }
         }
 
@@ -6066,14 +6923,36 @@ impl App {
             if let Some(ref mut rx) = self.session_list_rx {
                 match rx.try_recv() {
                     Ok(entries) => {
-                        self.session_browser.sessions = entries;
-                        self.session_browser.selected_idx = 0;
+                        self.overlays.session_browser.sessions = entries;
+                        self.overlays.session_browser.selected_idx = 0;
                         self.session_list_rx = None;
                     }
                     Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
                         self.session_list_rx = None;
                     }
                     Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {}
+                }
+            }
+
+            // Drain query events from the agent background task.
+            if let Some(ref mut rx) = self.query_rx {
+                let mut events = Vec::new();
+                loop {
+                    match rx.try_recv() {
+                        Ok(event) => {
+                            events.push(event);
+                        }
+                        Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
+                            self.query_rx = None;
+                            break;
+                        }
+                        Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {
+                            break;
+                        }
+                    }
+                }
+                for event in events {
+                    self.handle_query_event(event);
                 }
             }
 
@@ -6087,8 +6966,7 @@ impl App {
                     let entries: Vec<crate::tui::session_browser::SessionEntry> = sessions
                         .into_iter()
                         .map(|s| {
-                            let age = chrono::Utc::now()
-                                .signed_duration_since(s.updated_at);
+                            let age = chrono::Utc::now().signed_duration_since(s.updated_at);
                             let last_updated = if age.num_minutes() < 1 {
                                 "just now".to_string()
                             } else if age.num_hours() < 1 {
@@ -6132,8 +7010,7 @@ impl App {
                         }
                         VoiceEvent::RecordingStopped => {
                             self.voice_recording = false;
-                            self.status_message =
-                                Some("Transcribing\u{2026}".to_string());
+                            self.status_message = Some("Transcribing\u{2026}".to_string());
                         }
                         VoiceEvent::TranscriptReady(text) => {
                             if !text.is_empty() {
@@ -6146,9 +7023,8 @@ impl App {
                                 }
                                 self.prompt_input.paste(&text);
                                 self.refresh_prompt_input();
-                                self.status_message = Some(
-                                    format!("Transcribed: {}", &text[..text.len().min(60)])
-                                );
+                                self.status_message =
+                                    Some(format!("Transcribed: {}", &text[..text.len().min(60)]));
                             }
                             // Clear the channel once we have the result.
                             self.voice_event_rx = None;
@@ -6162,6 +7038,7 @@ impl App {
                                 Some(8),
                             );
                         }
+                        VoiceEvent::Transcription(_) => {}
                     }
                 }
             }
@@ -6190,8 +7067,7 @@ impl App {
             let pending = self.pending_key.take();
 
             // Poll for events with a short timeout so we can redraw for animation
-            let got_event = pending.is_some()
-                || event::poll(std::time::Duration::from_millis(50))?;
+            let got_event = pending.is_some() || event::poll(std::time::Duration::from_millis(50))?;
 
             if got_event {
                 let event = if let Some(k) = pending {
@@ -6256,8 +7132,7 @@ impl App {
                             // Check if this is a slash command that should open a UI screen
                             if crate::input::is_slash_command(&self.prompt_input.text) {
                                 let slash_input = self.prompt_input.text.clone();
-                                let (cmd, args) =
-                                        crate::input::parse_slash_command(&slash_input);
+                                let (cmd, args) = crate::input::parse_slash_command(&slash_input);
                                 if self.intercept_slash_command_with_args(cmd, args) {
                                     self.clear_prompt();
                                     continue;
@@ -6270,9 +7145,9 @@ impl App {
                         }
                     }
                     Event::Paste(data)
-                        if !self.is_streaming
-                            && self.permission_request.is_none()
-                            && !self.history_search_overlay.visible
+                        if !self.streaming.is_streaming
+                            && self.permission.permission_request.is_none()
+                            && !self.overlays.history_search_overlay.visible
                             && self.history_search.is_none() =>
                     {
                         self.handle_paste_data(data);
@@ -6300,9 +7175,9 @@ impl App {
             let content = msg.get_all_text().to_lowercase();
 
             // Check if message contains error keywords
-            let has_error = ERROR_KEYWORDS.iter().any(|keyword| {
-                content.contains(keyword)
-            });
+            let has_error = ERROR_KEYWORDS
+                .iter()
+                .any(|keyword| content.contains(keyword));
 
             if has_error && i > (self.messages.len().saturating_sub(self.scroll_offset / 2)) {
                 // Found an error message, scroll to it
@@ -6328,9 +7203,9 @@ impl App {
             let content = msg.get_all_text().to_lowercase();
 
             // Check if message contains error keywords
-            let has_error = ERROR_KEYWORDS.iter().any(|keyword| {
-                content.contains(keyword)
-            });
+            let has_error = ERROR_KEYWORDS
+                .iter()
+                .any(|keyword| content.contains(keyword));
 
             if has_error && i < (self.messages.len().saturating_sub(self.scroll_offset / 2)) {
                 // Found an error message, scroll to it
@@ -6351,17 +7226,13 @@ fn open_file_externally(path: &std::path::Path) -> Result<(), Box<dyn std::error
     // Try to open with the system's default application
     #[cfg(target_os = "macos")]
     {
-        std::process::Command::new("open")
-            .arg(path)
-            .spawn()?;
+        std::process::Command::new("open").arg(path).spawn()?;
         Ok(())
     }
 
     #[cfg(target_os = "linux")]
     {
-        std::process::Command::new("xdg-open")
-            .arg(path)
-            .spawn()?;
+        std::process::Command::new("xdg-open").arg(path).spawn()?;
         Ok(())
     }
 
@@ -6378,10 +7249,7 @@ fn open_file_externally(path: &std::path::Path) -> Result<(), Box<dyn std::error
     {
         // Fallback for other systems: try common editors in order
         for editor in &["nano", "vi", "vim", "emacs"] {
-            match std::process::Command::new(editor)
-                .arg(path)
-                .spawn()
-            {
+            match std::process::Command::new(editor).arg(path).spawn() {
                 Ok(_) => return Ok(()),
                 Err(_) => continue,
             }
@@ -6398,7 +7266,7 @@ mod tests {
     fn make_app() -> App {
         let config = Config::default();
         let cost_tracker = crate::tui::adapter_types::cost::CostTracker::new();
-        App::new(config, cost_tracker)
+        App::new(config, std::sync::Arc::new(cost_tracker))
     }
 
     fn press_key(code: KeyCode, modifiers: KeyModifiers) -> KeyEvent {
@@ -6468,7 +7336,10 @@ mod tests {
         // CTRL or ALT without SHIFT should not shift the character
         assert_eq!(normalize_char_with_shift('a', KeyModifiers::CONTROL), 'a');
         assert_eq!(normalize_char_with_shift('1', KeyModifiers::ALT), '1');
-        assert_eq!(normalize_char_with_shift('a', KeyModifiers::CONTROL | KeyModifiers::ALT), 'a');
+        assert_eq!(
+            normalize_char_with_shift('a', KeyModifiers::CONTROL | KeyModifiers::ALT),
+            'a'
+        );
     }
 
     #[test]
@@ -6488,7 +7359,7 @@ mod tests {
     fn test_mcp_subcommand_is_not_intercepted() {
         let mut app = make_app();
         assert!(!app.intercept_slash_command_with_args("mcp", "auth mcphub"));
-        assert!(!app.mcp_view.visible);
+        assert!(!app.overlays.mcp_view.visible);
     }
 
     #[test]
@@ -6522,9 +7393,9 @@ mod tests {
     #[test]
     fn test_model_slash_command_opens_picker() {
         let mut app = make_app();
-        assert!(!app.model_picker.visible);
+        assert!(!app.overlays.model_picker.visible);
         assert!(app.intercept_slash_command("model"));
-        assert!(app.model_picker.visible);
+        assert!(app.overlays.model_picker.visible);
     }
 
     #[test]
@@ -6589,7 +7460,7 @@ mod tests {
         });
 
         assert!(matches!(
-            app.context_menu_state,
+            app.overlays.context_menu_state,
             Some(ContextMenuState {
                 kind: ContextMenuKind::Message { message_index: 1 },
                 ..
@@ -6602,12 +7473,12 @@ mod tests {
     #[test]
     fn test_help_slash_command_opens_overlay() {
         let mut app = make_app();
-        assert!(!app.help_overlay.visible);
-        assert!(!app.show_help);
-        assert!(!app.help_overlay.commands.is_empty());
+        assert!(!app.overlays.help_overlay.visible);
+        assert!(!app.overlays.show_help);
+        assert!(!app.overlays.help_overlay.commands.is_empty());
         assert!(app.intercept_slash_command("help"));
-        assert!(app.help_overlay.visible);
-        assert!(app.show_help);
+        assert!(app.overlays.help_overlay.visible);
+        assert!(app.overlays.show_help);
     }
 
     #[test]
@@ -6615,10 +7486,10 @@ mod tests {
         let mut app = make_app();
         // First call opens it.
         assert!(app.intercept_slash_command("help"));
-        assert!(app.help_overlay.visible);
+        assert!(app.overlays.help_overlay.visible);
         // Second call while already open should leave it open (not toggle it off).
         assert!(app.intercept_slash_command("help"));
-        assert!(app.help_overlay.visible);
+        assert!(app.overlays.help_overlay.visible);
     }
 
     #[test]
@@ -6627,20 +7498,20 @@ mod tests {
 
         app.handle_key_event(press_key(KeyCode::Char('?'), KeyModifiers::SHIFT));
 
-        assert!(app.help_overlay.visible);
-        assert!(app.show_help);
+        assert!(app.overlays.help_overlay.visible);
+        assert!(app.overlays.show_help);
     }
 
     #[test]
     fn test_question_mark_shortcut_closes_help_with_shift_modifier() {
         let mut app = make_app();
-        app.help_overlay.toggle();
-        app.show_help = true;
+        app.overlays.help_overlay.toggle();
+        app.overlays.show_help = true;
 
         app.handle_key_event(press_key(KeyCode::Char('?'), KeyModifiers::SHIFT));
 
-        assert!(!app.help_overlay.visible);
-        assert!(!app.show_help);
+        assert!(!app.overlays.help_overlay.visible);
+        assert!(!app.overlays.show_help);
     }
 
     #[test]
@@ -6652,7 +7523,7 @@ mod tests {
 
         app.handle_key_event(press_key(KeyCode::Char('?'), KeyModifiers::SHIFT));
 
-        assert!(!app.help_overlay.visible);
+        assert!(!app.overlays.help_overlay.visible);
         assert_eq!(app.prompt_input.text, "why?");
     }
 
@@ -6664,7 +7535,7 @@ mod tests {
 
         app.handle_key_event(press_key(KeyCode::Char('a'), KeyModifiers::CONTROL));
 
-        assert!(app.model_picker.visible);
+        assert!(app.overlays.model_picker.visible);
     }
 
     #[test]
@@ -6676,7 +7547,7 @@ mod tests {
 
         app.handle_key_event(press_key(KeyCode::Char('k'), KeyModifiers::CONTROL));
 
-        assert!(app.command_palette.visible);
+        assert!(app.overlays.command_palette.visible);
         assert_eq!(app.prompt_input.text, "hello");
     }
 
@@ -6704,7 +7575,7 @@ mod tests {
             "git status".to_string(),
             Some("git".to_string()),
         );
-        app.permission_request = Some(pr);
+        app.permission.permission_request = Some(pr);
 
         // Simulate pressing 'P' (prefix-allow key).
         let key = KeyEvent {
@@ -6716,7 +7587,7 @@ mod tests {
         app.handle_permission_key(key);
 
         // Dialog should be dismissed and "git" added to the allowlist.
-        assert!(app.permission_request.is_none());
+        assert!(app.permission.permission_request.is_none());
         assert!(app.bash_command_allowed_by_prefix("git status"));
         assert!(app.bash_command_allowed_by_prefix("git push origin main"));
         // Other commands should NOT be allowed.
@@ -6738,7 +7609,7 @@ mod tests {
         );
         // Navigate to the prefix option (index 3 in a 5-option dialog).
         pr.selected_option = 3;
-        app.permission_request = Some(pr);
+        app.permission.permission_request = Some(pr);
 
         // Press Enter to confirm the currently selected (prefix) option.
         let key = KeyEvent {
@@ -6749,7 +7620,7 @@ mod tests {
         };
         app.handle_permission_key(key);
 
-        assert!(app.permission_request.is_none());
+        assert!(app.permission.permission_request.is_none());
         assert!(app.bash_command_allowed_by_prefix("cargo test"));
         assert!(!app.bash_command_allowed_by_prefix("make build"));
     }
@@ -6767,7 +7638,7 @@ mod tests {
             "npm install".to_string(),
             Some("npm".to_string()),
         );
-        app.permission_request = Some(pr);
+        app.permission.permission_request = Some(pr);
 
         // Press 'y' (allow-once) — should NOT add to allowlist.
         let key = KeyEvent {
@@ -6778,7 +7649,7 @@ mod tests {
         };
         app.handle_permission_key(key);
 
-        assert!(app.permission_request.is_none());
+        assert!(app.permission.permission_request.is_none());
         assert!(!app.bash_command_allowed_by_prefix("npm test"));
     }
 }

@@ -1,5 +1,5 @@
-use crate::tui::app::{App, ToolStatus, ToolUseBlock, TurnMetadata};
 use crate::tui::adapter_types::types::{ContentBlock, Message, Role};
+use crate::tui::app::{App, ToolStatus, ToolUseBlock, TurnMetadata};
 
 #[derive(Debug)]
 pub struct TranscriptTurn<'a> {
@@ -51,24 +51,18 @@ impl<'a> TranscriptTurn<'a> {
 }
 
 pub fn reasoning_heading(text: &str) -> Option<String> {
-    let first = text
-        .lines()
-        .map(str::trim)
-        .find(|line| !line.is_empty())?;
+    let first = text.lines().map(str::trim).find(|line| !line.is_empty())?;
 
     let cleaned = first
         .trim_start_matches(['#', '*', '-', '>', ' '])
         .trim_start_matches("Thinking:")
         .trim()
-        .trim_end_matches(['*', '#', ' ', ':']);  // strip trailing ** ** etc.
+        .trim_end_matches(['*', '#', ' ', ':']); // strip trailing ** ** etc.
     if cleaned.is_empty() {
         return None;
     }
 
-    let collapsed = cleaned
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ");
+    let collapsed = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
     if collapsed.is_empty() {
         return None;
     }
@@ -140,7 +134,7 @@ pub fn build_transcript_turns(app: &App) -> Vec<TranscriptTurn<'_>> {
                 tool_blocks: Vec::new(),
                 live_text: None,
                 live_thinking: None,
-                metadata: app.turn_metadata.get(draft.ordinal),
+                metadata: app.streaming.turn_metadata.get(draft.ordinal),
                 active: false,
             })
         })
@@ -161,14 +155,18 @@ pub fn build_transcript_turns(app: &App) -> Vec<TranscriptTurn<'_>> {
     }
 
     if let Some(last) = turns.last_mut() {
-        if !app.streaming_text.is_empty() {
-            last.live_text = Some(app.streaming_text.as_str());
+        if !app.streaming.streaming_text.is_empty() {
+            last.live_text = Some(app.streaming.streaming_text.as_str());
         }
-        if !app.streaming_thinking.is_empty() {
-            last.live_thinking = Some(app.streaming_thinking.as_str());
+        if !app.streaming.streaming_thinking.is_empty() {
+            last.live_thinking = Some(app.streaming.streaming_thinking.as_str());
         }
 
-        last.active = app.is_streaming || last.tool_blocks.iter().any(|block| block.status == ToolStatus::Running);
+        last.active = app.streaming.is_streaming
+            || last
+                .tool_blocks
+                .iter()
+                .any(|block| block.status == ToolStatus::Running);
     }
 
     turns
