@@ -635,11 +635,28 @@ impl McpStdioClient {
             .await
             .map_err(|e| crate::error::Error::Agent(format!("Failed to flush MCP stdin: {}", e)))?;
 
-        // Read response from stdout
+        // Read response from stdout — with a 60s timeout. Without this, a
+        // hung MCP server would block the agent loop forever.
         let mut response_line = String::new();
-        io.stdout.read_line(&mut response_line).await.map_err(|e| {
-            crate::error::Error::Agent(format!("Failed to read from MCP stdout: {}", e))
-        })?;
+        let read_result = tokio::time::timeout(
+            std::time::Duration::from_secs(60),
+            io.stdout.read_line(&mut response_line),
+        )
+        .await;
+        match read_result {
+            Ok(Ok(_)) => {}
+            Ok(Err(e)) => {
+                return Err(crate::error::Error::Agent(format!(
+                    "Failed to read from MCP stdout: {}",
+                    e
+                )));
+            }
+            Err(_) => {
+                return Err(crate::error::Error::Agent(
+                    "MCP stdio server did not respond within 60s (possible hang)".to_string(),
+                ));
+            }
+        }
 
         let trimmed = response_line.trim();
         if trimmed.is_empty() {
@@ -651,6 +668,15 @@ impl McpStdioClient {
         let rpc_response: JsonRpcResponse = serde_json::from_str(trimmed).map_err(|e| {
             crate::error::Error::ParseResponse(format!("Failed to parse MCP stdio response: {}", e))
         })?;
+
+        // Verify response ID matches request ID. Without this, out-of-order
+        // or mismatched responses would silently return the wrong result.
+        if rpc_response.id != request_id {
+            return Err(crate::error::Error::Agent(format!(
+                "MCP response ID mismatch: expected {}, got {} (possible out-of-order response)",
+                request_id, rpc_response.id
+            )));
+        }
 
         if let Some(error) = rpc_response.error {
             return Err(crate::error::Error::Agent(format!(
