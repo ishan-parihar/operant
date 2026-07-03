@@ -41,7 +41,6 @@ mod env_store;
 mod gateway_commands;
 mod gateway_platforms;
 mod gateway_runner;
-mod gateway_webhooks;
 mod mcp_serve;
 pub mod plugins_install;
 mod post_setup;

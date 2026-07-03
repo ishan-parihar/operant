@@ -583,9 +583,26 @@ where
             return raw.to_string();
         };
 
+        // Match the status file path as a path suffix, not a substring.
+        // Previously used .contains() which would also filter out unrelated
+        // files whose path happens to contain the status filename (e.g.
+        // "src/status_parser/toml.rs" would be filtered if the status file
+        // is "status/toml"). Now checks that the line ends with the path
+        // (after normalizing backslashes to forward slashes).
+        let normalized_filter = relative_status_path.replace('\\', "/");
         let filtered = raw
             .lines()
-            .filter(|line| !line.replace('\\', "/").contains(&relative_status_path))
+            .filter(|line| {
+                let normalized = line.replace('\\', "/");
+                // git status --short format: " XY path" where XY is 2 status chars.
+                // Strip the leading 3 chars (space + 2 status) before matching.
+                let path_part: &str = if normalized.chars().count() > 3 {
+                    normalized.split_at(3).1
+                } else {
+                    &normalized
+                };
+                !path_part.ends_with(&normalized_filter)
+            })
             .collect::<Vec<_>>();
 
         if filtered.is_empty() {
