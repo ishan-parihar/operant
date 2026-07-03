@@ -862,7 +862,10 @@ impl McpManager {
         Self::default()
     }
 
-    /// Add and connect to an HTTP MCP server
+    /// Add and connect to an HTTP MCP server.
+    ///
+    /// If `auth_token` is `None`, falls back to any OAuth token persisted by
+    /// `operant mcp login` (via `mcp_oauth::OAuthManager::get_token`).
     pub async fn add_server(
         &self,
         name: impl Into<String>,
@@ -870,7 +873,25 @@ impl McpManager {
         auth_token: Option<String>,
     ) -> Result<()> {
         let name = name.into();
-        let client = McpClient::new(url, auth_token);
+        let effective_token = match auth_token {
+            Some(t) => Some(t),
+            None => {
+                // Try OAuth: if the user previously ran `operant mcp login`
+                // for this server, a token will be persisted on disk.
+                match crate::mcp_oauth::get_manager().get_token(&url).await {
+                    Some(token) => {
+                        tracing::debug!(
+                            "MCP server {}: using OAuth access token from {}",
+                            name,
+                            url
+                        );
+                        Some(token.access_token)
+                    }
+                    None => None,
+                }
+            }
+        };
+        let client = McpClient::new(url, effective_token);
         client.connect().await?;
         self.servers
             .write()
