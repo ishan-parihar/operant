@@ -1787,14 +1787,6 @@ permission_rx: None,
         self.rustle_current_pose = crate::tui::rustle::RustlePose::Default;
     }
 
-    /// Trigger Rustle looking down briefly (called on Tab / mode switch).
-    pub fn rustle_look_down(&mut self) {
-        self.rustle_temp_pose = Some(crate::tui::rustle::RustlePose::LookDown);
-        self.rustle_pose_until = Some(
-            std::time::Instant::now() + std::time::Duration::from_secs(1)
-        );
-    }
-
     /// Cycle to the next agent mode: build → plan → explore → build.
     /// Sets `agent_mode_changed` so the main loop can update the query config
     /// and tool list accordingly.

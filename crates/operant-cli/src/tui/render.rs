@@ -269,38 +269,9 @@ fn startup_notice_lines(app: &App, width: u16) -> Vec<Line<'static>> {
         ]));
     }
 
-    match &app.bridge_state {
-        crate::bridge_state::BridgeConnectionState::Connected { peer_count, .. } => {
-            let label = if *peer_count > 0 {
-                format!("Remote session active \u{00b7} {} peer{}", peer_count, if *peer_count == 1 { "" } else { "s" })
-            } else {
-                "Remote session active".to_string()
-            };
-            lines.push(Line::from(vec![
-                Span::styled(" remote ", Style::default().fg(ACCENT_PRIMARY)),
-                Span::styled(label, Style::default().fg(Color::DarkGray)),
-            ]));
-        }
-        crate::bridge_state::BridgeConnectionState::Reconnecting { attempt } => {
-            lines.push(Line::from(vec![
-                Span::styled(" remote ", Style::default().fg(Color::Yellow)),
-                Span::styled(
-                    format!("Reconnecting remote session (attempt #{attempt})"),
-                    Style::default().fg(Color::DarkGray),
-                ),
-            ]));
-        }
-        crate::bridge_state::BridgeConnectionState::Failed { reason } => {
-            lines.push(Line::from(vec![
-                Span::styled(" remote ", Style::default().fg(Color::Red)),
-                Span::styled(
-                    truncate_end(reason, max_width),
-                    Style::default().fg(Color::DarkGray),
-                ),
-            ]));
-        }
-        _ => {}
-    }
+    // Bridge connection state is always Disconnected today (bridge feature
+    // not yet wired). When it is, restore the Connected/Reconnecting/Failed
+    // match arms here from git history.
 
     if let Some(url) = app.remote_session_url.as_deref() {
         lines.push(Line::from(vec![
@@ -2356,13 +2327,9 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
             parts.push(Span::styled(clean, Style::default().fg(Color::DarkGray)));
         }
 
-        // 8. Bridge badge
-        if let Some(badge) = app.bridge_state.status_badge(app.frame_count) {
-            if !parts.is_empty() {
-                parts.push(Span::raw("  "));
-            }
-            parts.push(badge);
-        } else if app.pending_mcp_reconnect {
+        // 8. Bridge badge — bridge feature not yet wired (state is always
+        // Disconnected). When wired, restore status_badge() call here.
+        if app.pending_mcp_reconnect {
             if !parts.is_empty() {
                 parts.push(Span::raw("  "));
             }
