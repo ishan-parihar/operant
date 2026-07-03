@@ -845,7 +845,7 @@ async fn chat_non_tui(config: &AppConfig, system_prompt: Option<&str>) -> Result
     tokio::spawn(async move {
         while let Some(event) = event_rx.recv().await {
             match event {
-                AgentEvent::ToolStart { name, arguments } => {
+                AgentEvent::ToolStart { tool_call_id: _, name, arguments } => {
                     let preview = preview_tool_args(&arguments)
                         .map(|a| format!("{}: {}", name, a))
                         .unwrap_or_else(|| name);
@@ -854,7 +854,7 @@ async fn chat_non_tui(config: &AppConfig, system_prompt: Option<&str>) -> Result
                 AgentEvent::ToolComplete { result: _ } => {
                     println!("  Tool: Done.");
                 }
-                AgentEvent::ToolError { name, error } => {
+                AgentEvent::ToolError { tool_call_id: _, name, error } => {
                     eprintln!("  Tool Error {}: {}", name, error);
                 }
                 _ => {}

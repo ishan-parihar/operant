@@ -97,11 +97,11 @@ pub enum AgentEvent {
     /// Model reasoning content
     Reasoning { text: String },
     /// Tool execution started
-    ToolStart { name: String, arguments: String },
+    ToolStart { tool_call_id: String, name: String, arguments: String },
     /// Tool execution completed
     ToolComplete { result: ToolResult },
     /// Tool execution failed
-    ToolError { name: String, error: String },
+    ToolError { tool_call_id: String, name: String, error: String },
     /// Response content received
     Content { text: String },
     /// Agent finished with final response
@@ -554,7 +554,8 @@ impl OperantAgent {
                             .await;
                         } else {
                             self.emit(AgentEvent::ToolError {
-                                name: result.tool_call_id.clone(),
+                                tool_call_id: result.tool_call_id.clone(),
+                                name: result.name.clone(),
                                 error: result.error.clone().unwrap_or_default(),
                             })
                             .await;
@@ -1021,6 +1022,7 @@ impl OperantAgent {
 
             debug!(tool = %name, args = %args_str, "Executing tool");
             self.emit(AgentEvent::ToolStart {
+                tool_call_id: tool_call.id.clone(),
                 name: name.clone(),
                 arguments: args_str.clone(),
             })

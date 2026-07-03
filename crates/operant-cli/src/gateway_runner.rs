@@ -442,7 +442,7 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
             };
 
             match event {
-                AgentEvent::ToolStart { name, arguments } => {
+                AgentEvent::ToolStart { tool_call_id: _, name, arguments } => {
                     let line = tool_preview_line(&name, &arguments);
                     let key = (platform.clone(), channel_id.clone());
 

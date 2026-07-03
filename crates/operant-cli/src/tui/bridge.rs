@@ -29,11 +29,18 @@ pub fn spawn_bridge() -> (
                         delta: text,
                     }))
                 }
-                AgentEvent::ToolStart { name, arguments } => {
-                    let tool_id = format!("tool_{}_{}", name, chrono::Utc::now().timestamp_millis());
+                AgentEvent::ToolStart { tool_call_id, name, arguments } => {
+                    // Use the real tool_call_id from the agent so the TUI
+                    // can correlate this ToolStart with the matching ToolEnd.
+                    // Previously the bridge generated its own fake id
+                    // (format!("tool_{}_{}", name, timestamp_millis())) which
+                    // never matched the ToolEnd's id (result.tool_call_id),
+                    // so the TUI rendered duplicate tool blocks — the start
+                    // block was never "closed" and a new block appeared for
+                    // the end.
                     Some(QueryEvent::ToolStart {
                         tool_name: name,
-                        tool_id,
+                        tool_id: tool_call_id,
                         input_json: arguments,
                     })
                 }
@@ -51,9 +58,12 @@ pub fn spawn_bridge() -> (
                         is_error,
                     })
                 }
-                AgentEvent::ToolError { name, error } => {
+                AgentEvent::ToolError { tool_call_id, name, error } => {
+                    // Use the real tool_call_id (was empty string before),
+                    // so the TUI can correlate this error ToolEnd with the
+                    // matching ToolStart.
                     Some(QueryEvent::ToolEnd {
-                        tool_id: String::new(),
+                        tool_id: tool_call_id,
                         tool_name: name,
                         result: error,
                         is_error: true,
