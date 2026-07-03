@@ -137,6 +137,12 @@ pub struct OperantAgent {
     memory_manager: Option<MemoryManager>,
     skill_manager: Option<SkillManager>,
     database: Arc<Database>,
+    /// TDG memory provider for graph memory hooks. When set, the agent
+    /// calls `sync_turn(user, assistant)` after each completed turn so
+    /// the graph self-organizes (entity extraction + auto-wiring).
+    /// This is the native equivalent of the hermes-agent Python adapter's
+    /// TDG hooks — no manual tdg_create/tdg_connect needed.
+    memory_provider: Option<Arc<dyn crate::memory_provider::MemoryProvider>>,
     /// Stable session ID for DB persistence across multiple `run()` calls.
     /// When set, all messages are persisted under this ID instead of generating
     /// a fresh one each call.  Set by the TUI at startup.
@@ -178,6 +184,7 @@ impl OperantAgent {
             event_tx: None,
             permission_tx: None,
             memory_manager: None,
+            memory_provider: None,
             skill_manager: None,
             database,
             persistent_session_id: None,
@@ -202,6 +209,7 @@ impl OperantAgent {
             event_tx: Some(event_tx),
             permission_tx: None,
             memory_manager: None,
+            memory_provider: None,
             skill_manager: None,
             database,
             persistent_session_id: None,
@@ -213,6 +221,19 @@ impl OperantAgent {
     /// Attach a memory manager for long-term memory injection and session distillation.
     pub fn with_memory_manager(mut self, memory_manager: MemoryManager) -> Self {
         self.memory_manager = Some(memory_manager);
+        self
+    }
+
+    /// Attach a TDG memory provider for graph memory hooks. When set,
+    /// the agent calls `sync_turn(user, assistant)` after each completed
+    /// turn so the graph self-organizes (entity extraction + auto-wiring).
+    /// This is the native equivalent of the hermes-agent Python adapter's
+    /// TDG hooks.
+    pub fn with_memory_provider(
+        mut self,
+        memory_provider: Arc<dyn crate::memory_provider::MemoryProvider>,
+    ) -> Self {
+        self.memory_provider = Some(memory_provider);
         self
     }
 
@@ -522,6 +543,26 @@ impl OperantAgent {
                             message: assistant_msg,
                         })
                         .await;
+
+                        // TDG hook: sync this turn to graph memory. The
+                        // provider extracts entities and auto-wires edges,
+                        // so the graph self-organizes without the agent
+                        // needing to call tdg_create/tdg_connect manually.
+                        // This is the native equivalent of the hermes-agent
+                        // Python adapter's post-turn TDG hook. Failures are
+                        // logged but don't break the turn — the agent's
+                        // response is already complete.
+                        if let Some(provider) = &self.memory_provider {
+                            let user_text = user_query.clone();
+                            let assistant_text = result.content.clone();
+                            let provider = provider.clone();
+                            tokio::spawn(async move {
+                                if let Err(e) = provider.sync_turn(&user_text, &assistant_text).await {
+                                    tracing::warn!(error = %e, "TDG sync_turn hook failed");
+                                }
+                            });
+                        }
+
                         return Ok(result);
                     }
 
@@ -1547,6 +1588,7 @@ pub struct OperantAgentBuilder {
     client: Option<Box<dyn ModelClient>>,
     registry: Option<ToolRegistry>,
     memory_manager: Option<MemoryManager>,
+    memory_provider: Option<Arc<dyn crate::memory_provider::MemoryProvider>>,
     database: Option<Arc<Database>>,
 }
 
@@ -1557,6 +1599,7 @@ impl OperantAgentBuilder {
             client: None,
             registry: None,
             memory_manager: None,
+            memory_provider: None,
             database: None,
         }
     }
@@ -1621,6 +1664,15 @@ impl OperantAgentBuilder {
         self
     }
 
+    /// Set the TDG memory provider for graph memory hooks.
+    pub fn memory_provider(
+        mut self,
+        memory_provider: Arc<dyn crate::memory_provider::MemoryProvider>,
+    ) -> Self {
+        self.memory_provider = Some(memory_provider);
+        self
+    }
+
     /// Build the agent
     pub fn build(self) -> Result<OperantAgent> {
         let client: Box<dyn ModelClient> = self.client.unwrap_or_else(|| {
@@ -1655,6 +1707,9 @@ impl OperantAgentBuilder {
         let mut agent = OperantAgent::new(self.config, client, registry, database);
         if let Some(memory_manager) = self.memory_manager {
             agent = agent.with_memory_manager(memory_manager);
+        }
+        if let Some(memory_provider) = self.memory_provider {
+            agent = agent.with_memory_provider(memory_provider);
         }
 
         Ok(agent)
