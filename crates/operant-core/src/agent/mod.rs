@@ -137,6 +137,10 @@ pub struct OperantAgent {
     /// When set, all messages are persisted under this ID instead of generating
     /// a fresh one each call.  Set by the TUI at startup.
     persistent_session_id: Option<String>,
+    /// Shared interrupt flag for graceful Ctrl-C cancellation.
+    /// When triggered, the agent loop exits at the next iteration boundary
+    /// and tool execution is aborted via `flag.check()`.
+    interrupt_flag: crate::interrupt::InterruptFlag,
 }
 
 /// A pending permission request sent from the agent to the TUI
@@ -169,6 +173,7 @@ impl OperantAgent {
             skill_manager: None,
             database,
             persistent_session_id: None,
+            interrupt_flag: crate::interrupt::InterruptFlag::new(),
         }
     }
 
@@ -191,6 +196,7 @@ impl OperantAgent {
             skill_manager: None,
             database,
             persistent_session_id: None,
+            interrupt_flag: crate::interrupt::InterruptFlag::new(),
         }
     }
 
@@ -214,6 +220,21 @@ impl OperantAgent {
     pub fn with_persistent_session(mut self, session_id: String) -> Self {
         self.persistent_session_id = Some(session_id);
         self
+    }
+
+    /// Inject an externally-managed `InterruptFlag` (e.g. wired to Ctrl-C by
+    /// the TUI or CLI). When triggered, the agent loop exits gracefully at
+    /// the next iteration boundary.
+    pub fn with_interrupt_flag(mut self, flag: crate::interrupt::InterruptFlag) -> Self {
+        self.interrupt_flag = flag;
+        self
+    }
+
+    /// Get a clone of the agent's interrupt flag, so callers can trigger it
+    /// (e.g. from a `tokio::signal::ctrl_c()` handler) without having kept
+    /// their own copy.
+    pub fn interrupt_flag(&self) -> crate::interrupt::InterruptFlag {
+        self.interrupt_flag.clone()
     }
 
     /// Send an event to the channel
@@ -297,6 +318,19 @@ impl OperantAgent {
         loop {
             iteration += 1;
             debug!(iteration, "Agent iteration");
+
+            // ── Graceful interrupt check (Ctrl-C) ──
+            // If the interrupt flag has been triggered (e.g. by a Ctrl-C
+            // signal handler in the TUI/CLI), exit the loop cleanly instead
+            // of starting another LLM round-trip + tool execution cycle.
+            if self.interrupt_flag.is_triggered() {
+                info!("Agent loop interrupted by user (Ctrl-C)");
+                self.emit(AgentEvent::Error {
+                    error: "Interrupted by user".to_string(),
+                })
+                .await;
+                return Err(Error::Agent("Interrupted by user".to_string()));
+            }
 
             if iteration > self.config.max_iterations {
                 error!(max = self.config.max_iterations, "Max iterations exceeded");
@@ -711,6 +745,15 @@ impl OperantAgent {
         let mut results = Vec::new();
 
         for tool_call in tool_calls {
+            // Check interrupt flag before each tool call — allows a Ctrl-C
+            // during a multi-tool iteration to skip remaining tools.
+            if self.interrupt_flag.is_triggered() {
+                results.push(ToolResult::error(
+                    &tool_call.id,
+                    "Skipped: interrupted by user (Ctrl-C)".to_string(),
+                ));
+                continue;
+            }
             let name = tool_call.function.name.clone();
             // Default empty/whitespace-only argument strings to "{}" so that
             // providers which stream tool-calls without any arguments at all
