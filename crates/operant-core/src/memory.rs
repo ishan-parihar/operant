@@ -7,6 +7,7 @@ use crate::client::Message;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, info};
@@ -460,6 +461,11 @@ pub struct MemoryManager {
     session_messages: Arc<RwLock<Vec<Message>>>,
     /// Optional directory for file-backed persistent storage (MEMORY.md / USER.md)
     storage_dir: Option<PathBuf>,
+    /// Dirty flag set by `store()` and `save_profile()` so the next
+    /// `save_to_disk()` / `flush_if_dirty()` call knows whether a write is
+    /// needed. Avoids the O(n²) write pattern where every `store()` in a
+    /// distillation loop triggered a full file rewrite.
+    dirty: Arc<AtomicBool>,
 }
 
 impl Default for MemoryManager {
@@ -478,6 +484,7 @@ impl MemoryManager {
             current_session: Arc::new(RwLock::new(None)),
             session_messages: Arc::new(RwLock::new(Vec::new())),
             storage_dir: None,
+            dirty: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -491,6 +498,7 @@ impl MemoryManager {
             current_session: Arc::new(RwLock::new(None)),
             session_messages: Arc::new(RwLock::new(Vec::new())),
             storage_dir: Some(dir),
+            dirty: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -555,8 +563,13 @@ impl MemoryManager {
     pub async fn store(&self, block: MemoryBlock) {
         debug!(block_id = %block.id, block_type = %block.block_type, "Storing memory block");
         self.long_term.write().await.insert(block.id.clone(), block);
+        // Mark dirty instead of writing immediately. Previously this called
+        // save_to_disk() on every store, which made distillation loops O(n²)
+        // — n stores each triggering a full file rewrite. Callers that need
+        // synchronous persistence should call save_to_disk() (or
+        // flush_if_dirty()) explicitly after a batch of stores.
         if self.storage_dir.is_some() {
-            let _ = self.save_to_disk().await;
+            self.dirty.store(true, Ordering::Release);
         }
     }
 
@@ -609,7 +622,9 @@ impl MemoryManager {
     }
 
     /// Store or update a user profile.
-    /// When `storage_dir` is set, automatically persists to USER.md on disk.
+    /// Marks the manager dirty so the next `save_to_disk()` / `flush_if_dirty()` flushes
+    /// USER.md to disk. Does NOT write synchronously — callers that need immediate
+    /// persistence should call `save_to_disk()` afterwards.
     pub async fn save_profile(&self, profile: UserProfile) {
         debug!(user_id = %profile.user_id, "Saving user profile");
         self.profiles
@@ -617,7 +632,7 @@ impl MemoryManager {
             .await
             .insert(profile.user_id.clone(), profile);
         if self.storage_dir.is_some() {
-            let _ = self.save_to_disk().await;
+            self.dirty.store(true, Ordering::Release);
         }
     }
 
@@ -628,21 +643,55 @@ impl MemoryManager {
 
     /// Save all memories and profiles to disk (MEMORY.md and USER.md).
     /// Returns `Ok(())` immediately if no `storage_dir` is configured.
+    ///
+    /// The file I/O runs inside `tokio::task::spawn_blocking` so the async
+    /// runtime isn't blocked while writing large memory files. The locks on
+    /// `long_term` and `profiles` are held only long enough to clone the data
+    /// into local Vecs, then dropped before the blocking write starts.
     pub async fn save_to_disk(&self) -> std::io::Result<()> {
         let dir = match &self.storage_dir {
-            Some(dir) => dir,
+            Some(dir) => dir.clone(),
             None => return Ok(()),
         };
-        let store = MemoryStore::new(dir.clone());
 
-        let memories = self.long_term.read().await;
-        store.write_memories(&memories)?;
-        drop(memories);
+        // Snapshot the memories + profiles under short-lived read locks,
+        // then drop the locks before doing any file I/O. This minimizes the
+        // time other async tasks are blocked waiting on these locks.
+        let (memories_snapshot, profiles_snapshot) = {
+            let memories = self.long_term.read().await;
+            let profiles = self.profiles.read().await;
+            (memories.clone(), profiles.clone())
+        };
 
-        let profiles = self.profiles.read().await;
-        store.write_profiles(&profiles)?;
+        // Move the synchronous file writes off the async runtime.
+        tokio::task::spawn_blocking(move || {
+            let store = MemoryStore::new(dir);
+            store.write_memories(&memories_snapshot)?;
+            store.write_profiles(&profiles_snapshot)?;
+            Ok::<(), std::io::Error>(())
+        })
+        .await
+        .map_err(|join_err| {
+            std::io::Error::new(
+                std::io::ErrorKind::Other,
+                format!("save_to_disk spawn_blocking panicked: {}", join_err),
+            )
+        })??;
 
+        // Clear the dirty flag after a successful write.
+        self.dirty.store(false, Ordering::Release);
         Ok(())
+    }
+
+    /// Write to disk only if `store()` or `save_profile()` has been called
+    /// since the last flush. Cheap (single atomic load) when nothing is dirty.
+    /// Returns `Ok(())` immediately if no `storage_dir` is configured or if
+    /// nothing has changed since the last successful write.
+    pub async fn flush_if_dirty(&self) -> std::io::Result<()> {
+        if !self.dirty.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        self.save_to_disk().await
     }
 
     /// Load memories and profiles from disk (MEMORY.md and USER.md).
@@ -1264,11 +1313,14 @@ mod tests {
         let dir = test_dir("auto_save_store");
         let manager = MemoryManager::with_storage_dir(dir.clone());
 
-        // store() should auto-save to disk
+        // store() marks dirty; an explicit flush_if_dirty() persists to disk.
+        // (Previously store() wrote to disk on every call — O(n²) during
+        // distillation. Now callers batch stores and flush once.)
         let block = MemoryBlock::new("auto1", "fact", "Auto-saved fact")
             .importance(60)
             .tags(vec!["auto".to_string()]);
         manager.store(block).await;
+        manager.flush_if_dirty().await.unwrap();
 
         // Verify the file was written
         let store = MemoryStore::new(dir.clone());
@@ -1286,7 +1338,7 @@ mod tests {
         let dir = test_dir("auto_save_profile");
         let manager = MemoryManager::with_storage_dir(dir.clone());
 
-        // save_profile() should auto-save to disk
+        // save_profile() marks dirty; flush_if_dirty() persists to disk.
         let profile = UserProfile {
             user_id: "autouser".to_string(),
             name: Some("Auto User".to_string()),
@@ -1294,6 +1346,7 @@ mod tests {
             facts: Vec::new(),
         };
         manager.save_profile(profile).await;
+        manager.flush_if_dirty().await.unwrap();
 
         // Verify the file was written
         let store = MemoryStore::new(dir.clone());
@@ -1329,6 +1382,69 @@ mod tests {
         // Should return Ok(()) without doing anything
         manager.save_to_disk().await.unwrap();
         manager.load_from_disk().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_flush_if_dirty_skips_when_clean() {
+        // flush_if_dirty() must be a no-op (no file write) when nothing has
+        // been stored since the last flush. This is what makes the batch
+        // pattern cheap — distillation callers can call flush_if_dirty()
+        // every N stores without paying for a write when N=0 happened.
+        let dir = test_dir("flush_clean");
+        let manager = MemoryManager::with_storage_dir(dir.clone());
+
+        // No store() yet — flush should be a no-op.
+        manager.flush_if_dirty().await.unwrap();
+        let store = MemoryStore::new(dir.clone());
+        assert!(
+            !store.memory_path().exists(),
+            "no write should happen when nothing is dirty"
+        );
+
+        // After a store + flush, the file exists.
+        manager
+            .store(MemoryBlock::new("d1", "fact", "dirty fact"))
+            .await;
+        manager.flush_if_dirty().await.unwrap();
+        assert!(store.memory_path().exists());
+
+        // A second flush_if_dirty() with no intervening store() must not
+        // touch the file again (we can't easily assert "no write" without
+        // mtime tricks, but the call must at least return Ok).
+        manager.flush_if_dirty().await.unwrap();
+
+        cleanup(&dir);
+    }
+
+    #[tokio::test]
+    async fn test_batch_stores_single_flush() {
+        // Distillation pattern: N stores in a loop, one flush at the end.
+        // The file should contain all N blocks after the single flush, and
+        // only one write should have happened (not N writes).
+        let dir = test_dir("batch_stores");
+        let manager = MemoryManager::with_storage_dir(dir.clone());
+
+        for i in 0..10 {
+            manager
+                .store(MemoryBlock::new(
+                    &format!("block_{i}"),
+                    "fact",
+                    format!("Fact number {i}"),
+                ))
+                .await;
+        }
+        // Single flush after the batch — replaces the old O(n²) behavior
+        // where every store() called save_to_disk() internally.
+        manager.flush_if_dirty().await.unwrap();
+
+        let store = MemoryStore::new(dir.clone());
+        let loaded = store.read_memories().unwrap();
+        assert_eq!(loaded.len(), 10, "all 10 batched blocks should persist");
+        for i in 0..10 {
+            assert!(loaded.contains_key(&format!("block_{i}")));
+        }
+
+        cleanup(&dir);
     }
 
     #[test]
