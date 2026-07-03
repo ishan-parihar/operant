@@ -2713,6 +2713,12 @@ permission_rx: None,
         self.voice_recording = true;
         if let Some(ref recorder_arc) = self.voice_recorder {
             let recorder = recorder_arc.clone();
+            // spawn_blocking + block_on: the std MutexGuard is not Send,
+            // so we can't hold it across .await in a tokio::spawn.
+            // spawn_blocking runs on a dedicated blocking thread, so the
+            // main tokio runtime (and TUI render) continues unblocked.
+            // start_recording is a quick operation (creates recorder +
+            // starts capture subprocess).
             tokio::task::spawn_blocking(move || {
                 if let Ok(mut r) = recorder.lock() {
                     tokio::runtime::Handle::current()
@@ -2735,6 +2741,10 @@ permission_rx: None,
         self.voice_recording = false;
         if let Some(ref recorder_arc) = self.voice_recorder {
             let recorder = recorder_arc.clone();
+            // spawn_blocking: stop_recording does network STT (5-30s).
+            // Using a blocking thread ensures the main tokio runtime
+            // (TUI render, event loop) continues running while the
+            // transcription happens in the background.
             tokio::task::spawn_blocking(move || {
                 if let Ok(mut r) = recorder.lock() {
                     tokio::runtime::Handle::current()
@@ -3845,13 +3855,8 @@ permission_rx: None,
                 self.voice_recording = true;
                 if let Some(ref recorder_arc) = self.voice_recorder {
                     let recorder = recorder_arc.clone();
-                    // Use spawn_blocking so we don't hold a std::sync::MutexGuard
-                    // across an await point.  start_recording internally spawns a
-                    // tokio task and returns quickly, so blocking is negligible.
                     tokio::task::spawn_blocking(move || {
                         if let Ok(mut r) = recorder.lock() {
-                            // start_recording is async but its real work happens in
-                            // a spawned task; use block_on to drive the short setup.
                             tokio::runtime::Handle::current()
                                 .block_on(r.start_recording(tx))
                                 .ok();
@@ -3864,8 +3869,7 @@ permission_rx: None,
                     None,
                 );
             } else {
-                // Second press: stop recording.  stop_recording() just flips an
-                // AtomicBool; drive it synchronously to avoid Send issues.
+                // Second press: stop recording.
                 self.voice_recording = false;
                 if let Some(ref recorder_arc) = self.voice_recorder {
                     let recorder = recorder_arc.clone();
