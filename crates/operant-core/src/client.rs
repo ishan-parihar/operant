@@ -165,8 +165,10 @@ impl OpenAIClient {
         model: &str,
         messages: &[Message],
         tools: Option<&[ToolSchema]>,
+        max_tokens: Option<u32>,
+        temperature: Option<f32>,
     ) -> Result<ChatResponse> {
-        let request = self.build_chat_request(model, messages, tools, false)?;
+        let request = self.build_chat_request(model, messages, tools, false, max_tokens, temperature)?;
 
         let url = self.build_url("")?;
         let headers = self.build_headers()?;
@@ -194,8 +196,10 @@ impl OpenAIClient {
         model: &str,
         messages: &[Message],
         tools: Option<&[ToolSchema]>,
+        max_tokens: Option<u32>,
+        temperature: Option<f32>,
     ) -> Result<ChatStreamResponse> {
-        let request = self.build_chat_request(model, messages, tools, true)?;
+        let request = self.build_chat_request(model, messages, tools, true, max_tokens, temperature)?;
 
         let url = self.build_url("")?;
         let headers = self.build_headers()?;
@@ -401,12 +405,26 @@ impl OpenAIClient {
         messages: &[Message],
         tools: Option<&[ToolSchema]>,
         stream: bool,
+        max_tokens: Option<u32>,
+        temperature: Option<f32>,
     ) -> Result<serde_json::Value> {
         let mut request = json!({
             "model": model,
             "messages": messages.iter().map(|m| m.to_value()).collect::<Vec<_>>(),
             "stream": stream,
         });
+
+        // Pass through max_tokens / temperature if the caller set them.
+        // Previously these fields were parsed from config into ChatRequest
+        // but never sent to the provider — the OpenAI adapter dropped them,
+        // so users who set max_tokens=8192 or temperature=0.5 in their
+        // config saw no effect.
+        if let Some(max_tokens) = max_tokens {
+            request["max_tokens"] = json!(max_tokens);
+        }
+        if let Some(temperature) = temperature {
+            request["temperature"] = json!(temperature);
+        }
 
         if let Some(tools) = tools {
             if !tools.is_empty() {
@@ -1168,5 +1186,60 @@ mod tests {
         // Invalid JSON should not crash; falls through to default classification
         let err = classify_http_error(429, "not json at all");
         assert!(matches!(err, Error::RateLimited { .. }));
+    }
+
+    // --- iter-23: max_tokens / temperature pass-through tests ---
+
+    /// `build_chat_request` now threads `max_tokens` and `temperature` into
+    /// the JSON body. Previously these fields existed on `ChatRequest` but
+    /// were dropped by the OpenAI adapter — config-level values never reached
+    /// the provider.
+    #[test]
+    fn build_chat_request_includes_max_tokens_and_temperature_when_set() {
+        let client = OpenAIClient::new(ClientConfig::default());
+        let request = client
+            .build_chat_request(
+                "gpt-4o",
+                &[Message::user("hi")],
+                None,
+                false,
+                Some(8192),
+                Some(0.5),
+            )
+            .expect("request should build");
+
+        assert_eq!(request["max_tokens"], 8192);
+        assert_eq!(request["temperature"], 0.5);
+    }
+
+    #[test]
+    fn build_chat_request_omits_max_tokens_and_temperature_when_none() {
+        let client = OpenAIClient::new(ClientConfig::default());
+        let request = client
+            .build_chat_request("gpt-4o", &[Message::user("hi")], None, false, None, None)
+            .expect("request should build");
+
+        // Both fields should be absent (not null) so we don't send default
+        // values that might conflict with provider-side defaults.
+        assert!(request.get("max_tokens").is_none());
+        assert!(request.get("temperature").is_none());
+    }
+
+    #[test]
+    fn build_chat_request_includes_only_max_tokens_when_temperature_none() {
+        let client = OpenAIClient::new(ClientConfig::default());
+        let request = client
+            .build_chat_request(
+                "gpt-4o",
+                &[Message::user("hi")],
+                None,
+                false,
+                Some(4096),
+                None,
+            )
+            .expect("request should build");
+
+        assert_eq!(request["max_tokens"], 4096);
+        assert!(request.get("temperature").is_none());
     }
 }
