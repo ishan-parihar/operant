@@ -2057,6 +2057,15 @@ permission_rx: None,
                 self.tool_use_blocks.clear();
                 self.turn_metadata.clear();
                 self.cost_usd = 0.0;
+                // Reset streaming + scroll + token state so new input isn't
+                // silently dropped. Without this, /clear mid-stream leaves
+                // is_streaming=true, so the prompt input handler rejects
+                // new queries.
+                self.is_streaming = false;
+                self.scroll_offset = 0;
+                self.auto_scroll = true;
+                self.new_messages_while_scrolled = 0;
+                self.token_count = 0;
                 self.invalidate_transcript();
                 self.status_message = Some("Conversation cleared.".to_string());
                 true
