@@ -52,6 +52,7 @@ pub mod client;
 pub mod config;
 pub mod context;
 pub mod context_files;
+pub mod context_management;
 pub mod credential_files;
 pub mod credential_pool;
 pub mod cronjobs;
