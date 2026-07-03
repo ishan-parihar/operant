@@ -956,8 +956,15 @@ pub struct App {
     pub voice_event_rx: Option<tokio::sync::mpsc::Receiver<crate::tui::adapter_types::voice::VoiceEvent>>,
     /// Receiver for QueryEvent messages from the agent bridge task.
     pub query_event_rx: Option<tokio::sync::mpsc::Receiver<crate::tui::adapter_types::query::QueryEvent>>,
-    /// Receiver for tool permission requests from the agent. Auto-approves all requests.
+    /// Receiver for tool permission requests from the agent. Each request is
+    /// surfaced as a `PermissionRequest` dialog; the user's choice is routed
+    /// back to the agent via `pending_permission_response_tx`.
     pub permission_rx: Option<tokio::sync::mpsc::Receiver<operant_core::agent::ToolPermissionRequest>>,
+    /// The response channel for the currently-shown permission dialog. Set
+    /// when a `ToolPermissionRequest` is popped from `permission_rx` and
+    /// consumed when the user picks an option (or Esc/deny).
+    pub pending_permission_response_tx:
+        Option<tokio::sync::oneshot::Sender<operant_core::agent::ToolPermissionResponse>>,
     pub run_complete_rx: Option<tokio::sync::oneshot::Receiver<operant_core::error::Result<()>>>,
     /// A single key event that was drained from the queue during paste-burst
     /// detection but wasn't part of the burst (e.g. a modifier key that stopped
@@ -1396,6 +1403,7 @@ impl App {
             voice_event_rx: None,
             query_event_rx: None,
 permission_rx: None,
+            pending_permission_response_tx: None,
             run_complete_rx: None,
             pending_key: None,
             model_fetch_rx: None,
@@ -5070,6 +5078,51 @@ permission_rx: None,
         false
     }
 
+    /// Resolve the currently-shown permission dialog by mapping the selected
+    /// option to a `ToolPermissionResponse` and sending it to the agent.
+    /// Drops the dialog state and the response sender regardless of whether
+    /// the agent is still listening (send fails silently if the agent has
+    /// already timed out / been dropped).
+    ///
+    /// Option key mapping:
+    ///   `y` → AllowOnce
+    ///   `Y` → AllowSession
+    ///   `p` (persistent) → AllowSession (no persistent store wired yet —
+    ///       session-scoped is the closest equivalent)
+    ///   `P` (bash prefix) → AllowSession, also records the bash prefix in
+    ///       `bash_prefix_allowlist` via `maybe_record_bash_prefix`
+    ///   `n` / Esc / unknown → Deny
+    fn resolve_permission_dialog(&mut self) {
+        // Capture the selected option key + response sender up front so we
+        // can clear `permission_request` at the end unconditionally.
+        let (selected_key, tx) = {
+            let pr = match self.permission_request.as_ref() {
+                Some(p) => p,
+                None => return,
+            };
+            let key = pr.options.get(pr.selected_option).map(|o| o.key);
+            let tx = self.pending_permission_response_tx.take();
+            (key, tx)
+        };
+        // Bash prefix-allow ('P') records the prefix in the allowlist. Must
+        // run before we drop `permission_request` — it reads `pr.kind`.
+        self.maybe_record_bash_prefix();
+
+        let response = match selected_key {
+            Some('y') => operant_core::agent::ToolPermissionResponse::AllowOnce,
+            Some('Y') | Some('p') | Some('P') => {
+                operant_core::agent::ToolPermissionResponse::AllowSession
+            }
+            // 'n' (deny), None (no options), or any unmatched key → Deny.
+            Some('n') | None => operant_core::agent::ToolPermissionResponse::Deny,
+            Some(_) => operant_core::agent::ToolPermissionResponse::Deny,
+        };
+        if let Some(tx) = tx {
+            let _ = tx.send(response);
+        }
+        self.permission_request = None;
+    }
+
     /// Handle a key event while a permission dialog is active.
     fn handle_permission_key(&mut self, key: KeyEvent) {
         let pr = match self.permission_request.as_mut() {
@@ -5095,17 +5148,13 @@ permission_rx: None,
                     }
                     if let Some(idx) = matched_idx {
                         pr.selected_option = idx;
-                        // If this is the prefix-allow option ('P'), record the prefix.
-                        self.maybe_record_bash_prefix();
-                        self.permission_request = None;
+                        self.resolve_permission_dialog();
                         return;
                     }
                 }
             }
             KeyCode::Enter => {
-                // If the currently selected option is the prefix-allow option, record it.
-                self.maybe_record_bash_prefix();
-                self.permission_request = None;
+                self.resolve_permission_dialog();
             }
             KeyCode::Up => {
                 if pr.selected_option > 0 {
@@ -5118,7 +5167,15 @@ permission_rx: None,
                 }
             }
             KeyCode::Esc => {
-                self.permission_request = None;
+                // Esc = cancel = deny. Force the selected option to the deny
+                // option (key 'n') before resolving so the response is always
+                // Deny regardless of which option was highlighted.
+                if let Some(pr) = self.permission_request.as_mut() {
+                    if let Some(idx) = pr.options.iter().position(|o| o.key == 'n') {
+                        pr.selected_option = idx;
+                    }
+                }
+                self.resolve_permission_dialog();
             }
             _ => {}
         }
@@ -6213,11 +6270,37 @@ permission_rx: None,
                 }
             }
 
-            // Auto-approve all tool permission requests.
+            // Drain pending tool permission requests from the agent. Each
+            // request is converted into a `PermissionRequest` dialog and shown
+            // to the user; the per-request `response_tx` is stashed in
+            // `pending_permission_response_tx` so the user's choice can be
+            // routed back when the dialog is dismissed. If a dialog is already
+            // active (rare — the agent blocks on each request), the new
+            // request is denied to avoid deadlock.
             {
                 if let Some(ref mut rx) = self.permission_rx {
                     while let Ok(req) = rx.try_recv() {
-                        let _ = req.response_tx.send(operant_core::agent::ToolPermissionResponse::AllowOnce);
+                        if self.permission_request.is_some() {
+                            // A dialog is already shown — deny the new request
+                            // so the agent doesn't block forever.
+                            let _ = req
+                                .response_tx
+                                .send(operant_core::agent::ToolPermissionResponse::Deny);
+                            continue;
+                        }
+                        let reason = if req.danger_explanation.is_empty() {
+                            req.description.clone()
+                        } else {
+                            format!("{}\n{}", req.description, req.danger_explanation)
+                        };
+                        let dialog = crate::tui::dialogs::PermissionRequest::from_reason(
+                            req.tool_id,
+                            req.tool_name,
+                            reason,
+                            req.input_preview,
+                        );
+                        self.permission_request = Some(dialog);
+                        self.pending_permission_response_tx = Some(req.response_tx);
                     }
                 }
             }
@@ -6860,5 +6943,149 @@ mod tests {
 
         assert!(app.permission_request.is_none());
         assert!(!app.bash_command_allowed_by_prefix("npm test"));
+    }
+
+    // ---- iter-20: permission dialog response routing ----------------------
+
+    #[test]
+    fn test_permission_dialog_y_sends_allow_once() {
+        use crate::tui::dialogs::PermissionRequest;
+
+        let mut app = make_app();
+        let pr = PermissionRequest::standard(
+            "tu-1".to_string(),
+            "Bash".to_string(),
+            "This will execute a shell command.".to_string(),
+        );
+        app.permission_request = Some(pr);
+
+        let (tx, mut rx) = tokio::sync::oneshot::channel();
+        app.pending_permission_response_tx = Some(tx);
+
+        let key = press_key(KeyCode::Char('y'), KeyModifiers::NONE);
+        app.handle_permission_key(key);
+
+        assert!(app.permission_request.is_none());
+        assert!(app.pending_permission_response_tx.is_none());
+        let response = rx.try_recv().expect("response should be sent");
+        assert_eq!(response, operant_core::agent::ToolPermissionResponse::AllowOnce);
+    }
+
+    #[test]
+    fn test_permission_dialog_uppercase_y_sends_allow_session() {
+        use crate::tui::dialogs::PermissionRequest;
+
+        let mut app = make_app();
+        let pr = PermissionRequest::standard(
+            "tu-2".to_string(),
+            "Bash".to_string(),
+            "This will execute a shell command.".to_string(),
+        );
+        app.permission_request = Some(pr);
+
+        let (tx, mut rx) = tokio::sync::oneshot::channel();
+        app.pending_permission_response_tx = Some(tx);
+
+        // Shift+y → uppercase 'Y' (the session-allow key).
+        let key = press_key(KeyCode::Char('Y'), KeyModifiers::SHIFT);
+        app.handle_permission_key(key);
+
+        assert!(app.permission_request.is_none());
+        let response = rx.try_recv().expect("response should be sent");
+        assert_eq!(response, operant_core::agent::ToolPermissionResponse::AllowSession);
+    }
+
+    #[test]
+    fn test_permission_dialog_n_sends_deny() {
+        use crate::tui::dialogs::PermissionRequest;
+
+        let mut app = make_app();
+        let pr = PermissionRequest::standard(
+            "tu-3".to_string(),
+            "Bash".to_string(),
+            "This will execute a shell command.".to_string(),
+        );
+        app.permission_request = Some(pr);
+
+        let (tx, mut rx) = tokio::sync::oneshot::channel();
+        app.pending_permission_response_tx = Some(tx);
+
+        let key = press_key(KeyCode::Char('n'), KeyModifiers::NONE);
+        app.handle_permission_key(key);
+
+        assert!(app.permission_request.is_none());
+        let response = rx.try_recv().expect("response should be sent");
+        assert_eq!(response, operant_core::agent::ToolPermissionResponse::Deny);
+    }
+
+    #[test]
+    fn test_permission_dialog_esc_sends_deny() {
+        use crate::tui::dialogs::PermissionRequest;
+
+        let mut app = make_app();
+        let pr = PermissionRequest::standard(
+            "tu-4".to_string(),
+            "Bash".to_string(),
+            "This will execute a shell command.".to_string(),
+        );
+        app.permission_request = Some(pr);
+
+        let (tx, mut rx) = tokio::sync::oneshot::channel();
+        app.pending_permission_response_tx = Some(tx);
+
+        let key = press_key(KeyCode::Esc, KeyModifiers::NONE);
+        app.handle_permission_key(key);
+
+        assert!(app.permission_request.is_none());
+        let response = rx.try_recv().expect("response should be sent");
+        assert_eq!(response, operant_core::agent::ToolPermissionResponse::Deny);
+    }
+
+    #[test]
+    fn test_permission_dialog_enter_sends_selected_option_response() {
+        use crate::tui::dialogs::PermissionRequest;
+
+        let mut app = make_app();
+        let mut pr = PermissionRequest::standard(
+            "tu-5".to_string(),
+            "Bash".to_string(),
+            "This will execute a shell command.".to_string(),
+        );
+        // Move selection down to the deny option (index 3).
+        pr.selected_option = 3;
+        app.permission_request = Some(pr);
+
+        let (tx, mut rx) = tokio::sync::oneshot::channel();
+        app.pending_permission_response_tx = Some(tx);
+
+        let key = press_key(KeyCode::Enter, KeyModifiers::NONE);
+        app.handle_permission_key(key);
+
+        assert!(app.permission_request.is_none());
+        let response = rx.try_recv().expect("response should be sent");
+        assert_eq!(response, operant_core::agent::ToolPermissionResponse::Deny);
+    }
+
+    #[test]
+    fn test_permission_dialog_no_tx_does_not_panic() {
+        use crate::tui::dialogs::PermissionRequest;
+
+        // Tests the case where the dialog was opened without a response_tx
+        // (e.g. directly constructed in tests). resolve_permission_dialog
+        // should silently no-op the send, not panic.
+        let mut app = make_app();
+        let pr = PermissionRequest::standard(
+            "tu-6".to_string(),
+            "Bash".to_string(),
+            "This will execute a shell command.".to_string(),
+        );
+        app.permission_request = Some(pr);
+        // pending_permission_response_tx is None by default.
+
+        let key = press_key(KeyCode::Char('y'), KeyModifiers::NONE);
+        app.handle_permission_key(key);
+
+        assert!(app.permission_request.is_none());
+        assert!(app.pending_permission_response_tx.is_none());
     }
 }
