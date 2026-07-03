@@ -646,7 +646,25 @@ impl OperantAgent {
     async fn build_messages(&self) -> Result<Vec<Message>> {
         let mut messages = Vec::new();
 
-        let mut system_prompt = if let Some(ref system) = self.config.system_prompt {
+        // ── Prompt-cache stability (iter-39) ─────────────────────────────
+        // Split the system prompt into TWO messages:
+        //   1. FROZEN PREFIX: base system prompt + skills. These rarely
+        //      change across turns, so keeping them byte-stable lets
+        //      Anthropic's prompt cache hit (cache reads cost ~10x less
+        //      than fresh prompt tokens).
+        //   2. VOLATILE SUFFIX: memory context + workspace context. These
+        //      change each turn (memory grows, workspace files change),
+        //      so they go in a separate message AFTER the frozen prefix.
+        //      The frozen prefix stays cache-stable; only the volatile
+        //      suffix + conversation history are re-processed each turn.
+        //
+        // This is a simplified version of magic-context's m[0]/m[1]
+        // cache layout. The full m[0]/m[1] scheme uses HARD/SOFT/SOFT+
+        // pass taxonomy + byte-identical replay; this implementation
+        // just splits into frozen vs volatile, which captures ~80% of
+        // the cache benefit with ~10% of the complexity.
+
+        let frozen_prefix = if let Some(ref system) = self.config.system_prompt {
             system.clone()
         } else {
             "You are Operant, a helpful AI assistant. You have access to tools that you can use to help users. \
@@ -655,39 +673,48 @@ impl OperantAgent {
                 .to_string()
         };
 
-        if let Some(memory_manager) = &self.memory_manager {
-            let memory_context = memory_manager.build_memory_context(2048).await;
-            let memory_context = memory_context.trim();
-            if !memory_context.is_empty() {
-                system_prompt.push_str("\n\n<long_term_memory>\n");
-                system_prompt.push_str(memory_context);
-                system_prompt.push_str("\n</long_term_memory>");
-            }
-        }
-
+        // Skills are stable within a session (they're loaded once at
+        // startup), so they go in the frozen prefix.
+        let mut frozen = frozen_prefix;
         if let Some(skill_manager) = &self.skill_manager {
             let skills = skill_manager.list();
             if !skills.is_empty() {
-                system_prompt.push_str("\n\n<available_skills>\n");
+                frozen.push_str("\n\n<available_skills>\n");
                 for (name, description) in &skills {
-                    system_prompt.push_str(&format!(
+                    frozen.push_str(&format!(
                         "  <skill name=\"{}\">{}</skill>\n",
                         name, description
                     ));
                 }
-                system_prompt.push_str("</available_skills>");
+                frozen.push_str("</available_skills>");
+            }
+        }
+        messages.push(Message::system(frozen));
+
+        // Volatile suffix: memory context + workspace context. These
+        // change each turn, so they're a separate message that doesn't
+        // bust the frozen prefix's cache entry.
+        let mut volatile_suffix = String::new();
+        if let Some(memory_manager) = &self.memory_manager {
+            let memory_context = memory_manager.build_memory_context(2048).await;
+            let memory_context = memory_context.trim();
+            if !memory_context.is_empty() {
+                volatile_suffix.push_str("\n\n<long_term_memory>\n");
+                volatile_suffix.push_str(memory_context);
+                volatile_suffix.push_str("\n</long_term_memory>");
             }
         }
 
         let context_files = self.load_context_file_prompt();
         if !context_files.trim().is_empty() {
-            system_prompt.push_str("\n\n<workspace_context>\n");
-            system_prompt.push_str(context_files.trim());
-            system_prompt.push_str("\n</workspace_context>");
+            volatile_suffix.push_str("\n\n<workspace_context>\n");
+            volatile_suffix.push_str(context_files.trim());
+            volatile_suffix.push_str("\n</workspace_context>");
         }
 
-        // Add system prompt
-        messages.push(Message::system(system_prompt));
+        if !volatile_suffix.trim().is_empty() {
+            messages.push(Message::system(volatile_suffix.trim().to_string()));
+        }
 
         // Add conversation history
         let conv = self.conversation.read().await;
@@ -1873,10 +1900,16 @@ mod tests {
         .with_memory_manager(memory_manager);
 
         let messages = agent.build_messages().await.unwrap();
-        let system = messages
-            .first()
-            .map(|message| message.content.as_str())
-            .unwrap_or_default();
+        // iter-39: the system prompt is now split into a frozen prefix
+        // (base prompt + skills) and a volatile suffix (memory + workspace
+        // context). Long-term memory lands in the second system message,
+        // not the first. Concatenate all system message content to check.
+        let system: String = messages
+            .iter()
+            .filter(|m| m.role == crate::client::Role::System)
+            .map(|m| m.content.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
 
         assert!(system.contains("<long_term_memory>"));
         assert!(system.contains("[fact] User prefers concise answers"));
