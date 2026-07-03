@@ -6,17 +6,17 @@ use ratatui::{
     text::{Line, Span},
 };
 use unicode_width::UnicodeWidthStr;
-use once_cell::sync::Lazy;
+use std::sync::LazyLock;
 use regex::Regex;
 
 /// Regex pattern to detect markdown table rows (lines starting/ending with |)
-static TABLE_ROW_PATTERN: Lazy<Regex> = Lazy::new(|| {
+static TABLE_ROW_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^\s*\|.+\|\s*$")
         .expect("Invalid table row regex pattern")
 });
 
 /// Regex pattern to detect markdown table separator row (dashes/colons/pipes)
-static TABLE_SEPARATOR_PATTERN: Lazy<Regex> = Lazy::new(|| {
+static TABLE_SEPARATOR_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^\s*\|\s*[:|-]+\s*(\|\s*[:|-]+\s*)*\|\s*$")
         .expect("Invalid table separator regex pattern")
 });

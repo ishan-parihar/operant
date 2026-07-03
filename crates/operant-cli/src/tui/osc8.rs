@@ -20,7 +20,7 @@ use crossterm::{
     style::{Attribute, Color, Print, ResetColor, SetAttribute, SetForegroundColor},
     QueueableCommand,
 };
-use once_cell::sync::Lazy;
+use std::sync::LazyLock;
 use ratatui::buffer::Buffer;
 use regex::Regex;
 
@@ -28,7 +28,7 @@ const OSC8_OPEN_PREFIX: &str = "\x1b]8;;";
 const OSC8_ST: &str = "\x1b\\";
 const OSC8_CLOSE: &str = "\x1b]8;;\x1b\\";
 
-static URL_RE: Lazy<Regex> = Lazy::new(|| {
+static URL_RE: LazyLock<Regex> = LazyLock::new(|| {
     // Conservative URL set — restricting body chars to the RFC 3986 reserved/
     // unreserved alphabet avoids accidentally pulling in trailing whitespace
     // or display punctuation that the markdown styler also rejects.
