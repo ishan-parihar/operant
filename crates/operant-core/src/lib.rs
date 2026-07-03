@@ -165,10 +165,7 @@ pub use managed_tool_gateway::{
 };
 pub use mcp::{McpClient, McpNamespacedTool, McpStdioClient, McpTool, McpTransport};
 pub use memory::{MemoryBlock, MemoryManager, Session, UserProfile};
-pub use memory_provider::{
-    build_memory_provider, BuiltinProvider, HindsightProvider, LocalVectorProvider, Mem0Provider,
-    MemoryProvider, RetainDbProvider, TdgMemoryProvider,
-};
+pub use memory_provider::{build_memory_provider, BuiltinProvider, MemoryProvider, TdgMemoryProvider};
 pub use ms_graph::{
     CachedAccessToken, GraphCredentials, MicrosoftGraphClient, MicrosoftGraphError,
     MicrosoftGraphTokenProvider,
