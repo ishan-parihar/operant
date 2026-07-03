@@ -250,17 +250,28 @@ fn handle_auth_add(provider: &str, key: &str, label: Option<&str>) -> Result<()>
     let cred = PooledCredential::new(name, AuthType::ApiKey, key, "manual");
     let id = pool.add(cred);
 
+    // Persist to ~/.operant/.env so the key survives across CLI invocations.
+    let env_var = provider_env_var(provider);
+    if let Err(e) = crate::env_store::save_env_value(&env_var, key) {
+        println!("  Warning: could not persist key to ~/.operant/.env: {}", e);
+    } else {
+        std::env::set_var(&env_var, key);
+    }
+
     let hint = key_hint(key, 8);
     println!("Added credential for '{}':", provider);
     println!("  Key hint: {}", hint);
     println!("  Label:    {}", name);
     println!("  ID:       {}", id);
     println!();
-    println!("Note: This credential is stored in-memory for the current session.");
-    println!(
-        "To persist, set the {} environment variable.",
-        provider_env_var(provider)
-    );
+    if crate::env_store::get_env_value(&env_var).is_some() {
+        println!("  Persisted to ~/.operant/.env as {}", env_var);
+    } else {
+        println!(
+            "Note: could not persist. Set the {} environment variable manually.",
+            env_var
+        );
+    }
 
     Ok(())
 }
@@ -426,8 +437,17 @@ pub async fn handle_login(config: &AppConfig) -> Result<()> {
         return Ok(());
     }
 
-    // Store in process environment
+    // Store in process environment (for current process)
     std::env::set_var(env_var, &key);
+
+    // Persist to ~/.operant/.env so the key survives across CLI invocations.
+    // Without this, `operant login` sets the key in-process only — the next
+    // `operant` call won't see it.
+    if let Err(e) = crate::env_store::save_env_value(env_var, &key) {
+        println!("  Warning: could not persist key to ~/.operant/.env: {}", e);
+    } else {
+        println!("  Persisted to ~/.operant/.env (will load on next run)");
+    }
 
     // Also add to the in-memory credential pool
     {
@@ -438,7 +458,6 @@ pub async fn handle_login(config: &AppConfig) -> Result<()> {
 
     // Also update config-level api_key if this is "openai" (backward compat)
     if provider == "openai" {
-        // config is &AppConfig, but we can update runtime config
         let mut updated = config.clone();
         updated.client.api_key = Some(key.clone());
         operant_core::config::install_runtime_config(updated);

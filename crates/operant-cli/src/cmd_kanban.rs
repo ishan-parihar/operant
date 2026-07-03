@@ -768,10 +768,12 @@ async fn cmd_dispatch(config: &AppConfig, board_slug: &str) -> Result<()> {
         match dispatcher.claim_task(task_id, "cli-dispatcher") {
             Ok(run_id) => {
                 println!("  Claimed task '{}' (run {}): {}", task_id, run_id, title);
-                dispatcher
-                    .complete_run(task_id, run_id, "claimed", Some("Dispatched via CLI"))
-                    .context("Failed to auto-complete claim")?;
-                println!("  -> Marked as done (CLI dispatch is supervisory)");
+                // Do NOT auto-complete the task. Previously this marked the
+                // task as "done" with output "Dispatched via CLI" without
+                // doing any work — which was misleading. The task stays in
+                // "running" state so an agent or the user can pick it up.
+                println!("  -> Task is now 'running' (awaiting execution)");
+                println!("     Use 'operant kanban complete {}' when done.", task_id);
             }
             Err(e) => {
                 println!("  Failed to claim task '{}': {}", task_id, e);
