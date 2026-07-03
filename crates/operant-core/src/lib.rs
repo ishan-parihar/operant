@@ -41,6 +41,7 @@
 
 pub mod accessibility;
 pub mod acp;
+pub mod aft_bridge;
 pub mod agent;
 pub mod ansi_strip;
 pub mod approval;
