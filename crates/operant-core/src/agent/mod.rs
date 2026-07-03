@@ -56,6 +56,9 @@ pub struct AgentConfig {
     pub fallback_models: Vec<String>,
     /// Whether automatic fallback to fallback_models is enabled.
     pub fallback_on_errors: bool,
+    /// Approval mode for tool execution: "smart" (default, pattern-based),
+    /// "manual" (prompt for every tool), or "off" (no checks).
+    pub approval_mode: String,
 }
 
 impl Default for AgentConfig {
@@ -77,6 +80,7 @@ impl From<&BehaviorSettings> for AgentConfig {
             max_healing_attempts: settings.max_healing_attempts,
             fallback_models: settings.fallback_models.clone(),
             fallback_on_errors: settings.fallback_on_errors,
+            approval_mode: "smart".to_string(),
         }
     }
 }
@@ -749,6 +753,61 @@ impl OperantAgent {
                     format!("Tool '{}' not found", name),
                 ));
                 continue;
+            }
+
+            // ── Smart approval gate (operant_core::approval) ──
+            // Runs a pattern-based security scan on the tool name + args.
+            // - "blocked" → refuse immediately, no user prompt (e.g. rm -rf /)
+            // - "requires_approval" → fall through to the permission_tx flow
+            //   below, which prompts the user with the scan's risk level
+            // - "allowed" → proceed (may still hit the hardcoded dangerous-
+            //   tool list below, which prompts for a subset of tools)
+            //
+            // Mode is controlled by AgentConfig::approval_mode:
+            //   "smart" (default) → pattern-based, only prompt when flagged
+            //   "manual"           → prompt for every tool call
+            //   "off"              → skip this gate entirely
+            if self.config.approval_mode != "off" {
+                let approval_result = crate::approval::check_tool_approval(
+                    &name,
+                    &args,
+                    Some(&self.config.approval_mode),
+                );
+                match approval_result.verdict.as_str() {
+                    "blocked" => {
+                        warn!(
+                            tool = %name,
+                            reason = ?approval_result.reason,
+                            blocked_by = ?approval_result.blocked_by,
+                            "Tool call blocked by approval guard"
+                        );
+                        results.push(ToolResult::error(
+                            &tool_call.id,
+                            format!(
+                                "Blocked by security policy: {}",
+                                approval_result
+                                    .reason
+                                    .unwrap_or_else(|| "blocked".to_string())
+                            ),
+                        ));
+                        continue;
+                    }
+                    "requires_approval" => {
+                        // The existing permission_tx flow below will prompt
+                        // the user. We just log the scan's risk assessment.
+                        warn!(
+                            tool = %name,
+                            risk = ?approval_result.risk_level,
+                            reason = ?approval_result.reason,
+                            "Tool call flagged by approval guard — will prompt user"
+                        );
+                        // Don't `continue` — fall through to the permission
+                        // prompt so the user can decide.
+                    }
+                    _ => {
+                        // "allowed" — proceed normally.
+                    }
+                }
             }
 
             // Permission guard for dangerous tools
