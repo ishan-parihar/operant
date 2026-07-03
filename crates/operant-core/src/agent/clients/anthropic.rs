@@ -25,10 +25,19 @@ pub struct AnthropicModelClient {
 
 impl AnthropicModelClient {
     pub fn new(api_key: String) -> Self {
+        // Use a connect_timeout so a dead Anthropic endpoint doesn't hang
+        // the agent forever. We deliberately do NOT set a total request
+        // timeout — streaming responses (chat_streaming) can legitimately
+        // run for many minutes on long generations, and a total timeout
+        // would cut them off mid-stream.
+        let http = Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(30))
+            .build()
+            .unwrap_or_else(|_| Client::new());
         Self {
             api_key,
             base_url: "https://api.anthropic.com".to_string(),
-            http: Client::new(),
+            http,
         }
     }
 

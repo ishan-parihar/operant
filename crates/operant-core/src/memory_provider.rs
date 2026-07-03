@@ -373,7 +373,13 @@ impl RetainDbProvider {
             base_url: std::env::var("RETAINDB_BASE_URL")
                 .unwrap_or_else(|_| "https://api.retaindb.com".to_string()),
             project: std::env::var("RETAINDB_PROJECT").unwrap_or_else(|_| "default".to_string()),
-            client: reqwest::Client::new(),
+            // 60s total timeout — RetainDb API calls are request/response
+            // style, so a total timeout is appropriate. Previously
+            // reqwest::Client::new() had no timeout.
+            client: reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(60))
+                .build()
+                .unwrap_or_else(|_| reqwest::Client::new()),
         }
     }
 
@@ -507,7 +513,13 @@ impl Mem0Provider {
             api_key: std::env::var("MEM0_API_KEY").unwrap_or_default(),
             base_url: std::env::var("MEM0_BASE_URL")
                 .unwrap_or_else(|_| "https://api.mem0.ai".to_string()),
-            client: reqwest::Client::new(),
+            // 60s total timeout — Mem0 API calls are request/response
+            // style, so a total timeout is appropriate. Previously
+            // reqwest::Client::new() had no timeout.
+            client: reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(60))
+                .build()
+                .unwrap_or_else(|_| reqwest::Client::new()),
         }
     }
 }
