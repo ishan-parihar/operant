@@ -3242,6 +3242,12 @@ impl CliConfig {
                 app.gateway.discord_token = Some(token.clone());
             }
         }
+        if self.gateways.slack.enabled.unwrap_or(false) {
+            app.gateway.slack_enabled = true;
+            if let Some(token) = &self.gateways.slack.bot_token {
+                app.gateway.slack_token = Some(token.clone());
+            }
+        }
 
         app
     }
