@@ -554,6 +554,28 @@ pub(crate) async fn build_registry(
     registry.register(EchoTool::new()).await?;
     registry.register(CalculatorTool::new()).await?;
 
+    // Register TDG tools only when the TDG memory provider is active.
+    // This requires the TdgMemoryProvider to be initialized so we can
+    // share its connection pool — if TDG init failed (and we fell back
+    // to BuiltinProvider), the tools are skipped. Previously these tools
+    // were registered unconditionally for every agent.
+    if config.memory.enabled && config.memory.provider == "tdg" {
+        let storage_dir = operant_core::platform::operant_home();
+        match operant_core::TdgMemoryProvider::new(storage_dir) {
+            Ok(provider) => {
+                let pool = provider.pool().clone();
+                operant_core::tools::register_tdg_tools(&registry, pool).await?;
+                tracing::info!("TDG tools registered (shared pool with memory provider)");
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "TDG provider init failed — TDG tools not registered (builtin memory only)"
+                );
+            }
+        }
+    }
+
     let disabled_tools: std::collections::HashSet<String> =
         config.tools.disabled_tools.iter().cloned().collect();
     let disabled_toolsets: std::collections::HashSet<String> =

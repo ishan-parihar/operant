@@ -93,10 +93,13 @@ pub async fn register_builtin_tools(
     registry.register(MemoryStoreTool).await?;
     registry.register(MemorySearchTool).await?;
     registry.register(MemoryRecallTool).await?;
-    registry.register(TdgSearchTool).await?;
-    registry.register(TdgCreateTool).await?;
-    registry.register(TdgConnectTool).await?;
-    registry.register(TdgGetRelatedTool).await?;
+    // TDG tools are NOT registered here — they're registered conditionally
+    // via register_tdg_tools() only when config.memory.provider == "tdg".
+    // Previously they were registered unconditionally, meaning every agent
+    // got 4 graph-memory tools even when using the builtin file-backed
+    // memory provider. The conditional registration also fixes the
+    // dual-database bug: register_tdg_tools takes the TdgMemoryProvider's
+    // pool, so tools and provider share the same graph.db.
     registry.register(HttpRequestTool).await?;
     registry.register(DateTimeTool).await?;
     registry.register(TimestampTool).await?;
