@@ -203,6 +203,15 @@ impl TdgMemoryProvider {
             storage_dir,
         })
     }
+
+    /// Expose the underlying connection pool so the TDG tools
+    /// (`register_tdg_tools`) can share it. This is the fix for the
+    /// dual-database bug: previously the tools created their own pool
+    /// at a different path, so nodes created via tools were invisible
+    /// to the provider's prefetch and vice versa.
+    pub fn pool(&self) -> &std::sync::Arc<tdg_rust::ConnectionPool> {
+        &self.pool
+    }
 }
 
 #[async_trait]

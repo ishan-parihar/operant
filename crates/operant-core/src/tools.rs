@@ -76,6 +76,7 @@ pub use builtin::{
     MemorySearchTool, MemoryStoreTool, PatchTool, SubAgentTool, TerminalTool, TimestampTool,
     TodoTool, TtsTool, VideoAnalysisTool, VisionTool, WebFetchTool, WebSearchTool,
 };
+pub use tdg_tools::register_tdg_tools;
 pub use checkpoint_tool::{
     get_checkpoint_manager, Checkpoint, CheckpointConfig, CheckpointManager, CheckpointTool,
 };
