@@ -1,11 +1,16 @@
 //! Dashboard HTTP server.
-//! Ported from operant-agent/operant_cli/web_server.py.
-//! Serves a minimal web dashboard for Operant status monitoring.
+//! Serves the embedded web dashboard for Operant status monitoring.
+//!
+//! Security: API endpoints (except /api/health) require a bearer token
+//! that is generated at startup and printed to the console. The token
+//! is injected into index.html as a global variable so the frontend
+//! can call the API without manual configuration.
 
 use anyhow::{Context, Result};
 use axum::{
-    extract::State,
-    response::{Html, IntoResponse, Json},
+    extract::{Path, State},
+    http::{header, HeaderMap, HeaderValue, StatusCode},
+    response::{Html, IntoResponse, Json, Response},
     routing::get,
     Router,
 };
@@ -16,8 +21,22 @@ use std::sync::Arc;
 use std::time::Instant;
 
 /// Embedded frontend HTML (compiled into binary).
-/// Served at the root route for zero-deployment static assets.
 const INDEX_HTML: &str = include_str!("dashboard/index.html");
+
+/// Embedded static assets (JS, CSS, fonts, images).
+/// These are served at /assets/<filename> so the index.html script/link tags resolve.
+static ASSETS: &[(&str, &[u8], &str)] = &[
+    ("index-BB4BRelo.js", include_bytes!("dashboard/assets/index-BB4BRelo.js"), "text/javascript"),
+    ("index-DJxmcHRv.css", include_bytes!("dashboard/assets/index-DJxmcHRv.css"), "text/css"),
+    ("Collapse-Bold-mgICk9-_.woff2", include_bytes!("dashboard/assets/Collapse-Bold-mgICk9-_.woff2"), "font/woff2"),
+    ("Collapse-Regular-DysayoTY.woff2", include_bytes!("dashboard/assets/Collapse-Regular-DysayoTY.woff2"), "font/woff2"),
+    ("Mondwest-Regular-CWscgue7.woff2", include_bytes!("dashboard/assets/Mondwest-Regular-CWscgue7.woff2"), "font/woff2"),
+    ("RulesCompressed-Medium-CA76_CrB.woff2", include_bytes!("dashboard/assets/RulesCompressed-Medium-CA76_CrB.woff2"), "font/woff2"),
+    ("RulesCompressed-Regular-BSXFyF4x.woff2", include_bytes!("dashboard/assets/RulesCompressed-Regular-BSXFyF4x.woff2"), "font/woff2"),
+    ("RulesExpanded-Bold-DZA7s8Pa.woff2", include_bytes!("dashboard/assets/RulesExpanded-Bold-DZA7s8Pa.woff2"), "font/woff2"),
+    ("RulesExpanded-Regular-l8uVympt.woff2", include_bytes!("dashboard/assets/RulesExpanded-Regular-l8uVympt.woff2"), "font/woff2"),
+    ("filler-bg0-DxMaWJpb.webp", include_bytes!("dashboard/assets/filler-bg0-DxMaWJpb.webp"), "image/webp"),
+];
 
 /// Server state shared across all handlers.
 #[derive(Clone)]
@@ -25,20 +44,34 @@ pub struct DashboardState {
     pub start_time: Instant,
     pub app_config: Arc<AppConfig>,
     pub kanban_dir: Option<std::path::PathBuf>,
+    /// Session token for API auth. If None, auth is disabled (--insecure mode).
+    pub session_token: Option<String>,
 }
 
 /// Start the dashboard server and block until shutdown.
-pub async fn run_dashboard(config: &AppConfig, host: &str, port: u16) -> Result<()> {
+pub async fn run_dashboard(config: &AppConfig, host: &str, port: u16, insecure: bool) -> Result<()> {
     let kanban_dir = config
         .database_path
         .parent()
         .map(|p| p.to_path_buf())
         .unwrap_or_else(|| std::path::PathBuf::from("."));
 
+    // Generate a session token for API auth (unless --insecure).
+    let session_token = if insecure {
+        tracing::warn!("Dashboard running in INSECURE mode — no auth token required");
+        None
+    } else {
+        let token = generate_session_token();
+        println!("Dashboard session token: {}", token);
+        println!("  (API requests must include header: Authorization: Bearer {})", token);
+        Some(token)
+    };
+
     let state = DashboardState {
         start_time: Instant::now(),
         app_config: Arc::new(config.clone()),
         kanban_dir: Some(kanban_dir),
+        session_token,
     };
 
     let app = Router::new()
@@ -46,8 +79,8 @@ pub async fn run_dashboard(config: &AppConfig, host: &str, port: u16) -> Result<
         .route("/api/boards", get(handle_boards))
         .route("/api/health", get(handle_health))
         .route("/api/config", get(handle_config))
+        .route("/assets/:filename", get(handle_asset))
         .route("/", get(handle_index))
-        .layer(tower_http::cors::CorsLayer::permissive())
         .with_state(state);
 
     let addr = format!("{}:{}", host, port);
@@ -58,6 +91,39 @@ pub async fn run_dashboard(config: &AppConfig, host: &str, port: u16) -> Result<
     tracing::info!("Dashboard server listening on http://{}", addr);
     axum::serve(listener, app).await?;
     Ok(())
+}
+
+/// Generate a random session token.
+fn generate_session_token() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
+    format!("operant_{:x}{:x}", now.as_secs(), now.subsec_nanos())
+}
+
+/// Check the Authorization header against the session token.
+/// Returns Ok(()) if authorized, Err(response) if not.
+fn check_auth(state: &DashboardState, headers: &HeaderMap) -> Result<(), Response> {
+    let token = match &state.session_token {
+        None => return Ok(()), // Insecure mode — no auth required
+        Some(t) => t,
+    };
+
+    let auth_header = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+
+    if auth_header == format!("Bearer {}", token) {
+        Ok(())
+    } else {
+        Err((
+            StatusCode::UNAUTHORIZED,
+            "Missing or invalid Authorization header",
+        )
+            .into_response())
+    }
 }
 
 // ── API Handlers ──
@@ -73,7 +139,11 @@ struct StatusResponse {
     database_path: String,
 }
 
-async fn handle_status(State(state): State<DashboardState>) -> Json<StatusResponse> {
+async fn handle_status(State(state): State<DashboardState>, headers: HeaderMap) -> Response {
+    if let Err(e) = check_auth(&state, &headers) {
+        return e;
+    }
+
     let kanban_task_count = count_all_kanban_tasks(&state.kanban_dir).unwrap_or(0);
 
     Json(StatusResponse {
@@ -85,6 +155,7 @@ async fn handle_status(State(state): State<DashboardState>) -> Json<StatusRespon
         kanban_tasks: kanban_task_count,
         database_path: state.app_config.database_path.display().to_string(),
     })
+    .into_response()
 }
 
 #[derive(Serialize)]
@@ -106,20 +177,24 @@ struct TaskCounts {
     archived: usize,
 }
 
-async fn handle_boards(State(state): State<DashboardState>) -> Json<Vec<BoardResponse>> {
+async fn handle_boards(State(state): State<DashboardState>, headers: HeaderMap) -> Response {
+    if let Err(e) = check_auth(&state, &headers) {
+        return e;
+    }
+
     let kanban_dir = match &state.kanban_dir {
         Some(d) => d.clone(),
-        None => return Json(Vec::new()),
+        None => return Json(Vec::<BoardResponse>::new()).into_response(),
     };
 
     if !kanban_dir.exists() {
-        return Json(Vec::new());
+        return Json(Vec::<BoardResponse>::new()).into_response();
     }
 
     let mgr = KanbanManager::new(kanban_dir);
     let boards = match mgr.list_boards() {
         Ok(b) => b,
-        Err(_) => return Json(Vec::new()),
+        Err(_) => return Json(Vec::<BoardResponse>::new()).into_response(),
     };
 
     let mut result: Vec<BoardResponse> = Vec::new();
@@ -136,7 +211,7 @@ async fn handle_boards(State(state): State<DashboardState>) -> Json<Vec<BoardRes
         });
     }
 
-    Json(result)
+    Json(result).into_response()
 }
 
 #[derive(Serialize)]
@@ -149,6 +224,7 @@ struct HealthResponse {
 }
 
 async fn handle_health(State(state): State<DashboardState>) -> Json<HealthResponse> {
+    // Health endpoint does NOT require auth — needed for health checks.
     let kanban_ok = state
         .kanban_dir
         .as_ref()
@@ -174,7 +250,11 @@ struct ConfigResponse {
     gateway_running: bool,
 }
 
-async fn handle_config(State(state): State<DashboardState>) -> Json<ConfigResponse> {
+async fn handle_config(State(state): State<DashboardState>, headers: HeaderMap) -> Response {
+    if let Err(e) = check_auth(&state, &headers) {
+        return e;
+    }
+
     let cfg = &state.app_config;
     let mut platforms = Vec::new();
     if cfg.gateway.telegram_enabled {
@@ -198,10 +278,41 @@ async fn handle_config(State(state): State<DashboardState>) -> Json<ConfigRespon
         database_path: cfg.database_path.display().to_string(),
         gateway_running: crate::gateway_runner::is_running().await,
     })
+    .into_response()
 }
 
-async fn handle_index() -> impl IntoResponse {
-    Html(INDEX_HTML)
+async fn handle_index(State(state): State<DashboardState>) -> impl IntoResponse {
+    // Inject the session token into the HTML so the frontend can use it.
+    let html = match &state.session_token {
+        Some(token) => INDEX_HTML.replace(
+            "<div id=\"root\"></div>",
+            &format!(
+                "<script>window.__OPERANT_SESSION_TOKEN__=\"{}\";</script>\n<div id=\"root\"></div>",
+                token
+            ),
+        ),
+        None => INDEX_HTML.to_string(),
+    };
+    Html(html)
+}
+
+/// Serve an embedded static asset (JS, CSS, font, image).
+async fn handle_asset(
+    State(_state): State<DashboardState>,
+    Path(filename): Path<String>,
+) -> Response {
+    // Look up the asset by filename.
+    for (name, bytes, content_type) in ASSETS {
+        if *name == filename {
+            return Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, *content_type)
+                .header(header::CACHE_CONTROL, "public, max-age=86400")
+                .body(axum::body::Body::from(*bytes))
+                .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response());
+        }
+    }
+    StatusCode::NOT_FOUND.into_response()
 }
 
 // ── Helpers ──

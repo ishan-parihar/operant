@@ -42,11 +42,11 @@ pub async fn handle_dashboard_command(config: &AppConfig, cmd: DashboardSubcomma
             port,
             host,
             no_open,
-            insecure: _,
+            insecure,
             tui,
             stop,
             status,
-        } => cmd_server(config, port, host, no_open, tui, stop, status).await,
+        } => cmd_server(config, port, host, no_open, insecure, tui, stop, status).await,
     }
 }
 
@@ -55,6 +55,7 @@ async fn cmd_server(
     port: u16,
     host: String,
     no_open: bool,
+    insecure: bool,
     tui: bool,
     stop: bool,
     status: bool,
@@ -80,5 +81,5 @@ async fn cmd_server(
         }
     }
 
-    crate::dashboard_server::run_dashboard(config, &host, port).await
+    crate::dashboard_server::run_dashboard(config, &host, port, insecure).await
 }
