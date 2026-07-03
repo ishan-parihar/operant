@@ -698,6 +698,7 @@ impl MemoryProvider for TdgMemoryProvider {
                     source: Some("operant-session".to_string()),
                     parent_ids: None,
                     agent_id: None,
+                    ..Default::default()
                 };
                 tdg_rust::db::crud::add_node(conn, &new_node)?;
                 Ok(())
@@ -805,6 +806,7 @@ impl MemoryProvider for TdgMemoryProvider {
                         source: Some("operant-agent".to_string()),
                         parent_ids: None,
                         agent_id: None,
+                        ..Default::default()
                     };
                     let node = tdg_rust::db::crud::add_node(conn, &new_node)?;
                     Ok(serde_json::json!({"id": node.id, "name": node.name}).to_string())

@@ -146,6 +146,7 @@ impl OperantTool for TdgCreateTool {
                         source: Some("operant-agent".to_string()),
                         parent_ids: None,
                         agent_id: None,
+                        ..Default::default()
                     };
                     let node = tdg_rust::db::crud::add_node(conn, &new_node)?;
                     Ok(node)
