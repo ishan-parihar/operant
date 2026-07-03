@@ -1,14 +1,11 @@
 //! Operant-RS CLI
 
 mod autonomous;
-mod claw_migrate;
 mod cmd_acp;
 mod cmd_auth;
 mod cmd_backup;
 mod cmd_checkpoints;
-mod cmd_claw;
 mod cmd_completion;
-mod cmd_computer_use;
 mod cmd_config;
 mod cmd_cron;
 mod cmd_curator;
@@ -25,21 +22,17 @@ mod cmd_logs;
 mod cmd_mcp;
 mod cmd_memory;
 mod cmd_model;
-mod cmd_pairing;
 mod cmd_plugins;
 mod cmd_profile;
-mod cmd_rl;
 mod cmd_sessions;
 mod cmd_setup;
 mod cmd_skills;
-mod cmd_slack;
 mod cmd_status;
 mod cmd_tools;
 mod cmd_uninstall;
 mod cmd_update;
 mod cmd_version;
 mod cmd_webhook;
-mod cmd_whatsapp;
 mod commands;
 pub(crate) mod config;
 mod dashboard_server;
@@ -267,11 +260,6 @@ enum Commands {
         #[command(subcommand)]
         cmd: cmd_auth::AuthSubcommand,
     },
-    /// Manage fallback models
-    Fallback {
-        #[command(subcommand)]
-        cmd: cmd_auth::FallbackSubcommand,
-    },
     /// Login to a provider
     Login,
     /// Logout
@@ -329,11 +317,6 @@ enum Commands {
         #[command(subcommand)]
         cmd: cmd_insights::InsightsSubcommand,
     },
-    /// Manage device pairing
-    Pairing {
-        #[command(subcommand)]
-        cmd: cmd_pairing::PairingSubcommand,
-    },
     /// Manage webhook subscriptions
     Webhook {
         #[command(subcommand)]
@@ -349,11 +332,6 @@ enum Commands {
         #[command(subcommand)]
         cmd: cmd_debug::DebugSubcommand,
     },
-    /// Manage the computer-use driver
-    ComputerUse {
-        #[command(subcommand)]
-        cmd: cmd_computer_use::ComputerUseSubcommand,
-    },
     /// Manage installed plugins
     Plugins {
         #[command(subcommand)]
@@ -363,16 +341,6 @@ enum Commands {
     Curator {
         #[command(subcommand)]
         cmd: cmd_curator::CuratorSubcommand,
-    },
-    /// Migrate from OpenClaw
-    Claw {
-        #[command(subcommand)]
-        cmd: cmd_claw::ClawSubcommand,
-    },
-    /// Generate a Slack app manifest
-    Slack {
-        #[command(subcommand)]
-        cmd: cmd_slack::SlackSubcommand,
     },
     /// Interactive setup wizard
     Setup {
@@ -387,11 +355,6 @@ enum Commands {
         #[arg(long)]
         quick: bool,
     },
-    /// Check WhatsApp status
-    Whatsapp {
-        #[command(subcommand)]
-        cmd: cmd_whatsapp::WhatsappSubcommand,
-    },
     /// Run the ACP server
     Acp {
         #[command(subcommand)]
@@ -401,11 +364,6 @@ enum Commands {
     Dashboard {
         #[command(subcommand)]
         cmd: cmd_dashboard::DashboardSubcommand,
-    },
-    /// Reinforcement learning training and management
-    Rl {
-        #[command(subcommand)]
-        cmd: cmd_rl::RlSubcommand,
     },
 }
 
@@ -1345,9 +1303,6 @@ async fn main() -> Result<()> {
         Some(Commands::Auth { cmd }) => {
             cmd_auth::handle_auth_command(&loaded.config, cmd.clone()).await?;
         }
-        Some(Commands::Fallback { cmd }) => {
-            cmd_auth::handle_fallback_command(&loaded.config, cmd.clone()).await?;
-        }
         Some(Commands::Login) => {
             cmd_auth::handle_login(&loaded.config).await?;
         }
@@ -1384,9 +1339,6 @@ async fn main() -> Result<()> {
         Some(Commands::Insights { cmd }) => {
             cmd_insights::handle_insights_command(&loaded.config, cmd.clone()).await?;
         }
-        Some(Commands::Pairing { cmd }) => {
-            cmd_pairing::handle_pairing_command(&loaded.config, cmd.clone()).await?;
-        }
         Some(Commands::Webhook { cmd }) => {
             cmd_webhook::handle_webhook_command(&loaded.config, cmd.clone()).await?;
         }
@@ -1396,20 +1348,11 @@ async fn main() -> Result<()> {
         Some(Commands::Debug { cmd }) => {
             cmd_debug::handle_debug_command(&loaded.config, cmd.clone()).await?;
         }
-        Some(Commands::ComputerUse { cmd }) => {
-            cmd_computer_use::handle_computer_use_command(&loaded.config, cmd.clone()).await?;
-        }
         Some(Commands::Plugins { cmd }) => {
             cmd_plugins::handle_plugins_command(&loaded.config, cmd.clone()).await?;
         }
         Some(Commands::Curator { cmd }) => {
             cmd_curator::handle_curator_command(&loaded.config, cmd.clone()).await?;
-        }
-        Some(Commands::Claw { cmd }) => {
-            cmd_claw::handle_claw_command(&loaded.config, cmd.clone()).await?;
-        }
-        Some(Commands::Slack { cmd }) => {
-            cmd_slack::handle_slack_command(&loaded.config, cmd.clone()).await?;
         }
         Some(Commands::Setup {
             section,
@@ -1428,17 +1371,11 @@ async fn main() -> Result<()> {
             )
             .await?;
         }
-        Some(Commands::Whatsapp { cmd }) => {
-            cmd_whatsapp::handle_whatsapp_command(&loaded.config, cmd.clone()).await?;
-        }
         Some(Commands::Acp { cmd }) => {
             cmd_acp::handle_acp_command(&loaded.config, cmd.clone()).await?;
         }
         Some(Commands::Dashboard { cmd }) => {
             cmd_dashboard::handle_dashboard_command(&loaded.config, cmd.clone()).await?;
-        }
-        Some(Commands::Rl { cmd }) => {
-            cmd_rl::handle_rl_command(&loaded.config, cmd.clone()).await?;
         }
         None => {
             // No command provided - launch TUI in interactive mode
