@@ -674,15 +674,31 @@ pub(crate) async fn create_runtime_agent(
         .unwrap_or_else(|| "openai".to_string());
     let model_client = create_model_client(&provider, config);
 
-    Ok(OperantAgent::with_events(
-        core.agent_config,
-        model_client,
-        core.registry,
-        core.database,
-        event_tx,
-    )
-    .with_memory_manager(core.memory_manager)
-    .with_skill_manager(core.skill_manager))
+    Ok({
+        let flag = operant_core::interrupt::InterruptFlag::new();
+        // Spawn a Ctrl-C handler that triggers the flag. The agent loop
+        // checks this flag at each iteration boundary + before each tool
+        // call, so Ctrl-C produces a graceful exit instead of killing the
+        // process mid-tool.
+        let handler_flag = flag.clone();
+        tokio::spawn(async move {
+            if let Err(e) = tokio::signal::ctrl_c().await {
+                tracing::debug!("ctrl_c signal handler error: {}", e);
+            }
+            tracing::info!("Ctrl-C received — triggering agent interrupt flag");
+            handler_flag.trigger();
+        });
+        OperantAgent::with_events(
+            core.agent_config,
+            model_client,
+            core.registry,
+            core.database,
+            event_tx,
+        )
+        .with_memory_manager(core.memory_manager)
+        .with_skill_manager(core.skill_manager)
+        .with_interrupt_flag(flag)
+    })
 }
 
 pub(crate) async fn create_agent_without_events(
@@ -706,14 +722,26 @@ pub(crate) async fn create_agent_without_events(
         .unwrap_or_else(|| "openai".to_string());
     let model_client = create_model_client(&provider, config);
 
-    Ok(OperantAgent::new(
-        core.agent_config,
-        model_client,
-        core.registry,
-        core.database,
-    )
-    .with_memory_manager(core.memory_manager)
-    .with_skill_manager(core.skill_manager))
+    Ok({
+        let flag = operant_core::interrupt::InterruptFlag::new();
+        let handler_flag = flag.clone();
+        tokio::spawn(async move {
+            if let Err(e) = tokio::signal::ctrl_c().await {
+                tracing::debug!("ctrl_c signal handler error: {}", e);
+            }
+            tracing::info!("Ctrl-C received — triggering agent interrupt flag");
+            handler_flag.trigger();
+        });
+        OperantAgent::new(
+            core.agent_config,
+            model_client,
+            core.registry,
+            core.database,
+        )
+        .with_memory_manager(core.memory_manager)
+        .with_skill_manager(core.skill_manager)
+        .with_interrupt_flag(flag)
+    })
 }
 
 async fn load_repo_memory_manager() -> Result<MemoryManager> {
