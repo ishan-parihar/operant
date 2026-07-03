@@ -42,6 +42,12 @@ if [ ! -L "$LOCAL_DIR/lib/libasound.so" ]; then
   ln -sf /usr/lib/x86_64-linux-gnu/libasound.so.2 "$LOCAL_DIR/lib/libasound.so"
 fi
 
+# ── 5. sonic runtime (for espeak-ng, linked by operant-core/build.rs) ──
+# Create a libsonic.so symlink so the linker can find the runtime libsonic.so.0
+if [ ! -L "$LOCAL_DIR/lib/libsonic.so" ]; then
+  ln -sf /usr/lib/x86_64-linux-gnu/libsonic.so.0 "$LOCAL_DIR/lib/libsonic.so"
+fi
+
 # Synthetic alsa.pc so pkg-config can satisfy alsa-sys without libasound2-dev
 mkdir -p "$LOCAL_DIR/pkgconfig"
 cat > "$LOCAL_DIR/pkgconfig/alsa.pc" << 'EOF'

@@ -64,7 +64,6 @@ pub mod error;
 pub mod error_classifier;
 pub mod fuzzy_match;
 pub mod gateway;
-pub mod gateway_hooks;
 pub mod gateway_markdown;
 pub mod gateway_pipeline;
 pub mod gateway_session;

@@ -1,6 +1,6 @@
-# Hermes Agent — Web UI
+# Operant — Web UI
 
-Browser-based dashboard for managing Hermes Agent configuration, API keys, and monitoring active sessions.
+Browser-based dashboard for managing Operant configuration, API keys, and monitoring active sessions.
 
 ## Stack
 
@@ -12,8 +12,7 @@ Browser-based dashboard for managing Hermes Agent configuration, API keys, and m
 
 ```bash
 # Start the backend API server
-cd ../
-python -m hermes_cli.main web --no-open
+operant dashboard --no-open
 
 # In another terminal, start the Vite dev server (with HMR + API proxy)
 cd web/
@@ -23,9 +22,9 @@ npm run dev
 
 Open the **Vite URL** printed in the terminal (usually `http://localhost:5173`). That is the live-reload UI.
 
-`hermes dashboard` on port 9119 serves the **built** bundle from `hermes_cli/web_dist/`, not the Vite dev server — changes in `web/src/` will not appear there until you run `npm run build` and restart the dashboard (or use `web --no-open` + Vite as above).
+`operant dashboard` on port 9119 serves the **built** bundle from `crates/operant-cli/src/dashboard/`, not the Vite dev server — changes in `web/src/` will not appear there until you run `npm run build` and restart the dashboard (or use `dashboard --no-open` + Vite as above).
 
-The Vite dev server proxies `/api` requests to `http://127.0.0.1:9119` (the FastAPI backend).
+The Vite dev server proxies `/api` requests to `http://127.0.0.1:9119` (the axum backend).
 
 ## Build
 
@@ -33,7 +32,7 @@ The Vite dev server proxies `/api` requests to `http://127.0.0.1:9119` (the Fast
 npm run build
 ```
 
-This outputs to `../hermes_cli/web_dist/`, which the FastAPI server serves as a static SPA. The built assets are included in the Python package via `pyproject.toml` package-data.
+This outputs to `../src/dashboard/`, which the axum server serves as a static SPA via `include_str!`.
 
 ## Structure
 
