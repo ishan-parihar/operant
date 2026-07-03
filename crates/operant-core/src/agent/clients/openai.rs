@@ -42,7 +42,13 @@ impl ModelClient for OpenAIModelClient {
             Some(request.tools.as_slice())
         };
         self.inner
-            .chat(&request.model, &request.messages, tools)
+            .chat(
+                &request.model,
+                &request.messages,
+                tools,
+                request.max_tokens,
+                request.temperature,
+            )
             .await
     }
 
@@ -58,7 +64,13 @@ impl ModelClient for OpenAIModelClient {
 
         let stream = self
             .inner
-            .chat_streaming(&request.model, &request.messages, tools)
+            .chat_streaming(
+                &request.model,
+                &request.messages,
+                tools,
+                request.max_tokens,
+                request.temperature,
+            )
             .await?;
 
         // Map each ChatStreamEvent into a StreamChunk.  Tool-call deltas are
