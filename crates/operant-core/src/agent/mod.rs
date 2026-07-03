@@ -805,7 +805,10 @@ impl OperantAgent {
         let mut accumulated_text = String::new();
         let mut accumulated_reasoning = String::new();
         let mut tool_calls: Vec<ToolCall> = Vec::new();
-        let mut has_error = false;
+        // Capture the original stream error so we can surface it (instead of
+        // the generic "Stream processing failed" string) and decide whether
+        // to flush partials after the loop.
+        let mut stream_error: Option<Error> = None;
 
         while let Some(chunk_result) = stream.next().await {
             match chunk_result {
@@ -863,36 +866,73 @@ impl OperantAgent {
                 }
                 Err(e) => {
                     error!(error = %e, "Stream error");
-                    has_error = true;
+                    // Capture the original error so we can surface it after
+                    // flushing partials. Previously the error was swallowed
+                    // and replaced with a generic "Stream processing failed"
+                    // string, making debugging impossible.
+                    stream_error = Some(e);
                     break;
                 }
             }
         }
 
-        if has_error {
-            // Trajectory saving is handled by the caller (run()) when this
-            // error propagates up — see the Err(e) arm in the run() loop.
-            return Err(Error::Agent("Stream processing failed".to_string()));
-        }
-
+        // Flush any partial content/tool_calls still buffered in the routers
+        // and parser. This runs on both success AND error paths so partial
+        // tool calls (e.g. a tool_use block that started but didn't finish
+        // before the stream broke) are still extracted and returned to the
+        // caller. Previously the error path `break`ed before this flush,
+        // dropping all partials.
         let (remaining_content, remaining_reasoning) = content_router.finish();
         if !remaining_content.is_empty() {
             let remaining_calls = parser.process_chunk(&remaining_content);
             for tc in remaining_calls {
                 merge_stream_tool_call(&mut tool_calls, tc);
             }
-            accumulated_text.push_str(&tool_call_router.feed(&remaining_content));
+            let visible = tool_call_router.feed(&remaining_content);
+            if !visible.is_empty() {
+                accumulated_text.push_str(&visible);
+                // Emit the flushed partial so the TUI sees it even if we're
+                // about to return Err — otherwise content streamed right
+                // before the error would be silently lost.
+                self.emit(AgentEvent::Content { text: visible }).await;
+            }
         }
-        accumulated_text.push_str(&tool_call_router.finish());
-        accumulated_reasoning.push_str(&remaining_reasoning);
+        let tail = tool_call_router.finish();
+        if !tail.is_empty() {
+            accumulated_text.push_str(&tail);
+            self.emit(AgentEvent::Content { text: tail }).await;
+        }
+        if !remaining_reasoning.is_empty() {
+            accumulated_reasoning.push_str(&remaining_reasoning);
+            self.emit(AgentEvent::Reasoning {
+                text: remaining_reasoning,
+            })
+            .await;
+        }
 
-        // Also try to extract any remaining tool calls from accumulated text
+        // Also try to extract any remaining tool calls from accumulated text.
+        // On the error path we don't want a parser failure to mask the
+        // original stream error, so fall back to an empty vec.
         let mut remaining_parser = ToolCallParser::new();
-        let remaining_calls = remaining_parser.parse(&accumulated_text)?;
+        let remaining_calls = if stream_error.is_some() {
+            remaining_parser.parse(&accumulated_text).unwrap_or_default()
+        } else {
+            remaining_parser.parse(&accumulated_text)?
+        };
 
         // Merge tool calls, avoiding duplicates
         for tc in remaining_calls {
             merge_stream_tool_call(&mut tool_calls, tc);
+        }
+
+        if let Some(err) = stream_error {
+            // Surface the original stream error (not a generic "Stream
+            // processing failed" string) so the caller can see what went
+            // wrong. Trajectory saving is handled by the caller (run()) when
+            // this error propagates up — see the Err(e) arm in the run() loop.
+            return Err(Error::Agent(format!(
+                "Stream processing failed: {err}"
+            )));
         }
 
         Ok((
