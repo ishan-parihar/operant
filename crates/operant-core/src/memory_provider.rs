@@ -15,7 +15,7 @@ use async_trait::async_trait;
 use serde_json::Value;
 use std::sync::Arc;
 
-use crate::error::Result;
+use crate::error::{Error, Result};
 
 // ---------------------------------------------------------------------------
 // Trait
@@ -579,6 +579,12 @@ impl MemoryProvider for Mem0Provider {
 
 /// Construct the appropriate provider from the config `provider` string.
 /// Falls back to `BuiltinProvider` on unknown values.
+///
+/// If the requested provider fails to initialize (e.g. TDG can't open its
+/// SQLite database), this falls back to `BuiltinProvider` and logs the error
+/// — previously `TdgMemoryProvider::new()` would `.expect()` and crash the
+/// entire process. The agent stays functional with a degraded memory backend
+/// rather than dying on startup.
 pub fn build_memory_provider(
     provider_name: &str,
     storage_dir: std::path::PathBuf,
@@ -588,7 +594,18 @@ pub fn build_memory_provider(
         "local-vector" | "local_vector" => Arc::new(LocalVectorProvider::new()),
         "retaindb" => Arc::new(RetainDbProvider::new()),
         "mem0" => Arc::new(Mem0Provider::new()),
-        "tdg" => Arc::new(TdgMemoryProvider::new(storage_dir)),
+        "tdg" => match TdgMemoryProvider::new(storage_dir.clone()) {
+            Ok(provider) => Arc::new(provider),
+            Err(e) => {
+                tracing::error!(
+                    error = %e,
+                    "TDG memory provider initialization failed; falling back to BuiltinProvider"
+                );
+                Arc::new(BuiltinProvider::new(
+                    crate::memory::MemoryManager::with_storage_dir(storage_dir),
+                ))
+            }
+        },
         _ => Arc::new(BuiltinProvider::new(
             crate::memory::MemoryManager::with_storage_dir(storage_dir),
         )),
@@ -605,7 +622,15 @@ pub struct TdgMemoryProvider {
 }
 
 impl TdgMemoryProvider {
-    pub fn new(storage_dir: std::path::PathBuf) -> Self {
+    /// Create a new TDG memory provider backed by a SQLite database at
+    /// `<storage_dir>/tdg/graph.db`.
+    ///
+    /// Returns `Err` if the connection pool can't be created or the schema
+    /// can't be initialized. Previously this method `.expect()`ed on both
+    /// failures, crashing the entire process on a bad storage dir or a
+    /// corrupted database. Callers (notably `build_memory_provider`) now
+    /// fall back to `BuiltinProvider` on `Err`.
+    pub fn new(storage_dir: std::path::PathBuf) -> Result<Self> {
         let db_path = storage_dir.join("tdg").join("graph.db");
         if let Some(parent) = db_path.parent() {
             let _ = std::fs::create_dir_all(parent);
@@ -615,18 +640,18 @@ impl TdgMemoryProvider {
             5,
             30_000,
         )
-        .expect("failed to create TDG connection pool");
+        .map_err(|e| Error::Agent(format!("failed to create TDG connection pool: {e}")))?;
         pool.with_connection(|conn| {
             tdg_rust::init_schema(conn)?;
             tdg_rust::init_fts(conn)?;
             tdg_rust::run_migrations(conn)?;
             Ok(())
         })
-        .expect("failed to initialize TDG schema");
-        Self {
+        .map_err(|e| Error::Agent(format!("failed to initialize TDG schema: {e}")))?;
+        Ok(Self {
             pool: std::sync::Arc::new(pool),
             storage_dir,
-        }
+        })
     }
 }
 
@@ -895,5 +920,45 @@ mod tests {
         if std::env::var("HINDSIGHT_API_KEY").is_err() {
             assert!(!p.is_available());
         }
+    }
+
+    // --- iter-25: TdgMemoryProvider::new returns Result -------------------
+
+    /// `TdgMemoryProvider::new` now returns `Result<Self>` instead of
+    /// `.expect()`ing. A bad storage directory (e.g. a path under a file
+    /// where a directory is expected) produces an `Err`, not a process crash.
+    #[test]
+    fn tdg_memory_provider_new_returns_err_on_bad_storage_dir() {
+        // Use a file path as the storage dir's parent — create_dir_all will
+        // fail because the parent isn't a directory.
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let bad_dir = tmp.path().to_path_buf();
+        // Now try to create a TDG provider whose db_path is bad_dir/tdg/graph.db
+        // — create_dir_all(bad_dir/tdg) will fail because bad_dir is a file.
+        let result = TdgMemoryProvider::new(bad_dir);
+        let err_msg = match result {
+            Err(e) => e.to_string(),
+            Ok(_) => panic!("expected Err when storage_dir is a file, got Ok"),
+        };
+        // The error message should mention TDG so it's diagnosable.
+        assert!(
+            err_msg.contains("TDG"),
+            "error message should mention TDG, got: {err_msg}"
+        );
+    }
+
+    /// `build_memory_provider("tdg", ...)` falls back to `BuiltinProvider`
+    /// when TDG init fails, instead of panicking. The agent stays functional
+    /// with a degraded memory backend.
+    #[test]
+    fn build_memory_provider_tdg_falls_back_on_init_failure() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let bad_dir = tmp.path().to_path_buf();
+        let provider = build_memory_provider("tdg", bad_dir);
+        assert_eq!(
+            provider.name(),
+            "builtin",
+            "should fall back to BuiltinProvider when TDG init fails"
+        );
     }
 }
