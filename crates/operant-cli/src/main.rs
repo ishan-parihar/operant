@@ -29,6 +29,7 @@ mod cmd_setup;
 mod cmd_skills;
 mod cmd_status;
 mod cmd_tools;
+mod cmd_trajectory;
 mod cmd_uninstall;
 mod cmd_update;
 mod cmd_version;
@@ -171,6 +172,11 @@ enum Commands {
 
         #[arg(long, action = ArgAction::SetTrue)]
         autonomous: bool,
+
+        /// Record this run as a trajectory (ReAct steps + messages) saved to
+        /// ~/.operant/trajectories/. View with `operant trajectory list`.
+        #[arg(long, action = ArgAction::SetTrue)]
+        record_trajectory: bool,
     },
     Autonomous {
         #[arg(short, long)]
@@ -364,6 +370,11 @@ enum Commands {
     Dashboard {
         #[command(subcommand)]
         cmd: cmd_dashboard::DashboardSubcommand,
+    },
+    /// Manage agent trajectories (ReAct step recordings for fine-tuning)
+    Trajectory {
+        #[command(subcommand)]
+        cmd: cmd_trajectory::TrajectorySubcommand,
     },
 }
 
@@ -773,11 +784,20 @@ pub(crate) async fn load_memory_manager(storage_dir: PathBuf) -> Result<MemoryMa
     Ok(memory_manager)
 }
 
-async fn run_non_tui(config: &AppConfig, system_prompt: Option<&str>, query: &str) -> Result<()> {
+async fn run_non_tui(
+    config: &AppConfig,
+    system_prompt: Option<&str>,
+    query: &str,
+    record_trajectory: bool,
+) -> Result<()> {
     let mcp_manager = McpManager::new();
     let agent =
         create_agent_without_events(config, system_prompt, &mcp_manager, &config.skills.root_dir)
-            .await?;
+            .await?
+            .with_trajectory_recording(record_trajectory);
+    if record_trajectory {
+        println!("Trajectory recording enabled — run will be saved to ~/.operant/trajectories/");
+    }
     let response = agent.run(query.to_string()).await?;
     println!("{}", response.content);
     Ok(())
@@ -1246,6 +1266,7 @@ async fn main() -> Result<()> {
             system,
             query,
             autonomous,
+            record_trajectory,
         }) => {
             if *autonomous {
                 if query.is_some() {
@@ -1269,7 +1290,7 @@ async fn main() -> Result<()> {
                 .run()
                 .await?;
             } else {
-                run_non_tui(&loaded.config, system.as_deref(), query).await?;
+                run_non_tui(&loaded.config, system.as_deref(), query, *record_trajectory).await?;
             }
         }
         Some(Commands::Chat { system }) => {
@@ -1404,6 +1425,9 @@ async fn main() -> Result<()> {
         }
         Some(Commands::Dashboard { cmd }) => {
             cmd_dashboard::handle_dashboard_command(&loaded.config, cmd.clone()).await?;
+        }
+        Some(Commands::Trajectory { cmd }) => {
+            cmd_trajectory::handle_trajectory_command(cmd.clone()).await?;
         }
         None => {
             // No command provided - launch TUI in interactive mode
