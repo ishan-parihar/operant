@@ -1039,6 +1039,7 @@ impl OperantAgent {
                         | "terminal"
                         | "execute_command"
                         | "code_execution"
+                        | "file_read"
                         | "file_write"
                         | "file_edit"
                         | "patch"
@@ -1053,6 +1054,7 @@ impl OperantAgent {
                             "This runs a shell command on your system".to_string()
                         }
                         "code_execution" => "This executes code in a sandbox".to_string(),
+                        "file_read" => "This reads a file from your system".to_string(),
                         "file_write" => "This writes content to a file".to_string(),
                         "file_edit" | "patch" => "This modifies an existing file".to_string(),
                         "process" => "This manages background processes".to_string(),
