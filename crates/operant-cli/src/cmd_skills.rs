@@ -6,6 +6,7 @@ use operant_core::config::AppConfig;
 use operant_core::skills::SkillManager;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use tempfile as _;
 
 /// Manage installed skills.
 #[derive(Debug, Clone, Subcommand)]
@@ -22,13 +23,20 @@ pub enum SkillsSubcommand {
         /// Skill name to inspect
         id: String,
     },
-    /// Install a skill from a local file or URL
+    /// Install a skill from a local file or URL.
+    ///
+    /// Runs a pre-install security scan (skills_guard) and blocks
+    /// installation if high-severity threats are found. Use --force to
+    /// override the scan verdict (not recommended for untrusted sources).
     Install {
         /// Source path or URL to the skill content
         source: String,
         /// Optional name override (defaults to the file stem or URL basename)
         #[arg(long)]
         name: Option<String>,
+        /// Skip the security scan and install regardless of findings
+        #[arg(long)]
+        force: bool,
     },
     /// Uninstall a skill (removes its directory)
     Uninstall {
@@ -108,8 +116,8 @@ pub async fn handle_skills_command(config: &AppConfig, cmd: SkillsSubcommand) ->
         SkillsSubcommand::List => list_skills(config),
         SkillsSubcommand::Search { query } => search_skills(config, &query),
         SkillsSubcommand::Inspect { id } => inspect_skill(config, &id),
-        SkillsSubcommand::Install { source, name } => {
-            install_skill(config, &source, name.as_deref()).await
+        SkillsSubcommand::Install { source, name, force } => {
+            install_skill(config, &source, name.as_deref(), force).await
         }
         SkillsSubcommand::Uninstall { name } => uninstall_skill(config, &name),
         SkillsSubcommand::Update { name } => update_skill(config, &name),
@@ -243,7 +251,20 @@ fn inspect_skill(config: &AppConfig, id: &str) -> Result<()> {
     Ok(())
 }
 
-async fn install_skill(config: &AppConfig, source: &str, name: Option<&str>) -> Result<()> {
+/// Install a skill from a local file or URL.
+///
+/// Before writing the skill to the skills directory, runs a pre-install
+/// security scan via `operant_core::skills_guard`. The scan checks for:
+///   - prompt injection patterns
+///   - shell injection / reverse shell patterns
+///   - credential exfiltration patterns
+///   - suspicious network calls
+///   - known malicious patterns
+///
+/// If the scan verdict is Block (high-severity findings), installation is
+/// refused unless `--force` is passed. If the verdict is Confirm (medium-
+/// severity findings), the user is prompted to confirm.
+async fn install_skill(config: &AppConfig, source: &str, name: Option<&str>, force: bool) -> Result<()> {
     let (content, skill_name) = if source.starts_with("http://") || source.starts_with("https://") {
         let response = reqwest::get(source)
             .await
@@ -281,6 +302,71 @@ async fn install_skill(config: &AppConfig, source: &str, name: Option<&str>) -> 
 
         (body, derived)
     };
+
+    // ── Pre-install security scan ──
+    // Write the content to a temp file so skills_guard can scan it as a file.
+    let temp_dir = tempfile::tempdir().context("Failed to create temp dir for scan")?;
+    let temp_skill_path = temp_dir.path().join(format!("{}.md", skill_name));
+    std::fs::write(&temp_skill_path, &content)
+        .with_context(|| "Failed to write skill content to temp file for scanning")?;
+
+    let scan_result = operant_core::skills_guard::scan_skill(&temp_skill_path, source);
+    let (allow, reason) =
+        operant_core::skills_guard::should_allow_install(&scan_result, force);
+
+    // Always print the scan summary so the user knows what was found.
+    if !scan_result.findings.is_empty() {
+        println!(
+            "{}",
+            operant_core::skills_guard::format_scan_report(&scan_result)
+        );
+    }
+
+    match allow {
+        Some(true) => {
+            if !scan_result.findings.is_empty() {
+                println!("{} {}", style("⚠").yellow(), reason);
+            }
+        }
+        Some(false) => {
+            anyhow::bail!(
+                "Installation blocked by security scan: {}\n\
+                 {} findings ({} high, {} medium, {} low).\n\
+                 To install anyway, re-run with --force.",
+                reason,
+                scan_result.findings.len(),
+                scan_result
+                    .findings
+                    .iter()
+                    .filter(|f| f.severity == operant_core::skills_guard::Severity::High)
+                    .count(),
+                scan_result
+                    .findings
+                    .iter()
+                    .filter(|f| f.severity == operant_core::skills_guard::Severity::Medium)
+                    .count(),
+                scan_result
+                    .findings
+                    .iter()
+                    .filter(|f| f.severity == operant_core::skills_guard::Severity::Low)
+                    .count(),
+            );
+        }
+        None => {
+            // Confirm: prompt the user
+            println!("{}", style("⚠ Security scan requires confirmation:").yellow());
+            println!("  {}", reason);
+            if !Confirm::new()
+                .with_prompt(format!("Install skill '{}' anyway?", skill_name))
+                .default(false)
+                .interact()
+                .context("Failed to read confirmation")?
+            {
+                println!("Installation cancelled.");
+                return Ok(());
+            }
+        }
+    }
 
     let mut manager = SkillManager::new(config.skills.root_dir.clone());
     manager
