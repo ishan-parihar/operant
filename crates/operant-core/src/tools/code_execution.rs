@@ -97,6 +97,7 @@ async fn execute_python(
     let python_cmd =
         crate::platform::find_python().unwrap_or_else(|| std::path::PathBuf::from("python3"));
     let mut cmd = Command::new(&python_cmd);
+    cmd.kill_on_drop(true); // Kill child on timeout/panic to prevent orphan processes
     cmd.arg(script_path.to_str().unwrap_or("script.py"))
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -164,6 +165,7 @@ async fn execute_javascript(
         .map_err(|e| format!("Failed to write temp script: {}", e))?;
 
     let mut cmd = Command::new("node");
+    cmd.kill_on_drop(true); // Kill child on timeout/panic to prevent orphan processes
     cmd.arg(script_path.to_str().unwrap_or("script.js"))
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -224,6 +226,7 @@ async fn execute_shell(
     let shell = crate::platform::detect_shell();
     let mut cmd = {
         let mut c = Command::new(&shell.path);
+        c.kill_on_drop(true); // Kill child on timeout/panic to prevent orphan processes
         for arg in &shell.args_pattern {
             c.arg(arg);
         }
@@ -313,6 +316,7 @@ path = "src/main.rs"
         .map_err(|e| format!("Failed to write main.rs: {}", e))?;
 
     let mut cmd = Command::new("rustc");
+    cmd.kill_on_drop(true); // Kill child on timeout/panic to prevent orphan processes
     cmd.arg(project_dir.join("src/main.rs"))
         .arg("-o")
         .arg(project_dir.join("main"))
@@ -350,6 +354,7 @@ path = "src/main.rs"
 
     // Run the compiled binary
     let mut run_cmd = Command::new(project_dir.join("main").to_str().unwrap_or("main"));
+    run_cmd.kill_on_drop(true); // Kill child on timeout/panic to prevent orphan processes
     run_cmd.stdout(Stdio::piped());
     run_cmd.stderr(Stdio::piped());
 
