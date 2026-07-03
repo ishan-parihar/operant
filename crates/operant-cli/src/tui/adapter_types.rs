@@ -1996,6 +1996,18 @@ impl TuiApp {
         use ratatui::Terminal;
 
         enable_raw_mode()?;
+
+        // Install a panic hook that restores the terminal before printing
+        // the panic message. Without this, any panic between enable_raw_mode
+        // and disable_raw_mode leaves the user's terminal in raw mode +
+        // alternate screen (broken terminal, garbled output).
+        let prev_hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            let _ = disable_raw_mode();
+            let _ = execute!(std::io::stdout(), LeaveAlternateScreen);
+            prev_hook(info);
+        }));
+
         let mut stdout = std::io::stdout();
         execute!(stdout, EnterAlternateScreen)?;
         let backend = CrosstermBackend::new(stdout);
