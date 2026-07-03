@@ -59,6 +59,9 @@ pub struct AgentConfig {
     /// Approval mode for tool execution: "smart" (default, pattern-based),
     /// "manual" (prompt for every tool), or "off" (no checks).
     pub approval_mode: String,
+    /// Whether to record trajectories (ReAct steps + messages) for each run.
+    /// Saved to ~/.operant/trajectories/<session_id>.json.
+    pub record_trajectories: bool,
 }
 
 impl Default for AgentConfig {
@@ -81,6 +84,7 @@ impl From<&BehaviorSettings> for AgentConfig {
             fallback_models: settings.fallback_models.clone(),
             fallback_on_errors: settings.fallback_on_errors,
             approval_mode: "smart".to_string(),
+            record_trajectories: false,
         }
     }
 }
@@ -141,6 +145,10 @@ pub struct OperantAgent {
     /// When triggered, the agent loop exits at the next iteration boundary
     /// and tool execution is aborted via `flag.check()`.
     interrupt_flag: crate::interrupt::InterruptFlag,
+    /// Whether to record trajectories (ReAct steps + messages) for each run.
+    /// When true, a trajectory JSON is saved to ~/.operant/trajectories/
+    /// on run() completion. Set via AgentConfig::record_trajectories.
+    record_trajectories: bool,
 }
 
 /// A pending permission request sent from the agent to the TUI
@@ -174,6 +182,7 @@ impl OperantAgent {
             database,
             persistent_session_id: None,
             interrupt_flag: crate::interrupt::InterruptFlag::new(),
+            record_trajectories: false,
         }
     }
 
@@ -197,6 +206,7 @@ impl OperantAgent {
             database,
             persistent_session_id: None,
             interrupt_flag: crate::interrupt::InterruptFlag::new(),
+            record_trajectories: false,
         }
     }
 
@@ -235,6 +245,14 @@ impl OperantAgent {
     /// their own copy.
     pub fn interrupt_flag(&self) -> crate::interrupt::InterruptFlag {
         self.interrupt_flag.clone()
+    }
+
+    /// Enable trajectory recording for this agent. When enabled, each `run()`
+    /// call builds a `Trajectory` (ReAct steps + messages + metadata) and
+    /// saves it to `~/.operant/trajectories/<session_id>.json`.
+    pub fn with_trajectory_recording(mut self, enabled: bool) -> Self {
+        self.record_trajectories = enabled;
+        self
     }
 
     /// Send an event to the channel
@@ -314,6 +332,7 @@ impl OperantAgent {
         // Build initial messages including system prompt
         let mut messages = self.build_messages().await?;
         let mut iteration = 0;
+        let mut total_tool_calls: usize = 0;
 
         loop {
             iteration += 1;
@@ -414,12 +433,28 @@ impl OperantAgent {
                     if tool_calls.is_empty() {
                         let result = assistant_msg.clone();
                         self.spawn_session_distillation(messages.clone());
+
+                        // Save trajectory if recording is enabled.
+                        if self.record_trajectories {
+                            self.save_trajectory(
+                                &session_id,
+                                &messages,
+                                iteration,
+                                total_tool_calls,
+                                true,
+                                &result,
+                            )
+                            .await;
+                        }
+
                         self.emit(AgentEvent::Done {
                             message: assistant_msg,
                         })
                         .await;
                         return Ok(result);
                     }
+
+                    total_tool_calls += tool_calls.len();
 
                     // Execute tools and add results
                     let tool_results = self.execute_tools(tool_calls).await?;
@@ -557,6 +592,99 @@ impl OperantAgent {
         }
 
         blocks.join("\n\n")
+    }
+
+    /// Save a trajectory (ReAct steps + messages + metadata) for this run.
+    ///
+    /// Writes to `~/.operant/trajectories/<session_id>-<timestamp>.json`.
+    /// Each trajectory captures: session ID, model, iteration count, tool
+    /// call count, success status, full message history, and per-step
+    /// thought/action/observation where extractable.
+    async fn save_trajectory(
+        &self,
+        session_id: &str,
+        messages: &[Message],
+        iterations: usize,
+        tool_calls: usize,
+        success: bool,
+        final_response: &Message,
+    ) {
+        use crate::trajectory::{Trajectory, TrajectoryStep};
+
+        let mut trajectory = Trajectory::new(
+            format!("{}_{}", session_id, chrono::Utc::now().timestamp()),
+            session_id,
+            &self.config.model,
+        );
+        trajectory.iterations = iterations;
+        trajectory.tool_calls = tool_calls;
+        trajectory.success = success;
+
+        // Build per-step records from the message history.
+        // Each assistant message with tool calls → a reasoning step.
+        // Each tool result → an observation step.
+        // The final assistant message (no tool calls) → a response step.
+        let mut step_idx = 0usize;
+        for msg in messages {
+            match msg.role.as_str() {
+                "assistant" => {
+                    let mut step = TrajectoryStep {
+                        step: step_idx,
+                        thought: Some(msg.content.clone()),
+                        action: None,
+                        action_args: None,
+                        observation: None,
+                        response: None,
+                        success: true,
+                    };
+                    if let Some(tool_calls) = msg.tool_calls.as_ref() {
+                        if let Some(first) = tool_calls.first() {
+                            step.action = Some(first.function.name.clone());
+                            step.action_args = Some(first.function.arguments.clone());
+                        }
+                    } else {
+                        // No tool calls → this is a response step
+                        step.response = Some(msg.content.clone());
+                    }
+                    trajectory.add_step(step);
+                    step_idx += 1;
+                }
+                "tool" => {
+                    // Attach as observation to the last step
+                    if let Some(last) = trajectory.steps.last_mut() {
+                        last.observation = Some(msg.content.clone());
+                    }
+                }
+                _ => {}
+            }
+            trajectory.add_message(msg.clone());
+        }
+
+        // The final_response is the last assistant message; it's already
+        // captured in the messages loop above, so no extra step needed.
+        let _ = final_response;
+
+        trajectory.calculate_tokens();
+
+        // Write to ~/.operant/trajectories/
+        let trajectories_dir = crate::platform::operant_home().join("trajectories");
+        if let Err(e) = std::fs::create_dir_all(&trajectories_dir) {
+            warn!(error = %e, "Failed to create trajectories dir");
+            return;
+        }
+        let path = trajectories_dir.join(format!("{}.json", trajectory.id));
+        match trajectory.to_json() {
+            Ok(json) => {
+                if let Err(e) = std::fs::write(&path, json) {
+                    warn!(error = %e, path = ?path, "Failed to write trajectory");
+                } else {
+                    info!(path = %path.display(), "Trajectory saved");
+                }
+            }
+            Err(e) => {
+                warn!(error = %e, "Failed to serialize trajectory");
+            }
+        }
     }
 
     fn spawn_session_distillation(&self, history: Vec<Message>) {
