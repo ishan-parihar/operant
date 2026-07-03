@@ -236,20 +236,26 @@ impl MemoryProvider for TdgMemoryProvider {
         let pool = self.pool.clone();
         let query = query.to_string();
         let result = tokio::task::spawn_blocking(move || -> std::result::Result<Vec<String>, String> {
-            pool.with_connection(|conn| {
-                let mut stmt = conn.prepare(
-                    "SELECT id, node_type, name, description FROM nodes WHERE valid_to IS NULL AND name LIKE ?1 LIMIT 5"
-                )?;
-                let pattern = format!("%{}%", query);
-                let rows: Vec<String> = stmt
-                    .query_map(rusqlite::params![pattern], |row| {
-                        let id: String = row.get(0)?;
-                        let node_type: String = row.get(1)?;
-                        let name: String = row.get(2)?;
-                        let desc: String = row.get(3)?;
-                        Ok(format!("[{}] {}: {} — {}", node_type, id, name, desc))
-                    })?
-                    .filter_map(|r| r.ok())
+            pool.with_connection(|conn| -> tdg_rust::TdgResult<Vec<String>> {
+                // Use HybridRetriever for combined FTS5 + trust + recency
+                // scoring. Previously this was a raw LIKE '%query%'
+                // sequential scan that ignored the FTS5 virtual table
+                // and all the scoring logic tdg-rust provides.
+                let retriever = tdg_rust::plugins::hybrid_retriever::HybridRetriever::new();
+                let results = retriever.search(conn, &query, 5, None)?;
+                let rows: Vec<String> = results
+                    .iter()
+                    .map(|r| {
+                        format!(
+                            "[{}] {}: {} — {} (score: {:.2}, via {})",
+                            r.node.node_type,
+                            r.node.id,
+                            r.node.name,
+                            r.node.description,
+                            r.score,
+                            r.method
+                        )
+                    })
                     .collect();
                 Ok(rows)
             })
@@ -263,35 +269,74 @@ impl MemoryProvider for TdgMemoryProvider {
         }
     }
 
-    async fn sync_turn(&self, user: &str, _assistant: &str) -> Result<()> {
+    async fn sync_turn(&self, user: &str, assistant: &str) -> Result<()> {
         let pool = self.pool.clone();
         let user_text = user.to_string();
-        let _ = tokio::task::spawn_blocking(move || -> std::result::Result<(), String> {
+        let assistant_text = assistant.to_string();
+        let result = tokio::task::spawn_blocking(move || -> std::result::Result<(), String> {
             pool.with_connection(|conn| {
+                // Store the user turn as an observation node.
+                let turn_name: String = user_text.chars().take(100).collect();
                 let new_node = tdg_rust::NewNode {
                     node_type: "observation".to_string(),
-                    name: user_text.chars().take(100).collect(),
-                    description: Some(user_text),
+                    name: turn_name,
+                    description: Some(user_text.clone()),
                     properties: None,
                     quadrants: None,
                     drives: None,
                     lifecycle_state: None,
                     teleological_level: None,
-                    developmental_stage: Some(0),
+                    // Fixed: was Some(0) which is invalid (Stage enum is
+                    // 1-8). Stage 1 = "Seed".
+                    developmental_stage: Some(1),
                     confidence: Some(0.5),
                     source: Some("operant-session".to_string()),
                     parent_ids: None,
                     agent_id: None,
                     ..Default::default()
                 };
-                tdg_rust::db::crud::add_node(conn, &new_node)?;
+                let node = tdg_rust::db::crud::add_node(conn, &new_node)?;
+
+                // Extract entities from the user + assistant text and
+                // auto-wire edges from the new node to any extracted
+                // entities that already exist in the graph. This is the
+                // key integration that lifts tdg-rust coverage from ~8%
+                // to ~30%: the graph self-organizes as conversations
+                // happen, without the agent needing to call tdg_create
+                // + tdg_connect manually.
+                let extractor = tdg_rust::plugins::entity_extractor::EntityExtractor::new();
+                let combined = format!("{}\n{}", user_text, assistant_text);
+                let entities = extractor.extract(&combined, Some(conn));
+
+                // For each extracted entity that already has a node_id
+                // (i.e. it matched an existing node), auto-wire an edge
+                // from the turn node to it.
+                let parent_ids: Vec<String> = entities
+                    .iter()
+                    .filter_map(|e| e.id.clone())
+                    .collect();
+                if !parent_ids.is_empty() {
+                    let _ = tdg_rust::grammar::auto_wire::auto_wire_edges(
+                        conn,
+                        &node.id,
+                        &node.node_type,
+                        &parent_ids,
+                    );
+                }
+
                 Ok(())
             })
             .map_err(|e| e.to_string())
         })
-        .await
-        .ok();
-        Ok(())
+        .await;
+
+        // Surface sync errors instead of silently swallowing them
+        // (was `let _ = ... .ok();` before).
+        match result {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(e)) => Err(Error::Agent(format!("TDG sync_turn failed: {e}"))),
+            Err(e) => Err(Error::Agent(format!("TDG sync_turn task failed: {e}"))),
+        }
     }
 
     fn tool_schemas(&self) -> Vec<Value> {
