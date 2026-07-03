@@ -1149,8 +1149,23 @@ mod tests {
 // ── Turn state tracking for auto-continue / interruption recovery ────────
 
 /// Persist turn state so interrupted sessions can be detected on restart.
+///
+/// Writes to `<operant_home>/.turn_state/<channel_id>.json` — one file per
+/// channel — so concurrent turns on different channels don't overwrite each
+/// other. Previously this wrote a single `.turn_state.json` that got
+/// clobbered by whichever channel wrote last, so a crash during channel A's
+/// turn would be invisible if channel B completed its turn before the
+/// restart.
 fn save_turn_state(channel_id: &str, status: &str) {
-    let path = operant_core::platform::operant_home().join(".turn_state.json");
+    save_turn_state_in(&operant_core::platform::operant_home(), channel_id, status);
+}
+
+/// Same as `save_turn_state` but writes to a caller-provided base directory.
+/// Exposed for tests so they don't pollute the real operant home.
+fn save_turn_state_in(base_dir: &std::path::Path, channel_id: &str, status: &str) {
+    let dir = base_dir.join(".turn_state");
+    let _ = std::fs::create_dir_all(&dir);
+    let path = dir.join(format!("{}.json", sanitize_channel_id(channel_id)));
     let ts = chrono::Utc::now().to_rfc3339();
     let json = serde_json::json!({
         "channel_id": channel_id,
@@ -1160,18 +1175,155 @@ fn save_turn_state(channel_id: &str, status: &str) {
     let _ = std::fs::write(path, json.to_string());
 }
 
-/// Check for interrupted turns on startup and log a warning.
+/// Check for interrupted turns on startup and log a warning for each.
+///
+/// Scans every file under `<operant_home>/.turn_state/` so all concurrent
+/// channels are reported, not just whichever one happened to win the
+/// last-write race on the old single-file scheme.
 pub fn check_interrupted_turns() {
-    let path = operant_core::platform::operant_home().join(".turn_state.json");
-    if let Ok(content) = std::fs::read_to_string(&path) {
-        if let Ok(state) = serde_json::from_str::<serde_json::Value>(&content) {
-            if state.get("status").and_then(|s| s.as_str()) == Some("pending") {
-                tracing::warn!(
-                    channel_id = %state["channel_id"],
-                    timestamp = %state["timestamp"],
-                    "Detected interrupted turn from previous session"
-                );
-            }
+    check_interrupted_turns_in(&operant_core::platform::operant_home());
+}
+
+/// Same as `check_interrupted_turns` but reads from a caller-provided base
+/// directory. Exposed for tests.
+fn check_interrupted_turns_in(base_dir: &std::path::Path) -> Vec<(String, String)> {
+    let dir = base_dir.join(".turn_state");
+    let mut found = Vec::new();
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(e) => e,
+        Err(_) => return found,
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|s| s.to_str()) != Some("json") {
+            continue;
         }
+        let content = match std::fs::read_to_string(&path) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+        let state = match serde_json::from_str::<serde_json::Value>(&content) {
+            Ok(s) => s,
+            Err(_) => continue,
+        };
+        if state.get("status").and_then(|s| s.as_str()) == Some("pending") {
+            let channel_id = state["channel_id"].as_str().unwrap_or("").to_string();
+            let timestamp = state["timestamp"].as_str().unwrap_or("").to_string();
+            tracing::warn!(
+                channel_id = %channel_id,
+                timestamp = %timestamp,
+                "Detected interrupted turn from previous session"
+            );
+            found.push((channel_id, timestamp));
+        }
+    }
+    found
+}
+
+/// Sanitize a channel ID for use as a filename. Channel IDs are typically
+/// alphanumeric (Slack channel IDs, Discord channel IDs, etc.) but we
+/// defensively strip anything that isn't alphanumeric, dash, or underscore
+/// to prevent path traversal if a platform ever sends a hostile ID.
+fn sanitize_channel_id(channel_id: &str) -> String {
+    channel_id
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod turn_state_tests {
+    use super::*;
+
+    #[test]
+    fn save_turn_state_writes_one_file_per_channel() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path();
+
+        save_turn_state_in(base, "channel_a", "pending");
+        save_turn_state_in(base, "channel_b", "pending");
+        save_turn_state_in(base, "channel_a", "complete");
+
+        let dir = base.join(".turn_state");
+        let a_path = dir.join("channel_a.json");
+        let b_path = dir.join("channel_b.json");
+        assert!(a_path.exists(), "channel_a file should exist");
+        assert!(b_path.exists(), "channel_b file should exist");
+
+        // channel_a was written pending then complete — final state should
+        // be "complete".
+        let a_content = std::fs::read_to_string(&a_path).unwrap();
+        let a_json: serde_json::Value = serde_json::from_str(&a_content).unwrap();
+        assert_eq!(a_json["status"], "complete");
+        assert_eq!(a_json["channel_id"], "channel_a");
+
+        // channel_b was only written pending.
+        let b_content = std::fs::read_to_string(&b_path).unwrap();
+        let b_json: serde_json::Value = serde_json::from_str(&b_content).unwrap();
+        assert_eq!(b_json["status"], "pending");
+        assert_eq!(b_json["channel_id"], "channel_b");
+    }
+
+    #[test]
+    fn concurrent_channels_do_not_overwrite_each_other() {
+        // This is the core regression test for the old single-file bug:
+        // two channels with concurrent pending turns must both be visible
+        // to check_interrupted_turns_in, not just whichever one wrote last.
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path();
+
+        save_turn_state_in(base, "slack_channel_1", "pending");
+        save_turn_state_in(base, "discord_channel_2", "pending");
+
+        let interrupted = check_interrupted_turns_in(base);
+        assert_eq!(
+            interrupted.len(),
+            2,
+            "both channels should be reported as interrupted, got {:?}",
+            interrupted
+        );
+
+        let channel_ids: Vec<&str> = interrupted.iter().map(|(id, _)| id.as_str()).collect();
+        assert!(channel_ids.contains(&"slack_channel_1"));
+        assert!(channel_ids.contains(&"discord_channel_2"));
+    }
+
+    #[test]
+    fn check_interrupted_turns_skips_complete_status() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path();
+
+        save_turn_state_in(base, "completed_chan", "pending");
+        save_turn_state_in(base, "completed_chan", "complete");
+        save_turn_state_in(base, "still_pending", "pending");
+
+        let interrupted = check_interrupted_turns_in(base);
+        // Only "still_pending" should be reported — "completed_chan" was
+        // marked complete after its pending state.
+        assert_eq!(interrupted.len(), 1);
+        assert_eq!(interrupted[0].0, "still_pending");
+    }
+
+    #[test]
+    fn check_interrupted_turns_returns_empty_when_no_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        // No save_turn_state_in calls — directory doesn't exist.
+        let interrupted = check_interrupted_turns_in(tmp.path());
+        assert!(interrupted.is_empty());
+    }
+
+    #[test]
+    fn sanitize_channel_id_strips_path_separators() {
+        // Defensive: a hostile platform sending "../../etc/passwd" as a
+        // channel ID must not escape the .turn_state directory.
+        assert_eq!(sanitize_channel_id("../../etc/passwd"), "______etc_passwd");
+        assert_eq!(sanitize_channel_id("normal-channel_123"), "normal-channel_123");
+        assert_eq!(sanitize_channel_id(""), "");
     }
 }
