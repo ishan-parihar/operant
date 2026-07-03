@@ -9,7 +9,7 @@ fn test_storage_dir() -> PathBuf {
 #[tokio::test]
 async fn test_tdg_provider_initialization() {
     let storage = test_storage_dir();
-    let provider = operant_core::TdgMemoryProvider::new(storage.clone());
+    let provider = operant_core::TdgMemoryProvider::new(storage.clone()).unwrap();
     assert_eq!(provider.name(), "tdg");
     assert!(provider.is_available());
     provider.initialize("test-session").await.unwrap();
@@ -18,7 +18,7 @@ async fn test_tdg_provider_initialization() {
 #[tokio::test]
 async fn test_tdg_provider_prefetch_empty() {
     let storage = test_storage_dir();
-    let provider = operant_core::TdgMemoryProvider::new(storage);
+    let provider = operant_core::TdgMemoryProvider::new(storage).unwrap();
     provider.initialize("test-session").await.unwrap();
     let result = provider.prefetch("test query").await;
     assert!(result.is_empty());
@@ -27,7 +27,7 @@ async fn test_tdg_provider_prefetch_empty() {
 #[tokio::test]
 async fn test_tdg_provider_sync_turn() {
     let storage = test_storage_dir();
-    let provider = operant_core::TdgMemoryProvider::new(storage);
+    let provider = operant_core::TdgMemoryProvider::new(storage).unwrap();
     provider.initialize("test-session").await.unwrap();
     provider
         .sync_turn("user message", "assistant response")
@@ -38,7 +38,7 @@ async fn test_tdg_provider_sync_turn() {
 #[tokio::test]
 async fn test_tdg_provider_system_prompt() {
     let storage = test_storage_dir();
-    let provider = operant_core::TdgMemoryProvider::new(storage);
+    let provider = operant_core::TdgMemoryProvider::new(storage).unwrap();
     let prompt = provider.system_prompt_block();
     assert!(prompt.contains("TDG"));
     assert!(prompt.contains("graph memory"));
@@ -47,7 +47,7 @@ async fn test_tdg_provider_system_prompt() {
 #[tokio::test]
 async fn test_tdg_provider_tool_schemas() {
     let storage = test_storage_dir();
-    let provider = operant_core::TdgMemoryProvider::new(storage);
+    let provider = operant_core::TdgMemoryProvider::new(storage).unwrap();
     let schemas = provider.tool_schemas();
     assert_eq!(schemas.len(), 4);
     let names: Vec<&str> = schemas.iter().filter_map(|s| s["name"].as_str()).collect();
@@ -60,7 +60,7 @@ async fn test_tdg_provider_tool_schemas() {
 #[tokio::test]
 async fn test_tdg_provider_handle_search() {
     let storage = test_storage_dir();
-    let provider = operant_core::TdgMemoryProvider::new(storage);
+    let provider = operant_core::TdgMemoryProvider::new(storage).unwrap();
     provider.initialize("test-session").await.unwrap();
     let result = provider
         .handle_tool_call("tdg_search", serde_json::json!({"query": "test"}))
@@ -71,7 +71,7 @@ async fn test_tdg_provider_handle_search() {
 #[tokio::test]
 async fn test_tdg_provider_handle_create() {
     let storage = test_storage_dir();
-    let provider = operant_core::TdgMemoryProvider::new(storage);
+    let provider = operant_core::TdgMemoryProvider::new(storage).unwrap();
     provider.initialize("test-session").await.unwrap();
     let result = provider
         .handle_tool_call(
@@ -90,7 +90,7 @@ async fn test_tdg_provider_handle_create() {
 #[tokio::test]
 async fn test_tdg_provider_handle_connect() {
     let storage = test_storage_dir();
-    let provider = operant_core::TdgMemoryProvider::new(storage);
+    let provider = operant_core::TdgMemoryProvider::new(storage).unwrap();
     provider.initialize("test-session").await.unwrap();
     let create1 = provider
         .handle_tool_call(
@@ -134,7 +134,7 @@ async fn test_tdg_provider_handle_connect() {
 #[tokio::test]
 async fn test_tdg_provider_handle_get_related() {
     let storage = test_storage_dir();
-    let provider = operant_core::TdgMemoryProvider::new(storage);
+    let provider = operant_core::TdgMemoryProvider::new(storage).unwrap();
     provider.initialize("test-session").await.unwrap();
     let create = provider
         .handle_tool_call(
@@ -158,7 +158,7 @@ async fn test_tdg_provider_handle_get_related() {
 #[tokio::test]
 async fn test_tdg_provider_shutdown() {
     let storage = test_storage_dir();
-    let provider = operant_core::TdgMemoryProvider::new(storage);
+    let provider = operant_core::TdgMemoryProvider::new(storage).unwrap();
     provider.shutdown().await;
 }
 
