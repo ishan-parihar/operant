@@ -5,7 +5,7 @@
 //! Keyboard: ↑↓ navigate files, Tab switch pane, t toggle diff type, Esc close.
 
 use crate::tui::adapter_types::file_history::FileHistory;
-use once_cell::sync::Lazy;
+use std::sync::LazyLock;
 use ratatui::{
     buffer::Buffer,
     layout::{Constraint, Direction, Layout, Rect},
@@ -24,8 +24,8 @@ use crate::tui::overlays::{
     OPERANT_MUTED, OPERANT_PANEL_BG, OPERANT_TEXT,
 };
 
-static SYNTAX_SET: Lazy<SyntaxSet> = Lazy::new(SyntaxSet::load_defaults_newlines);
-static THEME_SET: Lazy<ThemeSet> = Lazy::new(ThemeSet::load_defaults);
+static SYNTAX_SET: LazyLock<SyntaxSet> = LazyLock::new(SyntaxSet::load_defaults_newlines);
+static THEME_SET: LazyLock<ThemeSet> = LazyLock::new(ThemeSet::load_defaults);
 
 // ---------------------------------------------------------------------------
 // Data types

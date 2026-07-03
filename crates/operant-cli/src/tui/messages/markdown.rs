@@ -1,7 +1,7 @@
 //! Markdown -> ratatui lines renderer used by transcript message families.
 
 use crate::tui::figures;
-use once_cell::sync::Lazy;
+use std::sync::LazyLock;
 use regex::Regex;
 use ratatui::{
     style::{Color, Modifier, Style},
@@ -10,13 +10,13 @@ use ratatui::{
 use unicode_width::UnicodeWidthStr;
 
 /// Regex pattern to detect URLs (http://, https://, ftp://, www.)
-static URL_PATTERN: Lazy<Regex> = Lazy::new(|| {
+static URL_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?:https?|ftp)://\S+|www\.\S+")
         .expect("Invalid URL regex pattern")
 });
 
 /// Regex pattern to detect email addresses
-static EMAIL_PATTERN: Lazy<Regex> = Lazy::new(|| {
+static EMAIL_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}")
         .expect("Invalid email regex pattern")
 });

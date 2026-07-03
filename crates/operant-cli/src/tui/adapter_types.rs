@@ -1367,8 +1367,8 @@ pub mod tools {
         pub fn new() -> Self { Self { tasks: HashMap::new() } }
     }
 
-    pub static TASK_STORE: once_cell::sync::Lazy<std::sync::Mutex<TaskStore>> =
-        once_cell::sync::Lazy::new(|| std::sync::Mutex::new(TaskStore::new()));
+    pub static TASK_STORE: std::sync::LazyLock<std::sync::Mutex<TaskStore>> =
+        std::sync::LazyLock::new(|| std::sync::Mutex::new(TaskStore::new()));
 
     #[derive(Debug, Clone)]
     pub struct UserQuestionEvent {
