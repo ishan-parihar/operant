@@ -692,6 +692,16 @@ impl OperantAgent {
         // Add conversation history
         let conv = self.conversation.read().await;
         messages.extend(conv.clone());
+        drop(conv);
+
+        // Apply context management: decay-render old messages + evict
+        // if over budget. Without this, any long-running session would
+        // eventually exceed the context window and 400-error. The budget
+        // is derived from the agent's context_window config; the reserve
+        // leaves room for the model's response.
+        let budget = self.config.context_window;
+        let reserve = 4096; // tokens reserved for the model's response
+        messages = crate::context_management::manage_context(messages, budget, reserve);
 
         Ok(messages)
     }
