@@ -174,12 +174,17 @@ impl ContextManager {
 
 /// Estimate token count for a string (rough approximation)
 ///
-/// This uses a simple heuristic: ~4 characters per token on average.
+/// Uses a simple heuristic: ~4 characters per token on average.
 /// For more accurate counting, a proper tokenizer like tiktoken would be needed.
+///
+/// Note: uses `chars().count()` (Unicode scalar values), NOT `len()` (bytes).
+/// Using byte length overcounts CJK text by 3x (UTF-8 uses 3 bytes per CJK
+/// character) and emoji by 4x, which would cause premature context truncation.
 pub fn estimate_tokens(text: &str) -> usize {
-    // Rough estimate: ~4 characters per token for English text
-    // This is a simplification but works reasonably well
-    (text.len() as f32 / 4.0).ceil() as usize
+    // Rough estimate: ~4 characters per token for English text.
+    // For CJK text the ratio is closer to 1-2 chars/token, but 4 is a
+    // conservative average that avoids undercounting.
+    (text.chars().count() as f32 / 4.0).ceil() as usize
 }
 
 /// Estimate tokens in a message
