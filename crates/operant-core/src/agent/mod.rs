@@ -11,7 +11,7 @@ use tokio::sync::{mpsc, RwLock};
 use tokio::time::timeout;
 use tracing::{debug, error, info, instrument, warn};
 
-use crate::client::{ChatResponse, Message, ToolCall};
+use crate::client::{ChatResponse, Message, Role, ToolCall};
 use crate::config::{runtime_config, BehaviorSettings};
 use crate::context_files::{load_default_context_files, load_workspace_context};
 use crate::database::Database;
@@ -294,13 +294,29 @@ impl OperantAgent {
     pub async fn run(&self, user_query: String) -> Result<Message> {
         info!("Starting agent run");
 
+        // Reset interrupt flag from any previous run() call. Without this,
+        // a Ctrl-C in run #1 permanently breaks run #2+ (the flag stays
+        // triggered and the loop exits immediately).
+        self.interrupt_flag.reset();
+
         let session_id = self
             .persistent_session_id
             .clone()
             .unwrap_or_else(|| format!("sess_{}", uuid::Uuid::new_v4()));
 
-        // Add user message
-        self.add_message(Message::user(&user_query)).await;
+        // Add user message — but skip if the last message is already this
+        // exact query (happens when run_with_healing retries run() — without
+        // this check, N retries produce N duplicate user messages).
+        {
+            let conv = self.conversation.read().await;
+            let already_added = conv
+                .last()
+                .is_some_and(|last| last.role == Role::User && last.content == user_query);
+            if !already_added {
+                drop(conv);
+                self.add_message(Message::user(&user_query)).await;
+            }
+        }
 
         // Save session first (must exist before messages can reference it)
         self.database
@@ -344,6 +360,17 @@ impl OperantAgent {
             // of starting another LLM round-trip + tool execution cycle.
             if self.interrupt_flag.is_triggered() {
                 info!("Agent loop interrupted by user (Ctrl-C)");
+                if self.record_trajectories {
+                    self.save_trajectory(
+                        &session_id,
+                        &messages,
+                        iteration,
+                        total_tool_calls,
+                        false,
+                        None,
+                    )
+                    .await;
+                }
                 self.emit(AgentEvent::Error {
                     error: "Interrupted by user".to_string(),
                 })
@@ -353,6 +380,17 @@ impl OperantAgent {
 
             if iteration > self.config.max_iterations {
                 error!(max = self.config.max_iterations, "Max iterations exceeded");
+                if self.record_trajectories {
+                    self.save_trajectory(
+                        &session_id,
+                        &messages,
+                        iteration,
+                        total_tool_calls,
+                        false,
+                        None,
+                    )
+                    .await;
+                }
                 return Err(Error::MaxIterationsExceeded {
                     max: self.config.max_iterations,
                 });
@@ -442,7 +480,7 @@ impl OperantAgent {
                                 iteration,
                                 total_tool_calls,
                                 true,
-                                &result,
+                                Some(&result),
                             )
                             .await;
                         }
@@ -510,6 +548,17 @@ impl OperantAgent {
                         error: e.to_string(),
                     })
                     .await;
+                    if self.record_trajectories {
+                        self.save_trajectory(
+                            &session_id,
+                            &messages,
+                            iteration,
+                            total_tool_calls,
+                            false,
+                            None,
+                        )
+                        .await;
+                    }
                     return Err(e);
                 }
             }
@@ -607,7 +656,7 @@ impl OperantAgent {
         iterations: usize,
         tool_calls: usize,
         success: bool,
-        final_response: &Message,
+        _final_response: Option<&Message>,
     ) {
         use crate::trajectory::{Trajectory, TrajectoryStep};
 
@@ -662,7 +711,6 @@ impl OperantAgent {
 
         // The final_response is the last assistant message; it's already
         // captured in the messages loop above, so no extra step needed.
-        let _ = final_response;
 
         trajectory.calculate_tokens();
 
@@ -789,6 +837,8 @@ impl OperantAgent {
         }
 
         if has_error {
+            // Trajectory saving is handled by the caller (run()) when this
+            // error propagates up — see the Err(e) arm in the run() loop.
             return Err(Error::Agent("Stream processing failed".to_string()));
         }
 
@@ -1020,9 +1070,12 @@ impl OperantAgent {
                             response_tx: resp_tx,
                         })
                         .await;
+                    // Permission prompt timeout: 120s (was 30s — too short for
+                    // users who step away). If the user doesn't respond in 2
+                    // minutes, default to Deny for safety.
                     let response = tokio::select! {
                         r = resp_rx => r.unwrap_or(ToolPermissionResponse::Deny),
-                        _ = tokio::time::sleep(Duration::from_secs(30)) => ToolPermissionResponse::Deny,
+                        _ = tokio::time::sleep(Duration::from_secs(120)) => ToolPermissionResponse::Deny,
                     };
                     match response {
                         ToolPermissionResponse::AllowOnce
@@ -1228,16 +1281,38 @@ fn truncate_tool_result(tool_name: &str, content: &str) -> String {
                     serde_json::json!("[large data truncated]"),
                 );
             }
-            return serde_json::to_string(&val)
-                .unwrap_or_else(|_| content[..MAX_TOOL_RESULT_LEN].to_string());
+            let serialized = serde_json::to_string(&val).unwrap_or_default();
+            if serialized.len() <= MAX_TOOL_RESULT_LEN {
+                return serialized;
+            }
+            // Serialized JSON is still too long — fall through to safe truncate
+            return format!(
+                "{}... [truncated, tool: {}]",
+                safe_truncate_str(&serialized, MAX_TOOL_RESULT_LEN),
+                tool_name
+            );
         }
     }
-    // Fallback: hard truncate
+    // Fallback: hard truncate (char-boundary-safe to avoid panic on CJK/emoji)
     format!(
         "{}... [truncated, tool: {}]",
-        &content[..MAX_TOOL_RESULT_LEN],
+        safe_truncate_str(content, MAX_TOOL_RESULT_LEN),
         tool_name
     )
+}
+
+/// Truncate a string to at most `max_bytes` bytes, ending at a UTF-8 char
+/// boundary. Without this, `&s[..N]` panics if N falls in the middle of a
+/// multi-byte character (common with CJK text or emoji in tool output).
+fn safe_truncate_str(s: &str, max_bytes: usize) -> &str {
+    if s.len() <= max_bytes {
+        return s;
+    }
+    let mut end = max_bytes;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
 }
 
 fn strip_reasoning_tags(text: &str) -> String {
