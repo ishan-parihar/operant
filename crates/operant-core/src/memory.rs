@@ -826,7 +826,14 @@ impl HindsightMemoryClient {
             api_key,
             bank_id,
             budget,
-            client: reqwest::Client::new(),
+            // 60s total timeout — Hindsight API calls are request/response
+            // style (no streaming), so a total timeout is appropriate.
+            // Previously reqwest::Client::new() had no timeout, so a stalled
+            // Hindsight endpoint would hang the agent forever.
+            client: reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(60))
+                .build()
+                .unwrap_or_else(|_| reqwest::Client::new()),
         }
     }
 
