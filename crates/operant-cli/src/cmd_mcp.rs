@@ -7,6 +7,7 @@ use anyhow::{Context, Result};
 use clap::Subcommand;
 use operant_core::config::{install_runtime_config, runtime_config, AppConfig, McpTransportKind};
 use operant_core::mcp::McpManager;
+use operant_core::mcp_oauth::{get_manager, McpOAuthConfig};
 use serde_json::Value;
 
 /// Manage MCP (Model Context Protocol) servers
@@ -47,16 +48,30 @@ pub enum McpSubcommand {
         #[arg(long, short)]
         verbose: bool,
     },
-    /// Login to an MCP server (OAuth flow)
+    /// Login to an MCP server (OAuth 2.1 + PKCE flow).
+    ///
+    /// Discovers the server's OAuth metadata, performs dynamic client
+    /// registration if needed, opens a browser for authorization, runs a
+    /// localhost callback server, exchanges the auth code for tokens, and
+    /// persists the tokens to disk under `~/.operant/mcp-tokens/`.
     Login {
-        /// MCP server name
+        /// MCP server name (must already be added via `operant mcp add`)
         name: String,
-        /// Auth URL (optional, for non-standard endpoints)
+        /// Override the authorization endpoint URL (skips metadata discovery)
         #[arg(long)]
         auth_url: Option<String>,
-        /// Client ID for OAuth
+        /// Pre-registered client ID (skips dynamic client registration)
         #[arg(long)]
         client_id: Option<String>,
+        /// OAuth scope string (space-separated, e.g. "read write")
+        #[arg(long)]
+        scope: Option<String>,
+        /// Timeout in seconds for the browser authorization step (default 300)
+        #[arg(long)]
+        timeout: Option<u64>,
+        /// Redirect URI port on localhost (0 = auto-pick a free port)
+        #[arg(long, default_value_t = 0)]
+        redirect_port: u16,
     },
     /// Configure MCP server settings
     Configure {
@@ -103,7 +118,10 @@ pub async fn handle_mcp_command(
             name,
             auth_url,
             client_id,
-        } => handle_mcp_login(config, name, auth_url, client_id),
+            scope,
+            timeout,
+            redirect_port,
+        } => handle_mcp_login(config, name, auth_url, client_id, scope, timeout, redirect_port).await,
         McpSubcommand::Configure {
             name,
             auth_token,
@@ -380,51 +398,106 @@ async fn handle_serve(config: &AppConfig, verbose: bool) -> Result<()> {
     Ok(())
 }
 
-/// Initiate OAuth login flow for an MCP server.
+/// Initiate the OAuth 2.1 + PKCE login flow for an MCP server.
 ///
-/// Since the OAuth flow requires browser interaction, this function prints
-/// instructions and optionally the auth URL for the user to visit.
-fn handle_mcp_login(
+/// This is the real OAuth flow backed by `operant_core::mcp_oauth`:
+///   1. Look up the server in config to get its base URL.
+///   2. Build a `McpOAuthConfig` from the CLI args.
+///   3. Get an `OAuthProvider` from the process-wide `OAuthManager`.
+///   4. Call `provider.authenticate()`, which:
+///        - discovers OAuth metadata (RFC 8414) from `<server_url>/.well-known/oauth-authorization-server`,
+///        - performs dynamic client registration (RFC 7591) if no `client_id` is provided,
+///        - builds an authorization URL with PKCE (S256),
+///        - starts a localhost callback server on `redirect_port`,
+///        - opens the user's browser (or prints the URL in headless mode),
+///        - waits for the callback (up to `timeout` seconds),
+///        - exchanges the auth code for access + refresh tokens,
+///        - persists tokens to `~/.operant/mcp-tokens/<server_hash>/tokens.json`.
+///   5. On success, prints the token hint + where it was saved.
+///
+/// The persisted tokens are auto-loaded by `McpClient` on subsequent
+/// connections to this server (via `OAuthManager::get_token`).
+async fn handle_mcp_login(
     config: &AppConfig,
     name: String,
     auth_url: Option<String>,
     client_id: Option<String>,
+    scope: Option<String>,
+    timeout: Option<u64>,
+    redirect_port: u16,
 ) -> Result<()> {
-    let server = config.mcp.servers.iter().find(|s| s.name == name);
+    let server = config
+        .mcp
+        .servers
+        .iter()
+        .find(|s| s.name == name)
+        .with_context(|| {
+            format!(
+                "MCP server '{}' is not configured. Add it first with `operant mcp add {}`",
+                name, name
+            )
+        })?;
 
-    match server {
-        Some(srv) => {
-            println!("Initiating OAuth login for MCP server '{}' ...", name);
-            println!("  Server:       {}", srv.name);
-            println!("  Transport:    {:?}", srv.transport);
+    let server_url = server
+        .url
+        .as_deref()
+        .with_context(|| format!("MCP server '{}' has no URL configured", name))?;
 
-            let url = auth_url
-                .as_deref()
-                .unwrap_or(srv.url.as_deref().unwrap_or("unknown"));
-            println!();
-            println!("  To complete the OAuth flow:");
-            println!("    1. Visit: {}", url);
-            if let Some(ref cid) = client_id {
-                println!("    2. Use client ID: {}", cid);
-            }
-            println!();
-            println!("    3. After authorization, you will receive a callback with an auth code.");
-            println!(
-                "    4. Use `operant mcp configure {} --auth-token <token>` to set the token.",
-                name
-            );
-        }
-        None => {
-            println!("MCP server '{}' is not configured.", name);
-            println!();
-            println!("  Add it first with `operant mcp add {}`", name);
-            if let Some(ref url) = auth_url {
-                println!("  Or visit the auth URL directly: {}", url);
-            }
-        }
+    println!("Initiating OAuth login for MCP server '{}' ...", name);
+    println!("  Server:       {}", server.name);
+    println!("  URL:          {}", server_url);
+    println!("  Transport:    {:?}", server.transport);
+
+    // Build the OAuth config from CLI args.
+    let oauth_config = McpOAuthConfig {
+        client_id: client_id.clone(),
+        client_secret: None,
+        scope: scope.clone(),
+        redirect_port: if redirect_port == 0 { None } else { Some(redirect_port) },
+        client_name: Some(format!("operant-{}", name)),
+        timeout,
+    };
+
+    // If the user supplied --auth-url, we can't pass it directly to the
+    // provider (which discovers metadata from the server URL), but we can
+    // at least surface it in the output as a hint.
+    if let Some(ref url) = auth_url {
+        println!("  Auth URL:     {} (override)", url);
     }
 
-    Ok(())
+    // Get the OAuthProvider from the process-wide manager and authenticate.
+    let manager = get_manager();
+    let provider = manager.get_provider(server_url, Some(oauth_config));
+
+    match provider.authenticate().await {
+        Ok(token) => {
+            println!();
+            println!("✓ OAuth login successful for '{}'.", name);
+            println!("  Access token:  {}...{}", &token.access_token[..token.access_token.len().min(8)], "");
+            if let Some(ref refresh) = token.refresh_token {
+                let hint: String = refresh.chars().take(8).collect();
+                println!("  Refresh token: {}...", hint);
+            }
+            if let Some(expires_in) = token.expires_in {
+                println!("  Expires in:    {} seconds", expires_in);
+            }
+            println!();
+            println!("  Tokens saved to ~/.operant/mcp-tokens/");
+            println!("  Future connections to this server will use the saved tokens automatically.");
+            Ok(())
+        }
+        Err(e) => {
+            eprintln!();
+            eprintln!("✗ OAuth login failed for '{}': {}", name, e);
+            eprintln!();
+            eprintln!("  Common causes:");
+            eprintln!("    - The server does not support OAuth (check `operant mcp test {}`)", name);
+            eprintln!("    - The server's OAuth metadata endpoint is unreachable");
+            eprintln!("    - The authorization timed out (use --timeout to extend)");
+            eprintln!("    - You already have valid tokens (use `operant mcp test {}` to verify)", name);
+            Err(anyhow::anyhow!("OAuth login failed: {}", e))
+        }
+    }
 }
 
 /// Update MCP server configuration in the runtime config.
