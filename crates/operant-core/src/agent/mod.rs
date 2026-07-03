@@ -1380,7 +1380,7 @@ fn extract_tool_calls_from_choice(
         .collect()
 }
 
-fn merge_stream_tool_call(tool_calls: &mut Vec<ToolCall>, tool_call: ToolCall) {
+pub(crate) fn merge_stream_tool_call(tool_calls: &mut Vec<ToolCall>, tool_call: ToolCall) {
     if let Some(existing) = tool_calls
         .iter_mut()
         .find(|existing| existing.id == tool_call.id)
