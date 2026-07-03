@@ -956,7 +956,10 @@ pub fn load_app_config(explicit: Option<&Path>) -> Result<LoadedConfig> {
 }
 
 pub fn default_config_paths() -> Vec<PathBuf> {
-    let mut paths = vec![PathBuf::from("operant.toml"), PathBuf::from(".operant.toml")];
+    let mut paths = vec![
+        PathBuf::from("operant.toml"),
+        PathBuf::from(".operant.toml"),
+    ];
 
     if let Some(config_dir) = dirs::config_dir() {
         paths.push(config_dir.join("operant").join("config.toml"));

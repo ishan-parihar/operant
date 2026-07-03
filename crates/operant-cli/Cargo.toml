@@ -14,7 +14,7 @@ path = "src/main.rs"
 
 [dependencies]
 # Core library
-operant-core = { path = "../operant-core" }
+operant-core = { path = "../operant-core", features = ["anthropic"] }
 
 # Async runtime
 tokio = { workspace = true, features = ["full"] }

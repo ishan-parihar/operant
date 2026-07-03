@@ -1723,8 +1723,11 @@ mod tests {
 
     fn test_db() -> Database {
         let counter = DB_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let path =
-            std::env::temp_dir().join(format!("operant_test_{}_{}.db", std::process::id(), counter));
+        let path = std::env::temp_dir().join(format!(
+            "operant_test_{}_{}.db",
+            std::process::id(),
+            counter
+        ));
         let _ = std::fs::remove_file(&path);
         let db = Database::init(path).expect("Failed to create test database");
         let id = "test-session";

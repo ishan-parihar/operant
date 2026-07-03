@@ -199,7 +199,9 @@ async fn cmd_migrate(
         "Migration complete. Skills are available in: {}/openclaw-imported",
         target_skills.display()
     );
-    println!("You can run `operant claw cleanup` to remove the OpenClaw directory after verifying.");
+    println!(
+        "You can run `operant claw cleanup` to remove the OpenClaw directory after verifying."
+    );
 
     Ok(())
 }

@@ -1,4 +1,4 @@
-use crate::tui::adapter_types::import_config::{ImportPreview, ImportSelection, PreviewAction};
+use crate::tui::adapter_types::import_config::{ImportPreview, ImportSelection};
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -6,8 +6,8 @@ use ratatui::widgets::{Paragraph, Wrap};
 use ratatui::Frame;
 
 use crate::tui::overlays::{
-    begin_modal_frame, modal_header_line_area, render_modal_title_frame, CLAURST_ACCENT,
-    CLAURST_MUTED, CLAURST_PANEL_BG, CLAURST_TEXT,
+    begin_modal_frame, modal_header_line_area, render_modal_title_frame, OPERANT_ACCENT,
+    OPERANT_MUTED, OPERANT_PANEL_BG, OPERANT_TEXT,
 };
 
 #[derive(Debug, Clone, Default)]
@@ -24,7 +24,7 @@ impl ImportConfigDialogState {
 
     pub fn open(&mut self, preview: ImportPreview) {
         self.visible = true;
-        self.selection = Some(preview.selection);
+        self.selection = Some(ImportSelection::Both);
         self.preview = Some(preview);
     }
 
@@ -54,74 +54,57 @@ pub fn render_import_config_dialog(
         frame.render_widget(
             Paragraph::new(Line::from(vec![Span::styled(
                 " Preview the content to import from ~/.claude; Enter to confirm, Esc to cancel.",
-                Style::default().fg(CLAURST_MUTED),
+                Style::default().fg(OPERANT_MUTED),
             )])),
             subtitle_area,
         );
     }
 
     let mut lines: Vec<Line<'static>> = vec![];
-    if let Some(doc) = &preview.claude_md {
+    if preview.claude_md {
         lines.push(section_title("CLAUDE.md"));
-        lines.push(path_row("Source", &doc.plan.source_path.display().to_string()));
-        lines.push(path_row("Target", &doc.plan.target_path.display().to_string()));
-        lines.push(meta_row(&format!(
-            "{} lines, {} chars, {}",
-            doc.line_count,
-            doc.char_count,
-            if doc.plan.target_exists { "will overwrite the target file" } else { "will create the target file" }
-        )));
-        for line in doc.excerpt.lines() {
-            lines.push(Line::from(vec![Span::styled(
-                format!("  {}", line),
-                Style::default().fg(CLAURST_TEXT),
-            )]));
-        }
+        lines.push(Line::from(vec![Span::styled(
+            "  Will import CLAUDE.md from ~/.claude",
+            Style::default().fg(OPERANT_TEXT),
+        )]));
         lines.push(Line::from(""));
     }
 
-    if let Some(settings) = &preview.settings {
+    if preview.settings {
         lines.push(section_title("settings.json"));
-        lines.push(path_row("Source", &settings.plan.source_path.display().to_string()));
-        lines.push(path_row("Target", &settings.plan.target_path.display().to_string()));
-        lines.push(meta_row(&format!(
-            "Import {}, replace {}, keep {}, skip {} fields",
-            settings.imported_count,
-            settings.replaced_count,
-            settings.kept_count,
-            settings.skipped_count
-        )));
-        for field in &settings.fields {
-            let action_style = match field.action {
-                PreviewAction::Import => Style::default().fg(CLAURST_ACCENT).add_modifier(Modifier::BOLD),
-                PreviewAction::Replace => Style::default().fg(CLAURST_ACCENT).add_modifier(Modifier::BOLD),
-                PreviewAction::Keep => Style::default().fg(CLAURST_MUTED),
-                PreviewAction::Skip => Style::default().fg(CLAURST_MUTED),
-            };
-            let mut spans = vec![
-                Span::styled(format!("  [{}] ", field.action.label()), action_style),
-                Span::styled(field.name.clone(), Style::default().fg(CLAURST_TEXT)),
-            ];
-            if let Some(reason) = &field.reason {
-                spans.push(Span::styled(
-                    format!(" — {}", reason),
-                    Style::default().fg(CLAURST_MUTED),
-                ));
-            }
-            lines.push(Line::from(spans));
-        }
+        lines.push(Line::from(vec![Span::styled(
+            "  Will import settings from ~/.claude/settings.json",
+            Style::default().fg(OPERANT_TEXT),
+        )]));
+        lines.push(Line::from(""));
+    }
+
+    if preview.auth {
+        lines.push(section_title("Auth credentials"));
+        lines.push(Line::from(vec![Span::styled(
+            "  Will import API keys from ~/.claude/.credentials",
+            Style::default().fg(OPERANT_TEXT),
+        )]));
+        lines.push(Line::from(""));
+    }
+
+    if lines.is_empty() {
+        lines.push(Line::from(vec![Span::styled(
+            "  Nothing to import.",
+            Style::default().fg(OPERANT_MUTED),
+        )]));
     }
 
     frame.render_widget(
         Paragraph::new(lines)
             .wrap(Wrap { trim: false })
-            .style(Style::default().bg(CLAURST_PANEL_BG)),
+            .style(Style::default().bg(OPERANT_PANEL_BG)),
         layout.body_area,
     );
     frame.render_widget(
         Paragraph::new(Line::from(vec![Span::styled(
             " Enter to import  ·  Esc to cancel",
-            Style::default().fg(CLAURST_MUTED).add_modifier(Modifier::ITALIC),
+            Style::default().fg(OPERANT_MUTED).add_modifier(Modifier::ITALIC),
         )])),
         layout.footer_area,
     );
@@ -130,20 +113,6 @@ pub fn render_import_config_dialog(
 fn section_title(title: &str) -> Line<'static> {
     Line::from(vec![
         Span::styled(" ", Style::default()),
-        Span::styled(title.to_string(), Style::default().fg(CLAURST_ACCENT).add_modifier(Modifier::BOLD)),
+        Span::styled(title.to_string(), Style::default().fg(OPERANT_ACCENT).add_modifier(Modifier::BOLD)),
     ])
-}
-
-fn path_row(label: &str, value: &str) -> Line<'static> {
-    Line::from(vec![
-        Span::styled(format!("  {}: ", label), Style::default().fg(CLAURST_MUTED)),
-        Span::styled(value.to_string(), Style::default().fg(CLAURST_TEXT)),
-    ])
-}
-
-fn meta_row(text: &str) -> Line<'static> {
-    Line::from(vec![Span::styled(
-        format!("  {}", text),
-        Style::default().fg(CLAURST_MUTED),
-    )])
 }

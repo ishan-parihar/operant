@@ -397,7 +397,7 @@ fn write_text_linux_selection(text: &str, primary: bool) -> bool {
 fn make_temp_png() -> Option<PathBuf> {
     let tmp_dir = std::env::temp_dir();
     let name = format!(
-        "claude-paste-{}.png",
+        "operant-paste-{}.png",
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos())
@@ -452,9 +452,8 @@ mod tests {
 
     #[test]
     fn make_temp_png_produces_unique_names() {
-        // Just check it returns a path under tmp with a .png suffix
         let p = make_temp_png().unwrap();
-        assert!(p.to_string_lossy().contains("claude-paste-"));
+        assert!(p.to_string_lossy().contains("operant-paste-"));
         assert!(p.to_string_lossy().ends_with(".png"));
     }
 

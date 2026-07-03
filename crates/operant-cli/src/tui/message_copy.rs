@@ -44,13 +44,14 @@ pub fn copy_as_markdown(message: &Message) -> String {
                         content,
                         is_error,
                     } => {
-                        let error_marker = if is_error.unwrap_or(false) {
+                        let error_marker = if *is_error {
                             "ERROR: "
                         } else {
                             ""
                         };
                         let result_text = match content {
                             crate::tui::adapter_types::ToolResultContent::Text(text) => text.clone(),
+                            crate::tui::adapter_types::ToolResultContent::Image { data: _, media_type } => format!("[image: {}]", media_type),
                             crate::tui::adapter_types::ToolResultContent::Blocks(blocks) => {
                                 blocks
                                     .iter()
@@ -97,13 +98,14 @@ pub fn copy_as_plaintext(message: &Message) -> String {
                         ))
                     }
                     crate::tui::adapter_types::ContentBlock::ToolResult { content, is_error, .. } => {
-                        let error_marker = if is_error.unwrap_or(false) {
+                        let error_marker = if *is_error {
                             "[ERROR] "
                         } else {
                             ""
                         };
                         let result_text = match content {
                             crate::tui::adapter_types::ToolResultContent::Text(text) => text.clone(),
+                            crate::tui::adapter_types::ToolResultContent::Image { data: _, media_type } => format!("[image: {}]", media_type),
                             crate::tui::adapter_types::ToolResultContent::Blocks(blocks) => {
                                 blocks
                                     .iter()
@@ -127,6 +129,7 @@ pub fn copy_as_plaintext(message: &Message) -> String {
     let role_str = match message.role {
         crate::tui::adapter_types::Role::User => "User",
         crate::tui::adapter_types::Role::Assistant => "Assistant",
+        crate::tui::adapter_types::Role::System => "System",
     };
     format!("{}:\n\n{}", role_str, content)
 }
@@ -160,6 +163,7 @@ pub fn copy_as_json(message: &Message) -> String {
     let role_str = match message.role {
         crate::tui::adapter_types::Role::User => "user",
         crate::tui::adapter_types::Role::Assistant => "assistant",
+        crate::tui::adapter_types::Role::System => "system",
     };
 
     let json_value = json!({
@@ -170,14 +174,6 @@ pub fn copy_as_json(message: &Message) -> String {
                 blocks.iter().map(|b| format_block_for_json(b)).collect::<Vec<_>>().join("\n")
             }
         },
-        "uuid": message.uuid,
-        "cost": message.cost.as_ref().map(|c| json!({
-            "input_tokens": c.input_tokens,
-            "output_tokens": c.output_tokens,
-            "cache_creation_input_tokens": c.cache_creation_input_tokens,
-            "cache_read_input_tokens": c.cache_read_input_tokens,
-            "cost_usd": c.cost_usd,
-        }))
     });
 
     serde_json::to_string_pretty(&json_value).unwrap_or_else(|_| "{}".to_string())
@@ -197,6 +193,7 @@ fn format_markdown_message(role: &crate::tui::adapter_types::Role, content: &str
     let role_str = match role {
         crate::tui::adapter_types::Role::User => "**User**",
         crate::tui::adapter_types::Role::Assistant => "**Assistant**",
+        crate::tui::adapter_types::Role::System => "**System**",
     };
     format!("{}\n\n{}", role_str, content)
 }
@@ -343,13 +340,14 @@ fn format_block_for_json(block: &crate::tui::adapter_types::ContentBlock) -> Str
             content,
             is_error,
         } => {
-            let error_marker = if is_error.unwrap_or(false) {
+            let error_marker = if *is_error {
                 "[ERROR] "
             } else {
                 ""
             };
             let result_text = match content {
                 crate::tui::adapter_types::ToolResultContent::Text(text) => text.clone(),
+                crate::tui::adapter_types::ToolResultContent::Image { data: _, media_type } => format!("[image: {}]", media_type),
                 crate::tui::adapter_types::ToolResultContent::Blocks(blocks) => {
                     blocks
                         .iter()

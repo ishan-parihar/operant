@@ -3585,7 +3585,10 @@ mod tests {
         new.operant.name = Some("custom-name".to_string());
 
         let changes = config_diff(&old, &new);
-        let name_changes: Vec<_> = changes.iter().filter(|c| c.path == "operant.name").collect();
+        let name_changes: Vec<_> = changes
+            .iter()
+            .filter(|c| c.path == "operant.name")
+            .collect();
         assert!(!name_changes.is_empty());
     }
 

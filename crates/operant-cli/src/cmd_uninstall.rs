@@ -43,7 +43,10 @@ async fn cmd_remove(_config: &AppConfig, full: bool, yes: bool) -> Result<()> {
         return Ok(());
     }
 
-    remove_dir(&operant_core::platform::operant_data_dir(), "data directory")?;
+    remove_dir(
+        &operant_core::platform::operant_data_dir(),
+        "data directory",
+    )?;
     if full {
         remove_dir(
             &operant_core::platform::operant_config_dir(),

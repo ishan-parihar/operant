@@ -85,7 +85,9 @@ async fn handle_list(config: &AppConfig, _platform: Option<String>) -> Result<()
     }
 
     println!();
-    println!("Use `operant tools enable <name>` or `operant tools disable <name>` to manage tools.");
+    println!(
+        "Use `operant tools enable <name>` or `operant tools disable <name>` to manage tools."
+    );
 
     Ok(())
 }

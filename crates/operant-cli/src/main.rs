@@ -55,6 +55,25 @@ mod prompt_helpers;
 pub mod provider;
 mod tui;
 
+pub(crate) use tui::agents_view;
+pub(crate) use tui::app;
+pub(crate) use tui::bridge_state;
+pub(crate) use tui::dialogs;
+pub(crate) use tui::effort_picker;
+pub(crate) use tui::figures;
+pub(crate) use tui::free_mode_dialog;
+pub(crate) use tui::image_paste;
+pub(crate) use tui::input;
+pub(crate) use tui::mcp_view;
+pub(crate) use tui::message_copy;
+pub(crate) use tui::messages;
+pub(crate) use tui::notifications;
+pub(crate) use tui::osc8;
+pub(crate) use tui::overlays;
+pub(crate) use tui::prompt_input;
+pub(crate) use tui::settings_screen;
+pub(crate) use tui::theme_screen;
+
 use std::fs::OpenOptions;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -65,6 +84,7 @@ use crate::config::CliConfig;
 use anyhow::{Context, Result};
 use clap::{ArgAction, Parser, Subcommand};
 use operant_core::agent::clients::openai::OpenAIModelClient;
+use operant_core::agent::clients::anthropic::AnthropicModelClient;
 use operant_core::agent::{AgentConfig, AgentEvent, OperantAgent};
 use operant_core::client::{ClientConfig, OpenAIClient};
 use operant_core::config::{
@@ -139,6 +159,9 @@ struct Cli {
 
     #[arg(long = "no-stream", global = true, action = ArgAction::SetTrue, conflicts_with = "stream")]
     no_stream: bool,
+
+    #[arg(long, global = true)]
+    debug_tui: bool,
 
     #[command(subcommand)]
     command: Option<Commands>,
@@ -494,6 +517,26 @@ fn apply_cli_overrides(cli: &Cli, config: &mut AppConfig) {
     }
 }
 
+/// Create the appropriate ModelClient based on the provider.
+fn create_model_client(
+    provider: &str,
+    config: &AppConfig,
+) -> Box<dyn operant_core::agent::ModelClient> {
+    match provider {
+        "anthropic" => {
+            let api_key = std::env::var("ANTHROPIC_API_KEY")
+                .unwrap_or_else(|_| {
+                    config.client.api_key.clone().unwrap_or_default()
+                });
+            Box::new(AnthropicModelClient::new(api_key))
+        }
+        _ => {
+            // Default to OpenAI-compatible client for openai, deepseek, and others
+            Box::new(OpenAIModelClient::new(OpenAIClient::new(client_config(config))))
+        }
+    }
+}
+
 fn client_config(config: &AppConfig) -> ClientConfig {
     ClientConfig::from(&config.client)
 }
@@ -669,9 +712,13 @@ pub(crate) async fn create_runtime_agent(
     )
     .await?;
 
+    let provider = crate::tui::provider::infer_provider_from_model(&behavior.model)
+        .unwrap_or_else(|| "openai".to_string());
+    let model_client = create_model_client(&provider, config);
+
     Ok(OperantAgent::with_events(
         core.agent_config,
-        Box::new(OpenAIModelClient::new(core.raw_client)),
+        model_client,
         core.registry,
         core.database,
         event_tx,
@@ -697,9 +744,13 @@ pub(crate) async fn create_agent_without_events(
     )
     .await?;
 
+    let provider = crate::tui::provider::infer_provider_from_model(&config.agent.model)
+        .unwrap_or_else(|| "openai".to_string());
+    let model_client = create_model_client(&provider, config);
+
     Ok(OperantAgent::new(
         core.agent_config,
-        Box::new(OpenAIModelClient::new(core.raw_client)),
+        model_client,
         core.registry,
         core.database,
     )
@@ -1199,6 +1250,10 @@ async fn main() -> Result<()> {
         &loaded.config.logging,
         loaded.config.tui.rich_output,
     );
+
+    if cli.debug_tui {
+        tracing::debug!(target: "tui_wiring", "--debug-tui flag enabled");
+    }
 
     match &cli.command {
         Some(Commands::Run {

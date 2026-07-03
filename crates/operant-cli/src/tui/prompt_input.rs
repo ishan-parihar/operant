@@ -18,7 +18,7 @@ use ratatui::{
 };
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-const CLAUDE_ORANGE: Color = Color::Rgb(233, 30, 99);
+const ACCENT_PRIMARY: Color = Color::Rgb(255, 191, 0);
 const PROMPT_POINTER: &str = "\u{276f}";
 
 // ---------------------------------------------------------------------------
@@ -2870,7 +2870,7 @@ pub fn wrap_line(line: &str, width: usize) -> Vec<String> {
     out
 }
 
-/// Render the prompt input widget in the same low-chrome style as Claurst:
+/// Render the prompt input widget in the same low-chrome style as Operant:
 /// multi-line input rows (one per logical line in the text) plus an accent
 /// underline. Suggestions are rendered by the footer, not as a boxed dropdown
 /// here.
@@ -2914,7 +2914,7 @@ pub fn render_prompt_input(
     }
 
     let accent = match mode {
-        InputMode::Readonly => CLAUDE_ORANGE,   // locked while streaming — always pink
+        InputMode::Readonly => ACCENT_PRIMARY,   // locked while streaming — always pink
         _ => accent_override,                   // use mode-aware accent color
     };
     let prompt_prefix = format!("{PROMPT_POINTER} ");

@@ -7,8 +7,8 @@
 use crate::tui::adapter_types::config::{Config, Settings};
 use crate::tui::adapter_types::output_styles::{builtin_styles, find_style};
 use crate::tui::overlays::{
-    centered_rect, modal_search_line, render_dark_overlay, render_dialog_bg, CLAURST_ACCENT,
-    CLAURST_MUTED, CLAURST_PANEL_BG,
+    centered_rect, modal_search_line, render_dark_overlay, render_dialog_bg, OPERANT_ACCENT,
+    OPERANT_MUTED, OPERANT_PANEL_BG,
 };
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -205,8 +205,8 @@ impl SettingsScreen {
         for (field, value) in &self.pending_changes {
             match field.as_str() {
                 "max_tokens" => {
-                    if let Ok(n) = value.parse::<u32>() {
-                        config.max_tokens = Some(n);
+                    if let Ok(n) = value.parse::<usize>() {
+                        config.max_tokens = n;
                     }
                 }
                 "output_style" => {
@@ -217,7 +217,7 @@ impl SettingsScreen {
                     };
                 }
                 "compact_threshold" => {
-                    if let Ok(n) = value.parse::<f32>() {
+                    if let Ok(n) = value.parse::<f64>() {
                         config.compact_threshold = n;
                         self.compact_threshold = value.clone();
                     }
@@ -237,7 +237,23 @@ impl SettingsScreen {
                 _ => {}
             }
         }
-        self.settings_snapshot.config = config.clone();
+        self.settings_snapshot.config = crate::tui::adapter_types::config::InnerConfig {
+            verbose: false,
+            cursor_blink_enabled: false,
+            auto_commits: None,
+            disable_claude_mds: false,
+            file_injection_enabled: false,
+            file_autocomplete_limit: config.file_autocomplete_limit,
+            file_autocomplete_show_hidden_files: config.file_autocomplete_show_hidden_files,
+            file_injection_max_size: config.file_injection_max_size,
+            output_style: config.output_style.clone(),
+            output_format: crate::tui::adapter_types::config::OutputFormat::default(),
+            compact_threshold: config.compact_threshold,
+            theme: config.theme.clone(),
+            provider: config.provider.clone(),
+            model: config.model.clone(),
+            max_tokens: config.max_tokens,
+        };
         let _ = self.settings_snapshot.save_sync();
         self.pending_changes.clear();
     }
@@ -260,9 +276,7 @@ fn all_entries(screen: &SettingsScreen) -> Vec<SettingsEntry> {
             label: "Max Tokens",
             description: "Maximum tokens per response.",
             kind: SettingKind::Number,
-            value: screen.settings_snapshot.config.max_tokens
-                .map(|n| n.to_string())
-                .unwrap_or_else(|| crate::tui::adapter_types::constants::DEFAULT_MAX_TOKENS.to_string()),
+            value: screen.settings_snapshot.config.max_tokens.to_string(),
         },
         SettingsEntry {
             key: "auto_compact",
@@ -460,18 +474,18 @@ pub fn render_settings_screen(frame: &mut Frame, screen: &SettingsScreen, area: 
 
     // Header
     let title = Line::from(vec![
-        Span::styled(" Settings", Style::default().fg(CLAURST_ACCENT).add_modifier(Modifier::BOLD)),
-        Span::styled(" — Claurst", Style::default().fg(CLAURST_MUTED)),
+        Span::styled(" Settings", Style::default().fg(OPERANT_ACCENT).add_modifier(Modifier::BOLD)),
+        Span::styled(" — Operant", Style::default().fg(OPERANT_MUTED)),
         Span::styled(
             format!("{:>width$}", "Esc close", width = inner.width.saturating_sub(19) as usize),
-            Style::default().fg(CLAURST_MUTED),
+            Style::default().fg(OPERANT_MUTED),
         ),
     ]);
-    frame.render_widget(Paragraph::new(title).style(Style::default().bg(CLAURST_PANEL_BG)), header_area);
+    frame.render_widget(Paragraph::new(title).style(Style::default().bg(OPERANT_PANEL_BG)), header_area);
 
     // Search
-    let search_line = modal_search_line(&screen.search_query, "Type to search settings...", Color::DarkGray, CLAURST_ACCENT);
-    frame.render_widget(Paragraph::new(search_line).style(Style::default().bg(CLAURST_PANEL_BG)), search_area);
+    let search_line = modal_search_line(&screen.search_query, "Type to search settings...", Color::DarkGray, OPERANT_ACCENT);
+    frame.render_widget(Paragraph::new(search_line).style(Style::default().bg(OPERANT_PANEL_BG)), search_area);
 
     // Content
     render_settings_list(frame, screen, content_area);
@@ -514,23 +528,23 @@ pub fn render_settings_screen(frame: &mut Frame, screen: &SettingsScreen, area: 
     // Footer
     let footer = if screen.edit_field.is_some() {
         Line::from(vec![
-            Span::styled(" Enter ", Style::default().fg(CLAURST_ACCENT).add_modifier(Modifier::BOLD)),
+            Span::styled(" Enter ", Style::default().fg(OPERANT_ACCENT).add_modifier(Modifier::BOLD)),
             Span::raw("save  "),
             Span::styled(" Esc ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
             Span::raw("cancel"),
         ])
     } else {
         Line::from(vec![
-            Span::styled(" ↑↓ ", Style::default().fg(CLAURST_ACCENT).add_modifier(Modifier::BOLD)),
+            Span::styled(" ↑↓ ", Style::default().fg(OPERANT_ACCENT).add_modifier(Modifier::BOLD)),
             Span::raw("navigate  "),
-            Span::styled(" Enter ", Style::default().fg(CLAURST_ACCENT).add_modifier(Modifier::BOLD)),
+            Span::styled(" Enter ", Style::default().fg(OPERANT_ACCENT).add_modifier(Modifier::BOLD)),
             Span::raw("toggle/edit  "),
             Span::styled(" Esc ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
             Span::raw("close"),
         ])
     };
     let footer_para = Paragraph::new(vec![footer])
-        .style(Style::default().fg(CLAURST_MUTED).bg(CLAURST_PANEL_BG))
+        .style(Style::default().fg(OPERANT_MUTED).bg(OPERANT_PANEL_BG))
         .alignment(Alignment::Center);
     frame.render_widget(footer_para, footer_area);
 }
@@ -570,7 +584,7 @@ fn render_settings_list(frame: &mut Frame, screen: &SettingsScreen, area: Rect) 
         let row_style = if is_selected {
             Style::default()
                 .fg(Color::Black)
-                .bg(CLAURST_ACCENT)
+                .bg(OPERANT_ACCENT)
                 .add_modifier(Modifier::BOLD)
         } else {
             Style::default()

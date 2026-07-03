@@ -42,7 +42,7 @@ use crate::tui::messages::{
 use crate::tui::notifications::{render_notification_banner, Notification, NotificationKind};
 use crate::tui::overlays::{
     render_global_search, render_help_overlay, render_history_search_overlay, render_rewind_flow,
-    CLAURST_ACCENT,
+    OPERANT_ACCENT,
 };
 use crate::tui::plugin_views::render_plugin_hints;
 use crate::tui::prompt_input::{InputMode, TypeaheadSource, VimMode, input_height, render_prompt_input};
@@ -70,7 +70,7 @@ const SPINNER: &[char] = &['\u{00b7}', '\u{2722}', '*', '\u{2736}', '\u{273b}', 
 #[cfg(not(target_os = "windows"))]
 const SPINNER: &[char] = &['\u{00b7}', '\u{2722}', '\u{2733}', '\u{2736}', '\u{273b}', '\u{273d}',
                             '\u{273d}', '\u{273b}', '\u{2736}', '\u{2733}', '\u{2722}', '\u{00b7}'];
-const CLAUDE_ORANGE: Color = Color::Rgb(233, 30, 99);
+const ACCENT_PRIMARY: Color = Color::Rgb(255, 191, 0);
 const WELCOME_BOX_HEIGHT: u16 = 9;
 const STATUS_THINKING: &str = "thinking";
 const STATUS_THINKING_ELLIPSIS: &str = "thinking\u{2026}";
@@ -260,7 +260,7 @@ fn startup_notice_lines(app: &App, width: u16) -> Vec<Line<'static>> {
         lines.push(Line::from(vec![
             Span::styled(
                 format!(" {} ", crate::figures::REFERENCE_MARK),
-                Style::default().fg(CLAUDE_ORANGE).add_modifier(Modifier::BOLD),
+                Style::default().fg(ACCENT_PRIMARY).add_modifier(Modifier::BOLD),
             ),
             Span::styled(
                 truncate_end(summary, max_width),
@@ -277,7 +277,7 @@ fn startup_notice_lines(app: &App, width: u16) -> Vec<Line<'static>> {
                 "Remote session active".to_string()
             };
             lines.push(Line::from(vec![
-                Span::styled(" remote ", Style::default().fg(CLAUDE_ORANGE)),
+                Span::styled(" remote ", Style::default().fg(ACCENT_PRIMARY)),
                 Span::styled(label, Style::default().fg(Color::DarkGray)),
             ]));
         }
@@ -304,7 +304,7 @@ fn startup_notice_lines(app: &App, width: u16) -> Vec<Line<'static>> {
 
     if let Some(url) = app.remote_session_url.as_deref() {
         lines.push(Line::from(vec![
-            Span::styled(" link ", Style::default().fg(CLAUDE_ORANGE)),
+            Span::styled(" link ", Style::default().fg(ACCENT_PRIMARY)),
             Span::styled(
                 truncate_end(url, max_width),
                 Style::default().fg(Color::DarkGray),
@@ -313,15 +313,7 @@ fn startup_notice_lines(app: &App, width: u16) -> Vec<Line<'static>> {
     }
 
     // Additional directories (from --add-dir)
-    for dir in &app.config.additional_dirs {
-        lines.push(Line::from(vec![
-            Span::styled(" +dir ", Style::default().fg(Color::Cyan)),
-            Span::styled(
-                truncate_end(&dir.display().to_string(), max_width),
-                Style::default().fg(Color::DarkGray),
-            ),
-        ]));
-    }
+    // ponytail: Config.additional_dirs not in stub; omitted until added
 
     lines
 }
@@ -902,7 +894,7 @@ fn render_context_menu(frame: &mut Frame, app: &App) {
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
             .style(Style::default().fg(Color::White).bg(Color::Rgb(24, 24, 30)))
-            .border_style(Style::default().fg(CLAURST_ACCENT));
+            .border_style(Style::default().fg(OPERANT_ACCENT));
         menu_block.render(menu_area, frame.buffer_mut());
 
         // Render menu items
@@ -928,7 +920,7 @@ fn render_context_menu(frame: &mut Frame, app: &App) {
             };
 
             let bg_color = if is_selected {
-                if *enabled { CLAURST_ACCENT } else { Color::Rgb(24, 24, 30) }
+                if *enabled { OPERANT_ACCENT } else { Color::Rgb(24, 24, 30) }
             } else {
                 Color::Rgb(24, 24, 30)
             };
@@ -1143,7 +1135,7 @@ fn render_messages(frame: &mut Frame, app: &App, area: Rect) {
             indicator,
             Style::default()
                 .fg(Color::Black)
-                .bg(CLAUDE_ORANGE)
+                .bg(ACCENT_PRIMARY)
                 .add_modifier(Modifier::BOLD),
         )]);
         frame.render_widget(Paragraph::new(vec![ind_line]), ind_area);
@@ -1461,7 +1453,7 @@ fn render_welcome_box(frame: &mut Frame, app: &App, area: Rect) {
     if area.height < box_height || box_width < 30 {
         // Too small: fall back to a single line
         let line = Line::from(vec![
-            Span::styled("Claurst ", Style::default().fg(CLAUDE_ORANGE).add_modifier(Modifier::BOLD)),
+            Span::styled("Operant ", Style::default().fg(ACCENT_PRIMARY).add_modifier(Modifier::BOLD)),
             Span::styled(format!("v{}", APP_VERSION), Style::default().fg(Color::DarkGray)),
         ]);
         frame.render_widget(Paragraph::new(vec![line]), area);
@@ -1469,14 +1461,14 @@ fn render_welcome_box(frame: &mut Frame, app: &App, area: Rect) {
     }
     let box_area = Rect { x: area.x, y: area.y, width: box_width, height: box_height };
 
-    // Outer border with title "Claurst vX.Y"
+    // Outer border with title "Operant vX.Y"
     let accent = app.accent_color;
     let outer_block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(accent))
         .title(Line::from(vec![
-            Span::styled(" Claurst ", Style::default().fg(accent).add_modifier(Modifier::BOLD)),
+            Span::styled(" Operant ", Style::default().fg(accent).add_modifier(Modifier::BOLD)),
             Span::styled(format!("v{} ", APP_VERSION), Style::default().fg(Color::DarkGray)),
         ]));
     frame.render_widget(outer_block, box_area);
@@ -1540,8 +1532,8 @@ fn render_welcome_box(frame: &mut Frame, app: &App, area: Rect) {
 
     // --- Right column ---
     let tip_text = crate::tui::adapter_types::tips::select_tip(0)
-        .map(|t| t.content.to_string())
-        .unwrap_or_else(|| "Edit AGENTS.md to add instructions for Claurst".to_string());
+        .map(|t| t)
+        .unwrap_or_else(|| "Edit AGENTS.md to add instructions for Operant".to_string());
 
     let mut right_lines: Vec<Line> = Vec::new();
     right_lines.push(Line::from(Span::styled(
@@ -1610,7 +1602,7 @@ fn render_system_annotation_lines(
     let (text_color, border_color) = match ann.style {
         SystemMessageStyle::Info => (Color::DarkGray, Color::DarkGray),
         SystemMessageStyle::Warning => (Color::Yellow, Color::Yellow),
-        SystemMessageStyle::Compact => unreachable!(),
+        SystemMessageStyle::Compact => (Color::DarkGray, Color::DarkGray),
     };
 
     // Centred, padded rule: "â”€â”€â”€ text â”€â”€â”€"
@@ -1676,7 +1668,7 @@ fn render_tool_block_lines(lines: &mut Vec<Line<'static>>, block: &crate::app::T
     let accent = if block.status == ToolStatus::Error {
         Color::Rgb(255, 140, 0)
     } else {
-        CLAUDE_ORANGE
+        ACCENT_PRIMARY
     };
     let mut header_spans = vec![Span::styled("   ~ ".to_string(), Style::default().fg(accent))];
     if running {
@@ -1816,13 +1808,10 @@ fn render_input(frame: &mut Frame, app: &App, area: Rect, focused: bool) {
         } else {
             Line::from(vec![
                 Span::styled(
-                    " /connect ",
-                    Style::default()
-                        .fg(Color::Black)
-                        .bg(pink)
-                        .add_modifier(Modifier::BOLD),
+                    " no provider",
+                    Style::default().fg(dim),
                 ),
-                Span::styled(" connect a provider", Style::default().fg(dim)),
+                Span::styled(" · type /model to choose", Style::default().fg(dim)),
             ])
         };
 
@@ -2290,7 +2279,7 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
             }
             parts.push(Span::styled(
                 format!("[{}]", badge),
-                Style::default().fg(CLAURST_ACCENT),
+                Style::default().fg(OPERANT_ACCENT),
             ));
         }
 
@@ -2428,17 +2417,17 @@ fn render_prompt_suggestions(frame: &mut Frame, app: &App, area: Rect) {
     for (row, suggestion) in suggestions[start..end].iter().enumerate() {
         let is_selected = start + row == selected;
         let accent_style = if is_selected {
-            Style::default().fg(CLAUDE_ORANGE).add_modifier(Modifier::BOLD)
+            Style::default().fg(ACCENT_PRIMARY).add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(Color::DarkGray)
         };
         let label_style = if is_selected {
-            Style::default().fg(CLAUDE_ORANGE).add_modifier(Modifier::BOLD)
+            Style::default().fg(ACCENT_PRIMARY).add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(Color::White)
         };
         let detail_style = if is_selected {
-            Style::default().fg(CLAUDE_ORANGE)
+            Style::default().fg(ACCENT_PRIMARY)
         } else {
             Style::default().fg(Color::DarkGray)
         };

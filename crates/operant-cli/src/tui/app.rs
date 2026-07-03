@@ -42,80 +42,94 @@ use std::io::Stdout;
 use std::sync::{Arc, Mutex};
 use tracing::debug;
 
+// ponytail: only commands that actually work in the TUI (intercepted or agent-handled)
 const PROMPT_SLASH_COMMANDS: &[(&str, &str)] = &[
-    ("advisor", "Set or unset the server-side advisor model"),
-    ("agent", "List available agents or show agent details"),
-    ("agents", "Browse agent definitions and active agents"),
+    // UI screens (intercepted)
+    ("agents", "Show active agents and running tasks"),
     ("changes", "Inspect changes from the current session"),
-    ("clear", "Clear the conversation transcript"),
-    ("compact", "Compact the conversation context"),
-    ("config", "Open settings"),
+    ("config", "Show current configuration"),
     ("connect", "Connect an AI provider"),
     ("context", "Show context window and rate limit usage"),
-    ("copy", "Copy the last assistant response to clipboard"),
     ("cost", "Show cost breakdown"),
     ("diff", "Inspect the current git diff"),
-    ("doctor", "Run diagnostics"),
-    ("effort", "Set effort level (low/medium/high/max)"),
-    ("exit", "Quit Claurst"),
+    ("effort", "Pick effort level"),
     ("export", "Export conversation"),
-    ("fast", "Toggle fast mode"),
-    ("feedback", "Open session feedback survey"),
-    ("fork", "Fork session into a new branch"),
-    ("goal", "Set or view the current session goal"),
-    ("heapdump", "Show process memory and diagnostic information"),
     ("help", "Show help"),
-    ("hooks", "Browse configured hooks (read-only)"),
-    ("import-config", "Import CLAUDE.md and settings.json from ~/.claude"),
-    ("init", "Initialize AGENTS.md for this project"),
-    ("insights", "Generate a session analysis report with conversation statistics"),
-    ("install-slack-app", "Install the Claurst Slack integration"),
-    ("keybindings", "Show keybinding configuration"),
-    ("links", "Open URLs from this session in your browser"),
-    ("login", "Log in to Claurst"),
-    ("logout", "Log out of Claurst"),
-    ("managed-agents", "Configure manager-executor managed agent system"),
+    ("hooks", "Configure hooks"),
+    ("import-config", "Import configuration"),
+    ("keybindings", "Edit keybindings"),
+    ("memory", "Browse and open memory files"),
     ("mcp", "Browse configured MCP servers"),
-    ("memory", "Browse and open AGENTS.md memory files"),
-    ("model", "Change the AI model"),
+    ("model", "Switch model for this session"),
     ("output-style", "Toggle output style (auto/stream/verbose)"),
-    ("plugin", "Manage plugins (list/info/enable/disable/reload)"),
-    ("providers", "List available AI providers and their status"),
-    ("caveman", "Caveman speech mode — save big token"),
-    ("rocky", "Rocky speech mode — amaze amaze amaze"),
-    ("normal", "Deactivate speech mode"),
-    ("quit", "Exit Claurst"),
-    ("refresh", "Clear saved provider auth and model caches"),
-    ("rename", "Rename this session"),
-    ("resume", "Resume a previous session"),
-    ("review", "Review changes (git diff)"),
+    ("plan", "Toggle plan mode"),
+    ("rename", "Set a title for the current session"),
+    ("resume", "Resume a previously-named session"),
     ("rewind", "Rewind to an earlier turn"),
-    ("session", "Browse and manage sessions"),
-    ("settings", "Open settings"),
-    ("share", "Upload the current session as a secret gist and get a shareable URL"),
+    ("review", "Review changes (git diff)"),
+    ("search", "Search conversation"),
     ("stats", "Open token and cost stats"),
-    ("survey", "Open session feedback survey"),
+    ("survey", "Give feedback"),
     ("theme", "Open the theme picker"),
-    ("ultrareview", "Run an exhaustive multi-dimensional code review"),
-    ("update", "Check for updates and upgrade to the latest version"),
-    ("upgrade", "Check for updates and upgrade to the latest version"),
     ("vim", "Toggle vim keybindings"),
-    ("voice", "Toggle voice input mode"),
+    ("voice", "Toggle voice mode"),
+    // TUI toggles (intercepted)
+    ("clear", "Clear screen and start a new session"),
+    ("copy", "Copy the last assistant response to clipboard"),
+    ("fast", "Toggle fast mode"),
+    ("exit", "Exit Operant"),
+    // Agent-handled (fall through)
+    ("compact", "Compress conversation context"),
+    ("doctor", "Run diagnostics"),
+    ("init", "Initialize AGENTS.md for this project"),
+    ("login", "Log in to Operant"),
+    ("logout", "Log out of Operant"),
+    // Agent-context commands (routed to backend)
+    ("refresh", "Refresh model list from providers"),
+    ("providers", "List available AI providers"),
+    ("status", "Show system status"),
+    ("version", "Show version"),
+    ("time", "Show current time"),
+    ("debug", "Toggle debug mode"),
+    ("new", "Start a new session"),
+    ("history", "Show conversation history"),
+    ("retry", "Retry last message"),
+    ("undo", "Undo last action"),
+    ("stop", "Stop current generation"),
+    ("compress", "Compress conversation context"),
+    ("rollback", "Rollback to previous state"),
+    ("title", "Set session title"),
+    ("branch", "Branch conversation"),
+    ("goal", "Set session goal"),
+    ("provider", "Switch provider"),
+    ("yolo", "Toggle auto-approve mode"),
+    ("personality", "Set agent personality"),
+    ("reasoning", "Toggle reasoning display"),
+    ("tools", "List available tools"),
+    ("skills", "Manage loaded skills"),
+    ("bundles", "Manage skill bundles"),
+    ("usage", "Show token usage"),
+    ("credits", "Show remaining credits"),
+    ("billing", "Show billing info"),
+    ("insights", "Show session insights"),
+    ("update", "Check for updates"),
+    ("whoami", "Show current user"),
+    ("sessions", "List all sessions"),
 ];
 
 fn help_command_category(name: &str) -> &'static str {
     match name {
-        "connect" | "model" | "providers" | "refresh" | "fast" | "effort" | "voice" => "Model & Provider",
-        "changes" | "diff" | "review" | "rewind" | "export" | "copy" | "share" | "links" => "Review & History",
-        "stats" | "cost" | "context" | "insights" | "heapdump" | "doctor" => "Diagnostics",
-        "config" | "settings" | "theme" | "keybindings" | "hooks" | "mcp" | "import-config" => {
-            "Workspace"
-        }
-        "agent" | "agents" | "memory" | "plugin" | "feedback" | "survey" => "Tools",
-        "session" | "resume" | "rename" | "fork" | "clear" | "compact" | "quit" | "exit" => {
-            "Session"
-        }
-        _ => "Commands",
+        "connect" | "model" | "fast" | "effort" | "voice" | "provider" => "Model & Provider",
+        "changes" | "diff" | "review" | "rewind" | "export" | "copy" | "history" | "retry" | "undo" | "rollback" | "stop" | "refresh" => "Review & History",
+        "stats" | "cost" | "context" | "doctor" | "status" | "version" | "time" | "debug" | "whoami" | "credits" | "billing" | "insights" | "usage" => "Diagnostics",
+        "config" | "theme" | "keybindings" | "hooks" | "mcp" | "import-config" | "output-style" => "Workspace",
+        "agents" | "memory" | "survey" | "tools" | "skills" | "bundles" => "Tools",
+        "search" | "new" | "sessions" | "branches" => "Sessions",
+        "plan" | "vim" | "yolo" => "Preferences",
+        "goal" | "title" | "branch" | "personality" | "reasoning" => "Session",
+        "compact" | "compress" => "Context",
+        "login" | "logout" | "update" => "Account",
+        _ => "Other",
     }
 }
 
@@ -364,48 +378,7 @@ pub enum ContextMenuItem {
     Fork,
 }
 
-/// State for the Go to Line dialog (Ctrl+G in message pane).
-#[derive(Debug, Clone)]
-pub struct GoToLineDialog {
-    /// Input field for line number.
-    pub input: String,
-    /// Whether the dialog is currently active.
-    pub active: bool,
-    /// Total number of lines (for validation feedback).
-    pub total_lines: usize,
-}
 
-impl GoToLineDialog {
-    pub fn new() -> Self {
-        Self {
-            input: String::new(),
-            active: false,
-            total_lines: 0,
-        }
-    }
-
-    pub fn open(&mut self, total_lines: usize) {
-        self.input.clear();
-        self.active = true;
-        self.total_lines = total_lines;
-    }
-
-    pub fn close(&mut self) {
-        self.active = false;
-        self.input.clear();
-    }
-
-    /// Parse the input as a line number (1-indexed).
-    /// Returns None if invalid or out of range.
-    pub fn parse_line_number(&self) -> Option<usize> {
-        let line_num: usize = self.input.trim().parse().ok()?;
-        if line_num >= 1 && line_num <= self.total_lines {
-            Some(line_num)
-        } else {
-            None
-        }
-    }
-}
 
 /// Status of an active or completed tool call.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -698,6 +671,8 @@ pub struct App {
     // Core state
     pub config: Config,
     pub cost_tracker: Arc<CostTracker>,
+    /// Command registry for dispatching slash commands to backend handlers.
+    pub command_registry: crate::commands::CommandRegistry,
     pub messages: Vec<Message>,
     /// Combined display list kept in sync with `messages`: real conversation turns
     /// plus injected system annotations. Used by the renderer so it can iterate
@@ -883,7 +858,7 @@ pub struct App {
     /// MCP server approval dialog.
     pub mcp_approval: McpApprovalDialogState,
     /// Go to Line dialog (Ctrl+G in message pane).
-    pub go_to_line_dialog: GoToLineDialog,
+
     /// Bypass-permissions startup confirmation dialog.
     /// Shown at startup when --dangerously-skip-permissions was passed.
     /// User must explicitly accept or the session exits.
@@ -943,8 +918,8 @@ pub struct App {
     pub import_config_dialog: ImportConfigDialogState,
     /// Ctrl+K command palette overlay.
     pub command_palette: DialogSelectState,
-    /// Whether Claurst was launched from the user's home directory.
-    /// Shown as a startup notice: "Note: You have launched Claurst in your home directory…"
+    /// Whether Operant was launched from the user's home directory.
+    /// Shown as a startup notice: "Note: You have launched Operant in your home directory…"
     pub home_dir_warning: bool,
     /// Output style: "auto" | "stream" | "verbose".
     pub output_style: String,
@@ -979,6 +954,11 @@ pub struct App {
     pub voice_recording: bool,
     /// Receiver for VoiceEvent messages produced by the recorder task.
     pub voice_event_rx: Option<tokio::sync::mpsc::Receiver<crate::tui::adapter_types::voice::VoiceEvent>>,
+    /// Receiver for QueryEvent messages from the agent bridge task.
+    pub query_event_rx: Option<tokio::sync::mpsc::Receiver<crate::tui::adapter_types::query::QueryEvent>>,
+    /// Receiver for tool permission requests from the agent. Auto-approves all requests.
+    pub permission_rx: Option<tokio::sync::mpsc::Receiver<operant_core::agent::ToolPermissionRequest>>,
+    pub run_complete_rx: Option<tokio::sync::oneshot::Receiver<operant_core::error::Result<()>>>,
     /// A single key event that was drained from the queue during paste-burst
     /// detection but wasn't part of the burst (e.g. a modifier key that stopped
     /// the burst). Replayed at the top of the next loop iteration.
@@ -1163,7 +1143,7 @@ Move immutable borrow out of scope first, then take mutable. Good good good afte
 }
 
 /// Accent color for build mode (default pink).
-pub const ACCENT_BUILD: Color = Color::Rgb(233, 30, 99);
+pub const ACCENT_BUILD: Color = Color::Rgb(255, 191, 0);
 /// Accent color for plan mode (blue).
 pub const ACCENT_PLAN: Color = Color::Rgb(66, 135, 245);
 /// Accent color for explore mode (amber).
@@ -1196,13 +1176,38 @@ fn format_turn_time_label() -> String {
 }
 
 impl App {
-    pub fn new(config: Config, cost_tracker: Arc<CostTracker>) -> Self {
-        let config = config;
-        let model_name = config.effective_model().to_string();
+    pub fn new(mut config: Config, cost_tracker: Arc<CostTracker>, command_registry: crate::commands::CommandRegistry) -> Self {
         let user_keybindings = UserKeybindings::load(&Settings::config_dir());
+        let auth_store = crate::tui::adapter_types::AuthStore::load();
+        let has_credentials = auth_store.has_any_key() || config.resolve_api_key().is_some();
+        let model_name = {
+            let raw = config.effective_model().to_string();
+            if raw.ends_with("/default") {
+                let provider = raw.strip_suffix("/default").unwrap_or(&raw);
+                let mut probe_reg = crate::tui::adapter_types::ModelRegistry::new();
+                let probe_cache = dirs::cache_dir()
+                    .unwrap_or_else(|| std::path::PathBuf::from("."))
+                    .join("operant")
+                    .join("models.json");
+                probe_reg.load_cache(&probe_cache);
+                let resolved = super::model_picker::default_model_for_provider(
+                    provider,
+                    &probe_reg,
+                );
+                if resolved != format!("{}/default", provider) {
+                    config.model = Some(resolved.clone());
+                    resolved
+                } else {
+                    raw
+                }
+            } else {
+                raw
+            }
+        };
         Self {
             config,
             cost_tracker,
+            command_registry,
             messages: Vec::new(),
             display_messages: Vec::new(),
             system_annotations: Vec::new(),
@@ -1225,7 +1230,7 @@ impl App {
             token_budget: Self::load_token_budget(),
             cost_usd: 0.0,
             model_name,
-            has_credentials: true, // overridden by caller when no key is configured
+            has_credentials,
             effort_level: EffortLevel::Normal,
             fast_mode: false,
             speech_mode: None,
@@ -1298,7 +1303,7 @@ impl App {
             export_dialog: ExportDialogState::new(),
             context_viz: ContextVizState::new(),
             mcp_approval: McpApprovalDialogState::new(),
-            go_to_line_dialog: GoToLineDialog::new(),
+
             bypass_permissions_dialog: crate::tui::bypass_permissions_dialog::BypassPermissionsDialogState::new(),
             bypass_permissions_dialog_shown: false,
             file_injection_dialog: crate::tui::file_injection_dialog::FileInjectionDialogState::new(),
@@ -1316,7 +1321,7 @@ impl App {
                 // Try to load cached models.dev data from disk.
                 let cache_path = dirs::cache_dir()
                     .unwrap_or_else(|| std::path::PathBuf::from("."))
-                    .join("claurst")
+                    .join("operant")
                     .join("models.json");
                 reg.load_cache(&cache_path);
                 reg
@@ -1325,7 +1330,7 @@ impl App {
             model_picker_provider_id: None,
             session_list_pending: false,
             session_list_rx: None,
-            auth_store: crate::tui::adapter_types::AuthStore::load(),
+            auth_store,
             queued_messages: std::collections::VecDeque::new(),
             pending_auto_submit: false,
             connect_dialog: DialogSelectState::new("Connect a provider", provider_picker_items()),
@@ -1354,7 +1359,7 @@ impl App {
             }),
             git_branch: crate::tui::adapter_types::git_utils::get_repo_root(
                 std::env::current_dir().as_deref().unwrap_or_else(|_| std::path::Path::new("."))
-            ).map(|repo_root| crate::tui::adapter_types::git_utils::get_current_branch(&repo_root)),
+            ).and_then(|repo_root| crate::tui::adapter_types::git_utils::get_current_branch(&repo_root)),
             background_task_count: 0,
             background_task_status: None,
             status_line_override: None,
@@ -1363,9 +1368,9 @@ impl App {
             auto_compact_running: false,
             voice_recorder: {
                 // Check whether voice input has been enabled via the /voice command
-                // (stored in ~/.claurst/ui-settings.json).  We also accept
-                // CLAURST_VOICE_ENABLED=1 as an override for easier testing.
-                let voice_on = std::env::var("CLAURST_VOICE_ENABLED")
+                // (stored in ~/.operant/ui-settings.json).  We also accept
+                // OPERANT_VOICE_ENABLED=1 as an override for easier testing.
+                let voice_on = std::env::var("OPERANT_VOICE_ENABLED")
                     .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
                     .unwrap_or(false)
                     || {
@@ -1389,6 +1394,9 @@ impl App {
             },
             voice_recording: false,
             voice_event_rx: None,
+            query_event_rx: None,
+permission_rx: None,
+            run_complete_rx: None,
             pending_key: None,
             model_fetch_rx: None,
             user_question_rx: None,
@@ -1435,8 +1443,8 @@ impl App {
     /// Only enabled when the `token_budget` feature flag is active.
     #[cfg(feature = "token_budget")]
     fn load_token_budget() -> Option<u32> {
-        // First check CLAURST_TOKEN_BUDGET env var
-        if let Ok(budget_str) = std::env::var("CLAURST_TOKEN_BUDGET") {
+        // First check OPERANT_TOKEN_BUDGET env var
+        if let Ok(budget_str) = std::env::var("OPERANT_TOKEN_BUDGET") {
             if let Ok(budget) = budget_str.parse::<u32>() {
                 return Some(budget);
             }
@@ -1476,7 +1484,7 @@ impl App {
     }
 
     fn perform_import_config(&mut self) {
-        let Some(selection) = self.import_config_dialog.selection else {
+        let Some(selection) = self.import_config_dialog.selection.clone() else {
             self.import_config_dialog.close();
             return;
         };
@@ -1488,8 +1496,10 @@ impl App {
                 let result_message = crate::tui::adapter_types::summarize_import_result(&result, &paths);
                 let imported_mcp = result.imported_fields.iter().any(|f| f == "mcpServers");
                 self.config = new_config.clone();
-                self.model_name = self.config.effective_model().to_string();
-                self.cost_tracker.set_model(&self.model_name);
+                self.model_name = self.resolve_stale_model(&self.config.effective_model().to_string());
+                if let Some(tracker) = Arc::get_mut(&mut self.cost_tracker) {
+                    tracker.set_model(&self.model_name);
+                }
                 self.refresh_context_window_size();
                 self.context_used_tokens = 0;
                 self.has_credentials = self.config.resolve_api_key().is_some();
@@ -1628,7 +1638,7 @@ impl App {
 
         let cache_path = dirs::cache_dir()
             .unwrap_or_else(|| std::path::PathBuf::from("."))
-            .join("claurst")
+            .join("operant")
             .join("models.json");
         if cache_path.exists() {
             self.model_registry.load_cache(&cache_path);
@@ -1639,9 +1649,37 @@ impl App {
             &self.model_registry,
         );
         self.model_picker.set_models(models);
-        self.model_picker.loading_models = true;
         self.model_picker_provider_id = Some(provider_id.to_string());
         self.model_picker_fetch_pending = true;
+
+        // Fetch models from provider's API in background
+        let settings = crate::tui::adapter_types::Settings::load_sync().unwrap_or_default();
+        let api_key = self.auth_store.api_key_for(
+            &provider_id.parse::<crate::tui::adapter_types::ProviderId>()
+                .unwrap_or(crate::tui::adapter_types::ProviderId::Other(provider_id.to_string())),
+        );
+        let base_url = settings.providers.get(provider_id)
+            .and_then(|p| p.api_base.clone())
+                    .or_else(|| {
+                        crate::provider::PROVIDERS.iter()
+                            .find(|p| p.name == provider_id)
+                            .map(|p| p.default_base_url.to_string())
+                    });
+
+        if let (Some(key), Some(url)) = (api_key, base_url) {
+            let provider_id = provider_id.to_string();
+            let mut registry = self.model_registry.clone();
+            let (tx, rx) = tokio::sync::mpsc::channel(1);
+            self.model_fetch_rx = Some(rx);
+            tokio::spawn(async move {
+                registry.fetch_from_provider_async(&provider_id, &key, &url).await;
+                let models = crate::tui::model_picker::models_for_provider_from_registry(
+                    &provider_id,
+                    &registry,
+                );
+                let _ = tx.send(Ok(models)).await;
+            });
+        }
 
         let provider_prefix = format!("{}/", provider_id);
         let current_model = if self.config.provider.as_deref() == Some(provider_id) {
@@ -1691,71 +1729,15 @@ impl App {
         let _ = settings.save_sync();
     }
 
-    fn infer_provider_from_model(model: &str) -> Option<String> {
-        // Free-mode synthetic IDs always route back through the "free"
-        // composite provider so the Zen → OpenRouter fallback kicks in.
-        if model == "free/auto"
-            || model.starts_with("free/")
-            || model.starts_with("zen/")
-            || model.starts_with("opencode-zen/")
-        {
-            return Some("free".to_string());
-        }
-        if let Some((provider, _)) = model.split_once('/') {
-            let known = [
-                "anthropic",
-                "openai",
-                "google",
-                "groq",
-                "cerebras",
-                "deepseek",
-                "mistral",
-                "xai",
-                "openrouter",
-                "github-copilot",
-                "codex",
-                "cohere",
-                "perplexity",
-                "togetherai",
-                "together-ai",
-                "deepinfra",
-                "venice",
-                "minimax",
-                "ollama",
-                "lmstudio",
-                "llamacpp",
-                "azure",
-                "amazon-bedrock",
-                "free",
-                "opencode-zen",
-            ];
-            if known.contains(&provider) {
-                return Some(provider.to_string());
-            }
-        }
-
-        if model.starts_with("claude") {
-            Some("anthropic".to_string())
-        } else if model.starts_with("gpt-")
-            || model.starts_with("o1")
-            || model.starts_with("o3")
-            || model.starts_with("o4")
-        {
-            Some("openai".to_string())
-        } else if model.starts_with("gemini") || model.starts_with("gemma") {
-            Some("google".to_string())
-        } else {
-            None
-        }
-    }
-
     /// Switch the active provider while clearing any explicit model override.
     fn set_provider_default(&mut self, provider_id: String) {
         self.config.provider = Some(provider_id.clone());
         self.config.model = None;
 
         let model = self.display_default_model_for_provider(&provider_id);
-        self.cost_tracker.set_model(&model);
+        if let Some(tracker) = Arc::get_mut(&mut self.cost_tracker) {
+            tracker.set_model(&model);
+        }
         self.model_name = model;
         self.refresh_context_window_size();
         self.context_used_tokens = 0;
@@ -1886,12 +1868,32 @@ impl App {
         }
     }
 
+    /// Resolve a stale `provider/default` model name to the best actual model
+    /// for that provider. This handles the case where settings.json stores a
+    /// fallback model name from a previous session when the registry was empty.
+    fn resolve_stale_model(&mut self, model: &str) -> String {
+        if model.ends_with("/default") {
+            let provider = model.strip_suffix("/default").unwrap_or(model);
+            let resolved = super::model_picker::default_model_for_provider(
+                provider,
+                &self.model_registry,
+            );
+            if resolved != format!("{}/default", provider) {
+                self.config.model = Some(resolved.clone());
+                return resolved;
+            }
+        }
+        model.to_string()
+    }
+
     /// Update the active model name (also updates config + cost tracker).
     pub fn set_model(&mut self, model: String) {
-        self.cost_tracker.set_model(&model);
+        if let Some(tracker) = Arc::get_mut(&mut self.cost_tracker) {
+            tracker.set_model(&model);
+        }
         self.model_name = model.clone();
         self.config.model = Some(model.clone());
-        if let Some(provider) = Self::infer_provider_from_model(&model) {
+        if let Some(provider) = super::provider::infer_provider_from_model(&model) {
             self.config.provider = Some(provider);
         }
         self.refresh_context_window_size();
@@ -1927,7 +1929,7 @@ impl App {
         self.close_secondary_views();
         self.config = config;
         self.provider_registry = provider_registry;
-        self.model_registry = crate::tui::adapter_types::ModelRegistry::new();
+        self.model_registry.ensure_provider_defaults();
         self.auth_store = auth_store;
         self.connect_dialog = DialogSelectState::new("Connect a provider", provider_picker_items());
         self.import_config_picker = DialogSelectState::new("Import config", import_config_picker_items());
@@ -1943,8 +1945,10 @@ impl App {
         self.model_picker_provider_id = None;
         self.has_credentials = has_credentials;
         self.fast_mode = false;
-        self.model_name = self.config.effective_model().to_string();
-        self.cost_tracker.set_model(&self.model_name);
+        self.model_name = self.resolve_stale_model(&self.config.effective_model().to_string());
+        if let Some(tracker) = Arc::get_mut(&mut self.cost_tracker) {
+            tracker.set_model(&self.model_name);
+        }
         self.status_message = Some(status_message);
         self.clear_prompt();
     }
@@ -1952,6 +1956,13 @@ impl App {
     /// Handle slash commands that should open UI screens rather than execute
     /// as normal commands. Returns `true` if the command was intercepted.
     pub fn intercept_slash_command_with_args(&mut self, cmd: &str, args: &str) -> bool {
+        if cmd == "mcp" && !args.trim().is_empty() {
+            return false;
+        }
+        self.intercept_slash_command(cmd)
+    }
+
+    pub fn handle_tui_command(&mut self, cmd: &str, args: &str) -> bool {
         if cmd == "mcp" && !args.trim().is_empty() {
             return false;
         }
@@ -2084,17 +2095,13 @@ impl App {
                     PermissionMode::Default
                 };
                 self.status_message = Some(if self.plan_mode {
-                    "Plan mode ON — Claurst will plan before acting.".to_string()
+                    "Plan mode ON — Operant will plan before acting.".to_string()
                 } else {
                     "Plan mode OFF.".to_string()
                 });
-                // Allow CLI path to also run (sends UserMessage to Claurst).
-                false
+                true
             }
-            "compact" => {
-                // Handled by execute_command in the CLI loop (real LLM compaction).
-                false
-            }
+            "compact" => false,
             "copy" => {
                 // Copy last assistant message to clipboard. Attempt arboard; fall back to notification.
                 let last = self.messages.iter().rev()
@@ -2174,10 +2181,7 @@ impl App {
                 }
                 true
             }
-            "doctor" => {
-                // Handled by execute_command (DoctorCommand).
-                false
-            }
+            "doctor" => false,
             "cost" => {
                 self.stats_dialog.open();
                 true
@@ -2200,10 +2204,7 @@ impl App {
                 self.session_browser.start_rename();
                 true
             }
-            "init" | "login" | "logout" => {
-                // Handled by execute_command (CLI-level operations).
-                false
-            }
+            "init" | "login" | "logout" => false,
             "keybindings" => {
                 // Open the keybindings.json file in the external editor
                 let keybindings_path = crate::tui::adapter_types::config::Settings::config_dir().join("keybindings.json");
@@ -2496,6 +2497,7 @@ impl App {
         let msg = match role {
             Role::User => Message::user(text),
             Role::Assistant => Message::assistant(text),
+            Role::System => Message { role: Role::System, content: crate::tui::adapter_types::types::MessageContent::Text(text) },
         };
         if role == Role::User {
             self.begin_user_turn_snapshot();
@@ -3247,7 +3249,7 @@ impl App {
                             }
                             "anthropic" => {
                                 // Anthropic: use API key from console.anthropic.com
-                                // (OAuth requires a registered app which Claurst doesn't have)
+                                // (OAuth requires a registered app which Operant doesn't have)
                                 self.key_input_dialog.open(selected.id.clone(), selected.title.clone());
                             }
                             "custom-openai" => {
@@ -3808,7 +3810,7 @@ impl App {
         let key_context = self.current_key_context();
         if let Some(keystroke) = key_event_to_keystroke(&key) {
             let had_pending_chord = self.keybindings.has_pending_chord();
-            match self.keybindings.process(keystroke, &key_context) {
+            match self.keybindings.process(&keystroke, &key_context) {
                 KeybindingResult::Action(action) => {
                     return self.handle_keybinding_action(&action);
                 }
@@ -4022,15 +4024,17 @@ impl App {
                 }
             }
 
+            // ---- Model picker (Ctrl+A) -----------------------------------
+            KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                if !self.is_streaming && self.has_credentials {
+                    self.open_model_picker_for_provider(&self.config.provider.clone().unwrap_or_default(), None);
+                }
+            }
+
             // ---- History search ----------------------------------------
             KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                // Open the new overlay-based history search
                 let overlay = HistorySearchOverlay::open(&self.prompt_input.history);
                 self.history_search_overlay = overlay;
-                // Also open legacy for backwards compat
-                let mut hs = HistorySearch::new();
-                hs.update_matches(&self.prompt_input.history);
-                self.history_search = Some(hs);
             }
             KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.global_search.open();
@@ -4040,6 +4044,11 @@ impl App {
             // ---- Tasks overlay (Ctrl+T) --------------------------------
             KeyCode::Char('t') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.tasks_overlay.toggle();
+            }
+
+            // ---- Command palette (Ctrl+K) -------------------------------
+            KeyCode::Char('k') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.command_palette.open();
             }
 
             // ---- Help overlay ------------------------------------------
@@ -4175,10 +4184,6 @@ impl App {
                     }
                     self.prompt_input.accept_suggestion();
                     self.refresh_prompt_input();
-                } else if !self.is_streaming && self.prompt_input.is_empty() {
-                    // Cycle agent mode: build → plan → explore → build
-                    self.cycle_agent_mode();
-                    self.rustle_look_down();
                 }
             }
 
@@ -4216,19 +4221,30 @@ impl App {
                 self.refresh_prompt_input();
             }
             KeyCode::Enter if !self.is_streaming => {
-                // If a suggestion is selected, accept it instead of submitting.
                 if !self.prompt_input.suggestions.is_empty()
                     && self.prompt_input.suggestion_index.is_some()
                 {
-                    let is_file_ref = self.prompt_input.suggestions
-                        .get(self.prompt_input.suggestion_index.unwrap())
-                        .map_or(false, |s| s.source == crate::prompt_input::TypeaheadSource::FileRef);
+                    let suggestion_source = self.prompt_input.suggestions
+                        .get(self.prompt_input.suggestion_index.unwrap_or(0))
+                        .map(|s| s.source.clone());
                     self.prompt_input.accept_suggestion();
-                    if is_file_ref {
-                        self.prompt_input.insert_char(' ');
+                    match suggestion_source.as_ref() {
+                        Some(crate::prompt_input::TypeaheadSource::FileRef) => {
+                            self.prompt_input.insert_char(' ');
+                            self.refresh_prompt_input();
+                            return false;
+                        }
+                        Some(crate::prompt_input::TypeaheadSource::SlashCommand) => {
+                            self.prompt_input.suggestion_index = None;
+                            self.prompt_input.suggestions.clear();
+                            return true;
+                        }
+                        _ => {
+                            self.prompt_input.suggestion_index = None;
+                            self.prompt_input.suggestions.clear();
+                            return true;
+                        }
                     }
-                    self.refresh_prompt_input();
-                    return false;
                 }
                 // Auto-dismiss all error notifications when user sends a message
                 self.dismiss_error_notifications();
@@ -4715,9 +4731,6 @@ impl App {
             "historySearch" => {
                 let overlay = HistorySearchOverlay::open(&self.prompt_input.history);
                 self.history_search_overlay = overlay;
-                let mut hs = HistorySearch::new();
-                hs.update_matches(&self.prompt_input.history);
-                self.history_search = Some(hs);
                 false
             }
             "openSearch" => {
@@ -4983,8 +4996,7 @@ impl App {
                 false
             }
             "indent" => {
-                // Tab: cycle agent mode when prompt is empty, accept
-                // slash-command suggestion otherwise.
+                // Tab: accept slash-command suggestion if available.
                 if !self.is_streaming {
                     if !self.prompt_input.suggestions.is_empty() {
                         if self.prompt_input.suggestion_index.is_none() {
@@ -4992,9 +5004,6 @@ impl App {
                         }
                         self.prompt_input.accept_suggestion();
                         self.refresh_prompt_input();
-                    } else if self.prompt_input.is_empty() {
-                        self.cycle_agent_mode();
-                    self.rustle_look_down();
                     }
                 }
                 false
@@ -5094,13 +5103,11 @@ impl App {
                 self.permission_request = None;
             }
             KeyCode::Up => {
-                let pr = self.permission_request.as_mut().unwrap();
                 if pr.selected_option > 0 {
                     pr.selected_option -= 1;
                 }
             }
             KeyCode::Down => {
-                let pr = self.permission_request.as_mut().unwrap();
                 if pr.selected_option + 1 < pr.options.len() {
                     pr.selected_option += 1;
                 }
@@ -5454,6 +5461,7 @@ impl App {
             && self.history_search.is_none()
             && !self.settings_screen.visible
             && !self.theme_screen.visible
+            && !self.key_input_dialog.visible
             && self.prompt_input.vim_mode == crate::prompt_input::VimMode::Insert
     }
 
@@ -5869,7 +5877,7 @@ impl App {
             QueryEvent::Stream(stream_evt) => {
                 if !self.is_streaming {
                     let seed = self.frame_count as usize ^ (self.messages.len() * 17);
-                    self.spinner_verb = Some(sample_spinner_verb(seed).to_string());
+                    self.spinner_verb = Some(sample_spinner_verb(seed as u64).to_string());
                     // turn_start is set in begin_user_turn_snapshot (prompt
                     // submission time).  Only fall back here if somehow no
                     // user message was pushed before streaming began (e.g.
@@ -5881,23 +5889,13 @@ impl App {
                 }
                 self.is_streaming = true;
                 match stream_evt {
-                    crate::tui::adapter_types::streaming::AnthropicStreamEvent::ContentBlockDelta { delta, .. } => {
+                    crate::tui::adapter_types::query::StreamEvent::ContentBlockDelta { delta } => {
                         // Reset stall timer on any incoming delta — we're making progress.
                         self.stall_start = None;
-                        match delta {
-                            crate::tui::adapter_types::streaming::ContentDelta::TextDelta { text } => {
-                                self.streaming_text.push_str(&text);
-                                self.invalidate_transcript();
-                            }
-                            crate::tui::adapter_types::streaming::ContentDelta::ThinkingDelta { thinking } => {
-                                debug!(len = thinking.len(), "Thinking delta received");
-                                self.streaming_thinking.push_str(&thinking);
-                                self.invalidate_transcript();
-                            }
-                            _ => {}
-                        }
+                        self.streaming_text.push_str(&delta);
+                        self.invalidate_transcript();
                     }
-                    crate::tui::adapter_types::streaming::AnthropicStreamEvent::MessageStop => {
+                    crate::tui::adapter_types::query::StreamEvent::MessageStop => {
                         self.is_streaming = false;
                         self.spinner_verb = None;
                         self.stall_start = None;
@@ -5916,7 +5914,7 @@ impl App {
             QueryEvent::ToolStart { tool_name, tool_id, input_json } => {
                 if !self.is_streaming && self.spinner_verb.is_none() {
                     let seed = self.frame_count as usize ^ (self.messages.len() * 17);
-                    self.spinner_verb = Some(sample_spinner_verb(seed).to_string());
+                    self.spinner_verb = Some(sample_spinner_verb(seed as u64).to_string());
                 }
                 self.is_streaming = true;
                 self.status_message = Some(format!("Running {}…", tool_name));
@@ -5983,7 +5981,7 @@ impl App {
                 if let Some(ref u) = usage {
                     let turn_tokens = u.input_tokens + u.output_tokens
                         + u.cache_creation_input_tokens + u.cache_read_input_tokens;
-                    self.context_used_tokens = self.context_used_tokens.saturating_add(turn_tokens);
+                    self.context_used_tokens = self.context_used_tokens.saturating_add(turn_tokens as u64);
                 }
                 // Record elapsed time and pick a completion verb
                 let seed = self.frame_count as usize ^ (self.messages.len() * 7);
@@ -5992,7 +5990,7 @@ impl App {
                 self.last_turn_elapsed = Some(
                     elapsed.unwrap_or_else(|| "0s".to_string())
                 );
-                self.last_turn_verb = Some(sample_completion_verb(seed));
+                self.last_turn_verb = Some(sample_completion_verb(seed as u64));
                 self.flush_streamed_assistant_message();
                 self.tool_use_blocks.retain(|b| b.status != ToolStatus::Running);
                 self.complete_current_turn_snapshot(stop_reason.contains("abort") || stop_reason.contains("cancel"));
@@ -6077,6 +6075,22 @@ impl App {
                 }
             }
 
+            // Drain background model-fetch results.
+            if let Some(ref mut rx) = self.model_fetch_rx {
+                match rx.try_recv() {
+                    Ok(Ok(models)) => {
+                        self.model_picker.set_models(models);
+                        self.model_fetch_rx = None;
+                        self.model_picker_fetch_pending = false;
+                    }
+                    Ok(Err(_)) | Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
+                        self.model_fetch_rx = None;
+                        self.model_picker_fetch_pending = false;
+                    }
+                    Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {}
+                }
+            }
+
             // Spawn async session-list load when requested.
             if self.session_list_pending {
                 self.session_list_pending = false;
@@ -6135,6 +6149,21 @@ impl App {
                             self.status_message =
                                 Some("Transcribing\u{2026}".to_string());
                         }
+                        VoiceEvent::Transcription(text) => {
+                            if !text.is_empty() {
+                                if !self.prompt_input.text.is_empty()
+                                    && !self.prompt_input.text.ends_with(' ')
+                                {
+                                    self.prompt_input.paste(" ");
+                                }
+                                self.prompt_input.paste(&text);
+                                self.refresh_prompt_input();
+                                self.status_message = Some(
+                                    format!("Transcribed: {}", &text[..text.len().min(60)])
+                                );
+                            }
+                            self.voice_event_rx = None;
+                        }
                         VoiceEvent::TranscriptReady(text) => {
                             if !text.is_empty() {
                                 // Append to existing prompt text with a space separator
@@ -6163,6 +6192,48 @@ impl App {
                             );
                         }
                     }
+                }
+            }
+
+            // Drain query events from the agent bridge task.
+            {
+                let mut events = Vec::new();
+                if let Some(ref mut rx) = self.query_event_rx {
+                    while let Ok(ev) = rx.try_recv() {
+                        events.push(ev);
+                    }
+                }
+                for ev in events {
+                    self.handle_query_event(ev);
+                }
+            }
+
+            // Auto-approve all tool permission requests.
+            {
+                if let Some(ref mut rx) = self.permission_rx {
+                    while let Ok(req) = rx.try_recv() {
+                        let _ = req.response_tx.send(operant_core::agent::ToolPermissionResponse::AllowOnce);
+                    }
+                }
+            }
+
+            // Check if background agent.run() completed.
+            if let Some(ref mut rx) = self.run_complete_rx {
+                match rx.try_recv() {
+                    Ok(result) => {
+                        self.is_streaming = false;
+                        if let Err(e) = result {
+                            self.handle_query_event(
+                                crate::tui::adapter_types::query::QueryEvent::Error(e.to_string()),
+                            );
+                        }
+                        self.run_complete_rx = None;
+                    }
+                    Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
+                        self.is_streaming = false;
+                        self.run_complete_rx = None;
+                    }
+                    Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {}
                 }
             }
 
@@ -6236,6 +6307,13 @@ impl App {
                                         self.refresh_prompt_input();
                                         continue;
                                     }
+                                } else if self.key_input_dialog.visible {
+                                    if let Some(burst) = self.try_detect_paste_burst(c) {
+                                        for ch in burst.chars() {
+                                            self.key_input_dialog.insert_char(ch);
+                                        }
+                                        continue;
+                                    }
                                 }
                             }
                         }
@@ -6251,18 +6329,7 @@ impl App {
                             return Ok(None);
                         }
                         if should_submit {
-                            // Dismiss any active error modal when the user sends a message
                             self.dismiss_error_notifications();
-                            // Check if this is a slash command that should open a UI screen
-                            if crate::input::is_slash_command(&self.prompt_input.text) {
-                                let slash_input = self.prompt_input.text.clone();
-                                let (cmd, args) =
-                                        crate::input::parse_slash_command(&slash_input);
-                                if self.intercept_slash_command_with_args(cmd, args) {
-                                    self.clear_prompt();
-                                    continue;
-                                }
-                            }
                             let input = self.take_input();
                             if !input.is_empty() {
                                 return Ok(Some(input));
@@ -6275,8 +6342,14 @@ impl App {
                             && !self.history_search_overlay.visible
                             && self.history_search.is_none() =>
                     {
-                        self.handle_paste_data(data);
-                        self.refresh_prompt_input();
+                        if self.key_input_dialog.visible {
+                            for ch in data.chars() {
+                                self.key_input_dialog.insert_char(ch);
+                            }
+                        } else {
+                            self.handle_paste_data(data);
+                            self.refresh_prompt_input();
+                        }
                     }
                     Event::Mouse(mouse_event) => {
                         self.handle_mouse_event(mouse_event);
@@ -6397,8 +6470,9 @@ mod tests {
 
     fn make_app() -> App {
         let config = Config::default();
-        let cost_tracker = crate::tui::adapter_types::cost::CostTracker::new();
-        App::new(config, cost_tracker)
+        let cost_tracker = std::sync::Arc::new(crate::tui::adapter_types::cost::CostTracker::new());
+        let command_registry = crate::commands::CommandRegistry::new();
+        App::new(config, cost_tracker, command_registry)
     }
 
     fn press_key(code: KeyCode, modifiers: KeyModifiers) -> KeyEvent {
@@ -6522,6 +6596,7 @@ mod tests {
     #[test]
     fn test_model_slash_command_opens_picker() {
         let mut app = make_app();
+        app.has_credentials = true;
         assert!(!app.model_picker.visible);
         assert!(app.intercept_slash_command("model"));
         assert!(app.model_picker.visible);
