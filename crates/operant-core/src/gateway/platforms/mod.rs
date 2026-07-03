@@ -2,9 +2,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::info;
 
-pub mod discord;
-pub mod slack;
-
 use super::PlatformAdapter;
 use crate::error::Result;
 

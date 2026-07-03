@@ -23,7 +23,6 @@ use crate::error::Result;
 use crate::gateway_markdown::markdown_to_telegram_html;
 use crate::gateway_session::{PersistentSessionStore, SessionSource};
 
-pub mod pairing;
 pub mod platforms;
 pub mod stream_consumer;
 
