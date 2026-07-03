@@ -450,13 +450,46 @@ impl OperantAgent {
                     messages.push(assistant_msg.clone());
                     self.add_message(assistant_msg.clone()).await;
 
-                    // Persist assistant message
-                    let _ = self.database.save_message(
-                        &session_id,
-                        "assistant",
-                        &effective_text,
-                        &chrono::Utc::now().to_rfc3339(),
-                    );
+                    // Persist assistant message — use save_message_full when
+                    // the message has tool_calls so they're not lost on reload.
+                    // Previously save_message (4-arg) dropped tool_calls, which
+                    // meant reloaded sessions lost the assistant's tool-call
+                    // context (the tool results became orphaned).
+                    let timestamp = chrono::Utc::now().to_rfc3339();
+                    if assistant_msg.tool_calls.is_some() {
+                        let tool_calls_json = assistant_msg
+                            .tool_calls
+                            .as_ref()
+                            .and_then(|tcs| serde_json::to_string(tcs).ok());
+                        let msg_data = crate::database::MessageData {
+                            id: 0,
+                            session_id: session_id.clone(),
+                            role: "assistant".to_string(),
+                            content: Some(effective_text.clone()),
+                            tool_call_id: None,
+                            tool_calls: tool_calls_json,
+                            tool_name: None,
+                            timestamp,
+                            token_count: None,
+                            finish_reason: Some("tool_calls".to_string()),
+                            reasoning: assistant_msg.reasoning.clone(),
+                            reasoning_content: None,
+                            reasoning_details: None,
+                            codex_reasoning_items: None,
+                            codex_message_items: None,
+                            platform_message_id: None,
+                            observed: None,
+                            active: 1,
+                        };
+                        let _ = self.database.save_message_full(&msg_data);
+                    } else {
+                        let _ = self.database.save_message(
+                            &session_id,
+                            "assistant",
+                            &effective_text,
+                            &timestamp,
+                        );
+                    }
                     self.database
                         .save_session(
                             &session_id,
