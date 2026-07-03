@@ -21,7 +21,7 @@ pub use markdown::render_markdown;
 
 mod markdown_enhanced;
 pub use markdown_enhanced::{
-    detect_table, render_table, parse_inline_formatting,
+    detect_table, render_table,
     Table, TableAlignment,
 };
 

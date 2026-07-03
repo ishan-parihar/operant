@@ -27,12 +27,6 @@ pub enum Error {
     MissingApiKey,
 
     // ========== Streaming Errors ==========
-    #[error("SSE parse error at position {position}: {message}")]
-    SseParse { position: usize, message: String },
-
-    #[error("Unexpected SSE event type: {0}")]
-    UnexpectedSseEvent(String),
-
     #[error("Incomplete SSE message")]
     IncompleteSseMessage,
 
@@ -93,26 +87,9 @@ pub enum Error {
     #[error("Context length exceeded")]
     ContextLengthExceeded,
 
-    #[error("Invalid state transition: {from} -> {to}")]
-    InvalidStateTransition { from: String, to: String },
-
-    // ========== Schema Errors ==========
-    #[error("Schema generation error: {0}")]
-    SchemaGeneration(String),
-
-    #[error("Invalid schema: {0}")]
-    InvalidSchema(String),
-
     // ========== Configuration Errors ==========
     #[error("Configuration error: {0}")]
     Config(String),
-
-    #[error("Missing required configuration: {key}")]
-    MissingConfig { key: String },
-
-    // ========== Plugin Errors ==========
-    #[error("Plugin error: {0}")]
-    Plugin(String),
 }
 
 impl Error {

@@ -4,10 +4,7 @@ use ratatui::text::{Line, Span};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RustlePose {
     Default,
-    ArmsUp,
-    LookLeft,
     LookRight,
-    LookDown,
     Loading { frame: u64 },
 }
 
@@ -30,7 +27,7 @@ pub fn rustle_lines(pose: &RustlePose) -> [Line<'static>; 5] {
         ]),
         Line::from(vec![
             Span::styled("  │ ", dim_style()),
-            Span::styled("HERMES", accent_style()),
+            Span::styled("OPERANT", accent_style()),
             Span::styled("    │", dim_style()),
         ]),
         Line::from(vec![
@@ -58,10 +55,7 @@ mod tests {
     fn rustle_lines_returns_5_lines() {
         for pose in [
             RustlePose::Default,
-            RustlePose::ArmsUp,
-            RustlePose::LookLeft,
             RustlePose::LookRight,
-            RustlePose::LookDown,
             RustlePose::Loading { frame: 0 },
         ] {
             let lines = rustle_lines(&pose);
