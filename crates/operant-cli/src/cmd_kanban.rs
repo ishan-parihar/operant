@@ -126,11 +126,6 @@ pub enum KanbanSubcommand {
         /// Number of events to show
         lines: Option<usize>,
     },
-    /// Watch a task for changes
-    Watch {
-        /// Task ID to watch
-        id: String,
-    },
     /// Show run history for a task
     Runs {
         /// Task ID
@@ -282,7 +277,6 @@ pub async fn handle_kanban_command(
         }
         KanbanSubcommand::Archive { id } => cmd_archive(config, board_slug, &id).await,
         KanbanSubcommand::Tail { id, lines } => cmd_tail(config, board_slug, &id, lines).await,
-        KanbanSubcommand::Watch { id } => cmd_watch(config, board_slug, &id).await,
         KanbanSubcommand::Runs { id } => cmd_runs(config, board_slug, &id).await,
         KanbanSubcommand::Log { id, message } => cmd_log(config, board_slug, &id, &message).await,
         KanbanSubcommand::Notify { action } => cmd_notify(config, board_slug, action).await,
@@ -716,18 +710,6 @@ async fn cmd_tail(
             payload_str
         );
     }
-    Ok(())
-}
-
-async fn cmd_watch(config: &AppConfig, board_slug: &str, id: &str) -> Result<()> {
-    let db = open_db(config, board_slug)?;
-    db.get_task(id)
-        .context("Failed to get task")?
-        .with_context(|| format!("Task '{}' not found", id))?;
-    println!(
-        "Now watching task '{}'. Use `operant kanban tail {}` to check for updates.",
-        id, id
-    );
     Ok(())
 }
 
