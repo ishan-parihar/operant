@@ -1049,7 +1049,8 @@ mod tests {
 
     /// Create a unique temp directory for a test
     fn test_dir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("operant_test_{}_{}", name, std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("operant_test_{}_{}", name, std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         dir
     }

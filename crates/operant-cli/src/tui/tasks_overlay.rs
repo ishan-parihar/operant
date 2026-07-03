@@ -195,11 +195,7 @@ impl TasksOverlay {
             let task_id = task.id.clone();
             let new_status = next_status(&task.status);
 
-            // Update the global task store
-            if let Some(mut global_task) = crate::tui::adapter_types::tools::TASK_STORE.get_mut(&task_id) {
-                global_task.status = new_status.clone();
-                global_task.updated_at = chrono::Utc::now();
-            }
+            // ponytail: TaskStore.tasks private in stub — global update deferred
 
             // Update local display
             if let Some(local_task) = self.tasks.get_mut(self.selected_idx) {

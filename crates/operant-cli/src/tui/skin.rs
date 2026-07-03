@@ -27,6 +27,36 @@ pub struct SkinColors {
     pub panel: String,
     #[serde(default = "default_panel_alt")]
     pub panel_alt: String,
+    #[serde(default = "default_status_bg")]
+    pub status_bg: String,
+    #[serde(default = "default_status_fg")]
+    pub status_fg: String,
+    #[serde(default = "default_status_good")]
+    pub status_good: String,
+    #[serde(default = "default_status_warn")]
+    pub status_warn: String,
+    #[serde(default = "default_status_bad")]
+    pub status_bad: String,
+    #[serde(default = "default_status_critical")]
+    pub status_critical: String,
+    #[serde(default = "default_selection_bg")]
+    pub selection_bg: String,
+    #[serde(default = "default_diff_added")]
+    pub diff_added: String,
+    #[serde(default = "default_diff_removed")]
+    pub diff_removed: String,
+    #[serde(default = "default_shell_dollar")]
+    pub shell_dollar: String,
+    #[serde(default = "default_session_label")]
+    pub session_label: String,
+    #[serde(default = "default_session_border")]
+    pub session_border: String,
+    #[serde(default = "default_prompt_color")]
+    pub prompt_color: String,
+    #[serde(default = "default_completion_bg")]
+    pub completion_bg: String,
+    #[serde(default = "default_completion_current_bg")]
+    pub completion_current_bg: String,
 }
 
 fn default_ui_label() -> String {
@@ -47,6 +77,21 @@ fn default_panel() -> String {
 fn default_panel_alt() -> String {
     "#12110f".into()
 }
+fn default_status_bg() -> String { "#1a1a2e".into() }
+fn default_status_fg() -> String { "#C0C0C0".into() }
+fn default_status_good() -> String { "#8FBC8F".into() }
+fn default_status_warn() -> String { "#FFD700".into() }
+fn default_status_bad() -> String { "#FF8C00".into() }
+fn default_status_critical() -> String { "#FF6B6B".into() }
+fn default_selection_bg() -> String { "#3a3a55".into() }
+fn default_diff_added() -> String { "rgb(220,255,220)".into() }
+fn default_diff_removed() -> String { "rgb(255,220,220)".into() }
+fn default_shell_dollar() -> String { "#4dabf7".into() }
+fn default_session_label() -> String { "#CC9B1F".into() }
+fn default_session_border() -> String { "#CC9B1F".into() }
+fn default_prompt_color() -> String { "#FFF8DC".into() }
+fn default_completion_bg() -> String { "#1a1a2e".into() }
+fn default_completion_current_bg() -> String { "#333355".into() }
 
 impl Default for SkinColors {
     fn default() -> Self {
@@ -64,6 +109,21 @@ impl Default for SkinColors {
             ui_warn: "#ffa726".into(),
             panel: "#1a1816".into(),
             panel_alt: "#12110f".into(),
+            status_bg: "#1a1a2e".into(),
+            status_fg: "#C0C0C0".into(),
+            status_good: "#8FBC8F".into(),
+            status_warn: "#FFD700".into(),
+            status_bad: "#FF8C00".into(),
+            status_critical: "#FF6B6B".into(),
+            selection_bg: "#3a3a55".into(),
+            diff_added: "rgb(220,255,220)".into(),
+            diff_removed: "rgb(255,220,220)".into(),
+            shell_dollar: "#4dabf7".into(),
+            session_label: "#CC9B1F".into(),
+            session_border: "#CC9B1F".into(),
+            prompt_color: "#FFF8DC".into(),
+            completion_bg: "#1a1a2e".into(),
+            completion_current_bg: "#333355".into(),
         }
     }
 }
@@ -210,6 +270,21 @@ impl SkinConfig {
     pub fn border(&self) -> Color {
         self.color(&self.colors.banner_border)
     }
+    pub fn status_bg(&self) -> Color { self.color(&self.colors.status_bg) }
+    pub fn status_fg(&self) -> Color { self.color(&self.colors.status_fg) }
+    pub fn status_good(&self) -> Color { self.color(&self.colors.status_good) }
+    pub fn status_warn(&self) -> Color { self.color(&self.colors.status_warn) }
+    pub fn status_bad(&self) -> Color { self.color(&self.colors.status_bad) }
+    pub fn status_critical(&self) -> Color { self.color(&self.colors.status_critical) }
+    pub fn selection_bg(&self) -> Color { self.color(&self.colors.selection_bg) }
+    pub fn diff_added(&self) -> Color { self.color(&self.colors.diff_added) }
+    pub fn diff_removed(&self) -> Color { self.color(&self.colors.diff_removed) }
+    pub fn shell_dollar(&self) -> Color { self.color(&self.colors.shell_dollar) }
+    pub fn session_label(&self) -> Color { self.color(&self.colors.session_label) }
+    pub fn session_border(&self) -> Color { self.color(&self.colors.session_border) }
+    pub fn prompt_color(&self) -> Color { self.color(&self.colors.prompt_color) }
+    pub fn completion_bg(&self) -> Color { self.color(&self.colors.completion_bg) }
+    pub fn completion_current_bg(&self) -> Color { self.color(&self.colors.completion_current_bg) }
 }
 
 fn builtin_default() -> SkinConfig {
@@ -241,6 +316,7 @@ fn builtin_ares() -> SkinConfig {
             ui_warn: "#C7A96B".into(),
             panel: "#2A1212".into(),
             panel_alt: "#1E0E0E".into(),
+            ..Default::default()
         },
         spinner: SpinnerConfig {
             waiting_faces: vec![
@@ -303,6 +379,7 @@ fn builtin_mono() -> SkinConfig {
             ui_warn: "#999999".into(),
             panel: "#1F1F1F".into(),
             panel_alt: "#161616".into(),
+            ..Default::default()
         },
         branding: BrandingConfig {
             agent_name: "Operant Agent".into(),
@@ -333,6 +410,7 @@ fn builtin_slate() -> SkinConfig {
             ui_warn: "#e6a855".into(),
             panel: "#151C2F".into(),
             panel_alt: "#111725".into(),
+            ..Default::default()
         },
         branding: BrandingConfig {
             agent_name: "Operant Agent".into(),
@@ -503,6 +581,21 @@ fn merge_with_default(mut skin: SkinConfig) -> SkinConfig {
     if c.panel_alt.is_empty() {
         c.panel_alt = dc.panel_alt.clone();
     }
+    if c.status_bg.is_empty() { c.status_bg = dc.status_bg.clone(); }
+    if c.status_fg.is_empty() { c.status_fg = dc.status_fg.clone(); }
+    if c.status_good.is_empty() { c.status_good = dc.status_good.clone(); }
+    if c.status_warn.is_empty() { c.status_warn = dc.status_warn.clone(); }
+    if c.status_bad.is_empty() { c.status_bad = dc.status_bad.clone(); }
+    if c.status_critical.is_empty() { c.status_critical = dc.status_critical.clone(); }
+    if c.selection_bg.is_empty() { c.selection_bg = dc.selection_bg.clone(); }
+    if c.diff_added.is_empty() { c.diff_added = dc.diff_added.clone(); }
+    if c.diff_removed.is_empty() { c.diff_removed = dc.diff_removed.clone(); }
+    if c.shell_dollar.is_empty() { c.shell_dollar = dc.shell_dollar.clone(); }
+    if c.session_label.is_empty() { c.session_label = dc.session_label.clone(); }
+    if c.session_border.is_empty() { c.session_border = dc.session_border.clone(); }
+    if c.prompt_color.is_empty() { c.prompt_color = dc.prompt_color.clone(); }
+    if c.completion_bg.is_empty() { c.completion_bg = dc.completion_bg.clone(); }
+    if c.completion_current_bg.is_empty() { c.completion_current_bg = dc.completion_current_bg.clone(); }
     if skin.branding.agent_name.is_empty() {
         skin.branding.agent_name = default.branding.agent_name;
     }

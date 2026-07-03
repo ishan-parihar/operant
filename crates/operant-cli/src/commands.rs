@@ -569,6 +569,12 @@ pub static COMMAND_REGISTRY: &[CommandDef] = &[
     .cli_only(),
     CommandDef::new("time", "Show the current time", "Info"),
     CommandDef::new("session", "Show current session info", "Info").with_aliases(&["s"]),
+    CommandDef::new("doctor", "Run diagnostics", "Info"),
+    CommandDef::new("init", "Initialize AGENTS.md for this project", "Session"),
+    CommandDef::new("login", "Log in to Operant", "Session"),
+    CommandDef::new("logout", "Log out of Operant", "Session"),
+    CommandDef::new("refresh", "Clear saved provider auth and model caches", "Session"),
+    CommandDef::new("providers", "List available AI providers and their status", "Info"),
     // ── Exit ─────────────────────────────────────────────────────────────────
     CommandDef::new("exit", "Exit the CLI", "Exit")
         .cli_only()

@@ -116,6 +116,7 @@ pub fn build_transcript_turns(app: &App) -> Vec<TranscriptTurn<'_>> {
                     turn.end_message_index = index;
                 }
             }
+            Role::System => {}
         }
     }
 

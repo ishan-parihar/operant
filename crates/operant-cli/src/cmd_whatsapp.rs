@@ -37,7 +37,9 @@ async fn whatsapp_status(_config: &AppConfig) -> Result<()> {
     println!();
     if configured {
         println!("WhatsApp is partially configured via environment variables.");
-        println!("The interactive QR pairing wizard is available in the Python operant-agent only.");
+        println!(
+            "The interactive QR pairing wizard is available in the Python operant-agent only."
+        );
         println!("  Install with: pip install -e '.[whatsapp]' in operant-agent/");
     } else {
         println!("WhatsApp is not configured. Run `operant whatsapp setup` for instructions.");

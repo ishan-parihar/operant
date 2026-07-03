@@ -216,6 +216,9 @@ pub fn render_file_injection_dialog(
             AtFileIssue::TooLarge(_) => format!("• {} (too large)", display),
             AtFileIssue::Unreadable(msg) => format!("• {} (unreadable: {})", display, msg),
             AtFileIssue::IsDirectory => format!("• {}", display),
+            AtFileIssue::NoMatch => format!("• {} (no match)", display),
+            AtFileIssue::FileNotFound(msg) => format!("• {} (not found: {})", display, msg),
+            AtFileIssue::PermissionDenied(msg) => format!("• {} (permission denied: {})", display, msg),
         };
 
         lines.push(Line::from(vec![Span::styled(

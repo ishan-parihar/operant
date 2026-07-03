@@ -399,7 +399,9 @@ fn i4() {
 // Platform (3)
 #[test]
 fn pl1() {
-    assert!(!operant_core::platform::operant_home().as_os_str().is_empty());
+    assert!(!operant_core::platform::operant_home()
+        .as_os_str()
+        .is_empty());
 }
 #[test]
 fn pl2() {
@@ -427,10 +429,11 @@ fn m3() {
 // Config (20)
 #[test]
 fn c1() {
-    assert!(
-        operant_core::config::parse_config_str("version = 2\n", std::path::Path::new("t.toml"))
-            .is_ok()
-    );
+    assert!(operant_core::config::parse_config_str(
+        "version = 2\n",
+        std::path::Path::new("t.toml")
+    )
+    .is_ok());
 }
 #[test]
 fn c2() {
@@ -513,8 +516,10 @@ fn c13() {
 }
 #[test]
 fn c14() {
-    let c =
-        operant_core::config::parse_config_str("# just a comment\n", std::path::Path::new("t.toml"));
+    let c = operant_core::config::parse_config_str(
+        "# just a comment\n",
+        std::path::Path::new("t.toml"),
+    );
     assert!(c.is_ok());
 }
 #[test]
@@ -2517,7 +2522,9 @@ fn x_pl32() {
 }
 #[test]
 fn x_pl33() {
-    operant_core::plugins::register_plugin_command(PluginCommand::new("xp33", "P", |a| a.repeat(3)));
+    operant_core::plugins::register_plugin_command(PluginCommand::new("xp33", "P", |a| {
+        a.repeat(3)
+    }));
     assert_eq!(
         operant_core::plugins::handle_plugin_command("xp33", "ab").unwrap(),
         "ababab"
@@ -2734,9 +2741,11 @@ fn x_pl52() {
     operant_core::plugins::register_plugin_command(PluginCommand::new("xp52", "P", |a| {
         format!("{:?}", a)
     }));
-    assert!(operant_core::plugins::handle_plugin_command("xp52", "hello")
-        .unwrap()
-        .contains("hello"));
+    assert!(
+        operant_core::plugins::handle_plugin_command("xp52", "hello")
+            .unwrap()
+            .contains("hello")
+    );
 }
 #[test]
 fn x_pl53() {

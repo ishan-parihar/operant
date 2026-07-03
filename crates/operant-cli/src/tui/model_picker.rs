@@ -8,7 +8,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
-use crate::tui::overlays::{centered_rect, modal_search_line, CLAURST_PANEL_BG};
+use crate::tui::overlays::{centered_rect, modal_search_line, OPERANT_PANEL_BG};
 
 // ---------------------------------------------------------------------------
 // Effort level
@@ -286,31 +286,16 @@ pub fn models_for_provider_from_registry(
         )];
     }
 
-    // Sort: most recently released first, then alphabetical by id.
-    entries.sort_by(|a, b| {
-        let rd_a = a.release_date.as_deref().unwrap_or("");
-        let rd_b = b.release_date.as_deref().unwrap_or("");
-        rd_b.cmp(rd_a).then_with(|| (*a.info.id).cmp(&*b.info.id))
-    });
+    // Sort: alphabetical by id.
+    entries.sort_by(|a, b| a.id.cmp(&b.id));
 
     entries
         .iter()
-        .map(|e| {
-            let cost_str = match (e.cost_input, e.cost_output) {
-                (Some(ci), Some(co)) => format!(
-                    "{} | ${:.2}/${:.2} per M",
-                    format_context_window(e.info.context_window),
-                    ci,
-                    co
-                ),
-                _ => format_context_window(e.info.context_window),
-            };
-            ModelEntry {
-                id: e.info.id.to_string(),
-                display_name: e.info.name.clone(),
-                description: cost_str,
-                is_current: false,
-            }
+        .map(|e| ModelEntry {
+            id: e.id.clone(),
+            display_name: e.display_name.clone(),
+            description: e.description.clone(),
+            is_current: false,
         })
         .collect()
 }
@@ -413,6 +398,13 @@ pub struct ModelPickerState {
 // ---------------------------------------------------------------------------
 
 impl ModelPickerState {
+    fn default_models() -> Vec<ModelEntry> {
+        vec![
+            model_entry("claude-3-5-sonnet-20241022", "Claude 3.5 Sonnet", "Latest Sonnet model"),
+            model_entry("claude-3-5-haiku-20241022", "Claude 3.5 Haiku", "Fast and capable"),
+        ]
+    }
+
     /// Create a new picker with the default model list (not yet visible).
     pub fn new() -> Self {
         Self {
@@ -608,96 +600,25 @@ impl ModelPickerState {
     /// On any error, returns `default_models()` as a fallback so the picker is
     /// never left empty.
     pub async fn fetch_models(client: &crate::tui::adapter_types::AnthropicClient) -> Vec<ModelEntry> {
-        match client.fetch_available_models().await {
-            Ok(available) => {
-                if available.is_empty() {
-                    return Self::default_models();
-                }
-
-                let mut entries: Vec<(i64, ModelEntry)> = available
-                    .into_iter()
-                    .map(|m| {
-                        let display = m
-                            .display_name
-                            .clone()
-                            .unwrap_or_else(|| m.id.clone());
-                        let description = model_family_description(&m.id);
-                        let ts = m.created_at.unwrap_or(0);
-                        (ts, ModelEntry {
-                            id: m.id,
-                            display_name: display,
-                            description,
-                            is_current: false,
-                        })
-                    })
-                    .collect();
-
-                // Sort newest-first.
-                entries.sort_by(|a, b| b.0.cmp(&a.0));
-                entries.into_iter().map(|(_, e)| e).collect()
-            }
-            Err(_) => Self::default_models(),
+        let available = client.fetch_available_models();
+        if available.is_empty() {
+            return Self::default_models();
         }
-    }
 
-    /// Hardcoded list of Claude models available as of 2025.
-    pub fn default_models() -> Vec<ModelEntry> {
-        vec![
-            ModelEntry {
-                id: "claude-opus-4-6".to_string(),
-                display_name: "Claude Opus 4.6".to_string(),
-                description: "Most capable model — best for complex reasoning and analysis".to_string(),
-                is_current: false,
-            },
-            ModelEntry {
-                id: "claude-sonnet-4-6".to_string(),
-                display_name: "Claude Sonnet 4.6".to_string(),
-                description: "Balanced performance and speed — great for coding tasks".to_string(),
-                is_current: false,
-            },
-            ModelEntry {
-                id: "claude-haiku-4-5-20251001".to_string(),
-                display_name: "Claude Haiku 4.5 (2025-10-01)".to_string(),
-                description: "Fast and efficient — ideal for quick completions".to_string(),
-                is_current: false,
-            },
-            ModelEntry {
-                id: "claude-opus-4-5".to_string(),
-                display_name: "Claude Opus 4.5".to_string(),
-                description: "Previous Opus generation — powerful multimodal reasoning".to_string(),
-                is_current: false,
-            },
-            ModelEntry {
-                id: "claude-sonnet-4-5".to_string(),
-                display_name: "Claude Sonnet 4.5".to_string(),
-                description: "Previous Sonnet generation — solid coding and writing".to_string(),
-                is_current: false,
-            },
-            ModelEntry {
-                id: "claude-haiku-4-5".to_string(),
-                display_name: "Claude Haiku 4.5".to_string(),
-                description: "Previous Haiku generation — lightweight and responsive".to_string(),
-                is_current: false,
-            },
-            ModelEntry {
-                id: "claude-3-7-sonnet-20250219".to_string(),
-                display_name: "Claude 3.7 Sonnet (2025-02-19)".to_string(),
-                description: "Sonnet 3.7 with enhanced instruction following".to_string(),
-                is_current: false,
-            },
-            ModelEntry {
-                id: "claude-3-5-sonnet-20241022".to_string(),
-                display_name: "Claude 3.5 Sonnet (2024-10-22)".to_string(),
-                description: "Highly capable 3.5 Sonnet — reliable and well-tested".to_string(),
-                is_current: false,
-            },
-            ModelEntry {
-                id: "claude-3-5-haiku-20241022".to_string(),
-                display_name: "Claude 3.5 Haiku (2024-10-22)".to_string(),
-                description: "Fast 3.5 Haiku — great for high-throughput pipelines".to_string(),
-                is_current: false,
-            },
-        ]
+        let entries: Vec<ModelEntry> = available
+            .into_iter()
+            .map(|m| {
+                let description = model_family_description(&m);
+                ModelEntry {
+                    id: m.clone(),
+                    display_name: m,
+                    description,
+                    is_current: false,
+                }
+            })
+            .collect();
+
+        entries
     }
 }
 
@@ -725,10 +646,10 @@ pub fn render_model_picker(state: &ModelPickerState, area: Rect, buf: &mut Buffe
     use ratatui::prelude::Stylize;
     use ratatui::widgets::Widget;
 
-    let _pink = Color::Rgb(233, 30, 99);
+    let _pink = Color::Rgb(255, 191, 0);
     let dim = Color::Rgb(90, 90, 90);
-    let dialog_bg = CLAURST_PANEL_BG;
-    let highlight_bg = Color::Rgb(233, 30, 99);
+    let dialog_bg = OPERANT_PANEL_BG;
+    let highlight_bg = Color::Rgb(255, 191, 0);
     let highlight_fg = Color::White;
 
     // ── Dark overlay ──
@@ -924,8 +845,8 @@ pub fn render_model_picker(state: &ModelPickerState, area: Rect, buf: &mut Buffe
         }
     }
     footer_spans.push(Span::raw("  "));
-    footer_spans.push(Span::styled(" /connect", Style::default().fg(Color::Rgb(233, 30, 99))));
-    footer_spans.push(Span::styled(" providers", Style::default().fg(dim)));
+    footer_spans.push(Span::styled("Esc", Style::default().fg(dim)));
+    footer_spans.push(Span::styled(" close", Style::default().fg(dim)));
     Paragraph::new(Line::from(footer_spans)).bg(dialog_bg).render(footer_area, buf);
 }
 
@@ -949,8 +870,7 @@ mod tests {
         let models = ModelPickerState::default_models();
         assert!(!models.is_empty(), "default model list must not be empty");
         let ids: Vec<&str> = models.iter().map(|m| m.id.as_str()).collect();
-        assert!(ids.contains(&"claude-sonnet-4-6"));
-        assert!(ids.contains(&"claude-opus-4-6"));
+        assert!(ids.contains(&"claude-3-5-sonnet-20241022"));
         assert!(ids.contains(&"claude-3-5-haiku-20241022"));
     }
 
@@ -958,10 +878,10 @@ mod tests {
     #[test]
     fn open_marks_current_model() {
         let mut p = ModelPickerState::new();
-        p.open("claude-sonnet-4-6");
+        p.open("claude-3-5-sonnet-20241022");
         let current_count = p.models.iter().filter(|m| m.is_current).count();
         assert_eq!(current_count, 1);
-        assert!(p.models.iter().find(|m| m.id == "claude-sonnet-4-6").unwrap().is_current);
+        assert!(p.models.iter().find(|m| m.id == "claude-3-5-sonnet-20241022").unwrap().is_current);
     }
 
     #[test]
@@ -1089,9 +1009,9 @@ mod tests {
     // 13. Non-effort models return None from effective_effort.
     #[test]
     fn haiku_has_no_effort() {
-        let mut p = make_picker_with_current("claude-haiku-4-5");
-        p.selected_idx = p.models.iter().position(|m| m.id == "claude-haiku-4-5").unwrap();
-        assert!(!model_supports_effort("claude-haiku-4-5"));
+        let mut p = make_picker_with_current("claude-3-5-haiku-20241022");
+        p.selected_idx = p.models.iter().position(|m| m.id == "claude-3-5-haiku-20241022").unwrap();
+        assert!(!model_supports_effort("claude-3-5-haiku-20241022"));
         let effort = p.confirm();
         assert!(effort.is_some_and(|(_, e)| e.is_none()));
     }
@@ -1100,7 +1020,7 @@ mod tests {
     #[test]
     fn render_does_not_panic() {
         let mut p = ModelPickerState::new();
-        p.open("claude-sonnet-4-6");
+        p.open("claude-3-5-sonnet-20241022");
         let area = Rect::new(0, 0, 120, 40);
         let mut buf = Buffer::empty(area);
         render_model_picker(&p, area, &mut buf);

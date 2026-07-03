@@ -147,7 +147,7 @@ pub fn render_feedback_survey(
             vec![
                 Line::from(""),
                 Line::from(vec![Span::styled(
-                    "  How is Claurst doing this session? (optional)",
+                    "  How is Operant doing this session? (optional)",
                     Style::default().fg(Color::White),
                 )]),
                 Line::from(""),
@@ -206,7 +206,7 @@ pub fn render_feedback_survey(
     let block = Block::default()
         .borders(Borders::ALL)
         .title(title)
-        .border_style(Style::default().fg(Color::Rgb(233, 30, 99)));
+        .border_style(Style::default().fg(Color::Rgb(255, 191, 0)));
 
     let para = Paragraph::new(body_lines)
         .block(block)

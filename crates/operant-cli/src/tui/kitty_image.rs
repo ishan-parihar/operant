@@ -94,43 +94,44 @@ pub fn supports_kitty_graphics() -> bool {
 ///
 /// The caller must flush stdout after this call when `None` is returned.
 pub fn render_image(source: &ImageSource) -> Option<String> {
-    // URL-type sources: never fetch remote URLs — fall back to text
-    if source.source_type == "url" {
-        let url = source.url.as_deref().unwrap_or("(no url)");
-        return Some(format!("[Image: {}]", url));
-    }
-
-    // base64 data source
-    if let Some(data) = &source.data {
-        let protocol = detect_image_protocol();
-
-        match protocol {
-            ImageProtocol::Kitty => {
-                emit_kitty_apc(data, source.media_type.as_deref());
-                return None; // successfully emitted — caller skips text line
+    match source {
+        ImageSource::Clipboard => Some("[Image: clipboard]".to_string()),
+        ImageSource::File(path) => Some(format!("[Image: {}]", path)),
+        ImageSource::Url(url) => Some(format!("[Image: {}]", url)),
+        ImageSource::Paste { source_type, url, data, media_type } => {
+            if source_type == "url" {
+                let url_str = url.as_deref().unwrap_or("(no url)");
+                return Some(format!("[Image: {}]", url_str));
             }
-            ImageProtocol::Sixel => {
-                if emit_sixel(data, source.media_type.as_deref()) {
-                    return None; // successfully emitted — caller skips text line
+
+            if let Some(raw_data) = data {
+                use base64::Engine;
+                let b64 = base64::engine::general_purpose::STANDARD.encode(raw_data);
+                let protocol = detect_image_protocol();
+
+                match protocol {
+                    ImageProtocol::Kitty => {
+                        emit_kitty_apc(&b64, Some(media_type));
+                        return None;
+                    }
+                    ImageProtocol::Sixel => {
+                        if emit_sixel(&b64, Some(media_type)) {
+                            return None;
+                        }
+                    }
+                    ImageProtocol::Text => {}
                 }
-                // Fall through to text if Sixel conversion fails
-            }
-            ImageProtocol::Text => {
-                // Fall through to generate fallback text
-            }
-        }
 
-        // Fallback: describe the type and rough size
-        let media = source.media_type.as_deref().unwrap_or("image");
-        let size_kb = (data.len() * 3 / 4) / 1024; // rough decoded byte count
-        if size_kb > 0 {
-            return Some(format!("[Image: {} ~{}KB]", media, size_kb));
+                let size_kb = raw_data.len() / 1024;
+                if size_kb > 0 {
+                    return Some(format!("[Image: {} ~{}KB]", media_type, size_kb));
+                }
+                return Some(format!("[Image: {}]", media_type));
+            }
+
+            Some("[Image: embedded image]".to_string())
         }
-        return Some(format!("[Image: {}]", media));
     }
-
-    // No data, no URL
-    Some("[Image: embedded image]".to_string())
 }
 
 // ---------------------------------------------------------------------------

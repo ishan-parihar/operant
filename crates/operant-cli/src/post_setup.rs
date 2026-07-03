@@ -192,7 +192,10 @@ fn print_config_location() {
         .unwrap_or_else(|| std::path::PathBuf::from("~/.operant"));
 
     print_header("Configuration Location");
-    print_info(&format!("Settings:  {}/operant.toml", operant_home.display()));
+    print_info(&format!(
+        "Settings:  {}/operant.toml",
+        operant_home.display()
+    ));
     print_info(&format!("API Keys:  {}/.env", operant_home.display()));
     print_info(&format!(
         "Data:      {}/cron/, sessions/, logs/",

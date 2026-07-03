@@ -109,9 +109,7 @@ async fn execute_acp_command_inner(
 
     let agent = operant_core::agent::OperantAgent::new(
         agent_config,
-        Box::new(operant_core::agent::clients::openai::OpenAIModelClient::new(
-            raw_client,
-        )),
+        Box::new(operant_core::agent::clients::openai::OpenAIModelClient::new(raw_client)),
         registry,
         database,
     )

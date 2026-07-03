@@ -22,6 +22,17 @@ use crate::parser::{ToolCallParser, ToolCallStreamParser};
 use crate::skills::SkillManager;
 use crate::tools::{ToolContext, ToolRegistry, ToolResult};
 
+/// Response from the user for tool permission requests
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ToolPermissionResponse {
+    /// Allow this tool call once
+    AllowOnce,
+    /// Allow this tool call and all subsequent calls to this tool in the session
+    AllowSession,
+    /// Deny this tool call
+    Deny,
+}
+
 /// Configuration for the Operant agent
 #[derive(Debug, Clone)]
 pub struct AgentConfig {
@@ -97,6 +108,14 @@ pub enum AgentEvent {
         output_tokens: u32,
         total_tokens: u32,
     },
+    /// Tool requires permission before execution
+    ToolPermissionRequest {
+        tool_name: String,
+        tool_id: String,
+        description: String,
+        danger_explanation: String,
+        input_preview: Option<String>,
+    },
 }
 
 /// Operant Agent for tool orchestration
@@ -106,9 +125,25 @@ pub struct OperantAgent {
     registry: ToolRegistry,
     conversation: Arc<RwLock<Vec<Message>>>,
     event_tx: Option<mpsc::Sender<AgentEvent>>,
+    permission_tx: Option<mpsc::Sender<ToolPermissionRequest>>,
     memory_manager: Option<MemoryManager>,
     skill_manager: Option<SkillManager>,
     database: Arc<Database>,
+    /// Stable session ID for DB persistence across multiple `run()` calls.
+    /// When set, all messages are persisted under this ID instead of generating
+    /// a fresh one each call.  Set by the TUI at startup.
+    persistent_session_id: Option<String>,
+}
+
+/// A pending permission request sent from the agent to the TUI
+#[derive(Debug)]
+pub struct ToolPermissionRequest {
+    pub tool_name: String,
+    pub tool_id: String,
+    pub description: String,
+    pub danger_explanation: String,
+    pub input_preview: Option<String>,
+    pub response_tx: tokio::sync::oneshot::Sender<ToolPermissionResponse>,
 }
 
 impl OperantAgent {
@@ -125,9 +160,11 @@ impl OperantAgent {
             registry,
             conversation: Arc::new(RwLock::new(Vec::new())),
             event_tx: None,
+            permission_tx: None,
             memory_manager: None,
             skill_manager: None,
             database,
+            persistent_session_id: None,
         }
     }
 
@@ -145,9 +182,11 @@ impl OperantAgent {
             registry,
             conversation: Arc::new(RwLock::new(Vec::new())),
             event_tx: Some(event_tx),
+            permission_tx: None,
             memory_manager: None,
             skill_manager: None,
             database,
+            persistent_session_id: None,
         }
     }
 
@@ -160,6 +199,16 @@ impl OperantAgent {
     /// Attach a skill manager for available skills injection into the system prompt.
     pub fn with_skill_manager(mut self, skill_manager: SkillManager) -> Self {
         self.skill_manager = Some(skill_manager);
+        self
+    }
+
+    pub fn with_permissions(mut self, permission_tx: mpsc::Sender<ToolPermissionRequest>) -> Self {
+        self.permission_tx = Some(permission_tx);
+        self
+    }
+
+    pub fn with_persistent_session(mut self, session_id: String) -> Self {
+        self.persistent_session_id = Some(session_id);
         self
     }
 
@@ -202,8 +251,10 @@ impl OperantAgent {
     pub async fn run(&self, user_query: String) -> Result<Message> {
         info!("Starting agent run");
 
-        // Generate a session ID for this run if not already present
-        let session_id = format!("sess_{}", uuid::Uuid::new_v4());
+        let session_id = self
+            .persistent_session_id
+            .clone()
+            .unwrap_or_else(|| format!("sess_{}", uuid::Uuid::new_v4()));
 
         // Add user message
         self.add_message(Message::user(&user_query)).await;
@@ -698,6 +749,63 @@ impl OperantAgent {
                     format!("Tool '{}' not found", name),
                 ));
                 continue;
+            }
+
+            // Permission guard for dangerous tools
+            if let Some(ref permission_tx) = self.permission_tx {
+                let needs_permission = matches!(
+                    name.as_str(),
+                    "bash"
+                        | "terminal"
+                        | "execute_command"
+                        | "code_execution"
+                        | "file_write"
+                        | "file_edit"
+                        | "patch"
+                        | "process"
+                        | "browser"
+                );
+                if needs_permission {
+                    let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
+                    let description = format!("Execute {} tool", name);
+                    let danger = match name.as_str() {
+                        "bash" | "terminal" | "execute_command" => {
+                            "This runs a shell command on your system".to_string()
+                        }
+                        "code_execution" => "This executes code in a sandbox".to_string(),
+                        "file_write" => "This writes content to a file".to_string(),
+                        "file_edit" | "patch" => "This modifies an existing file".to_string(),
+                        "process" => "This manages background processes".to_string(),
+                        "browser" => "This opens and interacts with a browser".to_string(),
+                        _ => "This tool may modify your system".to_string(),
+                    };
+                    let input_preview = Some(args_str.clone());
+                    let _ = permission_tx
+                        .send(ToolPermissionRequest {
+                            tool_name: name.clone(),
+                            tool_id: tool_call.id.clone(),
+                            description,
+                            danger_explanation: danger,
+                            input_preview,
+                            response_tx: resp_tx,
+                        })
+                        .await;
+                    let response = tokio::select! {
+                        r = resp_rx => r.unwrap_or(ToolPermissionResponse::Deny),
+                        _ = tokio::time::sleep(Duration::from_secs(30)) => ToolPermissionResponse::Deny,
+                    };
+                    match response {
+                        ToolPermissionResponse::AllowOnce
+                        | ToolPermissionResponse::AllowSession => {}
+                        ToolPermissionResponse::Deny => {
+                            results.push(ToolResult::error(
+                                &tool_call.id,
+                                "Permission denied by user".to_string(),
+                            ));
+                            continue;
+                        }
+                    }
+                }
             }
 
             // Execute with timeout
@@ -1539,5 +1647,38 @@ mod tests {
         assert_eq!(reasoning, "need tool");
         assert_eq!(tool_calls.len(), 1);
         assert_eq!(tool_calls[0].function.name, "datetime");
+    }
+
+    #[test]
+    fn tool_permission_response_variants() {
+        let allow_once = ToolPermissionResponse::AllowOnce;
+        let allow_session = ToolPermissionResponse::AllowSession;
+        let deny = ToolPermissionResponse::Deny;
+
+        assert_eq!(allow_once, ToolPermissionResponse::AllowOnce);
+        assert_eq!(allow_session, ToolPermissionResponse::AllowSession);
+        assert_eq!(deny, ToolPermissionResponse::Deny);
+        assert_ne!(allow_once, deny);
+    }
+
+    #[test]
+    fn agent_event_tool_permission_request_variant() {
+        let event = AgentEvent::ToolPermissionRequest {
+            tool_name: "terminal".to_string(),
+            tool_id: "call_1".to_string(),
+            description: "Execute terminal tool".to_string(),
+            danger_explanation: "This runs a shell command".to_string(),
+            input_preview: Some("ls -la".to_string()),
+        };
+
+        match event {
+            AgentEvent::ToolPermissionRequest {
+                tool_name, tool_id, ..
+            } => {
+                assert_eq!(tool_name, "terminal");
+                assert_eq!(tool_id, "call_1");
+            }
+            _ => panic!("Expected ToolPermissionRequest variant"),
+        }
     }
 }

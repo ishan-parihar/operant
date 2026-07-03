@@ -7,7 +7,7 @@
 
 use std::collections::HashMap;
 
-use crate::tui::adapter_types::types::{ContentBlock, Message, Role, ToolResultContent};
+use crate::tui::adapter_types::types::{ContentBlock, Message, MessageContent, Role, ToolResultContent};
 use crate::tui::app::TurnMetadata;
 use crate::tui::kitty_image::render_image;
 use crate::tui::transcript_turn::reasoning_heading;
@@ -61,7 +61,7 @@ const TRUNCATE_USER_PROMPT_HEAD_CHARS: usize = 2_500;
 const TRUNCATE_USER_PROMPT_TAIL_CHARS: usize = 2_500;
 
 /// Claude orange: Rgb(215, 119, 87)
-const CLAUDE_ORANGE: Color = Color::Rgb(233, 30, 99);
+const ACCENT_PRIMARY: Color = Color::Rgb(255, 191, 0);
 const TRANSCRIPT_USER_BG: Color = Color::Rgb(23, 23, 31);
 const TRANSCRIPT_CHIP_BG: Color = Color::Rgb(31, 31, 41);
 const TRANSCRIPT_TEXT: Color = Color::Rgb(236, 236, 241);
@@ -170,7 +170,7 @@ fn apply_block_style(mut line: Line<'static>, width: u16) -> Line<'static> {
     }
 
     let mut spans = vec![
-        Span::styled("▏", Style::default().fg(CLAUDE_ORANGE).bg(bg)),
+        Span::styled("▏", Style::default().fg(ACCENT_PRIMARY).bg(bg)),
         Span::styled(" ", Style::default().bg(bg)),
     ];
     spans.extend(line.spans);
@@ -190,7 +190,7 @@ fn empty_block_line(width: u16) -> Line<'static> {
     apply_block_style(Line::from(""), width)
 }
 fn render_attachment_chip(kind: &str, label: String) -> Line<'static> {
-    render_attachment_chip_colored(kind, label, CLAUDE_ORANGE, Color::Black)
+    render_attachment_chip_colored(kind, label, ACCENT_PRIMARY, Color::Black)
 }
 
 fn render_file_chip(label: String) -> Line<'static> {
@@ -441,20 +441,23 @@ pub fn render_transcript_user_message(
                     pending_text.push_str(&text);
                 }
             }
-            ContentBlock::Image { source } => {
+            ContentBlock::Image { source, data: _, media_type } => {
                 flush_text(&mut pending_text, &mut lines);
-                let label = source
-                    .media_type
-                    .or(source.url)
-                    .unwrap_or_else(|| "pasted image".to_string());
+                let label = if !media_type.is_empty() {
+                    media_type.clone()
+                } else if !source.is_empty() {
+                    source.clone()
+                } else {
+                    "pasted image".to_string()
+                };
                 lines.push(render_attachment_chip("img", label));
             }
             ContentBlock::Document { title, context, source, .. } => {
                 flush_text(&mut pending_text, &mut lines);
-                let label = title
-                    .or(context)
-                    .or(source.url)
-                    .or(source.media_type)
+                let label = [title.as_str(), context.as_str(), source.as_str()]
+                    .into_iter()
+                    .find(|s| !s.is_empty())
+                    .map(|s| s.to_string())
                     .unwrap_or_else(|| "attached document".to_string());
                 lines.push(render_attachment_chip("doc", label));
             }
@@ -472,12 +475,12 @@ pub fn render_transcript_user_message(
             }
             ContentBlock::SystemAPIError { message, retry_secs } => {
                 flush_text(&mut pending_text, &mut lines);
-                lines.extend(render_system_api_error(&message, retry_secs));
+                lines.extend(render_system_api_error(&message, *retry_secs));
             }
             ContentBlock::CollapsedReadSearch { tool_name, paths, n_hidden } => {
                 flush_text(&mut pending_text, &mut lines);
                 let path_refs: Vec<&str> = paths.iter().map(|path| path.as_str()).collect();
-                lines.extend(render_collapsed_read_search(&tool_name, &path_refs, n_hidden));
+                lines.extend(render_collapsed_read_search(&tool_name, &path_refs, *n_hidden));
             }
             ContentBlock::TaskAssignment { id, subject, description } => {
                 flush_text(&mut pending_text, &mut lines);
@@ -490,7 +493,7 @@ pub fn render_transcript_user_message(
             ContentBlock::ToolResult { tool_use_id: _, content, is_error } => {
                 flush_text(&mut pending_text, &mut lines);
                 let text = tool_result_text(&content);
-                let rendered = if is_error.unwrap_or(false) {
+                let rendered = if *is_error {
                     render_tool_result_error(&text)
                 } else {
                     render_tool_result_success(&text, false)
@@ -644,8 +647,8 @@ pub fn render_transcript_assistant_message_tagged(
             ContentBlock::ToolResult { tool_use_id, content, is_error } => {
                 flush_text(&mut pending_text, &mut out, ctx.width);
                 let text = tool_result_text(&content);
-                let tool_name = ctx.tool_names.get(&tool_use_id).map(|name| name.as_str());
-                let rendered = if is_error.unwrap_or(false) {
+                let tool_name = ctx.tool_names.get(tool_use_id).map(|name| name.as_str());
+                let rendered = if *is_error {
                     render_tool_result_error(&text)
                 } else {
                     match tool_name {
@@ -660,14 +663,15 @@ pub fn render_transcript_assistant_message_tagged(
                     out.push((line, None));
                 }
             }
-            ContentBlock::Image { source } => {
+            ContentBlock::Image { source, data: _, media_type } => {
                 flush_text(&mut pending_text, &mut out, ctx.width);
-                let label = render_image(&source).unwrap_or_else(|| {
-                    source
-                        .media_type
-                        .or(source.url)
-                        .unwrap_or_else(|| "assistant image".to_string())
-                });
+                let label = if !media_type.is_empty() {
+                    media_type.clone()
+                } else if !source.is_empty() {
+                    source.clone()
+                } else {
+                    "assistant image".to_string()
+                };
                 for line in indent_lines(
                     vec![render_attachment_chip("img", label)],
                     "   ",
@@ -679,10 +683,10 @@ pub fn render_transcript_assistant_message_tagged(
             }
             ContentBlock::Document { title, context, source, .. } => {
                 flush_text(&mut pending_text, &mut out, ctx.width);
-                let label = title
-                    .or(context)
-                    .or(source.url)
-                    .or(source.media_type)
+                let label = [title.as_str(), context.as_str(), source.as_str()]
+                    .into_iter()
+                    .find(|s| !s.is_empty())
+                    .map(|s| s.to_string())
                     .unwrap_or_else(|| "attached document".to_string());
                 for line in indent_lines(
                     vec![render_attachment_chip("doc", label)],
@@ -729,7 +733,7 @@ pub fn render_transcript_assistant_message_tagged(
             ContentBlock::SystemAPIError { message, retry_secs } => {
                 flush_text(&mut pending_text, &mut out, ctx.width);
                 for line in indent_lines(
-                    render_system_api_error(&message, retry_secs),
+                    render_system_api_error(&message, *retry_secs),
                     "   ",
                     Style::default(),
                     TRANSCRIPT_TEXT,
@@ -741,7 +745,7 @@ pub fn render_transcript_assistant_message_tagged(
                 flush_text(&mut pending_text, &mut out, ctx.width);
                 let path_refs: Vec<&str> = paths.iter().map(|path| path.as_str()).collect();
                 for line in indent_lines(
-                    render_collapsed_read_search(&tool_name, &path_refs, n_hidden),
+                    render_collapsed_read_search(&tool_name, &path_refs, *n_hidden),
                     "   ",
                     Style::default(),
                     TRANSCRIPT_TEXT,
@@ -823,8 +827,8 @@ pub fn render_transcript_assistant_message(
             ContentBlock::ToolResult { tool_use_id, content, is_error } => {
                 flush_text(&mut pending_text, &mut lines);
                 let text = tool_result_text(&content);
-                let tool_name = ctx.tool_names.get(&tool_use_id).map(|name| name.as_str());
-                let rendered = if is_error.unwrap_or(false) {
+                let tool_name = ctx.tool_names.get(tool_use_id).map(|name| name.as_str());
+                let rendered = if *is_error {
                     render_tool_result_error(&text)
                 } else {
                     match tool_name {
@@ -842,14 +846,15 @@ pub fn render_transcript_assistant_message(
                     TRANSCRIPT_TEXT,
                 ));
             }
-            ContentBlock::Image { source } => {
+            ContentBlock::Image { source, data: _, media_type } => {
                 flush_text(&mut pending_text, &mut lines);
-                let label = render_image(&source).unwrap_or_else(|| {
-                    source
-                        .media_type
-                        .or(source.url)
-                        .unwrap_or_else(|| "assistant image".to_string())
-                });
+                let label = if !media_type.is_empty() {
+                    media_type.clone()
+                } else if !source.is_empty() {
+                    source.clone()
+                } else {
+                    "assistant image".to_string()
+                };
                 lines.extend(indent_lines(
                     vec![render_attachment_chip("img", label)],
                     "   ",
@@ -859,10 +864,10 @@ pub fn render_transcript_assistant_message(
             }
             ContentBlock::Document { title, context, source, .. } => {
                 flush_text(&mut pending_text, &mut lines);
-                let label = title
-                    .or(context)
-                    .or(source.url)
-                    .or(source.media_type)
+                let label = [title.as_str(), context.as_str(), source.as_str()]
+                    .into_iter()
+                    .find(|s| !s.is_empty())
+                    .map(|s| s.to_string())
                     .unwrap_or_else(|| "attached document".to_string());
                 lines.extend(indent_lines(
                     vec![render_attachment_chip("doc", label)],
@@ -901,7 +906,7 @@ pub fn render_transcript_assistant_message(
             ContentBlock::SystemAPIError { message, retry_secs } => {
                 flush_text(&mut pending_text, &mut lines);
                 lines.extend(indent_lines(
-                    render_system_api_error(&message, retry_secs),
+                    render_system_api_error(&message, *retry_secs),
                     "   ",
                     Style::default(),
                     TRANSCRIPT_TEXT,
@@ -911,7 +916,7 @@ pub fn render_transcript_assistant_message(
                 flush_text(&mut pending_text, &mut lines);
                 let path_refs: Vec<&str> = paths.iter().map(|path| path.as_str()).collect();
                 lines.extend(indent_lines(
-                    render_collapsed_read_search(&tool_name, &path_refs, n_hidden),
+                    render_collapsed_read_search(&tool_name, &path_refs, *n_hidden),
                     "   ",
                     Style::default(),
                     TRANSCRIPT_TEXT,
@@ -1019,7 +1024,7 @@ fn render_tool_use_inner(tool_name: &str, input: &serde_json::Value) -> Vec<Line
         "task" | "agent" => return {
             let mut task_lines = Vec::new();
             task_lines.push(Line::from(vec![
-                Span::styled("  ~ ".to_string(), Style::default().fg(CLAUDE_ORANGE)),
+                Span::styled("  ~ ".to_string(), Style::default().fg(ACCENT_PRIMARY)),
                 Span::styled(
                     subagent_title(input),
                     Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
@@ -1037,7 +1042,7 @@ fn render_tool_use_inner(tool_name: &str, input: &serde_json::Value) -> Vec<Line
     };
 
     lines.push(Line::from(vec![
-        Span::styled("  ~ ".to_string(), Style::default().fg(CLAUDE_ORANGE)),
+        Span::styled("  ~ ".to_string(), Style::default().fg(ACCENT_PRIMARY)),
         Span::styled(
             title.to_string(),
             Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
@@ -1167,7 +1172,7 @@ pub fn render_tool_result_rejected(tool_name: &str, reason: &str) -> Vec<Line<'s
     vec![
         Line::from(vec![Span::styled(
             format!("  \u{2717} {} \u{2014} interrupted", tool_name),
-            Style::default().fg(CLAUDE_ORANGE),
+            Style::default().fg(ACCENT_PRIMARY),
         )]),
         Line::from(vec![Span::styled(
             format!("    {}", reason),
@@ -1306,13 +1311,13 @@ pub fn render_plan_steps(steps: &[String]) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     lines.push(Line::from(vec![Span::styled(
         "  Plan:".to_string(),
-        Style::default().fg(CLAUDE_ORANGE).add_modifier(Modifier::BOLD),
+        Style::default().fg(ACCENT_PRIMARY).add_modifier(Modifier::BOLD),
     )]));
     for (i, step) in steps.iter().enumerate() {
         lines.push(Line::from(vec![
             Span::styled(
                 format!("  {}. ", i + 1),
-                Style::default().fg(CLAUDE_ORANGE),
+                Style::default().fg(ACCENT_PRIMARY),
             ),
             Span::styled(step.clone(), Style::default().fg(Color::White)),
         ]));
@@ -1325,7 +1330,7 @@ pub fn render_plan_approval_prompt() -> Vec<Line<'static>> {
     vec![Line::from(vec![
         Span::styled(
             "  Approve this plan? ".to_string(),
-            Style::default().fg(CLAUDE_ORANGE).add_modifier(Modifier::BOLD),
+            Style::default().fg(ACCENT_PRIMARY).add_modifier(Modifier::BOLD),
         ),
         Span::styled(
             "[y] yes  [n] no  [e] edit".to_string(),
@@ -1424,7 +1429,7 @@ pub fn render_rate_limit_with_hint(retry_after_secs: u64, show_upgrade_hint: boo
     ];
     if show_upgrade_hint {
         lines.push(Line::from(vec![Span::styled(
-            "  \u{2192} claude.ai/upgrade for higher limits",
+            "  \u{2192} /providers to configure API keys",
             Style::default().fg(Color::DarkGray),
         )]));
     }
@@ -1478,11 +1483,11 @@ fn prefix_message_lines(
         Role::User => (
             "› ",
             Style::default()
-                .fg(Color::Rgb(233, 30, 99))
+                .fg(Color::Rgb(255, 191, 0))
                 .add_modifier(Modifier::BOLD),
             Style::default().fg(Color::White),
         ),
-        Role::Assistant => (
+        Role::Assistant | Role::System => (
             "",
             Style::default(),
             Style::default().fg(Color::White),
@@ -1529,7 +1534,7 @@ fn flush_text(lines: &mut Vec<Line<'static>>, role: &Role, text: &mut String, ct
 
     let rendered = match role {
         Role::User => prefix_message_lines(render_markdown(text, ctx.width), role, ctx.width),
-        Role::Assistant => prefix_message_lines(render_assistant_text(text, ctx), role, ctx.width),
+        Role::Assistant | Role::System => prefix_message_lines(render_assistant_text(text, ctx), role, ctx.width),
     };
     lines.extend(rendered);
     text.clear();
@@ -1538,6 +1543,7 @@ fn flush_text(lines: &mut Vec<Line<'static>>, role: &Role, text: &mut String, ct
 fn tool_result_text(content: &ToolResultContent) -> String {
     match content {
         ToolResultContent::Text(text) => text.clone(),
+        ToolResultContent::Image { data: _, media_type } => format!("[image: {}]", media_type),
         ToolResultContent::Blocks(blocks) => {
             let joined = blocks
                 .iter()
@@ -1571,6 +1577,11 @@ fn render_attachment_line(kind: &str, label: String) -> Vec<Line<'static>> {
 pub fn render_message(msg: &Message, ctx: &RenderContext) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     let mut pending_text = String::new();
+
+    // Handle plain-text messages (MessageContent::Text) which have no blocks.
+    if let MessageContent::Text(ref t) = msg.content {
+        pending_text.push_str(t);
+    }
 
     for block in msg.content_blocks() {
         match block {
@@ -1620,8 +1631,8 @@ pub fn render_message(msg: &Message, ctx: &RenderContext) -> Vec<Line<'static>> 
             ContentBlock::ToolResult { tool_use_id, content, is_error } => {
                 flush_text(&mut lines, &msg.role, &mut pending_text, ctx);
                 let text = tool_result_text(&content);
-                let tool_name = ctx.tool_names.get(&tool_use_id).map(|s| s.as_str());
-                let rendered = if is_error.unwrap_or(false) {
+                let tool_name = ctx.tool_names.get(tool_use_id).map(|s| s.as_str());
+                let rendered = if *is_error {
                     render_tool_result_error(&text)
                 } else {
                     match tool_name {
@@ -1636,28 +1647,27 @@ pub fn render_message(msg: &Message, ctx: &RenderContext) -> Vec<Line<'static>> 
                 };
                 lines.extend(prefix_message_lines(rendered, &msg.role, ctx.width));
             }
-            ContentBlock::Image { source } => {
+            ContentBlock::Image { source, data: _, media_type } => {
                 flush_text(&mut lines, &msg.role, &mut pending_text, ctx);
-                // Attempt Kitty graphics protocol rendering.  When the
-                // terminal supports it and the source carries inline base64
-                // data, `render_image` emits the APC escape sequence directly
-                // to stdout and returns `None` — nothing more to do for this
-                // block.  Otherwise it returns a human-readable fallback
-                // string that we display as a normal styled line.
-                if let Some(label) = render_image(&source) {
-                    lines.extend(prefix_message_lines(
-                        render_attachment_line("Image", label),
-                        &msg.role,
-                        ctx.width,
-                    ));
-                }
+                let label = if !media_type.is_empty() {
+                    media_type.clone()
+                } else if !source.is_empty() {
+                    source.clone()
+                } else {
+                    "assistant image".to_string()
+                };
+                lines.extend(prefix_message_lines(
+                    render_attachment_line("Image", label),
+                    &msg.role,
+                    ctx.width,
+                ));
             }
             ContentBlock::Document { title, context, source, .. } => {
                 flush_text(&mut lines, &msg.role, &mut pending_text, ctx);
-                let label = title
-                    .or(context)
-                    .or(source.url)
-                    .or(source.media_type)
+                let label = [title.as_str(), context.as_str(), source.as_str()]
+                    .into_iter()
+                    .find(|s| !s.is_empty())
+                    .map(|s| s.to_string())
                     .unwrap_or_else(|| "attached document".to_string());
                 lines.extend(prefix_message_lines(
                     render_attachment_line("Document", label),
@@ -1679,12 +1689,12 @@ pub fn render_message(msg: &Message, ctx: &RenderContext) -> Vec<Line<'static>> 
             }
             ContentBlock::SystemAPIError { message, retry_secs } => {
                 flush_text(&mut lines, &msg.role, &mut pending_text, ctx);
-                lines.extend(render_system_api_error(&message, retry_secs));
+                lines.extend(render_system_api_error(&message, *retry_secs));
             }
             ContentBlock::CollapsedReadSearch { tool_name, paths, n_hidden } => {
                 flush_text(&mut lines, &msg.role, &mut pending_text, ctx);
                 let path_refs: Vec<&str> = paths.iter().map(|s| s.as_str()).collect();
-                lines.extend(render_collapsed_read_search(&tool_name, &path_refs, n_hidden));
+                lines.extend(render_collapsed_read_search(&tool_name, &path_refs, *n_hidden));
             }
             ContentBlock::TaskAssignment { id, subject, description } => {
                 flush_text(&mut lines, &msg.role, &mut pending_text, ctx);
@@ -1700,7 +1710,7 @@ pub fn render_message(msg: &Message, ctx: &RenderContext) -> Vec<Line<'static>> 
 
 /// Render a system API error block (red-bordered, first 5 lines with [expand] hint,
 /// optional retry countdown).
-pub fn render_system_api_error(msg: &str, retry_secs: Option<u32>) -> Vec<Line<'static>> {
+pub fn render_system_api_error(msg: &str, retry_secs: Option<u64>) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     lines.push(Line::from(vec![Span::styled(
         "\u{250c}\u{2500} API Error ",
@@ -1948,7 +1958,7 @@ pub fn render_task_assignment(id: &str, subject: &str, desc: &str) -> Vec<Line<'
         subject.trim()
     };
     lines.push(Line::from(vec![
-        Span::styled("  ~ ", Style::default().fg(CLAUDE_ORANGE)),
+        Span::styled("  ~ ", Style::default().fg(ACCENT_PRIMARY)),
         Span::styled(
             title.to_string(),
             Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
@@ -2079,7 +2089,7 @@ mod tests {
             ContentBlock::ToolResult {
                 tool_use_id: "tool-1".to_string(),
                 content: ToolResultContent::Text("file contents".to_string()),
-                is_error: Some(false),
+                is_error: false,
             },
         ]);
         let ctx = RenderContext {
@@ -2105,7 +2115,7 @@ mod tests {
 
     #[test]
     fn render_message_renders_user_text_in_brief_prompt_style() {
-        let msg = Message::user("hello from user");
+        let msg = Message::user("hello from user".to_string());
         let ctx = RenderContext::default();
 
         let rendered = render_message(&msg, &ctx)
@@ -2327,11 +2337,11 @@ mod tests {
         tool_names.insert("tu-bash-1".to_string(), "Bash".to_string());
         let ctx = RenderContext { tool_names, ..Default::default() };
 
-        let msg = Message::user_blocks(vec![ContentBlock::ToolResult {
+        let msg = Message { role: Role::User, content: MessageContent::Blocks(vec![ContentBlock::ToolResult {
             tool_use_id: "tu-bash-1".to_string(),
             content: ToolResultContent::Text("hello world\nline2".to_string()),
-            is_error: Some(false),
-        }]);
+            is_error: false,
+        }]) };
         let rendered = render_message(&msg, &ctx)
             .into_iter()
             .map(|l| line_text(&l))
@@ -2344,11 +2354,11 @@ mod tests {
 
     #[test]
     fn non_bash_tool_result_shows_content() {
-        let msg = Message::user_blocks(vec![ContentBlock::ToolResult {
+        let msg = Message { role: Role::User, content: MessageContent::Blocks(vec![ContentBlock::ToolResult {
             tool_use_id: "tu-read-1".to_string(),
             content: ToolResultContent::Text("file content here".to_string()),
-            is_error: Some(false),
-        }]);
+            is_error: false,
+        }]) };
         // No tool_names → falls back to render_tool_result_success (no separate header)
         let rendered = render_message(&msg, &RenderContext::default())
             .into_iter()
@@ -2470,10 +2480,10 @@ mod tests {
 
     #[test]
     fn test_render_user_memory_input() {
-        let result = render_user_memory_input("project", "Claurst");
+        let result = render_user_memory_input("project", "Operant");
         assert_eq!(result.len(), 2);
         let first = line_text(&result[0]);
-        assert!(first.contains("# project: Claurst"));
+        assert!(first.contains("# project: Operant"));
         let second = line_text(&result[1]);
         assert!(second.contains("Got it."));
     }
@@ -2590,7 +2600,7 @@ mod tests {
         let result = render_rate_limit_with_hint(60, true);
         assert_eq!(result.len(), 3, "with hint should have 3 lines");
         let last = line_text(result.last().unwrap());
-        assert!(last.contains("claude.ai/upgrade"));
+        assert!(last.contains("/providers"));
     }
 
     #[test]

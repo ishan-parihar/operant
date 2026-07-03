@@ -17,7 +17,7 @@ use serde_json::Value;
 use tokio::time::timeout;
 
 use crate::agent::clients::openai::OpenAIModelClient;
-use crate::agent::{AgentConfig, AgentEvent, OperantAgent, ModelClient};
+use crate::agent::{AgentConfig, AgentEvent, ModelClient, OperantAgent};
 use crate::client::{ClientConfig, OpenAIClient};
 use crate::database::Database;
 use crate::schema::ToolSchema;

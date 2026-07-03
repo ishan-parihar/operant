@@ -46,7 +46,7 @@ impl ColorPalette {
         }
     }
 
-    /// Default Claurst theme
+    /// Default Operant theme
     fn default_theme() -> Self {
         Self {
             error: Color::Rgb(255, 87, 51),        // Bright red-orange
@@ -56,7 +56,7 @@ impl ColorPalette {
             action: Color::Cyan,
             disabled: Color::DarkGray,
             accent: Color::Cyan,
-            secondary_accent: Color::Rgb(233, 30, 99), // Magenta
+            secondary_accent: Color::Rgb(255, 191, 0), // Magenta
             text_light: Color::White,
             text_dark: Color::Black,
             border: Color::DarkGray,
