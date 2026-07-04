@@ -143,6 +143,9 @@ pub struct OperantAgent {
     /// This is the native equivalent of the hermes-agent Python adapter's
     /// TDG hooks — no manual tdg_create/tdg_connect needed.
     memory_provider: Option<Arc<dyn crate::memory_provider::MemoryProvider>>,
+    /// Hook registry for lifecycle events (AgentStart, AgentEnd, etc.).
+    /// When set, the agent emits events at key lifecycle points.
+    hook_registry: Option<Arc<crate::gateway_pipeline::HookRegistry>>,
     /// Stable session ID for DB persistence across multiple `run()` calls.
     /// When set, all messages are persisted under this ID instead of generating
     /// a fresh one each call.  Set by the TUI at startup.
@@ -185,6 +188,7 @@ impl OperantAgent {
             permission_tx: None,
             memory_manager: None,
             memory_provider: None,
+            hook_registry: None,
             skill_manager: None,
             database,
             persistent_session_id: None,
@@ -210,6 +214,7 @@ impl OperantAgent {
             permission_tx: None,
             memory_manager: None,
             memory_provider: None,
+            hook_registry: None,
             skill_manager: None,
             database,
             persistent_session_id: None,
@@ -234,6 +239,16 @@ impl OperantAgent {
         memory_provider: Arc<dyn crate::memory_provider::MemoryProvider>,
     ) -> Self {
         self.memory_provider = Some(memory_provider);
+        self
+    }
+
+    /// Attach a hook registry for lifecycle events. When set, the agent
+    /// emits AgentStart/AgentEnd events at the beginning/end of each run().
+    pub fn with_hook_registry(
+        mut self,
+        hook_registry: Arc<crate::gateway_pipeline::HookRegistry>,
+    ) -> Self {
+        self.hook_registry = Some(hook_registry);
         self
     }
 
@@ -314,6 +329,16 @@ impl OperantAgent {
     #[instrument(skip(self), fields(model = % self.config.model))]
     pub async fn run(&self, user_query: String) -> Result<Message> {
         info!("Starting agent run");
+
+        // Emit AgentStart hook
+        if let Some(ref hooks) = self.hook_registry {
+            let ctx = crate::gateway_pipeline::HookContext::new()
+                .with_session(self.persistent_session_id.as_deref().unwrap_or(""));
+            hooks.emit(
+                crate::gateway_pipeline::HookEvent::AgentStart,
+                ctx,
+            ).await;
+        }
 
         // Reset interrupt flag from any previous run() call. Without this,
         // a Ctrl-C in run #1 permanently breaks run #2+ (the flag stays
@@ -430,6 +455,12 @@ impl OperantAgent {
                             ).await;
                         }
                         self.emit(AgentEvent::Done { message: result.clone() }).await;
+                        // Emit AgentEnd hook
+                        if let Some(ref hooks) = self.hook_registry {
+                            hooks.emit(crate::gateway_pipeline::HookEvent::AgentEnd,
+                                crate::gateway_pipeline::HookContext::new()
+                                    .with_session(&session_id)).await;
+                        }
                         return Ok(result);
                     }
                     Err(e) => {
@@ -592,6 +623,13 @@ impl OperantAgent {
                                     tracing::warn!(error = %e, "TDG sync_turn hook failed");
                                 }
                             });
+                        }
+
+                        // Emit AgentEnd hook
+                        if let Some(ref hooks) = self.hook_registry {
+                            hooks.emit(crate::gateway_pipeline::HookEvent::AgentEnd,
+                                crate::gateway_pipeline::HookContext::new()
+                                    .with_session(&session_id)).await;
                         }
 
                         return Ok(result);
@@ -1677,6 +1715,7 @@ pub struct OperantAgentBuilder {
     registry: Option<ToolRegistry>,
     memory_manager: Option<MemoryManager>,
     memory_provider: Option<Arc<dyn crate::memory_provider::MemoryProvider>>,
+    hook_registry: Option<Arc<crate::gateway_pipeline::HookRegistry>>,
     database: Option<Arc<Database>>,
 }
 
@@ -1688,6 +1727,7 @@ impl OperantAgentBuilder {
             registry: None,
             memory_manager: None,
             memory_provider: None,
+            hook_registry: None,
             database: None,
         }
     }
@@ -1761,6 +1801,15 @@ impl OperantAgentBuilder {
         self
     }
 
+    /// Set the hook registry for lifecycle events.
+    pub fn hook_registry(
+        mut self,
+        hook_registry: Arc<crate::gateway_pipeline::HookRegistry>,
+    ) -> Self {
+        self.hook_registry = Some(hook_registry);
+        self
+    }
+
     /// Build the agent
     pub fn build(self) -> Result<OperantAgent> {
         let client: Box<dyn ModelClient> = self.client.unwrap_or_else(|| {
@@ -1799,6 +1848,9 @@ impl OperantAgentBuilder {
         if let Some(memory_provider) = self.memory_provider {
             agent = agent.with_memory_provider(memory_provider);
         }
+        if let Some(hook_registry) = self.hook_registry {
+            agent = agent.with_hook_registry(hook_registry);
+        }
 
         Ok(agent)
     }
@@ -1815,7 +1867,7 @@ mod model_client;
 pub use model_client::{ChatRequest, ModelClient, StreamChunk};
 
 mod fallback;
-pub use fallback::FallbackModelClient;
+pub use fallback::{ClassifiedError, FallbackModelClient};
 
 pub mod clients;
 
