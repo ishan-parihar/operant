@@ -158,10 +158,10 @@ They are NOT bugs — they are features not yet implemented:
 
 1. **MCP: no sampling/elicitation handlers** — stdio + HTTP work, but `sampling/createMessage` and `elicitation/create` server-initiated requests are unhandled. Hermes supports both + SSE transport + dynamic tool discovery (`notifications/tools/list_changed`)
 2. **No platform registry** — adapters hardcoded in `build_adapters()` if/elif chain. Hermes has `PlatformRegistry` with deferred loading, `adapter_factory`, `check_fn`, `validate_config`, per-plugin YAML config translation
-3. **No credential rotation** — no OAuth refresh / multi-account rotation. Hermes has `agent/credential_pool.py` (2,372 lines) with per-turn tally of consecutive same-entry refreshes
-4. **No `/steer` directive** — no real-time user steering injected during API calls. Hermes drains pending steer directives into the last tool-role message
+3. **No credential rotation** — no OAuth refresh / multi-account rotation. Hermes has `agent/credential_pool.py` (2,372 lines) with per-turn tally of consecutive same-entry refreshs
 
 ### Gaps CLOSED in recent iterations:
+- ✅ ~~`/steer` directive~~ — steer queue + drain between iterations (iter-65)
 - ✅ ~~Context compression on overflow~~ — auto-compress via context_management on context_overflow errors (iter-63)
 - ✅ ~~Hook system~~ — HookRegistry with 6 events + wildcard, wired into agent loop (iter-61/62)
 - ✅ ~~Error recovery 3 vs 22~~ — 12 error classes with ClassifiedError (iter-61)
