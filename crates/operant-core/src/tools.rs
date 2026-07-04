@@ -43,6 +43,10 @@ pub mod spotify_tool;
 pub mod sub_agent_tool;
 pub mod tdg_tools;
 pub mod aft_tools;
+#[cfg(feature = "igs")]
+pub mod igs_tools;
+#[cfg(feature = "lifeos")]
+pub mod lifeos_tools;
 pub mod terminal_backend;
 pub mod terminal_tool;
 pub mod todo_tool;
@@ -78,6 +82,10 @@ pub use builtin::{
 };
 pub use tdg_tools::register_tdg_tools;
 pub use aft_tools::register_aft_tools;
+#[cfg(feature = "igs")]
+pub use igs_tools::register_igs_tools;
+#[cfg(feature = "lifeos")]
+pub use lifeos_tools::{register_lifeos_tools, LifeosState};
 pub use checkpoint_tool::{
     get_checkpoint_manager, Checkpoint, CheckpointConfig, CheckpointManager, CheckpointTool,
 };

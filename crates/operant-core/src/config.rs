@@ -577,6 +577,15 @@ pub struct ToolSettings {
     /// When false (default), only the basic built-in file tools are
     /// available.
     pub aft_enabled: bool,
+    /// Whether to enable IGS (Intelligence Gathering System) tools.
+    /// When true, operant registers 14 igs_* tools for OSINT, news,
+    /// research, finance, security, and analysis. Requires the `igs`
+    /// feature flag at compile time.
+    pub igs_enabled: bool,
+    /// Whether to enable LifeOS tools. When true, operant registers 22
+    /// lifeos_* tools for Notion-backed holonic life-management. Requires
+    /// the `lifeos` feature flag at compile time + NOTION_API_TOKEN env var.
+    pub lifeos_enabled: bool,
 }
 
 impl Default for ToolSettings {
@@ -593,6 +602,8 @@ impl Default for ToolSettings {
             disabled_tools: Vec::new(),
             disabled_toolsets: Vec::new(),
             aft_enabled: false,
+            igs_enabled: false,
+            lifeos_enabled: false,
         }
     }
 }
