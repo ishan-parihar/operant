@@ -832,17 +832,12 @@ pub struct App {
     /// Read-only hooks configuration browser.
     pub hooks_config_menu: crate::tui::hooks_config_menu::HooksConfigMenuState,
     /// Overage credit upsell banner.
-    pub overage_upsell: crate::tui::overage_upsell::OverageCreditUpsellState,
     /// Voice mode availability notice.
     pub voice_mode_notice: crate::tui::voice_mode_notice::VoiceModeNoticeState,
     /// Desktop app upsell startup dialog.
-    pub desktop_upsell: crate::tui::desktop_upsell_startup::DesktopUpsellStartupState,
     /// Startup error dialog for malformed settings.json or AGENTS.md.
-    pub invalid_config_dialog: crate::tui::invalid_config_dialog::InvalidConfigDialogState,
     /// Memory update notification banner.
-    pub memory_update_notification: crate::tui::memory_update_notification::MemoryUpdateNotificationState,
     /// MCP elicitation dialog (form requested by an MCP server).
-    pub elicitation: crate::tui::elicitation_dialog::ElicitationDialogState,
     /// Model picker overlay (/model command).
     pub model_picker: ModelPickerState,
     /// Session browser overlay (/session, /resume, /rename, /export).
@@ -867,12 +862,10 @@ pub struct App {
     pub bypass_permissions_dialog_shown: bool,
     /// File injection warning dialog.
     /// Shown when oversized or binary files are detected in @refs.
-    pub file_injection_dialog: crate::tui::file_injection_dialog::FileInjectionDialogState,
     /// When true, the next file injection size check uses limit 0 (no limit),
     /// letting files that were "allowed" through the warning dialog be injected.
     pub file_injection_force: bool,
     /// First-launch onboarding welcome dialog.
-    pub onboarding_dialog: crate::tui::onboarding_dialog::OnboardingDialogState,
     /// Effort-level picker (/effort with no args).
     pub effort_picker: crate::tui::effort_picker::EffortPickerState,
     /// API key input dialog (opened from /connect for key-based providers).
@@ -1297,12 +1290,7 @@ impl App {
             feedback_survey: crate::tui::feedback_survey::FeedbackSurveyState::new(),
             memory_file_selector: crate::tui::memory_file_selector::MemoryFileSelectorState::new(),
             hooks_config_menu: crate::tui::hooks_config_menu::HooksConfigMenuState::new(),
-            overage_upsell: crate::tui::overage_upsell::OverageCreditUpsellState::new(),
             voice_mode_notice: crate::tui::voice_mode_notice::VoiceModeNoticeState::new(),
-            desktop_upsell: crate::tui::desktop_upsell_startup::DesktopUpsellStartupState::new(),
-            invalid_config_dialog: crate::tui::invalid_config_dialog::InvalidConfigDialogState::new(),
-            memory_update_notification: crate::tui::memory_update_notification::MemoryUpdateNotificationState::new(),
-            elicitation: crate::tui::elicitation_dialog::ElicitationDialogState::new(),
             model_picker: ModelPickerState::new(),
             session_browser: SessionBrowserState::new(),
             session_branching: crate::tui::session_branching::SessionBranchingState::new(),
@@ -1313,9 +1301,7 @@ impl App {
 
             bypass_permissions_dialog: crate::tui::bypass_permissions_dialog::BypassPermissionsDialogState::new(),
             bypass_permissions_dialog_shown: false,
-            file_injection_dialog: crate::tui::file_injection_dialog::FileInjectionDialogState::new(),
             file_injection_force: false,
-            onboarding_dialog: crate::tui::onboarding_dialog::OnboardingDialogState::new(),
             effort_picker: crate::tui::effort_picker::EffortPickerState::new(),
             key_input_dialog: crate::tui::key_input_dialog::KeyInputDialogState::new(),
             custom_provider_dialog: crate::tui::custom_provider_dialog::CustomProviderDialogState::new(),
@@ -2279,15 +2265,15 @@ permission_rx: None,
             || self.feedback_survey.visible
             || self.memory_file_selector.visible
             || self.hooks_config_menu.visible
-            || self.overage_upsell.visible
+            || false
             || self.voice_mode_notice.visible
-            || self.memory_update_notification.visible
-            || self.desktop_upsell.visible
+            || false
+            || false
             || self.import_config_dialog.visible
-            || self.invalid_config_dialog.visible
+            || false
             || self.bypass_permissions_dialog.visible
             || self.ask_user_dialog.visible
-            || self.onboarding_dialog.visible
+            || false
             || self.import_config_picker.visible
             || self.connect_dialog.visible
             || self.key_input_dialog.visible
@@ -2295,14 +2281,14 @@ permission_rx: None,
             || self.free_mode_dialog.visible
             || self.device_auth_dialog.visible
             || self.command_palette.visible
-            || self.elicitation.visible
+            || false
             || self.model_picker.visible
             || self.session_browser.visible
             || self.session_branching.visible
             || self.export_dialog.visible
             || self.context_viz.visible
             || self.mcp_approval.visible
-            || self.file_injection_dialog.visible
+            || false
             || self.context_menu_state.is_some()
     }
 
@@ -2689,11 +2675,6 @@ permission_rx: None,
 
     pub fn refresh_prompt_input(&mut self) {
         self.prompt_input.mode = self.prompt_mode();
-        if self.file_injection_dialog.visible {
-            // Don't update suggestions while the injection dialog is open.
-            self.sync_legacy_prompt_fields();
-            return;
-        }
         let file_autocomplete_limit = self.config.file_autocomplete_limit;
         let file_autocomplete_show_hidden = self.config.file_autocomplete_show_hidden_files;
         self.prompt_input.update_suggestions(PROMPT_SLASH_COMMANDS, file_autocomplete_limit, file_autocomplete_show_hidden);
@@ -2938,56 +2919,6 @@ permission_rx: None,
                     } else {
                         self.should_exit = true;
                     }
-                }
-                _ => {}
-            }
-            return false;
-        }
-
-        // File injection dialog: shown when oversized files are detected in @refs.
-        if self.file_injection_dialog.visible {
-            let is_directory_only = self.file_injection_dialog.is_directory_only();
-            match key.code {
-                KeyCode::Enter => {
-                    if is_directory_only {
-                        // Directories can't be injected; Enter = abort, restore input.
-                        if let Some(input) = self.file_injection_dialog.pending_input.clone() {
-                            self.set_prompt_text(input);
-                        }
-                        self.file_injection_dialog.dismiss();
-                    } else {
-                        // Enter = inject (Allow).
-                        self.file_injection_dialog.selected = 0;
-                        self.file_injection_dialog.confirm();
-                    }
-                }
-                KeyCode::Esc => {
-                    // Esc = abort, restore input.
-                    if let Some(input) = self.file_injection_dialog.pending_input.clone() {
-                        self.set_prompt_text(input);
-                    }
-                    self.file_injection_dialog.dismiss();
-                }
-                _ => {}
-            }
-            return false;
-        }
-
-        // Onboarding dialog: shown on first launch, dismissed with Enter/→/Esc.
-        if self.onboarding_dialog.visible {
-            match key.code {
-                KeyCode::Esc => {
-                    self.onboarding_dialog.dismiss();
-                }
-                KeyCode::Enter | KeyCode::Right => {
-                    if self.onboarding_dialog.next_page() {
-                        self.onboarding_dialog.dismiss();
-                        // Persist that onboarding is complete (best-effort).
-                        let _ = Self::persist_onboarding_complete();
-                    }
-                }
-                KeyCode::Left => {
-                    self.onboarding_dialog.prev_page();
                 }
                 _ => {}
             }
@@ -3373,15 +3304,6 @@ permission_rx: None,
         }
 
         // Invalid-config dialog intercepts Enter/Esc to dismiss
-        if self.invalid_config_dialog.visible {
-            match key.code {
-                KeyCode::Enter | KeyCode::Esc => self.invalid_config_dialog.dismiss(),
-                KeyCode::Up => self.invalid_config_dialog.scroll_up(),
-                KeyCode::Down => self.invalid_config_dialog.scroll_down(20),
-                _ => {}
-            }
-            return false;
-        }
 
         // Model picker intercepts navigation and Esc
         if self.model_picker.visible {
@@ -3719,8 +3641,7 @@ permission_rx: None,
         }
 
         // Overage upsell dismiss
-        if key.code == KeyCode::Esc && self.overage_upsell.visible {
-            self.overage_upsell.dismiss();
+        if key.code == KeyCode::Esc && false {
             return false;
         }
 
@@ -3749,81 +3670,13 @@ permission_rx: None,
         }
 
         // Desktop upsell startup dialog
-        if self.desktop_upsell.visible {
-            match key.code {
-                KeyCode::Up | KeyCode::BackTab => {
-                    self.desktop_upsell.select_prev();
-                    return false;
-                }
-                KeyCode::Down | KeyCode::Tab => {
-                    self.desktop_upsell.select_next();
-                    return false;
-                }
-                KeyCode::Enter => {
-                    self.desktop_upsell.confirm();
-                    return false;
-                }
-                KeyCode::Esc => {
-                    self.desktop_upsell.dismiss_temporarily();
-                    return false;
-                }
-                _ => return false,
-            }
-        }
 
         // Memory update notification dismiss
-        if key.code == KeyCode::Esc && self.memory_update_notification.visible {
-            self.memory_update_notification.dismiss();
+        if key.code == KeyCode::Esc && false {
             return false;
         }
 
         // MCP elicitation dialog — highest priority modal
-        if self.elicitation.visible {
-            match key.code {
-                KeyCode::Esc => {
-                    self.elicitation.cancel();
-                    return false;
-                }
-                KeyCode::Enter => {
-                    self.elicitation.submit();
-                    return false;
-                }
-                KeyCode::Tab | KeyCode::Down => {
-                    if let crossterm::event::KeyModifiers::SHIFT = key.modifiers {
-                        self.elicitation.prev_field();
-                    } else {
-                        self.elicitation.next_field();
-                    }
-                    return false;
-                }
-                KeyCode::BackTab | KeyCode::Up => {
-                    self.elicitation.prev_field();
-                    return false;
-                }
-                KeyCode::Left => {
-                    self.elicitation.cycle_enum_prev();
-                    return false;
-                }
-                KeyCode::Right => {
-                    self.elicitation.cycle_enum_next();
-                    return false;
-                }
-                KeyCode::Char(' ') => {
-                    self.elicitation.toggle_active();
-                    return false;
-                }
-                KeyCode::Backspace => {
-                    self.elicitation.backspace();
-                    return false;
-                }
-                KeyCode::Char(c) => {
-                    let c = normalize_char_with_shift(c, key.modifiers);
-                    self.elicitation.insert_char(c);
-                    return false;
-                }
-                _ => return false,
-            }
-        }
 
         // ---- Keybinding processor (runs AFTER all dialog checks) ----------
         let key_context = self.current_key_context();

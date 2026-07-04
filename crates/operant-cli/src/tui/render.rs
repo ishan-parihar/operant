@@ -14,21 +14,14 @@ use crate::tui::session_branching::render_session_branching;
 use crate::tui::tasks_overlay::render_tasks_overlay;
 use crate::tui::dialogs::{render_mcp_approval_dialog, render_permission_dialog};
 use crate::tui::feedback_survey::render_feedback_survey;
-use crate::tui::overage_upsell::render_overage_upsell;
 use crate::tui::voice_mode_notice::render_voice_mode_notice;
-use crate::tui::desktop_upsell_startup::render_desktop_upsell_startup;
-use crate::tui::memory_update_notification::render_memory_update_notification;
 use crate::tui::import_config_dialog::render_import_config_dialog;
-use crate::tui::invalid_config_dialog::render_invalid_config_dialog;
 use crate::tui::bypass_permissions_dialog::render_bypass_permissions_dialog;
-use crate::tui::file_injection_dialog::render_file_injection_dialog;
 use crate::tui::ask_user_dialog::render_ask_user_dialog;
-use crate::tui::onboarding_dialog::render_onboarding_dialog;
 use crate::tui::dialog_select::render_dialog_select;
 use crate::tui::key_input_dialog::render_key_input_dialog;
 use crate::tui::custom_provider_dialog::render_custom_provider_dialog;
 use crate::tui::device_auth_dialog::render_device_auth_dialog;
-use crate::tui::elicitation_dialog::render_elicitation_dialog;
 use crate::tui::figures;
 use crate::tui::hooks_config_menu::render_hooks_config_menu;
 use crate::tui::mcp_view::render_mcp_view;
@@ -536,15 +529,6 @@ pub fn render_app(frame: &mut Frame, app: &App) {
         render_hooks_config_menu(&app.hooks_config_menu, size, frame.buffer_mut());
     }
 
-    // Overage credit upsell banner
-    if app.overage_upsell.visible {
-        let banner_h = app.overage_upsell.height();
-        if size.height > banner_h + 4 {
-            let banner_area = Rect { x: size.x, y: size.y, width: size.width, height: banner_h };
-            render_overage_upsell(&app.overage_upsell, banner_area, frame.buffer_mut());
-        }
-    }
-
     // Voice mode availability notice
     if app.voice_mode_notice.visible {
         let notice_h = app.voice_mode_notice.height();
@@ -554,34 +538,9 @@ pub fn render_app(frame: &mut Frame, app: &App) {
         }
     }
 
-    // Memory update notification banner (bottom of message area)
-    if app.memory_update_notification.visible {
-        let notif_h = app.memory_update_notification.height();
-        if size.height > notif_h + 4 {
-            // Place at the bottom of the screen, just above the prompt bar area
-            let notif_y = size.y + size.height.saturating_sub(notif_h + 4);
-            let notif_area = Rect { x: size.x, y: notif_y, width: size.width, height: notif_h };
-            render_memory_update_notification(
-                &app.memory_update_notification,
-                notif_area,
-                frame.buffer_mut(),
-            );
-        }
-    }
-
-    // Desktop upsell startup modal
-    if app.desktop_upsell.visible {
-        render_desktop_upsell_startup(&app.desktop_upsell, size, frame.buffer_mut());
-    }
-
     // Import-config preview dialog
     if app.import_config_dialog.visible {
         render_import_config_dialog(frame, &app.import_config_dialog, size);
-    }
-
-    // Invalid config/settings dialog (shown when settings.json or AGENTS.md is malformed)
-    if app.invalid_config_dialog.visible {
-        render_invalid_config_dialog(frame, &app.invalid_config_dialog, size);
     }
 
     // Bypass-permissions confirmation dialog (topmost — rendered last so it sits above all)
@@ -589,20 +548,10 @@ pub fn render_app(frame: &mut Frame, app: &App) {
         render_bypass_permissions_dialog(frame, &app.bypass_permissions_dialog, size);
     }
 
-    // File injection warning dialog (shown when oversized/binary files detected)
-    if app.file_injection_dialog.visible {
-        render_file_injection_dialog(frame, &app.file_injection_dialog, size);
-    }
-
     // AskUserQuestion dialog — renders above bypass-permissions so the model's
     // question is never obscured by the startup confirmation prompt.
     if app.ask_user_dialog.visible {
         render_ask_user_dialog(&app.ask_user_dialog, size, frame.buffer_mut());
-    }
-
-    // First-launch onboarding dialog (shown after bypass dialog, below elicitation)
-    if app.onboarding_dialog.visible {
-        render_onboarding_dialog(frame, &app.onboarding_dialog, size);
     }
 
     // /effort picker
@@ -643,11 +592,6 @@ pub fn render_app(frame: &mut Frame, app: &App) {
     // Ctrl+K command palette
     if app.command_palette.visible {
         render_dialog_select(frame, &app.command_palette, size);
-    }
-
-    // MCP elicitation dialog (highest priority modal — rendered last to sit on top)
-    if app.elicitation.visible {
-        render_elicitation_dialog(&app.elicitation, size, frame.buffer_mut());
     }
 
     // Model picker overlay
