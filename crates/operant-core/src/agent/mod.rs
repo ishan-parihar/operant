@@ -1072,24 +1072,41 @@ impl OperantAgent {
 
     /// Execute tools and handle self-healing
     async fn execute_tools(&self, tool_calls: Vec<ToolCall>) -> Result<Vec<ToolResult>> {
-        let mut results = Vec::new();
+        // ── Concurrent tool execution (iter-56) ──────────────────────────
+        // Previously this was a sequential for-loop. Now it's two phases:
+        //
+        // Phase 1 (sequential): Pre-flight checks — interrupt flag, arg
+        //   parsing, tool validation, approval gate, permission prompts.
+        //   These MUST be sequential because permission prompts are
+        //   interactive (the user sees one dialog at a time).
+        //
+        // Phase 2 (concurrent): Execute all approved tools concurrently
+        //   using FuturesUnordered with a semaphore (max 8, matching
+        //   hermes's _MAX_TOOL_WORKERS). Independent tool calls (e.g.
+        //   4 web searches) now run in parallel instead of serially.
+        //
+        // Results are collected in the SAME ORDER as the input tool_calls
+        // (the model expects results in the same order as the calls).
 
-        for tool_call in tool_calls {
-            // Check interrupt flag before each tool call — allows a Ctrl-C
-            // during a multi-tool iteration to skip remaining tools.
+        use futures::stream::{self, StreamExt};
+        use std::sync::Arc as StdArc;
+        use tokio::sync::Semaphore;
+
+        // ── Phase 1: Pre-flight (sequential) ────────────────────────────
+        let mut pending: Vec<(usize, ToolCall, serde_json::Value)> = Vec::new();
+        let mut early_results: Vec<Option<ToolResult>> = vec![None; tool_calls.len()];
+
+        for (idx, tool_call) in tool_calls.into_iter().enumerate() {
+            // Check interrupt flag
             if self.interrupt_flag.is_triggered() {
-                results.push(ToolResult::error(
+                early_results[idx] = Some(ToolResult::error(
                     &tool_call.id,
                     "Skipped: interrupted by user (Ctrl-C)".to_string(),
                 ));
                 continue;
             }
+
             let name = tool_call.function.name.clone();
-            // Default empty/whitespace-only argument strings to "{}" so that
-            // providers which stream tool-calls without any arguments at all
-            // (e.g. zero-arg tools like `datetime`) still produce a valid
-            // JSON object instead of triggering "EOF while parsing a value
-            // at line 1 column 0".
             let raw_args = tool_call.function.arguments.clone();
             let trimmed = raw_args.trim();
             let args_str = if trimmed.is_empty() {
@@ -1111,7 +1128,7 @@ impl OperantAgent {
                 Ok(a) => a,
                 Err(e) => {
                     warn!(tool = %name, error = %e, "Failed to parse tool arguments");
-                    results.push(ToolResult::error(
+                    early_results[idx] = Some(ToolResult::error(
                         &tool_call.id,
                         format!("Invalid JSON: {}", e),
                     ));
@@ -1122,25 +1139,14 @@ impl OperantAgent {
             // Validate tool exists
             if !self.registry.contains(&name).await {
                 error!(tool = %name, "Tool not found");
-                results.push(ToolResult::error(
+                early_results[idx] = Some(ToolResult::error(
                     &tool_call.id,
                     format!("Tool '{}' not found", name),
                 ));
                 continue;
             }
 
-            // ── Smart approval gate (operant_core::approval) ──
-            // Runs a pattern-based security scan on the tool name + args.
-            // - "blocked" → refuse immediately, no user prompt (e.g. rm -rf /)
-            // - "requires_approval" → fall through to the permission_tx flow
-            //   below, which prompts the user with the scan's risk level
-            // - "allowed" → proceed (may still hit the hardcoded dangerous-
-            //   tool list below, which prompts for a subset of tools)
-            //
-            // Mode is controlled by AgentConfig::approval_mode:
-            //   "smart" (default) → pattern-based, only prompt when flagged
-            //   "manual"           → prompt for every tool call
-            //   "off"              → skip this gate entirely
+            // Smart approval gate
             if self.config.approval_mode != "off" {
                 let approval_result = crate::approval::check_tool_approval(
                     &name,
@@ -1149,63 +1155,33 @@ impl OperantAgent {
                 );
                 match approval_result.verdict.as_str() {
                     "blocked" => {
-                        warn!(
-                            tool = %name,
-                            reason = ?approval_result.reason,
-                            blocked_by = ?approval_result.blocked_by,
-                            "Tool call blocked by approval guard"
-                        );
-                        results.push(ToolResult::error(
+                        warn!(tool = %name, "Tool call blocked by approval guard");
+                        early_results[idx] = Some(ToolResult::error(
                             &tool_call.id,
-                            format!(
-                                "Blocked by security policy: {}",
-                                approval_result
-                                    .reason
-                                    .unwrap_or_else(|| "blocked".to_string())
-                            ),
+                            format!("Blocked by security policy: {}", approval_result.reason.unwrap_or_else(|| "blocked".to_string())),
                         ));
                         continue;
                     }
                     "requires_approval" => {
-                        // The existing permission_tx flow below will prompt
-                        // the user. We just log the scan's risk assessment.
-                        warn!(
-                            tool = %name,
-                            risk = ?approval_result.risk_level,
-                            reason = ?approval_result.reason,
-                            "Tool call flagged by approval guard — will prompt user"
-                        );
-                        // Don't `continue` — fall through to the permission
-                        // prompt so the user can decide.
+                        warn!(tool = %name, "Tool call flagged — will prompt user");
                     }
-                    _ => {
-                        // "allowed" — proceed normally.
-                    }
+                    _ => {}
                 }
             }
 
-            // Permission guard for dangerous tools
+            // Permission guard for dangerous tools (interactive — sequential)
             if let Some(ref permission_tx) = self.permission_tx {
                 let needs_permission = matches!(
                     name.as_str(),
-                    "bash"
-                        | "terminal"
-                        | "execute_command"
-                        | "code_execution"
-                        | "file_read"
-                        | "file_write"
-                        | "file_edit"
-                        | "patch"
-                        | "process"
-                        | "browser"
+                    "bash" | "terminal" | "execute_command" | "code_execution"
+                        | "file_read" | "file_write" | "file_edit" | "patch"
+                        | "process" | "browser"
                 );
                 if needs_permission {
                     let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
                     let description = format!("Execute {} tool", name);
                     let danger = match name.as_str() {
-                        "bash" | "terminal" | "execute_command" => {
-                            "This runs a shell command on your system".to_string()
-                        }
+                        "bash" | "terminal" | "execute_command" => "This runs a shell command on your system".to_string(),
                         "code_execution" => "This executes code in a sandbox".to_string(),
                         "file_read" => "This reads a file from your system".to_string(),
                         "file_write" => "This writes content to a file".to_string(),
@@ -1225,18 +1201,14 @@ impl OperantAgent {
                             response_tx: resp_tx,
                         })
                         .await;
-                    // Permission prompt timeout: 120s (was 30s — too short for
-                    // users who step away). If the user doesn't respond in 2
-                    // minutes, default to Deny for safety.
                     let response = tokio::select! {
                         r = resp_rx => r.unwrap_or(ToolPermissionResponse::Deny),
                         _ = tokio::time::sleep(Duration::from_secs(120)) => ToolPermissionResponse::Deny,
                     };
                     match response {
-                        ToolPermissionResponse::AllowOnce
-                        | ToolPermissionResponse::AllowSession => {}
+                        ToolPermissionResponse::AllowOnce | ToolPermissionResponse::AllowSession => {}
                         ToolPermissionResponse::Deny => {
-                            results.push(ToolResult::error(
+                            early_results[idx] = Some(ToolResult::error(
                                 &tool_call.id,
                                 "Permission denied by user".to_string(),
                             ));
@@ -1246,33 +1218,81 @@ impl OperantAgent {
                 }
             }
 
-            // Execute with timeout
+            // Tool passed all pre-flight checks — queue for concurrent execution
+            pending.push((idx, tool_call, args));
+        }
+
+        // ── Phase 2: Concurrent execution ───────────────────────────────
+        // Use a semaphore to limit concurrency to 8 (matching hermes).
+        // If only 1 tool is pending, skip the overhead and execute directly.
+        if pending.is_empty() {
+            // All tools were handled in pre-flight (errors/blocked/denied)
+            let results = early_results.into_iter().map(|r| r.unwrap()).collect();
+            return Ok(results);
+        }
+
+        if pending.len() == 1 {
+            // Single tool — no concurrency overhead
+            let (idx, tool_call, args) = pending.into_iter().next().unwrap();
+            let name = tool_call.function.name.clone();
             let result = timeout(
                 self.config.tool_timeout,
-                self.registry
-                    .execute(&name, &tool_call.id, args, ToolContext::default()),
-            )
-            .await;
+                self.registry.execute(&name, &tool_call.id, args, ToolContext::default()),
+            ).await;
+            early_results[idx] = Some(match result {
+                Ok(Ok(r)) => r,
+                Ok(Err(e)) => ToolResult::error(&tool_call.id, e.to_string()),
+                Err(_) => ToolResult::error(&tool_call.id, format!("Tool timed out after {:?}", self.config.tool_timeout)),
+            });
+        } else {
+            // Multiple tools — execute concurrently with semaphore
+            let semaphore = StdArc::new(Semaphore::new(8));
+            let tool_timeout = self.config.tool_timeout;
 
-            match result {
-                Ok(Ok(r)) => {
-                    debug!(tool = %name, success = r.success, "Tool execution completed");
-                    results.push(r);
-                }
-                Ok(Err(e)) => {
-                    error!(tool = %name, error = %e, "Tool execution failed");
-                    results.push(ToolResult::error(&tool_call.id, e.to_string()));
-                }
-                Err(_) => {
-                    error!(tool = %name, "Tool execution timed out");
-                    results.push(ToolResult::error(
-                        &tool_call.id,
-                        format!("Tool timed out after {:?}", self.config.tool_timeout),
-                    ));
-                }
+            let futures: Vec<_> = pending
+                .into_iter()
+                .map(|(idx, tool_call, args)| {
+                    let sem = semaphore.clone();
+                    let registry = &self.registry;
+                    let interrupt_flag = &self.interrupt_flag;
+                    async move {
+                        // Acquire semaphore permit (limits to 8 concurrent)
+                        let _permit = sem.acquire().await.unwrap();
+
+                        // Check interrupt flag before execution
+                        if interrupt_flag.is_triggered() {
+                            return (idx, ToolResult::error(&tool_call.id, "Skipped: interrupted".to_string()));
+                        }
+
+                        let name = tool_call.function.name.clone();
+                        let result = timeout(
+                            tool_timeout,
+                            registry.execute(&name, &tool_call.id, args, ToolContext::default()),
+                        ).await;
+
+                        (idx, match result {
+                            Ok(Ok(r)) => r,
+                            Ok(Err(e)) => ToolResult::error(&tool_call.id, e.to_string()),
+                            Err(_) => ToolResult::error(&tool_call.id, format!("Tool timed out after {:?}", tool_timeout)),
+                        })
+                    }
+                })
+                .collect();
+
+            // Execute all futures concurrently and collect results
+            let results = stream::iter(futures)
+                .buffer_unordered(8)
+                .collect::<Vec<_>>()
+                .await;
+
+            // Place results in the correct position
+            for (idx, result) in results {
+                early_results[idx] = Some(result);
             }
         }
 
+        // Collect results in original order
+        let results = early_results.into_iter().map(|r| r.unwrap()).collect();
         Ok(results)
     }
 
