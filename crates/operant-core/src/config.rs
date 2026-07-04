@@ -571,6 +571,12 @@ pub struct ToolSettings {
     pub stt: SttSettings,
     pub disabled_tools: Vec<String>,
     pub disabled_toolsets: Vec<String>,
+    /// Whether to enable AFT (Agent File Tools) IDE-grade coding tools.
+    /// When true, operant registers 15 aft_* tools that communicate
+    /// with an aft subprocess (auto-downloaded from GitHub releases).
+    /// When false (default), only the basic built-in file tools are
+    /// available.
+    pub aft_enabled: bool,
 }
 
 impl Default for ToolSettings {
@@ -586,6 +592,7 @@ impl Default for ToolSettings {
             stt: SttSettings::default(),
             disabled_tools: Vec::new(),
             disabled_toolsets: Vec::new(),
+            aft_enabled: false,
         }
     }
 }

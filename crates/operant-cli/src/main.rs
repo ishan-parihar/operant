@@ -576,6 +576,18 @@ pub(crate) async fn build_registry(
         }
     }
 
+    // Register AFT (Agent File Tools) if enabled in config.
+    // AFT provides 15 IDE-grade coding tools (tree-sitter outline/zoom/
+    // search/callgraph, AST-aware edit/refactor, safety undo/checkpoints)
+    // via a subprocess that auto-updates from GitHub releases.
+    if config.tools.aft_enabled {
+        let pool = std::sync::Arc::new(operant_core::aft_bridge::AftBridgePool::new());
+        match operant_core::tools::register_aft_tools(&registry, pool).await {
+            Ok(()) => tracing::info!("AFT tools registered (15 IDE-grade coding tools)"),
+            Err(e) => tracing::warn!(error = %e, "AFT tool registration failed (non-fatal)"),
+        }
+    }
+
     let disabled_tools: std::collections::HashSet<String> =
         config.tools.disabled_tools.iter().cloned().collect();
     let disabled_toolsets: std::collections::HashSet<String> =
