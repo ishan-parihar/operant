@@ -156,11 +156,12 @@ rm -rf target/debug/deps target/debug/build target/debug/incremental
 These are acknowledged gaps vs the hermes-agent reference implementation.
 They are NOT bugs — they are features not yet implemented:
 
-1. **MCP: no sampling/elicitation handlers** — stdio + HTTP work, but `sampling/createMessage` and `elicitation/create` server-initiated requests are unhandled. Hermes supports both + SSE transport + dynamic tool discovery (`notifications/tools/list_changed`)
-2. **No platform registry** — adapters hardcoded in `build_adapters()` if/elif chain. Hermes has `PlatformRegistry` with deferred loading, `adapter_factory`, `check_fn`, `validate_config`, per-plugin YAML config translation
-3. **No credential rotation** — no OAuth refresh / multi-account rotation. Hermes has `agent/credential_pool.py` (2,372 lines) with per-turn tally of consecutive same-entry refreshs
+1. **MCP: no SSE transport** — stdio + HTTP work. Sampling/elicitation handlers respond with error (not yet wired to agent). Hermes supports SSE transport + dynamic tool discovery (`notifications/tools/list_changed`)
 
 ### Gaps CLOSED in recent iterations:
+- ✅ ~~Credential rotation~~ — CredentialPool restored + PooledCredential with OAuth fields (iter-66)
+- ✅ ~~Platform registry~~ — platform_registry() with factory pattern replaces if/elif chain (iter-66)
+- ✅ ~~MCP sampling/elicitation handlers~~ — server-initiated requests handled in stdio transport (iter-66)
 - ✅ ~~`/steer` directive~~ — steer queue + drain between iterations (iter-65)
 - ✅ ~~Context compression on overflow~~ — auto-compress via context_management on context_overflow errors (iter-63)
 - ✅ ~~Hook system~~ — HookRegistry with 6 events + wildcard, wired into agent loop (iter-61/62)

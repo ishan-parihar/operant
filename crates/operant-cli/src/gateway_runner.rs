@@ -173,67 +173,142 @@ fn runner() -> &'static Mutex<Option<Arc<Gateway>>> {
 }
 
 /// Build platform adapters from config
+/// Platform adapter factory function type.
+type AdapterFactory = fn(&GatewayConfig) -> Option<Arc<dyn PlatformAdapter>>;
+
+/// Platform registry entry — maps a platform name to its factory function
+/// and metadata. This replaces the hardcoded if/elif chain and allows
+/// new platforms to be added by simply appending to the registry.
+struct PlatformEntry {
+    name: &'static str,
+    label: &'static str,
+    emoji: &'static str,
+    factory: AdapterFactory,
+}
+
+/// All supported platform adapters. To add a new platform:
+/// 1. Implement the PlatformAdapter trait
+/// 2. Add an entry here with a factory function
+/// 3. Add config fields to GatewayConfig
+///
+/// The factory returns Option<Arc<dyn PlatformAdapter>> — None means the
+/// platform is disabled in config, Some means it's enabled and constructed.
+fn platform_registry() -> Vec<PlatformEntry> {
+    vec![
+        PlatformEntry {
+            name: "telegram",
+            label: "Telegram",
+            emoji: "📱",
+            factory: |config| {
+                if config.telegram_enabled {
+                    Some(Arc::new(TelegramAdapter::with_config(
+                        config.telegram_token.clone(),
+                        config.telegram_bot_username.clone(),
+                        config.telegram_dm_topics_enabled,
+                        config.telegram_proxy.as_deref(),
+                    )))
+                } else {
+                    None
+                }
+            },
+        },
+        PlatformEntry {
+            name: "discord",
+            label: "Discord",
+            emoji: "💬",
+            factory: |config| {
+                if config.discord_enabled {
+                    Some(Arc::new(DiscordAdapter::new(config.discord_token.clone())))
+                } else {
+                    None
+                }
+            },
+        },
+        PlatformEntry {
+            name: "slack",
+            label: "Slack",
+            emoji: "💼",
+            factory: |config| {
+                if config.slack_enabled {
+                    Some(Arc::new(SlackAdapter::new(config.slack_token.clone(), None)))
+                } else {
+                    None
+                }
+            },
+        },
+        PlatformEntry {
+            name: "whatsapp",
+            label: "WhatsApp",
+            emoji: "📲",
+            factory: |config| {
+                if config.whatsapp_enabled {
+                    Some(Arc::new(
+                        WhatsAppAdapter::new(config.whatsapp_enabled)
+                            .with_token(config.whatsapp_token.clone()),
+                    ))
+                } else {
+                    None
+                }
+            },
+        },
+        PlatformEntry {
+            name: "email",
+            label: "Email (SMTP)",
+            emoji: "📧",
+            factory: |config| {
+                if config.email_enabled {
+                    Some(Arc::new(
+                        EmailAdapter::new(config.email_enabled).with_smtp(
+                            config.email_smtp_host.clone(),
+                            config.email_smtp_user.clone(),
+                            config.email_smtp_pass.clone(),
+                        ),
+                    ))
+                } else {
+                    None
+                }
+            },
+        },
+        PlatformEntry {
+            name: "sms",
+            label: "SMS (Twilio)",
+            emoji: "📱",
+            factory: |config| {
+                if config.sms_twilio_enabled {
+                    Some(Arc::new(SmsAdapter::new(config.sms_twilio_enabled)))
+                } else {
+                    None
+                }
+            },
+        },
+        PlatformEntry {
+            name: "webhooks",
+            label: "Webhook",
+            emoji: "🔗",
+            factory: |config| {
+                if config.webhooks_enabled {
+                    let addr = config
+                        .webhooks_addr
+                        .clone()
+                        .unwrap_or_else(|| "0.0.0.0:8080".to_string());
+                    Some(Arc::new(
+                        WebhookAdapter::new(config.webhooks_enabled).with_addr(addr),
+                    ))
+                } else {
+                    None
+                }
+            },
+        },
+    ]
+}
+
+/// Build platform adapters from config using the platform registry.
+/// Iterates the registry, calls each factory, and collects enabled adapters.
 fn build_adapters(config: &GatewayConfig) -> Vec<Arc<dyn PlatformAdapter>> {
-    let mut adapters: Vec<Arc<dyn PlatformAdapter>> = Vec::new();
-
-    // Telegram
-    if config.telegram_enabled {
-        adapters.push(Arc::new(TelegramAdapter::with_config(
-            config.telegram_token.clone(),
-            config.telegram_bot_username.clone(),
-            config.telegram_dm_topics_enabled,
-            config.telegram_proxy.as_deref(),
-        )));
-    }
-
-    // Discord
-    if config.discord_enabled {
-        adapters.push(Arc::new(DiscordAdapter::new(config.discord_token.clone())));
-    }
-
-    // Slack
-    if config.slack_enabled {
-        adapters.push(Arc::new(SlackAdapter::new(
-            config.slack_token.clone(),
-            None,
-        )));
-    }
-
-    // Webhook adapter — real HTTP server with HMAC validation
-    if config.webhooks_enabled {
-        let addr = config.webhooks_addr.clone().unwrap_or_else(|| "0.0.0.0:8080".to_string());
-        adapters.push(Arc::new(
-            WebhookAdapter::new(config.webhooks_enabled)
-                .with_addr(addr),
-        ));
-    }
-
-    // WhatsApp adapter — WhatsApp Cloud API
-    if config.whatsapp_enabled {
-        adapters.push(Arc::new(
-            WhatsAppAdapter::new(config.whatsapp_enabled)
-                .with_token(config.whatsapp_token.clone()),
-        ));
-    }
-
-    // Email adapter — SMTP outbound, webhook inbound
-    if config.email_enabled {
-        adapters.push(Arc::new(
-            EmailAdapter::new(config.email_enabled)
-                .with_smtp(
-                    config.email_smtp_host.clone(),
-                    config.email_smtp_user.clone(),
-                    config.email_smtp_pass.clone(),
-                ),
-        ));
-    }
-
-    // SMS adapter — Twilio REST API
-    if config.sms_twilio_enabled {
-        adapters.push(Arc::new(SmsAdapter::new(config.sms_twilio_enabled)));
-    }
-
-    adapters
+    platform_registry()
+        .into_iter()
+        .filter_map(|entry| (entry.factory)(config))
+        .collect()
 }
 
 fn build_session_context(platform: &str, channel_id: &str, app_config: &AppConfig) -> String {
