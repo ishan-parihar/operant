@@ -55,7 +55,6 @@ pub fn all_platforms() -> Vec<GatewayPlatform> {
         ),
         platform!("imessage", "💬", "BlueBubbles (iMessage)", setup_imessage),
         platform!("qq_bot", "🐧", "QQ Bot", setup_qq_bot),
-        platform!("yuanbao", "💎", "Yuanbao", setup_yuanbao),
         platform!("google_chat", "💬", "Google Chat", setup_google_chat),
         platform!("irc", "💬", "IRC", setup_irc),
         platform!("line", "💚", "LINE", setup_line),
@@ -331,16 +330,6 @@ fn setup_qq_bot(config: &mut AppConfig) -> Result<()> {
     config.gateway.qq_bot_enabled = true;
     println!(
         "  {} QQ Bot enabled. Configure bot credentials in config file.",
-        style("✓").green()
-    );
-    Ok(())
-}
-
-fn setup_yuanbao(config: &mut AppConfig) -> Result<()> {
-    print_platform_header("Yuanbao");
-    config.gateway.yuanbao_enabled = true;
-    println!(
-        "  {} Yuanbao enabled. Configure API endpoint in config file.",
         style("✓").green()
     );
     Ok(())

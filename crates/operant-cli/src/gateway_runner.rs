@@ -34,6 +34,11 @@ fn pid_file_path() -> std::path::PathBuf {
 struct GatewayMessageHandler {
     agent: Arc<OperantAgent>,
     memory_provider: Arc<dyn MemoryProvider>,
+    /// Tracks the currently-active session ID so we only reload
+    /// conversation history when switching sessions (not on every
+    /// message within the same session). This preserves prompt prefix
+    /// caching — previously clear_history() was called every message.
+    current_session_id: tokio::sync::Mutex<Option<String>>,
 }
 
 #[async_trait::async_trait]
@@ -64,18 +69,31 @@ impl MessageHandler for GatewayMessageHandler {
             .db()
             .save_session(&session_id, None, "gateway", &now, &now);
 
-        // Load conversation history (last 20 messages) instead of clearing
-        self.agent.clear_history().await;
-        if let Ok(history) = self.agent.db().get_session_messages(&session_id) {
-            let skip = history.len().saturating_sub(20);
-            for msg in history.into_iter().skip(skip) {
-                let m = match msg.role.as_str() {
-                    "user" => operant_core::client::Message::user(msg.content),
-                    "assistant" => operant_core::client::Message::assistant(msg.content),
-                    _ => continue,
-                };
-                self.agent.add_message(m).await;
+        // Load conversation history only when the session changes.
+        // Previously this called clear_history() + reloaded last 20 messages
+        // on EVERY gateway message — which broke Anthropic prompt prefix
+        // caching (the message array was rebuilt from scratch each turn,
+        // so the cache never hit). Now we track the active session ID and
+        // only reload when switching to a different session.
+        let needs_reload = {
+            let current = self.current_session_id.lock().await;
+            *current != Some(session_id.clone())
+        };
+        if needs_reload {
+            self.agent.clear_history().await;
+            if let Ok(history) = self.agent.db().get_session_messages(&session_id) {
+                let skip = history.len().saturating_sub(20);
+                for msg in history.into_iter().skip(skip) {
+                    let m = match msg.role.as_str() {
+                        "user" => operant_core::client::Message::user(msg.content),
+                        "assistant" => operant_core::client::Message::assistant(msg.content),
+                        _ => continue,
+                    };
+                    self.agent.add_message(m).await;
+                }
             }
+            let mut current = self.current_session_id.lock().await;
+            *current = Some(session_id.clone());
         }
 
         // Prefetch relevant memories from the configured provider
@@ -284,6 +302,7 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
     let handler = Arc::new(GatewayMessageHandler {
         agent,
         memory_provider,
+        current_session_id: tokio::sync::Mutex::new(None),
     });
     gateway = gateway.with_handler(handler);
 

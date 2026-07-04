@@ -858,7 +858,6 @@ fn is_gateway_enabled(settings: &GatewaySettings, platform_key: &str) -> bool {
         "wecom_callback" => settings.wecom_callback_enabled,
         "imessage" => settings.imessage_enabled,
         "qq_bot" => settings.qq_bot_enabled,
-        "yuanbao" => settings.yuanbao_enabled,
         "google_chat" => settings.google_chat_enabled,
         "irc" => settings.irc_enabled,
         "line" => settings.line_enabled,
