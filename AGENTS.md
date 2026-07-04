@@ -156,17 +156,72 @@ rm -rf target/debug/deps target/debug/build target/debug/incremental
 These are acknowledged gaps vs the hermes-agent reference implementation.
 They are NOT bugs — they are features not yet implemented:
 
-1. **WebhookAdapter is a stub** — no HTTP server, no HMAC validation
-2. **WhatsApp/Email/SMS adapters not implemented** — config flags exist, adapter code TBD
-3. **Sequential tool execution** — `execute_tools` is a for-loop; hermes uses 8-worker pool
-4. **No hook system** — `gateway_pipeline.rs` is 39 lines, just a MessageFilter
-5. **Error recovery: 3 classes vs 22** — no context_overflow/billing/content_policy detection
-6. **MCP: no sampling/elicitation handlers** — stdio + HTTP work, but server-initiated requests unhandled
-7. **No Anthropic cache_control breakpoints** — the frozen-prefix split is logical only
-8. **No platform registry** — adapters hardcoded in `build_adapters()` if/elif chain
+1. **Sequential tool execution** — `execute_tools` is a for-loop; hermes uses 8-worker thread pool. Independent tool calls run serially. (gateway_pipeline.rs is 38 lines)
+2. **No hook system** — `gateway_pipeline.rs` is 38 lines, just a MessageFilter. Hermes has `gateway/hooks.py` with events: `gateway:startup`, `session:start/end/reset`, `agent:start/step/end`, `command:*` (wildcard matching)
+3. **Error recovery: 3 classes vs 22** — no context_overflow/billing/content_policy detection. `fallback.rs` only handles Network/RateLimited/5xx. No `should_compress` / `should_rotate_credential` / `should_fallback` classification
+4. **MCP: no sampling/elicitation handlers** — stdio + HTTP work, but `sampling/createMessage` and `elicitation/create` server-initiated requests are unhandled. Hermes supports both + SSE transport + dynamic tool discovery (`notifications/tools/list_changed`)
+5. **No platform registry** — adapters hardcoded in `build_adapters()` if/elif chain. Hermes has `PlatformRegistry` with deferred loading, `adapter_factory`, `check_fn`, `validate_config`, per-plugin YAML config translation
+6. **No credential rotation** — no OAuth refresh / multi-account rotation. Hermes has `agent/credential_pool.py` (2,372 lines) with per-turn tally of consecutive same-entry refreshes
+7. **No context compression on overflow** — no automatic summarization when context exceeds window. Hermes has `agent/context_compressor.py` (3,018 lines) + `agent/conversation_compression.py` (1,194 lines)
+8. **7 dead TUI dialogs** — elicitation, onboarding, file_injection, invalid_config, memory_update_notification, overage_upsell, desktop_upsell_startup — all have 0 non-test `show()` calls. ~3000 LOC of dead state + render code
+9. **No iteration budget grace call** — agent hard-stops at max_iterations. Hermes allows one extra call with tools stripped (asks model to summarize)
+10. **No `/steer` directive** — no real-time user steering injected during API calls. Hermes drains pending steer directives into the last tool-role message
+
+## What IS Working (verified functional)
+
+### CLI (39 subcommands — all have real handlers)
+run, chat, autonomous, tools, test, config, sessions, mcp, skills, model, completion,
+cron, kanban, gateway (16 sub-actions), checkpoints, memory, profile, auth/login/logout,
+version, doctor, status, dump, logs, backup, import, uninstall, update, insights,
+webhook, debug, plugins, curator, setup, acp, dashboard, trajectory
+
+### Gateway (7 platform adapters — all have real code)
+- Telegram: fully implemented (long-poll + Bot API)
+- Discord: fully implemented (Gateway WS + REST API)
+- Slack: fully implemented (Socket Mode + Web API)
+- WhatsApp: implemented (Cloud API outbound + webhook inbound)
+- Email: implemented (SMTP outbound + webhook inbound)
+- SMS: implemented (Twilio API outbound + Twilio webhook inbound)
+- Webhooks: implemented (axum HTTP server + HMAC validation)
+
+### TUI
+- Entry point works (TuiApp::enter → ratatui + crossterm)
+- Permission dialog system works (iter-20: real prompts instead of auto-approve)
+- TUI bridge routes events (bridge.rs: 111 lines)
+- Prompt-cache stability: frozen prefix + volatile suffix (iter-39)
+- Session caching: clear_history only on session change (iter-49)
+- Anthropic cache_control breakpoints (iter-54)
+
+### Web Dashboard
+- Dashboard server: axum + TcpListener::bind + axum::serve (dashboard_server.rs)
+- Routes: /api/status, /api/boards, /api/health, /api/config, /assets/:filename, /
+- Static assets: fonts, JS, CSS served from crates/operant-cli/src/dashboard/
+
+### Memory (TDG — deeply integrated)
+- HybridRetriever (FTS5 + trust + recency + embedding scoring)
+- EntityExtractor (auto-extracts entities from conversation text)
+- auto_wire_edges (auto-connects entities via grammar contracts)
+- sync_turn hooks (agent loop auto-calls after each turn)
+- BuiltinProvider fallback (file-backed MEMORY.md/USER.md)
+
+### Context Management
+- Tiered eviction (T3→T2→T1 oldest-first, iter-37/38)
+- Decay curve (H = H50·2^((I-50)/D)/max(p,0.10), iter-38)
+- Recency reserve scales with budget (budget/4096 clamped to [6,50], iter-43)
+- FTS5 special character escaping (iter-46)
+
+### Native Tool Integrations
+- AFT: 15 IDE-grade tools (subprocess + auto-update, iter-40/41)
+- IGS: 14 OSINT tools (feature-gated, iter-47)
+- LifeOS: 22 Notion tools (feature-gated, iter-47/48)
+- AFT dedup: basic file/terminal tools auto-disabled when AFT enabled (iter-51)
 
 ## Iteration History (recent)
 
+- iter-54: WebhookAdapter HTTP server + WhatsApp/Email/SMS adapters + Anthropic cache_control
+- iter-53: AGENTS.md rewrite + gateway status shows all 7 platforms
+- iter-52: Clean operant.example.toml + remove phantom token fields
+- iter-51: Wire igs/lifeos registration + AFT tool dedup
 - iter-50: Purged 20 phantom platforms — keep only 7 supported
 - iter-49: Fixed budget_config regression + yuanbao phantom + gateway session caching
 - iter-48: LifeOS API alignment — 22 tools compile clean
