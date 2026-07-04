@@ -3403,6 +3403,13 @@ mod tests {
             telegram_proxy: None,
             telegram_bot_username: None,
             telegram_dm_topics_enabled: false,
+            whatsapp_enabled: false,
+            whatsapp_token: None,
+            email_enabled: false,
+            email_smtp_host: None,
+            email_smtp_user: None,
+            email_smtp_pass: None,
+            sms_twilio_enabled: false,
         };
         let gw = Gateway::new(config);
         let stats = gw.get_stats().await;
@@ -3560,6 +3567,13 @@ mod tests {
             telegram_proxy: None,
             telegram_bot_username: None,
             telegram_dm_topics_enabled: false,
+            whatsapp_enabled: false,
+            whatsapp_token: None,
+            email_enabled: false,
+            email_smtp_host: None,
+            email_smtp_user: None,
+            email_smtp_pass: None,
+            sms_twilio_enabled: false,
         };
         let msg = format_startup_message(&config);
         assert!(msg.contains("Operant Gateway"));
