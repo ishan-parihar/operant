@@ -400,17 +400,48 @@ impl OperantAgent {
             }
 
             if iteration > self.config.max_iterations {
-                error!(max = self.config.max_iterations, "Max iterations exceeded");
+                // ── Grace call (iter-57) ────────────────────────────────
+                // When max_iterations is exceeded, hermes-agent makes one
+                // extra "grace call" with tools stripped, asking the model
+                // to summarize what it has so far. This gives the user a
+                // partial answer instead of a hard error.
+                warn!(max = self.config.max_iterations, "Max iterations exceeded — attempting grace call");
+
+                // Build a grace-call request: same messages but no tools
+                let grace_request = ChatRequest::new(&self.config.model, messages.clone())
+                    .with_stream(self.config.stream);
+
+                let grace_result = if self.config.stream {
+                    let stream = self.client.chat_streaming(grace_request).await?;
+                    let (text, reasoning, _tcs, _extra) = self.process_stream(stream).await?;
+                    Ok((text, reasoning))
+                } else {
+                    let response = self.client.chat(grace_request).await?;
+                    self.process_response(response).await.map(|(t, r, _)| (t, r))
+                };
+
+                match grace_result {
+                    Ok((text, _reasoning)) => {
+                        let result = Message::assistant(&text);
+                        if self.record_trajectories {
+                            self.save_trajectory(
+                                &session_id, &messages, iteration, total_tool_calls,
+                                false, Some(&result),
+                            ).await;
+                        }
+                        self.emit(AgentEvent::Done { message: result.clone() }).await;
+                        return Ok(result);
+                    }
+                    Err(e) => {
+                        warn!(error = %e, "Grace call failed — returning hard error");
+                    }
+                }
+
                 if self.record_trajectories {
                     self.save_trajectory(
-                        &session_id,
-                        &messages,
-                        iteration,
-                        total_tool_calls,
-                        false,
-                        None,
-                    )
-                    .await;
+                        &session_id, &messages, iteration, total_tool_calls,
+                        false, None,
+                    ).await;
                 }
                 return Err(Error::MaxIterationsExceeded {
                     max: self.config.max_iterations,
