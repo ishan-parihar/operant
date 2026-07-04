@@ -665,6 +665,96 @@ impl McpStdioClient {
             ));
         }
 
+        // Check if this is a server-initiated request (has "method" field)
+        // rather than a response (has "result" or "error"). If so, handle
+        // it and read the next line for our actual response.
+        let parsed: Value = serde_json::from_str(trimmed).map_err(|e| {
+            crate::error::Error::ParseResponse(format!("Failed to parse MCP stdio response: {}", e))
+        })?;
+
+        if parsed.get("method").is_some() {
+            // This is a server-initiated request (e.g. sampling/createMessage,
+            // elicitation/create, notifications/*).
+            let method = parsed["method"].as_str().unwrap_or("");
+            let id = parsed.get("id").and_then(|v| v.as_u64());
+            let params = parsed.get("params").cloned().unwrap_or(Value::Null);
+
+            match method {
+                "sampling/createMessage" => {
+                    // Handle sampling request — the server wants us to
+                    // sample an LLM. For now, return an error indicating
+                    // sampling is not supported (the agent can be wired
+                    // in later via a callback).
+                    if let Some(req_id) = id {
+                        let error_response = serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "id": req_id,
+                            "error": {
+                                "code": -32601,
+                                "message": "sampling not supported by this client"
+                            }
+                        });
+                        let mut err_line = serde_json::to_string(&error_response).unwrap();
+                        err_line.push('\n');
+                        let _ = io.stdin.write_all(err_line.as_bytes()).await;
+                        let _ = io.stdin.flush().await;
+                    }
+                }
+                "elicitation/create" => {
+                    // Handle elicitation request — the server wants user
+                    // input. Return an error for now.
+                    if let Some(req_id) = id {
+                        let error_response = serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "id": req_id,
+                            "error": {
+                                "code": -32601,
+                                "message": "elicitation not supported by this client"
+                            }
+                        });
+                        let mut err_line = serde_json::to_string(&error_response).unwrap();
+                        err_line.push('\n');
+                        let _ = io.stdin.write_all(err_line.as_bytes()).await;
+                        let _ = io.stdin.flush().await;
+                    }
+                }
+                "notifications/progress" | "notifications/cancelled" => {
+                    // Server-side notifications — log and ignore.
+                    debug!(method = %method, "MCP server notification received");
+                }
+                _ => {
+                    debug!(method = %method, "Unknown MCP server request — ignoring");
+                }
+            }
+
+            // Read the next line for our actual response
+            response_line.clear();
+            let read_result2 = tokio::time::timeout(
+                std::time::Duration::from_secs(60),
+                io.stdout.read_line(&mut response_line),
+            ).await;
+            match read_result2 {
+                Ok(Ok(_)) => {}
+                Ok(Err(e)) => {
+                    return Err(crate::error::Error::Agent(format!(
+                        "Failed to read MCP stdout after server request: {}", e
+                    )));
+                }
+                Err(_) => {
+                    return Err(crate::error::Error::Agent(
+                        "MCP stdio server did not respond within 60s after server request".to_string(),
+                    ));
+                }
+            }
+        }
+
+        let trimmed = response_line.trim();
+        if trimmed.is_empty() {
+            return Err(crate::error::Error::Agent(
+                "MCP server returned empty response after server request".to_string(),
+            ));
+        }
+
         let rpc_response: JsonRpcResponse = serde_json::from_str(trimmed).map_err(|e| {
             crate::error::Error::ParseResponse(format!("Failed to parse MCP stdio response: {}", e))
         })?;

@@ -110,7 +110,7 @@ pub use config::{
 pub use context_files::{
     load_context_dir, load_default_context_files, load_workspace_context, scan_context_content,
 };
-pub use credential_pool::{AuthType, CredentialPool, PoolStrategy, PooledCredential};
+pub use credential_pool::{AuthType, CredentialPool, PooledCredential, PoolStrategy};
 pub use curator::{archiver, backup, review, CuratorEngine, CuratorReport, CuratorState};
 pub use distillation::distill_session_to_memory;
 pub use error::{Error, Result};
