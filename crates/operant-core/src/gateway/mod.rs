@@ -16,17 +16,12 @@ use tokio::sync::RwLock;
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
-use crate::agent::cache::new_shared_cache;
-use crate::agent::cache::SharedAgentCache;
 use crate::config::runtime_config;
 use crate::error::Result;
 use crate::gateway_markdown::markdown_to_telegram_html;
 use crate::gateway_session::{PersistentSessionStore, SessionSource};
 
-pub mod platforms;
-pub mod stream_consumer;
 
-pub use platforms::PlatformRegistry;
 
 /// Configuration for the gateway
 #[derive(Debug, Clone)]
@@ -562,7 +557,6 @@ pub struct Gateway {
     session_store: SessionStore,
     persistent_sessions: Option<Arc<PersistentSessionStore>>,
     channel_directory: ChannelDirectory,
-    agent_cache: SharedAgentCache,
     start_time: Instant,
     start_time_formatted: String,
     messages_processed: Arc<AtomicU64>,
@@ -586,7 +580,6 @@ impl Gateway {
             session_store: SessionStore::new(),
             persistent_sessions: None,
             channel_directory: ChannelDirectory::new(),
-            agent_cache: new_shared_cache(),
             start_time: Instant::now(),
             start_time_formatted: Utc::now().to_rfc3339(),
             messages_processed: Arc::new(AtomicU64::new(0)),
@@ -853,9 +846,6 @@ impl Gateway {
         &self.channel_directory
     }
 
-    pub fn get_agent_cache(&self) -> &SharedAgentCache {
-        &self.agent_cache
-    }
 }
 
 /// Telegram adapter

@@ -1,5 +1,4 @@
 pub mod db;
-pub mod scanner;
 pub mod scheduler;
 
 pub use db::CronDb;
