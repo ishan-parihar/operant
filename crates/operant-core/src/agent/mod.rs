@@ -1761,12 +1761,6 @@ impl Default for OperantAgentBuilder {
 
 pub mod cache;
 
-mod context_compressor;
-pub use context_compressor::{CompressionStrategy, ContextCompressor};
-
-mod prompt_builder;
-pub use prompt_builder::{ContextEntry, PromptBuilder};
-
 mod model_client;
 pub use model_client::{ChatRequest, ModelClient, StreamChunk};
 

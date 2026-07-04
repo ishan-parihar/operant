@@ -532,7 +532,7 @@ impl MemoryManager {
     /// Add a message to the current session
     pub async fn add_message(&self, message: Message) {
         if let Some(session_id) = self.current_session.read().await.clone() {
-            let tokens = crate::context::estimate_message_tokens(&message);
+            let tokens = crate::context_management::estimate_message_tokens(&message);
             self.session_messages.write().await.push(message);
 
             if let Some(session) = self.sessions.write().await.get_mut(&session_id) {
@@ -747,7 +747,7 @@ impl MemoryManager {
 
         for memory in important_memories {
             let memory_text = format!("[{}] {}\n", memory.block_type, memory.content);
-            let memory_tokens = crate::context::estimate_tokens(&memory_text);
+            let memory_tokens = crate::context_management::estimate_tokens(&memory_text);
 
             if tokens_used + memory_tokens > max_tokens {
                 break;

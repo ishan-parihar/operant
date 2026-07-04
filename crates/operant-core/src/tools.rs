@@ -260,19 +260,6 @@ impl ToolContext {
     }
 }
 
-/// Internal message for tool execution
-#[derive(Debug)]
-#[allow(dead_code)]
-enum ToolCommand {
-    Execute {
-        tool_name: String,
-        tool_call_id: String,
-        args: Value,
-        response_tx: oneshot::Sender<ToolResult>,
-    },
-    Shutdown,
-}
-
 /// Sandboxed tool executor with timeout support
 struct ToolExecutor {
     timeout: Duration,
@@ -317,30 +304,16 @@ pub struct ToolRegistry {
     disabled_names: Arc<RwLock<HashSet<String>>>,
     disabled_toolsets: Arc<RwLock<HashSet<String>>>,
     executor: ToolExecutor,
-    #[allow(dead_code)]
-    command_tx: mpsc::Sender<ToolCommand>,
 }
 
 impl ToolRegistry {
     pub fn new(timeout: Duration) -> Self {
-        let tools = Arc::new(RwLock::new(HashMap::new()));
-        let (command_tx, command_rx) = mpsc::channel(100);
-
-        let registry = Self {
-            tools,
+        Self {
+            tools: Arc::new(RwLock::new(HashMap::new())),
             disabled_names: Arc::new(RwLock::new(HashSet::new())),
             disabled_toolsets: Arc::new(RwLock::new(HashSet::new())),
             executor: ToolExecutor::new(timeout),
-            command_tx,
-        };
-
-        let tools_clone = registry.tools.clone();
-        let executor = ToolExecutor::new(timeout);
-        tokio::spawn(async move {
-            registry_worker(tools_clone, executor, command_rx).await;
-        });
-
-        registry
+        }
     }
 
     #[instrument(skip(self, tool), fields(tool = % tool.name()))]
@@ -497,56 +470,6 @@ impl ToolRegistry {
             results.push(self.execute(&name, &id, args, ctx).await);
         }
         results
-    }
-}
-
-/// Background worker for tool execution
-async fn registry_worker(
-    tools: Arc<RwLock<HashMap<String, Arc<dyn OperantTool>>>>,
-    executor: ToolExecutor,
-    mut command_rx: mpsc::Receiver<ToolCommand>,
-) {
-    info!("Tool registry worker started");
-
-    while let Some(cmd) = command_rx.recv().await {
-        match cmd {
-            ToolCommand::Execute {
-                tool_name,
-                tool_call_id,
-                args,
-                response_tx,
-            } => {
-                let tool = {
-                    let tools = tools.read().await;
-                    tools.get(&tool_name).cloned()
-                };
-
-                let result = match tool {
-                    Some(tool) => {
-                        executor
-                            .execute_with_timeout(
-                                tool,
-                                tool_name,
-                                tool_call_id.clone(),
-                                args,
-                                ToolContext::default(),
-                            )
-                            .await
-                    }
-                    None => ToolResult::error_with_name(
-                        &tool_name,
-                        &tool_call_id,
-                        format!("Tool '{}' not found", tool_name),
-                    ),
-                };
-
-                let _ = response_tx.send(result);
-            }
-            ToolCommand::Shutdown => {
-                info!("Tool registry worker shutting down");
-                break;
-            }
-        }
     }
 }
 
