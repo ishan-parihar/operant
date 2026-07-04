@@ -204,11 +204,17 @@ pub fn decay_render(messages: Vec<Message>, h50: usize, decay: f64) -> Vec<Messa
                 100.0 * (conv_index as f64 + 1.0) / (conv_len as f64)
             };
 
-            // Decay curve formula.
+            // Decay curve formula. H50 is in TOKENS (not chars) for
+            // consistency with estimate_tokens. We convert to chars
+            // for truncation: tokens × 4 (the same heuristic used in
+            // estimate_tokens). This ensures the decay targets match
+            // the budget calculations — previously H50=200 was treated
+            // as 200 chars (~50 tokens), which was too aggressive.
             let p = 1.0_f64; // default importance weight
             let p = p.max(0.10);
-            let h = (h50 as f64) * 2.0_f64.powf((importance - 50.0) / decay) / p;
-            let target_chars = h.max(50.0) as usize; // never shorter than 50 chars
+            let h_tokens = (h50 as f64) * 2.0_f64.powf((importance - 50.0) / decay) / p;
+            let target_tokens = h_tokens.max(20.0) as usize; // never < 20 tokens
+            let target_chars = target_tokens * 4; // tokens → chars heuristic
 
             if msg.content.chars().count() <= target_chars {
                 msg // already short enough
@@ -370,24 +376,33 @@ mod tests {
 
     #[test]
     fn manage_context_combines_decay_and_evict() {
+        // 10 messages: system + 8 tool results + recent. The tool results
+        // are T3 (evict first) and outside the recency reserve (last 6).
         let msgs = vec![
             make_msg(Role::System, "system"),
-            make_msg(Role::User, "old ".repeat(200)),
-            make_msg(Role::Tool, "result ".repeat(200)),
-            make_msg(Role::User, "recent user"),
+            make_msg(Role::Tool, "result ".repeat(200)), // T3, oldest
+            make_msg(Role::Tool, "result ".repeat(200)), // T3
+            make_msg(Role::Tool, "result ".repeat(200)), // T3
+            make_msg(Role::User, "msg 1"),
+            make_msg(Role::Assistant, "msg 2"),
+            make_msg(Role::User, "msg 3"),
+            make_msg(Role::Assistant, "msg 4"),
+            make_msg(Role::User, "msg 5"),
             make_msg(Role::Assistant, "recent answer"),
         ];
-        // Budget of 200 tokens + 50 reserve.
-        let result = manage_context(msgs, 200, 50);
-        // Should be under the effective budget (150).
+        // Budget of 100 tokens + 50 reserve = 50 effective.
+        // The 3 tool results (~350 tokens each before decay) are T3 and
+        // outside the recency reserve (keep_recent = 6, so last 6 are
+        // preserved). They should be evicted.
+        let result = manage_context(msgs, 100, 50);
         let total = estimate_total_tokens(&result);
         assert!(
-            total <= 150,
-            "total {} should be <= effective budget 150",
+            total <= 50,
+            "total {} should be <= effective budget 50",
             total
         );
         // System + recent should survive.
         assert!(result.first().is_some_and(|m| m.role == Role::System));
-        assert!(result.iter().any(|m| m.content == "recent user"));
+        assert!(result.iter().any(|m| m.content == "recent answer"));
     }
 }
