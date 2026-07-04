@@ -12,6 +12,7 @@ use operant_core::config::AppConfig;
 use operant_core::gateway::{
     DiscordAdapter, Gateway, GatewayConfig, IncomingMessage, MessageHandler, OutgoingMessage,
     PlatformAdapter, SlackAdapter, TelegramAdapter, WebhookAdapter,
+    WhatsAppAdapter, EmailAdapter, SmsAdapter,
 };
 use operant_core::gateway_pipeline::{MessagePipeline, PipelineAction};
 use operant_core::memory_provider::{build_memory_provider, MemoryProvider};
@@ -198,9 +199,38 @@ fn build_adapters(config: &GatewayConfig) -> Vec<Arc<dyn PlatformAdapter>> {
         )));
     }
 
-    // Webhook adapter
+    // Webhook adapter — real HTTP server with HMAC validation
     if config.webhooks_enabled {
-        adapters.push(Arc::new(WebhookAdapter::new(config.webhooks_enabled)));
+        let addr = config.webhooks_addr.clone().unwrap_or_else(|| "0.0.0.0:8080".to_string());
+        adapters.push(Arc::new(
+            WebhookAdapter::new(config.webhooks_enabled)
+                .with_addr(addr),
+        ));
+    }
+
+    // WhatsApp adapter — WhatsApp Cloud API
+    if config.whatsapp_enabled {
+        adapters.push(Arc::new(
+            WhatsAppAdapter::new(config.whatsapp_enabled)
+                .with_token(config.whatsapp_token.clone()),
+        ));
+    }
+
+    // Email adapter — SMTP outbound, webhook inbound
+    if config.email_enabled {
+        adapters.push(Arc::new(
+            EmailAdapter::new(config.email_enabled)
+                .with_smtp(
+                    config.email_smtp_host.clone(),
+                    config.email_smtp_user.clone(),
+                    config.email_smtp_pass.clone(),
+                ),
+        ));
+    }
+
+    // SMS adapter — Twilio REST API
+    if config.sms_twilio_enabled {
+        adapters.push(Arc::new(SmsAdapter::new(config.sms_twilio_enabled)));
     }
 
     adapters
@@ -248,6 +278,13 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
         discord_token: app_config.gateway.discord_token.clone(),
         slack_enabled: app_config.gateway.slack_enabled,
         slack_token: app_config.gateway.slack_token.clone(),
+        whatsapp_enabled: app_config.gateway.whatsapp_enabled,
+        whatsapp_token: app_config.gateway.whatsapp_token.clone(),
+        email_enabled: app_config.gateway.email_enabled,
+        email_smtp_host: app_config.gateway.email_smtp_host.clone(),
+        email_smtp_user: app_config.gateway.email_smtp_user.clone(),
+        email_smtp_pass: app_config.gateway.email_smtp_pass.clone(),
+        sms_twilio_enabled: app_config.gateway.sms_twilio_enabled,
         webhooks_enabled: app_config.gateway.webhooks_enabled,
         webhooks_addr: app_config.gateway.webhooks_addr.clone(),
         admins: app_config.gateway.admins.clone(),
