@@ -497,12 +497,56 @@ impl OperantAgent {
 
             let mut stream_extra_content = None;
             let response = if request.stream {
-                let stream = self.client.chat_streaming(request).await?;
+                let stream = match self.client.chat_streaming(request).await {
+                    Ok(s) => s,
+                    Err(e) => {
+                        // ── Context overflow auto-compression (iter-63) ───────
+                        // When the provider returns a context_overflow error,
+                        // compress the conversation using context_management
+                        // and retry once. This prevents hard failures on long
+                        // sessions that exceed the context window.
+                        let classified = FallbackModelClient::classify_error(&e);
+                        if classified.should_compress {
+                            warn!(reason = %classified.reason, "Context overflow detected — compressing and retrying");
+                            let budget = self.config.context_window;
+                            messages = crate::context_management::manage_context(
+                                messages, budget, 4096,
+                            );
+                            // Rebuild request with compressed messages
+                            let tools = self.registry.get_schemas().await;
+                            let retry_request = ChatRequest::new(&self.config.model, messages.clone())
+                                .with_tools(tools)
+                                .with_stream(self.config.stream);
+                            self.client.chat_streaming(retry_request).await?
+                        } else {
+                            return Err(e);
+                        }
+                    }
+                };
                 let (text, reasoning, tcs, extra) = self.process_stream(stream).await?;
                 stream_extra_content = extra;
                 Ok((text, reasoning, tcs))
             } else {
-                let response = self.client.chat(request).await?;
+                let response = match self.client.chat(request).await {
+                    Ok(r) => r,
+                    Err(e) => {
+                        let classified = FallbackModelClient::classify_error(&e);
+                        if classified.should_compress {
+                            warn!(reason = %classified.reason, "Context overflow detected — compressing and retrying");
+                            let budget = self.config.context_window;
+                            messages = crate::context_management::manage_context(
+                                messages, budget, 4096,
+                            );
+                            let tools = self.registry.get_schemas().await;
+                            let retry_request = ChatRequest::new(&self.config.model, messages.clone())
+                                .with_tools(tools)
+                                .with_stream(self.config.stream);
+                            self.client.chat(retry_request).await?
+                        } else {
+                            return Err(e);
+                        }
+                    }
+                };
                 self.process_response(response).await
             };
 

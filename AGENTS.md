@@ -156,16 +156,16 @@ rm -rf target/debug/deps target/debug/build target/debug/incremental
 These are acknowledged gaps vs the hermes-agent reference implementation.
 They are NOT bugs — they are features not yet implemented:
 
-1. **No hook system** — `gateway_pipeline.rs` is 38 lines, just a MessageFilter. Hermes has `gateway/hooks.py` with events: `gateway:startup`, `session:start/end/reset`, `agent:start/step/end`, `command:*` (wildcard matching)
-2. **Error recovery: 3 classes vs 22** — no context_overflow/billing/content_policy detection. `fallback.rs` only handles Network/RateLimited/5xx. No `should_compress` / `should_rotate_credential` / `should_fallback` classification
-3. **MCP: no sampling/elicitation handlers** — stdio + HTTP work, but `sampling/createMessage` and `elicitation/create` server-initiated requests are unhandled. Hermes supports both + SSE transport + dynamic tool discovery (`notifications/tools/list_changed`)
-4. **No platform registry** — adapters hardcoded in `build_adapters()` if/elif chain. Hermes has `PlatformRegistry` with deferred loading, `adapter_factory`, `check_fn`, `validate_config`, per-plugin YAML config translation
-5. **No credential rotation** — no OAuth refresh / multi-account rotation. Hermes has `agent/credential_pool.py` (2,372 lines) with per-turn tally of consecutive same-entry refreshes
-6. **No context compression on overflow** — no automatic summarization when context exceeds window. Hermes has `agent/context_compressor.py` (3,018 lines) + `agent/conversation_compression.py` (1,194 lines)
-7. **7 more dead TUI dialogs** — ask_user_dialog, bypass_permissions_dialog, custom_provider_dialog, device_auth_dialog, free_mode_dialog, import_config_dialog, key_input_dialog — all have 0 non-test `show()` calls. (export_dialog and stats_dialog ARE used.)
-8. **No `/steer` directive** — no real-time user steering injected during API calls. Hermes drains pending steer directives into the last tool-role message
+1. **MCP: no sampling/elicitation handlers** — stdio + HTTP work, but `sampling/createMessage` and `elicitation/create` server-initiated requests are unhandled. Hermes supports both + SSE transport + dynamic tool discovery (`notifications/tools/list_changed`)
+2. **No platform registry** — adapters hardcoded in `build_adapters()` if/elif chain. Hermes has `PlatformRegistry` with deferred loading, `adapter_factory`, `check_fn`, `validate_config`, per-plugin YAML config translation
+3. **No credential rotation** — no OAuth refresh / multi-account rotation. Hermes has `agent/credential_pool.py` (2,372 lines) with per-turn tally of consecutive same-entry refreshes
+4. **7 more dead TUI dialogs** — ask_user_dialog, bypass_permissions_dialog, custom_provider_dialog, device_auth_dialog, free_mode_dialog, import_config_dialog, key_input_dialog — all have 0 non-test `show()` calls. (export_dialog and stats_dialog ARE used.)
+5. **No `/steer` directive** — no real-time user steering injected during API calls. Hermes drains pending steer directives into the last tool-role message
 
 ### Gaps CLOSED in recent iterations:
+- ✅ ~~Context compression on overflow~~ — auto-compress via context_management on context_overflow errors (iter-63)
+- ✅ ~~Hook system~~ — HookRegistry with 6 events + wildcard, wired into agent loop (iter-61/62)
+- ✅ ~~Error recovery 3 vs 22~~ — 12 error classes with ClassifiedError (iter-61)
 - ✅ ~~Sequential tool execution~~ — concurrent 8-worker pool (iter-56)
 - ✅ ~~7 dead TUI dialogs~~ — elicitation/onboarding/file_injection/invalid_config/memory_update_notification/overage_upsell/desktop_upsell_startup deleted (iter-58)
 - ✅ ~~Iteration budget grace call~~ — summarize instead of hard-stop (iter-57)
