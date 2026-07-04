@@ -426,9 +426,13 @@ impl AftBridge {
                 .map_err(|e| Error::Agent(format!("aft: failed to flush stdin: {e}")))?;
         }
 
-        let response = tokio::time::timeout(std::time::Duration::from_secs(300), rx)
+        // 600s timeout (10 min) — was 300s (5 min) which killed long-running
+        // bash commands like test suites. The timeout is a safety net, not
+        // a normal behavior; aft itself handles per-command timeouts via
+        // the bash tool's timeoutMs parameter.
+        let response = tokio::time::timeout(std::time::Duration::from_secs(600), rx)
             .await
-            .map_err(|_| Error::Agent(format!("aft: request {} timed out (300s)", id)))?
+            .map_err(|_| Error::Agent(format!("aft: request {} timed out (600s)", id)))?
             .map_err(|_| Error::Agent(format!("aft: response channel closed for request {}", id)))?;
 
         if response["success"].as_bool() == Some(false) {

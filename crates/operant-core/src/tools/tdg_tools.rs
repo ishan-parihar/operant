@@ -100,21 +100,35 @@ impl OperantTool for TdgSearchTool {
                 // FTS5 MATCH syntax: for multi-word queries, we want each
                 // word to be a prefix match (OR semantics). E.g. "hello world"
                 // should match nodes containing "hello" OR "world" as prefixes.
-                // The previous format!("\"{}*\"", query) wrapped the whole
-                // query in quotes, making FTS5 treat it as a single phrase —
-                // which only matched nodes where "hello world" appeared as a
-                // contiguous prefix. For multi-word queries this returned 0
-                // results even when both words existed separately.
                 //
-                // Fix: split on whitespace, escape each token, join with
-                // spaces (FTS5 implicit OR), and append * to each token for
-                // prefix matching.
-                let safe_q = query.replace('"', "\"\"");
-                let fts_query: String = safe_q
+                // FTS5 special characters (colon, asterisk, parens, quotes)
+                // must be stripped or they cause syntax errors. E.g. "C++"
+                // or "3:1" would error without sanitization. We strip any
+                // char that isn't alphanumeric, underscore, or hyphen, then
+                // wrap each token in double-quotes (FTS5 string literal) +
+                // append * for prefix matching.
+                let fts_query: String = query
                     .split_whitespace()
-                    .map(|token| format!("{}*", token))
+                    .filter_map(|token| {
+                        // Sanitize: keep only alnum + underscore + hyphen
+                        let clean: String = token
+                            .chars()
+                            .filter(|c| c.is_alphanumeric() || *c == '_' || *c == '-')
+                            .collect();
+                        if clean.is_empty() {
+                            None
+                        } else {
+                            // Wrap in double-quotes (FTS5 string literal) to
+                            // prevent any residual special chars from being
+                            // interpreted, then append * for prefix match.
+                            Some(format!("\"{}\"*", clean))
+                        }
+                    })
                     .collect::<Vec<_>>()
                     .join(" ");
+                if fts_query.is_empty() {
+                    return Ok(vec![]);
+                }
                 let rows: Vec<Value> = stmt
                     .query_map(rusqlite::params![fts_query], |row| {
                         Ok(serde_json::json!({
