@@ -175,6 +175,18 @@ fn cmd_status(config: &AppConfig, deep: bool) -> Result<()> {
         "  Slack     {}",
         indicator(gw.slack_enabled, gw.slack_token.is_some())
     );
+    println!(
+        "  WhatsApp  {}",
+        indicator(gw.whatsapp_enabled, gw.whatsapp_token.is_some())
+    );
+    println!(
+        "  Email     {}",
+        indicator(gw.email_enabled, gw.email_smtp_host.is_some())
+    );
+    println!(
+        "  SMS       {}",
+        indicator(gw.sms_twilio_enabled, false)
+    );
     println!();
     println!(
         "Webhooks:  {}",
@@ -492,13 +504,21 @@ fn cmd_list(config: &AppConfig) -> Result<()> {
     println!("────────────────");
     println!();
 
-    let enabled_count = [gw.telegram_enabled, gw.discord_enabled, gw.slack_enabled]
-        .iter()
-        .filter(|&&e| e)
-        .count();
+    let enabled_count = [
+        gw.telegram_enabled,
+        gw.discord_enabled,
+        gw.slack_enabled,
+        gw.whatsapp_enabled,
+        gw.email_enabled,
+        gw.sms_twilio_enabled,
+        gw.webhooks_enabled,
+    ]
+    .iter()
+    .filter(|&&e| e)
+    .count();
 
     println!("Active profile: default");
-    println!("  Platforms:    {}/3 enabled", enabled_count);
+    println!("  Platforms:    {}/7 enabled", enabled_count);
     println!(
         "  Telegram:     {}",
         if gw.telegram_enabled { "✓" } else { "✗" }
@@ -651,10 +671,16 @@ fn fmt_ts_short(rfc3339: &str) -> String {
 fn cmd_channels(config: &AppConfig) -> Result<()> {
     let gw = &config.gateway;
 
-    let any_platform = gw.telegram_enabled || gw.discord_enabled || gw.slack_enabled;
+    let any_platform = gw.telegram_enabled
+        || gw.discord_enabled
+        || gw.slack_enabled
+        || gw.whatsapp_enabled
+        || gw.email_enabled
+        || gw.sms_twilio_enabled
+        || gw.webhooks_enabled;
     if !any_platform {
         println!("No gateway platforms are enabled in config.");
-        println!("Enable a platform (telegram, discord, slack) in your config file first.");
+        println!("Enable a platform (telegram, discord, slack, whatsapp, email, sms, webhooks) in your config file first.");
         return Ok(());
     }
 
@@ -687,15 +713,23 @@ fn cmd_channels(config: &AppConfig) -> Result<()> {
 fn cmd_stats(config: &AppConfig) -> Result<()> {
     let gw = &config.gateway;
 
-    let enabled_count = [gw.telegram_enabled, gw.discord_enabled, gw.slack_enabled]
-        .iter()
-        .filter(|&&e| e)
-        .count();
+    let enabled_count = [
+        gw.telegram_enabled,
+        gw.discord_enabled,
+        gw.slack_enabled,
+        gw.whatsapp_enabled,
+        gw.email_enabled,
+        gw.sms_twilio_enabled,
+        gw.webhooks_enabled,
+    ]
+    .iter()
+    .filter(|&&e| e)
+    .count();
 
     println!("Gateway Statistics");
     println!("──────────────────");
     println!();
-    println!("Enabled platforms:  {enabled_count}/3");
+    println!("Enabled platforms:  {enabled_count}/7");
     println!(
         "Webhooks:           {}",
         if gw.webhooks_enabled {

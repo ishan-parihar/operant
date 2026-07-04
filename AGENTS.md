@@ -18,6 +18,173 @@
   - `cargo test --workspace`
   - `cargo clippy --workspace --all-targets --all-features -- -D warnings`
 
+## Design Preferences (DO NOT CHANGE)
+
+These are the user's intentional design choices. Do not replace, remove, or
+"improve" them. New AI agents working on this repo must respect these defaults:
+
+### Voice / TTS
+- **Default: Kokoro** (`tools/tts_tool.rs`)
+- Kokoro engine is loaded lazily via `kokoro-tiny::TtsEngine`
+- Default voice: `af_sky`
+- Config: `config.tts.provider = "kokoro"` in `operant.example.toml`
+- Do NOT switch to Edge TTS, OpenAI TTS, or any other provider as the default
+
+### Memory
+- **Default: TDG (Teleological Developmental Graph)** via `tdg-rust` path dependency
+- TDG is the ONLY real memory backend (`memory_provider.rs`)
+- All other providers (Hindsight, RetainDb, Mem0, LocalVector) were removed in iter-30
+- `BuiltinProvider` (file-backed MEMORY.md/USER.md) is the zero-dependency fallback
+- TDG integration is deep: HybridRetriever + EntityExtractor + auto_wire_edges
+- Agent loop auto-calls `sync_turn(user, assistant)` after each turn (iter-33)
+- Graph self-organizes — no manual `tdg_create`/`tdg_connect` needed
+- Config: `config.memory.provider = "tdg"`
+
+### Browser
+- **Default: Obscura/Camofox** (`browser_provider.rs`)
+- 5 backends available: lightpanda, camofox, browserbase, browser-use, firecrawl
+- Camofox is the preferred default for local automation
+- Do NOT switch to a different browser backend as the default
+
+### Platform Adapters (Gateway)
+- **Supported: 7 platforms** — telegram, discord, slack, whatsapp, email_smtp, sms_twilio, webhooks
+- **Working adapters**: Telegram, Discord, Slack (fully implemented in `gateway/mod.rs`)
+- **Stub adapter**: Webhook (needs HTTP server implementation)
+- **Config-only**: WhatsApp, Email, SMS (setup wizard + config flags exist, adapter code TBD)
+- 20 phantom platforms were purged in iter-50 (matrix, mattermost, signal, etc.)
+- Do NOT re-add purged platforms without a real adapter implementation
+
+### Native Tool Integrations
+- **AFT (Agent File Tools)**: 15 IDE-grade coding tools via subprocess (`aft_bridge.rs` + `aft_tools.rs`)
+  - Auto-downloads from GitHub releases, auto-updates
+  - When `aft_enabled=true`, basic file/terminal tools are auto-disabled (no duplication)
+  - Feature flag: `aft_enabled` in config
+- **IGS (Intelligence Gathering System)**: 14 OSINT/research tools (`igs_tools.rs`)
+  - Feature flag: `igs` cargo feature + `igs_enabled` in config
+- **LifeOS**: 22 Notion-backed holonic life-management tools (`lifeos_tools.rs`)
+  - Feature flag: `lifeos` cargo feature + `lifeos_enabled` in config
+  - Requires `NOTION_API_TOKEN` env var
+
+### Context Management
+- **Tiered eviction + decay curve** ported from `cortexkit/magic-context` (`context_management.rs`)
+- T3 (tool results) evicted first, T2 (reasoning) second, T1 (user/assistant) last
+- Recency reserve scales with context window: `budget/4096` clamped to [6, 50]
+- Prompt-cache stability: system prompt split into frozen prefix (base + skills) + volatile suffix (memory + workspace)
+
+## Architecture Overview
+
+```
+operant/
+├── crates/
+│   ├── operant-core/          # Core library (no CLI/TUI)
+│   │   ├── src/
+│   │   │   ├── agent/         # Agent loop, model clients, fallback
+│   │   │   │   ├── mod.rs     # OperantAgent — run(), execute_tools(), process_stream()
+│   │   │   │   ├── clients/   # OpenAI, Anthropic adapters
+│   │   │   │   └── fallback.rs # FallbackModelClient
+│   │   │   ├── tools/         # Tool registry + all tool implementations
+│   │   │   │   ├── builtin.rs # register_builtin_tools()
+│   │   │   │   ├── tdg_tools.rs   # 4 TDG graph memory tools
+│   │   │   │   ├── aft_tools.rs   # 15 AFT IDE tools
+│   │   │   │   ├── igs_tools.rs   # 14 IGS OSINT tools (feature-gated)
+│   │   │   │   └── lifeos_tools.rs # 22 LifeOS tools (feature-gated)
+│   │   │   ├── memory_provider.rs # TDG + BuiltinProvider
+│   │   │   ├── context_management.rs # Tiered eviction + decay curve
+│   │   │   ├── aft_bridge.rs  # AFT subprocess + auto-update
+│   │   │   ├── gateway/       # Platform adapters (Telegram/Discord/Slack/Webhook)
+│   │   │   ├── mcp.rs         # MCP client (HTTP + Stdio)
+│   │   │   └── config.rs      # AppConfig, BehaviorSettings, ToolSettings
+│   │   └── Cargo.toml         # Features: anthropic, igs, lifeos
+│   └── operant-cli/           # CLI + TUI
+│       ├── src/
+│       │   ├── main.rs        # CLI entry point, Clap enum, agent setup
+│       │   ├── tui/           # 50+ TUI modules (app, render, prompt_input, dialogs)
+│       │   ├── gateway_runner.rs # Gateway mode agent handler
+│       │   ├── autonomous.rs  # Autonomous coding mode
+│       │   ├── config.rs      # CLI config (CliConfig, 3728→2626 LOC after cleanup)
+│       │   └── cmd_*.rs       # CLI subcommand handlers
+│       └── Cargo.toml         # Features: igs, lifeos
+├── Cargo.toml                 # Workspace deps (tdg-rust, igs-rust, lifeos-core)
+├── operant.example.toml       # Config template (7 platforms only)
+└── AGENTS.md                  # This file
+```
+
+## Path Dependencies
+
+Operant depends on three path dependencies that must be cloned alongside it:
+- `../../tdg-rust` — TDG graph memory (clone from `ishan-parihar/tdg-rust`)
+- `../../igs-rust` — Intelligence Gathering System (clone from `ishan-parihar/igs-rust`)
+- `../../lifeos-ops/lifeos-core` — LifeOS Notion tools (clone from `ishan-parihar/lifeos-ops`)
+
+## Build Environment Setup
+
+```bash
+# 1. Source the dev env (sets LIBCLANG_PATH, ORT_LIB_LOCATION, etc.)
+source /home/z/my-project/operant/scripts/dev-env.sh
+
+# 2. Use the check.sh wrapper (applies RUSTFLAGS + CARGO_INCREMENTAL=0)
+/home/z/my-project/operant/scripts/check.sh check -p operant-core --lib
+/home/z/my-project/operant/scripts/check.sh test -p operant-core --lib -- <test_filter>
+
+# 3. Or set env manually:
+source /home/z/.cargo/env
+export LIBCLANG_PATH=/home/z/my-project/local/libclang_extract/usr/lib/x86_64-linux-gnu
+export ORT_LIB_LOCATION=/home/z/my-project/local/onnxruntime-linux-x64-1.20.1/lib
+export ORT_PREFER_DYNAMIC_LINK=1
+export BINDGEN_EXTRA_CLANG_ARGS="-I/usr/lib/gcc/x86_64-linux-gnu/14/include -I/usr/include"
+export PKG_CONFIG_PATH=/home/z/my-project/local/pkgconfig
+export LD_LIBRARY_PATH=/home/z/my-project/local/lib:/home/z/my-project/local/onnxruntime-linux-x64-1.20.1/lib
+export RUSTFLAGS="-L native=/home/z/my-project/local/lib"
+export CARGO_INCREMENTAL=0
+
+# 4. For fresh environments, run provision first:
+/home/z/my-project/operant/scripts/provision-build-deps.sh
+```
+
+**Compile strategy**: Only compile the specific crate being modified. Use
+`-p operant-core --lib` or `-p operant-cli --bin operant` — never
+`--workspace` unless doing a final verification. Full workspace compiles
+take 10+ minutes on a 2-CPU box.
+
+**Disk constraint**: `target/debug/` can hit 5-8GB. Clean between iterations:
+```bash
+rm -rf target/debug/deps target/debug/build target/debug/incremental
+```
+
+## Known Gaps (from hermes-agent contrast audit)
+
+These are acknowledged gaps vs the hermes-agent reference implementation.
+They are NOT bugs — they are features not yet implemented:
+
+1. **WebhookAdapter is a stub** — no HTTP server, no HMAC validation
+2. **WhatsApp/Email/SMS adapters not implemented** — config flags exist, adapter code TBD
+3. **Sequential tool execution** — `execute_tools` is a for-loop; hermes uses 8-worker pool
+4. **No hook system** — `gateway_pipeline.rs` is 39 lines, just a MessageFilter
+5. **Error recovery: 3 classes vs 22** — no context_overflow/billing/content_policy detection
+6. **MCP: no sampling/elicitation handlers** — stdio + HTTP work, but server-initiated requests unhandled
+7. **No Anthropic cache_control breakpoints** — the frozen-prefix split is logical only
+8. **No platform registry** — adapters hardcoded in `build_adapters()` if/elif chain
+
+## Iteration History (recent)
+
+- iter-50: Purged 20 phantom platforms — keep only 7 supported
+- iter-49: Fixed budget_config regression + yuanbao phantom + gateway session caching
+- iter-48: LifeOS API alignment — 22 tools compile clean
+- iter-47: Integrated igs-rust + lifeos-ops as native tool modules
+- iter-46: FTS5 escaping + aft timeout + decay token-consistency
+- iter-45: Deleted 9 more dead operant-core modules (~4.9k LOC)
+- iter-44: Fixed test counts + memory flush after iter-24/31/42 changes
+- iter-43: Bug fixes + remove rand dep
+- iter-42: Deleted 17 dead operant-core modules (~12.6k LOC)
+- iter-41: Wired 15 aft tools as OperantTool impls
+- iter-40: AFT subprocess bridge with auto-update
+- iter-39: Prompt-cache stability — frozen prefix + volatile suffix
+- iter-37/38: Ported magic-context tiered eviction + decay curve
+- iter-33: TDG hooks — auto-sync_turn in agent loop
+- iter-32: Deepened TDG — HybridRetriever + EntityExtractor + auto_wire_edges
+- iter-31: Unified TDG pool, gated tools on provider, fixed FTS5 + edge fields
+- iter-30: Removed Hindsight/RetainDb/Mem0/LocalVector — TDG-only memory
+
 ## MVP Deployment (Current Focus)
 
 **Goal**: Make operant-rs deployable and functional for testing
