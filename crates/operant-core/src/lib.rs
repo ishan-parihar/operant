@@ -45,8 +45,6 @@ pub mod aft_bridge;
 pub mod agent;
 pub mod approval;
 pub mod browser_provider;
-pub mod browser_supervisor;
-pub mod budget_config;
 pub mod client;
 pub mod config;
 pub mod context_files;
@@ -82,18 +80,12 @@ pub mod security;
 pub mod skill_usage;
 pub mod skills;
 pub mod skills_guard;
-pub mod skills_sync;
 pub mod tools;
 pub mod trajectory;
 pub mod voice;
-pub mod yuanbao;
 
 pub use acp::{server, AcpHandler, AgentState, RpcRequest, RpcResponse};
 pub use agent::{
-    cache::{
-        new_shared_cache, new_shared_cache_with_config, AgentCache, AgentCacheConfig,
-        AgentCacheEntry, SharedAgentCache,
-    },
     AgentConfig, AgentEvent, FallbackModelClient, OperantAgent,
 };
 pub use approval::{
@@ -103,10 +95,6 @@ pub use approval::{
 pub use browser_provider::{
     build_browser_provider, BrowserProvider, BrowserUseProvider, BrowserbaseProvider,
     CamofoxProvider, FirecrawlProvider, LightpandaProvider,
-};
-pub use browser_supervisor::{
-    BrowserSession, BrowserSupervisorTool, CDPSupervisor, CdpNavigateTool, CloudProvider,
-    CloudProviderClient, CloudProviderConfig, DialogBridgeTool, SessionStatus,
 };
 pub use client::{Message, OpenAIClient};
 pub use config::{
@@ -125,7 +113,7 @@ pub use error::{Error, Result};
 pub use gateway::{
     format_startup_message, handle_admin_command, ChannelDirectory, ChannelInfo, ChannelType,
     Gateway, GatewayConfig, GatewayStats, IncomingMessage, OutgoingMessage, PlatformAdapter,
-    PlatformRegistry, PlatformSession, SessionStore, TelegramAdapter, TelegramPoller, UserInfo,
+    PlatformSession, SessionStore, TelegramAdapter, TelegramPoller, UserInfo,
     WebhookAdapter,
 };
 pub use gateway_session::{

@@ -1759,7 +1759,6 @@ impl Default for OperantAgentBuilder {
     }
 }
 
-pub mod cache;
 
 mod model_client;
 pub use model_client::{ChatRequest, ModelClient, StreamChunk};

@@ -50,7 +50,6 @@ pub mod tool_backend_helpers;
 pub mod tool_output_limits;
 pub mod transcription_tool;
 pub mod tts_command_provider;
-pub mod tts_opus;
 pub mod tts_provider;
 pub mod tts_registry;
 pub mod tts_tool;
