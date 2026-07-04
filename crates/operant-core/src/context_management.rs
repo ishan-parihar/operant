@@ -88,7 +88,12 @@ pub fn evict_to_budget(messages: Vec<Message>, budget_tokens: usize) -> Vec<Mess
         return messages;
     }
 
-    let keep_recent = 6.min(messages.len());
+    // Recency reserve: scale with budget so large contexts preserve more
+    // recent messages. For a 128k context, ~20 messages; for a 4k context,
+    // ~6. Clamped to [6, 50] to avoid degenerate cases. Was fixed at 6,
+    // which was too few for large contexts (the agent lost too much recent
+    // context) and too many for tiny contexts (it couldn't evict enough).
+    let keep_recent = ((budget_tokens / 4096) as usize).clamp(6, 50).min(messages.len());
     let n = messages.len();
 
     // Build a list of (index, tier) for evictable messages. System
@@ -208,10 +213,15 @@ pub fn decay_render(messages: Vec<Message>, h50: usize, decay: f64) -> Vec<Messa
             if msg.content.chars().count() <= target_chars {
                 msg // already short enough
             } else {
-                // Truncate to target_chars, adding an ellipsis.
+                // Hard-truncate to target_chars. We do NOT add a "[…truncated]"
+                // marker because that would change the message content and
+                // could confuse the model ("what is this marker?"). The
+                // truncation is a context-management internal — the model
+                // doesn't need to know it happened. If the model needs the
+                // full content, it can re-request it via a tool call.
                 let truncated: String = msg.content.chars().take(target_chars).collect();
                 Message {
-                    content: format!("{}[…truncated]", truncated),
+                    content: truncated,
                     ..msg
                 }
             }
