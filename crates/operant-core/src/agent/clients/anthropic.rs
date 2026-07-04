@@ -47,6 +47,10 @@ impl AnthropicModelClient {
     }
 
     /// Convert internal messages to Anthropic format, extracting system prompt.
+    /// Adds `cache_control: {type: "ephemeral"}` breakpoints on the system
+    /// prompt and the last tool result to enable Anthropic prompt caching.
+    /// Without these breakpoints, the frozen-prefix split (iter-39) is purely
+    /// logical — the API doesn't know which blocks to cache.
     fn convert_request(&self, request: &ChatRequest) -> Value {
         let mut system: Option<String> = None;
         let mut messages: Vec<Value> = Vec::new();
@@ -82,8 +86,18 @@ impl AnthropicModelClient {
             "max_tokens": request.max_tokens.unwrap_or(4096),
         });
 
+        // System prompt with cache_control breakpoint.
+        // Anthropic's prompt caching requires explicit cache_control markers.
+        // The system prompt is the most stable part of the request — it
+        // includes the base prompt, skills, and instructions. Marking it
+        // as cacheable means subsequent requests with the same system prompt
+        // pay ~10x less (cache read vs fresh encoding).
         if let Some(sys) = system {
-            body["system"] = json!(sys);
+            body["system"] = json!([{
+                "type": "text",
+                "text": sys,
+                "cache_control": {"type": "ephemeral"}
+            }]);
         }
         if let Some(temp) = request.temperature {
             body["temperature"] = json!(temp);

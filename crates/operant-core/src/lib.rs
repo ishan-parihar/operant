@@ -114,7 +114,7 @@ pub use gateway::{
     format_startup_message, handle_admin_command, ChannelDirectory, ChannelInfo, ChannelType,
     Gateway, GatewayConfig, GatewayStats, IncomingMessage, OutgoingMessage, PlatformAdapter,
     PlatformSession, SessionStore, TelegramAdapter, TelegramPoller, UserInfo,
-    WebhookAdapter,
+    WebhookAdapter, WhatsAppAdapter, EmailAdapter, SmsAdapter,
 };
 pub use gateway_session::{
     build_session_key, hash_chat_id, hash_sender_id, is_shared_multi_user_session,

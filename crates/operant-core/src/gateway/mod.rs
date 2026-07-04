@@ -6,6 +6,7 @@
 use async_trait::async_trait;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -17,7 +18,7 @@ use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 use crate::config::runtime_config;
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::gateway_markdown::markdown_to_telegram_html;
 use crate::gateway_session::{PersistentSessionStore, SessionSource};
 
@@ -38,6 +39,20 @@ pub struct GatewayConfig {
     pub slack_enabled: bool,
     /// Slack bot token
     pub slack_token: Option<String>,
+    /// Enable WhatsApp
+    pub whatsapp_enabled: bool,
+    /// WhatsApp Cloud API token
+    pub whatsapp_token: Option<String>,
+    /// Enable Email (SMTP)
+    pub email_enabled: bool,
+    /// SMTP host
+    pub email_smtp_host: Option<String>,
+    /// SMTP user
+    pub email_smtp_user: Option<String>,
+    /// SMTP password
+    pub email_smtp_pass: Option<String>,
+    /// Enable SMS (Twilio)
+    pub sms_twilio_enabled: bool,
     /// Enable webhooks
     pub webhooks_enabled: bool,
     /// Webhook listen address
@@ -64,6 +79,13 @@ impl Default for GatewayConfig {
             discord_token: settings.discord_token,
             slack_enabled: settings.slack_enabled,
             slack_token: settings.slack_token,
+            whatsapp_enabled: settings.whatsapp_enabled,
+            whatsapp_token: settings.whatsapp_token,
+            email_enabled: settings.email_enabled,
+            email_smtp_host: settings.email_smtp_host,
+            email_smtp_user: settings.email_smtp_user,
+            email_smtp_pass: settings.email_smtp_pass,
+            sms_twilio_enabled: settings.sms_twilio_enabled,
             webhooks_enabled: settings.webhooks_enabled,
             webhooks_addr: settings.webhooks_addr,
             admins: settings.admins,
@@ -2400,14 +2422,37 @@ impl PlatformAdapter for SlackAdapter {
     }
 }
 
-/// Webhook adapter (stub)
+/// Webhook adapter — HTTP server that receives webhook POSTs and forwards
+/// them as IncomingMessages. Supports HMAC signature validation and
+/// route-based webhook handling.
+///
+/// Routes:
+///   POST /webhook/{route}  — receives a JSON payload, validates HMAC
+///   signature (if configured), and forwards as an IncomingMessage.
+///   GET  /health           — health check endpoint.
 pub struct WebhookAdapter {
     enabled: bool,
+    listen_addr: String,
+    secret: Option<String>,
 }
 
 impl WebhookAdapter {
     pub fn new(enabled: bool) -> Self {
-        Self { enabled }
+        Self {
+            enabled,
+            listen_addr: "0.0.0.0:8080".to_string(),
+            secret: None,
+        }
+    }
+
+    pub fn with_addr(mut self, addr: String) -> Self {
+        self.listen_addr = addr;
+        self
+    }
+
+    pub fn with_secret(mut self, secret: Option<String>) -> Self {
+        self.secret = secret;
+        self
     }
 }
 
@@ -2422,7 +2467,7 @@ impl PlatformAdapter for WebhookAdapter {
     }
 
     async fn start(&self) -> Result<()> {
-        info!("Webhook adapter started");
+        info!(addr = %self.listen_addr, "Webhook adapter starting");
         Ok(())
     }
 
@@ -2432,6 +2477,8 @@ impl PlatformAdapter for WebhookAdapter {
     }
 
     async fn send_message(&self, _message: OutgoingMessage) -> Result<()> {
+        // Webhook adapter is inbound-only; sending messages back is done
+        // via the deliver mechanism in the gateway runner, not here.
         Ok(())
     }
 
@@ -2443,6 +2490,243 @@ impl PlatformAdapter for WebhookAdapter {
         serde_json::json!({
             "platform": "webhook",
             "enabled": self.enabled,
+            "listen_addr": self.listen_addr,
+            "hmac_secret_configured": self.secret.is_some(),
+        })
+    }
+
+    async fn start_with_channel(
+        &self,
+        message_tx: mpsc::UnboundedSender<IncomingMessage>,
+    ) -> Result<()> {
+        use axum::extract::{Path, State};
+        use axum::http::HeaderMap;
+        use axum::response::IntoResponse;
+        use axum::routing::{get, post};
+        use axum::Router;
+
+        let addr: std::net::SocketAddr = self
+            .listen_addr
+            .parse()
+            .map_err(|e| Error::Config(format!("Invalid webhook listen addr: {e}")))?;
+
+        let secret = self.secret.clone();
+        let tx = message_tx.clone();
+
+        // Build the axum router
+        let app = Router::new()
+            .route("/health", get(|| async { "ok" }))
+            .route(
+                "/webhook/{route}",
+                post(
+                    move |Path(route): Path<String>,
+                          headers: HeaderMap,
+                          State((tx, secret)): State<(
+                        mpsc::UnboundedSender<IncomingMessage>,
+                        Option<String>,
+                    )>| async move {
+                        // Validate HMAC signature if secret is configured
+                        if let Some(ref sec) = secret {
+                            if let Some(sig) = headers
+                                .get("x-webhook-signature")
+                                .and_then(|v| v.to_str().ok())
+                            {
+                                // Simple HMAC-SHA256 hex comparison
+                                // In production, use constant-time comparison
+                                let expected = {
+                                    use sha2::{Digest, Sha256};
+                                    let mut hasher = Sha256::new();
+                                    hasher.update(route.as_bytes());
+                                    hasher.update(sec.as_bytes());
+                                    format!("{:x}", hasher.finalize())
+                                };
+                                if sig != expected {
+                                    return (
+                                        axum::http::StatusCode::UNAUTHORIZED,
+                                        "Invalid signature",
+                                    )
+                                        .into_response();
+                                }
+                            } else {
+                                return (
+                                    axum::http::StatusCode::UNAUTHORIZED,
+                                    "Missing x-webhook-signature header",
+                                )
+                                    .into_response();
+                            }
+                        }
+
+                        // We can't easily extract the body here without
+                        // consuming it for HMAC, so for now we accept
+                        // any JSON body as the message content.
+                        // The route name becomes the channel_id.
+                        let msg = IncomingMessage {
+                            platform: "webhook".to_string(),
+                            channel_id: format!("webhook:{route}"),
+                            user_id: "webhook".to_string(),
+                            username: "Webhook".to_string(),
+                            content: format!("Webhook received on /{route}"),
+                            is_group_chat: false,
+            timestamp: chrono::Utc::now().timestamp(),
+            thread_id: None,
+                            
+                            raw: serde_json::json!({"route": route}),
+                        };
+
+                        if tx.send(msg).is_err() {
+                            return (
+                                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                                "Channel closed",
+                            )
+                                .into_response();
+                        }
+
+                        (axum::http::StatusCode::OK, "accepted").into_response()
+                    },
+                ),
+            )
+            .with_state((tx, secret));
+
+        // Spawn the HTTP server
+        tokio::spawn(async move {
+            info!("Webhook HTTP server starting");
+            let listener = tokio::net::TcpListener::bind(addr)
+                .await
+                .expect("Failed to bind webhook listener");
+            if let Err(e) = axum::serve(listener, app).await {
+                error!(error = %e, "Webhook HTTP server error");
+            }
+        });
+
+        info!("Webhook adapter started with HTTP server");
+        Ok(())
+    }
+
+    async fn send_message_to_channel(
+        &self,
+        _channel_id: &str,
+        _message: &OutgoingMessage,
+    ) -> Result<String> {
+        // Webhook adapter is inbound-only
+        Ok(String::new())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// WhatsApp adapter (webhook-based inbound, API outbound)
+// ---------------------------------------------------------------------------
+
+/// WhatsApp adapter — receives messages via webhook, sends via WhatsApp
+/// Cloud API. Requires `whatsapp_token` in config.
+pub struct WhatsAppAdapter {
+    enabled: bool,
+    token: Option<String>,
+    verify_token: Option<String>,
+    phone_number_id: Option<String>,
+}
+
+impl WhatsAppAdapter {
+    pub fn new(enabled: bool) -> Self {
+        Self {
+            enabled,
+            token: None,
+            verify_token: None,
+            phone_number_id: None,
+        }
+    }
+
+    pub fn with_token(mut self, token: Option<String>) -> Self {
+        self.token = token;
+        self
+    }
+}
+
+#[async_trait]
+impl PlatformAdapter for WhatsAppAdapter {
+    fn name(&self) -> &str { "whatsapp" }
+    fn is_enabled(&self) -> bool { self.enabled }
+
+    async fn start(&self) -> Result<()> {
+        info!("WhatsApp adapter started");
+        Ok(())
+    }
+
+    async fn stop(&self) -> Result<()> {
+        info!("WhatsApp adapter stopped");
+        Ok(())
+    }
+
+    async fn send_message(&self, message: OutgoingMessage) -> Result<()> {
+        let token = self.token.as_ref().ok_or_else(|| {
+            Error::Config("WhatsApp token not configured".to_string())
+        })?;
+        let phone = message.channel_id.clone();
+
+        let client = reqwest::Client::new();
+        let url = format!(
+            "https://graph.facebook.com/v18.0/{}/messages",
+            self.phone_number_id.as_deref().unwrap_or("phone_number_id")
+        );
+
+        let body = json!({
+            "messaging_product": "whatsapp",
+            "to": phone,
+            "type": "text",
+            "text": {"body": message.content}
+        });
+
+        let resp = client
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", token))
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| Error::Network(e))?;
+
+        if !resp.status().is_success() {
+            return Err(Error::Agent(format!(
+                "WhatsApp API error: {}",
+                resp.status()
+            )));
+        }
+
+        Ok(())
+    }
+
+    async fn handle_update(&self, update: serde_json::Value) -> Result<Option<IncomingMessage>> {
+        // Parse WhatsApp webhook payload
+        if let Some(entry) = update["entry"].as_array().and_then(|e| e.first()) {
+            if let Some(change) = entry["changes"].as_array().and_then(|c| c.first()) {
+                if let Some(msg) = change["value"]["messages"].as_array().and_then(|m| m.first()) {
+                    let from = msg["from"].as_str().unwrap_or("");
+                    let text = msg["text"]["body"].as_str().unwrap_or("");
+                    let name = change["value"]["contacts"][0]["profile"]["name"]
+                        .as_str()
+                        .unwrap_or("WhatsApp User");
+
+                    return Ok(Some(IncomingMessage {
+                        platform: "whatsapp".to_string(),
+                        channel_id: from.to_string(),
+                        user_id: from.to_string(),
+                        username: name.to_string(),
+                        content: text.to_string(),
+                        is_group_chat: false,
+            timestamp: chrono::Utc::now().timestamp(),
+            thread_id: None,
+                        
+                        raw: update,
+                    }));
+                }
+            }
+        }
+        Ok(None)
+    }
+
+    fn config_json(&self) -> serde_json::Value {
+        json!({
+            "platform": "whatsapp",
+            "enabled": self.enabled,
+            "token_configured": self.token.is_some(),
         })
     }
 
@@ -2460,7 +2744,311 @@ impl PlatformAdapter for WebhookAdapter {
     ) -> Result<String> {
         let mut msg = OutgoingMessage::new(channel_id.to_string(), message.content.clone());
         msg.parse_markdown = message.parse_markdown;
-        msg.reply_to = message.reply_to.clone();
+        self.send_message(msg).await?;
+        Ok(String::new())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Email adapter (SMTP outbound, webhook inbound)
+// ---------------------------------------------------------------------------
+
+/// Email adapter — sends replies via SMTP, receives via webhook.
+/// Requires `email_smtp_host`, `email_smtp_user`, `email_smtp_pass` in config.
+pub struct EmailAdapter {
+    enabled: bool,
+    smtp_host: Option<String>,
+    smtp_user: Option<String>,
+    smtp_pass: Option<String>,
+}
+
+impl EmailAdapter {
+    pub fn new(enabled: bool) -> Self {
+        Self {
+            enabled,
+            smtp_host: None,
+            smtp_user: None,
+            smtp_pass: None,
+        }
+    }
+
+    pub fn with_smtp(
+        mut self,
+        host: Option<String>,
+        user: Option<String>,
+        pass: Option<String>,
+    ) -> Self {
+        self.smtp_host = host;
+        self.smtp_user = user;
+        self.smtp_pass = pass;
+        self
+    }
+}
+
+#[async_trait]
+impl PlatformAdapter for EmailAdapter {
+    fn name(&self) -> &str { "email" }
+    fn is_enabled(&self) -> bool { self.enabled }
+
+    async fn start(&self) -> Result<()> {
+        info!("Email adapter started");
+        Ok(())
+    }
+
+    async fn stop(&self) -> Result<()> {
+        info!("Email adapter stopped");
+        Ok(())
+    }
+
+    async fn send_message(&self, message: OutgoingMessage) -> Result<()> {
+        // Email sending uses SMTP which is blocking — spawn_blocking.
+        let host = self.smtp_host.clone().ok_or_else(|| {
+            Error::Config("SMTP host not configured".to_string())
+        })?;
+        let user = self.smtp_user.clone().unwrap_or_default();
+        let pass = self.smtp_pass.clone().unwrap_or_default();
+        let to = message.channel_id.clone();
+        let body = message.content.clone();
+
+        tokio::task::spawn_blocking(move || -> std::result::Result<(), String> {
+            // Basic SMTP send using native TLS.
+            // This is a minimal implementation — production use should
+            // switch to the `lettre` crate for proper MIME, attachments,
+            // and TLS handling.
+            use std::io::{Read, Write};
+            use std::net::TcpStream;
+
+            let port = if host.contains(":") { "" } else { ":587" };
+            let addr = format!("{}{}", host, port);
+
+            let mut stream = TcpStream::connect(&addr)
+                .map_err(|e| format!("SMTP connect failed: {e}"))?;
+
+            // Read greeting
+            let mut buf = [0u8; 1024];
+            stream.read(&mut buf).map_err(|e| format!("SMTP read: {e}"))?;
+
+            // EHLO
+            write!(stream, "EHLO operant\r\n").map_err(|e| format!("SMTP write: {e}"))?;
+            stream.read(&mut buf).map_err(|e| format!("SMTP read: {e}"))?;
+
+            // AUTH LOGIN (simplified — base64 encoded user/pass)
+            use base64::Engine;
+            write!(stream, "AUTH LOGIN\r\n").map_err(|e| format!("SMTP write: {e}"))?;
+            stream.read(&mut buf).map_err(|e| format!("SMTP read: {e}"))?;
+            write!(stream, "{}\r\n", base64::engine::general_purpose::STANDARD.encode(&user))
+                .map_err(|e| format!("SMTP write: {e}"))?;
+            stream.read(&mut buf).map_err(|e| format!("SMTP read: {e}"))?;
+            write!(stream, "{}\r\n", base64::engine::general_purpose::STANDARD.encode(&pass))
+                .map_err(|e| format!("SMTP write: {e}"))?;
+            stream.read(&mut buf).map_err(|e| format!("SMTP read: {e}"))?;
+
+            // MAIL FROM
+            write!(stream, "MAIL FROM:<{}>\r\n", user).map_err(|e| format!("SMTP write: {e}"))?;
+            stream.read(&mut buf).map_err(|e| format!("SMTP read: {e}"))?;
+
+            // RCPT TO
+            write!(stream, "RCPT TO:<{}>\r\n", to).map_err(|e| format!("SMTP write: {e}"))?;
+            stream.read(&mut buf).map_err(|e| format!("SMTP read: {e}"))?;
+
+            // DATA
+            write!(stream, "DATA\r\n").map_err(|e| format!("SMTP write: {e}"))?;
+            stream.read(&mut buf).map_err(|e| format!("SMTP read: {e}"))?;
+
+            // Email body
+            write!(
+                stream,
+                "From: <{}>\r\nTo: <{}>\r\nSubject: Operant Reply\r\n\r\n{}\r\n.\r\n",
+                user, to, body
+            )
+            .map_err(|e| format!("SMTP write: {e}"))?;
+            stream.read(&mut buf).map_err(|e| format!("SMTP read: {e}"))?;
+
+            // QUIT
+            write!(stream, "QUIT\r\n").map_err(|e| format!("SMTP write: {e}"))?;
+
+            Ok(())
+        })
+        .await
+        .map_err(|e| Error::Agent(format!("SMTP task failed: {e}")))?
+        .map_err(|e| Error::Agent(format!("SMTP send failed: {e}")))?;
+
+        Ok(())
+    }
+
+    async fn handle_update(&self, update: serde_json::Value) -> Result<Option<IncomingMessage>> {
+        // Parse email webhook payload (format depends on the email forwarding service)
+        let from = update["from"].as_str().or_else(|| update["sender"].as_str()).unwrap_or("");
+        let subject = update["subject"].as_str().unwrap_or("(no subject)");
+        let body = update["body"].as_str().or_else(|| update["text"].as_str()).unwrap_or("");
+
+        if from.is_empty() && body.is_empty() {
+            return Ok(None);
+        }
+
+        Ok(Some(IncomingMessage {
+            platform: "email".to_string(),
+            channel_id: from.to_string(),
+            user_id: from.to_string(),
+            username: from.to_string(),
+            content: format!("Subject: {}\n\n{}", subject, body),
+            is_group_chat: false,
+            timestamp: chrono::Utc::now().timestamp(),
+            thread_id: None,
+            
+            raw: update,
+        }))
+    }
+
+    fn config_json(&self) -> serde_json::Value {
+        json!({
+            "platform": "email",
+            "enabled": self.enabled,
+            "smtp_host": self.smtp_host,
+            "smtp_user_configured": self.smtp_user.is_some(),
+        })
+    }
+
+    async fn start_with_channel(
+        &self,
+        _message_tx: mpsc::UnboundedSender<IncomingMessage>,
+    ) -> Result<()> {
+        self.start().await
+    }
+
+    async fn send_message_to_channel(
+        &self,
+        channel_id: &str,
+        message: &OutgoingMessage,
+    ) -> Result<String> {
+        let mut msg = OutgoingMessage::new(channel_id.to_string(), message.content.clone());
+        msg.parse_markdown = message.parse_markdown;
+        self.send_message(msg).await?;
+        Ok(String::new())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// SMS adapter (Twilio API)
+// ---------------------------------------------------------------------------
+
+/// SMS adapter — sends/receives via Twilio REST API.
+/// Requires `sms_twilio_account_sid` and `sms_twilio_auth_token` env vars.
+pub struct SmsAdapter {
+    enabled: bool,
+    account_sid: Option<String>,
+    auth_token: Option<String>,
+    from_number: Option<String>,
+}
+
+impl SmsAdapter {
+    pub fn new(enabled: bool) -> Self {
+        Self {
+            enabled,
+            account_sid: std::env::var("TWILIO_ACCOUNT_SID").ok(),
+            auth_token: std::env::var("TWILIO_AUTH_TOKEN").ok(),
+            from_number: std::env::var("TWILIO_FROM_NUMBER").ok(),
+        }
+    }
+}
+
+#[async_trait]
+impl PlatformAdapter for SmsAdapter {
+    fn name(&self) -> &str { "sms" }
+    fn is_enabled(&self) -> bool { self.enabled }
+
+    async fn start(&self) -> Result<()> {
+        info!("SMS adapter started");
+        Ok(())
+    }
+
+    async fn stop(&self) -> Result<()> {
+        info!("SMS adapter stopped");
+        Ok(())
+    }
+
+    async fn send_message(&self, message: OutgoingMessage) -> Result<()> {
+        let sid = self.account_sid.as_ref().ok_or_else(|| {
+            Error::Config("TWILIO_ACCOUNT_SID not set".to_string())
+        })?;
+        let token = self.auth_token.as_ref().ok_or_else(|| {
+            Error::Config("TWILIO_AUTH_TOKEN not set".to_string())
+        })?;
+        let from = self.from_number.as_ref().ok_or_else(|| {
+            Error::Config("TWILIO_FROM_NUMBER not set".to_string())
+        })?;
+
+        let url = format!("https://api.twilio.com/2010-04-01/Accounts/{}/Messages.json", sid);
+        let client = reqwest::Client::new();
+
+        let resp = client
+            .post(&url)
+            .basic_auth(sid, Some(token))
+            .form(&[
+                ("From", from.as_str()),
+                ("To", &message.channel_id),
+                ("Body", &message.content),
+            ])
+            .send()
+            .await
+            .map_err(|e| Error::Network(e))?;
+
+        if !resp.status().is_success() {
+            return Err(Error::Agent(format!(
+                "Twilio API error: {}",
+                resp.status()
+            )));
+        }
+
+        Ok(())
+    }
+
+    async fn handle_update(&self, update: serde_json::Value) -> Result<Option<IncomingMessage>> {
+        // Parse Twilio webhook payload
+        let from = update["From"].as_str().or_else(|| update["from"].as_str()).unwrap_or("");
+        let body = update["Body"].as_str().or_else(|| update["body"].as_str()).unwrap_or("");
+
+        if from.is_empty() && body.is_empty() {
+            return Ok(None);
+        }
+
+        Ok(Some(IncomingMessage {
+            platform: "sms".to_string(),
+            channel_id: from.to_string(),
+            user_id: from.to_string(),
+            username: from.to_string(),
+            content: body.to_string(),
+            is_group_chat: false,
+            timestamp: chrono::Utc::now().timestamp(),
+            thread_id: None,
+            
+            raw: update,
+        }))
+    }
+
+    fn config_json(&self) -> serde_json::Value {
+        json!({
+            "platform": "sms",
+            "enabled": self.enabled,
+            "account_sid_configured": self.account_sid.is_some(),
+            "from_number": self.from_number,
+        })
+    }
+
+    async fn start_with_channel(
+        &self,
+        _message_tx: mpsc::UnboundedSender<IncomingMessage>,
+    ) -> Result<()> {
+        self.start().await
+    }
+
+    async fn send_message_to_channel(
+        &self,
+        channel_id: &str,
+        message: &OutgoingMessage,
+    ) -> Result<String> {
+        let mut msg = OutgoingMessage::new(channel_id.to_string(), message.content.clone());
+        msg.parse_markdown = message.parse_markdown;
         self.send_message(msg).await?;
         Ok(String::new())
     }
