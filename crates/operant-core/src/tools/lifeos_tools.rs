@@ -97,9 +97,9 @@ fn schema_from_json(name: &str, description: &str, json: Value) -> ToolSchema {
 
 /// Execute a lifeos tool function and convert the result to ToolResult.
 /// All lifeos execute() functions return `Result<String, String>`.
-async fn run_lifeos_tool(
+fn run_lifeos_tool(
     tool_name: &str,
-    result: Result<String, String>,
+    result: std::result::Result<String, String>,
 ) -> ToolResult {
     match result {
         Ok(output) => ToolResult::success(tool_name, output),
@@ -121,7 +121,7 @@ impl OperantTool for LifeosQueryTool {
     }
     fn schema(&self) -> ToolSchema {
         schema_from_json("lifeos_query", "Query LifeOS database",
-            lifeos_core::tools::query::schema())
+            lifeos_core::tools::query::schema(&self.state.config, &self.state.schema_cache))
     }
     async fn execute(&self, args: Value, _ctx: ToolContext) -> ToolResult {
         let params: lifeos_core::tools::query::QueryParams = match serde_json::from_value(args) {
@@ -131,7 +131,7 @@ impl OperantTool for LifeosQueryTool {
         let result = lifeos_core::tools::query::execute(
             &params, &self.state.config, &self.state.notion, &self.state.schema_cache,
         ).await;
-        run_lifeos_tool("lifeos_query", result).await
+        run_lifeos_tool("lifeos_query", result)
     }
 }
 
@@ -155,7 +155,7 @@ impl OperantTool for LifeosMutateTool {
         let result = lifeos_core::tools::mutate::execute(
             &params, &self.state.config, &self.state.notion, &self.state.schema_cache,
         ).await;
-        run_lifeos_tool("lifeos_mutate", result).await
+        run_lifeos_tool("lifeos_mutate", result)
     }
 }
 
@@ -169,20 +169,17 @@ impl OperantTool for LifeosGetSchemaTool {
     }
     fn schema(&self) -> ToolSchema {
         schema_from_json("lifeos_get_schema", "Get LifeOS database schema",
-            lifeos_core::tools::query::schema())
+            lifeos_core::tools::query::schema(&self.state.config, &self.state.schema_cache))
     }
     async fn execute(&self, args: Value, _ctx: ToolContext) -> ToolResult {
         let params: lifeos_core::tools::query::QueryParams = match serde_json::from_value(args) {
             Ok(p) => p,
             Err(e) => return ToolResult::error("lifeos_get_schema", format!("args: {e}")),
         };
-        // Return the schema for the requested database
+        // Return the property names for the requested database
         let db = &params.database;
-        let schema = self.state.schema_cache.get_database_schema(db);
-        match schema {
-            Some(s) => ToolResult::success("lifeos_get_schema", serde_json::to_value(s).unwrap_or_default()),
-            None => ToolResult::error("lifeos_get_schema", format!("Unknown database: {}", db)),
-        }
+        let props = self.state.schema_cache.get_property_names(db);
+        ToolResult::success("lifeos_get_schema", serde_json::json!({"database": db, "properties": props}))
     }
 }
 
@@ -198,7 +195,7 @@ impl OperantTool for LifeosIntelligenceTool {
     fn description(&self) -> &str { "Generate an intelligence briefing from LifeOS data." }
     fn schema(&self) -> ToolSchema {
         schema_from_json("lifeos_intelligence", "Intelligence briefing",
-            lifeos_core::tools::intelligence::schema())
+            lifeos_core::tools::intelligence::schema(&self.state.schema_cache))
     }
     async fn execute(&self, args: Value, _ctx: ToolContext) -> ToolResult {
         let params: lifeos_core::tools::intelligence::IntelligenceParams = match serde_json::from_value(args) {
@@ -208,7 +205,7 @@ impl OperantTool for LifeosIntelligenceTool {
         let result = lifeos_core::tools::intelligence::execute(
             &params, &self.state.config, &self.state.notion, &self.state.schema_cache,
         ).await;
-        run_lifeos_tool("lifeos_intelligence", result).await
+        run_lifeos_tool("lifeos_intelligence", result)
     }
 }
 
@@ -228,9 +225,9 @@ impl OperantTool for LifeosReviewTool {
             Err(e) => return ToolResult::error("lifeos_review", format!("args: {e}")),
         };
         let result = lifeos_core::tools::review::execute(
-            &params, &self.state.config, &self.state.notion, &self.state.schema_cache,
+            &params, &self.state.config, &self.state.notion,
         ).await;
-        run_lifeos_tool("lifeos_review", result).await
+        run_lifeos_tool("lifeos_review", result)
     }
 }
 
@@ -250,9 +247,9 @@ impl OperantTool for LifeosStrategicTool {
             Err(e) => return ToolResult::error("lifeos_strategic", format!("args: {e}")),
         };
         let result = lifeos_core::tools::strategic::execute(
-            &params, &self.state.config, &self.state.notion, &self.state.schema_cache,
+            &params, &self.state.config, &self.state.notion,
         ).await;
-        run_lifeos_tool("lifeos_strategic", result).await
+        run_lifeos_tool("lifeos_strategic", result)
     }
 }
 
@@ -272,9 +269,9 @@ impl OperantTool for LifeosSyncNoteTool {
             Err(e) => return ToolResult::error("lifeos_sync_note", format!("args: {e}")),
         };
         let result = lifeos_core::tools::sync_note::execute(
-            &params, &self.state.config, &self.state.notion, &self.state.schema_cache,
+            &params, &self.state.config, &self.state.notion,
         ).await;
-        run_lifeos_tool("lifeos_sync_note", result).await
+        run_lifeos_tool("lifeos_sync_note", result)
     }
 }
 
@@ -300,7 +297,7 @@ impl OperantTool for LifeosHolonicSynthesisTool {
         let result = lifeos_core::tools::holonic_synthesis::execute(
             &params, &self.state.config, &self.state.notion, &self.state.schema_cache,
         ).await;
-        run_lifeos_tool("lifeos_holonic_synthesis", result).await
+        run_lifeos_tool("lifeos_holonic_synthesis", result)
     }
 }
 
@@ -322,7 +319,7 @@ impl OperantTool for LifeosEnergyFlowTool {
         let result = lifeos_core::tools::energy_flow::execute(
             &params, &self.state.config, &self.state.notion, &self.state.schema_cache,
         ).await;
-        run_lifeos_tool("lifeos_energy_flow", result).await
+        run_lifeos_tool("lifeos_energy_flow", result)
     }
 }
 
@@ -350,7 +347,7 @@ macro_rules! lifeos_relational_tool {
                 let result = $exec_path(
                     &params, &self.state.config, &self.state.notion, &self.state.schema_cache,
                 ).await;
-                run_lifeos_tool($tool_str, result).await
+                run_lifeos_tool($tool_str, result)
             }
         }
     };
@@ -379,7 +376,7 @@ impl OperantTool for LifeosBuildContextTool {
         let result = lifeos_core::tools::build_context::execute(
             &params, &self.state.config, &self.state.notion, &self.state.schema_cache,
         ).await;
-        run_lifeos_tool("lifeos_build_context", result).await
+        run_lifeos_tool("lifeos_build_context", result)
     }
 }
 
@@ -415,7 +412,7 @@ macro_rules! lifeos_audit_tool {
                 let result = lifeos_core::tools::audit::$exec_fn(
                     &params, &self.state.config, &self.state.notion, &self.state.schema_cache,
                 ).await;
-                run_lifeos_tool($tool_str, result).await
+                run_lifeos_tool($tool_str, result)
             }
         }
     };
@@ -439,15 +436,11 @@ impl OperantTool for LifeosDailyTool {
         schema_from_json("lifeos_daily", "Daily briefing",
             lifeos_core::tools::workflows::schema_daily())
     }
-    async fn execute(&self, args: Value, _ctx: ToolContext) -> ToolResult {
-        let params: lifeos_core::tools::workflows::DailyParams = match serde_json::from_value(args) {
-            Ok(p) => p,
-            Err(e) => return ToolResult::error("lifeos_daily", format!("args: {e}")),
-        };
+    async fn execute(&self, _args: Value, _ctx: ToolContext) -> ToolResult {
         let result = lifeos_core::tools::workflows::execute_daily(
-            &params, &self.state.config, &self.state.notion, &self.state.schema_cache,
+            &self.state.config, &self.state.notion, &self.state.schema_cache,
         ).await;
-        run_lifeos_tool("lifeos_daily", result).await
+        run_lifeos_tool("lifeos_daily", result)
     }
 }
 
@@ -461,15 +454,11 @@ impl OperantTool for LifeosDashboardTool {
         schema_from_json("lifeos_dashboard", "Dashboard view",
             lifeos_core::tools::workflows::schema_dashboard())
     }
-    async fn execute(&self, args: Value, _ctx: ToolContext) -> ToolResult {
-        let params: lifeos_core::tools::workflows::DashboardParams = match serde_json::from_value(args) {
-            Ok(p) => p,
-            Err(e) => return ToolResult::error("lifeos_dashboard", format!("args: {e}")),
-        };
+    async fn execute(&self, _args: Value, _ctx: ToolContext) -> ToolResult {
         let result = lifeos_core::tools::workflows::execute_dashboard(
-            &params, &self.state.config, &self.state.notion, &self.state.schema_cache,
+            &self.state.config, &self.state.notion, &self.state.schema_cache,
         ).await;
-        run_lifeos_tool("lifeos_dashboard", result).await
+        run_lifeos_tool("lifeos_dashboard", result)
     }
 }
 
