@@ -159,15 +159,14 @@ They are NOT bugs — they are features not yet implemented:
 1. **MCP: no sampling/elicitation handlers** — stdio + HTTP work, but `sampling/createMessage` and `elicitation/create` server-initiated requests are unhandled. Hermes supports both + SSE transport + dynamic tool discovery (`notifications/tools/list_changed`)
 2. **No platform registry** — adapters hardcoded in `build_adapters()` if/elif chain. Hermes has `PlatformRegistry` with deferred loading, `adapter_factory`, `check_fn`, `validate_config`, per-plugin YAML config translation
 3. **No credential rotation** — no OAuth refresh / multi-account rotation. Hermes has `agent/credential_pool.py` (2,372 lines) with per-turn tally of consecutive same-entry refreshes
-4. **7 more dead TUI dialogs** — ask_user_dialog, bypass_permissions_dialog, custom_provider_dialog, device_auth_dialog, free_mode_dialog, import_config_dialog, key_input_dialog — all have 0 non-test `show()` calls. (export_dialog and stats_dialog ARE used.)
-5. **No `/steer` directive** — no real-time user steering injected during API calls. Hermes drains pending steer directives into the last tool-role message
+4. **No `/steer` directive** — no real-time user steering injected during API calls. Hermes drains pending steer directives into the last tool-role message
 
 ### Gaps CLOSED in recent iterations:
 - ✅ ~~Context compression on overflow~~ — auto-compress via context_management on context_overflow errors (iter-63)
 - ✅ ~~Hook system~~ — HookRegistry with 6 events + wildcard, wired into agent loop (iter-61/62)
 - ✅ ~~Error recovery 3 vs 22~~ — 12 error classes with ClassifiedError (iter-61)
 - ✅ ~~Sequential tool execution~~ — concurrent 8-worker pool (iter-56)
-- ✅ ~~7 dead TUI dialogs~~ — elicitation/onboarding/file_injection/invalid_config/memory_update_notification/overage_upsell/desktop_upsell_startup deleted (iter-58)
+- ✅ ~~7 dead TUI dialogs~~ — elicitation/onboarding/file_injection/invalid_config/memory_update_notification/overage_upsell/desktop_upsell_startup deleted (iter-58). The remaining 7 dialogs (ask_user/bypass_permissions/custom_provider/device_auth/free_mode/import_config/key_input) are alive via indirect `.open()` calls from the connect_dialog handler.
 - ✅ ~~Iteration budget grace call~~ — summarize instead of hard-stop (iter-57)
 - ✅ ~~WebhookAdapter stub~~ — real HTTP server with HMAC (iter-54)
 - ✅ ~~WhatsApp/Email/SMS adapters~~ — real implementations (iter-54)
