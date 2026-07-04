@@ -51,7 +51,6 @@ pub mod browser_supervisor;
 pub mod budget_config;
 pub mod client;
 pub mod config;
-pub mod context;
 pub mod context_files;
 pub mod context_management;
 pub mod credential_files;
@@ -133,7 +132,6 @@ pub use config::{
     LoadedConfig, LoggingSettings, McpServerConfig, McpSettings, MemorySettings, RateLimitSettings,
     SkillsSettings, SttSettings, TerminalSettings, ToolSettings, TuiSettings, WebToolSettings,
 };
-pub use context::{estimate_tokens, ContextConfig, ContextManager};
 pub use context_files::{
     load_context_dir, load_default_context_files, load_workspace_context, scan_context_content,
 };
