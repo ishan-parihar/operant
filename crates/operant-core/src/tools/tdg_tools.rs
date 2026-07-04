@@ -97,10 +97,24 @@ impl OperantTool for TdgSearchTool {
                      ORDER BY rank
                      LIMIT 10"
                 )?;
-                // FTS5 MATCH syntax: wrap the query in quotes to treat it
-                // as a phrase prefix, escaping internal quotes.
+                // FTS5 MATCH syntax: for multi-word queries, we want each
+                // word to be a prefix match (OR semantics). E.g. "hello world"
+                // should match nodes containing "hello" OR "world" as prefixes.
+                // The previous format!("\"{}*\"", query) wrapped the whole
+                // query in quotes, making FTS5 treat it as a single phrase —
+                // which only matched nodes where "hello world" appeared as a
+                // contiguous prefix. For multi-word queries this returned 0
+                // results even when both words existed separately.
+                //
+                // Fix: split on whitespace, escape each token, join with
+                // spaces (FTS5 implicit OR), and append * to each token for
+                // prefix matching.
                 let safe_q = query.replace('"', "\"\"");
-                let fts_query = format!("\"{}*\"", safe_q);
+                let fts_query: String = safe_q
+                    .split_whitespace()
+                    .map(|token| format!("{}*", token))
+                    .collect::<Vec<_>>()
+                    .join(" ");
                 let rows: Vec<Value> = stmt
                     .query_map(rusqlite::params![fts_query], |row| {
                         Ok(serde_json::json!({
