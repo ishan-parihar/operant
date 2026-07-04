@@ -16,6 +16,9 @@ path = "src/main.rs"
 # Core library
 operant-core = { path = "../operant-core", features = ["anthropic"] }
 
+# Optional: LifeOS direct dependency for registration code
+lifeos-core = { workspace = true, optional = true }
+
 # Async runtime
 tokio = { workspace = true, features = ["full"] }
 async-trait = { workspace = true }
@@ -71,5 +74,10 @@ open = "5"
 # SQLite (for WAL checkpoint in doctor --fix)
 rusqlite = { version = "0.32", features = ["bundled"] }
 tempfile = { workspace = true }
+
+[features]
+default = []
+igs = ["operant-core/igs"]
+lifeos = ["operant-core/lifeos", "dep:lifeos-core"]
 
 [dev-dependencies]
