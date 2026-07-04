@@ -146,6 +146,12 @@ pub struct OperantAgent {
     /// Hook registry for lifecycle events (AgentStart, AgentEnd, etc.).
     /// When set, the agent emits events at key lifecycle points.
     hook_registry: Option<Arc<crate::gateway_pipeline::HookRegistry>>,
+    /// /steer directive queue (iter-65). When the user sends a steer
+    /// message during a multi-iteration tool-calling loop, it's queued
+    /// here. The run() loop drains pending steers between iterations
+    /// and injects them into the conversation so the model sees the
+    /// user's real-time guidance without restarting the turn.
+    steer_queue: Arc<tokio::sync::Mutex<Vec<String>>>,
     /// Stable session ID for DB persistence across multiple `run()` calls.
     /// When set, all messages are persisted under this ID instead of generating
     /// a fresh one each call.  Set by the TUI at startup.
@@ -189,6 +195,7 @@ impl OperantAgent {
             memory_manager: None,
             memory_provider: None,
             hook_registry: None,
+            steer_queue: Arc::new(tokio::sync::Mutex::new(Vec::new())),
             skill_manager: None,
             database,
             persistent_session_id: None,
@@ -215,6 +222,7 @@ impl OperantAgent {
             memory_manager: None,
             memory_provider: None,
             hook_registry: None,
+            steer_queue: Arc::new(tokio::sync::Mutex::new(Vec::new())),
             skill_manager: None,
             database,
             persistent_session_id: None,
@@ -281,6 +289,34 @@ impl OperantAgent {
     /// their own copy.
     pub fn interrupt_flag(&self) -> crate::interrupt::InterruptFlag {
         self.interrupt_flag.clone()
+    }
+
+    /// /steer directive (iter-65). Queue a steer message that will be
+    /// injected into the conversation at the next iteration boundary.
+    /// This allows real-time user guidance during a multi-iteration
+    /// tool-calling loop — the model sees the steer without restarting
+    /// the turn.
+    ///
+    /// The steer is injected as a user-role message appended to the
+    /// conversation, so the model sees it as additional guidance from
+    /// the user. Multiple steers can be queued; they're drained in order.
+    pub async fn steer(&self, message: impl Into<String>) {
+        let msg = message.into();
+        debug!(steer = %msg, "Steer directive queued");
+        self.steer_queue.lock().await.push(msg);
+    }
+
+    /// Drain pending steer directives. Returns the steers as a single
+    /// concatenated string, or None if no steers are pending.
+    async fn drain_steers(&self) -> Option<String> {
+        let mut queue = self.steer_queue.lock().await;
+        if queue.is_empty() {
+            return None;
+        }
+        let steers: Vec<String> = queue.drain(..).collect();
+        let combined = steers.join("\n");
+        debug!(steer = %combined, "Draining steer directives");
+        Some(combined)
     }
 
     /// Enable trajectory recording for this agent. When enabled, each `run()`
@@ -752,6 +788,22 @@ impl OperantAgent {
             }
 
             self.emit(AgentEvent::IterationComplete { iteration }).await;
+
+            // ── /steer directive drain (iter-65) ──────────────────────────
+            // Between iterations, check if the user queued any steer
+            // directives. If so, inject them as a user-role message so
+            // the model sees the real-time guidance on the next iteration.
+            // This mirrors hermes-agent's /steer drain which injects into
+            // the last tool-role message to preserve role alternation.
+            if let Some(steer_text) = self.drain_steers().await {
+                info!(steer = %steer_text, "Injecting steer directive");
+                let steer_msg = Message::user(&format!(
+                    "[STEER] {}\n\nPlease adjust your approach based on this guidance.",
+                    steer_text
+                ));
+                messages.push(steer_msg.clone());
+                self.add_message(steer_msg).await;
+            }
         }
     }
 
@@ -1761,6 +1813,7 @@ pub struct OperantAgentBuilder {
     memory_provider: Option<Arc<dyn crate::memory_provider::MemoryProvider>>,
     hook_registry: Option<Arc<crate::gateway_pipeline::HookRegistry>>,
     database: Option<Arc<Database>>,
+    steer_queue: Arc<tokio::sync::Mutex<Vec<String>>>,
 }
 
 impl OperantAgentBuilder {
@@ -1772,6 +1825,7 @@ impl OperantAgentBuilder {
             memory_manager: None,
             memory_provider: None,
             hook_registry: None,
+            steer_queue: Arc::new(tokio::sync::Mutex::new(Vec::new())),
             database: None,
         }
     }
@@ -1895,6 +1949,8 @@ impl OperantAgentBuilder {
         if let Some(hook_registry) = self.hook_registry {
             agent = agent.with_hook_registry(hook_registry);
         }
+        // Steer queue is shared — set it directly
+        agent.steer_queue = self.steer_queue;
 
         Ok(agent)
     }
