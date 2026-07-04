@@ -42,6 +42,7 @@ pub mod slash_confirm;
 pub mod spotify_tool;
 pub mod sub_agent_tool;
 pub mod tdg_tools;
+pub mod aft_tools;
 pub mod terminal_backend;
 pub mod terminal_tool;
 pub mod todo_tool;
@@ -77,6 +78,7 @@ pub use builtin::{
     TodoTool, TtsTool, VideoAnalysisTool, VisionTool, WebFetchTool, WebSearchTool,
 };
 pub use tdg_tools::register_tdg_tools;
+pub use aft_tools::register_aft_tools;
 pub use checkpoint_tool::{
     get_checkpoint_manager, Checkpoint, CheckpointConfig, CheckpointManager, CheckpointTool,
 };
