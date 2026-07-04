@@ -66,6 +66,10 @@ tempfile = "3.10"
 # Graph memory infrastructure
 tdg-rust = { path = "../../tdg-rust" }
 
+# Intelligence Gathering System + LifeOS (native tool integrations)
+igs-rust = { path = "../../igs-rust" }
+lifeos-core = { path = "../../lifeos-ops/lifeos-core" }
+
 [profile.release]
 lto = true
 strip = true

@@ -58,9 +58,15 @@ tar = "0.4"
 tempfile = { workspace = true }
 image = { workspace = true }
 
+# Native tool integrations (feature-gated to keep default builds lean)
+igs-rust = { workspace = true, optional = true }
+lifeos-core = { workspace = true, optional = true }
+
 [features]
 default = []
 anthropic = []
+igs = ["dep:igs-rust"]
+lifeos = ["dep:lifeos-core"]
 
 [build-dependencies]
 cc = "1.0"
