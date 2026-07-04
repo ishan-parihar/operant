@@ -1510,6 +1510,10 @@ mod tests {
                 .importance(90),
         )
         .await;
+        // iter-24: store() marks dirty instead of writing immediately.
+        // flush_if_dirty() persists to disk so load_memory_manager can
+        // read the file.
+        seed.flush_if_dirty().await.unwrap();
 
         let loaded = load_memory_manager(dir.clone()).await.unwrap();
 

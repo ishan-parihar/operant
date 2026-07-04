@@ -258,7 +258,6 @@ pub fn builtin_tool_names() -> Vec<&'static str> {
         "browser_cdp",
         "computer_use",
         "mixture_of_agents",
-        "rl",
         "spotify_playback",
         "spotify_devices",
         "spotify_queue",
@@ -266,10 +265,10 @@ pub fn builtin_tool_names() -> Vec<&'static str> {
         "spotify_playlists",
         "spotify_albums",
         "spotify_library",
-        "tdg_search",
-        "tdg_create",
-        "tdg_connect",
-        "tdg_get_related",
+        // TDG tools are NOT in builtin_tool_names — they're registered
+        // conditionally via register_tdg_tools() only when
+        // config.memory.provider == "tdg". Including them here would
+        // make the test_register_all_builtin_tools count wrong.
     ]
 }
 
@@ -299,7 +298,12 @@ mod tests {
             .unwrap();
 
         let count = registry.len().await;
-        assert_eq!(count + 2, builtin_tool_names().len());
+        // register_builtin_tools registers everything in builtin_tool_names
+        // EXCEPT delegate_task (only in _with_sub_agent variant).
+        // So: registry.len() + 1 == builtin_tool_names().len().
+        assert_eq!(count + 1, builtin_tool_names().len(),
+            "registry has {} tools, names list has {}; the difference should be 1 (delegate_task)",
+            count, builtin_tool_names().len());
         assert!(!registry.contains("delegate_to_sub_agent").await);
     }
 
@@ -327,7 +331,9 @@ mod tests {
         .unwrap();
 
         let count = registry.len().await;
-        assert_eq!(count + 1, builtin_tool_names().len());
+        assert_eq!(count, builtin_tool_names().len(),
+            "registry has {} tools, names list has {}; _with_sub_agent registers all names",
+            count, builtin_tool_names().len());
         assert!(registry.contains("delegate_task").await);
     }
 }
