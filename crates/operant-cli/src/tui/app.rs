@@ -107,6 +107,7 @@ const PROMPT_SLASH_COMMANDS: &[(&str, &str)] = &[
     ("reasoning", "Toggle reasoning display"),
     ("tools", "List available tools"),
     ("skills", "Manage loaded skills"),
+    ("plugins", "Browse and toggle installed plugins"),
     ("bundles", "Manage skill bundles"),
     ("usage", "Show token usage"),
     ("credits", "Show remaining credits"),
@@ -830,6 +831,7 @@ pub struct App {
     /// Memory file selector overlay (AGENTS.md browser).
     pub memory_file_selector: crate::tui::memory_file_selector::MemoryFileSelectorState,
     pub skills_view: crate::tui::skills_view::SkillsViewState,
+    pub plugins_hub: crate::tui::plugins_hub::PluginsHubState,
     /// Read-only hooks configuration browser.
     pub hooks_config_menu: crate::tui::hooks_config_menu::HooksConfigMenuState,
     /// Overage credit upsell banner.
@@ -1291,6 +1293,7 @@ impl App {
             feedback_survey: crate::tui::feedback_survey::FeedbackSurveyState::new(),
             memory_file_selector: crate::tui::memory_file_selector::MemoryFileSelectorState::new(),
             skills_view: crate::tui::skills_view::SkillsViewState::new(),
+            plugins_hub: crate::tui::plugins_hub::PluginsHubState::new(),
             hooks_config_menu: crate::tui::hooks_config_menu::HooksConfigMenuState::new(),
             voice_mode_notice: crate::tui::voice_mode_notice::VoiceModeNoticeState::new(),
             model_picker: ModelPickerState::new(),
@@ -2018,6 +2021,17 @@ permission_rx: None,
                 self.skills_view.open(skills_dir);
                 true
             }
+            "plugins" => {
+                let plugins_dir = crate::cmd_plugins::plugins_dir(&self.config.inner)
+                    .unwrap_or_else(|_| {
+                        dirs::data_dir()
+                            .unwrap_or_default()
+                            .join("operant")
+                            .join("plugins")
+                    });
+                self.plugins_hub.open(plugins_dir);
+                true
+            }
             "hooks" => {
                 self.hooks_config_menu.open();
                 true
@@ -2236,6 +2250,7 @@ permission_rx: None,
         self.feedback_survey.close();
         self.memory_file_selector.close();
         self.skills_view.close();
+        self.plugins_hub.close();
         self.hooks_config_menu.close();
         self.model_picker.close();
         self.session_browser.close();
@@ -2273,6 +2288,7 @@ permission_rx: None,
             || self.feedback_survey.visible
             || self.memory_file_selector.visible
             || self.skills_view.visible
+            || self.plugins_hub.visible
             || self.hooks_config_menu.visible
             || false
             || self.voice_mode_notice.visible
@@ -3607,6 +3623,28 @@ permission_rx: None,
                     {
                         self.skills_view.open_detail();
                     }
+                }
+                _ => {}
+            }
+            return false;
+        }
+
+        // Plugins hub intercepts navigation, toggle, and Esc
+        if self.plugins_hub.visible {
+            // Resolve plugins_dir once for the toggle action.
+            let plugins_dir = crate::cmd_plugins::plugins_dir(&self.config.inner)
+                .unwrap_or_else(|_| {
+                    dirs::data_dir()
+                        .unwrap_or_default()
+                        .join("operant")
+                        .join("plugins")
+                });
+            match key.code {
+                KeyCode::Esc | KeyCode::Char('q') => self.plugins_hub.close(),
+                KeyCode::Up | KeyCode::Char('k') => self.plugins_hub.select_prev(),
+                KeyCode::Down | KeyCode::Char('j') => self.plugins_hub.select_next(),
+                KeyCode::Enter | KeyCode::Char('t') | KeyCode::Char(' ') => {
+                    self.plugins_hub.toggle_selected(&plugins_dir);
                 }
                 _ => {}
             }

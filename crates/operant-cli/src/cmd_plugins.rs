@@ -66,7 +66,7 @@ pub async fn handle_plugins_command(config: &AppConfig, cmd: PluginsSubcommand) 
 }
 
 /// Resolve the plugins directory: `{data_dir}/operant/plugins`
-fn plugins_dir(_config: &AppConfig) -> Result<PathBuf> {
+pub fn plugins_dir(_config: &AppConfig) -> Result<PathBuf> {
     let dir = dirs::data_dir()
         .context("Failed to determine system data directory")?
         .join("operant")
