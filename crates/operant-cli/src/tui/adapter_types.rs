@@ -1268,14 +1268,31 @@ impl ModelRegistry {
     }
 
     /// Fetch models from a provider's /v1/models endpoint and merge them into the registry.
+    ///
+    /// Routes Anthropic through `AnthropicClient::fetch_available_models` (which
+    /// uses `x-api-key` + `anthropic-version` headers — the OpenAI-compat
+    /// `Authorization: Bearer` pattern does NOT work for Anthropic). All other
+    /// providers go through the OpenAI-compat path.
     pub async fn fetch_from_provider_async(&mut self, provider_id: &str, api_key: &str, base_url: &str) {
-        let fetched = fetch_openai_compatible_models_async(api_key, base_url).await;
+        let fetched = if provider_id == "anthropic" {
+            let client = AnthropicClient::new(Some(api_key.to_string()), Some(base_url.to_string()));
+            client.fetch_available_models().await
+        } else {
+            fetch_openai_compatible_models_async(api_key, base_url).await
+        };
         if fetched.is_empty() {
             return;
         }
 
+        // De-dup against any cached/catalog entries already present for this provider
+        // (models.dev, populate_default_models, prior fetches). Match by id.
         let models = self.models.entry(provider_id.to_string()).or_default();
+        let existing: std::collections::HashSet<String> =
+            models.iter().map(|m| m.id.clone()).collect();
         for model_id in fetched {
+            if existing.contains(&model_id) {
+                continue;
+            }
             models.push(crate::tui::model_picker::ModelEntry {
                 id: model_id.clone(),
                 display_name: model_id,
@@ -1344,26 +1361,101 @@ impl AnthropicClient {
     }
 
     /// Fetch available models from the Anthropic API.
-    /// Returns a list of model IDs, or an empty list on error.
-    pub fn fetch_available_models(&self) -> Vec<String> {
+    ///
+    /// Anthropic added a `/v1/models` endpoint in late 2024. It requires the
+    /// `x-api-key` and `anthropic-version` headers (NOT `Authorization: Bearer`,
+    /// which is the OpenAI-compat pattern). Returns the live list on success;
+    /// on any error (network, auth, parse) falls back to a curated 5-model list
+    /// so the picker is never empty.
+    pub async fn fetch_available_models(&self) -> Vec<String> {
+        // Curated fallback — kept up to date with the latest Claude lineup as of
+        // 2026-07. Used only if the API call fails (no key, no network, 4xx).
+        let fallback = vec![
+            "claude-opus-4-6".to_string(),
+            "claude-sonnet-4-6".to_string(),
+            "claude-sonnet-4-5-20250929".to_string(),
+            "claude-3-7-sonnet-20250219".to_string(),
+            "claude-3-5-haiku-20241022".to_string(),
+        ];
+
         let Some(api_key) = &self.api_key else {
-            return vec![];
+            return fallback;
         };
 
         let base_url = self
             .base_url
             .as_deref()
             .unwrap_or("https://api.anthropic.com");
+        let base = base_url.trim_end_matches('/');
+        let base = base.strip_suffix("/v1").unwrap_or(base);
+        let url = format!("{}/v1/models", base);
 
-        // Anthropic doesn't have a /v1/models endpoint, so we return a curated list
-        // that gets merged with any provider-specific catalog
-        vec![
-            "claude-opus-4-6".to_string(),
-            "claude-sonnet-4-6".to_string(),
-            "claude-sonnet-4-5-20250929".to_string(),
-            "claude-3-7-sonnet-20250219".to_string(),
-            "claude-3-5-haiku-20241022".to_string(),
-        ]
+        let client = match reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(8))
+            .build()
+        {
+            Ok(c) => c,
+            Err(_) => return fallback,
+        };
+
+        let resp = client
+            .get(&url)
+            .header("x-api-key", api_key)
+            // anthropic-version is mandatory; pinned to the latest stable date.
+            .header("anthropic-version", "2023-06-01")
+            .send()
+            .await;
+
+        let resp = match resp {
+            Ok(r) => r,
+            Err(_) => return fallback,
+        };
+
+        let status = resp.status();
+        if !status.is_success() {
+            return fallback;
+        }
+
+        let json = match resp.json::<serde_json::Value>().await {
+            Ok(j) => j,
+            Err(_) => return fallback,
+        };
+
+        // Anthropic's response shape: {"data":[{"id":"claude-...","type":"model",...}, ...], "has_more": bool, "first_id": ..., "last_id": ...}
+        // Note: Anthropic paginates (limit/after params) but the default first page
+        // covers all current production models — pagination is left as a future
+        // enhancement if the catalog grows past the page limit.
+        let Some(data) = json.get("data").and_then(|d| d.as_array()) else {
+            return fallback;
+        };
+
+        let mut ids: Vec<String> = data
+            .iter()
+            .filter_map(|item| item.get("id")?.as_str().map(String::from))
+            .collect();
+
+        if ids.is_empty() {
+            return fallback;
+        }
+
+        // Sort newest-first by created_at if present, otherwise keep API order.
+        ids.sort_by(|a, b| {
+            let ta = data
+                .iter()
+                .find(|item| item.get("id").and_then(|v| v.as_str()) == Some(a))
+                .and_then(|item| item.get("created_at"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let tb = data
+                .iter()
+                .find(|item| item.get("id").and_then(|v| v.as_str()) == Some(b))
+                .and_then(|item| item.get("created_at"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            tb.cmp(ta)
+        });
+
+        ids
     }
 }
 
