@@ -6326,14 +6326,25 @@ permission_rx: None,
                     existing.input_json = input_json;
                 } else {
                     self.tool_use_blocks.push(ToolUseBlock {
-                        id: tool_id,
-                        name: tool_name,
+                        id: tool_id.clone(),
+                        name: tool_name.clone(),
                         turn_index,
                         status: ToolStatus::Running,
                         output_preview: None,
                         input_json,
                     });
                 }
+
+                // Track subagent spawns for the status-bar HUD (iter-78/89).
+                // The subagent tool is "delegate_task" — when it starts, push
+                // a "running" entry; when it ends, mark "done". The HUD counts
+                // entries whose status isn't done/idle/complete. (Bug #11.)
+                if tool_name == "delegate_task" || tool_name == "spawn_subagent" {
+                    // Remove any stale entry with the same tool_id, then push.
+                    self.agent_status.retain(|(id, _)| id != &tool_id);
+                    self.agent_status.push((tool_id, "running".to_string()));
+                }
+
                 self.invalidate_transcript();
             }
 
@@ -6360,6 +6371,16 @@ permission_rx: None,
                         ToolStatus::Done
                     };
                     block.output_preview = Some(preview);
+
+                    // Update the subagent HUD entry for this tool_id. (Bug #11.)
+                    if block.name == "delegate_task" || block.name == "spawn_subagent" {
+                        let new_status = if is_error { "error" } else { "done" };
+                        for (id, st) in self.agent_status.iter_mut() {
+                            if id == &tool_id {
+                                *st = new_status.to_string();
+                            }
+                        }
+                    }
                 }
                 self.invalidate_transcript();
                 if is_error {
