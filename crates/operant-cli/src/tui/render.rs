@@ -1816,6 +1816,43 @@ fn render_input(frame: &mut Frame, app: &App, area: Rect, focused: bool) {
                     Style::default().fg(dim),
                 ));
             }
+
+            // Iteration count — read from the Arc<AtomicUsize> the agent loop
+            // bumps each turn. Shown as "· iter N" so it clusters visually
+            // with the model/provider pills. Only shown when current_turn is
+            // wired (i.e. after the first agent invocation).
+            if let Some(ref turn) = app.current_turn {
+                let n = turn.load(std::sync::atomic::Ordering::Relaxed);
+                if n > 0 {
+                    spans.push(Span::styled(
+                        format!(" · iter {}", n),
+                        Style::default().fg(dim),
+                    ));
+                }
+            }
+
+            // Subagent HUD — a small "· N agents" pill when there are live
+            // subagent status entries. Mirrors hermes' SpawnHud widget.
+            // agent_status is a Vec<(String, String)> of (name, status); we
+            // count entries whose status is not "done" / "idle" / empty.
+            let live_subagents = app
+                .agent_status
+                .iter()
+                .filter(|(_, s)| {
+                    let s = s.to_ascii_lowercase();
+                    !s.is_empty()
+                        && !s.contains("done")
+                        && !s.contains("idle")
+                        && !s.contains("complete")
+                })
+                .count();
+            if live_subagents > 0 {
+                spans.push(Span::styled(
+                    format!(" · {} agent{}", live_subagents, if live_subagents == 1 { "" } else { "s" }),
+                    Style::default().fg(Color::Cyan),
+                ));
+            }
+
             Line::from(spans)
         } else {
             Line::from(vec![
