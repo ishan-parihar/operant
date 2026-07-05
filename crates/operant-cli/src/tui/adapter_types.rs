@@ -89,6 +89,12 @@ pub mod config {
         pub model: Option<String>,
         pub provider: Option<String>,
         pub output_style: Option<String>,
+        /// Reasoning effort level: "low" | "normal" | "high" | "max".
+        /// Mirrors EffortLevel in model_picker.rs. Set by `operant tui effort set`.
+        pub effort_level: Option<String>,
+        /// Whether vim keybindings are enabled in the TUI prompt input.
+        /// Set by `operant tui vim on|off`.
+        pub vim_enabled: bool,
         pub reduce_motion: bool,
         pub show_cwd: bool,
         pub auto_compact: bool,
@@ -651,6 +657,27 @@ pub mod voice {
 
         pub fn set_enabled(&mut self, enabled: bool) {
             self.enabled = enabled;
+        }
+
+        /// Check whether voice recording is available on this system.
+        /// Used by `operant tui voice` to surface availability without
+        /// entering the TUI.
+        pub fn is_available(&self) -> bool {
+            // We probe for at least one of the common recorder backends on
+            // PATH. The actual recorder is created lazily on start_recording,
+            // so this is a best-effort availability check.
+            for cmd in &["arecord", "rec", "ffmpeg"] {
+                if std::process::Command::new(cmd)
+                    .arg("--version")
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .status()
+                    .is_ok()
+                {
+                    return true;
+                }
+            }
+            false
         }
 
         /// Start recording audio. Sends `RecordingStarted` to `tx` on success.

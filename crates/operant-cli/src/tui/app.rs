@@ -1200,6 +1200,19 @@ impl App {
         let user_keybindings = UserKeybindings::load(&Settings::config_dir());
         let auth_store = crate::tui::adapter_types::AuthStore::load();
         let has_credentials = auth_store.has_any_key() || config.resolve_api_key().is_some();
+
+        // Read persisted TUI state from settings.json so CLI commands like
+        // `operant tui effort set high` and `operant tui vim on` take effect
+        // on the next TUI launch. (Closes parity gaps #5, #8, #10.)
+        let saved_settings = Settings::load_sync().unwrap_or_default();
+        let initial_effort = match saved_settings.effort_level.as_deref() {
+            Some("low") => EffortLevel::Low,
+            Some("high") => EffortLevel::High,
+            Some("max") => EffortLevel::Max,
+            _ => EffortLevel::Normal,
+        };
+        let initial_vim = saved_settings.vim_enabled;
+
         let model_name = {
             let raw = config.effective_model().to_string();
             if raw.ends_with("/default") {
@@ -1232,7 +1245,11 @@ impl App {
             display_messages: Vec::new(),
             system_annotations: Vec::new(),
             input: String::new(),
-            prompt_input: PromptInputState::new(),
+            prompt_input: {
+                let mut p = PromptInputState::new();
+                p.vim_enabled = initial_vim;
+                p
+            },
             input_history: Vec::new(),
             history_index: None,
             scroll_offset: 0,
@@ -1252,7 +1269,7 @@ impl App {
             cost_usd: 0.0,
             model_name,
             has_credentials,
-            effort_level: EffortLevel::Normal,
+            effort_level: initial_effort,
             fast_mode: false,
             speech_mode: None,
             speech_level: "full".to_string(),

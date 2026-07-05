@@ -34,7 +34,92 @@ use anyhow::Result;
 use clap::Subcommand;
 use operant_core::config::AppConfig;
 
-/// `operant tui debug` subcommands.
+/// `operant tui` subcommands. Combines read-only debug subcommands (that
+/// simulate TUI overlays from the CLI) with action subcommands (that set
+/// TUI state persistently, closing the TUI↔CLI parity gaps from the audit).
+#[derive(Debug, Clone, Subcommand)]
+pub enum TuiSubcommand {
+    /// Read-only debug subcommands — simulate TUI overlays from the CLI.
+    /// Each runs the same data-loading path the TUI uses, but prints to stdout.
+    Debug {
+        #[command(subcommand)]
+        cmd: TuiDebugSubcommand,
+    },
+
+    /// Show or set the reasoning effort level (parity gap #5).
+    /// `operant tui effort` shows the current level;
+    /// `operant tui effort set high` sets it.
+    Effort {
+        /// Optional subcommand: 'set <level>'. If omitted, shows the current level.
+        #[command(subcommand)]
+        cmd: Option<EffortSubcommand>,
+    },
+
+    /// Show or set the active mode (parity gap #8).
+    /// `operant tui mode` shows the current permission mode;
+    /// `operant tui mode yolo` sets permission_mode=BypassPermissions;
+    /// `operant tui mode plan` sets permission_mode=Plan;
+    /// `operant tui mode default` sets permission_mode=Default.
+    Mode {
+        /// Mode to set: yolo | plan | default | accept-edits. If omitted, shows current.
+        mode: Option<String>,
+    },
+
+    /// Show or set the output style (parity gap #8).
+    /// `operant tui output-style` shows current;
+    /// `operant tui output-style verbose` sets it.
+    OutputStyle {
+        /// Style to set: auto | stream | verbose. If omitted, shows current.
+        style: Option<String>,
+    },
+
+    /// List or set the TUI theme (parity gap #10).
+    /// `operant tui theme` lists available themes;
+    /// `operant tui theme set dark` sets the theme.
+    Theme {
+        #[command(subcommand)]
+        cmd: Option<ThemeSubcommand>,
+    },
+
+    /// Toggle vim mode in the TUI prompt input (parity gap #10).
+    /// `operant tui vim on` enables; `operant tui vim off` disables;
+    /// `operant tui vim` shows current state.
+    Vim {
+        /// on | off. If omitted, shows current state.
+        state: Option<String>,
+    },
+
+    /// Open the user keybindings file in $EDITOR (parity gap #10).
+    Keybindings,
+
+    /// Show voice-mode status (parity gap #9).
+    /// Voice mode can't be toggled from the CLI because it requires the TUI's
+    /// audio recorder + crossterm event loop; this command surfaces the
+    /// current availability so the user knows whether /voice will work.
+    Voice,
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum EffortSubcommand {
+    /// Set the effort level.
+    Set {
+        /// Effort level: low | normal | high | max.
+        level: String,
+    },
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum ThemeSubcommand {
+    /// List available themes.
+    List,
+    /// Set the theme.
+    Set {
+        /// Theme name: dark | light | default | deuteranopia | <custom-name>.
+        name: String,
+    },
+}
+
+/// `operant tui debug` subcommands (read-only).
 #[derive(Debug, Clone, Subcommand)]
 pub enum TuiDebugSubcommand {
     /// List installed skills (same data as the /skills overlay).
@@ -61,7 +146,21 @@ pub enum TuiDebugSubcommand {
     Cost,
 }
 
-/// Entry point dispatch.
+/// Entry point dispatch for `operant tui <subcommand>`.
+pub async fn handle_tui_command(config: &AppConfig, cmd: TuiSubcommand) -> Result<()> {
+    match cmd {
+        TuiSubcommand::Debug { cmd } => handle_tui_debug_command(config, cmd).await,
+        TuiSubcommand::Effort { cmd } => handle_effort(config, cmd).await,
+        TuiSubcommand::Mode { mode } => handle_mode(config, mode).await,
+        TuiSubcommand::OutputStyle { style } => handle_output_style(config, style).await,
+        TuiSubcommand::Theme { cmd } => handle_theme(config, cmd).await,
+        TuiSubcommand::Vim { state } => handle_vim(config, state).await,
+        TuiSubcommand::Keybindings => handle_keybindings(config).await,
+        TuiSubcommand::Voice => handle_voice(config).await,
+    }
+}
+
+/// Entry point dispatch for `operant tui debug <subcommand>`.
 pub async fn handle_tui_debug_command(config: &AppConfig, cmd: TuiDebugSubcommand) -> Result<()> {
     match cmd {
         TuiDebugSubcommand::Skills => debug_skills(config).await,
@@ -609,4 +708,254 @@ fn mask_api_keys(s: &str) -> String {
             .expect("Invalid mask regex")
     });
     KEY_RE.replace_all(s, r"${1}***${3}").to_string()
+}
+
+// ---------------------------------------------------------------------------
+// Action subcommand handlers (parity-gap closures)
+// ---------------------------------------------------------------------------
+
+/// `operant tui effort` — show or set the reasoning effort level.
+/// Stored in settings.json under `effort_level`.
+async fn handle_effort(_config: &AppConfig, cmd: Option<EffortSubcommand>) -> Result<()> {
+    let mut settings = load_settings();
+    match cmd {
+        None => {
+            let cur = settings.effort_level.clone().unwrap_or_else(|| "normal".to_string());
+            println!("Current effort level: {}", cur);
+            println!();
+            println!("Set with: operant tui effort set low|normal|high|max");
+            println!("  low    — fast, cheap, minimal reasoning");
+            println!("  normal — balanced (default)");
+            println!("  high   — more reasoning tokens");
+            println!("  max    — maximum reasoning budget");
+        }
+        Some(EffortSubcommand::Set { level }) => {
+            let lvl = level.to_lowercase();
+            match lvl.as_str() {
+                "low" | "normal" | "high" | "max" => {
+                    settings.effort_level = Some(lvl.clone());
+                    save_settings(&settings)?;
+                    println!("Effort level set to: {}", lvl);
+                }
+                _ => {
+                    anyhow::bail!("Invalid effort level '{}'. Must be one of: low, normal, high, max", level);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// `operant tui mode [yolo|plan|default|accept-edits]` — show or set
+/// permission_mode. Closes the parity gap for /yolo + /plan.
+async fn handle_mode(_config: &AppConfig, mode: Option<String>) -> Result<()> {
+    let mut settings = load_settings();
+    match mode {
+        None => {
+            let cur = format!("{:?}", settings.permission_mode);
+            println!("Current permission mode: {}", cur);
+            println!();
+            println!("Set with: operant tui mode <mode>");
+            println!("  yolo         — BypassPermissions (auto-approve everything)");
+            println!("  plan         — Plan (agent proposes, doesn't execute)");
+            println!("  default      — Default (prompt per tool)");
+            println!("  accept-edits — AcceptEdits (auto-approve file edits)");
+        }
+        Some(m) => {
+            let new_mode = match m.to_lowercase().as_str() {
+                "yolo" | "bypass" | "bypasspermissions" => {
+                    crate::tui::adapter_types::config::PermissionMode::BypassPermissions
+                }
+                "plan" => crate::tui::adapter_types::config::PermissionMode::Plan,
+                "default" | "normal" => {
+                    crate::tui::adapter_types::config::PermissionMode::Default
+                }
+                "accept-edits" | "acceptedits" | "accept_edits" => {
+                    crate::tui::adapter_types::config::PermissionMode::AcceptEdits
+                }
+                _ => {
+                    anyhow::bail!(
+                        "Invalid mode '{}'. Must be one of: yolo, plan, default, accept-edits",
+                        m
+                    );
+                }
+            };
+            settings.permission_mode = new_mode.clone();
+            save_settings(&settings)?;
+            println!("Permission mode set to: {:?}", new_mode);
+        }
+    }
+    Ok(())
+}
+
+/// `operant tui output-style [auto|stream|verbose]` — show or set output_style.
+async fn handle_output_style(_config: &AppConfig, style: Option<String>) -> Result<()> {
+    let mut settings = load_settings();
+    match style {
+        None => {
+            let cur = settings.output_style.clone().unwrap_or_else(|| "auto".to_string());
+            println!("Current output style: {}", cur);
+            println!();
+            println!("Set with: operant tui output-style <style>");
+            println!("  auto    — stream when reasonable, verbose for long outputs");
+            println!("  stream  — always stream");
+            println!("  verbose — always show full output");
+        }
+        Some(s) => {
+            let s_lower = s.to_lowercase();
+            match s_lower.as_str() {
+                "auto" | "stream" | "verbose" => {
+                    settings.output_style = Some(s_lower.clone());
+                    save_settings(&settings)?;
+                    println!("Output style set to: {}", s_lower);
+                }
+                _ => {
+                    anyhow::bail!(
+                        "Invalid output style '{}'. Must be one of: auto, stream, verbose",
+                        s
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// `operant tui theme [list|set <name>]` — list or set the TUI theme.
+async fn handle_theme(_config: &AppConfig, cmd: Option<ThemeSubcommand>) -> Result<()> {
+    let mut settings = load_settings();
+    match cmd {
+        None => {
+            let cur = format!("{:?}", settings.theme);
+            println!("Current theme: {}", cur);
+            println!();
+            println!("Available themes:");
+            println!("  dark         — dark background (default)");
+            println!("  light        — light background");
+            println!("  default      — terminal default");
+            println!("  deuteranopia — color-blind friendly");
+            println!("  <custom>     — any name; the TUI will look for a matching palette");
+            println!();
+            println!("Set with: operant tui theme set <name>");
+            println!("List with: operant tui theme list");
+        }
+        Some(ThemeSubcommand::List) => {
+            println!("Available themes:");
+            println!("  dark");
+            println!("  light");
+            println!("  default");
+            println!("  deuteranopia");
+        }
+        Some(ThemeSubcommand::Set { name }) => {
+            let theme = match name.to_lowercase().as_str() {
+                "dark" => crate::tui::adapter_types::config::Theme::Dark,
+                "light" => crate::tui::adapter_types::config::Theme::Light,
+                "default" => crate::tui::adapter_types::config::Theme::Default,
+                "deuteranopia" => crate::tui::adapter_types::config::Theme::Deuteranopia,
+                other => crate::tui::adapter_types::config::Theme::Custom(other.to_string()),
+            };
+            settings.theme = theme.clone();
+            save_settings(&settings)?;
+            println!("Theme set to: {:?}", theme);
+        }
+    }
+    Ok(())
+}
+
+/// `operant tui vim [on|off]` — toggle vim mode.
+async fn handle_vim(_config: &AppConfig, state: Option<String>) -> Result<()> {
+    let mut settings = load_settings();
+    match state {
+        None => {
+            println!("Vim mode: {}", if settings.vim_enabled { "on" } else { "off" });
+            println!();
+            println!("Set with: operant tui vim on | operant tui vim off");
+        }
+        Some(s) => {
+            match s.to_lowercase().as_str() {
+                "on" | "true" | "1" | "yes" => {
+                    settings.vim_enabled = true;
+                    save_settings(&settings)?;
+                    println!("Vim mode enabled.");
+                }
+                "off" | "false" | "0" | "no" => {
+                    settings.vim_enabled = false;
+                    save_settings(&settings)?;
+                    println!("Vim mode disabled.");
+                }
+                _ => {
+                    anyhow::bail!("Invalid state '{}'. Must be one of: on, off", s);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// `operant tui keybindings` — open the user keybindings file in $EDITOR.
+async fn handle_keybindings(_config: &AppConfig) -> Result<()> {
+    let kb_path = crate::tui::adapter_types::config::Settings::config_dir()
+        .join("keybindings.json");
+    if !kb_path.exists() {
+        // Write a default empty keybindings file.
+        std::fs::create_dir_all(kb_path.parent().unwrap())?;
+        std::fs::write(&kb_path, "{\n  \"//\": \"User keybindings. See docs for the schema.\"\n}\n")?;
+        println!("Created default keybindings file: {}", kb_path.display());
+    }
+
+    let editor = std::env::var("EDITOR")
+        .or_else(|_| std::env::var("VISUAL"))
+        .unwrap_or_else(|_| "vi".to_string());
+
+    println!("Opening {} in {}…", kb_path.display(), editor);
+    let status = std::process::Command::new(&editor)
+        .arg(&kb_path)
+        .status()?;
+    if !status.success() {
+        anyhow::bail!("Editor exited with non-zero status");
+    }
+    Ok(())
+}
+
+/// `operant tui voice` — show voice-mode availability.
+/// Voice mode can't be toggled from the CLI (requires the TUI's audio
+/// recorder + crossterm event loop), but we can surface whether the
+/// recorder is available so the user knows whether /voice will work.
+async fn handle_voice(_config: &AppConfig) -> Result<()> {
+    println!("=== Voice Mode Status ===");
+    println!();
+
+    // Check if the voice recorder feature is compiled in.
+    let recorder = crate::tui::adapter_types::voice::global_voice_recorder();
+    let is_available = if let Ok(r) = recorder.lock() {
+        r.is_available()
+    } else {
+        false
+    };
+
+    println!("Voice recorder available: {}", if is_available { "yes" } else { "no" });
+    if !is_available {
+        println!();
+        println!("Voice mode requires:");
+        println!("  - A working microphone (arecord / rec / ffmpeg)");
+        println!("  - The 'voice' cargo feature compiled in");
+        println!("  - An audio output device for TTS playback");
+    } else {
+        println!();
+        println!("To enable voice mode, run `operant chat` and press /voice.");
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Settings load/save helpers
+// ---------------------------------------------------------------------------
+
+fn load_settings() -> crate::tui::adapter_types::config::Settings {
+    crate::tui::adapter_types::config::Settings::load_sync().unwrap_or_default()
+}
+
+fn save_settings(settings: &crate::tui::adapter_types::config::Settings) -> Result<()> {
+    settings.save_sync().map_err(Into::into)
 }
