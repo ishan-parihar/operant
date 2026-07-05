@@ -884,13 +884,6 @@ pub struct App {
     /// Shown at startup when --dangerously-skip-permissions was passed.
     /// User must explicitly accept or the session exits.
     pub bypass_permissions_dialog: crate::tui::bypass_permissions_dialog::BypassPermissionsDialogState,
-    /// Whether the bypass-permissions dialog has been shown this session.
-    pub bypass_permissions_dialog_shown: bool,
-    /// File injection warning dialog.
-    /// Shown when oversized or binary files are detected in @refs.
-    /// When true, the next file injection size check uses limit 0 (no limit),
-    /// letting files that were "allowed" through the warning dialog be injected.
-    pub file_injection_force: bool,
     /// First-launch onboarding welcome dialog.
     /// Effort-level picker (/effort with no args).
     pub effort_picker: crate::tui::effort_picker::EffortPickerState,
@@ -945,9 +938,6 @@ pub struct App {
     pub import_config_dialog: ImportConfigDialogState,
     /// Ctrl+K command palette overlay.
     pub command_palette: DialogSelectState,
-    /// Whether Operant was launched from the user's home directory.
-    /// Shown as a startup notice: "Note: You have launched Operant in your home directory…"
-    pub home_dir_warning: bool,
     /// Output style: "auto" | "stream" | "verbose".
     pub output_style: String,
     /// PR number for the current branch (None if not in a PR context).
@@ -1019,9 +1009,9 @@ pub struct App {
     pub rate_limit_5h_pct: Option<f32>,
     /// Rate limit info — 7-day window usage percentage (0–100).
     pub rate_limit_7day_pct: Option<f32>,
-    /// Active worktree name (if in a worktree).
+    /// Active worktree name (if in a worktree). Rendered in the footer.
     pub worktree_name: Option<String>,
-    /// Active worktree branch (if in a worktree).
+    /// Active worktree branch (if in a worktree). Rendered in the footer.
     pub worktree_branch: Option<String>,
     /// Agent type badge: "agent" | "coordinator" | "subagent".
     pub agent_type_badge: Option<String>,
@@ -1090,8 +1080,6 @@ pub struct App {
     /// If a newer version was found during background update check, this holds
     /// the latest version string (e.g. "0.1.0"). Shown in the footer status bar.
     pub update_available: Option<String>,
-    /// Cost breakdown for managed agent sessions: (manager_usd, executors_usd, total_usd).
-    pub managed_agent_cost_breakdown: Option<(f64, f64, f64)>,
     /// Whether managed agent mode is currently active.
     pub managed_agents_active: bool,
     /// Timestamp of the first exit key press that showed confirmation (valid for ~2 seconds).
@@ -1358,8 +1346,6 @@ impl App {
             mcp_approval: McpApprovalDialogState::new(),
 
             bypass_permissions_dialog: crate::tui::bypass_permissions_dialog::BypassPermissionsDialogState::new(),
-            bypass_permissions_dialog_shown: false,
-            file_injection_force: false,
             effort_picker: crate::tui::effort_picker::EffortPickerState::new(),
             key_input_dialog: crate::tui::key_input_dialog::KeyInputDialogState::new(),
             custom_provider_dialog: crate::tui::custom_provider_dialog::CustomProviderDialogState::new(),
@@ -1402,7 +1388,6 @@ impl App {
                     .collect();
                 DialogSelectState::new("Command Palette", items)
             },
-            home_dir_warning: false,
             output_style: "auto".to_string(),
             pr_number: None,
             pr_url: None,
@@ -1485,7 +1470,6 @@ permission_rx: None,
             scroll_last_time: None,
             bash_prefix_allowlist: std::collections::HashSet::new(),
             update_available: None,
-            managed_agent_cost_breakdown: None,
             managed_agents_active: false,
             last_exit_key_warning: None,
             exit_key_sequence_start: None,
