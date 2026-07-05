@@ -600,7 +600,7 @@ impl ModelPickerState {
     /// On any error, returns `default_models()` as a fallback so the picker is
     /// never left empty.
     pub async fn fetch_models(client: &crate::tui::adapter_types::AnthropicClient) -> Vec<ModelEntry> {
-        let available = client.fetch_available_models();
+        let available = client.fetch_available_models().await;
         if available.is_empty() {
             return Self::default_models();
         }
