@@ -157,6 +157,13 @@ struct Cli {
     #[arg(long, global = true)]
     debug_tui: bool,
 
+    /// Disable mouse capture in the TUI. Useful when running inside a
+    /// terminal multiplexer (tmux/screen) or when the user wants the
+    /// terminal's native mouse selection to work. (Bug #24 from iter-82
+    /// audit — /mouse mentioned a --no-mouse flag that didn't exist.)
+    #[arg(long, global = true, action = ArgAction::SetTrue)]
+    no_mouse: bool,
+
     #[command(subcommand)]
     command: Option<Commands>,
 }
@@ -1392,6 +1399,7 @@ async fn main() -> Result<()> {
                     loaded.config.clone(),
                     system.clone(),
                     LaunchMode::Query(query.clone()),
+                    cli.no_mouse,
                 )
                 .await?
                 .run()
@@ -1402,7 +1410,7 @@ async fn main() -> Result<()> {
         }
         Some(Commands::Chat { system }) => {
             if loaded.config.tui.rich_output {
-                TuiApp::enter(loaded.config.clone(), system.clone(), LaunchMode::Landing)
+                TuiApp::enter(loaded.config.clone(), system.clone(), LaunchMode::Landing, cli.no_mouse)
                     .await?
                     .run()
                     .await?;
@@ -1542,7 +1550,7 @@ async fn main() -> Result<()> {
         None => {
             // No command provided - launch TUI in interactive mode
             if loaded.config.tui.rich_output {
-                TuiApp::enter(loaded.config.clone(), None, LaunchMode::Landing)
+                TuiApp::enter(loaded.config.clone(), None, LaunchMode::Landing, cli.no_mouse)
                     .await?
                     .run()
                     .await?;
