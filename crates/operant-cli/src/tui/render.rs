@@ -529,6 +529,10 @@ pub fn render_app(frame: &mut Frame, app: &App) {
         crate::tui::skills_view::render_skills_view(frame, &app.skills_view, size);
     }
 
+    if app.plugins_hub.visible {
+        crate::tui::plugins_hub::render_plugins_hub(frame, &app.plugins_hub, size);
+    }
+
     if app.hooks_config_menu.visible {
         render_hooks_config_menu(&app.hooks_config_menu, size, frame.buffer_mut());
     }
