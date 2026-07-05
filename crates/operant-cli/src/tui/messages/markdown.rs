@@ -7,7 +7,19 @@ use ratatui::{
     style::{Color, Modifier, Style},
     text::{Line, Span},
 };
+use syntect::easy::HighlightLines;
+use syntect::highlighting::ThemeSet;
+use syntect::parsing::SyntaxSet;
 use unicode_width::UnicodeWidthStr;
+
+/// Syntect syntax set — ships with the default grammar bundle (covers ~120
+/// languages including rust, python, js/ts, go, c/c++, java, ruby, sql, yaml,
+/// json, toml, markdown, bash, html, css, etc.). Loaded once per process.
+static SYNTAX_SET: LazyLock<SyntaxSet> = LazyLock::new(SyntaxSet::load_defaults_newlines);
+
+/// Syntect theme set — `base16-ocean.dark` matches the diff viewer's choice so
+/// inline code blocks and diff hunks read as one design system.
+static THEME_SET: LazyLock<ThemeSet> = LazyLock::new(ThemeSet::load_defaults);
 
 /// Regex pattern to detect URLs (http://, https://, ftp://, www.)
 static URL_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
@@ -21,12 +33,129 @@ static EMAIL_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
         .expect("Invalid email regex pattern")
 });
 
+/// Map a markdown code-fence language tag (e.g. `rust`, `py`, `ts`) to a
+/// syntect syntax reference. Returns None for unknown languages or empty tags
+/// — the caller falls back to plain white-on-yellow rendering in that case.
+fn resolve_syntax(lang: &str) -> Option<&'static syntect::parsing::SyntaxReference> {
+    let ss = &*SYNTAX_SET;
+    if lang.is_empty() {
+        return None;
+    }
+    // Try the language tag directly (syntect uses lowercase names like "rust", "python").
+    if let Some(s) = ss.find_syntax_by_token(lang) {
+        return Some(s);
+    }
+    // Try common file extensions for the language.
+    let ext_candidates: &[&str] = match lang.to_lowercase().as_str() {
+        "rs" | "rust" => &["rs"],
+        "py" | "python" | "python3" => &["py"],
+        "js" | "javascript" | "node" => &["js"],
+        "ts" | "typescript" => &["ts"],
+        "tsx" | "jsx" => &["tsx", "jsx"],
+        "go" | "golang" => &["go"],
+        "c" => &["c"],
+        "cpp" | "c++" | "cxx" => &["cpp"],
+        "h" | "hpp" => &["h", "hpp"],
+        "java" => &["java"],
+        "kt" | "kotlin" => &["kt"],
+        "rb" | "ruby" => &["rb"],
+        "swift" => &["swift"],
+        "sh" | "bash" | "shell" | "zsh" => &["sh"],
+        "sql" => &["sql"],
+        "yaml" | "yml" => &["yaml", "yml"],
+        "json" => &["json"],
+        "toml" => &["toml"],
+        "html" | "htm" => &["html"],
+        "css" | "scss" | "sass" => &["css", "scss"],
+        "xml" => &["xml"],
+        "md" | "markdown" => &["md"],
+        "dockerfile" => &["Dockerfile"],
+        "php" => &["php"],
+        "scala" => &["scala"],
+        "lua" => &["lua"],
+        "perl" | "pl" => &["pl"],
+        "r" => &["r"],
+        "haskell" | "hs" => &["hs"],
+        "elixir" | "ex" | "exs" => &["ex", "exs"],
+        "erlang" | "erl" => &["erl"],
+        "clojure" | "clj" => &["clj"],
+        "dart" => &["dart"],
+        "groovy" => &["groovy"],
+        "proto" | "protobuf" => &["proto"],
+        "graphql" | "gql" => &["graphql"],
+        "nim" => &["nim"],
+        "ocaml" | "ml" => &["ml"],
+        _ => &[],
+    };
+    for ext in ext_candidates {
+        if let Some(s) = ss.find_syntax_by_extension(ext) {
+            return Some(s);
+        }
+    }
+    // Last resort: syntect keeps an alias table — try by name.
+    ss.find_syntax_by_name(lang)
+}
+
+/// Highlight a single line of source code in the given language, returning
+/// ratatui Spans. Falls back to a single plain-white span on the yellow code
+/// base style if the language is unknown or syntect fails.
+///
+/// Mirrors `diff_viewer::highlight_code_line` but without the diff-color
+/// blending — code blocks use the syntect foreground colors verbatim.
+fn highlight_code_line_spans(line: &str, syntax: Option<&'static syntect::parsing::SyntaxReference>, base_style: Style) -> Vec<Span<'static>> {
+    let Some(syntax) = syntax else {
+        return vec![Span::styled(line.to_string(), base_style)];
+    };
+
+    let ts = &*THEME_SET;
+    let theme = ts
+        .themes
+        .get("base16-ocean.dark")
+        .or_else(|| ts.themes.values().next())
+        .unwrap_or_else(|| ts.themes.values().next().expect("ThemeSet has at least one theme"));
+
+    let ss = &*SYNTAX_SET;
+    let mut h = HighlightLines::new(syntax, theme);
+    match h.highlight_line(line, ss) {
+        Ok(ranges) => {
+            let mut result: Vec<Span<'static>> = Vec::new();
+            for (style, text) in ranges {
+                if text.is_empty() {
+                    continue;
+                }
+                let fg = style.foreground;
+                // Skip "default" near-white foregrounds (syntect emits these for
+                // plain text — we want the base code-block style to show through
+                // so the gutter alignment stays consistent).
+                let is_default = fg.r > 200 && fg.g > 200 && fg.b > 200;
+                if is_default {
+                    result.push(Span::styled(text.to_string(), base_style));
+                } else {
+                    result.push(Span::styled(
+                        text.to_string(),
+                        Style::default().fg(Color::Rgb(fg.r, fg.g, fg.b)),
+                    ));
+                }
+            }
+            if result.is_empty() {
+                vec![Span::styled(line.to_string(), base_style)]
+            } else {
+                result
+            }
+        }
+        Err(_) => vec![Span::styled(line.to_string(), base_style)],
+    }
+}
+
 /// Render markdown text to styled ratatui lines.
 pub fn render_markdown(text: &str, width: u16) -> Vec<Line<'static>> {
     let all_lines: Vec<&str> = text.lines().collect();
     let mut lines: Vec<Line<'static>> = Vec::new();
     let mut in_code_block = false;
     let mut code_lang = String::new();
+    // Resolved syntax reference for the current code block — computed once
+    // when the fence opens, reused for every line until the fence closes.
+    let mut code_syntax: Option<&'static syntect::parsing::SyntaxReference> = None;
     let mut idx = 0;
 
     while idx < all_lines.len() {
@@ -39,9 +168,11 @@ pub fn render_markdown(text: &str, width: u16) -> Vec<Line<'static>> {
                 )]));
                 in_code_block = false;
                 code_lang.clear();
+                code_syntax = None;
             } else {
                 in_code_block = true;
                 code_lang = raw.trim_start().trim_start_matches('`').trim().to_string();
+                code_syntax = resolve_syntax(&code_lang);
                 let lang_label = if code_lang.is_empty() {
                     String::new()
                 } else {
@@ -57,10 +188,12 @@ pub fn render_markdown(text: &str, width: u16) -> Vec<Line<'static>> {
         }
 
         if in_code_block {
-            lines.push(Line::from(vec![
-                Span::styled("  │ ", Style::default().fg(Color::Yellow)),
-                Span::styled(raw.to_string(), Style::default().fg(Color::White)),
-            ]));
+            let base_style = Style::default().fg(Color::White);
+            let code_spans = highlight_code_line_spans(raw, code_syntax, base_style);
+            let mut spans: Vec<Span<'static>> = Vec::with_capacity(code_spans.len() + 1);
+            spans.push(Span::styled("  │ ", Style::default().fg(Color::Yellow)));
+            spans.extend(code_spans);
+            lines.push(Line::from(spans));
             idx += 1;
             continue;
         }
