@@ -1764,6 +1764,9 @@ pub mod tools {
 pub struct TuiApp {
     app: crate::tui::app::App,
     initial_query: Option<String>,
+    /// Whether to skip EnableMouseCapture in the TUI setup. Set by the
+    /// --no-mouse CLI flag. (Bug #24 from iter-82 audit.)
+    no_mouse: bool,
 }
 
 impl TuiApp {
@@ -1771,6 +1774,7 @@ impl TuiApp {
         config: operant_core::config::AppConfig,
         _system: Option<String>,
         _mode: LaunchMode,
+        no_mouse: bool,
     ) -> anyhow::Result<Self> {
         use crate::tui::adapter_types::config::Config;
         use crate::tui::adapter_types::cost::CostTracker;
@@ -2201,7 +2205,7 @@ impl TuiApp {
         app.voice_mode_notice
             .show_if_available(audio_env.available, false);
 
-        Ok(Self { app, initial_query })
+        Ok(Self { app, initial_query, no_mouse })
     }
 
     pub async fn run(mut self) -> anyhow::Result<()> {
@@ -2217,15 +2221,28 @@ impl TuiApp {
         // the panic message. Without this, any panic between enable_raw_mode
         // and disable_raw_mode leaves the user's terminal in raw mode +
         // alternate screen (broken terminal, garbled output).
+        let no_mouse = self.no_mouse;
         let prev_hook = std::panic::take_hook();
         std::panic::set_hook(Box::new(move |info| {
             let _ = disable_raw_mode();
             let _ = execute!(std::io::stdout(), LeaveAlternateScreen);
+            if !no_mouse {
+                let _ = execute!(std::io::stdout(), crossterm::event::DisableMouseCapture);
+            }
             prev_hook(info);
         }));
 
         let mut stdout = std::io::stdout();
         execute!(stdout, EnterAlternateScreen)?;
+        // Enable mouse capture unless --no-mouse was passed. Mouse capture
+        // lets the TUI receive scroll/click events for the transcript, diff
+        // viewer, and overlay scrolling. Some terminal multiplexers (tmux,
+        // screen) interfere with mouse capture; --no-mouse disables it so
+        // the terminal's native mouse selection works. (Bug #24 from iter-82
+        // audit — /mouse mentioned a --no-mouse flag that didn't exist.)
+        if !self.no_mouse {
+            execute!(stdout, crossterm::event::EnableMouseCapture)?;
+        }
         let backend = CrosstermBackend::new(stdout);
         let mut terminal = Terminal::new(backend)?;
 
@@ -2416,6 +2433,9 @@ impl TuiApp {
         };
 
         disable_raw_mode()?;
+        if !self.no_mouse {
+            let _ = execute!(terminal.backend_mut(), crossterm::event::DisableMouseCapture);
+        }
         execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
         result
     }

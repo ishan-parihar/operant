@@ -2445,12 +2445,13 @@ permission_rx: None,
                 true
             }
 
-            // /mouse — toggle mouse capture (ratatui enables it on startup;
-            // we can't disable per-command without re-entering raw mode, so
-            // surface the current state).
+            // /mouse — surface whether mouse capture is active. Mouse capture
+            // is enabled on startup unless --no-mouse was passed. (Bug #24
+            // from iter-82 audit — /mouse mentioned a --no-mouse flag that
+            // didn't exist; now it does.)
             "mouse" => {
                 self.status_message = Some(
-                    "Mouse capture is enabled on startup. Restart operant with --no-mouse to disable.".to_string()
+                    "Mouse capture is enabled on startup. Use --no-mouse to disable (e.g. inside tmux).".to_string()
                 );
                 true
             }
