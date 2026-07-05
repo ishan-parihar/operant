@@ -25,6 +25,7 @@ pub mod tasks_overlay;
 pub mod session_branching;
 pub mod osc8;
 pub mod rustle;
+pub mod banner;
 pub mod bridge_state;
 pub mod image_paste;
 pub mod message_copy;
