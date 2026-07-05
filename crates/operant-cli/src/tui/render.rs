@@ -890,14 +890,52 @@ fn render_messages(frame: &mut Frame, app: &App, area: Rect) {
     }
 
     let notice_lines = startup_notice_lines(app, content_area.width);
-    let header_height = WELCOME_BOX_HEIGHT + notice_lines.len() as u16;
+    // The banner sits above the welcome box. Height is responsive: 8 lines
+    // (7 art + 1 subtitle) at >=80 cols, 5 lines (4 art + 1 subtitle) at
+    // >=40 cols, 0 lines below 40 cols (the welcome box itself shows a
+    // styled text fallback).
+    let banner_height: u16 = if content_area.width >= 80 {
+        8
+    } else if content_area.width >= 40 {
+        5
+    } else {
+        0
+    };
+    let header_height = WELCOME_BOX_HEIGHT + notice_lines.len() as u16 + banner_height;
     let show_logo_header = content_area.height >= header_height + 3 && content_area.width >= 60;
     let (logo_area, notices_area, msg_area) = if show_logo_header {
         let splits = Layout::default()
             .direction(Direction::Vertical)
             .constraints([Constraint::Length(header_height), Constraint::Min(1)])
             .split(content_area);
-        if notice_lines.is_empty() {
+        // Within the header: optional banner (top), welcome box (middle), notices (bottom).
+        if banner_height > 0 {
+            let banner_area = Rect {
+                x: splits[0].x,
+                y: splits[0].y,
+                width: splits[0].width,
+                height: banner_height,
+            };
+            let beneath_banner = Rect {
+                x: splits[0].x,
+                y: splits[0].y + banner_height,
+                width: splits[0].width,
+                height: splits[0].height.saturating_sub(banner_height),
+            };
+            render_banner_block(frame, app, banner_area);
+            if notice_lines.is_empty() {
+                (Some(beneath_banner), None, splits[1])
+            } else {
+                let header_splits = Layout::default()
+                    .direction(Direction::Vertical)
+                    .constraints([
+                        Constraint::Length(WELCOME_BOX_HEIGHT),
+                        Constraint::Length(notice_lines.len() as u16),
+                    ])
+                    .split(beneath_banner);
+                (Some(header_splits[0]), Some(header_splits[1]), splits[1])
+            }
+        } else if notice_lines.is_empty() {
             (Some(splits[0]), None, splits[1])
         } else {
             let header_splits = Layout::default()
@@ -1357,6 +1395,57 @@ fn render_message_items(app: &App, width: u16) -> Vec<RenderedLineItem> {
 }
 
 // â”€â”€ Welcome / startup screen â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+/// Render the OPERANT ASCII wordmark banner above the welcome box.
+///
+/// The banner is responsive: full 7-line art + dim version rule at >=80 cols,
+/// compact 4-line art + version rule at >=40 cols, nothing below 40 cols (the
+/// welcome box itself shows a styled text fallback). The art is centered
+/// horizontally within `area`.
+fn render_banner_block(frame: &mut Frame, _app: &App, area: Rect) {
+    use crate::tui::banner;
+
+    if area.height == 0 || area.width == 0 {
+        return;
+    }
+
+    let lines = banner::banner_with_subtitle(area.width, APP_VERSION);
+
+    // Center each line horizontally. The art is fixed-width so compute the
+    // indent once from the longest line's display width.
+    let max_len = lines
+        .iter()
+        .map(|l| {
+            l.spans
+                .iter()
+                .map(|s| s.content.chars().count())
+                .sum::<usize>()
+        })
+        .max()
+        .unwrap_or(0);
+    let indent = area.width.saturating_sub(max_len as u16) / 2;
+    let pad = " ".repeat(indent as usize);
+
+    let mut padded: Vec<Line> = Vec::with_capacity(lines.len());
+    for line in lines {
+        let mut spans: Vec<Span> = Vec::with_capacity(line.spans.len() + 1);
+        if !pad.is_empty() {
+            spans.push(Span::raw(pad.clone()));
+        }
+        spans.extend(line.spans);
+        padded.push(Line::from(spans));
+    }
+
+    // Vertical-center within the banner area (small bias toward the top).
+    let v_pad = area.height.saturating_sub(padded.len() as u16) / 2;
+    let mut all_lines: Vec<Line> = Vec::with_capacity(area.height as usize);
+    for _ in 0..v_pad {
+        all_lines.push(Line::from(""));
+    }
+    all_lines.extend(padded);
+
+    frame.render_widget(Paragraph::new(all_lines), area);
+}
 
 /// Render the two-column orange round-bordered welcome box (matches TS LogoV2).
 fn render_welcome_box(frame: &mut Frame, app: &App, area: Rect) {
