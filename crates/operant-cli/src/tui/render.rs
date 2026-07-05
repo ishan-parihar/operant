@@ -1170,6 +1170,7 @@ fn append_turn_items(
     width: u16,
     tool_names: &std::collections::HashMap<String, String>,
     expanded_thinking: &std::collections::HashSet<u64>,
+    show_reasoning: bool,
     frame_count: u64,
     accent: Color,
 ) {
@@ -1192,7 +1193,7 @@ fn append_turn_items(
             &RenderContext {
                 width,
                 highlight: true,
-                show_thinking: false,
+                show_thinking: show_reasoning,
                 tool_names: tool_names.clone(),
                 expanded_thinking: expanded_thinking.clone(),
             },
@@ -1335,6 +1336,7 @@ fn render_message_items(app: &App, width: u16) -> Vec<RenderedLineItem> {
                         width,
                         &tool_names,
                         &app.thinking_expanded,
+                        app.show_reasoning,
                         app.frame_count,
                         app.accent_color,
                     );
@@ -1348,7 +1350,7 @@ fn render_message_items(app: &App, width: u16) -> Vec<RenderedLineItem> {
                 &RenderContext {
                     width,
                     highlight: true,
-                    show_thinking: false,
+                    show_thinking: app.show_reasoning,
                     tool_names: tool_names.clone(),
                     expanded_thinking: app.thinking_expanded.clone(),
                 },

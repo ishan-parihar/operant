@@ -689,6 +689,10 @@ pub struct App {
     pub is_streaming: bool,
     pub streaming_text: String,
     pub streaming_thinking: String,
+    /// Whether reasoning/thinking blocks are expanded by default in the
+    /// transcript. Toggled by /reasoning. (Bug #18 from iter-82 audit —
+    /// /reasoning previously just printed a status message without toggling.)
+    pub show_reasoning: bool,
     pub status_message: Option<String>,
     /// Randomly chosen thinking verb shown next to the spinner while streaming.
     pub spinner_verb: Option<String>,
@@ -1256,6 +1260,7 @@ impl App {
             is_streaming: false,
             streaming_text: String::new(),
             streaming_thinking: String::new(),
+            show_reasoning: false,
             status_message: None,
             spinner_verb: None,
             should_exit: false,
@@ -2334,14 +2339,16 @@ permission_rx: None,
                 true
             }
 
-            // /reasoning — toggle showing the reasoning/thinking panel.
-            // Operant doesn't yet have a dedicated thinking-visibility flag;
-            // surface the current streaming_thinking buffer state.
+            // /reasoning — toggle whether thinking/reasoning blocks are
+            // expanded by default in the transcript. (Bug #18 from iter-82
+            // audit — previously just printed a status message without
+            // toggling anything.)
             "reasoning" => {
-                let has_thinking = !self.streaming_thinking.is_empty();
+                self.show_reasoning = !self.show_reasoning;
+                self.invalidate_transcript();
                 self.status_message = Some(format!(
-                    "Reasoning stream {}. The thinking panel renders when the model emits reasoning blocks.",
-                    if has_thinking { "is active" } else { "is idle" }
+                    "Reasoning blocks {} by default.",
+                    if self.show_reasoning { "expanded" } else { "collapsed" }
                 ));
                 true
             }
@@ -3949,8 +3956,11 @@ permission_rx: None,
                     {
                         self.skills_view.select_next();
                     } else {
-                        // viewport=24 is a safe default; render clamps.
-                        self.skills_view.scroll_down(24);
+                        // Use the last rendered viewport height (set by
+                        // render_list_stage) instead of a hardcoded 24.
+                        // (Bug #16 fix.)
+                        let vh = self.skills_view.last_viewport_height.get().max(1);
+                        self.skills_view.scroll_down(vh);
                     }
                 }
                 KeyCode::PageUp => {
@@ -3959,8 +3969,9 @@ permission_rx: None,
                     }
                 }
                 KeyCode::PageDown => {
+                    let vh = self.skills_view.last_viewport_height.get().max(1);
                     for _ in 0..6 {
-                        self.skills_view.scroll_down(24);
+                        self.skills_view.scroll_down(vh);
                     }
                 }
                 KeyCode::Enter => {
