@@ -339,8 +339,14 @@ async fn cmd_run(config: &AppConfig, id: &str) -> Result<()> {
     // Mark the job as "triggered" (not "success") — actual execution requires
     // the cron scheduler or the gateway. Previously this marked the job as
     // "ran successfully" without executing anything, which was misleading.
-    db.mark_job_run(id, false, Some("triggered_manually".to_string()), None, None)
-        .context("Failed to mark cron job run")?;
+    db.mark_job_run(
+        id,
+        false,
+        Some("triggered_manually".to_string()),
+        None,
+        None,
+    )
+    .context("Failed to mark cron job run")?;
 
     println!("Cron job '{}' triggered.", job.name);
     println!("  Prompt: {}", job.prompt);
@@ -350,8 +356,13 @@ async fn cmd_run(config: &AppConfig, id: &str) -> Result<()> {
     }
     println!();
     println!("  Note: Manual execution via CLI is not yet implemented.");
-    println!("  The job has been marked as 'triggered' and will execute on the next scheduler tick.");
-    println!("  To run the prompt now, use: operant run --query \"{}\"", job.prompt);
+    println!(
+        "  The job has been marked as 'triggered' and will execute on the next scheduler tick."
+    );
+    println!(
+        "  To run the prompt now, use: operant run --query \"{}\"",
+        job.prompt
+    );
     Ok(())
 }
 

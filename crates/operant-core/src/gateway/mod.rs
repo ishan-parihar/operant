@@ -22,8 +22,6 @@ use crate::error::{Error, Result};
 use crate::gateway_markdown::markdown_to_telegram_html;
 use crate::gateway_session::{PersistentSessionStore, SessionSource};
 
-
-
 /// Configuration for the gateway
 #[derive(Debug, Clone)]
 pub struct GatewayConfig {
@@ -867,7 +865,6 @@ impl Gateway {
     pub fn get_channel_directory(&self) -> &ChannelDirectory {
         &self.channel_directory
     }
-
 }
 
 /// Telegram adapter
@@ -2567,9 +2564,9 @@ impl PlatformAdapter for WebhookAdapter {
                             username: "Webhook".to_string(),
                             content: format!("Webhook received on /{route}"),
                             is_group_chat: false,
-            timestamp: chrono::Utc::now().timestamp(),
-            thread_id: None,
-                            
+                            timestamp: chrono::Utc::now().timestamp(),
+                            thread_id: None,
+
                             raw: serde_json::json!({"route": route}),
                         };
 
@@ -2643,8 +2640,12 @@ impl WhatsAppAdapter {
 
 #[async_trait]
 impl PlatformAdapter for WhatsAppAdapter {
-    fn name(&self) -> &str { "whatsapp" }
-    fn is_enabled(&self) -> bool { self.enabled }
+    fn name(&self) -> &str {
+        "whatsapp"
+    }
+    fn is_enabled(&self) -> bool {
+        self.enabled
+    }
 
     async fn start(&self) -> Result<()> {
         info!("WhatsApp adapter started");
@@ -2657,9 +2658,10 @@ impl PlatformAdapter for WhatsAppAdapter {
     }
 
     async fn send_message(&self, message: OutgoingMessage) -> Result<()> {
-        let token = self.token.as_ref().ok_or_else(|| {
-            Error::Config("WhatsApp token not configured".to_string())
-        })?;
+        let token = self
+            .token
+            .as_ref()
+            .ok_or_else(|| Error::Config("WhatsApp token not configured".to_string()))?;
         let phone = message.channel_id.clone();
 
         let client = reqwest::Client::new();
@@ -2697,7 +2699,10 @@ impl PlatformAdapter for WhatsAppAdapter {
         // Parse WhatsApp webhook payload
         if let Some(entry) = update["entry"].as_array().and_then(|e| e.first()) {
             if let Some(change) = entry["changes"].as_array().and_then(|c| c.first()) {
-                if let Some(msg) = change["value"]["messages"].as_array().and_then(|m| m.first()) {
+                if let Some(msg) = change["value"]["messages"]
+                    .as_array()
+                    .and_then(|m| m.first())
+                {
                     let from = msg["from"].as_str().unwrap_or("");
                     let text = msg["text"]["body"].as_str().unwrap_or("");
                     let name = change["value"]["contacts"][0]["profile"]["name"]
@@ -2711,9 +2716,9 @@ impl PlatformAdapter for WhatsAppAdapter {
                         username: name.to_string(),
                         content: text.to_string(),
                         is_group_chat: false,
-            timestamp: chrono::Utc::now().timestamp(),
-            thread_id: None,
-                        
+                        timestamp: chrono::Utc::now().timestamp(),
+                        thread_id: None,
+
                         raw: update,
                     }));
                 }
@@ -2787,8 +2792,12 @@ impl EmailAdapter {
 
 #[async_trait]
 impl PlatformAdapter for EmailAdapter {
-    fn name(&self) -> &str { "email" }
-    fn is_enabled(&self) -> bool { self.enabled }
+    fn name(&self) -> &str {
+        "email"
+    }
+    fn is_enabled(&self) -> bool {
+        self.enabled
+    }
 
     async fn start(&self) -> Result<()> {
         info!("Email adapter started");
@@ -2802,9 +2811,10 @@ impl PlatformAdapter for EmailAdapter {
 
     async fn send_message(&self, message: OutgoingMessage) -> Result<()> {
         // Email sending uses SMTP which is blocking — spawn_blocking.
-        let host = self.smtp_host.clone().ok_or_else(|| {
-            Error::Config("SMTP host not configured".to_string())
-        })?;
+        let host = self
+            .smtp_host
+            .clone()
+            .ok_or_else(|| Error::Config("SMTP host not configured".to_string()))?;
         let user = self.smtp_user.clone().unwrap_or_default();
         let pass = self.smtp_pass.clone().unwrap_or_default();
         let to = message.channel_id.clone();
@@ -2821,39 +2831,63 @@ impl PlatformAdapter for EmailAdapter {
             let port = if host.contains(":") { "" } else { ":587" };
             let addr = format!("{}{}", host, port);
 
-            let mut stream = TcpStream::connect(&addr)
-                .map_err(|e| format!("SMTP connect failed: {e}"))?;
+            let mut stream =
+                TcpStream::connect(&addr).map_err(|e| format!("SMTP connect failed: {e}"))?;
 
             // Read greeting
             let mut buf = [0u8; 1024];
-            stream.read(&mut buf).map_err(|e| format!("SMTP read: {e}"))?;
+            stream
+                .read(&mut buf)
+                .map_err(|e| format!("SMTP read: {e}"))?;
 
             // EHLO
             write!(stream, "EHLO operant\r\n").map_err(|e| format!("SMTP write: {e}"))?;
-            stream.read(&mut buf).map_err(|e| format!("SMTP read: {e}"))?;
+            stream
+                .read(&mut buf)
+                .map_err(|e| format!("SMTP read: {e}"))?;
 
             // AUTH LOGIN (simplified — base64 encoded user/pass)
             use base64::Engine;
             write!(stream, "AUTH LOGIN\r\n").map_err(|e| format!("SMTP write: {e}"))?;
-            stream.read(&mut buf).map_err(|e| format!("SMTP read: {e}"))?;
-            write!(stream, "{}\r\n", base64::engine::general_purpose::STANDARD.encode(&user))
-                .map_err(|e| format!("SMTP write: {e}"))?;
-            stream.read(&mut buf).map_err(|e| format!("SMTP read: {e}"))?;
-            write!(stream, "{}\r\n", base64::engine::general_purpose::STANDARD.encode(&pass))
-                .map_err(|e| format!("SMTP write: {e}"))?;
-            stream.read(&mut buf).map_err(|e| format!("SMTP read: {e}"))?;
+            stream
+                .read(&mut buf)
+                .map_err(|e| format!("SMTP read: {e}"))?;
+            write!(
+                stream,
+                "{}\r\n",
+                base64::engine::general_purpose::STANDARD.encode(&user)
+            )
+            .map_err(|e| format!("SMTP write: {e}"))?;
+            stream
+                .read(&mut buf)
+                .map_err(|e| format!("SMTP read: {e}"))?;
+            write!(
+                stream,
+                "{}\r\n",
+                base64::engine::general_purpose::STANDARD.encode(&pass)
+            )
+            .map_err(|e| format!("SMTP write: {e}"))?;
+            stream
+                .read(&mut buf)
+                .map_err(|e| format!("SMTP read: {e}"))?;
 
             // MAIL FROM
             write!(stream, "MAIL FROM:<{}>\r\n", user).map_err(|e| format!("SMTP write: {e}"))?;
-            stream.read(&mut buf).map_err(|e| format!("SMTP read: {e}"))?;
+            stream
+                .read(&mut buf)
+                .map_err(|e| format!("SMTP read: {e}"))?;
 
             // RCPT TO
             write!(stream, "RCPT TO:<{}>\r\n", to).map_err(|e| format!("SMTP write: {e}"))?;
-            stream.read(&mut buf).map_err(|e| format!("SMTP read: {e}"))?;
+            stream
+                .read(&mut buf)
+                .map_err(|e| format!("SMTP read: {e}"))?;
 
             // DATA
             write!(stream, "DATA\r\n").map_err(|e| format!("SMTP write: {e}"))?;
-            stream.read(&mut buf).map_err(|e| format!("SMTP read: {e}"))?;
+            stream
+                .read(&mut buf)
+                .map_err(|e| format!("SMTP read: {e}"))?;
 
             // Email body
             write!(
@@ -2862,7 +2896,9 @@ impl PlatformAdapter for EmailAdapter {
                 user, to, body
             )
             .map_err(|e| format!("SMTP write: {e}"))?;
-            stream.read(&mut buf).map_err(|e| format!("SMTP read: {e}"))?;
+            stream
+                .read(&mut buf)
+                .map_err(|e| format!("SMTP read: {e}"))?;
 
             // QUIT
             write!(stream, "QUIT\r\n").map_err(|e| format!("SMTP write: {e}"))?;
@@ -2878,9 +2914,15 @@ impl PlatformAdapter for EmailAdapter {
 
     async fn handle_update(&self, update: serde_json::Value) -> Result<Option<IncomingMessage>> {
         // Parse email webhook payload (format depends on the email forwarding service)
-        let from = update["from"].as_str().or_else(|| update["sender"].as_str()).unwrap_or("");
+        let from = update["from"]
+            .as_str()
+            .or_else(|| update["sender"].as_str())
+            .unwrap_or("");
         let subject = update["subject"].as_str().unwrap_or("(no subject)");
-        let body = update["body"].as_str().or_else(|| update["text"].as_str()).unwrap_or("");
+        let body = update["body"]
+            .as_str()
+            .or_else(|| update["text"].as_str())
+            .unwrap_or("");
 
         if from.is_empty() && body.is_empty() {
             return Ok(None);
@@ -2895,7 +2937,7 @@ impl PlatformAdapter for EmailAdapter {
             is_group_chat: false,
             timestamp: chrono::Utc::now().timestamp(),
             thread_id: None,
-            
+
             raw: update,
         }))
     }
@@ -2954,8 +2996,12 @@ impl SmsAdapter {
 
 #[async_trait]
 impl PlatformAdapter for SmsAdapter {
-    fn name(&self) -> &str { "sms" }
-    fn is_enabled(&self) -> bool { self.enabled }
+    fn name(&self) -> &str {
+        "sms"
+    }
+    fn is_enabled(&self) -> bool {
+        self.enabled
+    }
 
     async fn start(&self) -> Result<()> {
         info!("SMS adapter started");
@@ -2968,17 +3014,23 @@ impl PlatformAdapter for SmsAdapter {
     }
 
     async fn send_message(&self, message: OutgoingMessage) -> Result<()> {
-        let sid = self.account_sid.as_ref().ok_or_else(|| {
-            Error::Config("TWILIO_ACCOUNT_SID not set".to_string())
-        })?;
-        let token = self.auth_token.as_ref().ok_or_else(|| {
-            Error::Config("TWILIO_AUTH_TOKEN not set".to_string())
-        })?;
-        let from = self.from_number.as_ref().ok_or_else(|| {
-            Error::Config("TWILIO_FROM_NUMBER not set".to_string())
-        })?;
+        let sid = self
+            .account_sid
+            .as_ref()
+            .ok_or_else(|| Error::Config("TWILIO_ACCOUNT_SID not set".to_string()))?;
+        let token = self
+            .auth_token
+            .as_ref()
+            .ok_or_else(|| Error::Config("TWILIO_AUTH_TOKEN not set".to_string()))?;
+        let from = self
+            .from_number
+            .as_ref()
+            .ok_or_else(|| Error::Config("TWILIO_FROM_NUMBER not set".to_string()))?;
 
-        let url = format!("https://api.twilio.com/2010-04-01/Accounts/{}/Messages.json", sid);
+        let url = format!(
+            "https://api.twilio.com/2010-04-01/Accounts/{}/Messages.json",
+            sid
+        );
         let client = reqwest::Client::new();
 
         let resp = client
@@ -2994,10 +3046,7 @@ impl PlatformAdapter for SmsAdapter {
             .map_err(|e| Error::Network(e))?;
 
         if !resp.status().is_success() {
-            return Err(Error::Agent(format!(
-                "Twilio API error: {}",
-                resp.status()
-            )));
+            return Err(Error::Agent(format!("Twilio API error: {}", resp.status())));
         }
 
         Ok(())
@@ -3005,8 +3054,14 @@ impl PlatformAdapter for SmsAdapter {
 
     async fn handle_update(&self, update: serde_json::Value) -> Result<Option<IncomingMessage>> {
         // Parse Twilio webhook payload
-        let from = update["From"].as_str().or_else(|| update["from"].as_str()).unwrap_or("");
-        let body = update["Body"].as_str().or_else(|| update["body"].as_str()).unwrap_or("");
+        let from = update["From"]
+            .as_str()
+            .or_else(|| update["from"].as_str())
+            .unwrap_or("");
+        let body = update["Body"]
+            .as_str()
+            .or_else(|| update["body"].as_str())
+            .unwrap_or("");
 
         if from.is_empty() && body.is_empty() {
             return Ok(None);
@@ -3021,7 +3076,7 @@ impl PlatformAdapter for SmsAdapter {
             is_group_chat: false,
             timestamp: chrono::Utc::now().timestamp(),
             thread_id: None,
-            
+
             raw: update,
         }))
     }

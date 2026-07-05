@@ -1,4 +1,6 @@
-# AGENTS.md
+# AGENTS.md — Operant
+
+> **Development protocol**: The full monorepo development guide is at `../AGENTS.md` (root). This file contains Operant-specific context.
 
 > **READ THIS FILE FIRST.** Every agent (human or AI) working in this repository
 > must read this document top-to-bottom before making any change. It is the

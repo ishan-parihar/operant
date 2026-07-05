@@ -1,11 +1,8 @@
-use tokio::sync::mpsc;
 use crate::tui::adapter_types::query::{QueryEvent, StreamEvent, UsageInfo};
 use operant_core::agent::AgentEvent;
+use tokio::sync::mpsc;
 
-pub fn spawn_bridge() -> (
-    mpsc::Sender<AgentEvent>,
-    mpsc::Receiver<QueryEvent>,
-) {
+pub fn spawn_bridge() -> (mpsc::Sender<AgentEvent>, mpsc::Receiver<QueryEvent>) {
     let (agent_tx, mut agent_rx) = mpsc::channel::<AgentEvent>(256);
     let (query_tx, query_rx) = mpsc::channel::<QueryEvent>(256);
 
@@ -29,7 +26,11 @@ pub fn spawn_bridge() -> (
                         delta: text,
                     }))
                 }
-                AgentEvent::ToolStart { tool_call_id, name, arguments } => {
+                AgentEvent::ToolStart {
+                    tool_call_id,
+                    name,
+                    arguments,
+                } => {
                     // Use the real tool_call_id from the agent so the TUI
                     // can correlate this ToolStart with the matching ToolEnd.
                     // Previously the bridge generated its own fake id
@@ -48,7 +49,10 @@ pub fn spawn_bridge() -> (
                     let content = if result.success {
                         result.content.clone()
                     } else {
-                        result.error.clone().unwrap_or_else(|| "Unknown error".to_string())
+                        result
+                            .error
+                            .clone()
+                            .unwrap_or_else(|| "Unknown error".to_string())
                     };
                     let is_error = !result.success;
                     Some(QueryEvent::ToolEnd {
@@ -58,7 +62,11 @@ pub fn spawn_bridge() -> (
                         is_error,
                     })
                 }
-                AgentEvent::ToolError { tool_call_id, name, error } => {
+                AgentEvent::ToolError {
+                    tool_call_id,
+                    name,
+                    error,
+                } => {
                     // Use the real tool_call_id (was empty string before),
                     // so the TUI can correlate this error ToolEnd with the
                     // matching ToolStart.
@@ -69,17 +77,17 @@ pub fn spawn_bridge() -> (
                         is_error: true,
                     })
                 }
-                AgentEvent::Done { message } => {
-                    Some(QueryEvent::TurnComplete {
-                        turn: 0,
-                        stop_reason: "end_turn".to_string(),
-                        usage: pending_usage.take(),
-                    })
-                }
-                AgentEvent::Error { error } => {
-                    Some(QueryEvent::Error(error))
-                }
-                AgentEvent::Usage { input_tokens, output_tokens, total_tokens: _ } => {
+                AgentEvent::Done { message } => Some(QueryEvent::TurnComplete {
+                    turn: 0,
+                    stop_reason: "end_turn".to_string(),
+                    usage: pending_usage.take(),
+                }),
+                AgentEvent::Error { error } => Some(QueryEvent::Error(error)),
+                AgentEvent::Usage {
+                    input_tokens,
+                    output_tokens,
+                    total_tokens: _,
+                } => {
                     pending_usage = Some(UsageInfo {
                         input_tokens,
                         output_tokens,
@@ -90,13 +98,14 @@ pub fn spawn_bridge() -> (
                     None
                 }
                 AgentEvent::IterationComplete { .. } => None,
-                AgentEvent::ToolPermissionRequest { tool_name, description, .. } => {
-                    Some(QueryEvent::Status(format!(
-                        "Permission needed: {} — {}",
-                        tool_name,
-                        description
-                    )))
-                }
+                AgentEvent::ToolPermissionRequest {
+                    tool_name,
+                    description,
+                    ..
+                } => Some(QueryEvent::Status(format!(
+                    "Permission needed: {} — {}",
+                    tool_name, description
+                ))),
             };
 
             if let Some(qe) = query_event {

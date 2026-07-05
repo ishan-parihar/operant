@@ -10,7 +10,9 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 
-use crate::tui::overlays::{centered_rect, render_dark_overlay, render_dialog_bg, OPERANT_PANEL_BG};
+use crate::tui::overlays::{
+    centered_rect, render_dark_overlay, render_dialog_bg, OPERANT_PANEL_BG,
+};
 
 // ---------------------------------------------------------------------------
 // State
@@ -86,11 +88,7 @@ impl KeyInputDialogState {
 
 /// Render the key input dialog overlay — OpenCode-style: dark overlay, no
 /// border, minimal and polished.
-pub fn render_key_input_dialog(
-    frame: &mut Frame,
-    state: &KeyInputDialogState,
-    area: Rect,
-) {
+pub fn render_key_input_dialog(frame: &mut Frame, state: &KeyInputDialogState, area: Rect) {
     if !state.visible {
         return;
     }
@@ -151,11 +149,7 @@ pub fn render_key_input_dialog(
         if len <= 4 {
             state.input.clone()
         } else {
-            format!(
-                "{}{}",
-                "\u{2022}".repeat(len - 4),
-                &state.input[len - 4..]
-            )
+            format!("{}{}", "\u{2022}".repeat(len - 4), &state.input[len - 4..])
         }
     };
 

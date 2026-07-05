@@ -40,11 +40,7 @@ impl PluginHintBanner {
 
 /// Render the first undismissed plugin hint banner into `area`.
 /// Returns the height consumed (0 if nothing rendered).
-pub fn render_plugin_hints(
-    frame: &mut Frame,
-    hints: &[PluginHintBanner],
-    area: Rect,
-) -> u16 {
+pub fn render_plugin_hints(frame: &mut Frame, hints: &[PluginHintBanner], area: Rect) -> u16 {
     let hint = match hints.iter().find(|h| h.is_visible()) {
         Some(h) => h,
         None => return 0,
@@ -71,14 +67,12 @@ pub fn render_plugin_hints(
         content
     };
 
-    let lines = vec![Line::from(vec![
-        Span::styled(
-            display,
-            Style::default()
-                .fg(Color::White)
-                .add_modifier(Modifier::ITALIC),
-        ),
-    ])];
+    let lines = vec![Line::from(vec![Span::styled(
+        display,
+        Style::default()
+            .fg(Color::White)
+            .add_modifier(Modifier::ITALIC),
+    )])];
 
     frame.render_widget(Clear, banner_area);
     let para = Paragraph::new(lines).block(
@@ -91,4 +85,3 @@ pub fn render_plugin_hints(
 
     banner_height
 }
-

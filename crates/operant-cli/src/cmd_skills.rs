@@ -116,9 +116,11 @@ pub async fn handle_skills_command(config: &AppConfig, cmd: SkillsSubcommand) ->
         SkillsSubcommand::List => list_skills(config),
         SkillsSubcommand::Search { query } => search_skills(config, &query),
         SkillsSubcommand::Inspect { id } => inspect_skill(config, &id),
-        SkillsSubcommand::Install { source, name, force } => {
-            install_skill(config, &source, name.as_deref(), force).await
-        }
+        SkillsSubcommand::Install {
+            source,
+            name,
+            force,
+        } => install_skill(config, &source, name.as_deref(), force).await,
         SkillsSubcommand::Uninstall { name } => uninstall_skill(config, &name),
         SkillsSubcommand::Update { name } => update_skill(config, &name),
         SkillsSubcommand::Browse => browse_skills(config),
@@ -264,7 +266,12 @@ fn inspect_skill(config: &AppConfig, id: &str) -> Result<()> {
 /// If the scan verdict is Block (high-severity findings), installation is
 /// refused unless `--force` is passed. If the verdict is Confirm (medium-
 /// severity findings), the user is prompted to confirm.
-async fn install_skill(config: &AppConfig, source: &str, name: Option<&str>, force: bool) -> Result<()> {
+async fn install_skill(
+    config: &AppConfig,
+    source: &str,
+    name: Option<&str>,
+    force: bool,
+) -> Result<()> {
     let (content, skill_name) = if source.starts_with("http://") || source.starts_with("https://") {
         let response = reqwest::get(source)
             .await
@@ -311,8 +318,7 @@ async fn install_skill(config: &AppConfig, source: &str, name: Option<&str>, for
         .with_context(|| "Failed to write skill content to temp file for scanning")?;
 
     let scan_result = operant_core::skills_guard::scan_skill(&temp_skill_path, source);
-    let (allow, reason) =
-        operant_core::skills_guard::should_allow_install(&scan_result, force);
+    let (allow, reason) = operant_core::skills_guard::should_allow_install(&scan_result, force);
 
     // Always print the scan summary so the user knows what was found.
     if !scan_result.findings.is_empty() {
@@ -354,7 +360,10 @@ async fn install_skill(config: &AppConfig, source: &str, name: Option<&str>, for
         }
         None => {
             // Confirm: prompt the user
-            println!("{}", style("⚠ Security scan requires confirmation:").yellow());
+            println!(
+                "{}",
+                style("⚠ Security scan requires confirmation:").yellow()
+            );
             println!("  {}", reason);
             if !Confirm::new()
                 .with_prompt(format!("Install skill '{}' anyway?", skill_name))

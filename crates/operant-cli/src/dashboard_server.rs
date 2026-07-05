@@ -26,16 +26,56 @@ const INDEX_HTML: &str = include_str!("dashboard/index.html");
 /// Embedded static assets (JS, CSS, fonts, images).
 /// These are served at /assets/<filename> so the index.html script/link tags resolve.
 static ASSETS: &[(&str, &[u8], &str)] = &[
-    ("index-BB4BRelo.js", include_bytes!("dashboard/assets/index-BB4BRelo.js"), "text/javascript"),
-    ("index-DJxmcHRv.css", include_bytes!("dashboard/assets/index-DJxmcHRv.css"), "text/css"),
-    ("Collapse-Bold-mgICk9-_.woff2", include_bytes!("dashboard/assets/Collapse-Bold-mgICk9-_.woff2"), "font/woff2"),
-    ("Collapse-Regular-DysayoTY.woff2", include_bytes!("dashboard/assets/Collapse-Regular-DysayoTY.woff2"), "font/woff2"),
-    ("Mondwest-Regular-CWscgue7.woff2", include_bytes!("dashboard/assets/Mondwest-Regular-CWscgue7.woff2"), "font/woff2"),
-    ("RulesCompressed-Medium-CA76_CrB.woff2", include_bytes!("dashboard/assets/RulesCompressed-Medium-CA76_CrB.woff2"), "font/woff2"),
-    ("RulesCompressed-Regular-BSXFyF4x.woff2", include_bytes!("dashboard/assets/RulesCompressed-Regular-BSXFyF4x.woff2"), "font/woff2"),
-    ("RulesExpanded-Bold-DZA7s8Pa.woff2", include_bytes!("dashboard/assets/RulesExpanded-Bold-DZA7s8Pa.woff2"), "font/woff2"),
-    ("RulesExpanded-Regular-l8uVympt.woff2", include_bytes!("dashboard/assets/RulesExpanded-Regular-l8uVympt.woff2"), "font/woff2"),
-    ("filler-bg0-DxMaWJpb.webp", include_bytes!("dashboard/assets/filler-bg0-DxMaWJpb.webp"), "image/webp"),
+    (
+        "index-BB4BRelo.js",
+        include_bytes!("dashboard/assets/index-BB4BRelo.js"),
+        "text/javascript",
+    ),
+    (
+        "index-DJxmcHRv.css",
+        include_bytes!("dashboard/assets/index-DJxmcHRv.css"),
+        "text/css",
+    ),
+    (
+        "Collapse-Bold-mgICk9-_.woff2",
+        include_bytes!("dashboard/assets/Collapse-Bold-mgICk9-_.woff2"),
+        "font/woff2",
+    ),
+    (
+        "Collapse-Regular-DysayoTY.woff2",
+        include_bytes!("dashboard/assets/Collapse-Regular-DysayoTY.woff2"),
+        "font/woff2",
+    ),
+    (
+        "Mondwest-Regular-CWscgue7.woff2",
+        include_bytes!("dashboard/assets/Mondwest-Regular-CWscgue7.woff2"),
+        "font/woff2",
+    ),
+    (
+        "RulesCompressed-Medium-CA76_CrB.woff2",
+        include_bytes!("dashboard/assets/RulesCompressed-Medium-CA76_CrB.woff2"),
+        "font/woff2",
+    ),
+    (
+        "RulesCompressed-Regular-BSXFyF4x.woff2",
+        include_bytes!("dashboard/assets/RulesCompressed-Regular-BSXFyF4x.woff2"),
+        "font/woff2",
+    ),
+    (
+        "RulesExpanded-Bold-DZA7s8Pa.woff2",
+        include_bytes!("dashboard/assets/RulesExpanded-Bold-DZA7s8Pa.woff2"),
+        "font/woff2",
+    ),
+    (
+        "RulesExpanded-Regular-l8uVympt.woff2",
+        include_bytes!("dashboard/assets/RulesExpanded-Regular-l8uVympt.woff2"),
+        "font/woff2",
+    ),
+    (
+        "filler-bg0-DxMaWJpb.webp",
+        include_bytes!("dashboard/assets/filler-bg0-DxMaWJpb.webp"),
+        "image/webp",
+    ),
 ];
 
 /// Server state shared across all handlers.
@@ -49,7 +89,12 @@ pub struct DashboardState {
 }
 
 /// Start the dashboard server and block until shutdown.
-pub async fn run_dashboard(config: &AppConfig, host: &str, port: u16, insecure: bool) -> Result<()> {
+pub async fn run_dashboard(
+    config: &AppConfig,
+    host: &str,
+    port: u16,
+    insecure: bool,
+) -> Result<()> {
     let kanban_dir = config
         .database_path
         .parent()
@@ -63,7 +108,10 @@ pub async fn run_dashboard(config: &AppConfig, host: &str, port: u16, insecure: 
     } else {
         let token = generate_session_token();
         println!("Dashboard session token: {}", token);
-        println!("  (API requests must include header: Authorization: Bearer {})", token);
+        println!(
+            "  (API requests must include header: Authorization: Bearer {})",
+            token
+        );
         Some(token)
     };
 

@@ -10,9 +10,9 @@ use operant_core::agent::{AgentEvent, OperantAgent};
 use operant_core::config::runtime_config;
 use operant_core::config::AppConfig;
 use operant_core::gateway::{
-    DiscordAdapter, Gateway, GatewayConfig, IncomingMessage, MessageHandler, OutgoingMessage,
-    PlatformAdapter, SlackAdapter, TelegramAdapter, WebhookAdapter,
-    WhatsAppAdapter, EmailAdapter, SmsAdapter,
+    DiscordAdapter, EmailAdapter, Gateway, GatewayConfig, IncomingMessage, MessageHandler,
+    OutgoingMessage, PlatformAdapter, SlackAdapter, SmsAdapter, TelegramAdapter, WebhookAdapter,
+    WhatsAppAdapter,
 };
 use operant_core::gateway_pipeline::{MessagePipeline, PipelineAction};
 use operant_core::memory_provider::{build_memory_provider, MemoryProvider};
@@ -230,7 +230,10 @@ fn platform_registry() -> Vec<PlatformEntry> {
             emoji: "💼",
             factory: |config| {
                 if config.slack_enabled {
-                    Some(Arc::new(SlackAdapter::new(config.slack_token.clone(), None)))
+                    Some(Arc::new(SlackAdapter::new(
+                        config.slack_token.clone(),
+                        None,
+                    )))
                 } else {
                     None
                 }
@@ -257,13 +260,11 @@ fn platform_registry() -> Vec<PlatformEntry> {
             emoji: "📧",
             factory: |config| {
                 if config.email_enabled {
-                    Some(Arc::new(
-                        EmailAdapter::new(config.email_enabled).with_smtp(
-                            config.email_smtp_host.clone(),
-                            config.email_smtp_user.clone(),
-                            config.email_smtp_pass.clone(),
-                        ),
-                    ))
+                    Some(Arc::new(EmailAdapter::new(config.email_enabled).with_smtp(
+                        config.email_smtp_host.clone(),
+                        config.email_smtp_user.clone(),
+                        config.email_smtp_pass.clone(),
+                    )))
                 } else {
                     None
                 }
@@ -573,7 +574,11 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
             };
 
             match event {
-                AgentEvent::ToolStart { tool_call_id: _, name, arguments } => {
+                AgentEvent::ToolStart {
+                    tool_call_id: _,
+                    name,
+                    arguments,
+                } => {
                     let line = tool_preview_line(&name, &arguments);
                     let key = (platform.clone(), channel_id.clone());
 
@@ -1482,7 +1487,10 @@ mod turn_state_tests {
         // Defensive: a hostile platform sending "../../etc/passwd" as a
         // channel ID must not escape the .turn_state directory.
         assert_eq!(sanitize_channel_id("../../etc/passwd"), "______etc_passwd");
-        assert_eq!(sanitize_channel_id("normal-channel_123"), "normal-channel_123");
+        assert_eq!(
+            sanitize_channel_id("normal-channel_123"),
+            "normal-channel_123"
+        );
         assert_eq!(sanitize_channel_id(""), "");
     }
 }

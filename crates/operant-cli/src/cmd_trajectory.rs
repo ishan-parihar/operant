@@ -79,7 +79,11 @@ fn list_trajectories(dir: &std::path::Path) -> Result<()> {
         return Ok(());
     }
 
-    println!("{} ({} total)", style("Saved Trajectories").bold(), entries.len());
+    println!(
+        "{} ({} total)",
+        style("Saved Trajectories").bold(),
+        entries.len()
+    );
     println!("{}", "─".repeat(80));
     println!(
         "{:<40} {:<12} {:<10} {:<8}",
@@ -104,7 +108,10 @@ fn list_trajectories(dir: &std::path::Path) -> Result<()> {
         };
         println!(
             "{:<40} {:<12} {:<10} {:<8}",
-            id, traj.model, traj.steps.len(), traj.tool_calls
+            id,
+            traj.model,
+            traj.steps.len(),
+            traj.tool_calls
         );
     }
 
@@ -119,7 +126,8 @@ fn show_trajectory(dir: &std::path::Path, id: &str) -> Result<()> {
 
     let json = std::fs::read_to_string(&path)
         .with_context(|| format!("Failed to read {}", path.display()))?;
-    let traj: Trajectory = serde_json::from_str(&json).context("Failed to parse trajectory JSON")?;
+    let traj: Trajectory =
+        serde_json::from_str(&json).context("Failed to parse trajectory JSON")?;
 
     println!("{}", style("Trajectory Details").bold());
     println!("{}", "─".repeat(60));
@@ -158,11 +166,7 @@ fn show_trajectory(dir: &std::path::Path, id: &str) -> Result<()> {
     Ok(())
 }
 
-fn export_trajectories(
-    dir: &std::path::Path,
-    format: &str,
-    output: Option<PathBuf>,
-) -> Result<()> {
+fn export_trajectories(dir: &std::path::Path, format: &str, output: Option<PathBuf>) -> Result<()> {
     if !dir.exists() {
         anyhow::bail!("No trajectories directory at {}", dir.display());
     }
@@ -232,7 +236,11 @@ fn clear_trajectories(dir: &std::path::Path) -> Result<()> {
             count += 1;
         }
     }
-    println!("{} Cleared {} trajectory file(s).", style("✓").green(), count);
+    println!(
+        "{} Cleared {} trajectory file(s).",
+        style("✓").green(),
+        count
+    );
     Ok(())
 }
 

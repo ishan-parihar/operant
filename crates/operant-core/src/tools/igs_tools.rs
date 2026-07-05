@@ -65,7 +65,12 @@ pub async fn register_igs_tools(registry: &ToolRegistry) -> Result<()> {
 // Helper: build a minimal ToolSchema
 // ---------------------------------------------------------------------------
 
-fn simple_schema(name: &str, description: &str, properties: Value, required: &[&str]) -> ToolSchema {
+fn simple_schema(
+    name: &str,
+    description: &str,
+    properties: Value,
+    required: &[&str],
+) -> ToolSchema {
     let mut req = Vec::new();
     for r in required {
         req.push(json!(r));
@@ -109,19 +114,24 @@ pub struct IgsNewsFetchTool;
 
 #[async_trait]
 impl OperantTool for IgsNewsFetchTool {
-    fn name(&self) -> &str { "igs_news_fetch" }
+    fn name(&self) -> &str {
+        "igs_news_fetch"
+    }
     fn description(&self) -> &str {
         "Fetch news from RSS pools monitored by IGS (Intelligence Gathering System). Returns enriched articles with topics, entities, and sentiment."
     }
     fn schema(&self) -> ToolSchema {
-        simple_schema("igs_news_fetch", "Fetch IGS news from RSS pools",
+        simple_schema(
+            "igs_news_fetch",
+            "Fetch IGS news from RSS pools",
             json!({
                 "pools": {"type": "array", "items": {"type": "string"}, "description": "Pool names to fetch from"},
                 "limit": {"type": "integer", "default": 20, "description": "Max articles to return"},
                 "depth": {"type": "string", "enum": ["shallow", "deep"], "default": "shallow", "description": "Enrichment depth"},
                 "urgency": {"type": "string", "description": "Urgency filter"}
             }),
-            &["pools"])
+            &["pools"],
+        )
     }
     async fn execute(&self, args: Value, _ctx: ToolContext) -> ToolResult {
         let input: igs_rust_mcp::tools::types::NewsFetchInput = match serde_json::from_value(args) {
@@ -146,12 +156,16 @@ pub struct IgsRedditSearchTool;
 
 #[async_trait]
 impl OperantTool for IgsRedditSearchTool {
-    fn name(&self) -> &str { "igs_reddit_search" }
+    fn name(&self) -> &str {
+        "igs_reddit_search"
+    }
     fn description(&self) -> &str {
         "Search Reddit for posts matching a query. Returns posts with title, body, score, and comments."
     }
     fn schema(&self) -> ToolSchema {
-        simple_schema("igs_reddit_search", "Search Reddit",
+        simple_schema(
+            "igs_reddit_search",
+            "Search Reddit",
             json!({
                 "query": {"type": "string", "description": "Search query"},
                 "subreddits": {"type": "array", "items": {"type": "string"}, "description": "Subreddits to search (omit for all)"},
@@ -159,13 +173,15 @@ impl OperantTool for IgsRedditSearchTool {
                 "time": {"type": "string", "enum": ["hour", "day", "week", "month", "year", "all"], "default": "all"},
                 "limit": {"type": "integer", "default": 25, "description": "Max results"}
             }),
-            &["query"])
+            &["query"],
+        )
     }
     async fn execute(&self, args: Value, _ctx: ToolContext) -> ToolResult {
-        let input: igs_rust_mcp::tools::types::RedditSearchInput = match serde_json::from_value(args) {
-            Ok(i) => i,
-            Err(e) => return ToolResult::error("igs_reddit_search", format!("args: {e}")),
-        };
+        let input: igs_rust_mcp::tools::types::RedditSearchInput =
+            match serde_json::from_value(args) {
+                Ok(i) => i,
+                Err(e) => return ToolResult::error("igs_reddit_search", format!("args: {e}")),
+            };
         match igs_rust_mcp::tools::reddit::reddit_search(input).await {
             Ok(output) => {
                 let json = serde_json::to_value(&output).unwrap_or(json!({"result": "success"}));
@@ -184,24 +200,30 @@ pub struct IgsResearchSearchTool;
 
 #[async_trait]
 impl OperantTool for IgsResearchSearchTool {
-    fn name(&self) -> &str { "igs_research_search" }
+    fn name(&self) -> &str {
+        "igs_research_search"
+    }
     fn description(&self) -> &str {
         "Search academic research papers (arXiv + Semantic Scholar). Returns papers with abstracts, authors, and DOIs."
     }
     fn schema(&self) -> ToolSchema {
-        simple_schema("igs_research_search", "Search academic research",
+        simple_schema(
+            "igs_research_search",
+            "Search academic research",
             json!({
                 "query": {"type": "string", "description": "Search query"},
                 "limit": {"type": "integer", "default": 10, "description": "Max results"},
                 "source": {"type": "string", "enum": ["arxiv", "semantic_scholar", "all"], "default": "all"}
             }),
-            &["query"])
+            &["query"],
+        )
     }
     async fn execute(&self, args: Value, _ctx: ToolContext) -> ToolResult {
-        let input: igs_rust_mcp::tools::types::ResearchSearchInput = match serde_json::from_value(args) {
-            Ok(i) => i,
-            Err(e) => return ToolResult::error("igs_research_search", format!("args: {e}")),
-        };
+        let input: igs_rust_mcp::tools::types::ResearchSearchInput =
+            match serde_json::from_value(args) {
+                Ok(i) => i,
+                Err(e) => return ToolResult::error("igs_research_search", format!("args: {e}")),
+            };
         match igs_rust_mcp::tools::research::research_search(input).await {
             Ok(output) => {
                 let json = serde_json::to_value(&output).unwrap_or(json!({"result": "success"}));
@@ -216,23 +238,29 @@ pub struct IgsResearchPubmedTool;
 
 #[async_trait]
 impl OperantTool for IgsResearchPubmedTool {
-    fn name(&self) -> &str { "igs_research_pubmed" }
+    fn name(&self) -> &str {
+        "igs_research_pubmed"
+    }
     fn description(&self) -> &str {
         "Search PubMed for biomedical research papers. Returns papers with abstracts and MeSH terms."
     }
     fn schema(&self) -> ToolSchema {
-        simple_schema("igs_research_pubmed", "Search PubMed",
+        simple_schema(
+            "igs_research_pubmed",
+            "Search PubMed",
             json!({
                 "query": {"type": "string", "description": "Search query"},
                 "limit": {"type": "integer", "default": 10, "description": "Max results"}
             }),
-            &["query"])
+            &["query"],
+        )
     }
     async fn execute(&self, args: Value, _ctx: ToolContext) -> ToolResult {
-        let input: igs_rust_mcp::tools::types::ResearchPubmedSearchInput = match serde_json::from_value(args) {
-            Ok(i) => i,
-            Err(e) => return ToolResult::error("igs_research_pubmed", format!("args: {e}")),
-        };
+        let input: igs_rust_mcp::tools::types::ResearchPubmedSearchInput =
+            match serde_json::from_value(args) {
+                Ok(i) => i,
+                Err(e) => return ToolResult::error("igs_research_pubmed", format!("args: {e}")),
+            };
         match igs_rust_mcp::tools::research::research_pubmed_search(input).await {
             Ok(output) => {
                 let json = serde_json::to_value(&output).unwrap_or(json!({"result": "success"}));
@@ -251,18 +279,23 @@ pub struct IgsWebScrapeTool;
 
 #[async_trait]
 impl OperantTool for IgsWebScrapeTool {
-    fn name(&self) -> &str { "igs_web_scrape" }
+    fn name(&self) -> &str {
+        "igs_web_scrape"
+    }
     fn description(&self) -> &str {
         "Scrape a URL and return content in markdown/HTML/text format. No API key required."
     }
     fn schema(&self) -> ToolSchema {
-        simple_schema("igs_web_scrape", "Scrape a URL",
+        simple_schema(
+            "igs_web_scrape",
+            "Scrape a URL",
             json!({
                 "url": {"type": "string", "description": "URL to scrape"},
                 "formats": {"type": "array", "items": {"type": "string"}, "default": ["markdown"], "description": "Output formats"},
                 "strip_mode": {"type": "string", "description": "Content stripping mode"}
             }),
-            &["url"])
+            &["url"],
+        )
     }
     async fn execute(&self, args: Value, _ctx: ToolContext) -> ToolResult {
         let input: igs_rust_mcp::tools::types::WebScrapeInput = match serde_json::from_value(args) {
@@ -283,17 +316,22 @@ pub struct IgsWebMapTool;
 
 #[async_trait]
 impl OperantTool for IgsWebMapTool {
-    fn name(&self) -> &str { "igs_web_map" }
+    fn name(&self) -> &str {
+        "igs_web_map"
+    }
     fn description(&self) -> &str {
         "Discover all URLs on a website via sitemap parsing. Returns a list of URLs."
     }
     fn schema(&self) -> ToolSchema {
-        simple_schema("igs_web_map", "Map website URLs",
+        simple_schema(
+            "igs_web_map",
+            "Map website URLs",
             json!({
                 "url": {"type": "string", "description": "Base URL to map"},
                 "limit": {"type": "integer", "default": 100, "description": "Max URLs to return"}
             }),
-            &["url"])
+            &["url"],
+        )
     }
     async fn execute(&self, args: Value, _ctx: ToolContext) -> ToolResult {
         let input: igs_rust_mcp::tools::types::WebMapInput = match serde_json::from_value(args) {
@@ -318,22 +356,28 @@ pub struct IgsFinanceMarketTool;
 
 #[async_trait]
 impl OperantTool for IgsFinanceMarketTool {
-    fn name(&self) -> &str { "igs_finance_market" }
+    fn name(&self) -> &str {
+        "igs_finance_market"
+    }
     fn description(&self) -> &str {
         "Get stock market quotes for given symbols. No API key required (Yahoo Finance)."
     }
     fn schema(&self) -> ToolSchema {
-        simple_schema("igs_finance_market", "Get stock quotes",
+        simple_schema(
+            "igs_finance_market",
+            "Get stock quotes",
             json!({
                 "symbols": {"type": "array", "items": {"type": "string"}, "description": "Stock symbols (e.g. [\"AAPL\", \"GOOG\"])"}
             }),
-            &["symbols"])
+            &["symbols"],
+        )
     }
     async fn execute(&self, args: Value, _ctx: ToolContext) -> ToolResult {
-        let input: igs_rust_mcp::tools::types::FinanceMarketInput = match serde_json::from_value(args) {
-            Ok(i) => i,
-            Err(e) => return ToolResult::error("igs_finance_market", format!("args: {e}")),
-        };
+        let input: igs_rust_mcp::tools::types::FinanceMarketInput =
+            match serde_json::from_value(args) {
+                Ok(i) => i,
+                Err(e) => return ToolResult::error("igs_finance_market", format!("args: {e}")),
+            };
         match igs_rust_mcp::tools::finance::finance_market(input).await {
             Ok(output) => {
                 let json = serde_json::to_value(&output).unwrap_or(json!({"result": "success"}));
@@ -348,22 +392,28 @@ pub struct IgsFinanceCryptoTool;
 
 #[async_trait]
 impl OperantTool for IgsFinanceCryptoTool {
-    fn name(&self) -> &str { "igs_finance_crypto" }
+    fn name(&self) -> &str {
+        "igs_finance_crypto"
+    }
     fn description(&self) -> &str {
         "Get cryptocurrency prices and market data. No API key required (CoinGecko)."
     }
     fn schema(&self) -> ToolSchema {
-        simple_schema("igs_finance_crypto", "Get crypto prices",
+        simple_schema(
+            "igs_finance_crypto",
+            "Get crypto prices",
             json!({
                 "ids": {"type": "array", "items": {"type": "string"}, "description": "CoinGecko coin IDs (e.g. [\"bitcoin\", \"ethereum\"])"}
             }),
-            &["ids"])
+            &["ids"],
+        )
     }
     async fn execute(&self, args: Value, _ctx: ToolContext) -> ToolResult {
-        let input: igs_rust_mcp::tools::types::FinanceCryptoInput = match serde_json::from_value(args) {
-            Ok(i) => i,
-            Err(e) => return ToolResult::error("igs_finance_crypto", format!("args: {e}")),
-        };
+        let input: igs_rust_mcp::tools::types::FinanceCryptoInput =
+            match serde_json::from_value(args) {
+                Ok(i) => i,
+                Err(e) => return ToolResult::error("igs_finance_crypto", format!("args: {e}")),
+            };
         match igs_rust_mcp::tools::finance::finance_crypto(input).await {
             Ok(output) => {
                 let json = serde_json::to_value(&output).unwrap_or(json!({"result": "success"}));
@@ -382,17 +432,22 @@ pub struct IgsSecurityCveTool;
 
 #[async_trait]
 impl OperantTool for IgsSecurityCveTool {
-    fn name(&self) -> &str { "igs_security_cve" }
+    fn name(&self) -> &str {
+        "igs_security_cve"
+    }
     fn description(&self) -> &str {
         "Search CVEs (Common Vulnerabilities and Exposures) from NVD. No API key required."
     }
     fn schema(&self) -> ToolSchema {
-        simple_schema("igs_security_cve", "Search CVEs",
+        simple_schema(
+            "igs_security_cve",
+            "Search CVEs",
             json!({
                 "query": {"type": "string", "description": "Search query (keyword or CVE ID)"},
                 "limit": {"type": "integer", "default": 10, "description": "Max results"}
             }),
-            &["query"])
+            &["query"],
+        )
     }
     async fn execute(&self, args: Value, _ctx: ToolContext) -> ToolResult {
         let input: igs_rust_mcp::tools::types::CveSearchInput = match serde_json::from_value(args) {
@@ -413,23 +468,31 @@ pub struct IgsSecurityAdvisoriesTool;
 
 #[async_trait]
 impl OperantTool for IgsSecurityAdvisoriesTool {
-    fn name(&self) -> &str { "igs_security_advisories" }
+    fn name(&self) -> &str {
+        "igs_security_advisories"
+    }
     fn description(&self) -> &str {
         "Get security advisories from GitHub. No API key required."
     }
     fn schema(&self) -> ToolSchema {
-        simple_schema("igs_security_advisories", "Get security advisories",
+        simple_schema(
+            "igs_security_advisories",
+            "Get security advisories",
             json!({
                 "ecosystem": {"type": "string", "description": "Package ecosystem (e.g. npm, pip, cargo)"},
                 "limit": {"type": "integer", "default": 10, "description": "Max results"}
             }),
-            &[])
+            &[],
+        )
     }
     async fn execute(&self, args: Value, _ctx: ToolContext) -> ToolResult {
-        let input: igs_rust_mcp::tools::types::SecurityAdvisoriesInput = match serde_json::from_value(args) {
-            Ok(i) => i,
-            Err(e) => return ToolResult::error("igs_security_advisories", format!("args: {e}")),
-        };
+        let input: igs_rust_mcp::tools::types::SecurityAdvisoriesInput =
+            match serde_json::from_value(args) {
+                Ok(i) => i,
+                Err(e) => {
+                    return ToolResult::error("igs_security_advisories", format!("args: {e}"))
+                }
+            };
         match igs_rust_mcp::tools::security::security_advisories(input).await {
             Ok(output) => {
                 let json = serde_json::to_value(&output).unwrap_or(json!({"result": "success"}));
@@ -448,23 +511,29 @@ pub struct IgsYoutubeSearchTool;
 
 #[async_trait]
 impl OperantTool for IgsYoutubeSearchTool {
-    fn name(&self) -> &str { "igs_youtube_search" }
+    fn name(&self) -> &str {
+        "igs_youtube_search"
+    }
     fn description(&self) -> &str {
         "Search YouTube for videos matching a query. Returns video metadata and URLs."
     }
     fn schema(&self) -> ToolSchema {
-        simple_schema("igs_youtube_search", "Search YouTube",
+        simple_schema(
+            "igs_youtube_search",
+            "Search YouTube",
             json!({
                 "query": {"type": "string", "description": "Search query"},
                 "limit": {"type": "integer", "default": 10, "description": "Max results"}
             }),
-            &["query"])
+            &["query"],
+        )
     }
     async fn execute(&self, args: Value, _ctx: ToolContext) -> ToolResult {
-        let input: igs_rust_mcp::tools::types::YoutubeSearchInput = match serde_json::from_value(args) {
-            Ok(i) => i,
-            Err(e) => return ToolResult::error("igs_youtube_search", format!("args: {e}")),
-        };
+        let input: igs_rust_mcp::tools::types::YoutubeSearchInput =
+            match serde_json::from_value(args) {
+                Ok(i) => i,
+                Err(e) => return ToolResult::error("igs_youtube_search", format!("args: {e}")),
+            };
         match igs_rust_mcp::tools::youtube::youtube_search(input).await {
             Ok(output) => {
                 let json = serde_json::to_value(&output).unwrap_or(json!({"result": "success"}));
@@ -483,17 +552,22 @@ pub struct IgsSummarizeTool;
 
 #[async_trait]
 impl OperantTool for IgsSummarizeTool {
-    fn name(&self) -> &str { "igs_summarize" }
+    fn name(&self) -> &str {
+        "igs_summarize"
+    }
     fn description(&self) -> &str {
         "Summarize text using offline TextRank algorithm. No API key required."
     }
     fn schema(&self) -> ToolSchema {
-        simple_schema("igs_summarize", "Summarize text (TextRank)",
+        simple_schema(
+            "igs_summarize",
+            "Summarize text (TextRank)",
             json!({
                 "text": {"type": "string", "description": "Text to summarize"},
                 "sentences": {"type": "integer", "default": 5, "description": "Number of summary sentences"}
             }),
-            &["text"])
+            &["text"],
+        )
     }
     async fn execute(&self, args: Value, _ctx: ToolContext) -> ToolResult {
         let input: igs_rust_mcp::tools::types::SummarizeInput = match serde_json::from_value(args) {
@@ -514,22 +588,28 @@ pub struct IgsExtractLocationsTool;
 
 #[async_trait]
 impl OperantTool for IgsExtractLocationsTool {
-    fn name(&self) -> &str { "igs_extract_locations" }
+    fn name(&self) -> &str {
+        "igs_extract_locations"
+    }
     fn description(&self) -> &str {
         "Extract geographic locations from text. No API key required."
     }
     fn schema(&self) -> ToolSchema {
-        simple_schema("igs_extract_locations", "Extract locations from text",
+        simple_schema(
+            "igs_extract_locations",
+            "Extract locations from text",
             json!({
                 "text": {"type": "string", "description": "Text to analyze"}
             }),
-            &["text"])
+            &["text"],
+        )
     }
     async fn execute(&self, args: Value, _ctx: ToolContext) -> ToolResult {
-        let input: igs_rust_mcp::tools::types::ExtractLocationsInput = match serde_json::from_value(args) {
-            Ok(i) => i,
-            Err(e) => return ToolResult::error("igs_extract_locations", format!("args: {e}")),
-        };
+        let input: igs_rust_mcp::tools::types::ExtractLocationsInput =
+            match serde_json::from_value(args) {
+                Ok(i) => i,
+                Err(e) => return ToolResult::error("igs_extract_locations", format!("args: {e}")),
+            };
         match igs_rust_mcp::tools::advanced::extract_locations(input) {
             Ok(output) => {
                 let json = serde_json::to_value(&output).unwrap_or(json!({"result": "success"}));
@@ -544,22 +624,28 @@ pub struct IgsDetectLanguageTool;
 
 #[async_trait]
 impl OperantTool for IgsDetectLanguageTool {
-    fn name(&self) -> &str { "igs_detect_language" }
+    fn name(&self) -> &str {
+        "igs_detect_language"
+    }
     fn description(&self) -> &str {
         "Detect the language of a text. No API key required."
     }
     fn schema(&self) -> ToolSchema {
-        simple_schema("igs_detect_language", "Detect language",
+        simple_schema(
+            "igs_detect_language",
+            "Detect language",
             json!({
                 "text": {"type": "string", "description": "Text to analyze"}
             }),
-            &["text"])
+            &["text"],
+        )
     }
     async fn execute(&self, args: Value, _ctx: ToolContext) -> ToolResult {
-        let input: igs_rust_mcp::tools::types::DetectLanguageInput = match serde_json::from_value(args) {
-            Ok(i) => i,
-            Err(e) => return ToolResult::error("igs_detect_language", format!("args: {e}")),
-        };
+        let input: igs_rust_mcp::tools::types::DetectLanguageInput =
+            match serde_json::from_value(args) {
+                Ok(i) => i,
+                Err(e) => return ToolResult::error("igs_detect_language", format!("args: {e}")),
+            };
         match igs_rust_mcp::tools::advanced::detect_language(input) {
             Ok(output) => {
                 let json = serde_json::to_value(&output).unwrap_or(json!({"result": "success"}));
@@ -581,14 +667,27 @@ mod tests {
     #[test]
     fn igs_tool_names_are_prefixed() {
         let names = vec![
-            "igs_news_fetch", "igs_reddit_search", "igs_research_search",
-            "igs_research_pubmed", "igs_web_scrape", "igs_web_map",
-            "igs_finance_market", "igs_finance_crypto", "igs_security_cve",
-            "igs_security_advisories", "igs_youtube_search", "igs_summarize",
-            "igs_extract_locations", "igs_detect_language",
+            "igs_news_fetch",
+            "igs_reddit_search",
+            "igs_research_search",
+            "igs_research_pubmed",
+            "igs_web_scrape",
+            "igs_web_map",
+            "igs_finance_market",
+            "igs_finance_crypto",
+            "igs_security_cve",
+            "igs_security_advisories",
+            "igs_youtube_search",
+            "igs_summarize",
+            "igs_extract_locations",
+            "igs_detect_language",
         ];
         for name in &names {
-            assert!(name.starts_with("igs_"), "tool '{}' should start with 'igs_'", name);
+            assert!(
+                name.starts_with("igs_"),
+                "tool '{}' should start with 'igs_'",
+                name
+            );
         }
     }
 }

@@ -183,10 +183,7 @@ fn cmd_status(config: &AppConfig, deep: bool) -> Result<()> {
         "  Email     {}",
         indicator(gw.email_enabled, gw.email_smtp_host.is_some())
     );
-    println!(
-        "  SMS       {}",
-        indicator(gw.sms_twilio_enabled, false)
-    );
+    println!("  SMS       {}", indicator(gw.sms_twilio_enabled, false));
     println!();
     println!(
         "Webhooks:  {}",

@@ -60,8 +60,7 @@ pub mod gateway;
 pub mod gateway_markdown;
 pub mod gateway_pipeline;
 pub use gateway_pipeline::{
-    HookContext, HookEvent, HookRegistry,
-    MessageFilter, MessagePipeline, PipelineAction,
+    HookContext, HookEvent, HookRegistry, MessageFilter, MessagePipeline, PipelineAction,
 };
 pub mod gateway_session;
 pub mod interrupt;
@@ -89,9 +88,7 @@ pub mod trajectory;
 pub mod voice;
 
 pub use acp::{server, AcpHandler, AgentState, RpcRequest, RpcResponse};
-pub use agent::{
-    AgentConfig, AgentEvent, FallbackModelClient, OperantAgent,
-};
+pub use agent::{AgentConfig, AgentEvent, FallbackModelClient, OperantAgent};
 pub use approval::{
     check_tool_approval, prompt_user_for_approval, ApprovalContext, ApprovalGuard, ApprovalMode,
     ApprovalVerdict, RiskLevel,
@@ -110,15 +107,15 @@ pub use config::{
 pub use context_files::{
     load_context_dir, load_default_context_files, load_workspace_context, scan_context_content,
 };
-pub use credential_pool::{AuthType, CredentialPool, PooledCredential, PoolStrategy};
+pub use credential_pool::{AuthType, CredentialPool, PoolStrategy, PooledCredential};
 pub use curator::{archiver, backup, review, CuratorEngine, CuratorReport, CuratorState};
 pub use distillation::distill_session_to_memory;
 pub use error::{Error, Result};
 pub use gateway::{
     format_startup_message, handle_admin_command, ChannelDirectory, ChannelInfo, ChannelType,
-    Gateway, GatewayConfig, GatewayStats, IncomingMessage, OutgoingMessage, PlatformAdapter,
-    PlatformSession, SessionStore, TelegramAdapter, TelegramPoller, UserInfo,
-    WebhookAdapter, WhatsAppAdapter, EmailAdapter, SmsAdapter,
+    EmailAdapter, Gateway, GatewayConfig, GatewayStats, IncomingMessage, OutgoingMessage,
+    PlatformAdapter, PlatformSession, SessionStore, SmsAdapter, TelegramAdapter, TelegramPoller,
+    UserInfo, WebhookAdapter, WhatsAppAdapter,
 };
 pub use gateway_session::{
     build_session_key, hash_chat_id, hash_sender_id, is_shared_multi_user_session,
@@ -127,7 +124,9 @@ pub use gateway_session::{
 };
 pub use mcp::{McpClient, McpNamespacedTool, McpStdioClient, McpTool, McpTransport};
 pub use memory::{MemoryBlock, MemoryManager, Session, UserProfile};
-pub use memory_provider::{build_memory_provider, BuiltinProvider, MemoryProvider, TdgMemoryProvider};
+pub use memory_provider::{
+    build_memory_provider, BuiltinProvider, MemoryProvider, TdgMemoryProvider,
+};
 pub use parser::ToolCallParser;
 pub use platform::PlatformInfo;
 pub use plugins::{

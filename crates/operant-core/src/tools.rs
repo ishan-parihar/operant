@@ -5,6 +5,7 @@
 //! - `ToolRegistry` for managing and executing tools
 //! - Built-in tools for common operations
 
+pub mod aft_tools;
 pub mod binary_extensions;
 pub mod browser_camofox_state;
 pub mod browser_cdp_tool;
@@ -23,8 +24,12 @@ pub mod debug_helpers;
 pub mod file_state;
 pub mod file_tools;
 pub mod http_tool;
+#[cfg(feature = "igs")]
+pub mod igs_tools;
 pub mod image_generation_tool;
 pub mod kanban_tool;
+#[cfg(feature = "lifeos")]
+pub mod lifeos_tools;
 pub mod mcp_tool;
 pub mod memory_tools;
 pub mod mixture_of_agents_tool;
@@ -42,11 +47,6 @@ pub mod slash_confirm;
 pub mod spotify_tool;
 pub mod sub_agent_tool;
 pub mod tdg_tools;
-pub mod aft_tools;
-#[cfg(feature = "igs")]
-pub mod igs_tools;
-#[cfg(feature = "lifeos")]
-pub mod lifeos_tools;
 pub mod terminal_backend;
 pub mod terminal_tool;
 pub mod todo_tool;
@@ -71,6 +71,7 @@ pub mod feishu_tool;
 pub mod home_assistant_tool;
 
 // Re-export commonly used types
+pub use aft_tools::register_aft_tools;
 pub use browser_cdp_tool::BrowserCdpTool;
 pub use browser_dialog_tool::BrowserDialogTool;
 pub use builtin::{
@@ -80,12 +81,6 @@ pub use builtin::{
     MemorySearchTool, MemoryStoreTool, PatchTool, SubAgentTool, TerminalTool, TimestampTool,
     TodoTool, TtsTool, VideoAnalysisTool, VisionTool, WebFetchTool, WebSearchTool,
 };
-pub use tdg_tools::register_tdg_tools;
-pub use aft_tools::register_aft_tools;
-#[cfg(feature = "igs")]
-pub use igs_tools::register_igs_tools;
-#[cfg(feature = "lifeos")]
-pub use lifeos_tools::{register_lifeos_tools, LifeosState};
 pub use checkpoint_tool::{
     get_checkpoint_manager, Checkpoint, CheckpointConfig, CheckpointManager, CheckpointTool,
 };
@@ -94,7 +89,11 @@ pub use cron_tool::CronTool;
 pub use discord_tool::{DiscordAdminTool, DiscordTool};
 pub use feishu_tool::{FeishuDocTool, FeishuDriveTool};
 pub use home_assistant_tool::HomeAssistantTool;
+#[cfg(feature = "igs")]
+pub use igs_tools::register_igs_tools;
 pub use kanban_tool::KanbanTool;
+#[cfg(feature = "lifeos")]
+pub use lifeos_tools::{register_lifeos_tools, LifeosState};
 pub use mcp_tool::McpManagementTool;
 pub use mixture_of_agents_tool::MixtureOfAgentsTool;
 pub use osv_check::OsvCheckTool;
@@ -107,6 +106,7 @@ pub use spotify_tool::{
     SpotifyAlbumsTool, SpotifyDevicesTool, SpotifyLibraryTool, SpotifyPlaybackTool,
     SpotifyPlaylistsTool, SpotifyQueueTool, SpotifySearchTool,
 };
+pub use tdg_tools::register_tdg_tools;
 pub use transcription_tool::TranscriptionTool;
 pub use tts_command_provider::CommandProvider;
 pub use tts_provider::{AudioFormat, TtsError, TtsProvider};

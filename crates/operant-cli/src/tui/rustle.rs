@@ -15,16 +15,13 @@ fn accent_style() -> Style {
 }
 
 fn dim_style() -> Style {
-    Style::default()
-        .fg(Color::Rgb(140, 110, 0))
+    Style::default().fg(Color::Rgb(140, 110, 0))
 }
 
 pub fn rustle_lines(pose: &RustlePose) -> [Line<'static>; 5] {
     let _ = pose;
     [
-        Line::from(vec![
-            Span::styled("  ┌──────────┐", dim_style()),
-        ]),
+        Line::from(vec![Span::styled("  ┌──────────┐", dim_style())]),
         Line::from(vec![
             Span::styled("  │ ", dim_style()),
             Span::styled("OPERANT", accent_style()),
@@ -41,9 +38,7 @@ pub fn rustle_lines(pose: &RustlePose) -> [Line<'static>; 5] {
             Span::styled(env!("CARGO_PKG_VERSION"), accent_style()),
             Span::styled("       │", dim_style()),
         ]),
-        Line::from(vec![
-            Span::styled("  └──────────┘", dim_style()),
-        ]),
+        Line::from(vec![Span::styled("  └──────────┘", dim_style())]),
     ]
 }
 

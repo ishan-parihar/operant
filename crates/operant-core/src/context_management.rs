@@ -93,7 +93,9 @@ pub fn evict_to_budget(messages: Vec<Message>, budget_tokens: usize) -> Vec<Mess
     // ~6. Clamped to [6, 50] to avoid degenerate cases. Was fixed at 6,
     // which was too few for large contexts (the agent lost too much recent
     // context) and too many for tiny contexts (it couldn't evict enough).
-    let keep_recent = ((budget_tokens / 4096) as usize).clamp(6, 50).min(messages.len());
+    let keep_recent = ((budget_tokens / 4096) as usize)
+        .clamp(6, 50)
+        .min(messages.len());
     let n = messages.len();
 
     // Build a list of (index, tier) for evictable messages. System
