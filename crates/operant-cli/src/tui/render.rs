@@ -525,6 +525,10 @@ pub fn render_app(frame: &mut Frame, app: &App) {
         render_memory_file_selector(&app.memory_file_selector, size, frame.buffer_mut());
     }
 
+    if app.skills_view.visible {
+        crate::tui::skills_view::render_skills_view(frame, &app.skills_view, size);
+    }
+
     if app.hooks_config_menu.visible {
         render_hooks_config_menu(&app.hooks_config_menu, size, frame.buffer_mut());
     }
