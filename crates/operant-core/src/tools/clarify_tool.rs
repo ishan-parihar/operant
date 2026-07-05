@@ -68,6 +68,35 @@ impl OperantTool for ClarifyTool {
             None => None,
         };
 
+        // If a TUI is running (user_question sender is set), push the
+        // question to the TUI and await the user's reply. The TUI opens
+        // the ask_user_dialog, the user picks/types an answer, and the
+        // reply flows back via the oneshot. The agent loop blocks here
+        // until the user responds. (iter-97 — closes Bug #2.)
+        if let Some(reply_rx) = crate::user_question::try_send_user_question(
+            args.question.clone(),
+            choices.clone(),
+        ) {
+            match reply_rx.await {
+                Ok(answer) => {
+                    // Return the user's answer as the tool result. The
+                    // agent sees this as the tool's output and continues.
+                    return ToolResult::success("clarify", answer);
+                }
+                Err(_) => {
+                    // The TUI dropped the reply_tx without sending —
+                    // typically means the user pressed Esc (dismissed).
+                    return ToolResult::success(
+                        "clarify",
+                        "[user dismissed the question]",
+                    );
+                }
+            }
+        }
+
+        // CLI mode (no TUI): return the question as a structured JSON
+        // result. The user sees it in the transcript but can't respond
+        // interactively. This is the original behavior.
         let mut response = serde_json::json!({
             "type": "clarification",
             "question": args.question,

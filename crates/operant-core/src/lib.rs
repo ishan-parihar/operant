@@ -86,6 +86,7 @@ pub mod skills;
 pub mod skills_guard;
 pub mod tools;
 pub mod trajectory;
+pub mod user_question;
 pub mod voice;
 
 pub use acp::{server, AcpHandler, AgentState, RpcRequest, RpcResponse};

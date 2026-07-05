@@ -2279,6 +2279,15 @@ impl TuiApp {
             self.app.steer_queue_handle = Some(agent.steer_queue_handle());
         }
 
+        // Create the user-question channel and register the sender with
+        // operant_core::user_question. The clarify tool will push
+        // UserQuestionRequest { question, choices, reply_tx } to this
+        // channel; the TUI drains it in the run loop and opens the
+        // ask_user_dialog. (iter-97 — closes Bug #2 from iter-82 audit.)
+        let (uq_tx, uq_rx) = tokio::sync::mpsc::unbounded_channel::<operant_core::user_question::UserQuestionRequest>();
+        let _ = operant_core::user_question::set_user_question_sender(uq_tx);
+        self.app.user_question_rx = Some(uq_rx);
+
         // Attach the MCP manager + file-history + current-turn counter to the
         // App. Without these, /mcp always shows "Disconnected" for every
         // server, /changes always shows "No changes", the "iter N" status

@@ -988,10 +988,13 @@ pub struct App {
     /// the fetch completes.
     pub model_fetch_rx:
         Option<tokio::sync::mpsc::Receiver<Result<Vec<crate::tui::model_picker::ModelEntry>, ()>>>,
-    /// Receiver for `UserQuestionEvent`s produced by the AskUserQuestion tool.
+    /// Receiver for `UserQuestionRequest`s produced by the clarify tool.
     /// When a question arrives, `ask_user_dialog` is populated and shown.
+    /// The reply_tx in the request is stored in `pending_permission_response_tx`
+    /// (reused) or `ask_user_dialog.reply_tx` — when the user confirms,
+    /// the reply flows back through the oneshot to the clarify tool.
     pub user_question_rx:
-        Option<tokio::sync::mpsc::UnboundedReceiver<crate::tui::adapter_types::tools::UserQuestionEvent>>,
+        Option<tokio::sync::mpsc::UnboundedReceiver<operant_core::user_question::UserQuestionRequest>>,
     /// State for the model-initiated ask-user question dialog.
     pub ask_user_dialog: crate::tui::ask_user_dialog::AskUserDialogState,
 
@@ -6593,22 +6596,26 @@ permission_rx: None,
                 }
             }
 
-            // Drain user-question events from the AskUserQuestion tool. The
-            // sender side is not yet wired to the agent (requires agent API
-            // extension); this drain is a no-op until that wiring lands, but
-            // it ensures the receiver side is correct so a future iteration
-            // only needs to assign user_question_rx. (Bug #2 from iter-82
-            // audit — partial fix; full fix needs agent API.)
+            // Drain user-question requests from the clarify tool. The
+            // clarify tool pushes a UserQuestionRequest (question + choices
+            // + reply_tx) and blocks awaiting the reply. We open the
+            // ask_user_dialog with the reply_tx — when the user confirms,
+            // the dialog sends the answer via reply_tx, and the clarify
+            // tool receives it and returns it as the tool result.
+            // (iter-97 — closes Bug #2 from iter-82 audit. The sender side
+            // is wired in TuiApp::run via set_user_question_sender.)
             if let Some(ref mut rx) = self.user_question_rx {
                 // Only one dialog at a time — use if-let (not while-let) so
                 // we process at most one event per frame and don't starve
                 // the render loop.
-                if let Ok(event) = rx.try_recv() {
-                    // Open the ask_user_dialog with the question + options.
-                    // reply_tx is a dummy oneshot that drops the response —
-                    // the agent side isn't wired to await it yet.
-                    let (tx, _rx) = tokio::sync::oneshot::channel::<String>();
-                    self.ask_user_dialog.open(event.question, Some(event.options), tx);
+                if let Ok(req) = rx.try_recv() {
+                    // Open the ask_user_dialog with the real reply_tx.
+                    // The dialog stores it and sends the user's answer when
+                    // confirm() is called. If the user presses Esc, the
+                    // dialog is dismissed and reply_tx is dropped — the
+                    // clarify tool receives a RecvError and returns
+                    // "[user dismissed the question]".
+                    self.ask_user_dialog.open(req.question, req.choices, req.reply_tx);
                 }
             }
 
