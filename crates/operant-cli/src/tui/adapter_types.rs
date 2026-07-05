@@ -1596,7 +1596,38 @@ impl TuiApp {
             LaunchMode::Query(q) => Some(q.clone()),
             _ => None,
         };
-        let config: Config = config.into();
+        let mut config: Config = config.into();
+
+        // Layer in the user's saved settings.json (written by App::persist_provider_and_model
+        // and App::set_provider_default). Without this, the provider+model picked in a prior
+        // TUI session are silently dropped on every restart — the YAML config has no record
+        // of them. Settings.json is the authoritative source for the "last active" selection.
+        if let Ok(saved) = Settings::load_sync() {
+            // Saved provider wins over the YAML-inferred one (which is just a guess based on
+            // the model string and is usually None for fresh installs).
+            if saved.provider.is_some() {
+                config.provider = saved.provider.clone();
+            }
+            // Saved model wins over the YAML model (which is the static default e.g. "gpt-4").
+            if saved.model.is_some() {
+                config.model = saved.model.clone();
+            }
+            // Mirror the saved values into the inner AppConfig too so anything that reads
+            // config.inner.agent.model sees the same thing as config.model.
+            if let Some(ref m) = saved.model {
+                config.inner.agent.model = m.clone();
+            }
+            // Persisted per-provider API base overrides (e.g. custom-openai).
+            // Applied lazily by callers that read Settings::providers, but we
+            // also surface the custom-openai base URL on the Config here so
+            // resolve_api_key / base-URL resolution picks it up.
+            if let Some(entry) = saved.providers.get("custom-openai") {
+                if let Some(ref base) = entry.api_base {
+                    config.inner.client.base_url = base.clone();
+                }
+            }
+        }
+
         let cost_tracker = Arc::new(CostTracker::new());
 
         let mut command_registry = CommandRegistry::new();
