@@ -695,6 +695,14 @@ pub struct App {
     pub should_exit: bool,
     pub show_help: bool,
 
+    /// Pending shell command to run after the current `app.run()` returns.
+    /// Set by slash commands like `/setup` that need to suspend the TUI and
+    /// spawn an interactive subprocess. The run loop in `TuiApp::run` polls
+    /// this after each frame and, if set, leaves alt screen + raw mode,
+    /// spawns the command with inherited stdio, waits for it, then re-enters
+    /// alt screen + raw mode and clears this field.
+    pub pending_shell_command: Option<Vec<String>>,
+
     // Extended state
     pub tool_use_blocks: Vec<ToolUseBlock>,
     pub permission_request: Option<PermissionRequest>,
@@ -1227,6 +1235,7 @@ impl App {
             spinner_verb: None,
             should_exit: false,
             show_help: false,
+            pending_shell_command: None,
             tool_use_blocks: Vec::new(),
             permission_request: None,
             frame_count: 0,
@@ -2487,13 +2496,22 @@ permission_rx: None,
                 true
             }
 
-            // /setup — surface the first-run wizard. We can't shell out to
-            // `operant setup` from inside the TUI without suspending ratatui,
-            // so for now point the user at the shell command.
+            // /setup — suspend the TUI and shell out to `operant setup` so the
+            // user gets the full interactive wizard. The run loop in
+            // TuiApp::run polls pending_shell_command after each frame and,
+            // if set, leaves alt screen + raw mode, spawns the command with
+            // inherited stdio, waits for it, then re-enters alt screen + raw
+            // mode and clears the field.
             "setup" => {
-                self.status_message = Some(
-                    "Run `operant setup` from a shell for the first-run wizard. Or use /connect to add a provider here.".to_string()
-                );
+                // Use the current binary (so the version matches) with the
+                // `setup` subcommand. If operant was launched via a wrapper,
+                // fall back to the literal "operant" name on PATH.
+                let exe = std::env::current_exe()
+                    .ok()
+                    .map(|p| p.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "operant".to_string());
+                self.pending_shell_command = Some(vec![exe, "setup".to_string()]);
+                self.status_message = Some("Launching setup wizard…".to_string());
                 true
             }
             _ => false,

@@ -2187,9 +2187,44 @@ impl TuiApp {
         let result = loop {
             match self.app.run(&mut terminal) {
                 Ok(Some(input)) => {
+                    // If a slash command set a pending shell command on a
+                    // *previous* iteration, run it BEFORE processing the next
+                    // input. (Slash commands set the field inside
+                    // handle_tui_command → intercept_slash_command, then we
+                    // `continue` to the next loop iteration; we run the shell
+                    // command at the top of the next iteration so the TUI
+                    // gets a chance to redraw the "Launching…" status message
+                    // before we suspend.)
+                    if let Some(argv) = self.app.pending_shell_command.take() {
+                        if let Err(e) = run_suspended_shell_command(&mut terminal, &argv) {
+                            self.app.status_message = Some(format!("Shell command failed: {}", e));
+                        } else {
+                            self.app.status_message = Some("Returned to operant.".to_string());
+                        }
+                        // Force a redraw on the next frame so the status
+                        // message + restored terminal show immediately.
+                        self.app.transcript_version.set(
+                            self.app.transcript_version.get().wrapping_add(1)
+                        );
+                    }
+
                     if crate::input::is_slash_command(&input) {
                         let (cmd, args) = crate::input::parse_slash_command(&input);
                         if self.app.handle_tui_command(cmd, args) {
+                            // If the slash command set a pending shell command,
+                            // we need to run it on the NEXT iteration — but
+                            // app.run() will block waiting for input. To avoid
+                            // that, run it NOW if it was set.
+                            if let Some(argv) = self.app.pending_shell_command.take() {
+                                if let Err(e) = run_suspended_shell_command(&mut terminal, &argv) {
+                                    self.app.status_message = Some(format!("Shell command failed: {}", e));
+                                } else {
+                                    self.app.status_message = Some("Returned to operant.".to_string());
+                                }
+                                self.app.transcript_version.set(
+                                    self.app.transcript_version.get().wrapping_add(1)
+                                );
+                            }
                             continue;
                         }
                         if let Some(canonical) = self.app.command_registry.resolve(cmd) {
@@ -2235,6 +2270,62 @@ impl TuiApp {
         execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
         result
     }
+}
+
+/// Suspend the TUI, run a shell command with inherited stdio, then resume.
+///
+/// Used by slash commands like `/setup` that need to launch an interactive
+/// subprocess (the operant setup wizard, an editor, etc.). The terminal is
+/// left in alt-screen + raw mode by the TUI; this function:
+///   1. leaves alt screen + disables raw mode (restoring the user's terminal)
+///   2. spawns the command with inherited stdin/stdout/stderr
+///   3. waits for it to complete
+///   4. re-enters alt screen + re-enables raw mode
+///   5. forces a terminal resize detection + full redraw on the next frame
+///
+/// Errors are returned if any of the crossterm operations fail or the spawn
+/// fails. A non-zero exit code from the subprocess is NOT an error (the user
+/// may have hit Ctrl+C in the wizard); we surface it via the returned
+/// `Ok(ExitStatus)` so the caller can decide whether to message the user.
+fn run_suspended_shell_command(
+    terminal: &mut ratatui::Terminal<ratatui::backend::CrosstermBackend<std::io::Stdout>>,
+    argv: &[String],
+) -> anyhow::Result<std::process::ExitStatus> {
+    use crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
+    use crossterm::execute;
+    use std::io::Write;
+
+    if argv.is_empty() {
+        anyhow::bail!("run_suspended_shell_command: empty argv");
+    }
+
+    // 1. Leave alt screen + disable raw mode.
+    disable_raw_mode()?;
+    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    // Flush so the user sees the wizard's first prompt immediately.
+    let _ = std::io::stdout().flush();
+
+    // 2. Spawn the subprocess with inherited stdio.
+    let mut cmd = std::process::Command::new(&argv[0]);
+    cmd.args(&argv[1..]);
+    cmd.stdin(std::process::Stdio::inherit())
+        .stdout(std::process::Stdio::inherit())
+        .stderr(std::process::Stdio::inherit());
+
+    let result = cmd.spawn()?.wait();
+
+    // 3. Re-enter alt screen + re-enable raw mode regardless of subprocess
+    //    outcome. If we skip this, the TUI is permanently broken.
+    enable_raw_mode()?;
+    execute!(terminal.backend_mut(), EnterAlternateScreen)?;
+    // Force ratatui to forget its cached buffer sizes — the terminal may have
+    // been resized while we were suspended. ratatui::Terminal::resize takes a
+    // Rect; we read the current size and convert.
+    let size = terminal.size()?;
+    let _ = terminal.resize(ratatui::layout::Rect::new(0, 0, size.width, size.height));
+
+    let status = result?;
+    Ok(status)
 }
 
 #[derive(Debug, Clone)]
