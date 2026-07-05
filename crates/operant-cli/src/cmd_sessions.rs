@@ -57,6 +57,15 @@ pub enum SessionsSubcommand {
     },
     /// Browse sessions interactively
     Browse,
+    /// Search session messages for a query (FTS5 full-text search).
+    /// Closes the TUI↔CLI parity gap for /search (audit item #6).
+    Search {
+        /// Search query (matched against message content via FTS5).
+        query: String,
+        /// Maximum number of results to return (default: 20).
+        #[arg(long, default_value = "20")]
+        limit: usize,
+    },
 }
 
 /// Dispatch a sessions subcommand.
@@ -75,6 +84,7 @@ pub async fn handle_sessions_command(config: &AppConfig, cmd: SessionsSubcommand
         } => cmd_prune(config, older_than_days, force).await,
         SessionsSubcommand::Rename { id, title } => cmd_rename(config, &id, &title).await,
         SessionsSubcommand::Browse => cmd_browse(config).await,
+        SessionsSubcommand::Search { query, limit } => cmd_search(config, &query, limit).await,
     }
 }
 
@@ -335,4 +345,62 @@ async fn cmd_browse(config: &AppConfig) -> Result<()> {
     let session = &sessions[selection];
     println!();
     cmd_show(config, &session.id).await
+}
+
+/// Search session messages for a query using FTS5 full-text search.
+/// Closes the TUI↔CLI parity gap for /search (audit item #6) — the user can
+/// now find a prior exchange from the shell without scrolling the TUI.
+async fn cmd_search(config: &AppConfig, query: &str, limit: usize) -> Result<()> {
+    let db = Database::init(config.database_path.clone()).context("Failed to open database")?;
+    let results = db
+        .search_sessions(query, limit)
+        .context("Failed to search sessions")?;
+
+    if results.is_empty() {
+        println!("No matches for '{}'.", query);
+        return Ok(());
+    }
+
+    println!("Found {} match(es) for '{}':", results.len(), query);
+    println!();
+    println!(
+        "{:<3}  {:<36} {:<28} {}",
+        "#", "Session ID", "Title", "Snippet"
+    );
+    println!("{}", "-".repeat(110));
+
+    for (i, r) in results.iter().enumerate() {
+        let title = r.title.as_deref().unwrap_or("(untitled)");
+        // Truncate the snippet to 50 chars for the table.
+        let snippet: String = r.content.chars().take(50).collect();
+        let snippet = if r.content.chars().count() > 50 {
+            format!("{}…", snippet)
+        } else {
+            snippet
+        };
+        println!(
+            "{:<3}  {:<36} {:<28} {}",
+            i + 1,
+            truncate_str(&r.session_id, 36),
+            truncate_str(title, 28),
+            snippet.replace('\n', " "),
+        );
+    }
+
+    println!();
+    println!("View a full session with: operant sessions show <session-id>");
+
+    Ok(())
+}
+
+fn truncate_str(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        s.to_string()
+    } else if max == 0 {
+        String::new()
+    } else {
+        let mut out: String = s.chars().take(max - 1).collect();
+        out.push('…');
+        out
+    }
 }

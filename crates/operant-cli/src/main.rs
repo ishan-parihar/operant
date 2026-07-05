@@ -378,13 +378,16 @@ enum Commands {
     },
     /// TUI debugging tools — simulate every TUI overlay from the CLI.
     ///
-    /// Each subcommand runs the same data-loading path the TUI uses for the
-    /// corresponding overlay, but prints to stdout instead of rendering. Use
-    /// this to verify an overlay's data loads correctly without entering
+    /// Each `debug` subcommand runs the same data-loading path the TUI uses
+    /// for the corresponding overlay, but prints to stdout instead of rendering.
+    /// Use this to verify an overlay's data loads correctly without entering
     /// the TUI, or to debug a broken overlay from the shell.
+    ///
+    /// Action subcommands (effort, mode, output-style, theme, vim, keybindings,
+    /// voice) set TUI state persistently, closing the TUI↔CLI parity gaps.
     Tui {
         #[command(subcommand)]
-        cmd: cmd_tui_debug::TuiDebugSubcommand,
+        cmd: cmd_tui_debug::TuiSubcommand,
     },
 }
 
@@ -1534,7 +1537,7 @@ async fn main() -> Result<()> {
             cmd_trajectory::handle_trajectory_command(cmd.clone()).await?;
         }
         Some(Commands::Tui { cmd }) => {
-            cmd_tui_debug::handle_tui_debug_command(&loaded.config, cmd.clone()).await?;
+            cmd_tui_debug::handle_tui_command(&loaded.config, cmd.clone()).await?;
         }
         None => {
             // No command provided - launch TUI in interactive mode
