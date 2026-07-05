@@ -829,6 +829,7 @@ pub struct App {
     pub feedback_survey: crate::tui::feedback_survey::FeedbackSurveyState,
     /// Memory file selector overlay (AGENTS.md browser).
     pub memory_file_selector: crate::tui::memory_file_selector::MemoryFileSelectorState,
+    pub skills_view: crate::tui::skills_view::SkillsViewState,
     /// Read-only hooks configuration browser.
     pub hooks_config_menu: crate::tui::hooks_config_menu::HooksConfigMenuState,
     /// Overage credit upsell banner.
@@ -1289,6 +1290,7 @@ impl App {
             diff_viewer: DiffViewerState::new(),
             feedback_survey: crate::tui::feedback_survey::FeedbackSurveyState::new(),
             memory_file_selector: crate::tui::memory_file_selector::MemoryFileSelectorState::new(),
+            skills_view: crate::tui::skills_view::SkillsViewState::new(),
             hooks_config_menu: crate::tui::hooks_config_menu::HooksConfigMenuState::new(),
             voice_mode_notice: crate::tui::voice_mode_notice::VoiceModeNoticeState::new(),
             model_picker: ModelPickerState::new(),
@@ -2011,6 +2013,11 @@ permission_rx: None,
                 self.memory_file_selector.open(&root);
                 true
             }
+            "skills" => {
+                let skills_dir = self.config.inner.skills.root_dir.clone();
+                self.skills_view.open(skills_dir);
+                true
+            }
             "hooks" => {
                 self.hooks_config_menu.open();
                 true
@@ -2228,6 +2235,7 @@ permission_rx: None,
         self.diff_viewer.close();
         self.feedback_survey.close();
         self.memory_file_selector.close();
+        self.skills_view.close();
         self.hooks_config_menu.close();
         self.model_picker.close();
         self.session_browser.close();
@@ -2264,6 +2272,7 @@ permission_rx: None,
             || self.global_search.visible
             || self.feedback_survey.visible
             || self.memory_file_selector.visible
+            || self.skills_view.visible
             || self.hooks_config_menu.visible
             || false
             || self.voice_mode_notice.visible
@@ -3538,6 +3547,66 @@ permission_rx: None,
                 KeyCode::Enter => {
                     // Selection acknowledged — consumer can read selected_path()
                     self.memory_file_selector.close();
+                }
+                _ => {}
+            }
+            return false;
+        }
+
+        // Skills view intercepts navigation and Esc
+        if self.skills_view.visible {
+            match key.code {
+                KeyCode::Esc => {
+                    if self.skills_view.stage
+                        == crate::tui::skills_view::SkillsStage::Detail
+                    {
+                        self.skills_view.back_to_list();
+                    } else {
+                        self.skills_view.close();
+                    }
+                }
+                KeyCode::Backspace => {
+                    if self.skills_view.stage
+                        == crate::tui::skills_view::SkillsStage::Detail
+                    {
+                        self.skills_view.back_to_list();
+                    }
+                }
+                KeyCode::Up | KeyCode::Char('k') => {
+                    if self.skills_view.stage
+                        == crate::tui::skills_view::SkillsStage::List
+                    {
+                        self.skills_view.select_prev();
+                    } else {
+                        self.skills_view.scroll_up();
+                    }
+                }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    if self.skills_view.stage
+                        == crate::tui::skills_view::SkillsStage::List
+                    {
+                        self.skills_view.select_next();
+                    } else {
+                        // viewport=24 is a safe default; render clamps.
+                        self.skills_view.scroll_down(24);
+                    }
+                }
+                KeyCode::PageUp => {
+                    for _ in 0..6 {
+                        self.skills_view.scroll_up();
+                    }
+                }
+                KeyCode::PageDown => {
+                    for _ in 0..6 {
+                        self.skills_view.scroll_down(24);
+                    }
+                }
+                KeyCode::Enter => {
+                    if self.skills_view.stage
+                        == crate::tui::skills_view::SkillsStage::List
+                    {
+                        self.skills_view.open_detail();
+                    }
                 }
                 _ => {}
             }
