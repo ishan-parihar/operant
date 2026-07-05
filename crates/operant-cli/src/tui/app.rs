@@ -832,6 +832,7 @@ pub struct App {
     pub memory_file_selector: crate::tui::memory_file_selector::MemoryFileSelectorState,
     pub skills_view: crate::tui::skills_view::SkillsViewState,
     pub plugins_hub: crate::tui::plugins_hub::PluginsHubState,
+    pub journey_view: crate::tui::journey_view::JourneyViewState,
     /// Read-only hooks configuration browser.
     pub hooks_config_menu: crate::tui::hooks_config_menu::HooksConfigMenuState,
     /// Overage credit upsell banner.
@@ -1294,6 +1295,7 @@ impl App {
             memory_file_selector: crate::tui::memory_file_selector::MemoryFileSelectorState::new(),
             skills_view: crate::tui::skills_view::SkillsViewState::new(),
             plugins_hub: crate::tui::plugins_hub::PluginsHubState::new(),
+            journey_view: crate::tui::journey_view::JourneyViewState::new(),
             hooks_config_menu: crate::tui::hooks_config_menu::HooksConfigMenuState::new(),
             voice_mode_notice: crate::tui::voice_mode_notice::VoiceModeNoticeState::new(),
             model_picker: ModelPickerState::new(),
@@ -2472,9 +2474,9 @@ permission_rx: None,
             // (planned for a later iteration). Surface a "coming soon" status
             // rather than silently dropping.
             "journey" => {
-                self.status_message = Some(
-                    "/journey overlay is planned. For now, use /skills + /memory to browse separately.".to_string()
-                );
+                let skills_dir = self.config.inner.skills.root_dir.clone();
+                let memory_dir = operant_core::platform::operant_home().join("memory");
+                self.journey_view.open(skills_dir, memory_dir);
                 true
             }
             "replay" | "replay-diff" => {
@@ -2507,6 +2509,7 @@ permission_rx: None,
         self.memory_file_selector.close();
         self.skills_view.close();
         self.plugins_hub.close();
+        self.journey_view.close();
         self.hooks_config_menu.close();
         self.model_picker.close();
         self.session_browser.close();
@@ -2545,6 +2548,7 @@ permission_rx: None,
             || self.memory_file_selector.visible
             || self.skills_view.visible
             || self.plugins_hub.visible
+            || self.journey_view.visible
             || self.hooks_config_menu.visible
             || false
             || self.voice_mode_notice.visible
@@ -3902,6 +3906,18 @@ permission_rx: None,
                 KeyCode::Enter | KeyCode::Char('t') | KeyCode::Char(' ') => {
                     self.plugins_hub.toggle_selected(&plugins_dir);
                 }
+                _ => {}
+            }
+            return false;
+        }
+
+        // Journey view intercepts navigation, pane-switch, and Esc
+        if self.journey_view.visible {
+            match key.code {
+                KeyCode::Esc | KeyCode::Char('q') => self.journey_view.close(),
+                KeyCode::Up | KeyCode::Char('k') => self.journey_view.cursor_up(),
+                KeyCode::Down | KeyCode::Char('j') => self.journey_view.cursor_down(),
+                KeyCode::Tab | KeyCode::BackTab => self.journey_view.switch_pane(),
                 _ => {}
             }
             return false;

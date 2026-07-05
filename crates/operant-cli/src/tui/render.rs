@@ -533,6 +533,10 @@ pub fn render_app(frame: &mut Frame, app: &App) {
         crate::tui::plugins_hub::render_plugins_hub(frame, &app.plugins_hub, size);
     }
 
+    if app.journey_view.visible {
+        crate::tui::journey_view::render_journey_view(frame, &app.journey_view, size);
+    }
+
     if app.hooks_config_menu.visible {
         render_hooks_config_menu(&app.hooks_config_menu, size, frame.buffer_mut());
     }
