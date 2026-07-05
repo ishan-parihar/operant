@@ -1,6 +1,5 @@
 // app.rs — App state struct and main event loop.
 
-use crate::tui::bridge_state::BridgeConnectionState;
 use crate::tui::context_viz::ContextVizState;
 use crate::tui::dialog_select::{DialogSelectState, SelectItem};
 use crate::tui::export_dialog::{ExportDialogState, ExportFormat};
@@ -14,7 +13,7 @@ use crate::tui::dialogs::McpApprovalDialogState;
 use crate::tui::mcp_view::{McpServerView, McpToolView, McpViewState, McpViewStatus};
 use crate::tui::notifications::{NotificationKind, NotificationQueue};
 use crate::tui::overlays::{
-    GlobalSearchState, HelpEntry, HelpOverlay, HistorySearchOverlay, MessageSelectorOverlay,
+    GlobalSearchState, HelpEntry, HelpOverlay, HistorySearchOverlay,
     RewindFlowOverlay, SelectorMessage,
 };
 use crate::tui::plugin_views::PluginHintBanner;
@@ -403,7 +402,6 @@ pub struct ToolUseBlock {
 
 #[derive(Debug, Clone, Default)]
 pub struct TurnMetadata {
-    pub submitted_at: Option<String>,
     pub model_name: Option<String>,
     pub agent_mode: Option<String>,
     pub duration: Option<String>,
@@ -789,11 +787,9 @@ pub struct App {
     /// Global ripgrep search / quick-open overlay.
     pub global_search: GlobalSearchState,
     /// Message selector used by /rewind.
-    pub message_selector: MessageSelectorOverlay,
     /// Multi-step rewind flow overlay.
     pub rewind_flow: RewindFlowOverlay,
     /// Bridge connection state.
-    pub bridge_state: BridgeConnectionState,
     /// Active notification queue.
     pub notifications: NotificationQueue,
     /// Scroll offset for error modal text (in lines).
@@ -1306,9 +1302,7 @@ impl App {
             },
             history_search_overlay: HistorySearchOverlay::new(),
             global_search: GlobalSearchState::default(),
-            message_selector: MessageSelectorOverlay::new(),
             rewind_flow: RewindFlowOverlay::new(),
-            bridge_state: BridgeConnectionState::Disconnected,
             notifications: NotificationQueue::new(),
             error_modal_scroll_offset: 0,
             plugin_hints: Vec::new(),
@@ -1580,7 +1574,6 @@ permission_rx: None,
 
     fn begin_user_turn_snapshot(&mut self) {
         self.turn_metadata.push(TurnMetadata {
-            submitted_at: Some(format_turn_time_label()),
             model_name: Some(self.model_name.clone()),
             agent_mode: Some(self.current_agent_mode_snapshot()),
             duration: None,
