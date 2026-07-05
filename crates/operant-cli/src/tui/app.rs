@@ -6578,14 +6578,15 @@ permission_rx: None,
             // only needs to assign user_question_rx. (Bug #2 from iter-82
             // audit — partial fix; full fix needs agent API.)
             if let Some(ref mut rx) = self.user_question_rx {
-                while let Ok(event) = rx.try_recv() {
+                // Only one dialog at a time — use if-let (not while-let) so
+                // we process at most one event per frame and don't starve
+                // the render loop.
+                if let Ok(event) = rx.try_recv() {
                     // Open the ask_user_dialog with the question + options.
                     // reply_tx is a dummy oneshot that drops the response —
                     // the agent side isn't wired to await it yet.
                     let (tx, _rx) = tokio::sync::oneshot::channel::<String>();
                     self.ask_user_dialog.open(event.question, Some(event.options), tx);
-                    // Only one dialog at a time; stop draining after the first.
-                    break;
                 }
             }
 
