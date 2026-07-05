@@ -4037,10 +4037,9 @@ permission_rx: None,
             }
         }
 
-        // Overage upsell dismiss
-        if key.code == KeyCode::Esc && false {
-            return false;
-        }
+        // Overage upsell dismiss — the overage_upsell dialog was deleted in
+        // iter-58; this block is kept as a placeholder for future dismiss
+        // handlers. No-op until a replacement dialog is wired.
 
         // Voice mode notice dismiss
         if key.code == KeyCode::Esc && self.voice_mode_notice.visible {
@@ -4068,10 +4067,9 @@ permission_rx: None,
 
         // Desktop upsell startup dialog
 
-        // Memory update notification dismiss
-        if key.code == KeyCode::Esc && false {
-            return false;
-        }
+        // Memory update notification dismiss — the memory_update_notification
+        // dialog was deleted in iter-58; this block is kept as a placeholder
+        // for future dismiss handlers. No-op until a replacement is wired.
 
         // MCP elicitation dialog — highest priority modal
 
