@@ -804,13 +804,355 @@ impl McpStdioClient {
     }
 }
 
-/// MCP transport type — either HTTP or stdio
+// ---------------------------------------------------------------------------
+// SSE Transport (Server-Sent Events)
+// ---------------------------------------------------------------------------
+
+/// MCP client using SSE (Server-Sent Events) transport.
+///
+/// SSE transport works differently from HTTP:
+/// 1. Client connects to the SSE endpoint via GET (long-lived stream)
+/// 2. Server sends an `endpoint` event with a URI for POST requests
+/// 3. Client sends JSON-RPC requests via HTTP POST to that endpoint
+/// 4. Server sends responses back via the SSE stream
+///
+/// This is the transport used by older MCP servers (pre-Streamable HTTP).
+#[derive(Debug, Clone)]
+pub struct McpSseClient {
+    /// SSE endpoint URL (e.g. http://localhost:8000/sse)
+    sse_url: String,
+    /// POST endpoint URL (received from the server's `endpoint` event)
+    post_url: Arc<RwLock<Option<String>>>,
+    /// Authentication token
+    auth_token: Option<String>,
+    /// HTTP client for POST requests
+    http_client: reqwest::Client,
+    /// Connected tools from this server
+    tools: Arc<RwLock<Vec<McpTool>>>,
+    /// Whether connected
+    connected: Arc<RwLock<bool>>,
+    /// Request ID counter
+    request_id: Arc<AtomicU64>,
+    /// Pending responses keyed by request ID
+    pending: Arc<tokio::sync::Mutex<HashMap<u64, tokio::sync::oneshot::Sender<Value>>>>,
+    /// Background SSE reader task handle
+    _reader_task: Arc<RwLock<Option<tokio::task::JoinHandle<()>>>>,
+}
+
+impl McpSseClient {
+    /// Create a new SSE MCP client
+    pub fn new(sse_url: impl Into<String>, auth_token: Option<String>) -> Self {
+        Self {
+            sse_url: sse_url.into(),
+            post_url: Arc::new(RwLock::new(None)),
+            auth_token,
+            http_client: reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(300))
+                .build()
+                .unwrap_or_else(|_| reqwest::Client::new()),
+            tools: Arc::new(RwLock::new(Vec::new())),
+            connected: Arc::new(RwLock::new(false)),
+            request_id: Arc::new(AtomicU64::new(0)),
+            pending: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            _reader_task: Arc::new(RwLock::new(None)),
+        }
+    }
+
+    /// Connect to the MCP SSE server
+    pub async fn connect(&self) -> Result<()> {
+        info!(url = %self.sse_url, "Connecting to MCP SSE server");
+
+        // Start SSE stream
+        let mut req_builder = self.http_client.get(&self.sse_url);
+        if let Some(ref token) = self.auth_token {
+            req_builder = req_builder.header("Authorization", format!("Bearer {}", token));
+        }
+        req_builder = req_builder.header("Accept", "text/event-stream");
+
+        let response = req_builder.send().await?;
+
+        if !response.status().is_success() {
+            return Err(crate::error::Error::Agent(format!(
+                "MCP SSE connection failed: {}",
+                response.status()
+            )));
+        }
+
+        // Clone state for the background reader task
+        let post_url_clone = self.post_url.clone();
+        let pending_clone = self.pending.clone();
+        let sse_url = self.sse_url.clone();
+
+        // Spawn background SSE reader task
+        let task = tokio::spawn(async move {
+            use futures::StreamExt;
+            let mut stream = response.bytes_stream();
+            let mut buffer = String::new();
+
+            while let Some(chunk_result) = stream.next().await {
+                match chunk_result {
+                    Ok(bytes) => {
+                        buffer.push_str(&String::from_utf8_lossy(&bytes));
+
+                        // Process complete SSE events (separated by \n\n)
+                        while let Some(pos) = buffer.find("\n\n") {
+                            let event_block = buffer[..pos].to_string();
+                            buffer = buffer[pos + 2..].to_string();
+
+                            // Parse the SSE event
+                            let mut event_type = String::new();
+                            let mut data = String::new();
+
+                            for line in event_block.lines() {
+                                if let Some(rest) = line.strip_prefix("event: ") {
+                                    event_type = rest.trim().to_string();
+                                } else if let Some(rest) = line.strip_prefix("data: ") {
+                                    data = rest.to_string();
+                                }
+                            }
+
+                            if event_type == "endpoint" {
+                                // Server sent us the POST endpoint URL
+                                let endpoint_url = if data.starts_with("http") {
+                                    data.clone()
+                                } else {
+                                    // Relative URL — resolve against the SSE URL
+                                    let base = sse_url.trim_end_matches("/sse");
+                                    format!("{}{}", base, data)
+                                };
+                                debug!(endpoint = %endpoint_url, "MCP SSE: received POST endpoint");
+                                *post_url_clone.write().await = Some(endpoint_url);
+                            } else if event_type == "message" || data.starts_with("{") {
+                                // JSON-RPC response
+                                if let Ok(parsed) = serde_json::from_str::<Value>(&data) {
+                                    // Check if it's a response (has "id")
+                                    if let Some(id) = parsed.get("id").and_then(|v| v.as_u64()) {
+                                        let mut pending = pending_clone.lock().await;
+                                        if let Some(tx) = pending.remove(&id) {
+                                            let result = parsed.get("result").cloned()
+                                                .or_else(|| parsed.get("error").cloned())
+                                                .unwrap_or(Value::Null);
+                                            let _ = tx.send(result);
+                                        }
+                                    }
+                                    // Server-initiated requests (sampling, elicitation, etc.)
+                                    // are handled by the HTTP client's response processing
+                                    // — for SSE, we just log them.
+                                    if parsed.get("method").is_some() {
+                                        debug!(method = ?parsed["method"], "MCP SSE: server-initiated request (not handled)");
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        warn!(error = %e, "MCP SSE stream error");
+                        break;
+                    }
+                }
+            }
+            debug!("MCP SSE reader task ended");
+        });
+
+        *self._reader_task.write().await = Some(task);
+
+        // Wait for the server to send the endpoint event (up to 10s)
+        let timeout = tokio::time::Duration::from_secs(10);
+        let start = std::time::Instant::now();
+        loop {
+            if self.post_url.read().await.is_some() {
+                break;
+            }
+            if start.elapsed() > timeout {
+                return Err(crate::error::Error::Agent(
+                    "MCP SSE: timed out waiting for endpoint event".to_string(),
+                ));
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+
+        // Send initialize request
+        let init_request = InitializeRequest {
+            protocol_version: MCP_VERSION.to_string(),
+            capabilities: ClientCapabilities {
+                roots: Some(Roots { list_changed: true }),
+                sampling: Some(Sampling {}),
+            },
+            client_info: ClientInfo {
+                name: "operant-rs".to_string(),
+                version: env!("CARGO_PKG_VERSION").to_string(),
+            },
+        };
+
+        let init_result = self
+            .send_request("initialize", Some(serde_json::to_value(init_request)?))
+            .await?;
+
+        debug!(result = ?init_result, "MCP SSE: initialized");
+
+        // Send initialized notification
+        self.send_notification("notifications/initialized", Value::Null)
+            .await?;
+
+        // List tools
+        self.list_tools().await?;
+
+        *self.connected.write().await = true;
+        info!(url = %self.sse_url, "Connected to MCP SSE server");
+
+        Ok(())
+    }
+
+    /// Disconnect from the MCP SSE server
+    pub async fn disconnect(&self) -> Result<()> {
+        *self.connected.write().await = false;
+        self.tools.write().await.clear();
+        // Abort the reader task
+        if let Some(handle) = self._reader_task.write().await.take() {
+            handle.abort();
+        }
+        info!(url = %self.sse_url, "Disconnected from MCP SSE server");
+        Ok(())
+    }
+
+    /// Check if connected
+    pub async fn is_connected(&self) -> bool {
+        *self.connected.read().await
+    }
+
+    /// List tools from the server
+    pub async fn list_tools(&self) -> Result<Vec<McpToolDefinition>> {
+        let response = self.send_request("tools/list", None).await?;
+        let tool_list: ToolListResult = serde_json::from_value(response).map_err(|e| {
+            crate::error::Error::ParseResponse(format!("Failed to parse SSE tool list: {}", e))
+        })?;
+
+        let tools: Vec<McpTool> = tool_list
+            .tools
+            .into_iter()
+            .map(|def| McpTool::new_sse(self.clone(), def))
+            .collect();
+
+        let defs: Vec<McpToolDefinition> = tools.iter().map(|t| t.definition().clone()).collect();
+        *self.tools.write().await = tools;
+
+        debug!(count = defs.len(), "Listed MCP SSE tools");
+        Ok(defs)
+    }
+
+    /// Get tools
+    pub async fn get_tools(&self) -> Vec<McpTool> {
+        self.tools.read().await.clone()
+    }
+
+    /// Call a tool on the server
+    pub async fn call_tool(&self, name: &str, arguments: Value) -> Result<Value> {
+        let params = serde_json::json!({
+            "name": name,
+            "arguments": arguments,
+        });
+        let result = self.send_request("tools/call", Some(params)).await?;
+        Ok(result)
+    }
+
+    /// Send a JSON-RPC request via POST and wait for the response via SSE
+    async fn send_request(&self, method: &str, params: Option<Value>) -> Result<Value> {
+        let request_id = self.request_id.fetch_add(1, Ordering::SeqCst);
+
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            method: method.to_string(),
+            params,
+            id: Some(request_id),
+        };
+
+        let post_url = self.post_url.read().await.clone().ok_or_else(|| {
+            crate::error::Error::Agent("MCP SSE: POST endpoint not set".to_string())
+        })?;
+
+        let mut req_builder = self.http_client.post(&post_url);
+        if let Some(ref token) = self.auth_token {
+            req_builder = req_builder.header("Authorization", format!("Bearer {}", token));
+        }
+
+        // Register pending response channel
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        {
+            let mut pending = self.pending.lock().await;
+            pending.insert(request_id, tx);
+        }
+
+        // Send the request
+        req_builder
+            .header("Content-Type", "application/json")
+            .json(&request)
+            .send()
+            .await?
+            .error_for_status()
+            .map_err(|e| {
+                crate::error::Error::Agent(format!("MCP SSE POST failed: {}", e))
+            })?;
+
+        // Wait for the response via the SSE stream (with 60s timeout)
+        match tokio::time::timeout(
+            std::time::Duration::from_secs(60),
+            rx,
+        ).await {
+            Ok(Ok(result)) => Ok(result),
+            Ok(Err(_)) => Err(crate::error::Error::Agent(
+                "MCP SSE: response channel closed".to_string(),
+            )),
+            Err(_) => {
+                // Remove from pending on timeout
+                let mut pending = self.pending.lock().await;
+                pending.remove(&request_id);
+                Err(crate::error::Error::Agent(
+                    "MCP SSE: timed out waiting for response (60s)".to_string(),
+                ))
+            }
+        }
+    }
+
+    /// Send a notification (no response expected)
+    async fn send_notification(&self, method: &str, params: Value) -> Result<()> {
+        let post_url = self.post_url.read().await.clone().ok_or_else(|| {
+            crate::error::Error::Agent("MCP SSE: POST endpoint not set".to_string())
+        })?;
+
+        let notification = serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": method,
+            "params": params,
+        });
+
+        let mut req_builder = self.http_client.post(&post_url);
+        if let Some(ref token) = self.auth_token {
+            req_builder = req_builder.header("Authorization", format!("Bearer {}", token));
+        }
+
+        req_builder
+            .header("Content-Type", "application/json")
+            .json(&notification)
+            .send()
+            .await?
+            .error_for_status()
+            .map_err(|e| {
+                crate::error::Error::Agent(format!("MCP SSE notification failed: {}", e))
+            })?;
+
+        Ok(())
+    }
+}
+
+/// MCP transport type — either HTTP, stdio, or SSE
 #[derive(Debug, Clone)]
 pub enum McpTransport {
     /// HTTP-based MCP client
     Http(McpClient),
     /// Stdio-based MCP client (child process)
     Stdio(McpStdioClient),
+    /// SSE-based MCP client (Server-Sent Events)
+    Sse(McpSseClient),
 }
 
 impl McpTransport {
@@ -819,6 +1161,7 @@ impl McpTransport {
         match self {
             McpTransport::Http(c) => c.is_connected().await,
             McpTransport::Stdio(c) => c.is_connected().await,
+            McpTransport::Sse(c) => c.is_connected().await,
         }
     }
 
@@ -827,6 +1170,7 @@ impl McpTransport {
         match self {
             McpTransport::Http(c) => c.get_tools().await,
             McpTransport::Stdio(c) => c.get_tools().await,
+            McpTransport::Sse(c) => c.get_tools().await,
         }
     }
 
@@ -835,6 +1179,7 @@ impl McpTransport {
         match self {
             McpTransport::Http(c) => c.disconnect().await,
             McpTransport::Stdio(c) => c.disconnect().await,
+            McpTransport::Sse(c) => c.disconnect().await,
         }
     }
 
@@ -843,6 +1188,7 @@ impl McpTransport {
         match self {
             McpTransport::Http(c) => c.call_tool(name, arguments).await,
             McpTransport::Stdio(c) => c.call_tool(name, arguments).await,
+            McpTransport::Sse(c) => c.call_tool(name, arguments).await,
         }
     }
 }
@@ -867,6 +1213,14 @@ impl McpTool {
     pub fn new_stdio(client: McpStdioClient, definition: McpToolDefinition) -> Self {
         Self {
             transport: McpTransport::Stdio(client),
+            definition: Arc::new(definition),
+        }
+    }
+
+    /// Create a new MCP tool wrapper (SSE transport)
+    pub fn new_sse(client: McpSseClient, definition: McpToolDefinition) -> Self {
+        Self {
+            transport: McpTransport::Sse(client),
             definition: Arc::new(definition),
         }
     }
@@ -1031,6 +1385,23 @@ impl McpManager {
             .write()
             .await
             .insert(name, McpTransport::Stdio(client));
+        Ok(())
+    }
+
+    /// Add and connect to an SSE MCP server
+    pub async fn add_sse_server(
+        &self,
+        name: impl Into<String>,
+        sse_url: String,
+        auth_token: Option<String>,
+    ) -> Result<()> {
+        let name = name.into();
+        let client = McpSseClient::new(sse_url, auth_token);
+        client.connect().await?;
+        self.servers
+            .write()
+            .await
+            .insert(name, McpTransport::Sse(client));
         Ok(())
     }
 

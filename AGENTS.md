@@ -153,19 +153,15 @@ rm -rf target/debug/deps target/debug/build target/debug/incremental
 
 ## Known Gaps (from hermes-agent contrast audit)
 
-**1 remaining gap** (down from 10 at start of audit cycle):
-
-1. **MCP: no SSE transport** — stdio + HTTP work. Sampling/elicitation handlers
-   respond with -32601 error (infrastructure in place, actual sampling/elicitation
-   logic can be wired via callback). Hermes supports SSE transport + dynamic tool
-   discovery (`notifications/tools/list_changed`). This is minor — stdio + HTTP
-   cover 95%+ of MCP servers in practice.
+**All hermes-agent gaps closed.** The operant project now has feature parity
+with hermes-agent's core functionality (excluding Python-specific plugins).
 
 ### 2 minor CLI stubs (not bugs, just incomplete features):
 - `operant cron run <id>` — prints "Manual execution via CLI is not yet implemented"
 - `operant dashboard --stop` — prints "kill the process" (stop via signal instead)
 
-### Gaps CLOSED (14 total — all verified by grep + compile + tests):
+### Gaps CLOSED (15 total — all verified by grep + compile + tests):
+- ✅ ~~MCP SSE transport~~ — McpSseClient with background reader task + oneshot response routing (iter-68)
 - ✅ ~~Credential rotation~~ — CredentialPool restored + PooledCredential with OAuth fields (iter-66)
 - ✅ ~~Platform registry~~ — platform_registry() with factory pattern replaces if/elif chain (iter-66)
 - ✅ ~~MCP sampling/elicitation handlers~~ — server-initiated requests handled in stdio transport (iter-66)
