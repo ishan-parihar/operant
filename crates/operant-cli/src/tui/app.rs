@@ -4375,6 +4375,15 @@ permission_rx: None,
                 self.tasks_overlay.toggle();
             }
 
+            // ---- Session branching (Ctrl+B) -----------------------------
+            // Bug #6 from iter-82 audit: Ctrl+B was documented in the help
+            // overlay comment but had no keybinding. session_branching.open()
+            // was never called from anywhere. Now it opens the branch browser
+            // seeded with the current message count.
+            KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.session_branching.open(vec![], self.messages.len());
+            }
+
             // ---- Command palette (Ctrl+K) -------------------------------
             KeyCode::Char('k') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.command_palette.open();
@@ -6681,6 +6690,30 @@ permission_rx: None,
                                 .send(operant_core::agent::ToolPermissionResponse::Deny);
                             continue;
                         }
+
+                        // bash_prefix_allowlist: if the tool is bash/shell and
+                        // the first word of the command is in the allowlist,
+                        // auto-approve without showing a dialog. (Bug #21 from
+                        // iter-82 audit — the allowlist was written but never
+                        // consulted.) "Always allow" in the bypass-permissions
+                        // dialog populates the allowlist via
+                        // maybe_record_bash_prefix; this is the read side.
+                        if req.tool_name == "bash" || req.tool_name == "shell" || req.tool_name == "terminal" {
+                            if let Some(ref preview) = req.input_preview {
+                                let first_word = preview
+                                    .split_whitespace()
+                                    .next()
+                                    .map(|w| w.trim_start_matches("./").to_string())
+                                    .unwrap_or_default();
+                                if !first_word.is_empty() && self.bash_prefix_allowlist.contains(&first_word) {
+                                    let _ = req.response_tx.send(
+                                        operant_core::agent::ToolPermissionResponse::AllowSession,
+                                    );
+                                    continue;
+                                }
+                            }
+                        }
+
                         let reason = if req.danger_explanation.is_empty() {
                             req.description.clone()
                         } else {

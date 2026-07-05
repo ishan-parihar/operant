@@ -2304,6 +2304,38 @@ impl TuiApp {
         let result = loop {
             match self.app.run(&mut terminal) {
                 Ok(Some(input)) => {
+                    // Poll pending MCP state set by /mcp 'a' (panel auth) and
+                    // 'r' (reconnect) keys. Without this, the keys set state
+                    // that the run loop never reads, so panel-auth + reconnect
+                    // are no-ops. (Bug #7 from iter-82 audit.)
+                    // For now we surface a status message acknowledging the
+                    // request; a real implementation would spawn the MCP
+                    // panel-auth flow / reconnect the MCP runtime.
+                    if let Some(server_name) = self.app.take_pending_mcp_panel_auth() {
+                        self.app.status_message = Some(format!(
+                            "MCP panel auth requested for '{}' (not yet wired — restart operant to re-authenticate).",
+                            server_name
+                        ));
+                    }
+                    if self.app.take_pending_mcp_reconnect() {
+                        self.app.status_message = Some(
+                            "MCP reconnect requested (not yet wired — restart operant to reconnect).".to_string()
+                        );
+                    }
+
+                    // Poll device_auth_pending set by /connect for github-copilot
+                    // and openai-codex. Without this, the device-code dialog
+                    // shows "waiting for code" forever because no background
+                    // device-flow task is ever spawned. (Bug #15 from iter-82
+                    // audit — partial fix; full fix needs the device-flow task
+                    // spawned here.)
+                    if let Some(provider) = self.app.device_auth_pending.take() {
+                        self.app.status_message = Some(format!(
+                            "Device auth initiated for '{}' — open the provider's URL in a browser to complete. (Background polling not yet wired; restart operant after authenticating.)",
+                            provider
+                        ));
+                    }
+
                     // If a slash command set a pending shell command on a
                     // *previous* iteration, run it BEFORE processing the next
                     // input. (Slash commands set the field inside
