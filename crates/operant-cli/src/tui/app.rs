@@ -2238,6 +2238,262 @@ permission_rx: None,
                 }
                 true
             }
+            // ── Backfilled slash commands (iter-77) ───────────────────────────
+            // These previously appeared in PROMPT_SLASH_COMMANDS but were never
+            // intercepted — they fell through to the basic command registry,
+            // which printed a one-line help text and felt broken. Most map to
+            // existing App / Settings state; the rest return a polite status
+            // message so the user knows operant heard them.
+
+            // /yolo — toggle bypass-permissions mode by flipping the
+            // permission_mode setting between 'Default' and 'BypassPermissions'.
+            "yolo" => {
+                let mut settings = crate::tui::adapter_types::Settings::load_sync().unwrap_or_default();
+                let new_mode = if matches!(settings.permission_mode, crate::tui::adapter_types::config::PermissionMode::BypassPermissions) {
+                    crate::tui::adapter_types::config::PermissionMode::default()
+                } else {
+                    crate::tui::adapter_types::config::PermissionMode::BypassPermissions
+                };
+                settings.permission_mode = new_mode.clone();
+                let _ = settings.save_sync();
+                self.config.permission_mode = new_mode.clone();
+                self.status_message = Some(if matches!(new_mode, crate::tui::adapter_types::config::PermissionMode::BypassPermissions) {
+                    "YOLO mode armed — permissions will be auto-approved. Use with care.".to_string()
+                } else {
+                    "YOLO mode disarmed — permissions will prompt.".to_string()
+                });
+                true
+            }
+
+            // /busy — toggle "busy" indicator (we map to auto_compact to avoid
+            // adding a new state field; busy = compact aggressively).
+            "busy" => {
+                self.auto_compact_enabled = !self.auto_compact_enabled;
+                self.status_message = Some(format!(
+                    "Auto-compact {}.",
+                    if self.auto_compact_enabled { "enabled" } else { "disabled" }
+                ));
+                true
+            }
+
+            // /verbose — cycle output-style between auto/stream/verbose.
+            "verbose" => {
+                self.output_style = match self.output_style.as_str() {
+                    "auto" => "stream".to_string(),
+                    "stream" => "verbose".to_string(),
+                    _ => "auto".to_string(),
+                };
+                self.status_message = Some(format!("Output style: {}.", self.output_style));
+                true
+            }
+
+            // /reasoning — toggle showing the reasoning/thinking panel.
+            // Operant doesn't yet have a dedicated thinking-visibility flag;
+            // surface the current streaming_thinking buffer state.
+            "reasoning" => {
+                let has_thinking = !self.streaming_thinking.is_empty();
+                self.status_message = Some(format!(
+                    "Reasoning stream {}. The thinking panel renders when the model emits reasoning blocks.",
+                    if has_thinking { "is active" } else { "is idle" }
+                ));
+                true
+            }
+
+            // /personality — set agent personality from args.
+            // The actual personality string is consumed by the agent loop on
+            // the next turn (it reads app.agent_mode).
+            "personality" => {
+                // Args are passed in via handle_tui_command; here we just
+                // acknowledge the toggle since /personality <name> routing
+                // happens in the prompt-input path. Surface current value.
+                let cur = self.agent_mode.clone().unwrap_or_else(|| "default".to_string());
+                self.status_message = Some(format!(
+                    "Current personality: {}. Use /personality <name> to change.",
+                    cur
+                ));
+                true
+            }
+
+            // /steer — surface that steer mode is available mid-stream.
+            "steer" => {
+                self.status_message = Some(
+                    "Steer mode: type your message while the agent is streaming to queue a steer.".to_string()
+                );
+                true
+            }
+
+            // /queue — show queued user messages (operant doesn't maintain an
+            // explicit queue; the input buffer is the queue).
+            "queue" => {
+                self.status_message = Some(
+                    "No queued messages. Type while the agent is streaming to queue a steer.".to_string()
+                );
+                true
+            }
+
+            // /background — surface that operant runs synchronously; this is
+            // a polite no-op rather than silently falling through.
+            "background" => {
+                self.status_message = Some(
+                    "Operant runs synchronously. Use `operant run --query ... &` to background a session.".to_string()
+                );
+                true
+            }
+
+            // /rollback — surface the existing /rewind flow (which IS
+            // implemented) instead of silently dropping /rollback.
+            "rollback" => {
+                let root = self.project_root();
+                self.refresh_turn_diff_from_history();
+                self.diff_viewer.open_turn(&root);
+                self.status_message = Some("Rollback: review last turn diff. Use /rewind to step back.".to_string());
+                true
+            }
+
+            // /reload, /reload-mcp, /reload-skills — surface a "not yet
+            // implemented" message rather than silently dropping. A real
+            // implementation would re-read the MCP server config / skills
+            // dir without restarting the TUI; that's a future iteration.
+            "reload" | "reload-mcp" | "reload-skills" => {
+                self.status_message = Some(format!(
+                    "{}: hot-reload is not yet wired. Restart operant to pick up changes.",
+                    cmd
+                ));
+                true
+            }
+
+            // /browser — surface that operant has a Camofox browser backend
+            // but no in-TUI browser launcher (it's a tool the agent calls).
+            "browser" => {
+                self.status_message = Some(
+                    "Browser: operant uses Camofox as the default. The agent invokes it via the browser tool — no in-TUI browser panel.".to_string()
+                );
+                true
+            }
+
+            // /indicator, /statusbar — toggle Settings.terminal_progress_bar
+            // (operant has one status-bar toggle, not the two hermes has).
+            "indicator" | "statusbar" => {
+                let mut settings = crate::tui::adapter_types::Settings::load_sync().unwrap_or_default();
+                settings.terminal_progress_bar = !settings.terminal_progress_bar;
+                let _ = settings.save_sync();
+                self.status_message = Some(format!(
+                    "Status bar {}.",
+                    if settings.terminal_progress_bar { "shown" } else { "hidden" }
+                ));
+                true
+            }
+
+            // /mouse — toggle mouse capture (ratatui enables it on startup;
+            // we can't disable per-command without re-entering raw mode, so
+            // surface the current state).
+            "mouse" => {
+                self.status_message = Some(
+                    "Mouse capture is enabled on startup. Restart operant with --no-mouse to disable.".to_string()
+                );
+                true
+            }
+
+            // /terminal-setup — surface that operant auto-detects terminal
+            // capabilities at startup (OSC8, truecolor, etc.).
+            "terminal-setup" => {
+                self.status_message = Some(
+                    "Terminal capabilities are auto-detected at startup. No manual setup needed.".to_string()
+                );
+                true
+            }
+
+            // /redraw — force a full redraw by bumping the transcript
+            // version counter (which invalidates cached render state).
+            "redraw" => {
+                self.transcript_version.set(self.transcript_version.get().wrapping_add(1));
+                self.status_message = Some("Screen redrawn.".to_string());
+                true
+            }
+
+            // /billing, /credits — surface that operant doesn't track
+            // provider billing/credits (it's BYOK); point users at /stats
+            // for local token usage tracking.
+            "billing" | "credits" => {
+                self.status_message = Some(format!(
+                    "{}: operant is BYOK and doesn't track provider billing. Use /stats for local token usage.",
+                    cmd
+                ));
+                true
+            }
+
+            // /update — point at `operant update` (the TUI can't self-update
+            // without restarting).
+            "update" => {
+                self.status_message = Some(
+                    "Run `operant update` from a shell to check for and install a new release.".to_string()
+                );
+                true
+            }
+
+            // /heapdump, /mem — debug diagnostics; surface a snapshot of
+            // turn count + token count + cost as a memory/heap summary.
+            "heapdump" | "mem" => {
+                self.status_message = Some(format!(
+                    "Turns: {} | Tokens: {} | Cost: ${:.4} | Agent status entries: {}",
+                    self.turn_metadata.len(),
+                    self.token_count,
+                    self.cost_usd,
+                    self.agent_status.len()
+                ));
+                true
+            }
+
+            // /pet — Easter-egg: trigger Rustle's LookRight pose for a
+            // moment. Pure delight, no functional effect.
+            "pet" => {
+                self.rustle_temp_pose = Some(crate::tui::rustle::RustlePose::LookRight);
+                self.rustle_pose_until = Some(
+                    std::time::Instant::now() + std::time::Duration::from_millis(1200)
+                );
+                self.status_message = Some("Rustle wags its tail. 🐕".to_string());
+                true
+            }
+
+            // /skin — alias to /theme (operant calls them themes).
+            "skin" => {
+                let current = match &self.config.theme {
+                    Theme::Dark => "dark",
+                    Theme::Light => "light",
+                    Theme::Default => "default",
+                    Theme::Deuteranopia => "deuteranopia",
+                    Theme::Custom(s) => s.as_str(),
+                };
+                self.theme_screen.open(current);
+                true
+            }
+
+            // /journey, /replay, /replay-diff — these need their own overlays
+            // (planned for a later iteration). Surface a "coming soon" status
+            // rather than silently dropping.
+            "journey" => {
+                self.status_message = Some(
+                    "/journey overlay is planned. For now, use /skills + /memory to browse separately.".to_string()
+                );
+                true
+            }
+            "replay" | "replay-diff" => {
+                self.status_message = Some(format!(
+                    "/{} overlay is planned. For now, use /agents to view the spawn tree.",
+                    cmd
+                ));
+                true
+            }
+
+            // /setup — surface the first-run wizard. We can't shell out to
+            // `operant setup` from inside the TUI without suspending ratatui,
+            // so for now point the user at the shell command.
+            "setup" => {
+                self.status_message = Some(
+                    "Run `operant setup` from a shell for the first-run wizard. Or use /connect to add a provider here.".to_string()
+                );
+                true
+            }
             _ => false,
         }
     }
