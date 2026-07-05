@@ -806,6 +806,16 @@ pub struct App {
     pub remote_session_url: Option<String>,
     /// Live MCP manager snapshot source when available.
     pub mcp_manager: Option<Arc<crate::tui::adapter_types::mcp::McpManager>>,
+    /// Real operant-core McpManager handle for reconnect operations.
+    /// Set by TuiApp::run after create_runtime_agent. When /mcp 'r' is
+    /// pressed, the run loop calls remove_server + add_server on this.
+    /// (iter-93 — closes the /mcp reconnect parity gap.)
+    pub core_mcp_manager: Option<Arc<operant_core::mcp::McpManager>>,
+    /// Agent steer queue handle. Set by TuiApp::run after create_runtime_agent.
+    /// When the user types while a turn is streaming, the input is pushed here
+    /// so the agent sees it as a steer directive at the next iteration boundary.
+    /// (iter-93 — closes the /steer parity gap.)
+    pub steer_queue_handle: Option<Arc<tokio::sync::Mutex<Vec<String>>>>,
     /// Queued request for a real MCP reconnect from the interactive loop.
     pub pending_mcp_reconnect: bool,
     /// Pending MCP panel-auth request for the interactive loop.
@@ -1317,6 +1327,8 @@ impl App {
             session_title: None,
             remote_session_url: None,
             mcp_manager: None,
+            core_mcp_manager: None,
+            steer_queue_handle: None,
             pending_mcp_reconnect: false,
             pending_mcp_panel_auth: None,
             file_history: None,
