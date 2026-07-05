@@ -2524,23 +2524,45 @@ impl PlatformAdapter for WebhookAdapter {
                           State((tx, secret)): State<(
                         mpsc::UnboundedSender<IncomingMessage>,
                         Option<String>,
-                    )>| async move {
-                        // Validate HMAC signature if secret is configured
+                    )>,
+                          body: axum::body::Bytes| async move {
+                        // Validate HMAC signature if secret is configured.
+                        // Uses standard HMAC-SHA256(secret, body) — not the
+                        // old non-standard SHA256(route+secret). Supports
+                        // multiple signature header names for interop:
+                        // x-webhook-signature (custom), x-hub-signature-256
+                        // (GitHub), Stripe-Signature (Stripe).
+                        // (iter-101 — closes Bug #9 from iter-98 audit.)
                         if let Some(ref sec) = secret {
-                            if let Some(sig) = headers
+                            let sig = headers
                                 .get("x-webhook-signature")
-                                .and_then(|v| v.to_str().ok())
-                            {
-                                // Simple HMAC-SHA256 hex comparison
-                                // In production, use constant-time comparison
-                                let expected = {
-                                    use sha2::{Digest, Sha256};
-                                    let mut hasher = Sha256::new();
-                                    hasher.update(route.as_bytes());
-                                    hasher.update(sec.as_bytes());
-                                    format!("{:x}", hasher.finalize())
+                                .or_else(|| headers.get("x-hub-signature-256"))
+                                .or_else(|| headers.get("stripe-signature"))
+                                .and_then(|v| v.to_str().ok());
+
+                            if let Some(sig) = sig {
+                                // Strip "sha256=" prefix if present (GitHub/Stripe format).
+                                let sig_hex = sig.strip_prefix("sha256=").unwrap_or(sig);
+                                // Compute HMAC-SHA256(secret, body).
+                                use hmac::{Hmac, Mac};
+                                use sha2::Sha256;
+                                type HmacSha256 = Hmac<Sha256>;
+                                let mut mac = match HmacSha256::new_from_slice(sec.as_bytes()) {
+                                    Ok(m) => m,
+                                    Err(_) => {
+                                        return (
+                                            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                                            "HMAC key error",
+                                        )
+                                            .into_response();
+                                    }
                                 };
-                                if sig != expected {
+                                mac.update(&body);
+                                let expected = mac.finalize().into_bytes();
+                                let expected_hex = hex::encode(expected);
+                                // Constant-time comparison via the
+                                // constant_time_eq crate.
+                                if !constant_time_eq::constant_time_eq(sig_hex.as_bytes(), expected_hex.as_bytes()) {
                                     return (
                                         axum::http::StatusCode::UNAUTHORIZED,
                                         "Invalid signature",
@@ -2550,27 +2572,44 @@ impl PlatformAdapter for WebhookAdapter {
                             } else {
                                 return (
                                     axum::http::StatusCode::UNAUTHORIZED,
-                                    "Missing x-webhook-signature header",
+                                    "Missing signature header (x-webhook-signature / x-hub-signature-256 / stripe-signature)",
                                 )
                                     .into_response();
                             }
                         }
 
-                        // We can't easily extract the body here without
-                        // consuming it for HMAC, so for now we accept
-                        // any JSON body as the message content.
-                        // The route name becomes the channel_id.
+                        // Parse the body as the message content. Try JSON
+                        // first (most webhooks send JSON); fall back to UTF-8
+                        // text. The route name becomes the channel_id.
+                        // (iter-101 — previously the body was thrown away and
+                        // the agent received "Webhook received on /{route}".)
+                        let content = if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&body) {
+                            // Try common fields: text, message, content, body, data.
+                            // If none match, pretty-print the whole JSON.
+                            v.get("text")
+                                .or_else(|| v.get("message"))
+                                .or_else(|| v.get("content"))
+                                .or_else(|| v.get("body"))
+                                .or_else(|| v.get("data"))
+                                .and_then(|t| t.as_str())
+                                .map(|s| s.to_string())
+                                .unwrap_or_else(|| serde_json::to_string_pretty(&v).unwrap_or_default())
+                        } else {
+                            // Not JSON — use raw UTF-8 text.
+                            String::from_utf8_lossy(&body).to_string()
+                        };
+
                         let msg = IncomingMessage {
                             platform: "webhook".to_string(),
                             channel_id: format!("webhook:{route}"),
                             user_id: "webhook".to_string(),
                             username: "Webhook".to_string(),
-                            content: format!("Webhook received on /{route}"),
+                            content,
                             is_group_chat: false,
             timestamp: chrono::Utc::now().timestamp(),
             thread_id: None,
                             
-                            raw: serde_json::json!({"route": route}),
+                            raw: serde_json::from_slice(&body).unwrap_or(serde_json::json!({"route": route})),
                         };
 
                         if tx.send(msg).is_err() {
