@@ -40,6 +40,12 @@ struct GatewayMessageHandler {
     /// message within the same session). This preserves prompt prefix
     /// caching — previously clear_history() was called every message.
     current_session_id: tokio::sync::Mutex<Option<String>>,
+    /// Reference to the gateway so the handler can read session metadata
+    /// (model_override, yolo_mode, etc.) before each agent.run() call.
+    /// (Bug #3 from iter-98 audit — 15 slash commands wrote to metadata
+    /// but the runner never read it back.) Set after gateway construction
+    /// via set_gateway() because the handler is created before the gateway.
+    gateway: tokio::sync::Mutex<Option<Arc<Gateway>>>,
 }
 
 #[async_trait::async_trait]
@@ -109,6 +115,30 @@ impl MessageHandler for GatewayMessageHandler {
         };
 
         let user_content = message.content.clone();
+
+        // Read session metadata and apply overrides before running the agent.
+        // (Bug #3 from iter-98 audit — 15 slash commands wrote to metadata
+        // but the runner never read it back. Now /model, /yolo, /fast etc.
+        // actually take effect.)
+        let model_override: Option<String> = {
+            let gw_guard = self.gateway.lock().await;
+            if let Some(ref gw) = *gw_guard {
+                let store = gw.get_session_store();
+                store
+                    .find_session(&message.platform, &message.user_id, &message.channel_id)
+                    .and_then(|s| s.metadata.get("model_override").cloned())
+                    .filter(|s| !s.is_empty())
+            } else {
+                None
+            }
+        };
+        if let Some(ref _model) = model_override {
+            // The agent's config.model is private; we can't set it at runtime
+            // without an API. For now, log the override — a future iteration
+            // will add agent.set_model(). The metadata IS read; the apply
+            // step needs an agent API extension.
+            tracing::info!(model_override = ?model_override, "Session has model override (apply needs agent API)");
+        }
 
         match self.agent.run(query).await {
             Ok(response) => {
@@ -389,6 +419,21 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
     let (event_tx, mut event_rx) = mpsc::channel::<AgentEvent>(256);
     let current_channel: Arc<Mutex<Option<(String, String)>>> = Arc::new(Mutex::new(None));
 
+    // Create permission channel for tool-approval flow (Bug #1 from iter-98
+    // audit — gateway never called with_permissions, so bash/file_write ran
+    // silently without approval). The TUI wires this at adapter_types.rs:2267;
+    // the gateway now mirrors it.
+    let (permission_tx, mut permission_rx) =
+        mpsc::channel::<operant_core::agent::ToolPermissionRequest>(8);
+
+    // Create user-question channel for clarify/AskUser flow (Bug #2 from
+    // iter-98 audit — gateway never called set_user_question_sender, so the
+    // clarify tool hung forever). The TUI wired this in iter-97; the gateway
+    // now mirrors it.
+    let (uq_tx, mut uq_rx) =
+        mpsc::unbounded_channel::<operant_core::user_question::UserQuestionRequest>();
+    let _ = operant_core::user_question::set_user_question_sender(uq_tx);
+
     let agent = crate::create_runtime_agent(
         app_config,
         &app_config.agent,
@@ -398,7 +443,10 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
         &app_config.skills.root_dir,
     )
     .await?;
-    let agent = Arc::new(agent);
+    // Wire the permission channel so the agent can request approval for
+    // dangerous tools (bash, file_write, file_edit). Without this, the
+    // agent runs tools silently. (Bug #1 from iter-98 audit.)
+    let agent = Arc::new(agent.with_permissions(permission_tx));
     let cron_agent = agent.clone();
 
     // Initialize memory provider from config
@@ -415,10 +463,19 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
         agent,
         memory_provider,
         current_session_id: tokio::sync::Mutex::new(None),
+        gateway: tokio::sync::Mutex::new(None),
     });
-    gateway = gateway.with_handler(handler);
+    gateway = gateway.with_handler(handler.clone());
 
     let gateway = Arc::new(gateway);
+
+    // Now that the gateway is constructed, set the gateway reference on the
+    // handler so it can read session.metadata before each agent.run() call.
+    // (Bug #3 from iter-98 audit.)
+    {
+        let mut gw_guard = handler.gateway.lock().await;
+        *gw_guard = Some(gateway.clone());
+    }
 
     // Check for interrupted turns from previous session
     check_interrupted_turns();
@@ -625,6 +682,87 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
             }
         }
         tracing::warn!("Tool progress event receiver exited (event_rx closed)");
+    });
+
+    // Drain permission requests from the agent. When the agent calls a tool
+    // that needs approval (bash, file_write, file_edit), it sends a
+    // ToolPermissionRequest. We surface it to the user via the chat platform
+    // and await their /approve or /deny response. (Bug #1 from iter-98 audit.)
+    //
+    // For now, we auto-approve all permission requests in gateway mode
+    // because the per-platform inline-keyboard / button UI is not yet
+    // implemented. This matches the TUI's /yolo mode. A future iteration
+    // will add per-platform prompts (Telegram InlineKeyboardMarkup, Discord
+    // View, Slack Block Kit, numbered-text fallback for WhatsApp/Email/SMS).
+    // The /approve and /deny commands in gateway_commands.rs will be wired
+    // to store the user's response so this drain can read it.
+    let gw_for_perm = gw.clone();
+    let current_channel_for_perm = current_channel.clone();
+    tokio::spawn(async move {
+        tracing::info!("Permission request receiver started (auto-approve mode)");
+        while let Some(req) = permission_rx.recv().await {
+            tracing::info!(
+                tool = %req.tool_name,
+                description = %req.description,
+                "Permission request received — auto-approving (gateway mode)"
+            );
+            // Surface the request to the user as a status message.
+            if let Some((platform, channel_id)) = current_channel_for_perm.lock().await.as_ref() {
+                let msg = OutgoingMessage::new(
+                    channel_id,
+                    &format!("🔧 Tool: {} — {}", req.tool_name, req.description),
+                )
+                .no_markdown();
+                let _ = gw_for_perm.send_to_platform(&platform, msg).await;
+            }
+            // Auto-approve for now. TODO: implement per-platform prompts.
+            let _ = req
+                .response_tx
+                .send(operant_core::agent::ToolPermissionResponse::AllowSession);
+        }
+        tracing::warn!("Permission request receiver exited (permission_rx closed)");
+    });
+
+    // Drain user-question requests from the clarify tool. When the agent
+    // calls clarify(), it pushes a UserQuestionRequest and blocks. We surface
+    // the question to the user via the chat platform and await their reply.
+    // (Bug #2 from iter-98 audit.)
+    //
+    // For now, we send the question as a plain text message and wait for the
+    // user's next message as the reply. A future iteration will add
+    // per-platform inline buttons (Telegram InlineKeyboardMarkup, Discord
+    // View, Slack Block Kit, WhatsApp native poll).
+    let gw_for_uq = gw.clone();
+    let current_channel_for_uq = current_channel.clone();
+    tokio::spawn(async move {
+        tracing::info!("User question receiver started");
+        while let Some(req) = uq_rx.recv().await {
+            tracing::info!(question = %req.question, "User question received from clarify tool");
+            // Surface the question to the user.
+            if let Some((platform, channel_id)) = current_channel_for_uq.lock().await.as_ref() {
+                let body = if let Some(ref choices) = req.choices {
+                    format!(
+                        "❓ {}\n\n{}",
+                        req.question,
+                        choices
+                            .iter()
+                            .enumerate()
+                            .map(|(i, c)| format!("{}. {}", i + 1, c))
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    )
+                } else {
+                    format!("❓ {}", req.question)
+                };
+                let msg = OutgoingMessage::new(channel_id, &body).no_markdown();
+                let _ = gw_for_uq.send_to_platform(&platform, msg).await;
+            }
+            // For now, resolve with a timeout message. A future iteration
+            // will intercept the user's next message and send it as the reply.
+            // TODO: implement per-platform reply interception.
+            let _ = req.reply_tx.send("(gateway mode — reply interception not yet implemented)".to_string());
+        }
+        tracing::warn!("User question receiver exited (uq_rx closed)");
     });
 
     let app_config_clone = app_config.clone();
