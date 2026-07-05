@@ -611,12 +611,18 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
     // Spawn tool progress event receiver — appends tool calls to a single
     // chronological message by editing in-place. This gives users a clean
     // single-message timeline of all tool calls (like the operant-agent does).
+    // Also drains AgentEvent::Content for streaming progressive-edit
+    // (iter-100 — closes Bug #12 from iter-98 audit).
     let gw_for_events = gw.clone();
     let current_channel_for_events = current_channel.clone();
     tokio::spawn(async move {
         // (platform, channel_id) -> (message_id, tool_lines)
         let mut progress_msgs: Hm<(String, String), (String, Vec<String>)> = Hm::new();
-        tracing::info!("Tool progress event receiver started");
+        // Streaming state: accumulated text + message_id for progressive edit.
+        let mut stream_text = String::new();
+        let mut stream_msg_id: Option<String> = None;
+        let mut last_edit_time = std::time::Instant::now();
+        tracing::info!("Tool progress + streaming event receiver started");
         while let Some(event) = event_rx.recv().await {
             let (platform, channel_id) = match current_channel_for_events.lock().await.as_ref() {
                 Some((p, c)) => (p.clone(), c.clone()),
@@ -678,10 +684,75 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                         }
                     }
                 }
+                AgentEvent::Content { text } => {
+                    // Streaming progressive edit (iter-100 — closes Bug #12).
+                    // Accumulate text and edit the message in-place every
+                    // 500ms so the user sees tokens as they arrive.
+                    stream_text.push_str(&text);
+                    // Debounce: only edit if 500ms have passed since the last edit.
+                    if last_edit_time.elapsed() > std::time::Duration::from_millis(500) {
+                        last_edit_time = std::time::Instant::now();
+                        let msg = OutgoingMessage::new(&channel_id, &stream_text);
+                        if let Some(ref msg_id) = stream_msg_id {
+                            let _ = gw_for_events
+                                .edit_message(&platform, &channel_id, msg_id, msg)
+                                .await;
+                        } else {
+                            // First chunk — send a new message and store the id.
+                            match gw_for_events.send_message_return_id(&platform, msg).await {
+                                Ok(msg_id) => {
+                                    stream_msg_id = Some(msg_id);
+                                }
+                                Err(e) => {
+                                    tracing::warn!(error = %e, "Failed to send first stream chunk");
+                                }
+                            }
+                        }
+                    }
+                }
+                AgentEvent::Reasoning { text: _ } | AgentEvent::Thinking { content: _ } => {
+                    // Reasoning/thinking tokens — don't surface to the user
+                    // in gateway mode (the TUI shows them via /reasoning toggle,
+                    // but gateway channels don't have that toggle). Just log.
+                    tracing::debug!("Reasoning/thinking token received (not surfaced in gateway mode)");
+                }
+                AgentEvent::Done { .. } => {
+                    // Final message — do a final edit with the complete text.
+                    if !stream_text.is_empty() {
+                        if let Some(ref msg_id) = stream_msg_id {
+                            let msg = OutgoingMessage::new(&channel_id, &stream_text);
+                            let _ = gw_for_events
+                                .edit_message(&platform, &channel_id, msg_id, msg)
+                                .await;
+                        }
+                        // Reset streaming state for the next turn.
+                        stream_text.clear();
+                        stream_msg_id = None;
+                    }
+                }
+                AgentEvent::Usage { .. } | AgentEvent::IterationComplete { .. } => {
+                    // Usage + iteration events are not surfaced to the user
+                    // in gateway mode. The TUI uses them for /stats and the
+                    // iter-N pill; the gateway doesn't have those overlays.
+                }
+                AgentEvent::Error { error } => {
+                    // Surface errors to the user.
+                    let body = format!("❌ Error: {}", error);
+                    let msg = OutgoingMessage::new(&channel_id, &body).no_markdown();
+                    let _ = gw_for_events.send_to_platform(&platform, msg).await;
+                    // Reset streaming state.
+                    stream_text.clear();
+                    stream_msg_id = None;
+                }
+                AgentEvent::ToolPermissionRequest { .. } => {
+                    // Permission requests are drained by the dedicated
+                    // permission_rx task (iter-99). The event_rx copy is
+                    // a duplicate — skip it.
+                }
                 _ => {}
             }
         }
-        tracing::warn!("Tool progress event receiver exited (event_rx closed)");
+        tracing::warn!("Tool progress + streaming event receiver exited (event_rx closed)");
     });
 
     // Drain permission requests from the agent. When the agent calls a tool
