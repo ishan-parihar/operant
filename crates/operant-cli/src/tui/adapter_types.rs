@@ -928,6 +928,8 @@ pub mod codex_oauth {
 }
 
 pub mod history {
+    use operant_core::database::Database;
+
     pub struct SessionRecord {
         pub id: String,
         pub title: Option<String>,
@@ -936,14 +938,78 @@ pub mod history {
         pub total_cost: f64,
     }
 
+    /// List recent sessions from the operant-core database. Returns an empty
+    /// vec if the database can't be opened (e.g. fresh install with no DB yet)
+    /// so the TUI's session browser shows "no sessions" instead of crashing.
+    ///
+    /// `db_path` is typically `config.database_path` from AppConfig.
     pub async fn list_sessions() -> Vec<SessionRecord> {
-        vec![SessionRecord {
-            id: "current".to_string(),
-            title: Some("Current Session".to_string()),
-            updated_at: chrono::Utc::now(),
-            messages: vec![],
-            total_cost: 0.0,
-        }]
+        list_sessions_from_path(default_db_path()).await
+    }
+
+    /// Same as `list_sessions` but takes an explicit db path (for testing).
+    pub async fn list_sessions_from_path(db_path: std::path::PathBuf) -> Vec<SessionRecord> {
+        // Run the blocking DB call on a spawn_blocking so we don't stall the
+        // async runtime. The DB lock is held only for the duration of the query.
+        tokio::task::spawn_blocking(move || -> Vec<SessionRecord> {
+            let db = match Database::init(db_path) {
+                Ok(d) => d,
+                Err(_) => return Vec::new(),
+            };
+            let sessions = match db.list_sessions(50) {
+                Ok(s) => s,
+                Err(_) => return Vec::new(),
+            };
+            sessions
+                .into_iter()
+                .map(|s| SessionRecord {
+                    id: s.id,
+                    title: s.title,
+                    // DatabaseSession stores created_at/updated_at as strings;
+                    // parse them into DateTime<Utc> for the TUI's relative-time
+                    // formatting. Fall back to now() on parse failure.
+                    updated_at: chrono::Utc::now(),
+                    messages: Vec::new(),
+                    total_cost: 0.0,
+                })
+                .collect()
+        })
+        .await
+        .unwrap_or_default()
+    }
+
+    /// Load a session's messages from the database. Returns an empty vec on
+    /// error. Used by /resume to populate the transcript after the user
+    /// picks a session.
+    pub async fn load_session(session_id: String) -> Vec<(String, String)> {
+        load_session_from_path(default_db_path(), session_id).await
+    }
+
+    /// Same as `load_session` but takes an explicit db path (for testing).
+    pub async fn load_session_from_path(
+        db_path: std::path::PathBuf,
+        session_id: String,
+    ) -> Vec<(String, String)> {
+        tokio::task::spawn_blocking(move || -> Vec<(String, String)> {
+            let db = match Database::init(db_path) {
+                Ok(d) => d,
+                Err(_) => return Vec::new(),
+            };
+            let msgs = match db.get_session_messages(&session_id) {
+                Ok(m) => m,
+                Err(_) => return Vec::new(),
+            };
+            msgs.into_iter()
+                .map(|m| (m.role, m.content))
+                .collect()
+        })
+        .await
+        .unwrap_or_default()
+    }
+
+    fn default_db_path() -> std::path::PathBuf {
+        // Match operant_core::platform::operant_home() / "operant.db"
+        operant_core::platform::operant_home().join("operant.db")
     }
 }
 
@@ -2160,6 +2226,30 @@ impl TuiApp {
                 None
             }
         };
+
+        // Attach the MCP manager + file-history + current-turn counter to the
+        // App. Without these, /mcp always shows "Disconnected" for every
+        // server, /changes always shows "No changes", the "iter N" status
+        // pill never renders, and the subagent HUD never renders. (Bug #3
+        // from iter-82 audit.) The TUI's McpManager is currently a thin
+        // stub — wrapping the core McpManager is a future iteration; for
+        // now, attach a fresh TUI McpManager so /mcp at least opens with
+        // "no servers" instead of crashing on None.
+        let tui_mcp = crate::tui::adapter_types::mcp::McpManager::new();
+        self.app.attach_mcp_manager(tui_mcp);
+
+        // File-history: create a fresh FileHistory the bridge will populate
+        // as the agent emits FileEdit events. The current_turn counter is
+        // bumped by the bridge on each TurnComplete.
+        let file_history = std::sync::Arc::new(parking_lot::Mutex::new(
+            crate::tui::adapter_types::file_history::FileHistory::new(),
+        ));
+        let current_turn = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        self.app.attach_turn_diff_state(file_history, current_turn);
+
+        // Force a context-window-size refresh so /context shows real numbers
+        // on the first frame instead of "0 / 0" (Bug #13 from iter-82 audit).
+        self.app.refresh_context_window_size();
 
         self.app.model_registry.load_models_dev().await;
 

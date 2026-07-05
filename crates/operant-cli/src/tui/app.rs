@@ -907,6 +907,14 @@ pub struct App {
     /// Receiver for background session-list results.
     pub session_list_rx:
         Option<tokio::sync::mpsc::Receiver<Vec<crate::tui::session_browser::SessionEntry>>>,
+    /// Session ID to load on the next run-loop iteration (set by /resume
+    /// Enter). The run loop spawns a background load_session task and stores
+    /// the receiver in session_load_rx.
+    pub session_load_pending: Option<String>,
+    /// Receiver for background session-message-load results. Each item is a
+    /// Vec of (role, content) pairs that will replace app.messages.
+    pub session_load_rx:
+        Option<tokio::sync::mpsc::Receiver<Vec<(String, String)>>>,
     /// Credential store for provider API keys and OAuth tokens.
     pub auth_store: crate::tui::adapter_types::AuthStore,
     /// Messages typed by the user while a query was streaming. They will be
@@ -1339,6 +1347,8 @@ impl App {
             model_picker_provider_id: None,
             session_list_pending: false,
             session_list_rx: None,
+            session_load_pending: None,
+            session_load_rx: None,
             auth_store,
             queued_messages: std::collections::VecDeque::new(),
             pending_auto_submit: false,
@@ -3716,6 +3726,24 @@ permission_rx: None,
                         KeyCode::Up => self.session_browser.select_prev(),
                         KeyCode::Down => self.session_browser.select_next(),
                         KeyCode::Char('r') => self.session_browser.start_rename(),
+                        // Enter: load the selected session's messages from the
+                        // database and replace app.messages. The actual load
+                        // happens asynchronously in the run loop via
+                        // session_load_pending → session_load_rx.
+                        KeyCode::Enter => {
+                            if let Some(entry) = self
+                                .session_browser
+                                .sessions
+                                .get(self.session_browser.selected_idx)
+                                .cloned()
+                            {
+                                self.session_browser.close();
+                                self.session_load_pending = Some(entry.id.clone());
+                                self.status_message = Some(
+                                    format!("Loading session '{}'…", entry.title),
+                                );
+                            }
+                        }
                         _ => {}
                     }
                 }
@@ -6287,11 +6315,22 @@ permission_rx: None,
                 self.is_streaming = false;
                 self.spinner_verb = None;
 
-                // Update context window usage from the usage info.
+                // Update context window usage from the usage info AND record
+                // the cost in the cost_tracker. Without record_usage, every
+                // /stats, /cost, /heapdump, /mem, /context query returns 0
+                // tokens / $0.00 forever (Bug #1 from iter-82 audit).
                 if let Some(ref u) = usage {
                     let turn_tokens = u.input_tokens + u.output_tokens
                         + u.cache_creation_input_tokens + u.cache_read_input_tokens;
                     self.context_used_tokens = self.context_used_tokens.saturating_add(turn_tokens as u64);
+
+                    // Record into the cost_tracker. get_mut only succeeds when
+                    // there are no other Arc handles — the run loop holds the
+                    // only strong ref between frames, so this is safe.
+                    if let Some(tracker) = Arc::get_mut(&mut self.cost_tracker) {
+                        tracker.record_usage(u.input_tokens, u.output_tokens);
+                    }
+                    self.cost_usd = self.cost_tracker.total_cost;
                 }
                 // Record elapsed time and pick a completion verb
                 let seed = self.frame_count as usize ^ (self.messages.len() * 7);
@@ -6433,6 +6472,67 @@ permission_rx: None,
                         .collect();
                     let _ = tx.send(entries).await;
                 });
+            }
+
+            // Spawn async session-message load when /resume picks a session.
+            // The background task calls history::load_session(id) and sends
+            // the Vec<(role, content)> back via session_load_rx.
+            if let Some(session_id) = self.session_load_pending.take() {
+                let (tx, rx) = tokio::sync::mpsc::channel(1);
+                self.session_load_rx = Some(rx);
+                tokio::spawn(async move {
+                    let msgs = crate::tui::adapter_types::history::load_session(session_id).await;
+                    let _ = tx.send(msgs).await;
+                });
+            }
+
+            // Drain background session-load results. Replace app.messages
+            // with the loaded (role, content) pairs.
+            if let Some(ref mut rx) = self.session_load_rx {
+                match rx.try_recv() {
+                    Ok(msgs) => {
+                        self.messages.clear();
+                        self.display_messages.clear();
+                        use crate::tui::adapter_types::types::{Message, MessageContent, Role};
+                        for (role, content) in msgs {
+                            let r = match role.as_str() {
+                                "user" => Role::User,
+                                "assistant" => Role::Assistant,
+                                _ => Role::System,
+                            };
+                            self.messages.push(Message {
+                                role: r,
+                                content: MessageContent::Text(content),
+                            });
+                        }
+                        self.invalidate_transcript();
+                        self.session_load_rx = None;
+                        self.status_message = Some("Session loaded.".to_string());
+                    }
+                    Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
+                        self.session_load_rx = None;
+                        self.status_message = Some("Session load failed.".to_string());
+                    }
+                    Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {}
+                }
+            }
+
+            // Drain user-question events from the AskUserQuestion tool. The
+            // sender side is not yet wired to the agent (requires agent API
+            // extension); this drain is a no-op until that wiring lands, but
+            // it ensures the receiver side is correct so a future iteration
+            // only needs to assign user_question_rx. (Bug #2 from iter-82
+            // audit — partial fix; full fix needs agent API.)
+            if let Some(ref mut rx) = self.user_question_rx {
+                while let Ok(event) = rx.try_recv() {
+                    // Open the ask_user_dialog with the question + options.
+                    // reply_tx is a dummy oneshot that drops the response —
+                    // the agent side isn't wired to await it yet.
+                    let (tx, _rx) = tokio::sync::oneshot::channel::<String>();
+                    self.ask_user_dialog.open(event.question, Some(event.options), tx);
+                    // Only one dialog at a time; stop draining after the first.
+                    break;
+                }
             }
 
             // Drain voice transcription events (non-blocking).
