@@ -30,6 +30,7 @@ mod cmd_skills;
 mod cmd_status;
 mod cmd_tools;
 mod cmd_trajectory;
+mod cmd_tui_debug;
 mod cmd_uninstall;
 mod cmd_update;
 mod cmd_version;
@@ -374,6 +375,16 @@ enum Commands {
     Trajectory {
         #[command(subcommand)]
         cmd: cmd_trajectory::TrajectorySubcommand,
+    },
+    /// TUI debugging tools — simulate every TUI overlay from the CLI.
+    ///
+    /// Each subcommand runs the same data-loading path the TUI uses for the
+    /// corresponding overlay, but prints to stdout instead of rendering. Use
+    /// this to verify an overlay's data loads correctly without entering
+    /// the TUI, or to debug a broken overlay from the shell.
+    Tui {
+        #[command(subcommand)]
+        cmd: cmd_tui_debug::TuiDebugSubcommand,
     },
 }
 
@@ -1521,6 +1532,9 @@ async fn main() -> Result<()> {
         }
         Some(Commands::Trajectory { cmd }) => {
             cmd_trajectory::handle_trajectory_command(cmd.clone()).await?;
+        }
+        Some(Commands::Tui { cmd }) => {
+            cmd_tui_debug::handle_tui_debug_command(&loaded.config, cmd.clone()).await?;
         }
         None => {
             // No command provided - launch TUI in interactive mode
