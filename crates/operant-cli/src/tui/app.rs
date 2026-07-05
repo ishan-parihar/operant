@@ -1988,17 +1988,25 @@ permission_rx: None,
         if cmd == "mcp" && !args.trim().is_empty() {
             return false;
         }
-        self.intercept_slash_command(cmd)
+        self.intercept_slash_command_with_args_impl(cmd, args)
     }
 
     pub fn handle_tui_command(&mut self, cmd: &str, args: &str) -> bool {
         if cmd == "mcp" && !args.trim().is_empty() {
             return false;
         }
-        self.intercept_slash_command(cmd)
+        self.intercept_slash_command_with_args_impl(cmd, args)
     }
 
+    /// Backwards-compatible wrapper that takes no args (treats args as empty).
+    /// Kept so external callers (and the existing `?` shortcut path) still work.
     pub fn intercept_slash_command(&mut self, cmd: &str) -> bool {
+        self.intercept_slash_command_with_args_impl(cmd, "")
+    }
+
+    /// Implementation that receives both cmd and args. Most slash commands
+    /// ignore args; a few (like /personality <name>) consume them.
+    fn intercept_slash_command_with_args_impl(&mut self, cmd: &str, args: &str) -> bool {
         self.close_secondary_views();
         self.dismiss_error_notifications();
         match cmd {
@@ -2269,11 +2277,12 @@ permission_rx: None,
                 true
             }
             "help" => {
-                // Open the help overlay (same as pressing `?` or F1).
-                if !self.help_overlay.visible {
-                    self.show_help = true;
-                    self.help_overlay.toggle();
-                }
+                // Toggle the help overlay (same as pressing `?` or F1).
+                // Bug #8 from iter-82 audit: previously only opened (never
+                // closed), so pressing /help twice showed two different
+                // help overlays (the rich one + the legacy show_help fallback).
+                self.help_overlay.toggle();
+                self.show_help = self.help_overlay.visible;
                 true
             }
             // ── Backfilled slash commands (iter-77) ───────────────────────────
@@ -2341,14 +2350,21 @@ permission_rx: None,
             // The actual personality string is consumed by the agent loop on
             // the next turn (it reads app.agent_mode).
             "personality" => {
-                // Args are passed in via handle_tui_command; here we just
-                // acknowledge the toggle since /personality <name> routing
-                // happens in the prompt-input path. Surface current value.
-                let cur = self.agent_mode.clone().unwrap_or_else(|| "default".to_string());
-                self.status_message = Some(format!(
-                    "Current personality: {}. Use /personality <name> to change.",
-                    cur
-                ));
+                let trimmed = args.trim();
+                if trimmed.is_empty() {
+                    // No args — show current value.
+                    let cur = self.agent_mode.clone().unwrap_or_else(|| "default".to_string());
+                    self.status_message = Some(format!(
+                        "Current personality: {}. Use /personality <name> to change.",
+                        cur
+                    ));
+                } else {
+                    // Set the new personality. agent_mode_changed=true signals
+                    // the run loop to update the query config on the next turn.
+                    self.agent_mode = Some(trimmed.to_string());
+                    self.agent_mode_changed = true;
+                    self.status_message = Some(format!("Personality set to: {}.", trimmed));
+                }
                 true
             }
 
@@ -3662,11 +3678,18 @@ permission_rx: None,
                         // The "free" composite's picker entries already carry
                         // a routing prefix (`free/…`, `zen/…`, `openrouter/…`)
                         // so re-prefixing would produce nonsense like
-                        // `free/free/auto`.
+                        // `free/free/auto`. Also, OpenRouter catalog entries
+                        // are already prefixed with `openrouter/…` — check
+                        // for that to avoid `openrouter/openrouter/anthropic/…`.
+                        // (Bug #14 from iter-82 audit.)
                         let provider = self.config.provider.as_deref().unwrap_or("anthropic");
+                        let prefix = format!("{}/", provider);
                         let full_model = if provider == "anthropic" {
                             model_id.clone()
                         } else if provider == "free" {
+                            model_id.clone()
+                        } else if model_id.starts_with(&prefix) {
+                            // Already prefixed (e.g. openrouter/anthropic/claude-…).
                             model_id.clone()
                         } else {
                             format!("{}/{}", provider, model_id)
@@ -6426,6 +6449,11 @@ permission_rx: None,
         loop {
             self.frame_count = self.frame_count.wrapping_add(1);
 
+            // Tick notifications so expired ones are removed. Without this,
+            // notifications with a TTL stay visible forever (Bug #5 from
+            // iter-82 audit).
+            self.notifications.tick();
+
             // Drain background session-list results.
             if let Some(ref mut rx) = self.session_list_rx {
                 match rx.try_recv() {
@@ -7139,14 +7167,24 @@ mod tests {
     }
 
     #[test]
-    fn test_help_slash_command_is_idempotent_when_already_open() {
+    fn test_help_slash_command_toggles() {
+        // iter-85: /help now toggles (was idempotent-open in iter-81, which
+        // was itself a regression — the audit found that pressing /help twice
+        // showed two different help overlays). Correct behavior: first call
+        // opens, second call closes.
         let mut app = make_app();
         // First call opens it.
         assert!(app.intercept_slash_command("help"));
         assert!(app.help_overlay.visible);
-        // Second call while already open should leave it open (not toggle it off).
+        assert!(app.show_help);
+        // Second call closes it (toggle, not idempotent-open).
+        assert!(app.intercept_slash_command("help"));
+        assert!(!app.help_overlay.visible);
+        assert!(!app.show_help);
+        // Third call opens it again.
         assert!(app.intercept_slash_command("help"));
         assert!(app.help_overlay.visible);
+        assert!(app.show_help);
     }
 
     #[test]

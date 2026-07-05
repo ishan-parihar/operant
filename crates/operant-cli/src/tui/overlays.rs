@@ -415,12 +415,12 @@ pub fn render_help_overlay(frame: &mut Frame, overlay: &HelpOverlay, area: Rect)
     )));
     for (key, desc) in &[
         ("F1 / ?",          "Toggle help"),
-        ("Ctrl+Shift+A",    "Model picker"),
+        ("Ctrl+Shift+A",    "Model picker (Ctrl+A)"),
         ("Ctrl+K",          "Command palette"),
         ("Ctrl+C",          "Cancel / quit"),
         ("Ctrl+D",          "Quit (empty input)"),
-        ("Ctrl+L",          "Clear screen"),
-        ("t",               "Expand/collapse thinking"),
+        ("Ctrl+L",          "Clear input line"),
+        ("t",               "(unbound — use mouse-click to toggle thinking)"),
     ] {
         left_lines.push(kb_line(key, desc));
     }
