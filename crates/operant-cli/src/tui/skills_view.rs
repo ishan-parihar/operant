@@ -14,6 +14,7 @@ use operant_core::skills::Skill;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
+use std::cell::Cell;
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use ratatui::Frame;
 use std::path::PathBuf;
@@ -44,6 +45,11 @@ pub struct SkillsViewState {
     pub detail_scroll: usize,
     /// Last error from load_all (shown inline if non-empty).
     pub last_error: String,
+    /// Last known viewport height (set by render_list_stage, read by
+    /// scroll_down so the key handler knows how many lines fit). Without
+    /// this, scroll_down hardcoded viewport=24 which overshot on short
+    /// terminals and undershot on tall ones. (Bug #16 from iter-82 audit.)
+    pub last_viewport_height: Cell<usize>,
 }
 
 impl SkillsViewState {
@@ -255,6 +261,9 @@ fn render_list_stage(frame: &mut Frame, state: &SkillsViewState, area: Rect) {
     )));
 
     let viewport = area.height.saturating_sub(6) as usize; // header + footer
+    // Record the viewport height so the key handler's scroll_down knows how
+    // many lines fit. (Bug #16 fix.)
+    state.last_viewport_height.set(viewport);
     let start = state.scroll.min(state.skills.len().saturating_sub(viewport));
     let end = (start + viewport).min(state.skills.len());
 

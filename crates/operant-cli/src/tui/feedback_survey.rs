@@ -78,18 +78,22 @@ impl FeedbackSurveyState {
                     0 => {
                         self.response = Some(FeedbackResponse::Dismissed);
                         self.stage = FeedbackSurveyStage::Thanks;
+                        self.persist_response();
                     }
                     1 => {
                         self.response = Some(FeedbackResponse::Bad);
                         self.stage = FeedbackSurveyStage::Thanks;
+                        self.persist_response();
                     }
                     2 => {
                         self.response = Some(FeedbackResponse::Fine);
                         self.stage = FeedbackSurveyStage::Thanks;
+                        self.persist_response();
                     }
                     3 => {
                         self.response = Some(FeedbackResponse::Good);
                         self.stage = FeedbackSurveyStage::SharePrompt;
+                        self.persist_response();
                     }
                     _ => {}
                 }
@@ -106,6 +110,25 @@ impl FeedbackSurveyState {
                 true
             }
             FeedbackSurveyStage::Closed => false,
+        }
+    }
+
+    /// Persist the survey response to ~/.operant/feedback.jsonl (append-only).
+    /// (Bug #25 from iter-82 audit — the survey result was previously discarded.)
+    fn persist_response(&self) {
+        if let Some(ref resp) = self.response {
+            let path = operant_core::platform::operant_home().join("feedback.jsonl");
+            let _ = std::fs::create_dir_all(path.parent().unwrap_or(std::path::Path::new(".")));
+            let entry = serde_json::json!({
+                "timestamp": chrono::Utc::now().to_rfc3339(),
+                "response": format!("{:?}", resp),
+            });
+            let _ = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&path)
+                .and_then(|mut f| std::io::Write::write_all(&mut f, format!("{}
+", entry).as_bytes()));
         }
     }
 }
