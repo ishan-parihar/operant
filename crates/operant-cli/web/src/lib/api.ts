@@ -345,9 +345,10 @@ export const api = {
       window.location.assign("/login");
       return r;
     }),
-  getSessions: (limit = 20, offset = 0, profile = getManagementProfile()) =>
+  getSessions: (limit = 20, offset = 0, profile = getManagementProfile(), signal?: AbortSignal) =>
     fetchJSON<PaginatedSessions>(
       appendProfileParam(`/api/sessions?limit=${limit}&offset=${offset}`, profile),
+      signal ? { signal } : undefined,
     ),
   getSessionMessages: (id: string, profile = getManagementProfile()) =>
     fetchJSON<SessionMessagesResponse>(
@@ -447,11 +448,12 @@ export const api = {
     if (params.component && params.component !== "all") qs.set("component", params.component);
     return fetchJSON<LogsResponse>(`/api/logs?${qs.toString()}`);
   },
-  getAnalytics: (days: number, profile = getManagementProfile()) =>
+  getAnalytics: (days: number, profile = getManagementProfile(), signal?: AbortSignal) =>
     fetchJSON<AnalyticsResponse>(
       appendProfileParam(`/api/analytics/usage?days=${days}`, profile),
+      signal ? { signal } : undefined,
     ),
-  getModelsAnalytics: (days: number, profile = getManagementProfile()) =>
+  getModelsAnalytics: (days: number, profile = getManagementProfile(), signal?: AbortSignal) =>
     fetchJSON<ModelsAnalyticsResponse>(
       appendProfileParam(`/api/analytics/models?days=${days}`, profile),
     ),
@@ -464,9 +466,12 @@ export const api = {
       "/api/config/schema",
       signal ? { signal } : undefined,
     ),
-  getModelInfo: () => fetchJSON<ModelInfoResponse>("/api/model/info"),
-  getModelOptions: () => fetchJSON<ModelOptionsResponse>("/api/model/options"),
-  getAuxiliaryModels: () => fetchJSON<AuxiliaryModelsResponse>("/api/model/auxiliary"),
+  getModelInfo: (signal?: AbortSignal) =>
+    fetchJSON<ModelInfoResponse>("/api/model/info", signal ? { signal } : undefined),
+  getModelOptions: (signal?: AbortSignal) =>
+    fetchJSON<ModelOptionsResponse>("/api/model/options", signal ? { signal } : undefined),
+  getAuxiliaryModels: (signal?: AbortSignal) =>
+    fetchJSON<AuxiliaryModelsResponse>("/api/model/auxiliary", signal ? { signal } : undefined),
   setModelAssignment: (body: ModelAssignmentRequest) =>
     fetchJSON<ModelAssignmentResponse>("/api/model/set", {
       method: "POST",
@@ -487,7 +492,8 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ yaml_text }),
     }),
-  getEnvVars: () => fetchJSON<Record<string, EnvVarInfo>>("/api/env"),
+  getEnvVars: (signal?: AbortSignal) =>
+    fetchJSON<Record<string, EnvVarInfo>>("/api/env", signal ? { signal } : undefined),
   setEnvVar: (key: string, value: string) =>
     fetchJSON<{ ok: boolean }>("/api/env", {
       method: "PUT",
