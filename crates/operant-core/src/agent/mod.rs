@@ -116,6 +116,23 @@ pub enum AgentEvent {
         output_tokens: u32,
         total_tokens: u32,
     },
+    /// Cost estimate for the last completed request. (iter-132 — closes
+    /// the ponytail-audit gap "no cost tracking; models_dev exposes
+    /// cost-per-million × Usage tokens = $ per session, nothing
+    /// multiplies them".)
+    ///
+    /// Emitted right after `Usage`. Calculated as:
+    ///   cost_usd = (input_tokens / 1_000_000) * cost_input_per_million
+    ///            + (output_tokens / 1_000_000) * cost_output_per_million
+    ///
+    /// If the model isn't in models_dev, cost_usd is None and the caller
+    /// can fall back to a UI hint like "cost unknown".
+    Cost {
+        cost_usd: Option<f64>,
+        input_tokens: u32,
+        output_tokens: u32,
+        model: String,
+    },
     /// Tool requires permission before execution
     ToolPermissionRequest {
         tool_name: String,
@@ -1295,6 +1312,35 @@ impl OperantAgent {
             input_tokens: response.usage.prompt_tokens,
             output_tokens: response.usage.completion_tokens,
             total_tokens: response.usage.total_tokens,
+        })
+        .await;
+
+        // iter-132: emit a Cost event right after Usage. Look up the
+        // model in models_dev to get cost-per-million, then multiply by
+        // token counts. If the model isn't in the catalog, emit
+        // cost_usd=None so the caller can show "cost unknown".
+        //
+        // We split the model name on '/' (provider/model format) to get
+        // the provider and model parts. If there's no '/', we use the
+        // whole string as the model and "" as the provider.
+        let (provider, model_name) = match self.config.model.split_once('/') {
+            Some((p, m)) => (p.to_string(), m.to_string()),
+            None => (String::new(), self.config.model.clone()),
+        };
+        let cost_usd = crate::models_dev::get_model_capabilities(&provider, &model_name)
+            .await
+            .and_then(|caps| {
+                let input_cost = caps.cost_input_per_million
+                    .map(|c| (response.usage.prompt_tokens as f64 / 1_000_000.0) * c);
+                let output_cost = caps.cost_output_per_million
+                    .map(|c| (response.usage.completion_tokens as f64 / 1_000_000.0) * c);
+                input_cost.zip(output_cost).map(|(i, o)| i + o)
+            });
+        self.emit(AgentEvent::Cost {
+            cost_usd,
+            input_tokens: response.usage.prompt_tokens,
+            output_tokens: response.usage.completion_tokens,
+            model: self.config.model.clone(),
         })
         .await;
 
