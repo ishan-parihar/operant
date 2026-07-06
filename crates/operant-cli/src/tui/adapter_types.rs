@@ -204,8 +204,8 @@ pub mod config {
                 file_autocomplete_limit: 50,
                 file_autocomplete_show_hidden_files: false,
                 file_injection_max_size: 1024,
-                compact_threshold: 0.8,
-                max_tokens: 8192,
+                compact_threshold: inner.agent.context_compression_threshold,
+                max_tokens: inner.agent.context_window,
                 additional_dirs: vec![],
                 inner,
             }
@@ -223,6 +223,9 @@ pub mod config {
             };
             let model = inner.agent.model.clone();
             let provider = infer_provider_from_model(&model);
+            // Read values from AppConfig instead of hardcoding. (iter-117 —
+            // was hardcoding max_tokens: 8192, compact_threshold: 0.8, etc.
+            // which ignored the user's operant.toml configuration.)
             Self {
                 provider,
                 model: Some(model),
@@ -235,8 +238,8 @@ pub mod config {
                 file_autocomplete_limit: 50,
                 file_autocomplete_show_hidden_files: false,
                 file_injection_max_size: 1024,
-                compact_threshold: 0.8,
-                max_tokens: 8192,
+                compact_threshold: inner.agent.context_compression_threshold,
+                max_tokens: inner.agent.context_window,
                 additional_dirs: vec![],
                 inner,
             }

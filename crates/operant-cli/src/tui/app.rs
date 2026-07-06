@@ -1784,11 +1784,46 @@ permission_rx: None,
     }
 
     fn persist_provider_and_model(&self) {
+        // Write to settings.json for TUI prefs (theme, vim, etc.) AND
+        // sync provider+model to operant.toml so `operant setup` sees them.
+        // (iter-117 — was writing ONLY to settings.json, which caused the
+        // "setup shows hardcoded defaults" bug. Now both files stay in sync.)
         let mut settings = Settings::load_sync().unwrap_or_default();
         settings.provider = self.config.provider.clone();
         settings.config.provider = self.config.provider.clone();
         settings.config.model = self.config.model.clone();
         let _ = settings.save_sync();
+
+        // Also sync to operant.toml so the setup wizard reads the current values.
+        if let Some(ref model) = self.config.model {
+            self.sync_model_to_toml(model);
+        }
+    }
+
+    /// Write the current model + provider to ~/.operant/operant.toml so that
+    /// `operant setup` reads the actual current values instead of defaults.
+    /// (iter-117 — fixes the config-source proliferation bug.)
+    fn sync_model_to_toml(&self, model: &str) {
+        // Load the existing TOML config, update the model field, and write back.
+        // We use the runtime config (already loaded by main.rs) rather than
+        // re-parsing the TOML file, to avoid format issues.
+        let mut config = operant_core::config::runtime_config();
+        config.agent.model = model.to_string();
+        if let Some(ref provider) = self.config.provider {
+            // Update base_url based on provider.
+            if let Some(p) = crate::provider::PROVIDERS.iter().find(|p| p.name == *provider) {
+                if !p.default_base_url.is_empty() {
+                    config.client.base_url = p.default_base_url.to_string();
+                }
+            }
+        }
+        // Write to ~/.operant/operant.toml.
+        let config_path = dirs::home_dir()
+            .map(|h| h.join(".operant").join("operant.toml"))
+            .unwrap_or_else(|| std::path::PathBuf::from("operant.toml"));
+        if let Ok(toml_str) = toml::to_string_pretty(&config) {
+            let _ = std::fs::write(&config_path, &toml_str);
+        }
     }
 
     /// Switch the active provider while clearing any explicit model override.
