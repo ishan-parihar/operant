@@ -370,20 +370,7 @@ pub mod file_history {
     }
 }
 
-// ---------- ImageSource (enum with Paste variant) ----------
-
-#[derive(Debug, Clone)]
-pub enum ImageSource {
-    Clipboard,
-    File(String),
-    Url(String),
-    Paste {
-        source_type: String,
-        url: Option<String>,
-        data: Option<Vec<u8>>,
-        media_type: String,
-    },
-}
+// (iter-136: ImageSource enum deleted — zero callers, ponytail-audit Tier-2 cut)
 
 pub mod keybindings {
     use std::collections::HashMap;
@@ -884,8 +871,7 @@ pub mod voice {
 pub fn context_window_for_model(_model: &str) -> usize { 128000 }
 
 pub mod compact {
-    #[derive(Debug, Clone, PartialEq)]
-    pub enum TokenWarningState { Ok, Warning, Critical }
+    // (iter-136: TokenWarningState deleted — never used)
 }
 
 pub mod import_config {
@@ -1107,7 +1093,7 @@ pub mod git_utils {
 }
 
 pub mod spinner {
-    pub fn random_face() -> &'static str { "●" }
+    // (iter-136: random_face deleted — always returned "●", zero callers)
 }
 
 // ---------- AuthStore ----------
@@ -1627,9 +1613,7 @@ pub async fn fetch_openai_compatible_models_async(
         .collect()
 }
 
-pub struct LoadedPlugin {
-    pub name: String,
-}
+// (iter-136: LoadedPlugin struct deleted — single name field, zero callers)
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ProviderId {
