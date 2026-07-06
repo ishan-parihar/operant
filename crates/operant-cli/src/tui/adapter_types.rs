@@ -1858,27 +1858,27 @@ impl TuiApp {
 
         // Layer in the user's saved settings.json (written by App::persist_provider_and_model
         // and App::set_provider_default). Without this, the provider+model picked in a prior
-        // TUI session are silently dropped on every restart — the YAML config has no record
-        // of them. Settings.json is the authoritative source for the "last active" selection.
+        // TUI session are silently dropped on every restart.
+        //
+        // BUT: the TOML config (from `operant setup`) is the authoritative source.
+        // settings.json should only override when the TOML config has the DEFAULT
+        // values (gpt-4 / empty base_url). This prevents stale settings.json from
+        // overriding a fresh `operant setup` run.
+        // (iter-112 — fixes the "TUI shows hardcoded defaults after setup" bug.)
         if let Ok(saved) = Settings::load_sync() {
-            // Saved provider wins over the YAML-inferred one (which is just a guess based on
-            // the model string and is usually None for fresh installs).
-            if saved.provider.is_some() {
+            // Only use settings.json provider if the TOML config has no real
+            // provider set (base_url is empty or default).
+            let toml_has_real_provider = !config.inner.client.base_url.is_empty()
+                && config.inner.client.base_url != "https://api.openai.com/v1";
+            if saved.provider.is_some() && !toml_has_real_provider {
                 config.provider = saved.provider.clone();
             }
-            // Saved model wins over the YAML model (which is the static default e.g. "gpt-4").
-            if saved.model.is_some() {
+            // Only use settings.json model if the TOML config has the default "gpt-4".
+            if saved.model.is_some() && config.inner.agent.model == "gpt-4" {
                 config.model = saved.model.clone();
-            }
-            // Mirror the saved values into the inner AppConfig too so anything that reads
-            // config.inner.agent.model sees the same thing as config.model.
-            if let Some(ref m) = saved.model {
-                config.inner.agent.model = m.clone();
+                config.inner.agent.model = saved.model.clone().unwrap_or_default();
             }
             // Persisted per-provider API base overrides (e.g. custom-openai).
-            // Applied lazily by callers that read Settings::providers, but we
-            // also surface the custom-openai base URL on the Config here so
-            // resolve_api_key / base-URL resolution picks it up.
             if let Some(entry) = saved.providers.get("custom-openai") {
                 if let Some(ref base) = entry.api_base {
                     config.inner.client.base_url = base.clone();
