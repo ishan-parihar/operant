@@ -320,13 +320,12 @@ fn score_entry(entry: &SkillRegistryEntry, q: &str, q_words: &[&str]) -> i32 {
     let tags_lower: Vec<String> = entry.tags.iter().map(|t| t.to_lowercase()).collect();
     let cat_lower = entry.category.as_deref().unwrap_or("").to_lowercase();
 
+    // Name match — use else-if so only the highest name match counts.
     if name_lower == q {
         score += 100;
-    }
-    if name_lower.starts_with(q) {
+    } else if name_lower.starts_with(q) {
         score += 50;
-    }
-    if name_lower.contains(q) {
+    } else if name_lower.contains(q) {
         score += 20;
     }
     if desc_lower.contains(q) {
@@ -338,15 +337,19 @@ fn score_entry(entry: &SkillRegistryEntry, q: &str, q_words: &[&str]) -> i32 {
     if !cat_lower.is_empty() && cat_lower == q {
         score += 5;
     }
-    for word in q_words {
-        if name_lower.contains(word) {
-            score += 5;
-        }
-        if desc_lower.contains(word) {
-            score += 2;
-        }
-        if tags_lower.iter().any(|t| t.contains(word)) {
-            score += 3;
+    // Per-word matching — only for multi-word queries (single-word is
+    // already covered by the name/desc/tag checks above).
+    if q_words.len() > 1 {
+        for word in q_words {
+            if name_lower.contains(word) {
+                score += 5;
+            }
+            if desc_lower.contains(word) {
+                score += 2;
+            }
+            if tags_lower.iter().any(|t| t.contains(word)) {
+                score += 3;
+            }
         }
     }
     score
