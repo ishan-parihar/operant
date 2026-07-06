@@ -6382,9 +6382,20 @@ permission_rx: None,
                         self.turn_start = Some(std::time::Instant::now());
                     }
                     self.streaming_thinking.clear();
+                    self.streaming_text.clear();
                 }
                 self.is_streaming = true;
                 self.stall_start = None;
+                // If we already have streaming text, this is a NEW iteration —
+                // the model is thinking again after a tool call. Clear the old
+                // text so we don't accumulate duplicate content across iterations.
+                // (iter-122 — fixes "double thinking and text streaming" bug.)
+                if !self.streaming_text.is_empty() {
+                    // Flush the previous iteration's text as a completed message
+                    // so it's preserved in the transcript, then start fresh.
+                    self.flush_streamed_assistant_message();
+                    self.streaming_thinking.clear();
+                }
                 self.streaming_thinking.push_str(&content);
                 self.invalidate_transcript();
             }
@@ -6397,9 +6408,19 @@ permission_rx: None,
                         self.turn_start = Some(std::time::Instant::now());
                     }
                     self.streaming_thinking.clear();
+                    self.streaming_text.clear();
                 }
                 self.is_streaming = true;
                 self.stall_start = None;
+                // If we already have streaming thinking, this is the model
+                // switching from thinking to producing text. Don't clear
+                // thinking — it should be shown above the text. But if we
+                // already have text (meaning this is a new iteration after
+                // a tool call), flush the old text first.
+                if !self.streaming_text.is_empty() {
+                    self.flush_streamed_assistant_message();
+                    self.streaming_thinking.clear();
+                }
                 self.streaming_text.push_str(&text);
                 self.invalidate_transcript();
             }
@@ -6533,6 +6554,15 @@ permission_rx: None,
                 self.complete_current_turn_snapshot(false);
                 self.invalidate_transcript();
                 self.refresh_turn_diff_from_history();
+
+                // Show a "copy" hint after each response so the user knows
+                // they can copy the last response with /copy.
+                // (iter-122 — user-requested: copy button at end of response.)
+                self.push_notification(
+                    NotificationKind::Info,
+                    "Response complete · /copy to copy · Ctrl+J for line break".to_string(),
+                    Some(4),
+                );
             }
 
             AgentEvent::Error { error } => {
