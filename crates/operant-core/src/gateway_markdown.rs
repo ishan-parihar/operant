@@ -382,3 +382,112 @@ mod tests {
         assert_eq!(markdown_to_telegram_html(input), expected);
     }
 }
+
+// ---------------------------------------------------------------------------
+// Slack mrkdwn conversion
+// ---------------------------------------------------------------------------
+
+/// Convert standard Markdown to Slack's mrkdwn format.
+///
+/// Slack uses a non-standard markup format:
+/// - `**bold**` → `*bold*` (single asterisks)
+/// - `*italic*` → `_italic_` (underscores)
+/// - `~~strike~~` → `~strike~` (single tilde)
+/// - `` `code` `` → `` `code` `` (same)
+/// - ``` ```codeblock``` ``` → ``` ```codeblock``` ``` (same)
+/// - `> quote` → `> quote` (same)
+///
+/// Code blocks and inline code are preserved verbatim (Slack renders them
+/// the same way as Markdown).
+///
+/// (iter-102 — closes Bug #15 from iter-98 audit.)
+pub fn markdown_to_slack_mrkdwn(text: &str) -> String {
+    let mut result = String::with_capacity(text.len());
+    let mut in_code_block = false;
+
+    let mut chars = text.chars().peekable();
+    while let Some(ch) = chars.next() {
+        // Detect code fence toggles.
+        if ch == '`' && chars.peek() == Some(&'`') && chars.peek() == Some(&'`') {
+            // Triple backtick — toggle code block state.
+            in_code_block = !in_code_block;
+            result.push_str("```");
+            chars.next();
+            chars.next();
+            continue;
+        }
+
+        if in_code_block {
+            // Inside a code block — pass through verbatim.
+            result.push(ch);
+            continue;
+        }
+
+        // Outside code blocks: convert markdown to mrkdwn.
+        match ch {
+            '*' => {
+                if chars.peek() == Some(&'*') {
+                    // `**bold**` → `*bold*` (consume second *, output single *)
+                    chars.next();
+                    result.push('*');
+                } else {
+                    // Single `*italic*` → `_italic_`
+                    result.push('_');
+                }
+            }
+            '~' => {
+                if chars.peek() == Some(&'~') {
+                    // `~~strike~~` → `~strike~` (consume second ~, output single ~)
+                    chars.next();
+                    result.push('~');
+                } else {
+                    result.push('~');
+                }
+            }
+            _ => {
+                result.push(ch);
+            }
+        }
+    }
+
+    result
+}
+
+#[cfg(test)]
+mod slack_tests {
+    use super::*;
+
+    #[test]
+    fn test_slack_bold() {
+        assert_eq!(markdown_to_slack_mrkdwn("**bold**"), "*bold*");
+    }
+
+    #[test]
+    fn test_slack_italic() {
+        assert_eq!(markdown_to_slack_mrkdwn("*italic*"), "_italic_");
+    }
+
+    #[test]
+    fn test_slack_strike() {
+        assert_eq!(markdown_to_slack_mrkdwn("~~strike~~"), "~strike~");
+    }
+
+    #[test]
+    fn test_slack_code_preserved() {
+        assert_eq!(markdown_to_slack_mrkdwn("`code`"), "`code`");
+    }
+
+    #[test]
+    fn test_slack_code_block_preserved() {
+        let input = "```rust\nfn main() {}\n```";
+        assert_eq!(markdown_to_slack_mrkdwn(input), input);
+    }
+
+    #[test]
+    fn test_slack_mixed() {
+        assert_eq!(
+            markdown_to_slack_mrkdwn("**bold** and *italic*"),
+            "*bold* and _italic_"
+        );
+    }
+}

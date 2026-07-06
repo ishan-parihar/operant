@@ -19,7 +19,7 @@ use uuid::Uuid;
 
 use crate::config::runtime_config;
 use crate::error::{Error, Result};
-use crate::gateway_markdown::markdown_to_telegram_html;
+use crate::gateway_markdown::{markdown_to_telegram_html, markdown_to_slack_mrkdwn};
 use crate::gateway_session::{PersistentSessionStore, SessionSource};
 
 
@@ -2181,26 +2181,34 @@ impl PlatformAdapter for DiscordAdapter {
     async fn send_message(&self, message: OutgoingMessage) -> Result<()> {
         let client = reqwest::Client::new();
 
-        let body = serde_json::json!({
-            "content": message.content,
-        });
+        // Discord's message limit is 2000 chars. Messages exceeding this
+        // are silently rejected by the API (400 Bad Request) — the user
+        // gets nothing. Chunk the text to stay under the limit.
+        // (Bug #14 from iter-98 audit.)
+        let chunks = chunk_text(&message.content, 2000);
 
-        let url = format!(
-            "{}/channels/{}/messages",
-            self.api_url(),
-            message.channel_id
-        );
+        for chunk in chunks {
+            let body = serde_json::json!({
+                "content": chunk,
+            });
 
-        client
-            .post(&url)
-            .header(
-                "Authorization",
-                format!("Bot {}", self.token.as_ref().unwrap()),
-            )
-            .header("Content-Type", "application/json")
-            .json(&body)
-            .send()
-            .await?;
+            let url = format!(
+                "{}/channels/{}/messages",
+                self.api_url(),
+                message.channel_id
+            );
+
+            client
+                .post(&url)
+                .header(
+                    "Authorization",
+                    format!("Bot {}", self.token.as_ref().unwrap()),
+                )
+                .header("Content-Type", "application/json")
+                .json(&body)
+                .send()
+                .await?;
+        }
 
         Ok(())
     }
@@ -2326,9 +2334,17 @@ impl PlatformAdapter for SlackAdapter {
     async fn send_message(&self, message: OutgoingMessage) -> Result<()> {
         let client = reqwest::Client::new();
 
+        // Slack uses mrkdwn format, NOT standard Markdown. Raw **bold**
+        // renders as literal asterisks. Convert before sending.
+        // (Bug #15 from iter-98 audit.)
+        let text = markdown_to_slack_mrkdwn(&message.content);
+
         let body = serde_json::json!({
             "channel": message.channel_id,
-            "text": message.content,
+            "text": text,
+            // Prevent link-preview noise.
+            "unfurl_links": false,
+            "unfurl_media": false,
         });
 
         client
