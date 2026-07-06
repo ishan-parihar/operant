@@ -30,6 +30,7 @@ use crate::tui::messages::{
     render_transcript_assistant_message_tagged,
     render_transcript_assistant_meta, render_transcript_live_text, render_transcript_user_message,
     render_thinking_live_content,
+    render_markdown,
     RenderContext,
 };
 use crate::tui::notifications::{render_notification_banner, Notification, NotificationKind};
@@ -541,11 +542,15 @@ pub fn render_app(frame: &mut Frame, app: &App) {
         render_hooks_config_menu(&app.hooks_config_menu, size, frame.buffer_mut());
     }
 
-    // Voice mode availability notice
+    // Voice mode availability notice — rendered ABOVE the input box (near
+    // the bottom of the screen), not at the top. Was at y: size.y (top).
+    // (iter-118 — user-reported bug: notification was at top of TUI.)
     if app.voice_mode_notice.visible {
         let notice_h = app.voice_mode_notice.height();
         if size.height > notice_h + 4 {
-            let notice_area = Rect { x: size.x, y: size.y, width: size.width, height: notice_h };
+            // Place it 2 lines above the bottom (above the footer + input).
+            let notice_y = size.y + size.height.saturating_sub(notice_h + 2);
+            let notice_area = Rect { x: size.x, y: notice_y, width: size.width, height: notice_h };
             render_voice_mode_notice(&app.voice_mode_notice, notice_area, frame.buffer_mut());
         }
     }
@@ -984,6 +989,10 @@ fn render_messages(frame: &mut Frame, app: &App, area: Rect) {
     app.last_msg_area.set(msg_area);
 
     let lines = render_message_items(app, msg_area.width);
+    // Append live streaming content in the correct order:
+    // completed messages → thinking → tool calls → streaming text.
+    // (iter-118 — fixes causation chain ordering bug.)
+    let lines = append_live_content(app, lines, msg_area.width);
 
     // Highlight search matches in transcript when global search is active
     let lines = if app.global_search.visible && !app.global_search.query.is_empty() {
@@ -1408,6 +1417,40 @@ fn render_message_items(app: &App, width: u16) -> Vec<RenderedLineItem> {
     completed_lines
 }
 
+/// Append live streaming content (thinking, text, running tool blocks) to the
+/// completed message items. This ensures the correct causation order:
+/// completed messages → live thinking → live tool calls → live text.
+/// (iter-118 — user-reported bug: thinking was always at the bottom while
+/// tool calls piled up above it, breaking the causation chain order.)
+fn append_live_content(app: &App, mut items: Vec<RenderedLineItem>, width: u16) -> Vec<RenderedLineItem> {
+    // 1. Live thinking (appears BEFORE tool calls and text — thinking
+    //    happens first, then the model decides to call tools or respond).
+    if !app.streaming_thinking.is_empty() {
+        let thinking_lines = render_thinking_live_content(&app.streaming_thinking, width);
+        push_rendered_items(&mut items, thinking_lines, None, false);
+        push_blank_item(&mut items);
+    }
+
+    // 2. Running tool blocks (appear AFTER thinking but BEFORE response text —
+    //    the model thinks, then calls tools, then produces the final text).
+    for block in &app.tool_use_blocks {
+        if block.status == ToolStatus::Running {
+            let mut lines = Vec::new();
+            render_tool_block_lines(&mut lines, block, app.frame_count);
+            push_rendered_items(&mut items, lines, None, false);
+            push_blank_item(&mut items);
+        }
+    }
+
+    // 3. Live streaming text (the model's response — appears LAST).
+    if !app.streaming_text.is_empty() {
+        let text_lines = render_markdown(&app.streaming_text, width);
+        push_rendered_items(&mut items, text_lines, None, false);
+    }
+
+    items
+}
+
 // â”€â”€ Welcome / startup screen â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 /// Render the OPERANT ASCII wordmark banner above the welcome box.
@@ -1549,9 +1592,12 @@ fn render_welcome_box(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(Paragraph::new(left_lines).wrap(Wrap { trim: false }), h_chunks[0]);
 
     // --- Right column ---
-    // Use frame_count as the seed so the tip rotates each session but
-    // is stable within a session. (iter-106 — was hardcoded to 0.)
-    let tip_text = crate::tui::adapter_types::tips::select_tip(app.frame_count)
+    // Use a STABLE seed (session start time) so the tip stays fixed for the
+    // entire session. Was using app.frame_count which increments every frame
+    // (~20fps), causing the tip to rotate 20 times per second in an infinite
+    // loop. (iter-118 — user-reported bug.)
+    let tip_seed = app.session_start.elapsed().as_secs();
+    let tip_text = crate::tui::adapter_types::tips::select_tip(tip_seed)
         .unwrap_or_else(|| "Edit AGENTS.md to add instructions for Operant".to_string());
 
     let mut right_lines: Vec<Line> = Vec::new();
@@ -1578,8 +1624,8 @@ fn render_welcome_box(frame: &mut Frame, app: &App, area: Rect) {
         "What patterns do you notice in my work?",
         "Set up a morning brief — operant cron blueprint morning-brief",
     ];
-    // Rotate one example per session based on frame_count.
-    let prompt_idx = (app.frame_count as usize) % EXAMPLE_PROMPTS.len();
+    // Rotate one example per session using the same stable seed.
+    let prompt_idx = (tip_seed as usize) % EXAMPLE_PROMPTS.len();
     let example = EXAMPLE_PROMPTS[prompt_idx];
     for chunk in example.chars().collect::<Vec<_>>().chunks(right_w_usize.max(1)) {
         right_lines.push(Line::from(vec![
