@@ -70,8 +70,15 @@ pub async fn handle_setup_command(
         return reset_config().await;
     }
 
+    // Default to quick mode unless --reconfigure is set. Quick mode asks
+    // only 3 questions (provider, model, key) — enough to start chatting.
+    // Use --reconfigure for the full 6-step wizard.
+    // (iter-106 — P0 UX fix: setup completion rate was low because the
+    // full wizard asks too many questions for a first-time user.)
+    let effective_quick = quick || !reconfigure;
+
     // Interactive wizard — optionally scoped to a single section
-    run_setup_wizard(config, section, quick, reconfigure).await
+    run_setup_wizard(config, section, effective_quick, reconfigure).await
 }
 
 // ---------------------------------------------------------------------------

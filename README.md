@@ -1,15 +1,54 @@
 # Operant ⚡
 
-**The Hardened Rust Substrate for Agentic Tool Orchestration.**
+**Your personal AI agent. Remembers what matters. Runs in your terminal.**
 
 [![Rust 1.86+](https://img.shields.io/badge/rust-1.86%2B-orange.svg)](https://www.rust-lang.org)
 [![License: MIT/Apache](https://img.shields.io/badge/License-MIT/Apache-yellow.svg)](LICENSE)
 [![TUI](https://img.shields.io/badge/UI-Ratatui-blue.svg)](https://github.com/ratatui-org/ratatui)
-[![Architecture](https://img.shields.io/badge/Architecture-ReAct-purple.svg)](https://arxiv.org/abs/2210.03629)
 
-`Operant` is a high-performance, production-grade implementation of the Hermes-Agent orchestration loop. It provides the critical infrastructure needed for LLMs to move from "text generation" to "system operation" by implementing a robust, streaming-first ReAct (Reason-Act) loop.
+Operant is a personal AI agent that lives in your terminal. It remembers
+your conversations, learns your patterns, and is available across every
+messaging platform you use — Telegram, Discord, Slack, and more.
 
-Written entirely in Rust, `Operant` focuses on **Tolerant Parsing**, **Deterministic Execution**, and **Autonomous Workspace Management**, ensuring that agentic loops remain stable even when LLM outputs are malformed or inconsistent.
+Unlike a chatbot, operant:
+- **Remembers** — uses a graph memory (TDG) that self-organizes across sessions
+- **Acts** — runs tools, writes code, manages files, browses the web
+- **Grows** — installs skills, tracks goals, and surfaces patterns over time
+- **Shows up** — runs scheduled jobs and can message you proactively
+
+## Quick Start
+
+```bash
+# Clone and build
+git clone https://github.com/ishan-parihar/operant.git
+cd operant
+cargo build --release
+
+# Set your API key
+export ANTHROPIC_API_KEY=sk-ant-...  # or OPENAI_API_KEY=sk-...
+
+# Start chatting
+./target/release/operant chat
+```
+
+That's it. The first run will guide you through a quick setup (provider,
+model, API key). Type `/help` in the TUI to see everything operant can do.
+
+## What Can It Do?
+
+- **Code** — write, review, debug, refactor across your entire project
+- **Research** — search the web, read pages, synthesize findings
+- **Automate** — schedule cron jobs, manage tasks, run autonomous loops
+- **Remember** — every conversation feeds a graph memory that grows smarter
+- **Connect** — talk to operant via Telegram, Discord, Slack, WhatsApp, Email
+- **Learn** — install skills (reusable prompt+tool bundles) or draft your own
+
+## Architecture
+
+Operant is written entirely in Rust, focusing on **Tolerant Parsing**,
+**Deterministic Execution**, and **Autonomous Workspace Management**. It
+implements a streaming-first ReAct (Reason-Act) loop that stays stable
+even when LLM outputs are malformed.
 
 ---
 
