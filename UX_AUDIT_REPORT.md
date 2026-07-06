@@ -25,31 +25,48 @@ the individual") is invisible in every user-facing surface.
 | TUI polish | iter-85..iter-91 | /personality args, /help toggle, keybindings, OpenRouter prefix, /reasoning, --no-mouse, YAGNI cleanup | ✅ Complete |
 | Agent API | iter-92..iter-97 | steer_queue_handle, list_subagents, user_question sender | ✅ 25/25 closed |
 | Gateway fixes | iter-98..iter-104 | 3 cross-cutting BLOCKERs, streaming, webhook HMAC, Discord chunking, Slack mrkdwn, WhatsApp phone_number_id, typing indicator | ✅ 8/15 BLOCKERs closed |
-| UX P0 fixes | iter-106 | README rewrite, tips stub, quick-setup default, help discoverability | ✅ 4/6 P0 fixes |
+| UX P0 fixes | iter-106..iter-109 | README rewrite, tips, quick-setup, help discoverability, onboarding overlay, model defaults, example prompts, /whoami, spinner verbs, status pill | ✅ 7/11 UX fixes |
 
 ### Active / In Progress
 
 | Item | Status | Notes |
 |------|--------|-------|
-| First-run onboarding overlay | Pending (iter-107) | 3-step wizard: provider → model → first message |
-| Morning brief cron blueprint | Pending (iter-107) | Agent-initiated messaging — the #1 transformative feature |
-| YAGNI cleanup of provider stubs | Pending (iter-108) | Cut from 50+ to 8 well-tested providers |
+| All P0 + P2 UX fixes | ✅ Complete | 7/11 UX fixes done across iter-106..iter-109 |
+| Morning brief cron blueprint | ✅ Complete | 3 blueprints: morning-brief, weekly-digest, reflection |
+| YAGNI cleanup | ✅ Partial | Config sections commented out (iter-110). Provider stub cut deferred. |
+
+### Pending (future iterations)
+
+| Item | Priority | Notes |
+|------|----------|-------|
+| Replace Rustle mascot with real ASCII creature | P1 | ~150 LOC, brand identity |
+| Real /journey timeline with visual time axis | P1 | ~400 LOC, makes growth visible |
+| Extended distillation (personal dimensions) | P1 | ~150 LOC, agent starts knowing you |
+| Wire or remove stub slash commands | P1 | ~250 LOC, trust: help only shows working things |
+| End-of-session reflection prompt | P1 | ~150 LOC, builds a corpus of who you're becoming |
+| Cross-session continuity ritual | P1 | ~200 LOC, every session = picking up where we left off |
+| Personalized onboarding interview | P1 | ~150 LOC, agent starts with a model of who you are |
+| /reflect guided reflection | P1 | ~200 LOC, directly serves the "healing" mission |
+| "Challenge me" mode | P1 | ~150 LOC, growth partner not just helper |
+| Cut provider stubs from 50+ to 8 | P2 | YAGNI — risky (many call sites) |
 
 ### Pending (from UX audit recommendations)
 
-| # | Item | Priority | Effort | Impact |
-|---|------|----------|--------|--------|
-| P0-2 | First-run onboarding overlay | P0 | ~300 LOC | 5× activation rate |
-| P0-6 | Fix model picker to use live-fetched list | P0 | ~120 LOC | Stop showing 404 models |
-| P1-7 | Replace Rustle mascot with real ASCII creature | P1 | ~150 LOC | Brand identity |
-| P1-8 | Real /journey timeline with visual time axis | P1 | ~400 LOC | Makes growth visible |
-| P1-9 | /whoami command (what the agent knows about you) | P1 | ~200 LOC | Transparency + trust |
-| P1-10 | Extended distillation (personal dimensions) | P1 | ~150 LOC | Agent starts knowing you |
-| P1-11 | **Morning brief cron** (agent-initiated messaging) | P1 | ~350 LOC | **Transforms tool → companion** |
-| P1-12 | Example prompts on welcome screen | P1 | ~60 LOC | Reduces blank-page paralysis |
-| P1-13 | Wire or remove stub slash commands | P1 | ~250 LOC | Trust: help only shows working things |
-| P2-14 | "memory · mcp · skills" status pill | P2 | ~40 LOC | Make infrastructure visible |
-| P2-15 | Populate spinner/completion verbs | P2 | ~50 LOC | Warmth: UI feels alive |
+| # | Item | Priority | Effort | Impact | Status |
+|---|------|----------|--------|--------|--------|
+| P0-2 | First-run onboarding overlay | P0 | ~300 LOC | 5× activation rate | ✅ Done (iter-108) |
+| P0-6 | Fix model picker to use live-fetched list | P0 | ~120 LOC | Stop showing 404 models | ✅ Done (iter-108) |
+| P1-7 | Replace Rustle mascot with real ASCII creature | P1 | ~150 LOC | Brand identity | Pending |
+| P1-8 | Real /journey timeline with visual time axis | P1 | ~400 LOC | Makes growth visible | Pending |
+| P1-9 | /whoami command (what the agent knows about you) | P1 | ~200 LOC | Transparency + trust | ✅ Done (iter-109) |
+| P1-10 | Extended distillation (personal dimensions) | P1 | ~150 LOC | Agent starts knowing you | Pending |
+| P1-11 | **Morning brief cron** (agent-initiated messaging) | P1 | ~350 LOC | **Transforms tool → companion** | ✅ Done (iter-107) |
+| P1-12 | Example prompts on welcome screen | P1 | ~60 LOC | Reduces blank-page paralysis | ✅ Done (iter-108) |
+| P1-13 | Wire or remove stub slash commands | P1 | ~250 LOC | Trust: help only shows working things | Pending |
+| P2-14 | "memory · mcp · skills" status pill | P2 | ~40 LOC | Make infrastructure visible | ✅ Done (iter-109) |
+| P2-15 | Populate spinner/completion verbs | P2 | ~50 LOC | Warmth: UI feels alive | ✅ Done (iter-109) |
+
+**Completed: 7 of 11 UX fixes (64%)**
 
 ### YAGNI Candidates (from UX audit)
 
