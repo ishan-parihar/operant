@@ -2313,9 +2313,63 @@ impl PlatformAdapter for DiscordAdapter {
 
     async fn start_with_channel(
         &self,
-        _message_tx: mpsc::UnboundedSender<IncomingMessage>,
+        message_tx: mpsc::UnboundedSender<IncomingMessage>,
     ) -> Result<()> {
-        self.start().await
+        // Discord gateway WebSocket — receives MESSAGE_CREATE events.
+        // Without this, the Discord adapter could only send outbound
+        // messages; users could never talk TO the bot. (iter-129 —
+        // closes the ponytail-audit gap "Discord has no gateway WebSocket
+        // → no inbound MESSAGE_CREATE events ever".)
+        //
+        // Implementation notes:
+        // - Uses wss://gateway.discord.gg/?v=10&encoding=json
+        // - Handshake: OPCODE 10 HELLO → send OPCODE 2 IDENTIFY →
+        //   receive OPCODE 0 READY → listen for OPCODE 0 MESSAGE_CREATE
+        // - Heartbeat: send OPCODE 1 every `heartbeat_interval` ms
+        // - Reconnect: on disconnect, sleep with exponential backoff
+        let token = self.token.as_ref().ok_or_else(|| {
+            Error::Config("Discord token not configured".to_string())
+        })?;
+        let token = token.clone();
+        let api_url = self.api_url();
+
+        // The bare wss://gateway.discord.gg always works for single-shard bots.
+        let gateway_url = "wss://gateway.discord.gg/?v=10&encoding=json";
+
+        tokio::spawn(async move {
+            let mut reconnect_delay = std::time::Duration::from_secs(1);
+            let max_reconnect_delay = std::time::Duration::from_secs(30);
+
+            loop {
+                info!(url = %gateway_url, "Discord gateway: connecting");
+                match connect_discord_gateway(
+                    gateway_url,
+                    &token,
+                    &api_url,
+                    &message_tx,
+                )
+                .await
+                {
+                    Ok(()) => {
+                        info!("Discord gateway: connection closed cleanly");
+                        reconnect_delay = std::time::Duration::from_secs(1);
+                    }
+                    Err(e) => {
+                        warn!(error = %e, "Discord gateway: connection error");
+                        reconnect_delay = (reconnect_delay * 2)
+                            .min(max_reconnect_delay);
+                    }
+                }
+
+                if message_tx.is_closed() {
+                    info!("Discord gateway: message channel closed, shutting down");
+                    break;
+                }
+                tokio::time::sleep(reconnect_delay).await;
+            }
+        });
+
+        Ok(())
     }
 
     async fn send_message_to_channel(
@@ -2329,6 +2383,236 @@ impl PlatformAdapter for DiscordAdapter {
         self.send_message(msg).await?;
         Ok(String::new())
     }
+}
+
+/// Connect to the Discord gateway, complete the handshake, and listen for
+/// MESSAGE_CREATE events. Returns when the connection closes (clean or
+/// error). The caller is responsible for reconnecting.
+///
+/// (iter-129 — see DiscordAdapter::start_with_channel.)
+async fn connect_discord_gateway(
+    url: &str,
+    token: &str,
+    api_url: &str,
+    message_tx: &mpsc::UnboundedSender<IncomingMessage>,
+) -> Result<()> {
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message;
+
+    // Connect with the Discord-recommended User-Agent.
+    let request = tokio_tungstenite::tungstenite::http::Request::builder()
+        .uri(url)
+        .header("User-Agent", "Operant-DiscordBot (https://operant.dev, 0.1.3)")
+        .header("Host", "gateway.discord.gg")
+        .header("Connection", "Upgrade")
+        .header("Upgrade", "websocket")
+        .header("Sec-WebSocket-Version", "13")
+        .header(
+            "Sec-WebSocket-Key",
+            tokio_tungstenite::tungstenite::handshake::client::generate_key(),
+        );
+    let request = request
+        .body(())
+        .map_err(|e| Error::Agent(format!("Discord WS request build failed: {e}")))?;
+
+    let (ws_stream, _response) = tokio_tungstenite::connect_async(request)
+        .await
+        .map_err(|e| Error::Agent(format!("Discord WS connect failed: {e}")))?;
+
+    let (mut write, mut read) = ws_stream.split();
+
+    // Step 1: receive HELLO (opcode 10) with heartbeat_interval.
+    let hello = read.next().await
+        .ok_or_else(|| Error::Agent("Discord WS closed before HELLO".to_string()))?
+        .map_err(|e| Error::Agent(format!("Discord WS HELLO read failed: {e}")))?;
+    let hello_text = match hello {
+        Message::Text(t) => t,
+        Message::Binary(b) => String::from_utf8_lossy(&b).to_string(),
+        other => return Err(Error::Agent(format!("Discord WS HELLO unexpected frame: {other:?}"))),
+    };
+    let hello_json: serde_json::Value = serde_json::from_str(&hello_text)
+        .map_err(|e| Error::Agent(format!("Discord WS HELLO parse failed: {e}")))?;
+    if hello_json.get("op").and_then(|v| v.as_u64()) != Some(10) {
+        return Err(Error::Agent(format!(
+            "Discord WS expected opcode 10 (HELLO), got: {hello_text}"
+        )));
+    }
+    let heartbeat_interval = hello_json
+        .get("d")
+        .and_then(|d| d.get("heartbeat_interval"))
+        .and_then(|v| v.as_u64())
+        .ok_or_else(|| Error::Agent("Discord WS HELLO missing heartbeat_interval".to_string()))?;
+
+    // Step 2: send IDENTIFY (opcode 2).
+    let identify = serde_json::json!({
+        "op": 2,
+        "d": {
+            "token": token,
+            "intents": (1 << 0) | (1 << 9) | (1 << 15),  // GUILDS + GUILD_MESSAGES + MESSAGE_CONTENT
+            "properties": {
+                "os": "linux",
+                "browser": "operant",
+                "device": "operant"
+            }
+        }
+    });
+    write.send(Message::Text(identify.to_string())).await
+        .map_err(|e| Error::Agent(format!("Discord WS IDENTIFY send failed: {e}")))?;
+
+    // Step 3: spawn a heartbeat task.
+    let (heartbeat_tx, mut heartbeat_rx) = mpsc::unbounded_channel::<()>();
+    {
+        let heartbeat_tx = heartbeat_tx.clone();
+        let interval_ms = heartbeat_interval;
+        tokio::spawn(async move {
+            // Discord wants the first heartbeat after `interval` ms (not
+            // immediately), and then every `interval` ms after.
+            let mut ticker = tokio::time::interval(std::time::Duration::from_millis(interval_ms));
+            // We need to track the last sequence number for the heartbeat payload.
+            // Send via heartbeat_tx to trigger a heartbeat in the main loop.
+            loop {
+                ticker.tick().await;
+                if heartbeat_tx.send(()).is_err() {
+                    break;
+                }
+            }
+        });
+    }
+    // Drop the original heartbeat_tx so the task's clone is the only sender.
+    drop(heartbeat_tx);
+
+    // Step 4: listen for events.
+    let mut last_seq: Option<u64> = None;
+    loop {
+        tokio::select! {
+            // Heartbeat tick — send OPCODE 1.
+            _ = heartbeat_rx.recv() => {
+                let heartbeat = serde_json::json!({
+                    "op": 1,
+                    "d": last_seq
+                });
+                if let Err(e) = write.send(Message::Text(heartbeat.to_string())).await {
+                    return Err(Error::Agent(format!("Discord WS heartbeat send failed: {e}")));
+                }
+            }
+            // Incoming message.
+            msg = read.next() => {
+                let msg = match msg {
+                    Some(Ok(Message::Text(t))) => t,
+                    Some(Ok(Message::Binary(b))) => String::from_utf8_lossy(&b).to_string(),
+                    Some(Ok(Message::Ping(p))) => {
+                        let _ = write.send(Message::Pong(p)).await;
+                        continue;
+                    }
+                    Some(Ok(Message::Close(_))) => {
+                        info!("Discord WS: server sent Close frame");
+                        return Ok(());
+                    }
+                    Some(Ok(_)) => continue,  // Binary/Pong/Frame — ignore
+                    Some(Err(e)) => {
+                        return Err(Error::Agent(format!("Discord WS read error: {e}")));
+                    }
+                    None => {
+                        info!("Discord WS: stream ended");
+                        return Ok(());
+                    }
+                };
+                let json: serde_json::Value = match serde_json::from_str(&msg) {
+                    Ok(v) => v,
+                    Err(_) => continue,
+                };
+                let op = json.get("op").and_then(|v| v.as_u64()).unwrap_or(0);
+                // Track sequence number for heartbeats.
+                if let Some(s) = json.get("s").and_then(|v| v.as_u64()) {
+                    last_seq = Some(s);
+                }
+                match op {
+                    0 => {
+                        // Dispatch event.
+                        let event_type = json.get("t").and_then(|v| v.as_str()).unwrap_or("");
+                        if event_type == "READY" {
+                            let bot_user = json
+                                .get("d")
+                                .and_then(|d| d.get("user"))
+                                .and_then(|u| u.get("username"))
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("(unknown)");
+                            info!(bot = %bot_user, "Discord gateway: READY");
+                        } else if event_type == "MESSAGE_CREATE" {
+                            // Forward to the gateway runner.
+                            if let Some(incoming) = parse_discord_message(&json, api_url) {
+                                if message_tx.send(incoming).is_err() {
+                                    info!("Discord WS: message channel closed, exiting");
+                                    return Ok(());
+                                }
+                            }
+                        }
+                    }
+                    11 => {
+                        // Heartbeat ACK — server confirmed our heartbeat.
+                        // (No action needed; just keep going.)
+                    }
+                    7 => {
+                        info!("Discord WS: server requested RECONNECT");
+                        return Ok(());  // Caller will reconnect.
+                    }
+                    9 => {
+                        let invalid = json.get("d").and_then(|v| v.as_bool()).unwrap_or(false);
+                        if invalid {
+                            return Err(Error::Agent(
+                                "Discord WS: INVALID_SESSION (invalid token or intents)".to_string()
+                            ));
+                        }
+                        // Resumable invalid session — wait and let caller reconnect.
+                        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                        return Ok(());
+                    }
+                    _ => {
+                        // Unknown opcode — log at debug and ignore.
+                        debug!(op = op, "Discord WS: unknown opcode");
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Parse a Discord MESSAGE_CREATE dispatch into an IncomingMessage.
+/// Returns None if the message is from a bot (we don't want bot loops)
+/// or is missing required fields.
+fn parse_discord_message(json: &serde_json::Value, _api_url: &str) -> Option<IncomingMessage> {
+    let d = json.get("d")?;
+    let author = d.get("author")?;
+    let is_bot = author.get("bot").and_then(|v| v.as_bool()).unwrap_or(false);
+    if is_bot {
+        return None;  // Ignore bot messages (prevents loops).
+    }
+    let content = d.get("content")?.as_str()?.to_string();
+    if content.is_empty() {
+        return None;  // Embed-only message — skip.
+    }
+    let channel_id = d.get("channel_id")?.as_str()?.to_string();
+    let user_id = author.get("id")?.as_str()?.to_string();
+    let username = author.get("username")?.as_str()?.to_string();
+    let guild_id = d.get("guild_id").and_then(|v| v.as_str()).is_some();
+    let timestamp = d
+        .get("timestamp")
+        .and_then(|v| v.as_str())
+        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+        .map(|dt| dt.timestamp())
+        .unwrap_or(0);
+
+    Some(IncomingMessage {
+        platform: "discord".to_string(),
+        channel_id,
+        user_id,
+        username,
+        content,
+        raw: json.clone(),
+        timestamp,
+        is_group_chat: guild_id,
+        thread_id: None,
+    })
 }
 
 /// Slack adapter
