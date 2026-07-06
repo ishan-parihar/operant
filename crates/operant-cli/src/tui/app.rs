@@ -4726,28 +4726,34 @@ permission_rx: None,
             KeyCode::Up => {
                 if !self.prompt_input.suggestions.is_empty() && (self.prompt_input.text.starts_with('/') || self.prompt_input.has_active_file_ref()) {
                     self.prompt_input.suggestion_prev();
-                } else {
-                    let area = self.last_input_area.get();
-                    let width = area.width.saturating_sub(4) as usize;
-                    let moved = !self.prompt_input.text.is_empty()
-                        && self.prompt_input.move_visual_up(width);
-                    if !moved && !self.prompt_input.history.is_empty() {
+                } else if !self.prompt_input.text.contains('\n') {
+                    // Single-line input: always navigate history (like hermes-agent).
+                    // (iter-124 — was only navigating when move_visual_up failed,
+                    // which meant Up did nothing on single-line input.)
+                    if !self.prompt_input.history.is_empty() {
                         self.prompt_input.history_up();
                     }
+                } else {
+                    // Multi-line input: move cursor up within the text.
+                    let area = self.last_input_area.get();
+                    let width = area.width.saturating_sub(4) as usize;
+                    self.prompt_input.move_visual_up(width);
                 }
                 self.refresh_prompt_input();
             }
             KeyCode::Down => {
                 if !self.prompt_input.suggestions.is_empty() && (self.prompt_input.text.starts_with('/') || self.prompt_input.has_active_file_ref()) {
                     self.prompt_input.suggestion_next();
-                } else {
-                    let area = self.last_input_area.get();
-                    let width = area.width.saturating_sub(4) as usize;
-                    let moved = !self.prompt_input.text.is_empty()
-                        && self.prompt_input.move_visual_down(width);
-                    if !moved && self.prompt_input.history_pos.is_some() {
+                } else if !self.prompt_input.text.contains('\n') {
+                    // Single-line input: always navigate history.
+                    if self.prompt_input.history_pos.is_some() {
                         self.prompt_input.history_down();
                     }
+                } else {
+                    // Multi-line input: move cursor down within the text.
+                    let area = self.last_input_area.get();
+                    let width = area.width.saturating_sub(4) as usize;
+                    self.prompt_input.move_visual_down(width);
                 }
                 self.refresh_prompt_input();
             }
