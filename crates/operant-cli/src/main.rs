@@ -221,6 +221,9 @@ enum Commands {
     Mcp {
         #[command(subcommand)]
         cmd: cmd_mcp::McpSubcommand,
+        /// Output as JSON (for scripting/CI)
+        #[arg(long, global = true)]
+        json: bool,
     },
     /// Manage installed skills
     Skills {
@@ -1441,9 +1444,9 @@ async fn main() -> Result<()> {
         Some(Commands::Sessions { cmd, json }) => {
             cmd_sessions::handle_sessions_command(&loaded.config, cmd.clone(), *json).await?;
         }
-        Some(Commands::Mcp { cmd }) => {
+        Some(Commands::Mcp { cmd, json }) => {
             let mcp_manager = operant_core::mcp::McpManager::new();
-            cmd_mcp::handle_mcp_command(&loaded.config, &mcp_manager, cmd.clone()).await?;
+            cmd_mcp::handle_mcp_command(&loaded.config, &mcp_manager, cmd.clone(), *json).await?;
         }
         Some(Commands::Skills { cmd }) => {
             cmd_skills::handle_skills_command(&loaded.config, cmd.clone()).await?;
