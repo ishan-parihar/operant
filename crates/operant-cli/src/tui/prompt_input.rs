@@ -3095,9 +3095,13 @@ pub fn render_prompt_input(
         );
     }
 
-    // Overlay the cursor block on top of the rendered text. We modify the
-    // buffer cell directly so the cursor occupies the same column whether
-    // it is currently blinking on or off.
+    // Overlay the cursor on top of the rendered text. Instead of replacing
+    // the character with a solid block (which made the input look like a
+    // "black bar" when the user typed), we use reverse video: swap the
+    // foreground and background of the character at the cursor position.
+    // This shows the character AND the cursor simultaneously.
+    // (iter-121 — user-reported bug: input text was invisible because the
+    // solid block cursor covered the typed character.)
     if show_cursor {
         if let Some((vi, col_in_row)) = cursor_visual {
             if vi >= scroll_offset {
@@ -3107,8 +3111,21 @@ pub fn render_prompt_input(
                     let x = area.x + prefix_width + col_in_row as u16;
                     if x < area.x + area.width && row_y < area.y + area.height {
                         let cell = &mut buf[(x, row_y)];
-                        cell.set_symbol("\u{2588}");
-                        cell.set_style(Style::default().fg(text_style.fg.unwrap_or(Color::White)));
+                        // Get the current character at this position
+                        let current_symbol = cell.symbol().to_string();
+                        if current_symbol.is_empty() || current_symbol == " " {
+                            // Empty position — show a cursor bar
+                            cell.set_symbol("▏");
+                            cell.set_style(Style::default().fg(Color::White).bg(Color::Black));
+                        } else {
+                            // Non-empty position — reverse video
+                            cell.set_style(
+                                Style::default()
+                                    .fg(Color::Black)
+                                    .bg(Color::White)
+                                    .add_modifier(Modifier::BOLD),
+                            );
+                        }
                     }
                 }
             }
@@ -3413,7 +3430,14 @@ mod tests {
             false,
         );
 
-        assert_eq!(buf[(4, 1)].symbol(), "\u{2588}");
+        // iter-121: cursor now uses reverse video instead of solid block.
+        // The character at the cursor position ('a') should still be visible
+        // (not replaced by █). We check that the cell contains 'a' and has
+        // reverse-video styling (black fg, white bg).
+        let cell = &buf[(4, 1)];
+        assert_eq!(cell.symbol(), "a");
+        assert_eq!(cell.fg, Color::Black);
+        assert_eq!(cell.bg, Color::White);
     }
 
     #[test]
