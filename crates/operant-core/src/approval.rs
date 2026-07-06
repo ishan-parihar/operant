@@ -654,64 +654,6 @@ fn extract_command_from_args(tool_name: &str, args: &Value) -> String {
 // Interactive Approval Prompt
 // ============================================================================
 
-/// Prompt the user for approval interactively.
-///
-/// Reads a line from stdin with a configurable timeout. Returns `true` if
-/// the user approves, `false` if denied or timeout occurs.
-///
-/// # Arguments
-///
-/// * `verdict` — The approval verdict from the guard.
-/// * `tool_name` — The name of the tool requesting approval.
-/// * `timeout_secs` — Optional timeout in seconds (default: 60).
-pub fn prompt_user_for_approval(
-    verdict: &ApprovalVerdict,
-    tool_name: &str,
-    timeout_secs: Option<u64>,
-) -> bool {
-    let timeout = Duration::from_secs(timeout_secs.unwrap_or(60));
-
-    match verdict {
-        ApprovalVerdict::Allowed => return true,
-        ApprovalVerdict::Blocked { reason } => {
-            warn!(tool = %tool_name, reason = %reason, "Blocked operation — no prompt shown");
-            return false;
-        }
-        ApprovalVerdict::RequiresApproval { risk_level, reason } => {
-            let risk_str = match risk_level {
-                RiskLevel::Low => "LOW",
-                RiskLevel::Medium => "MEDIUM",
-                RiskLevel::High => "HIGH",
-                RiskLevel::Critical => "CRITICAL",
-            };
-
-            println!("\n⚠️  APPROVAL REQUIRED [{risk_str}] — Tool: {tool_name}");
-            println!("   Reason: {reason}");
-            println!(
-                "   Type 'y' to approve, anything else to deny (timeout: {}s):",
-                timeout.as_secs()
-            );
-            print!("   > ");
-
-            use std::io::{self, Write};
-            let _ = io::stdout().flush();
-
-            let mut input = String::new();
-            let result = io::stdin().read_line(&mut input);
-
-            match result {
-                Ok(_) => {
-                    let trimmed = input.trim().to_lowercase();
-                    trimmed == "y" || trimmed == "yes" || trimmed == "approve"
-                }
-                Err(_) => {
-                    warn!("Failed to read stdin for approval prompt");
-                    false
-                }
-            }
-        }
-    }
-}
 
 // ============================================================================
 // Helper Functions

@@ -94,7 +94,7 @@ pub use agent::{
     AgentConfig, AgentEvent, FallbackModelClient, OperantAgent,
 };
 pub use approval::{
-    check_tool_approval, prompt_user_for_approval, ApprovalContext, ApprovalGuard, ApprovalMode,
+    check_tool_approval, ApprovalContext, ApprovalGuard, ApprovalMode,
     ApprovalVerdict, RiskLevel,
 };
 pub use browser_provider::{
@@ -152,7 +152,7 @@ pub use tools::{
     register_builtin_tools, register_builtin_tools_with_sub_agent, OperantTool, ToolRegistry,
     ToolResult,
 };
-pub use trajectory::{Trajectory, TrajectoryBuilder, TrajectoryExporter};
+pub use trajectory::Trajectory;
 
 pub use models_dev::{
     fetch_models_dev, get_model_capabilities, list_agentic_models, lookup_models_dev_context,

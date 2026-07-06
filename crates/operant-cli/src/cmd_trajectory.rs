@@ -10,7 +10,7 @@
 use anyhow::{Context, Result};
 use clap::Subcommand;
 use console::style;
-use operant_core::trajectory::{Trajectory, TrajectoryExporter};
+use operant_core::trajectory::Trajectory;
 use std::path::PathBuf;
 
 /// Manage agent trajectories (ReAct step recordings for fine-tuning/analysis)
@@ -167,7 +167,10 @@ fn export_trajectories(
         anyhow::bail!("No trajectories directory at {}", dir.display());
     }
 
-    let mut exporter = TrajectoryExporter::new();
+    // Inline trajectory export (iter-126 — TrajectoryExporter was deleted as
+    // dead code; the only caller was this function). We collect trajectories
+    // into a Vec and serialize them directly.
+    let mut trajectories: Vec<Trajectory> = Vec::new();
     for entry in std::fs::read_dir(dir)? {
         let entry = entry?;
         if entry.path().extension().and_then(|s| s.to_str()) != Some("json") {
@@ -175,18 +178,23 @@ fn export_trajectories(
         }
         let json = std::fs::read_to_string(entry.path())?;
         if let Ok(traj) = serde_json::from_str::<Trajectory>(&json) {
-            exporter.add(traj);
+            trajectories.push(traj);
         }
     }
 
-    if exporter.is_empty() {
+    if trajectories.is_empty() {
         println!("No trajectories to export.");
         return Ok(());
     }
 
+    let count = trajectories.len();
     let content = match format {
-        "json" => exporter.export_json().context("Failed to export JSON")?,
-        "ndjson" => exporter.export_ndjson(),
+        "json" => serde_json::to_string_pretty(&trajectories).context("Failed to export JSON")?,
+        "ndjson" => trajectories
+            .iter()
+            .map(|t| serde_json::to_string(t).unwrap_or_default())
+            .collect::<Vec<_>>()
+            .join("\n"),
         other => anyhow::bail!("Unknown format: {} (use json or ndjson)", other),
     };
 
@@ -197,7 +205,7 @@ fn export_trajectories(
             println!(
                 "{} Exported {} trajectories to {}",
                 style("✓").green(),
-                exporter.len(),
+                count,
                 path.display()
             );
         }

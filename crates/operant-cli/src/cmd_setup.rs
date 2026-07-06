@@ -19,7 +19,6 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use chrono::Local;
-use clap::Subcommand;
 use console::style;
 use operant_core::config::{
     default_config_paths, install_runtime_config, AppConfig, AuxiliaryModelConfig, GatewaySettings,
@@ -31,20 +30,6 @@ use crate::gateway_platforms::all_platforms;
 use crate::prompt_helpers::*;
 use crate::provider::{fetch_models_for_provider, provider_by_name, provider_from_url, PROVIDERS};
 
-// ---------------------------------------------------------------------------
-// Subcommand enum (non-interactive modes)
-// ---------------------------------------------------------------------------
-
-/// Non-interactive setup operations.
-#[derive(Debug, Clone, Subcommand)]
-pub enum SetupSubcommand {
-    /// Show current setup status (what's configured, what's missing)
-    Status,
-    /// Reset configuration to factory defaults
-    Reset,
-    /// Re-run all wizard steps
-    Reconfigure,
-}
 
 // ---------------------------------------------------------------------------
 // Public entry point
@@ -1291,131 +1276,6 @@ async fn step_agent_settings(config: &mut AppConfig, _reconfigure: bool) -> Resu
         .unwrap_or(0);
     let reset_sel = prompt_select("Session reset mode", &reset_mode_names, current_reset)?;
     config.agent.session_reset = reset_modes[reset_sel].1.clone();
-
-    println!();
-    Ok(())
-}
-
-// ---------------------------------------------------------------------------
-// Legacy wizard steps (kept for reference, not used in current flow)
-// ---------------------------------------------------------------------------
-
-#[allow(dead_code)]
-/// Legacy: Vision model configuration (replaced by auxiliary_models.vision).
-async fn step_vision(config: &mut AppConfig, _reconfigure: bool) -> Result<()> {
-    print_page_header("Vision Model Configuration");
-    println!("Configure vision model for image analysis.");
-
-    let enabled = dialoguer::Confirm::new()
-        .with_prompt("Configure Vision Model?")
-        .default(config.vision.provider.is_some())
-        .interact()
-        .context("Failed to read vision preference")?;
-
-    if enabled {
-        let provider: String = dialoguer::Input::new()
-            .with_prompt("Vision provider")
-            .default(
-                config
-                    .vision
-                    .provider
-                    .clone()
-                    .unwrap_or_else(|| "openai".to_string()),
-            )
-            .interact_text()
-            .context("Failed to read vision provider")?;
-        config.vision.provider = Some(provider);
-
-        let model: String = dialoguer::Input::new()
-            .with_prompt("Vision model")
-            .default(
-                config
-                    .vision
-                    .model
-                    .clone()
-                    .unwrap_or_else(|| "gpt-4o".to_string()),
-            )
-            .interact_text()
-            .context("Failed to read vision model")?;
-        config.vision.model = Some(model);
-
-        let base_url: String = dialoguer::Input::new()
-            .with_prompt("Vision base URL")
-            .default(
-                config
-                    .vision
-                    .base_url
-                    .clone()
-                    .unwrap_or_else(|| "https://api.openai.com/v1".to_string()),
-            )
-            .interact_text()
-            .context("Failed to read vision base URL")?;
-        config.vision.base_url = Some(base_url);
-
-        let api_key: String = dialoguer::Password::new()
-            .with_prompt("Vision API key")
-            .with_confirmation("Confirm:", "Passwords do not match")
-            .allow_empty_password(true)
-            .interact()
-            .context("Failed to read vision API key")?;
-        if !api_key.is_empty() {
-            config.vision.api_key = Some(api_key);
-        }
-
-        println!("  {} Vision model configured", style("✓").green());
-    } else {
-        config.vision.provider = None;
-        config.vision.model = None;
-        config.vision.base_url = None;
-        config.vision.api_key = None;
-        println!("  {} Vision not configured", style("✓").green());
-    }
-
-    println!();
-    Ok(())
-}
-
-#[allow(dead_code)]
-/// Legacy: Credential Pool configuration.
-async fn step_credential_pool(config: &mut AppConfig, _reconfigure: bool) -> Result<()> {
-    print_page_header("Credential Pool Configuration");
-    println!("Configure credential pooling for multi-key fallback and load balancing.");
-
-    let enabled = dialoguer::Confirm::new()
-        .with_prompt("Enable Credential Pool (multi-key fallback)?")
-        .default(config.credential_pool.enabled)
-        .interact()
-        .context("Failed to read credential pool preference")?;
-
-    if enabled {
-        let strategies = &["Fill First", "Round Robin", "Random", "Least Used"];
-        let strategy_values = &["fill_first", "round_robin", "random", "least_used"];
-
-        let current_idx = config
-            .credential_pool
-            .strategy
-            .as_ref()
-            .and_then(|s| strategy_values.iter().position(|v| *v == s))
-            .unwrap_or(1);
-
-        let sel = dialoguer::Select::new()
-            .with_prompt("Select credential pool strategy")
-            .items(strategies)
-            .default(current_idx)
-            .interact()
-            .context("Failed to select credential pool strategy")?;
-
-        config.credential_pool.strategy = Some(strategy_values[sel].to_string());
-        config.credential_pool.enabled = true;
-        println!(
-            "  {} Credential Pool enabled with strategy: {}",
-            style("✓").green(),
-            strategies[sel]
-        );
-    } else {
-        config.credential_pool.enabled = false;
-        println!("  {} Credential Pool disabled", style("✓").green());
-    }
 
     println!();
     Ok(())
