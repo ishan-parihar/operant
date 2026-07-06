@@ -50,3 +50,5 @@ crates/operant-cli/web/dist/
 # Autonomous-mode runtime state
 autonomous-status.toml
 telegram_offset.txt
+build.log
+build*.log
