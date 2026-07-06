@@ -98,7 +98,6 @@ import type { Translations } from "@/i18n/types";
 import { PluginPage, PluginSlot, usePlugins } from "@/plugins";
 import type { PluginManifest } from "@/plugins";
 import { useTheme } from "@/themes";
-import { isDashboardEmbeddedChatEnabled } from "@/lib/dashboard-flags";
 import { api } from "@/lib/api";
 import type { StatusResponse } from "@/lib/api";
 
@@ -377,7 +376,9 @@ export default function App() {
   const isDocsRoute = pathname === "/docs" || pathname === "/docs/";
   const normalizedPath = pathname.replace(/\/$/, "") || "/";
   const isChatRoute = normalizedPath === "/chat";
-  const embeddedChat = isDashboardEmbeddedChatEnabled();
+  // The embedded TUI Chat surface is always enabled (iter-128 — deleted the
+  // dashboard-flags.ts seam that always returned true anyway).
+  const embeddedChat = true;
 
   // `dashboard.show_token_analytics` gates the Analytics nav item.  The
   // page itself remains reachable by URL (it renders an explanation when

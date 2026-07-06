@@ -64,7 +64,7 @@ import { useToast } from "@nous-research/ui/hooks/use-toast";
 import { useI18n } from "@/i18n";
 import { usePageHeader } from "@/contexts/usePageHeader";
 import { PluginSlot } from "@/plugins";
-import { isDashboardEmbeddedChatEnabled } from "@/lib/dashboard-flags";
+// iter-128: dashboard-flags.ts deleted (always returned true).
 
 const SOURCE_CONFIG: Record<string, { icon: typeof Terminal; color: string }> =
   {
@@ -760,7 +760,7 @@ export default function SessionsPage() {
   const { t } = useI18n();
   const { setAfterTitle, setEnd } = usePageHeader();
   const { activeAction, actionStatus, dismissLog } = useSystemActions();
-  const resumeInChatEnabled = isDashboardEmbeddedChatEnabled();
+  const resumeInChatEnabled = true; // iter-128: dashboard-flags.ts deleted.
 
   const refreshEmptyCount = useCallback(() => {
     api
