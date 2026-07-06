@@ -916,42 +916,6 @@ fn normalize_sse_buffer(buffer: &mut String) {
     }
 }
 
-/// Builder for constructing messages
-pub struct MessageBuilder {
-    message: Message,
-}
-
-impl MessageBuilder {
-    pub fn new(role: Role) -> Self {
-        Self {
-            message: Message::new(role, ""),
-        }
-    }
-
-    pub fn content(mut self, content: impl Into<String>) -> Self {
-        self.message.content = content.into();
-        self
-    }
-
-    pub fn name(mut self, name: impl Into<String>) -> Self {
-        self.message.name = Some(name.into());
-        self
-    }
-
-    pub fn tool_call_id(mut self, id: impl Into<String>) -> Self {
-        self.message.tool_call_id = Some(id.into());
-        self
-    }
-
-    pub fn tool_calls(mut self, tool_calls: Vec<ToolCall>) -> Self {
-        self.message.tool_calls = Some(tool_calls);
-        self
-    }
-
-    pub fn build(self) -> Message {
-        self.message
-    }
-}
 
 #[cfg(test)]
 mod tests {

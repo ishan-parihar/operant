@@ -426,7 +426,10 @@ fn m2() {
 }
 #[test]
 fn m3() {
-    let _ = operant_core::trajectory::TrajectoryBuilder::new("session", "model");
+    // TrajectoryBuilder was deleted in iter-126 (dead code — zero callers).
+    // Replace with a Trajectory direct-construction smoke test.
+    use operant_core::trajectory::Trajectory;
+    let _ = Trajectory::new("session", "model");
 }
 
 // Config (20)
