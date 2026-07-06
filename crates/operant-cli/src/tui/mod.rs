@@ -1,5 +1,4 @@
 pub mod adapter_types;
-pub mod bridge;
 pub mod provider;
 
 pub mod app;
@@ -29,7 +28,6 @@ pub mod banner;
 pub mod skills_view;
 pub mod plugins_hub;
 pub mod journey_view;
-pub mod bridge_state;
 pub mod image_paste;
 pub mod message_copy;
 pub mod ask_user_dialog;

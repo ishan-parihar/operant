@@ -51,7 +51,6 @@ mod tui;
 
 pub(crate) use tui::agents_view;
 pub(crate) use tui::app;
-pub(crate) use tui::bridge_state;
 pub(crate) use tui::dialogs;
 pub(crate) use tui::effort_picker;
 pub(crate) use tui::figures;
