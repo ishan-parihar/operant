@@ -1637,11 +1637,33 @@ fn render_welcome_box(frame: &mut Frame, app: &App, area: Rect) {
 
     right_lines.push(Line::from(""));
     right_lines.push(Line::from(Span::styled(
-        "Recent activity",
+        "Available Tools",
         Style::default().fg(accent).add_modifier(Modifier::BOLD),
     )));
+    // Show tool/MCP/skills counts like hermes-agent's header.
+    // (iter-124 — user-requested: add tools/mcp/skills info to header.)
+    let tool_count = app.tool_use_blocks.len();
+    let mcp_count = app.config.inner.mcp.servers.iter().filter(|s| s.enabled).count();
+    let skills_count = app.skills_view.skills.len();
+    let mem_count = {
+        let mem_dir = operant_core::platform::operant_home().join("memory");
+        operant_core::memory::MemoryStore::new(mem_dir)
+            .read_memories()
+            .map(|m| m.len())
+            .unwrap_or(0)
+    };
+    right_lines.push(Line::from(vec![
+        Span::styled("  ", Style::default()),
+        Span::styled(format!("{} tools", tool_count.max(1)), Style::default().fg(Color::White)),
+        Span::styled(" · ", Style::default().fg(Color::DarkGray)),
+        Span::styled(format!("{} MCP", mcp_count), Style::default().fg(Color::White)),
+        Span::styled(" · ", Style::default().fg(Color::DarkGray)),
+        Span::styled(format!("{} skills", skills_count), Style::default().fg(Color::White)),
+        Span::styled(" · ", Style::default().fg(Color::DarkGray)),
+        Span::styled(format!("{} memories", mem_count), Style::default().fg(Color::White)),
+    ]));
     right_lines.push(Line::from(Span::styled(
-        "No recent activity",
+        "  /help for commands",
         Style::default().fg(Color::DarkGray),
     )));
 
