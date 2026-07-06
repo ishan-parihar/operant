@@ -66,6 +66,14 @@ pub enum CronSubcommand {
     Status,
     /// Tick the cron scheduler (check for due jobs)
     Tick,
+    /// Create a cron job from a pre-built blueprint.
+    Blueprint {
+        /// Blueprint name: morning-brief | weekly-digest | reflection
+        name: String,
+        /// Override the default schedule (e.g. "0 9 * * *" for 9am daily)
+        #[arg(long)]
+        schedule: Option<String>,
+    },
 }
 
 /// Dispatch a cron subcommand.
@@ -90,6 +98,9 @@ pub async fn handle_cron_command(config: &AppConfig, cmd: CronSubcommand) -> Res
         CronSubcommand::Run { id } => cmd_run(config, &id).await,
         CronSubcommand::Status => cmd_status(config).await,
         CronSubcommand::Tick => cmd_tick(config).await,
+        CronSubcommand::Blueprint { name, schedule } => {
+            cmd_blueprint(config, &name, schedule).await
+        }
     }
 }
 
@@ -385,6 +396,62 @@ async fn cmd_tick(config: &AppConfig) -> Result<()> {
             println!("  - {} ({})", job.name, job.id);
         }
     }
+
+    Ok(())
+}
+
+/// Create a cron job from a pre-built blueprint.
+/// (iter-107 — the #1 transformative feature from the UX audit.)
+async fn cmd_blueprint(config: &AppConfig, name: &str, schedule_override: Option<String>) -> Result<()> {
+    let (display_name, default_schedule, prompt): (&str, &str, String) = match name {
+        "morning-brief" => (
+            "Morning Brief",
+            "0 8 * * *",
+            "You are delivering the morning brief. Review your memory of recent conversations with this user.\n\nSurface exactly three things, formatted as a short message (under 200 words total):\n\n1. Pattern: One thing you have noticed the user doing repeatedly. Be specific and observational.\n\n2. Insight: One observation the user might not have about themselves. This should come from connecting dots across sessions.\n\n3. Question: One question that invites reflection. Not a task - a question that makes the user think about their direction.\n\nKeep the tone warm, specific, and brief. If you do not have enough memory yet, say so honestly.".to_string(),
+        ),
+        "weekly-digest" => (
+            "Weekly Digest",
+            "0 18 * * 5",
+            "You are delivering the weekly digest. Review all conversations from the past 7 days.\n\nSummarize: 1) Themes, 2) Progress, 3) Friction, 4) Growth. Under 300 words. End with one question for the week ahead.".to_string(),
+        ),
+        "reflection" => (
+            "Daily Reflection",
+            "0 21 * * *",
+            "You are guiding a daily reflection. Ask these 3 questions one at a time: 1) What went well today? 2) What did not go as you hoped? 3) What will you do differently tomorrow? After all 3 answers, synthesize a one-sentence summary.".to_string(),
+        ),
+        _ => {
+            anyhow::bail!("Unknown blueprint '{}'. Available: morning-brief, weekly-digest, reflection", name);
+        }
+    };
+
+    let schedule = schedule_override.unwrap_or_else(|| default_schedule.to_string());
+
+    let db = CronDb::init(config.database_path.clone()).context("Failed to open cron database")?;
+    let id = db
+        .create_job(
+            display_name.to_string(),
+            prompt,
+            schedule.clone(),
+            schedule.clone(),
+            None,
+            "local".to_string(),
+            None, None, None, None, None, None, None, None, None, None, None, None,
+            false,
+        )
+        .context("Failed to create cron job")?;
+
+    println!("Blueprint '{}' created successfully!", display_name);
+    println!();
+    println!("   Schedule: {}", schedule);
+    println!("   Job ID:   {}", id);
+    println!();
+    println!("   The agent will run this prompt on schedule and deliver");
+    println!("   the result via your configured gateway (Telegram, Discord, etc.)");
+    println!("   or in the TUI if no gateway is running.");
+    println!();
+    println!("   To test it now: operant cron run {}", id);
+    println!("   To customize:   operant cron update {} --command <your prompt>", id);
+    println!("   To delete:       operant cron delete {}", id);
 
     Ok(())
 }
