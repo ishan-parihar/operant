@@ -547,7 +547,14 @@ pub(crate) async fn step_provider_and_model(
         config.client.base_url = custom_url;
     }
 
-    // ── Part B — Select model ──────────────────────────────────────────────
+    // ── Part B — API key FIRST (so live model fetch works) ────────────────
+    // Reordered: was provider → model → API key. Now: provider → API key → model.
+    // This ensures the API key is available when the user chooses "Fetch live
+    // models", so the fetch actually works instead of returning an empty list.
+    // (iter-119 — user-reported bug: live model fetch always failed.)
+    step_api_key(config, provider_key, provider_name)?;
+
+    // ── Part C — Select model (now with API key available for live fetch) ─
     let models_for_provider: Vec<&str> = if selected_provider.models.is_empty() {
         Vec::new()
     } else {
@@ -628,14 +635,10 @@ pub(crate) async fn step_provider_and_model(
     ));
     println!();
 
-    // ── Part C — API key with [K]eep/[R]eplace/[C]lear ────────────────────
-    step_api_key(config, provider_key, provider_name)?;
-
+    // API key was already entered in Part B (before model selection) so that
+    // live model fetch works. Don't ask again here.
     // Parts D (fallback & strategy) and E (auxiliary models) are power-user
-    // features. Skip them in quick mode — the user can run `operant setup
-    // --reconfigure` for the full wizard. (iter-112 — reduces quick setup
-    // from 5 sub-steps to 3: provider → model → API key.)
-    // The _reconfigure param is 0 for quick, 1 for full.
+    // features. Skip them in quick mode.
     if full {
         // ── Part D — Same-provider fallback & rotation ────────────────────────
         step_fallback_and_strategy(config, provider_key, provider_name)?;
