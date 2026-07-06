@@ -162,35 +162,52 @@ export default function ConfigPage() {
   }
 
   useEffect(() => {
+    // iter-132: AbortController prevents stale responses from overwriting
+    // fresh state when the user navigates away or switches profiles mid-
+    // fetch. Previously a slow /api/config response could clobber the
+    // state set by a faster /api/config?profile=other response.
+    const controller = new AbortController();
+
     api
-      .getConfig()
-      .then(setConfig)
-      .catch(() => {});
-    api
-      .getSchema()
-      .then((resp) => {
-        setSchema(resp.fields as Record<string, Record<string, unknown>>);
-        setCategoryOrder(resp.category_order ?? []);
+      .getConfig(controller.signal)
+      .then((c) => {
+        if (!controller.signal.aborted) setConfig(c);
       })
       .catch(() => {});
     api
-      .getDefaults()
-      .then(setDefaults)
+      .getSchema(controller.signal)
+      .then((resp) => {
+        if (!controller.signal.aborted) {
+          setSchema(resp.fields as Record<string, Record<string, unknown>>);
+          setCategoryOrder(resp.category_order ?? []);
+        }
+      })
+      .catch(() => {});
+    api
+      .getDefaults(controller.signal)
+      .then((d) => {
+        if (!controller.signal.aborted) setDefaults(d);
+      })
       .catch(() => {});
     // getConfigRaw is profile-scoped (fetchJSON appends ?profile=), so its
     // `path` reflects the switched profile's config.yaml. /api/status's
     // config_path is machine-global (the dashboard's own profile) — wrong
     // header under the global profile switcher, so it's only a fallback.
     api
-      .getConfigRaw()
+      .getConfigRaw(controller.signal)
       .then((resp) => {
-        if (resp.path) setConfigPath(resp.path);
+        if (!controller.signal.aborted && resp.path) setConfigPath(resp.path);
       })
       .catch(() => {});
     api
-      .getStatus()
-      .then((resp) => setConfigPath((prev) => prev ?? resp.config_path))
+      .getStatus(controller.signal)
+      .then((resp) => {
+        if (!controller.signal.aborted)
+          setConfigPath((prev) => prev ?? resp.config_path);
+      })
       .catch(() => {});
+
+    return () => controller.abort();
   }, []);
 
   // Set active category when categories load

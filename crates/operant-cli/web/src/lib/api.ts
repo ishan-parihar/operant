@@ -311,7 +311,8 @@ function appendProfileParam(url: string, profile?: string): string {
 }
 
 export const api = {
-  getStatus: () => fetchJSON<StatusResponse>("/api/status"),
+  getStatus: (signal?: AbortSignal) =>
+    fetchJSON<StatusResponse>("/api/status", signal ? { signal } : undefined),
   /**
    * Identity probe for the dashboard auth gate (Phase 7).
    *
@@ -454,9 +455,15 @@ export const api = {
     fetchJSON<ModelsAnalyticsResponse>(
       appendProfileParam(`/api/analytics/models?days=${days}`, profile),
     ),
-  getConfig: () => fetchJSON<Record<string, unknown>>("/api/config"),
-  getDefaults: () => fetchJSON<Record<string, unknown>>("/api/config/defaults"),
-  getSchema: () => fetchJSON<{ fields: Record<string, unknown>; category_order: string[] }>("/api/config/schema"),
+  getConfig: (signal?: AbortSignal) =>
+    fetchJSON<Record<string, unknown>>("/api/config", signal ? { signal } : undefined),
+  getDefaults: (signal?: AbortSignal) =>
+    fetchJSON<Record<string, unknown>>("/api/config/defaults", signal ? { signal } : undefined),
+  getSchema: (signal?: AbortSignal) =>
+    fetchJSON<{ fields: Record<string, unknown>; category_order: string[] }>(
+      "/api/config/schema",
+      signal ? { signal } : undefined,
+    ),
   getModelInfo: () => fetchJSON<ModelInfoResponse>("/api/model/info"),
   getModelOptions: () => fetchJSON<ModelOptionsResponse>("/api/model/options"),
   getAuxiliaryModels: () => fetchJSON<AuxiliaryModelsResponse>("/api/model/auxiliary"),
@@ -472,7 +479,8 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ config }),
     }),
-  getConfigRaw: () => fetchJSON<{ yaml: string; path?: string }>("/api/config/raw"),
+  getConfigRaw: (signal?: AbortSignal) =>
+    fetchJSON<{ yaml: string; path?: string }>("/api/config/raw", signal ? { signal } : undefined),
   saveConfigRaw: (yaml_text: string) =>
     fetchJSON<{ ok: boolean }>("/api/config/raw", {
       method: "PUT",
