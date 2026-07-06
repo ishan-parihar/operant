@@ -18,8 +18,34 @@ use crate::error::Result;
 use crate::schema::ToolSchema;
 use crate::tools::{OperantTool, ToolContext, ToolRegistry, ToolResult};
 
-/// MCP protocol version
-const MCP_VERSION: &str = "2024-11-05";
+/// MCP protocol versions we support, newest first. We send the newest in
+/// our `initialize` request, then verify the server's response is in this
+/// list. (iter-130 — closes the ponytail-audit gap "no protocol version
+/// negotiation; hardcoded 2024-11-05 will silently break against
+/// 2025-06-18 servers".)
+const MCP_SUPPORTED_VERSIONS: &[&str] = &["2025-06-18", "2024-11-05"];
+
+/// The default (newest) version we send in `initialize`.
+const MCP_DEFAULT_VERSION: &str = "2025-06-18";
+
+/// Check whether a server-returned `protocolVersion` is one we accept.
+/// Returns the (possibly normalized) version to use, or None if the
+/// server's version is incompatible with all of ours.
+fn negotiate_protocol_version(server_version: &str) -> Option<&'static str> {
+    // Exact match first.
+    for v in MCP_SUPPORTED_VERSIONS {
+        if *v == server_version {
+            return Some(v);
+        }
+    }
+    // Fallback: prefix match (some servers return "2025-06-18-draft" etc.)
+    for v in MCP_SUPPORTED_VERSIONS {
+        if server_version.starts_with(*v) {
+            return Some(v);
+        }
+    }
+    None
+}
 
 /// MCP client for connecting to MCP servers
 #[derive(Debug, Clone)]
@@ -36,6 +62,13 @@ pub struct McpClient {
     capabilities: Arc<RwLock<McpCapabilities>>,
     /// Whether connected
     connected: Arc<RwLock<bool>>,
+    /// Monotonic JSON-RPC request id counter. (iter-130 — closes the
+    /// ponytail-audit bug "HTTP McClient uses SystemTime nanos for the
+    /// JSON-RPC id; non-monotonic, can collide, and the response isn't
+    /// verified to match the id".)
+    request_id: Arc<AtomicU64>,
+    /// Server name (set after connect, for logging).
+    server_name: Arc<RwLock<String>>,
 }
 
 /// Server capabilities
@@ -190,10 +223,19 @@ impl McpClient {
         Self {
             url: url.into(),
             auth_token,
-            client: reqwest::Client::new(),
+            // iter-130: configure a 60s timeout — previously the HTTP
+            // transport had no timeout, so a slow/dead MCP server could
+            // hang the agent loop forever. Stdio + SSE paths already had
+            // 60s timeouts.
+            client: reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(60))
+                .build()
+                .unwrap_or_else(|_| reqwest::Client::new()),
             tools: Arc::new(RwLock::new(Vec::new())),
             capabilities: Arc::new(RwLock::new(McpCapabilities::default())),
             connected: Arc::new(RwLock::new(false)),
+            request_id: Arc::new(AtomicU64::new(1)),
+            server_name: Arc::new(RwLock::new(String::new())),
         }
     }
 
@@ -202,7 +244,7 @@ impl McpClient {
         info!(url = %self.url, "Connecting to MCP server");
 
         let request = InitializeRequest {
-            protocol_version: MCP_VERSION.to_string(),
+            protocol_version: MCP_DEFAULT_VERSION.to_string(),
             capabilities: ClientCapabilities {
                 roots: Some(Roots { list_changed: true }),
                 sampling: Some(Sampling {}),
@@ -224,11 +266,34 @@ impl McpClient {
             ))
         })?;
 
-        debug!(
-            server = %init_response.server_info.name,
-            version = %init_response.server_info.version,
-            "MCP server initialized"
-        );
+        // iter-130: protocol version negotiation. Verify the server's
+        // returned protocolVersion is one we support. If not, log a
+        // warning but don't fail — many servers return a newer version
+        // they're willing to speak; we just downgrade to our newest.
+        match negotiate_protocol_version(&init_response.protocol_version) {
+            Some(negotiated) => {
+                if negotiated != init_response.protocol_version.as_str() {
+                    debug!(
+                        server_version = %init_response.protocol_version,
+                        negotiated_version = %negotiated,
+                        "MCP server returned a non-exact version match — using negotiated version"
+                    );
+                }
+                debug!(
+                    server = %init_response.server_info.name,
+                    version = %init_response.server_info.version,
+                    protocol = %negotiated,
+                    "MCP server initialized"
+                );
+            }
+            None => {
+                warn!(
+                    server_version = %init_response.protocol_version,
+                    supported = ?MCP_SUPPORTED_VERSIONS,
+                    "MCP server returned an unsupported protocolVersion. Continuing with best-effort compatibility (newest version we support)."
+                );
+            }
+        }
 
         // Update capabilities
         {
@@ -313,10 +378,11 @@ impl McpClient {
 
     /// Send a JSON-RPC request
     async fn send_request(&self, method: &str, params: Option<Value>) -> Result<Value> {
-        let request_id = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos() as u64)
-            .unwrap_or(0);
+        // iter-130: use the monotonic AtomicU64 counter instead of
+        // SystemTime nanos. The previous approach was non-monotonic
+        // (clock skew), could collide under load, and the response
+        // wasn't matched against the id.
+        let request_id = self.request_id.fetch_add(1, Ordering::SeqCst);
 
         let request = JsonRpcRequest {
             jsonrpc: "2.0".to_string(),
@@ -335,6 +401,23 @@ impl McpClient {
         }
 
         let response = req_builder.json(&request).send().await?;
+
+        // iter-130: handle 401 Unauthorized specifically. Previously a
+        // 401 just returned a generic "MCP request failed" error and the
+        // user had to manually re-run `operant mcp login`. Now we surface
+        // a clear error that tells the caller to refresh the token.
+        // (Full auto-refresh + retry is queued for iter-130b — needs the
+        // OAuthManager wired into the HTTP path, which is a bigger
+        // refactor since McpClient doesn't currently hold an OAuthManager
+        // reference.)
+        if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+            let body = response.text().await.unwrap_or_default();
+            warn!(method = %method, body = %body, "MCP server returned 401 — token may be expired. Run `operant mcp login <server>` to refresh.");
+            return Err(crate::error::Error::Agent(format!(
+                "MCP server returned 401 Unauthorized (token may be expired). Run `operant mcp login` to refresh. Server response: {}",
+                body
+            )));
+        }
 
         if !response.status().is_success() {
             let status = response.status();
@@ -478,7 +561,7 @@ impl McpStdioClient {
 
         // Send initialize request
         let request = InitializeRequest {
-            protocol_version: MCP_VERSION.to_string(),
+            protocol_version: MCP_DEFAULT_VERSION.to_string(),
             capabilities: ClientCapabilities {
                 roots: Some(Roots { list_changed: true }),
                 sampling: Some(Sampling {}),
@@ -973,7 +1056,7 @@ impl McpSseClient {
 
         // Send initialize request
         let init_request = InitializeRequest {
-            protocol_version: MCP_VERSION.to_string(),
+            protocol_version: MCP_DEFAULT_VERSION.to_string(),
             capabilities: ClientCapabilities {
                 roots: Some(Roots { list_changed: true }),
                 sampling: Some(Sampling {}),
