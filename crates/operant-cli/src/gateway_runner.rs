@@ -979,7 +979,14 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                 }
 
                 // ── 5. Typing indicator ───────────────────────────────────────
-                let typing_handle = if platform == "telegram" {
+                // Send typing indicator on ALL platforms, not just Telegram.
+                // The PlatformAdapter::send_typing default is a no-op, so
+                // non-supporting platforms skip silently. (Bug #13 from
+                // iter-98 audit — Discord and Slack users saw no 'bot is
+                // typing' indicator, making long silences look like the bot
+                // was dead.)
+                let typing_platform = platform.clone();
+                let typing_handle = {
                     let gw = gw.clone();
                     let ch = channel_id.clone();
                     Some(tokio::spawn(async move {
@@ -988,13 +995,11 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                         interval.tick().await;
                         loop {
                             interval.tick().await;
-                            if gw.send_typing("telegram", &ch).is_err() {
+                            if gw.send_typing(&typing_platform, &ch).is_err() {
                                 break;
                             }
                         }
                     }))
-                } else {
-                    None
                 };
 
                 // ── 5.5 Keepalive notification ─────────────────────────────────

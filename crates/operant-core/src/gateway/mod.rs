@@ -2178,6 +2178,29 @@ impl PlatformAdapter for DiscordAdapter {
         Ok(())
     }
 
+    /// Send a typing indicator. Discord's typing endpoint is
+    /// POST /channels/{id}/typing (5s TTL). (Bug #13 from iter-98 audit —
+    /// previously Discord used the default no-op, so users saw no indicator.)
+    fn send_typing(&self, channel_id: &str) -> Result<()> {
+        let token = self.token.as_ref().ok_or_else(|| {
+            Error::Config("Discord token not configured".to_string())
+        })?;
+        let url = format!("{}/channels/{}/typing", self.api_url(), channel_id);
+        // Fire and forget — we don't await the response since send_typing
+        // is synchronous. The next typing call in 4s will refresh it.
+        let client = reqwest::Client::new();
+        let token = token.clone();
+        let url = url.clone();
+        tokio::spawn(async move {
+            let _ = client
+                .post(&url)
+                .header("Authorization", format!("Bot {}", token))
+                .send()
+                .await;
+        });
+        Ok(())
+    }
+
     async fn send_message(&self, message: OutgoingMessage) -> Result<()> {
         let client = reqwest::Client::new();
 
@@ -2694,6 +2717,20 @@ impl WhatsAppAdapter {
         self.token = token;
         self
     }
+
+    /// Set the WhatsApp Cloud API phone_number_id (from Meta Business Manager).
+    /// Without this, send_message posts to /v18.0/phone_number_id/messages
+    /// which returns 404. (Bug #10 from iter-98 audit.)
+    pub fn with_phone_number_id(mut self, phone_number_id: Option<String>) -> Self {
+        self.phone_number_id = phone_number_id;
+        self
+    }
+
+    /// Set the verify token for webhook handshake.
+    pub fn with_verify_token(mut self, verify_token: Option<String>) -> Self {
+        self.verify_token = verify_token;
+        self
+    }
 }
 
 #[async_trait]
@@ -2718,9 +2755,14 @@ impl PlatformAdapter for WhatsAppAdapter {
         let phone = message.channel_id.clone();
 
         let client = reqwest::Client::new();
+        let phone_number_id = self.phone_number_id.as_deref().ok_or_else(|| {
+            Error::Config(
+                "WhatsApp phone_number_id not configured. Set it via WhatsAppAdapter::with_phone_number_id() or config.gateway.whatsapp_phone_number_id. Get it from Meta Business Manager.".to_string()
+            )
+        })?;
         let url = format!(
             "https://graph.facebook.com/v18.0/{}/messages",
-            self.phone_number_id.as_deref().unwrap_or("phone_number_id")
+            phone_number_id
         );
 
         let body = json!({
