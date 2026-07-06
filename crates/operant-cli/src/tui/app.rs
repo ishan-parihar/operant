@@ -6348,6 +6348,15 @@ permission_rx: None,
                         self.streaming_text.push_str(&delta);
                         self.invalidate_transcript();
                     }
+                    crate::tui::adapter_types::query::StreamEvent::ThinkingDelta { delta } => {
+                        // Route thinking/reasoning content to streaming_thinking,
+                        // NOT streaming_text. (iter-113 — fixes the bug where
+                        // [thinking] prefixes appeared as literal text in the
+                        // streaming preview, then glitched when flushed.)
+                        self.stall_start = None;
+                        self.streaming_thinking.push_str(&delta);
+                        self.invalidate_transcript();
+                    }
                     crate::tui::adapter_types::query::StreamEvent::MessageStop => {
                         self.is_streaming = false;
                         self.spinner_verb = None;
