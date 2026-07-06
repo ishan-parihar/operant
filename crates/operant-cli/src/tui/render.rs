@@ -1549,8 +1549,9 @@ fn render_welcome_box(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(Paragraph::new(left_lines).wrap(Wrap { trim: false }), h_chunks[0]);
 
     // --- Right column ---
-    let tip_text = crate::tui::adapter_types::tips::select_tip(0)
-        .map(|t| t)
+    // Use frame_count as the seed so the tip rotates each session but
+    // is stable within a session. (iter-106 — was hardcoded to 0.)
+    let tip_text = crate::tui::adapter_types::tips::select_tip(app.frame_count)
         .unwrap_or_else(|| "Edit AGENTS.md to add instructions for Operant".to_string());
 
     let mut right_lines: Vec<Line> = Vec::new();
@@ -1563,6 +1564,30 @@ fn render_welcome_box(frame: &mut Frame, app: &App, area: Rect) {
     for chunk in tip_text.chars().collect::<Vec<_>>().chunks(right_w_usize.max(1)) {
         right_lines.push(Line::from(chunk.iter().collect::<String>()));
     }
+
+    // Example prompts — reduce "blank page" paralysis by showing the user
+    // what they can ask. (P1-12 from UX audit.)
+    right_lines.push(Line::from(""));
+    right_lines.push(Line::from(Span::styled(
+        "Try asking",
+        Style::default().fg(accent).add_modifier(Modifier::BOLD),
+    )));
+    const EXAMPLE_PROMPTS: &[&str] = &[
+        "Help me understand this codebase",
+        "Write a function to parse JSON",
+        "What patterns do you notice in my work?",
+        "Set up a morning brief — operant cron blueprint morning-brief",
+    ];
+    // Rotate one example per session based on frame_count.
+    let prompt_idx = (app.frame_count as usize) % EXAMPLE_PROMPTS.len();
+    let example = EXAMPLE_PROMPTS[prompt_idx];
+    for chunk in example.chars().collect::<Vec<_>>().chunks(right_w_usize.max(1)) {
+        right_lines.push(Line::from(vec![
+            Span::styled("  ", Style::default()),
+            Span::styled(chunk.iter().collect::<String>(), Style::default().fg(Color::Gray)),
+        ]));
+    }
+
     right_lines.push(Line::from(""));
     right_lines.push(Line::from(Span::styled(
         "Recent activity",
