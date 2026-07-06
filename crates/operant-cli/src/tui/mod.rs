@@ -4,6 +4,8 @@ pub mod provider;
 pub mod app;
 pub mod render;
 pub mod prompt_input;
+pub mod input_history;
+pub mod slash_usage;
 pub mod virtual_list;
 pub mod overlays;
 pub mod dialogs;

@@ -23,6 +23,10 @@ pin-project = { workspace = true }
 reqwest = { workspace = true }
 url = { workspace = true }
 tokio-tungstenite = { workspace = true }
+# TLS for the EmailAdapter's SMTP STARTTLS upgrade (iter-125). Used by the
+# gateway to refuse plaintext SMTP AUTH and require an encrypted channel.
+rustls = "0.23"
+rustls-native-certs = "0.7"
 
 # Serialization
 serde = { workspace = true }

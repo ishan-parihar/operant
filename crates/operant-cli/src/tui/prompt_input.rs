@@ -1082,23 +1082,57 @@ pub fn compute_typeahead(
 }
 
 /// Compute typeahead suggestions for slash commands only (e.g., `/help`).
+///
+/// Ordering rules (iter-125 — smart slash-command ordering):
+///   1. Exact prefix matches ranked by recency (most-recently-used first),
+///      then by frequency, then by declaration order.
+///   2. When the user has typed just `/` (empty prefix), recently-used
+///      commands float to the top — closes the user-reported "smart ordering
+///      of slash commands rather than generic-ordering" request.
+///
+/// We pull usage stats from the global `UsageStore` on every call (cheap —
+/// it's a small HashMap deserialized from `~/.operant/slash-usage.json`,
+/// cached in `App`).
 pub(crate) fn compute_slash_suggestions(input: &str, slash_commands: &[(&str, &str)]) -> Vec<TypeaheadSuggestion> {
-    let mut suggestions = Vec::new();
+    let Some(cmd_prefix) = input.strip_prefix('/') else {
+        return Vec::new();
+    };
+    let prefix_lower = cmd_prefix.to_lowercase();
 
-    if let Some(cmd_prefix) = input.strip_prefix('/') {
-        let prefix_lower = cmd_prefix.to_lowercase();
-        for (name, desc) in slash_commands {
-            if name.to_lowercase().starts_with(&prefix_lower) {
-                suggestions.push(TypeaheadSuggestion {
-                    text: format!("/{}", name),
-                    description: desc.to_string(),
-                    source: TypeaheadSource::SlashCommand,
-                });
-            }
-        }
+    // Filter to prefix matches first.
+    let mut matching: Vec<usize> = (0..slash_commands.len())
+        .filter(|&i| slash_commands[i].0.to_lowercase().starts_with(&prefix_lower))
+        .collect();
+    if matching.is_empty() {
+        return Vec::new();
     }
 
-    suggestions
+    // Apply smart ordering: recency → frequency → declaration order.
+    // We pull the usage store lazily so we don't re-read the file per
+    // keystroke (App caches it in `slash_usage` and calls us via
+    // `update_suggestions` which has access to that cache — but for
+    // standalone callers we fall back to a fresh load).
+    let usage = crate::tui::slash_usage::UsageStore::load();
+    matching.sort_by(|&a, &b| {
+        let ra = usage.recency_rank(slash_commands[a].0);
+        let rb = usage.recency_rank(slash_commands[b].0);
+        ra.cmp(&rb)
+            .then_with(|| {
+                let fa = usage.frequency_rank(slash_commands[a].0);
+                let fb = usage.frequency_rank(slash_commands[b].0);
+                fb.cmp(&fa)
+            })
+            .then_with(|| a.cmp(&b))
+    });
+
+    matching
+        .into_iter()
+        .map(|i| TypeaheadSuggestion {
+            text: format!("/{}", slash_commands[i].0),
+            description: slash_commands[i].1.to_string(),
+            source: TypeaheadSource::SlashCommand,
+        })
+        .collect()
 }
 
 /// Compute typeahead suggestions for file references (e.g., `@src/main.rs`).

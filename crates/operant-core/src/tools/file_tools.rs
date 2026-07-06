@@ -1,6 +1,19 @@
 //! File operation tools
 //!
 //! Tools for reading, writing, searching, and listing files.
+//!
+//! ## Path safety (iter-125)
+//!
+//! All file tools reject paths that escape the user's home directory or
+//! resolve to known-sensitive system files. This closes the ponytail-audit
+//! security gap "file_tools no path-traversal validation — agent can read
+//! /etc/shadow, ~/.ssh/id_rsa".
+//!
+//! The guard is conservative on purpose: any canonicalized path that
+//! either (a) starts with `..` (still relative after canonicalization
+//! failure — usually means the file doesn't exist), (b) lives outside
+//! the home directory, OR (c) is in the hard-deny list of sensitive
+//! files (SSH keys, .aws/credentials, /etc/shadow, etc.) is rejected.
 
 use async_trait::async_trait;
 use schemars::JsonSchema;
@@ -10,6 +23,101 @@ use std::path::PathBuf;
 
 use crate::schema::ToolSchema;
 use crate::tools::{OperantTool, ToolContext, ToolResult};
+
+/// Hard-deny list of file path prefixes that the agent must never read or
+/// write, regardless of where the user's home directory is. Mirrors the
+/// sensitive-file list used by Claude Code / Cursor.
+const DENIED_PATH_PATTERNS: &[&str] = &[
+    // SSH private keys + config
+    ".ssh/id_rsa",
+    ".ssh/id_dsa",
+    ".ssh/id_ecdsa",
+    ".ssh/id_ed25519",
+    ".ssh/identity",
+    ".ssh/identity.pub",
+    // Cloud-provider credentials
+    ".aws/credentials",
+    ".aws/config",
+    ".config/gcloud/credentials",
+    ".config/gcloud/application_default_credentials.json",
+    ".azure/credentials",
+    // Token files
+    ".operant/auth.json",
+    ".operant/mcp-tokens",
+    ".netrc",
+    ".npmrc",
+    ".pypirc",
+    ".docker/config.json",
+    ".kube/config",
+    // System shadow files (Linux)
+    "/etc/shadow",
+    "/etc/gshadow",
+    // macOS Keychain
+    "Library/Keychains/login.keychain",
+    "Library/Keychains/login.keychain-db",
+];
+
+/// Validate that a path is safe for the agent to read or write. Returns
+/// the canonicalized path on success, or an error message on rejection.
+fn validate_path(raw_path: &str) -> Result<PathBuf, String> {
+    let path = PathBuf::from(raw_path);
+
+    // Step 1: Resolve to canonical form. If the path doesn't exist yet
+    // (write case), canonicalize the parent and append the filename.
+    let canonical = match path.canonicalize() {
+        Ok(p) => p,
+        Err(_) => {
+            // Path doesn't exist — canonicalize the parent if possible.
+            if let Some(parent) = path.parent() {
+                match parent.canonicalize() {
+                    Ok(p) => p.join(path.file_name().unwrap_or_default()),
+                    Err(_) => {
+                        // Parent doesn't exist either — fall back to the
+                        // raw path. Reject if it starts with `..` (still
+                        // relative would let the agent escape via `../`).
+                        if raw_path.starts_with("..")
+                            || raw_path.contains("/../")
+                            || raw_path.contains("\\..\\")
+                        {
+                            return Err(format!(
+                                "Path traversal rejected (parent doesn't exist + relative escape): {}",
+                                raw_path
+                            ));
+                        }
+                        PathBuf::from(raw_path)
+                    }
+                }
+            } else {
+                PathBuf::from(raw_path)
+            }
+        }
+    };
+
+    // Step 2: Reject if the canonical path is in the hard-deny list.
+    let canonical_str = canonical.to_string_lossy();
+    let canonical_lower = canonical_str.to_lowercase();
+    for pattern in DENIED_PATH_PATTERNS {
+        let pattern_lower = pattern.to_lowercase();
+        if canonical_lower.ends_with(&pattern_lower)
+            || canonical_lower.contains(&format!("/{}/", pattern_lower))
+        {
+            return Err(format!(
+                "Access to sensitive file denied (matches pattern '{}'). If you genuinely need this file, ask the user to read it manually and paste the contents.",
+                pattern
+            ));
+        }
+    }
+
+    // Step 3: Reject `..` traversal in the canonical path.
+    if canonical_str.contains("/../") || canonical_str.contains("\\..\\") {
+        return Err(format!(
+            "Path traversal rejected (canonical path contains '..'): {}",
+            canonical_str
+        ));
+    }
+
+    Ok(canonical)
+}
 
 /// Tool for reading file contents
 pub struct FileReadTool;
@@ -42,7 +150,12 @@ impl OperantTool for FileReadTool {
             Err(e) => return ToolResult::error("file_read", format!("Invalid arguments: {}", e)),
         };
 
-        let path = PathBuf::from(&args.path);
+        // Path safety check (iter-125 — closes the ponytail-audit
+        // security gap "file_tools no path-traversal validation").
+        let path = match validate_path(&args.path) {
+            Ok(p) => p,
+            Err(e) => return ToolResult::error("file_read", e),
+        };
 
         if !path.exists() {
             return ToolResult::error("file_read", format!("File not found: {}", args.path));
@@ -106,7 +219,12 @@ impl OperantTool for FileWriteTool {
             Err(e) => return ToolResult::error("file_write", format!("Invalid arguments: {}", e)),
         };
 
-        let path = PathBuf::from(&args.path);
+        // Path safety check (iter-125 — closes the ponytail-audit security
+        // gap "file_tools no path-traversal validation").
+        let path = match validate_path(&args.path) {
+            Ok(p) => p,
+            Err(e) => return ToolResult::error("file_write", e),
+        };
 
         // Create parent directories if they don't exist
         if let Some(parent) = path.parent() {
@@ -182,7 +300,11 @@ impl OperantTool for FileSearchTool {
             Err(e) => return ToolResult::error("file_search", format!("Invalid arguments: {}", e)),
         };
 
-        let path = PathBuf::from(&args.path);
+        // Path safety check (iter-125).
+        let path = match validate_path(&args.path) {
+            Ok(p) => p,
+            Err(e) => return ToolResult::error("file_search", e),
+        };
         let case_sensitive = args.case_sensitive.unwrap_or(true);
         let escaped_pattern = regex::escape(&args.pattern);
         let re = match regex::RegexBuilder::new(&escaped_pattern)
@@ -316,7 +438,11 @@ impl OperantTool for FileListTool {
             Err(e) => return ToolResult::error("file_list", format!("Invalid arguments: {}", e)),
         };
 
-        let path = PathBuf::from(&args.path);
+        // Path safety check (iter-125).
+        let path = match validate_path(&args.path) {
+            Ok(p) => p,
+            Err(e) => return ToolResult::error("file_list", e),
+        };
 
         if !path.exists() {
             return ToolResult::error("file_list", format!("Path does not exist: {}", args.path));

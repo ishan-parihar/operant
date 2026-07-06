@@ -843,6 +843,11 @@ pub struct App {
     pub file_history: Option<Arc<parking_lot::Mutex<FileHistory>>>,
     /// Shared query-loop turn counter for turn-local diff reconstruction.
     pub current_turn: Option<Arc<std::sync::atomic::AtomicUsize>>,
+    /// Slash-command usage stats (recency + frequency) for smart ordering
+    /// of `/` suggestions. Loaded from `~/.operant/slash-usage.json` on
+    /// startup; saved back on every command invocation.
+    /// (iter-125 — smart slash-command ordering.)
+    pub slash_usage: crate::tui::slash_usage::UsageStore,
 
     // ---- Visual mode indicators -------------------------------------------
 
@@ -1274,6 +1279,11 @@ impl App {
             prompt_input: {
                 let mut p = PromptInputState::new();
                 p.vim_enabled = initial_vim;
+                // Load persisted input history so up/down arrow cycling works
+                // across sessions. (iter-125 — closes the user-reported
+                // "up/down must cycle through previously sent messages"
+                // request.)
+                p.history = crate::tui::input_history::load();
                 p
             },
             input_history: Vec::new(),
@@ -1343,6 +1353,7 @@ impl App {
             pending_mcp_panel_auth: None,
             file_history: None,
             current_turn: None,
+            slash_usage: crate::tui::slash_usage::UsageStore::load(),
             plan_mode: false,
             away_summary: None,
             stall_start: None,
@@ -2069,6 +2080,10 @@ permission_rx: None,
     fn intercept_slash_command_with_args_impl(&mut self, cmd: &str, args: &str) -> bool {
         self.close_secondary_views();
         self.dismiss_error_notifications();
+        // Record slash-command usage for smart ordering of `/` suggestions.
+        // (iter-125 — recency + frequency ranking.)
+        self.slash_usage.record(cmd);
+        self.slash_usage.save();
         match cmd {
             "config" | "settings" => {
                 self.settings_screen.open();
@@ -3044,6 +3059,9 @@ permission_rx: None,
             self.prompt_input.history_draft.clear();
             self.input_history = self.prompt_input.history.clone();
             self.history_index = self.prompt_input.history_pos;
+            // Persist the new entry to ~/.operant/history.jsonl so it
+            // survives restarts. (iter-125 — persistent input history.)
+            crate::tui::input_history::append(&input);
         }
         self.refresh_prompt_input();
         input

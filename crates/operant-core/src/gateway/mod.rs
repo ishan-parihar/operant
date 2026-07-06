@@ -480,6 +480,22 @@ pub struct GatewayStats {
     pub start_time: String,
 }
 
+/// Shared HTTP client pool for all gateway adapters. Previously each
+/// `send_message` / `send_typing` call did `reqwest::Client::new()` which
+/// allocated a fresh connection pool per request — a connection-pool leak
+/// in the hot path. (iter-125 — closes the ponytail-audit security/perform-
+/// ance bug "4 adapters call reqwest::Client::new() per send_message".)
+fn shared_http_client() -> &'static reqwest::Client {
+    use std::sync::OnceLock;
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(60))
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new())
+    })
+}
+
 /// Trait for platform adapters
 #[async_trait]
 pub trait PlatformAdapter: Send + Sync {
@@ -2072,7 +2088,7 @@ impl TelegramPoller {
         let url = format!("{}/getUpdates", adapter.api_url());
 
         tokio::spawn(async move {
-            let client = reqwest::Client::new();
+            let client = shared_http_client().clone();
             let mut offset: i64 = 0;
 
             while running.load(Ordering::SeqCst) {
@@ -2152,14 +2168,17 @@ impl PlatformAdapter for DiscordAdapter {
             return Ok(());
         }
 
-        // Verify the token
-        let client = reqwest::Client::new();
+        // Verify the token. Use `?` propagation instead of `.unwrap()` —
+        // previously this panicked if `token` was None despite `is_enabled`
+        // returning true (race during config reload). (iter-125 — closes
+        // the ponytail-audit security bug "token unwrap panics".)
+        let token = self.token.as_ref().ok_or_else(|| {
+            Error::Config("Discord token not configured".to_string())
+        })?;
+        let client = shared_http_client().clone();
         let response = client
             .get(format!("{}/users/@me", self.api_url()))
-            .header(
-                "Authorization",
-                format!("Bot {}", self.token.as_ref().unwrap()),
-            )
+            .header("Authorization", format!("Bot {}", token))
             .send()
             .await?;
 
@@ -2188,7 +2207,7 @@ impl PlatformAdapter for DiscordAdapter {
         let url = format!("{}/channels/{}/typing", self.api_url(), channel_id);
         // Fire and forget — we don't await the response since send_typing
         // is synchronous. The next typing call in 4s will refresh it.
-        let client = reqwest::Client::new();
+        let client = shared_http_client().clone();
         let token = token.clone();
         let url = url.clone();
         tokio::spawn(async move {
@@ -2202,7 +2221,12 @@ impl PlatformAdapter for DiscordAdapter {
     }
 
     async fn send_message(&self, message: OutgoingMessage) -> Result<()> {
-        let client = reqwest::Client::new();
+        let client = shared_http_client().clone();
+        // Propagate missing token via `?` instead of `.unwrap()` (iter-125 —
+        // closes the ponytail-audit "token unwrap panics" security bug).
+        let token = self.token.as_ref().ok_or_else(|| {
+            Error::Config("Discord token not configured".to_string())
+        })?;
 
         // Discord's message limit is 2000 chars. Messages exceeding this
         // are silently rejected by the API (400 Bad Request) — the user
@@ -2223,10 +2247,7 @@ impl PlatformAdapter for DiscordAdapter {
 
             client
                 .post(&url)
-                .header(
-                    "Authorization",
-                    format!("Bot {}", self.token.as_ref().unwrap()),
-                )
+                .header("Authorization", format!("Bot {}", token))
                 .header("Content-Type", "application/json")
                 .json(&body)
                 .send()
@@ -2355,7 +2376,12 @@ impl PlatformAdapter for SlackAdapter {
     }
 
     async fn send_message(&self, message: OutgoingMessage) -> Result<()> {
-        let client = reqwest::Client::new();
+        let client = shared_http_client().clone();
+        // Propagate missing token via `?` instead of `.unwrap()` (iter-125 —
+        // closes the ponytail-audit "token unwrap panics" security bug).
+        let token = self.token.as_ref().ok_or_else(|| {
+            Error::Config("Slack token not configured".to_string())
+        })?;
 
         // Slack uses mrkdwn format, NOT standard Markdown. Raw **bold**
         // renders as literal asterisks. Convert before sending.
@@ -2378,10 +2404,7 @@ impl PlatformAdapter for SlackAdapter {
                     .slack_api_base
                     .trim_end_matches('/')
             ))
-            .header(
-                "Authorization",
-                format!("Bearer {}", self.token.as_ref().unwrap()),
-            )
+            .header("Authorization", format!("Bearer {}", token))
             .header("Content-Type", "application/json")
             .json(&body)
             .send()
@@ -2573,16 +2596,38 @@ impl PlatformAdapter for WebhookAdapter {
                         // (GitHub), Stripe-Signature (Stripe).
                         // (iter-101 — closes Bug #9 from iter-98 audit.)
                         if let Some(ref sec) = secret {
-                            let sig = headers
-                                .get("x-webhook-signature")
-                                .or_else(|| headers.get("x-hub-signature-256"))
-                                .or_else(|| headers.get("stripe-signature"))
+                            // Slack-specific signature verification: Slack uses
+                            // `X-Slack-Signature` (HMAC-SHA256 hex of
+                            // "v0:<X-Slack-Request-Timestamp>:<body>") +
+                            // `X-Slack-Request-Timestamp`. We special-case
+                            // this because Slack's format is non-standard.
+                            // (iter-125 — closes the ponytail-audit security
+                            // bug "Slack signing_secret collected but HMAC
+                            // verification never performed".)
+                            let slack_sig = headers
+                                .get("x-slack-signature")
+                                .and_then(|v| v.to_str().ok());
+                            let slack_ts = headers
+                                .get("x-slack-request-timestamp")
                                 .and_then(|v| v.to_str().ok());
 
-                            if let Some(sig) = sig {
-                                // Strip "sha256=" prefix if present (GitHub/Stripe format).
-                                let sig_hex = sig.strip_prefix("sha256=").unwrap_or(sig);
-                                // Compute HMAC-SHA256(secret, body).
+                            if let (Some(sig), Some(ts)) = (slack_sig, slack_ts) {
+                                // Replay protection: reject requests older
+                                // than 5 minutes (Slack's own recommendation).
+                                if let Ok(ts_secs) = ts.parse::<i64>() {
+                                    let now_secs = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .map(|d| d.as_secs() as i64)
+                                        .unwrap_or(0);
+                                    if (now_secs - ts_secs).abs() > 300 {
+                                        return (
+                                            axum::http::StatusCode::UNAUTHORIZED,
+                                            "Stale Slack request (replay-protected)",
+                                        )
+                                            .into_response();
+                                    }
+                                }
+                                // Compute HMAC-SHA256(signing_secret, "v0:<ts>:<body>").
                                 use hmac::{Hmac, Mac};
                                 use sha2::Sha256;
                                 type HmacSha256 = Hmac<Sha256>;
@@ -2596,24 +2641,66 @@ impl PlatformAdapter for WebhookAdapter {
                                             .into_response();
                                     }
                                 };
+                                let basestring = format!("v0:{}:", ts);
+                                mac.update(basestring.as_bytes());
                                 mac.update(&body);
                                 let expected = mac.finalize().into_bytes();
-                                let expected_hex = hex::encode(expected);
-                                // Constant-time comparison via the
-                                // constant_time_eq crate.
-                                if !constant_time_eq::constant_time_eq(sig_hex.as_bytes(), expected_hex.as_bytes()) {
+                                let expected_hex = format!("v0={}", hex::encode(expected));
+                                if !constant_time_eq::constant_time_eq(
+                                    sig.as_bytes(),
+                                    expected_hex.as_bytes(),
+                                ) {
                                     return (
                                         axum::http::StatusCode::UNAUTHORIZED,
-                                        "Invalid signature",
+                                        "Invalid Slack signature",
                                     )
                                         .into_response();
                                 }
                             } else {
-                                return (
-                                    axum::http::StatusCode::UNAUTHORIZED,
-                                    "Missing signature header (x-webhook-signature / x-hub-signature-256 / stripe-signature)",
-                                )
-                                    .into_response();
+                                // Fall back to the standard HMAC verification
+                                // used by GitHub / Stripe / generic webhooks.
+                                let sig = headers
+                                    .get("x-webhook-signature")
+                                    .or_else(|| headers.get("x-hub-signature-256"))
+                                    .or_else(|| headers.get("stripe-signature"))
+                                    .and_then(|v| v.to_str().ok());
+
+                                if let Some(sig) = sig {
+                                    // Strip "sha256=" prefix if present (GitHub/Stripe format).
+                                    let sig_hex = sig.strip_prefix("sha256=").unwrap_or(sig);
+                                    // Compute HMAC-SHA256(secret, body).
+                                    use hmac::{Hmac, Mac};
+                                    use sha2::Sha256;
+                                    type HmacSha256 = Hmac<Sha256>;
+                                    let mut mac = match HmacSha256::new_from_slice(sec.as_bytes()) {
+                                        Ok(m) => m,
+                                        Err(_) => {
+                                            return (
+                                                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                                                "HMAC key error",
+                                            )
+                                                .into_response();
+                                        }
+                                    };
+                                    mac.update(&body);
+                                    let expected = mac.finalize().into_bytes();
+                                    let expected_hex = hex::encode(expected);
+                                    // Constant-time comparison via the
+                                    // constant_time_eq crate.
+                                    if !constant_time_eq::constant_time_eq(sig_hex.as_bytes(), expected_hex.as_bytes()) {
+                                        return (
+                                            axum::http::StatusCode::UNAUTHORIZED,
+                                            "Invalid signature",
+                                        )
+                                            .into_response();
+                                    }
+                                } else {
+                                    return (
+                                        axum::http::StatusCode::UNAUTHORIZED,
+                                        "Missing signature header (x-slack-signature / x-webhook-signature / x-hub-signature-256 / stripe-signature)",
+                                    )
+                                        .into_response();
+                                }
                             }
                         }
 
@@ -2754,7 +2841,7 @@ impl PlatformAdapter for WhatsAppAdapter {
         })?;
         let phone = message.channel_id.clone();
 
-        let client = reqwest::Client::new();
+        let client = shared_http_client().clone();
         let phone_number_id = self.phone_number_id.as_deref().ok_or_else(|| {
             Error::Config(
                 "WhatsApp phone_number_id not configured. Set it via WhatsAppAdapter::with_phone_number_id() or config.gateway.whatsapp_phone_number_id. Get it from Meta Business Manager.".to_string()
@@ -2908,10 +2995,15 @@ impl PlatformAdapter for EmailAdapter {
         let body = message.content.clone();
 
         tokio::task::spawn_blocking(move || -> std::result::Result<(), String> {
-            // Basic SMTP send using native TLS.
-            // This is a minimal implementation — production use should
-            // switch to the `lettre` crate for proper MIME, attachments,
-            // and TLS handling.
+            // SMTP send with mandatory STARTTLS upgrade. Previously this
+            // ran AUTH LOGIN over plaintext TCP, leaking the SMTP password
+            // to anyone on the network path. (iter-125 — closes the
+            // ponytail-audit security bug "EmailAdapter SMTP AUTH over
+            // plaintext TCP".)
+            //
+            // NOTE: This is a minimal STARTTLS implementation. Production
+            // use should switch to the `lettre` crate for proper MIME,
+            // attachments, certificate validation, and connection pooling.
             use std::io::{Read, Write};
             use std::net::TcpStream;
 
@@ -2920,50 +3012,121 @@ impl PlatformAdapter for EmailAdapter {
 
             let mut stream = TcpStream::connect(&addr)
                 .map_err(|e| format!("SMTP connect failed: {e}"))?;
+            // Set a 30s timeout so a hung SMTP server doesn't block the
+            // gateway forever.
+            let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(30)));
+            let _ = stream.set_write_timeout(Some(std::time::Duration::from_secs(30)));
+
+            // Helper: read a multi-line SMTP response.
+            fn read_response(stream: &mut TcpStream, buf: &mut [u8]) -> std::result::Result<String, String> {
+                let n = stream.read(buf).map_err(|e| format!("SMTP read: {e}"))?;
+                let text = String::from_utf8_lossy(&buf[..n]).to_string();
+                // SMTP multi-line responses end with "<code> <text>" (space
+                // after the code, not dash). We need to keep reading until
+                // we see that.
+                let mut full = text.clone();
+                while let Some(line) = full.lines().last() {
+                    if line.len() >= 4 && line.as_bytes()[3] == b' ' {
+                        break;
+                    }
+                    let n2 = stream.read(buf).map_err(|e| format!("SMTP read: {e}"))?;
+                    full.push_str(&String::from_utf8_lossy(&buf[..n2]));
+                }
+                Ok(full)
+            }
 
             // Read greeting
-            let mut buf = [0u8; 1024];
-            stream.read(&mut buf).map_err(|e| format!("SMTP read: {e}"))?;
+            let mut buf = [0u8; 4096];
+            let _ = read_response(&mut stream, &mut buf)?;
 
             // EHLO
             write!(stream, "EHLO operant\r\n").map_err(|e| format!("SMTP write: {e}"))?;
-            stream.read(&mut buf).map_err(|e| format!("SMTP read: {e}"))?;
+            let ehlo_resp = read_response(&mut stream, &mut buf)?;
 
-            // AUTH LOGIN (simplified — base64 encoded user/pass)
+            // STARTTLS — refuse to proceed without TLS upgrade.
+            write!(stream, "STARTTLS\r\n").map_err(|e| format!("SMTP write: {e}"))?;
+            let starttls_resp = read_response(&mut stream, &mut buf)?;
+            if !starttls_resp.starts_with("220") {
+                return Err(format!(
+                    "SMTP server does not support STARTTLS (got: {}). Refusing to send credentials over plaintext. Configure an SMTP host that supports STARTTLS, or set up a TLS tunnel.",
+                    starttls_resp.lines().next().unwrap_or("").trim()
+                ));
+            }
+
+            // Upgrade to TLS. Use a minimal TLS connector with the system
+            // root store + hostname verification (rustls).
+            use std::sync::OnceLock;
+            static TLS_CONFIG: OnceLock<std::sync::Arc<rustls::ClientConfig>> = OnceLock::new();
+            let config = TLS_CONFIG.get_or_init(|| {
+                let mut roots = rustls::RootCertStore::empty();
+                // rustls-native-certs v0.7 returns its own cert iterator;
+                // we add each to the rustls RootCertStore manually.
+                for cert in rustls_native_certs::load_native_certs()
+                    .unwrap_or_default()
+                    .into_iter()
+                {
+                    let _ = roots.add(cert);
+                }
+                std::sync::Arc::new(
+                    rustls::ClientConfig::builder()
+                        .with_root_certificates(roots)
+                        .with_no_client_auth(),
+                )
+            });
+            let server_name = host
+                .split(':')
+                .next()
+                .unwrap_or(&host)
+                .to_string();
+            let server_name = rustls::pki_types::ServerName::try_from(server_name)
+                .map_err(|e| format!("invalid SMTP hostname for TLS: {e}"))?
+                .to_owned();
+            let mut connector = rustls::client::ClientConnection::new(
+                config.clone(),
+                server_name,
+            ).map_err(|e| format!("TLS init: {e}"))?;
+            let mut tls_stream = rustls::Stream::new(&mut connector, &mut stream);
+
+            // EHLO again over the encrypted channel.
+            write!(tls_stream, "EHLO operant\r\n").map_err(|e| format!("SMTP write (TLS): {e}"))?;
+            tls_stream.read(&mut buf).map_err(|e| format!("SMTP read (TLS): {e}"))?;
+
+            // AUTH LOGIN (base64-encoded user/pass — now encrypted in transit)
             use base64::Engine;
-            write!(stream, "AUTH LOGIN\r\n").map_err(|e| format!("SMTP write: {e}"))?;
-            stream.read(&mut buf).map_err(|e| format!("SMTP read: {e}"))?;
-            write!(stream, "{}\r\n", base64::engine::general_purpose::STANDARD.encode(&user))
-                .map_err(|e| format!("SMTP write: {e}"))?;
-            stream.read(&mut buf).map_err(|e| format!("SMTP read: {e}"))?;
-            write!(stream, "{}\r\n", base64::engine::general_purpose::STANDARD.encode(&pass))
-                .map_err(|e| format!("SMTP write: {e}"))?;
-            stream.read(&mut buf).map_err(|e| format!("SMTP read: {e}"))?;
+            write!(tls_stream, "AUTH LOGIN\r\n").map_err(|e| format!("SMTP write (TLS): {e}"))?;
+            tls_stream.read(&mut buf).map_err(|e| format!("SMTP read (TLS): {e}"))?;
+            write!(tls_stream, "{}\r\n", base64::engine::general_purpose::STANDARD.encode(&user))
+                .map_err(|e| format!("SMTP write (TLS): {e}"))?;
+            tls_stream.read(&mut buf).map_err(|e| format!("SMTP read (TLS): {e}"))?;
+            write!(tls_stream, "{}\r\n", base64::engine::general_purpose::STANDARD.encode(&pass))
+                .map_err(|e| format!("SMTP write (TLS): {e}"))?;
+            tls_stream.read(&mut buf).map_err(|e| format!("SMTP read (TLS): {e}"))?;
 
             // MAIL FROM
-            write!(stream, "MAIL FROM:<{}>\r\n", user).map_err(|e| format!("SMTP write: {e}"))?;
-            stream.read(&mut buf).map_err(|e| format!("SMTP read: {e}"))?;
+            write!(tls_stream, "MAIL FROM:<{}>\r\n", user).map_err(|e| format!("SMTP write (TLS): {e}"))?;
+            tls_stream.read(&mut buf).map_err(|e| format!("SMTP read (TLS): {e}"))?;
 
             // RCPT TO
-            write!(stream, "RCPT TO:<{}>\r\n", to).map_err(|e| format!("SMTP write: {e}"))?;
-            stream.read(&mut buf).map_err(|e| format!("SMTP read: {e}"))?;
+            write!(tls_stream, "RCPT TO:<{}>\r\n", to).map_err(|e| format!("SMTP write (TLS): {e}"))?;
+            tls_stream.read(&mut buf).map_err(|e| format!("SMTP read (TLS): {e}"))?;
 
             // DATA
-            write!(stream, "DATA\r\n").map_err(|e| format!("SMTP write: {e}"))?;
-            stream.read(&mut buf).map_err(|e| format!("SMTP read: {e}"))?;
+            write!(tls_stream, "DATA\r\n").map_err(|e| format!("SMTP write (TLS): {e}"))?;
+            tls_stream.read(&mut buf).map_err(|e| format!("SMTP read (TLS): {e}"))?;
 
             // Email body
             write!(
-                stream,
+                tls_stream,
                 "From: <{}>\r\nTo: <{}>\r\nSubject: Operant Reply\r\n\r\n{}\r\n.\r\n",
                 user, to, body
             )
-            .map_err(|e| format!("SMTP write: {e}"))?;
-            stream.read(&mut buf).map_err(|e| format!("SMTP read: {e}"))?;
+            .map_err(|e| format!("SMTP write (TLS): {e}"))?;
+            tls_stream.read(&mut buf).map_err(|e| format!("SMTP read (TLS): {e}"))?;
 
             // QUIT
-            write!(stream, "QUIT\r\n").map_err(|e| format!("SMTP write: {e}"))?;
+            write!(tls_stream, "QUIT\r\n").map_err(|e| format!("SMTP write (TLS): {e}"))?;
 
+            let _ = ehlo_resp; // suppress unused warning
             Ok(())
         })
         .await
@@ -3076,7 +3239,7 @@ impl PlatformAdapter for SmsAdapter {
         })?;
 
         let url = format!("https://api.twilio.com/2010-04-01/Accounts/{}/Messages.json", sid);
-        let client = reqwest::Client::new();
+        let client = shared_http_client().clone();
 
         let resp = client
             .post(&url)
