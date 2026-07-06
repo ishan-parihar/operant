@@ -6432,6 +6432,15 @@ permission_rx: None,
                 }
                 self.is_streaming = true;
                 self.status_message = Some(format!("Running {}…", name));
+
+                // When a tool starts, flush any accumulated streaming text/thinking
+                // as a completed message. This prevents content from accumulating
+                // across iterations (think → tool → think → tool → respond).
+                // (iter-123 — fixes duplicate thinking/text in multi-iteration turns.)
+                if !self.streaming_text.is_empty() || !self.streaming_thinking.is_empty() {
+                    self.flush_streamed_assistant_message();
+                }
+
                 let turn_index = self.current_user_turn_index();
                 let tool_id = tool_call_id.clone();
                 let tool_name = name.clone();
