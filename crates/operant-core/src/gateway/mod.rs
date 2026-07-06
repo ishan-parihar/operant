@@ -2864,7 +2864,42 @@ impl PlatformAdapter for WebhookAdapter {
             .route("/health", get(|| async { "ok" }))
             .route(
                 "/webhook/{route}",
-                post(
+                // GET handler: WhatsApp/Meta webhook verification handshake.
+                // Meta sends `GET /webhook/{route}?hub.mode=subscribe&hub.verify_token=<token>&hub.challenge=<int>`
+                // when you first register the webhook URL in the Meta app dashboard.
+                // We respond with the challenge value iff the verify_token matches
+                // our secret. (iter-131 — closes the ponytail-audit gap "WhatsApp
+                // webhook handshake (hub.mode=subscribe) not implemented → no
+                // inbound from Meta".)
+                get(
+                    move |Path(_route): Path<String>,
+                          State((_, secret)): State<(
+                        mpsc::UnboundedSender<IncomingMessage>,
+                        Option<String>,
+                    )>,
+                          axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>| async move {
+                        let mode = params.get("hub.mode").map(|s| s.as_str()).unwrap_or("");
+                        let verify_token = params.get("hub.verify_token").map(|s| s.as_str()).unwrap_or("");
+                        let challenge = params.get("hub.challenge").cloned().unwrap_or_default();
+
+                        if mode == "subscribe" {
+                            // Verify the token matches our secret (if one is configured).
+                            let token_ok = match &secret {
+                                Some(expected) => verify_token == expected.as_str(),
+                                None => true,
+                            };
+                            if token_ok {
+                                debug!("WhatsApp/Meta webhook verification: challenge accepted");
+                                return (axum::http::StatusCode::OK, challenge).into_response();
+                            } else {
+                                warn!("WhatsApp/Meta webhook verification: verify_token mismatch");
+                                return (axum::http::StatusCode::FORBIDDEN, "verify_token mismatch").into_response();
+                            }
+                        }
+                        (axum::http::StatusCode::BAD_REQUEST, "Expected hub.mode=subscribe").into_response()
+                    },
+                )
+                .post(
                     move |Path(route): Path<String>,
                           headers: HeaderMap,
                           State((tx, secret)): State<(
@@ -2872,6 +2907,45 @@ impl PlatformAdapter for WebhookAdapter {
                         Option<String>,
                     )>,
                           body: axum::body::Bytes| async move {
+                        // ────────────────────────────────────────────────────────
+                        // URL Verification Handshakes (iter-131)
+                        // ────────────────────────────────────────────────────────
+                        // Several platforms require a one-time handshake when you
+                        // first register the webhook URL with them:
+                        //
+                        //   • Slack Events API — POSTs `{"type":"url_verification",
+                        //     "challenge":"<token>"}` and expects the same token
+                        //     back in the response body.
+                        //
+                        //   • WhatsApp Cloud API (Meta) — GETs the webhook with
+                        //     `hub.mode=subscribe` + `hub.verify_token=<token>` +
+                        //     `hub.challenge=<int>`. Expects the challenge value
+                        //     back in the response body.
+                        //
+                        //   • Meta Webhooks (Instagram/Messenger) — same as
+                        //     WhatsApp (the Meta Webhooks product is shared).
+                        //
+                        // These handshakes have NO HMAC signature (they happen
+                        // before the platform starts signing events), so they
+                        // must be handled BEFORE the signature check below.
+                        // ────────────────────────────────────────────────────────
+
+                        // Try parsing the body as JSON first (Slack url_verification
+                        // is JSON; WhatsApp handshake is GET with query params).
+                        if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&body) {
+                            // Slack url_verification
+                            if v.get("type").and_then(|t| t.as_str()) == Some("url_verification") {
+                                if let Some(challenge) = v.get("challenge").and_then(|c| c.as_str()) {
+                                    debug!("Slack url_verification challenge — responding with challenge token");
+                                    return (
+                                        axum::http::StatusCode::OK,
+                                        [(axum::http::header::CONTENT_TYPE, "text/plain; charset=utf-8")],
+                                        challenge.to_string(),
+                                    ).into_response();
+                                }
+                            }
+                        }
+
                         // Validate HMAC signature if secret is configured.
                         // Uses standard HMAC-SHA256(secret, body) — not the
                         // old non-standard SHA256(route+secret). Supports
@@ -2993,6 +3067,82 @@ impl PlatformAdapter for WebhookAdapter {
                         // text. The route name becomes the channel_id.
                         // (iter-101 — previously the body was thrown away and
                         // the agent received "Webhook received on /{route}".)
+                        //
+                        // iter-131: Slack Events API forwarding. Slack sends
+                        // event callbacks as `{"type":"event_callback","event":
+                        // {"type":"message","text":"...","user":"...","channel":"..."}}`.
+                        // We detect this shape and forward it as a real
+                        // IncomingMessage with platform="slack" instead of the
+                        // generic "webhook" platform.
+                        if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&body) {
+                            // Slack event_callback forwarding.
+                            if v.get("type").and_then(|t| t.as_str()) == Some("event_callback") {
+                                if let Some(event) = v.get("event") {
+                                    if event.get("type").and_then(|t| t.as_str()) == Some("message") {
+                                        // Skip bot messages (prevents echo loops).
+                                        let is_bot = event
+                                            .get("bot_id")
+                                            .or_else(|| event.get("bot_profile"))
+                                            .is_some();
+                                        if !is_bot {
+                                            let content = event.get("text").and_then(|t| t.as_str()).unwrap_or("").to_string();
+                                            if !content.is_empty() {
+                                                let channel = event.get("channel").and_then(|c| c.as_str()).unwrap_or("").to_string();
+                                                let user = event.get("user").and_then(|u| u.as_str()).unwrap_or("slack").to_string();
+                                                let ts = event.get("ts").and_then(|t| t.as_str())
+                                                    .and_then(|s| s.split('.').next().and_then(|n| n.parse::<i64>().ok()))
+                                                    .unwrap_or_else(|| chrono::Utc::now().timestamp());
+                                                let slack_msg = IncomingMessage {
+                                                    platform: "slack".to_string(),
+                                                    channel_id: channel,
+                                                    user_id: user.clone(),
+                                                    username: user,
+                                                    content,
+                                                    is_group_chat: true,  // Slack events come from channels by default
+                                                    timestamp: ts,
+                                                    thread_id: event.get("thread_ts")
+                                                        .and_then(|t| t.as_str())
+                                                        .and_then(|s| s.split('.').next().and_then(|n| n.parse::<i64>().ok())),
+                                                    raw: v.clone(),
+                                                };
+                                                let _ = tx.send(slack_msg);
+                                            }
+                                        }
+                                        // Always 200 OK to Slack — otherwise it retries.
+                                        return (axum::http::StatusCode::OK, "ok").into_response();
+                                    }
+                                }
+                            }
+
+                            // WhatsApp Cloud API event forwarding. Meta sends
+                            // `{"entry":[{"changes":[{"value":{"messages":[{"from":"...","text":{"body":"..."}}]}}]}]}`.
+                            if let Some(entry) = v.get("entry").and_then(|e| e.as_array()).and_then(|a| a.first()) {
+                                if let Some(change) = entry.get("changes").and_then(|c| c.as_array()).and_then(|a| a.first()) {
+                                    if let Some(messages) = change.get("value").and_then(|val| val.get("messages")).and_then(|m| m.as_array()) {
+                                        for msg in messages {
+                                            let from = msg.get("from").and_then(|f| f.as_str()).unwrap_or("").to_string();
+                                            let text = msg.get("text").and_then(|t| t.get("body")).and_then(|b| b.as_str()).unwrap_or("").to_string();
+                                            if !text.is_empty() {
+                                                let wa_msg = IncomingMessage {
+                                                    platform: "whatsapp".to_string(),
+                                                    channel_id: from.clone(),
+                                                    user_id: from.clone(),
+                                                    username: change.get("value").and_then(|val| val.get("contacts")).and_then(|c| c.as_array()).and_then(|a| a.first()).and_then(|c| c.get("profile")).and_then(|p| p.get("name")).and_then(|n| n.as_str()).unwrap_or(&from).to_string(),
+                                                    content: text,
+                                                    is_group_chat: false,
+                                                    timestamp: msg.get("timestamp").and_then(|t| t.as_str()).and_then(|s| s.parse::<i64>().ok()).unwrap_or_else(|| chrono::Utc::now().timestamp()),
+                                                    thread_id: None,
+                                                    raw: msg.clone(),
+                                                };
+                                                let _ = tx.send(wa_msg);
+                                            }
+                                        }
+                                        return (axum::http::StatusCode::OK, "ok").into_response();
+                                    }
+                                }
+                            }
+                        }
+
                         let content = if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&body) {
                             // Try common fields: text, message, content, body, data.
                             // If none match, pretty-print the whole JSON.
