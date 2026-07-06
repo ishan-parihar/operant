@@ -328,6 +328,7 @@ pub async fn run_setup_wizard(
 
     match section {
         Some("provider") => {
+            // Section-specific calls are always full (not quick).
             step_provider_and_model(&mut updated, true).await?;
         }
         Some("terminal") => {
@@ -370,7 +371,9 @@ pub async fn run_setup_wizard(
             println!();
 
             // Step 1: Provider, model, API key, and auxiliary models
-            step_provider_and_model(&mut updated, true).await?;
+            // Pass `!quick` as the reconfigure flag so step_provider_and_model
+            // knows whether to include Parts D (fallback) and E (auxiliary).
+            step_provider_and_model(&mut updated, !quick).await?;
 
             if !quick {
                 // Step 2: Gateway / Messaging platforms
@@ -401,6 +404,13 @@ pub async fn run_setup_wizard(
     install_runtime_config(updated.clone());
     persist_config(&updated)?;
 
+    // Also sync to settings.json so the TUI picks up the new provider+model
+    // immediately without needing a TUI-side /connect. Without this, the
+    // TUI's settings.json (which overrides the TOML config) would still
+    // have the old values. (iter-112 — fixes the "TUI shows hardcoded
+    // defaults after setup" bug.)
+    sync_to_settings_json(&updated);
+
     if section.is_none() {
         print_success("Setup complete! Configuration saved.");
 
@@ -428,7 +438,7 @@ pub async fn run_setup_wizard(
 /// Flow: provider → model → API key (K/R/C) → fallback keys → strategy → auxiliary models.
 pub(crate) async fn step_provider_and_model(
     config: &mut AppConfig,
-    _reconfigure: bool,
+    full: bool,
 ) -> Result<()> {
     print_page_header("Provider & Model Configuration");
     print_info("Select your LLM provider, model, and authentication.");
@@ -621,11 +631,18 @@ pub(crate) async fn step_provider_and_model(
     // ── Part C — API key with [K]eep/[R]eplace/[C]lear ────────────────────
     step_api_key(config, provider_key, provider_name)?;
 
-    // ── Part D — Same-provider fallback & rotation ──────────────────────────
-    step_fallback_and_strategy(config, provider_key, provider_name)?;
+    // Parts D (fallback & strategy) and E (auxiliary models) are power-user
+    // features. Skip them in quick mode — the user can run `operant setup
+    // --reconfigure` for the full wizard. (iter-112 — reduces quick setup
+    // from 5 sub-steps to 3: provider → model → API key.)
+    // The _reconfigure param is 0 for quick, 1 for full.
+    if full {
+        // ── Part D — Same-provider fallback & rotation ────────────────────────
+        step_fallback_and_strategy(config, provider_key, provider_name)?;
 
-    // ── Part E — Auxiliary Models ───────────────────────────────────────────
-    step_auxiliary_models(config)?;
+        // ── Part E — Auxiliary Models ───────────────────────────────────────────
+        step_auxiliary_models(config)?;
+    }
 
     println!();
     Ok(())
@@ -1399,21 +1416,73 @@ async fn step_credential_pool(config: &mut AppConfig, _reconfigure: bool) -> Res
 // Helpers
 // ---------------------------------------------------------------------------
 
+/// Sync the TOML config's provider+model to settings.json so the TUI
+/// picks them up immediately. The TUI reads settings.json on startup
+/// (iter-71); without this sync, `operant setup` writes to operant.toml
+/// but the TUI still shows the old settings.json values.
+/// (iter-112)
+fn sync_to_settings_json(config: &AppConfig) {
+    let settings_path = match dirs::home_dir() {
+        Some(h) => h.join(".operant").join("settings.json"),
+        None => return,
+    };
+
+    // Load existing settings (or default).
+    let mut settings: serde_json::Value = if settings_path.exists() {
+        std::fs::read_to_string(&settings_path)
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_else(|| serde_json::json!({}))
+    } else {
+        serde_json::json!({})
+    };
+
+    // Infer provider from base_url.
+    let provider = crate::tui::provider::infer_provider_from_model(&config.agent.model)
+        .or_else(|| {
+            let url = &config.client.base_url;
+            if url.contains("anthropic.com") {
+                Some("anthropic".to_string())
+            } else if url.contains("openai.com") {
+                Some("openai".to_string())
+            } else if url.contains("googleapis.com") {
+                Some("google".to_string())
+            } else {
+                None
+            }
+        });
+
+    // Update provider + model in settings.json.
+    if let Some(ref p) = provider {
+        settings["provider"] = serde_json::Value::String(p.clone());
+    }
+    settings["model"] = serde_json::Value::String(config.agent.model.clone());
+
+    // Write back.
+    let _ = std::fs::create_dir_all(settings_path.parent().unwrap_or(std::path::Path::new(".")));
+    let _ = std::fs::write(
+        &settings_path,
+        serde_json::to_string_pretty(&settings).unwrap_or_else(|_| "{}".to_string()),
+    );
+}
+
 /// Save the configuration to disk.
 ///
 /// Writes to the first existing config path from `default_config_paths()`, or
 /// creates `operant.toml` in the current directory if none exist yet.
 fn persist_config(config: &AppConfig) -> Result<()> {
-    let paths = default_config_paths();
-    let config_path = paths
-        .iter()
-        .find(|p| p.exists())
-        .cloned()
-        .unwrap_or_else(|| {
-            dirs::home_dir()
-                .map(|h| h.join(".operant").join("operant.toml"))
-                .unwrap_or_else(|| PathBuf::from("operant.toml"))
-        });
+    // Always write to ~/.operant/operant.toml — the global config. The
+    // setup wizard is for global settings, not project-specific overrides.
+    // Previously this wrote to the FIRST existing path from
+    // default_config_paths(), which could be ./operant.toml if the user
+    // ran setup from a directory containing one. That caused the "setup
+    // doesn't remember my config" bug — the wizard wrote to ./operant.toml
+    // but subsequent runs from other directories loaded ~/.operant/operant.toml
+    // which still had the old defaults.
+    // (iter-112 — fixes the user's reported bug.)
+    let config_path = dirs::home_dir()
+        .map(|h| h.join(".operant").join("operant.toml"))
+        .unwrap_or_else(|| PathBuf::from("operant.toml"));
 
     // Ensure parent directory exists
     if let Some(parent) = config_path.parent() {
