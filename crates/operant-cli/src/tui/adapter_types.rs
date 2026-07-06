@@ -874,52 +874,15 @@ pub mod voice {
     }
 }
 
-pub mod query {
-    #[derive(Debug, Clone)]
-    pub enum QueryEvent {
-        Stream(StreamEvent),
-        ToolStart { tool_name: String, tool_id: String, input_json: String },
-        ToolEnd { tool_id: String, tool_name: String, result: String, is_error: bool },
-        TurnComplete { turn: usize, stop_reason: String, usage: Option<UsageInfo> },
-        Status(String),
-        Error(String),
-        TokenWarning { state: TokenWarningState, pct_used: f64 },
-    }
+/// Model context-window lookup. (iter-115 — the query module's
+/// QueryEvent/StreamEvent/UsageInfo types were deleted with the bridge
+/// in iter-114. Only this function survived because it's still used by
+/// refresh_context_window_size in app.rs.)
+pub fn context_window_for_model(_model: &str) -> usize { 128000 }
 
-    #[derive(Debug, Clone)]
-    pub enum StreamEvent {
-        ContentBlockDelta { delta: String },
-        /// Thinking/reasoning content — routed to streaming_thinking, not
-        /// streaming_text. (iter-113 — fixes the "incorrect reasoning blocks
-        /// preview" bug where [thinking] prefixes appeared as literal text.)
-        ThinkingDelta { delta: String },
-        ContentBlockStart,
-        ContentBlockStop,
-        MessageStart,
-        MessageStop,
-    }
-
-    #[derive(Debug, Clone, Default)]
-    pub struct UsageInfo {
-        pub input_tokens: u32,
-        pub output_tokens: u32,
-        pub cache_creation_input_tokens: u32,
-        pub cache_read_input_tokens: u32,
-        pub total_cost: f64,
-    }
-
+pub mod compact {
     #[derive(Debug, Clone, PartialEq)]
     pub enum TokenWarningState { Ok, Warning, Critical }
-
-    pub fn context_window_for_model(_model: &str) -> usize { 128000 }
-
-    pub mod compact {
-        pub use super::TokenWarningState;
-    }
-}
-
-pub mod types_query {
-    pub use super::query::{QueryEvent, StreamEvent, UsageInfo, TokenWarningState};
 }
 
 pub mod import_config {
@@ -1142,10 +1105,6 @@ pub mod git_utils {
 
 pub mod spinner {
     pub fn random_face() -> &'static str { "●" }
-}
-
-pub mod compact {
-    pub use super::query::TokenWarningState;
 }
 
 // ---------- AuthStore ----------
@@ -1776,9 +1735,10 @@ pub mod mcp {
 }
 
 pub mod tools {
-    use std::sync::OnceLock;
-    use std::collections::HashMap;
-
+    /// Task status enum used by the tasks overlay. (TaskStore and
+    /// UserQuestionEvent were deleted in iter-115 — TaskStore was dead
+    /// code, UserQuestionEvent was replaced by operant_core::user_question::
+    /// UserQuestionRequest in iter-97.)
     #[derive(Debug, Clone, PartialEq)]
     pub enum TaskStatus { Pending, Running, Completed, Failed, InProgress, Deleted }
 
@@ -1814,23 +1774,6 @@ pub mod tools {
         pub status: TaskStatus,
         pub description: String,
         pub subject: String,
-    }
-
-    pub struct TaskStore {
-        tasks: HashMap<String, Task>,
-    }
-
-    impl TaskStore {
-        pub fn new() -> Self { Self { tasks: HashMap::new() } }
-    }
-
-    pub static TASK_STORE: std::sync::LazyLock<std::sync::Mutex<TaskStore>> =
-        std::sync::LazyLock::new(|| std::sync::Mutex::new(TaskStore::new()));
-
-    #[derive(Debug, Clone)]
-    pub struct UserQuestionEvent {
-        pub question: String,
-        pub options: Vec<String>,
     }
 }
 

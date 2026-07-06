@@ -2969,7 +2969,7 @@ permission_rx: None,
     /// appropriate.  Call this after updating `token_count`.
     pub fn check_token_warnings(&mut self) {
         let window =
-            crate::tui::adapter_types::query::context_window_for_model(&self.model_name) as u32;
+            crate::tui::adapter_types::context_window_for_model(&self.model_name) as u32;
         if window == 0 {
             return;
         }
