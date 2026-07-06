@@ -2237,6 +2237,20 @@ impl TuiApp {
         app.voice_mode_notice
             .show_if_available(audio_env.available, false);
 
+        // First-run onboarding: if no credentials and onboarding hasn't been
+        // completed, auto-open the connect dialog so the user is guided to
+        // set up a provider. (P0-2 from UX audit — was silently dropping the
+        // user onto a blank welcome screen with no guidance.)
+        if !app.has_credentials {
+            let settings = Settings::load_sync().unwrap_or_default();
+            if !settings.has_completed_onboarding {
+                app.connect_dialog.open();
+                app.status_message = Some(
+                    "Welcome to Operant! Connect a provider to get started.".to_string()
+                );
+            }
+        }
+
         Ok(Self { app, initial_query, no_mouse })
     }
 

@@ -1767,6 +1767,9 @@ permission_rx: None,
         self.persist_provider_and_model();
         self.has_credentials = true;
         self.status_message = Some(format!("{} {}.", status_prefix, provider_name));
+        // Mark onboarding as complete now that the user has connected a
+        // provider. (P0-2 from UX audit — was never called.)
+        let _ = Self::persist_onboarding_complete();
         self.open_model_picker_for_provider(&provider_id, Some(picker_title));
     }
 
