@@ -6621,6 +6621,24 @@ permission_rx: None,
                 self.token_count = self.cost_tracker.total_tokens() as u32;
             }
 
+            AgentEvent::Cost { cost_usd, input_tokens: _, output_tokens: _, model: _ } => {
+                // iter-132: per-request cost estimate from models_dev.
+                // The CostTracker above already tracks cost via its own
+                // pricing table; this event gives us the models_dev-
+                // sourced cost for the SPECIFIC model used in this
+                // request, which is more accurate for providers like
+                // OpenRouter that route to many different models.
+                //
+                // For now we just log it at debug level. A future iter
+                // can surface this in the /stats dialog as "last request
+                // cost: $X" alongside the cumulative tracker.
+                if let Some(cost) = cost_usd {
+                    debug!(cost_usd = %cost, "Per-request cost (models_dev)");
+                } else {
+                    debug!("Per-request cost unknown (model not in models_dev catalog)");
+                }
+            }
+
             AgentEvent::IterationComplete { iteration } => {
                 // Update the current_turn counter for the "iter N" status pill.
                 if let Some(ref turn) = self.current_turn {
