@@ -101,9 +101,10 @@ pub async fn handle_mcp_command(
     config: &AppConfig,
     mcp_manager: &McpManager,
     cmd: McpSubcommand,
+    json: bool,
 ) -> Result<()> {
     match cmd {
-        McpSubcommand::List => handle_list(config),
+        McpSubcommand::List => handle_list(config, json),
         McpSubcommand::Add {
             name,
             url,
@@ -132,7 +133,38 @@ pub async fn handle_mcp_command(
     }
 }
 
-fn handle_list(config: &AppConfig) -> Result<()> {
+fn handle_list(config: &AppConfig, json: bool) -> Result<()> {
+    if json {
+        let servers: Vec<serde_json::Value> = config
+            .mcp
+            .servers
+            .iter()
+            .map(|s| {
+                let transport = match s.transport {
+                    McpTransportKind::Http => "http",
+                    McpTransportKind::Stdio => "stdio",
+                };
+                let endpoint = match s.transport {
+                    McpTransportKind::Http => s.url.as_deref().unwrap_or(""),
+                    McpTransportKind::Stdio => s.command.as_deref().unwrap_or(""),
+                };
+                serde_json::json!({
+                    "name": s.name,
+                    "transport": transport,
+                    "enabled": s.enabled,
+                    "endpoint": endpoint,
+                })
+            })
+            .collect();
+        let result = serde_json::json!({
+            "servers": servers,
+            "total": config.mcp.servers.len(),
+            "autoload": config.mcp.autoload,
+        });
+        println!("{}", serde_json::to_string_pretty(&result)?);
+        return Ok(());
+    }
+
     if config.mcp.servers.is_empty() {
         println!("No MCP servers configured.");
         println!();
