@@ -1114,7 +1114,13 @@ impl OperantAgent {
         while let Some(chunk_result) = stream.next().await {
             match chunk_result {
                 Ok(chunk) => {
-                    // Process reasoning from StreamChunk
+                    // Process reasoning from StreamChunk.
+                    // If the provider sends reasoning natively (via
+                    // reasoning_content), use that and DON'T also extract
+                    // reasoning from content text — otherwise the same
+                    // reasoning appears twice. (iter-123 — fixes duplicate
+                    // thinking bug.)
+                    let has_native_reasoning = chunk.reasoning.is_some();
                     if let Some(reasoning) = chunk.reasoning {
                         let reasoning = strip_reasoning_tags(&reasoning);
                         if !reasoning.is_empty() {
@@ -1149,7 +1155,10 @@ impl OperantAgent {
                             }
                         }
 
-                        if !reasoning_delta.is_empty() {
+                        // Only emit reasoning from content_router if the
+                        // provider didn't already send it natively. This
+                        // prevents duplicate thinking. (iter-123)
+                        if !has_native_reasoning && !reasoning_delta.is_empty() {
                             accumulated_reasoning.push_str(&reasoning_delta);
                             self.emit(AgentEvent::Reasoning {
                                 text: reasoning_delta,
@@ -1345,16 +1354,28 @@ impl OperantAgent {
             })
             .await;
 
-            // Parse arguments
+            // Parse arguments — with auto-repair for common truncation issues.
+            // (iter-123 — fixes "Invalid JSON: EOF while parsing" errors
+            // caused by streaming tool-call argument fragmentation.)
             let args: serde_json::Value = match serde_json::from_str(&args_str) {
                 Ok(a) => a,
                 Err(e) => {
-                    warn!(tool = %name, error = %e, "Failed to parse tool arguments");
-                    early_results[idx] = Some(ToolResult::error(
-                        &tool_call.id,
-                        format!("Invalid JSON: {}", e),
-                    ));
-                    continue;
+                    // Try to repair common truncation issues:
+                    // 1. Missing closing brace — append }
+                    // 2. Missing closing bracket — append ]
+                    // 3. Truncated string value — append "
+                    let repaired = repair_json(&args_str);
+                    if let Ok(a) = serde_json::from_str(&repaired) {
+                        debug!(tool = %name, "Tool arguments auto-repaired");
+                        a
+                    } else {
+                        warn!(tool = %name, error = %e, args = %args_str, "Failed to parse tool arguments");
+                        early_results[idx] = Some(ToolResult::error(
+                            &tool_call.id,
+                            format!("Invalid JSON: {}", e),
+                        ));
+                        continue;
+                    }
                 }
             };
 
@@ -1740,6 +1761,66 @@ fn extract_tool_calls_from_choice(
             })
         })
         .collect()
+}
+
+/// Attempt to repair truncated JSON by balancing braces, brackets, and quotes.
+/// This handles common streaming truncation issues where the model's tool-call
+/// arguments are cut off mid-value. (iter-123)
+fn repair_json(s: &str) -> String {
+    let mut result = s.trim().to_string();
+    if result.is_empty() {
+        return "{}".to_string();
+    }
+
+    // Count unmatched braces, brackets, and quotes
+    let mut brace_depth = 0i32;
+    let mut bracket_depth = 0i32;
+    let mut in_string = false;
+    let mut escape_next = false;
+
+    for ch in result.chars() {
+        if escape_next {
+            escape_next = false;
+            continue;
+        }
+        if ch == '\\' && in_string {
+            escape_next = true;
+            continue;
+        }
+        if ch == '"' {
+            in_string = !in_string;
+            continue;
+        }
+        if !in_string {
+            match ch {
+                '{' => brace_depth += 1,
+                '}' => brace_depth -= 1,
+                '[' => bracket_depth += 1,
+                ']' => bracket_depth -= 1,
+                _ => {}
+            }
+        }
+    }
+
+    // If we're inside a string, close it
+    if in_string {
+        result.push('"');
+    }
+
+    // Remove trailing comma if present
+    while result.ends_with(',') || result.ends_with(' ') {
+        result.pop();
+    }
+
+    // Close unmatched brackets and braces
+    for _ in 0..bracket_depth.max(0) {
+        result.push(']');
+    }
+    for _ in 0..brace_depth.max(0) {
+        result.push('}');
+    }
+
+    result
 }
 
 pub(crate) fn merge_stream_tool_call(tool_calls: &mut Vec<ToolCall>, tool_call: ToolCall) {
