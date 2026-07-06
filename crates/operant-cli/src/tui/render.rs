@@ -1423,26 +1423,27 @@ fn render_message_items(app: &App, width: u16) -> Vec<RenderedLineItem> {
 /// (iter-118 — user-reported bug: thinking was always at the bottom while
 /// tool calls piled up above it, breaking the causation chain order.)
 fn append_live_content(app: &App, mut items: Vec<RenderedLineItem>, width: u16) -> Vec<RenderedLineItem> {
-    // 1. Live thinking (appears BEFORE tool calls and text — thinking
-    //    happens first, then the model decides to call tools or respond).
+    // 1. Live thinking (appears FIRST — model thinks before acting).
     if !app.streaming_thinking.is_empty() {
         let thinking_lines = render_thinking_live_content(&app.streaming_thinking, width);
         push_rendered_items(&mut items, thinking_lines, None, false);
         push_blank_item(&mut items);
     }
 
-    // 2. Running tool blocks (appear AFTER thinking but BEFORE response text —
-    //    the model thinks, then calls tools, then produces the final text).
+    // 2. ALL tool blocks for this turn (both running and completed).
+    //    Tool calls happen in order: think → call tool → get result → think
+    //    again → call another tool → etc. We show ALL of them so the user
+    //    sees the full causation chain, not just the currently-running one.
+    //    (iter-121 — was only showing Running blocks, so completed tool
+    //    calls disappeared from the live view, breaking the causation chain.)
     for block in &app.tool_use_blocks {
-        if block.status == ToolStatus::Running {
-            let mut lines = Vec::new();
-            render_tool_block_lines(&mut lines, block, app.frame_count);
-            push_rendered_items(&mut items, lines, None, false);
-            push_blank_item(&mut items);
-        }
+        let mut lines = Vec::new();
+        render_tool_block_lines(&mut lines, block, app.frame_count);
+        push_rendered_items(&mut items, lines, None, false);
+        push_blank_item(&mut items);
     }
 
-    // 3. Live streaming text (the model's response — appears LAST).
+    // 3. Live streaming text (the model's final response — appears LAST).
     if !app.streaming_text.is_empty() {
         let text_lines = render_markdown(&app.streaming_text, width);
         push_rendered_items(&mut items, text_lines, None, false);
