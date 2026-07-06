@@ -2977,9 +2977,9 @@ pub fn render_prompt_input(
     };
 
     let text_style = if state.text.is_empty() && !focused {
-        Style::default().fg(Color::DarkGray)
+        Style::default().fg(Color::DarkGray).bg(Color::Black)
     } else {
-        Style::default().fg(Color::White)
+        Style::default().fg(Color::White).bg(Color::Black)
     };
 
     // Wrap each logical line into visual rows that fit `available_width`,
