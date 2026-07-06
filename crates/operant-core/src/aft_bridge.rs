@@ -177,10 +177,18 @@ async fn download_aft_release(tag: &str) -> Result<PathBuf> {
         .map_err(|e| Error::Agent(format!("aft download: failed to create cache dir: {e}")))?;
 
     let target_triple = get_target_triple()?;
-    let asset_name = format!("aft-{}{}.tar.gz", target_triple, if tag.starts_with('v') { "" } else { "" });
+    // Ensure the tag has a 'v' prefix for the GitHub release URL.
+    // GitHub releases use 'v1.0.0' style tags; if the user passed '1.0.0',
+    // we normalize it here.
+    let normalized_tag = if tag.starts_with('v') {
+        tag.to_string()
+    } else {
+        format!("v{}", tag)
+    };
+    let asset_name = format!("aft-{}.tar.gz", target_triple);
     let download_url = format!(
         "https://github.com/{}/releases/download/{}/{}",
-        AFT_REPO, tag, asset_name
+        AFT_REPO, normalized_tag, asset_name
     );
 
     tracing::info!(url = %download_url, tag = %tag, "downloading aft binary");
