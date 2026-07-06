@@ -2296,7 +2296,12 @@ impl TuiApp {
     }
 
     pub async fn run(mut self) -> anyhow::Result<()> {
-        use crate::tui::bridge::spawn_bridge;
+        // Create the agent event channel directly — no bridge.
+        // (iter-114 — eliminates the bridge layer. The TUI now receives
+        // AgentEvent directly and handles it in handle_agent_event.)
+        let (agent_tx, agent_rx) = tokio::sync::mpsc::channel::<operant_core::agent::AgentEvent>(256);
+        self.app.agent_event_rx = Some(agent_rx);
+
         use crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
         use crossterm::execute;
         use ratatui::backend::CrosstermBackend;
@@ -2333,8 +2338,8 @@ impl TuiApp {
         let backend = CrosstermBackend::new(stdout);
         let mut terminal = Terminal::new(backend)?;
 
-        let (agent_tx, query_rx) = spawn_bridge();
-        self.app.query_event_rx = Some(query_rx);
+        // agent_tx was created above; agent_rx is stored on app.
+        // No bridge — the agent sends AgentEvent directly to the TUI.
 
         let (permission_tx, permission_rx) = tokio::sync::mpsc::channel::<operant_core::agent::ToolPermissionRequest>(4);
         self.app.permission_rx = Some(permission_rx);

@@ -31,7 +31,7 @@ use crate::tui::adapter_types::keybindings::{
     KeyContext, KeybindingResolver, KeybindingResult, ParsedKeystroke, UserKeybindings,
 };
 use crate::tui::adapter_types::types::{ContentBlock, Message, Role};
-use crate::tui::adapter_types::query::QueryEvent;
+use operant_core::agent::AgentEvent;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
 use ratatui::backend::CrosstermBackend;
 use ratatui::style::Color;
@@ -990,8 +990,10 @@ pub struct App {
     pub voice_recording: bool,
     /// Receiver for VoiceEvent messages produced by the recorder task.
     pub voice_event_rx: Option<tokio::sync::mpsc::Receiver<crate::tui::adapter_types::voice::VoiceEvent>>,
-    /// Receiver for QueryEvent messages from the agent bridge task.
-    pub query_event_rx: Option<tokio::sync::mpsc::Receiver<crate::tui::adapter_types::query::QueryEvent>>,
+    /// Receiver for AgentEvent messages from the agent. (iter-114 — was
+    /// QueryEvent via the bridge; now receives AgentEvent directly, eliminating
+    /// the bridge layer and its translation bugs.)
+    pub agent_event_rx: Option<tokio::sync::mpsc::Receiver<AgentEvent>>,
     /// Receiver for tool permission requests from the agent. Each request is
     /// surfaced as a `PermissionRequest` dialog; the user's choice is routed
     /// back to the agent via `pending_permission_response_tx`.
@@ -1452,7 +1454,7 @@ impl App {
             },
             voice_recording: false,
             voice_event_rx: None,
-            query_event_rx: None,
+            agent_event_rx: None,
 permission_rx: None,
             pending_permission_response_tx: None,
             run_complete_rx: None,
@@ -6317,70 +6319,61 @@ permission_rx: None,
     }
 
     /// Process a query event from the agentic loop.
-    pub fn handle_query_event(&mut self, event: QueryEvent) {
+    /// Handle an AgentEvent from the agent. (iter-114 — replaces
+    /// handle_query_event; eliminates the bridge layer.)
+    pub fn handle_agent_event(&mut self, event: AgentEvent) {
         // Auto-dismiss error modal when assistant responds
         match &event {
-            QueryEvent::Stream(_) | QueryEvent::TurnComplete { .. } => {
+            AgentEvent::Content { .. } | AgentEvent::Thinking { .. }
+            | AgentEvent::Reasoning { .. } | AgentEvent::Done { .. } => {
                 self.dismiss_error_notifications();
             }
             _ => {}
         }
 
         match event {
-            QueryEvent::Stream(stream_evt) => {
+            AgentEvent::Thinking { content } | AgentEvent::Reasoning { text: content } => {
+                // Route thinking/reasoning to streaming_thinking.
                 if !self.is_streaming {
                     let seed = self.frame_count as usize ^ (self.messages.len() * 17);
                     self.spinner_verb = Some(sample_spinner_verb(seed as u64).to_string());
-                    // turn_start is set in begin_user_turn_snapshot (prompt
-                    // submission time).  Only fall back here if somehow no
-                    // user message was pushed before streaming began (e.g.
-                    // headless / programmatic callers).
                     if self.turn_start.is_none() {
                         self.turn_start = Some(std::time::Instant::now());
                     }
                     self.streaming_thinking.clear();
                 }
                 self.is_streaming = true;
-                match stream_evt {
-                    crate::tui::adapter_types::query::StreamEvent::ContentBlockDelta { delta } => {
-                        // Reset stall timer on any incoming delta — we're making progress.
-                        self.stall_start = None;
-                        self.streaming_text.push_str(&delta);
-                        self.invalidate_transcript();
-                    }
-                    crate::tui::adapter_types::query::StreamEvent::ThinkingDelta { delta } => {
-                        // Route thinking/reasoning content to streaming_thinking,
-                        // NOT streaming_text. (iter-113 — fixes the bug where
-                        // [thinking] prefixes appeared as literal text in the
-                        // streaming preview, then glitched when flushed.)
-                        self.stall_start = None;
-                        self.streaming_thinking.push_str(&delta);
-                        self.invalidate_transcript();
-                    }
-                    crate::tui::adapter_types::query::StreamEvent::MessageStop => {
-                        self.is_streaming = false;
-                        self.spinner_verb = None;
-                        self.stall_start = None;
-                        self.flush_streamed_assistant_message();
-                    }
-                    _ => {
-                        // Any other stream event: if we have no stall_start yet,
-                        // record now so the red-spinner timer can begin.
-                        if self.stall_start.is_none() {
-                            self.stall_start = Some(std::time::Instant::now());
-                        }
-                    }
-                }
+                self.stall_start = None;
+                self.streaming_thinking.push_str(&content);
+                self.invalidate_transcript();
             }
 
-            QueryEvent::ToolStart { tool_name, tool_id, input_json } => {
+            AgentEvent::Content { text } => {
+                if !self.is_streaming {
+                    let seed = self.frame_count as usize ^ (self.messages.len() * 17);
+                    self.spinner_verb = Some(sample_spinner_verb(seed as u64).to_string());
+                    if self.turn_start.is_none() {
+                        self.turn_start = Some(std::time::Instant::now());
+                    }
+                    self.streaming_thinking.clear();
+                }
+                self.is_streaming = true;
+                self.stall_start = None;
+                self.streaming_text.push_str(&text);
+                self.invalidate_transcript();
+            }
+
+            AgentEvent::ToolStart { tool_call_id, name, arguments } => {
                 if !self.is_streaming && self.spinner_verb.is_none() {
                     let seed = self.frame_count as usize ^ (self.messages.len() * 17);
                     self.spinner_verb = Some(sample_spinner_verb(seed as u64).to_string());
                 }
                 self.is_streaming = true;
-                self.status_message = Some(format!("Running {}…", tool_name));
+                self.status_message = Some(format!("Running {}…", name));
                 let turn_index = self.current_user_turn_index();
+                let tool_id = tool_call_id.clone();
+                let tool_name = name.clone();
+                let input_json = arguments;
                 if let Some(existing) =
                     self.tool_use_blocks.iter_mut().find(|b| b.id == tool_id)
                 {
@@ -6399,12 +6392,8 @@ permission_rx: None,
                     });
                 }
 
-                // Track subagent spawns for the status-bar HUD (iter-78/89).
-                // The subagent tool is "delegate_task" — when it starts, push
-                // a "running" entry; when it ends, mark "done". The HUD counts
-                // entries whose status isn't done/idle/complete. (Bug #11.)
+                // Track subagent spawns for the status-bar HUD.
                 if tool_name == "delegate_task" || tool_name == "spawn_subagent" {
-                    // Remove any stale entry with the same tool_id, then push.
                     self.agent_status.retain(|(id, _)| id != &tool_id);
                     self.agent_status.push((tool_id, "running".to_string()));
                 }
@@ -6412,14 +6401,15 @@ permission_rx: None,
                 self.invalidate_transcript();
             }
 
-            QueryEvent::ToolEnd {
-                tool_name: _,
-                tool_id,
-                result,
-                is_error,
-            } => {
-                // Build a multi-line preview: show up to 3 lines, truncate if more.
-                let all_lines: Vec<&str> = result.lines().collect();
+            AgentEvent::ToolComplete { result } => {
+                let tool_id = result.tool_call_id.clone();
+                let is_error = !result.success;
+                let result_text = if result.success {
+                    result.content.clone()
+                } else {
+                    result.error.clone().unwrap_or_else(|| "Unknown error".to_string())
+                };
+                let all_lines: Vec<&str> = result_text.lines().collect();
                 let preview_lines = all_lines.len().min(3);
                 let mut preview = all_lines[..preview_lines].join("\n");
                 let remaining = all_lines.len().saturating_sub(preview_lines);
@@ -6436,7 +6426,6 @@ permission_rx: None,
                     };
                     block.output_preview = Some(preview);
 
-                    // Update the subagent HUD entry for this tool_id. (Bug #11.)
                     if block.name == "delegate_task" || block.name == "spawn_subagent" {
                         let new_status = if is_error { "error" } else { "done" };
                         for (id, st) in self.agent_status.iter_mut() {
@@ -6448,35 +6437,48 @@ permission_rx: None,
                 }
                 self.invalidate_transcript();
                 if is_error {
-                    self.status_message = Some(format!("Tool error: {}", result));
+                    self.status_message = Some(format!("Tool error: {}", result_text));
                 } else {
                     self.status_message = None;
                 }
                 self.refresh_turn_diff_from_history();
             }
 
-            QueryEvent::TurnComplete { turn, stop_reason, usage, .. } => {
-                debug!(turn, stop_reason, "Turn complete");
+            AgentEvent::ToolError { tool_call_id, name, error } => {
+                let tool_id = tool_call_id.clone();
+                let is_error = true;
+                let result_text = error;
+                let all_lines: Vec<&str> = result_text.lines().collect();
+                let preview_lines = all_lines.len().min(3);
+                let mut preview = all_lines[..preview_lines].join("\n");
+                let remaining = all_lines.len().saturating_sub(preview_lines);
+                if remaining > 0 {
+                    preview.push_str(&format!("\n\u{2026} {} more lines", remaining));
+                }
+                if let Some(block) =
+                    self.tool_use_blocks.iter_mut().find(|b| b.id == tool_id)
+                {
+                    block.status = ToolStatus::Error;
+                    block.output_preview = Some(preview);
+
+                    if block.name == "delegate_task" || block.name == "spawn_subagent" {
+                        for (id, st) in self.agent_status.iter_mut() {
+                            if id == &tool_id {
+                                *st = "error".to_string();
+                            }
+                        }
+                    }
+                }
+                self.invalidate_transcript();
+                self.status_message = Some(format!("Tool error: {}", result_text));
+                self.refresh_turn_diff_from_history();
+            }
+
+            AgentEvent::Done { message: _ } => {
+                // Turn complete — the agent finished.
                 self.is_streaming = false;
                 self.spinner_verb = None;
 
-                // Update context window usage from the usage info AND record
-                // the cost in the cost_tracker. Without record_usage, every
-                // /stats, /cost, /heapdump, /mem, /context query returns 0
-                // tokens / $0.00 forever (Bug #1 from iter-82 audit).
-                if let Some(ref u) = usage {
-                    let turn_tokens = u.input_tokens + u.output_tokens
-                        + u.cache_creation_input_tokens + u.cache_read_input_tokens;
-                    self.context_used_tokens = self.context_used_tokens.saturating_add(turn_tokens as u64);
-
-                    // Record into the cost_tracker. get_mut only succeeds when
-                    // there are no other Arc handles — the run loop holds the
-                    // only strong ref between frames, so this is safe.
-                    if let Some(tracker) = Arc::get_mut(&mut self.cost_tracker) {
-                        tracker.record_usage(u.input_tokens, u.output_tokens);
-                    }
-                    self.cost_usd = self.cost_tracker.total_cost;
-                }
                 // Record elapsed time and pick a completion verb
                 let seed = self.frame_count as usize ^ (self.messages.len() * 7);
                 let elapsed = self.turn_start.take()
@@ -6487,58 +6489,47 @@ permission_rx: None,
                 self.last_turn_verb = Some(sample_completion_verb(seed as u64));
                 self.flush_streamed_assistant_message();
                 self.tool_use_blocks.retain(|b| b.status != ToolStatus::Running);
-                self.complete_current_turn_snapshot(stop_reason.contains("abort") || stop_reason.contains("cancel"));
+                self.complete_current_turn_snapshot(false);
                 self.invalidate_transcript();
                 self.refresh_turn_diff_from_history();
             }
 
-            QueryEvent::Status(msg) => {
-                self.status_message = Some(msg);
-            }
-
-            QueryEvent::Error(msg) => {
+            AgentEvent::Error { error } => {
                 self.is_streaming = false;
                 self.spinner_verb = None;
                 self.streaming_text.clear();
                 self.streaming_thinking.clear();
                 self.invalidate_transcript();
-                let err_msg = format!("Error: {}", msg);
+                let err_msg = format!("Error: {}", error);
                 self.push_assistant_message(err_msg.clone());
                 self.push_notification(NotificationKind::Error, err_msg, None);
             }
-            QueryEvent::TokenWarning { state, pct_used } => {
-                // Push a notification for context window warnings (notification + threshold tracking).
-                use crate::tui::adapter_types::query::compact::TokenWarningState;
 
-                // Only escalate — never repeat a threshold already shown.
-                match state {
-                    TokenWarningState::Ok => {
-                        // Reset threshold tracking when back to normal
-                        self.token_warning_threshold_shown = 0;
-                    }
-                    TokenWarningState::Warning if self.token_warning_threshold_shown < 80 => {
-                        self.token_warning_threshold_shown = 80;
-                        self.push_notification(
-                            NotificationKind::Warning,
-                            format!("Context window {:.0}% full. Consider /compact.", pct_used * 100.0),
-                            Some(30),
-                        );
-                    }
-                    TokenWarningState::Critical if self.token_warning_threshold_shown < 95 => {
-                        self.token_warning_threshold_shown = 95;
-                        self.push_notification(
-                            NotificationKind::Error,
-                            format!("Context window {:.0}% full! Run /compact now.", pct_used * 100.0),
-                            None,
-                        );
-                    }
-                    _ => {}
+            AgentEvent::Usage { input_tokens, output_tokens, total_tokens: _ } => {
+                // Record cost tracking immediately (was deferred to TurnComplete
+                // via the bridge's pending_usage — now we record it directly).
+                let turn_tokens = input_tokens + output_tokens;
+                self.context_used_tokens = self.context_used_tokens.saturating_add(turn_tokens as u64);
+                if let Some(tracker) = Arc::get_mut(&mut self.cost_tracker) {
+                    tracker.record_usage(input_tokens, output_tokens);
+                }
+                self.cost_usd = self.cost_tracker.total_cost;
+                self.token_count = self.cost_tracker.total_tokens() as u32;
+            }
+
+            AgentEvent::IterationComplete { iteration } => {
+                // Update the current_turn counter for the "iter N" status pill.
+                if let Some(ref turn) = self.current_turn {
+                    turn.store(iteration, std::sync::atomic::Ordering::Relaxed);
                 }
             }
-        }
 
-        // Update token count from tracker.
-        self.token_count = self.cost_tracker.total_tokens() as u32;
+            AgentEvent::ToolPermissionRequest { tool_name, description, .. } => {
+                // Permission requests are drained by the dedicated permission_rx
+                // task. This event is a duplicate — skip it.
+                let _ = (tool_name, description);
+            }
+        }
     }
 
     // -------------------------------------------------------------------
@@ -6763,13 +6754,13 @@ permission_rx: None,
             // Drain query events from the agent bridge task.
             {
                 let mut events = Vec::new();
-                if let Some(ref mut rx) = self.query_event_rx {
+                if let Some(ref mut rx) = self.agent_event_rx {
                     while let Ok(ev) = rx.try_recv() {
                         events.push(ev);
                     }
                 }
                 for ev in events {
-                    self.handle_query_event(ev);
+                    self.handle_agent_event(ev);
                 }
             }
 
@@ -6838,8 +6829,8 @@ permission_rx: None,
                     Ok(result) => {
                         self.is_streaming = false;
                         if let Err(e) = result {
-                            self.handle_query_event(
-                                crate::tui::adapter_types::query::QueryEvent::Error(e.to_string()),
+                            self.handle_agent_event(
+                                AgentEvent::Error { error: e.to_string() },
                             );
                         }
                         self.run_complete_rx = None;
