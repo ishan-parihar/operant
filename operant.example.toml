@@ -178,15 +178,19 @@ enabled = true
 # - firecrawl:    scrape API (FIRECRAWL_API_KEY)
 provider = "lightpanda"
 
-[vision]
+# ── Advanced sections (uncomment to configure) ───────────────────────────────
+# These are power-user features. Most users don't need them.
+# See the documentation for details.
+
+# [vision]
 # provider = "openai"
 # model = "gpt-4o"
 # base_url = "https://api.openai.com/v1"
 # api_key = "..."
 
-[credential_pool]
+# [credential_pool]
 # strategy = "fill_first"  # fill_first|round_robin|random|least_used
-enabled = false
+# enabled = false
 
-[auxiliary_models]
-# Optional auxiliary model configurations
+# [auxiliary_models]
+# Optional auxiliary model configurations for MoA / side-LLM tasks.
