@@ -423,7 +423,29 @@ pub fn render_app(frame: &mut Frame, app: &App) {
     // ("> ") and the right-margin padding used inside `render_prompt_input`.
     // Keep this in sync with prefix_width=2 + right_pad=2 there.
     let prompt_text_width = size.width.saturating_sub(4);
-    let prompt_height = input_height(&app.prompt_input, prompt_text_width) + 1; // +1 for model/mode status line
+    let mut prompt_height = input_height(&app.prompt_input, prompt_text_width) + 1; // +1 for model/mode status line
+
+    // Clamp prompt_height so the prompt can never push itself (or the footer)
+    // off-screen. The terminal must accommodate:
+    //   - 1 row minimum for the messages area (chunks[0])
+    //   - separator_height (chunks[1])
+    //   - status_height (chunks[2])
+    //   - prompt_height (chunks[3])
+    //   - suggestions_height (chunks[4])
+    //   - 2 rows for the footer (chunks[5])
+    // If the natural prompt_height would overflow, clamp it to whatever
+    // remains. Without this clamp, a multi-line paste or a small terminal
+    // collapses chunks[3] to 0 rows and the input text vanishes — this is
+    // the persistent "input not visible" bug.
+    let reserved: u16 = 1u16 // minimum messages area
+        .saturating_add(separator_height)
+        .saturating_add(status_height)
+        .saturating_add(suggestions_height)
+        .saturating_add(2); // footer
+    let max_prompt_height = size.height.saturating_sub(reserved).max(2);
+    if prompt_height > max_prompt_height {
+        prompt_height = max_prompt_height;
+    }
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)

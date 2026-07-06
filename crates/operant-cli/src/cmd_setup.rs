@@ -950,7 +950,13 @@ async fn step_terminal(config: &mut AppConfig, _reconfigure: bool) -> Result<()>
     config.agent.stream = prompt_yes_no("Enable streaming responses?", config.agent.stream)?;
 
     // Theme
-    let themes = &["opencode", "dark", "light", "dracula", "monokai"];
+    // Keep this list in sync with the variants of `tui::adapter_types::Theme`
+    // (Dark / Light / Default / Deuteranopia). Previously this listed
+    // "opencode", "dracula", "monokai" which the TUI doesn't actually
+    // distinguish — they all collapsed into `Theme::Custom(name)` and were
+    // rendered identically to "default". (iter-125 — fixes the misleading
+    // theme list flagged in the ponytail audit.)
+    let themes = &["default", "dark", "light", "deuteranopia"];
     let current_theme_idx = themes
         .iter()
         .position(|t| *t == config.tui.theme)
