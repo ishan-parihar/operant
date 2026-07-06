@@ -292,6 +292,9 @@ enum Commands {
         /// Show detailed status
         #[arg(long)]
         deep: bool,
+        /// Output as JSON (for scripting/CI)
+        #[arg(long)]
+        json: bool,
     },
     /// Print a setup summary report
     Dump {
@@ -1478,8 +1481,8 @@ async fn main() -> Result<()> {
         Some(Commands::Doctor { fix }) => {
             cmd_doctor::handle_doctor_command(&loaded.config, *fix).await?;
         }
-        Some(Commands::Status { deep }) => {
-            cmd_status::handle_status_command(&loaded.config, *deep).await?;
+        Some(Commands::Status { deep, json }) => {
+            cmd_status::handle_status_command(&loaded.config, *deep, *json).await?;
         }
         Some(Commands::Dump { all }) => {
             cmd_dump::handle_dump_command(&loaded.config, *all).await?;
