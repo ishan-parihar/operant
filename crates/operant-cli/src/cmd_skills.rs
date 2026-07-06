@@ -89,6 +89,31 @@ pub enum SkillsSubcommand {
         /// Name of the skill to toggle
         name: String,
     },
+    /// Search the remote skill marketplace registry
+    Market {
+        #[command(subcommand)]
+        command: MarketCommand,
+    },
+}
+
+/// Marketplace subcommands (iter-133 — closes the ponytail-audit gap
+/// "skill marketplace missing").
+#[derive(Debug, Clone, Subcommand)]
+pub enum MarketCommand {
+    /// Search the registry by name, description, or tag
+    Search { query: String },
+    /// Install a skill from the registry by exact name
+    Install {
+        name: String,
+        #[arg(long)]
+        force: bool,
+    },
+    /// List all skills in the registry
+    List,
+    /// Force-refresh the cached registry index
+    Refresh,
+    /// Check if any installed skills have updates available
+    Updates,
 }
 
 /// Manage external skill sources (taps).
@@ -135,7 +160,64 @@ pub async fn handle_skills_command(config: &AppConfig, cmd: SkillsSubcommand) ->
         }
         SkillsSubcommand::Tap { command } => handle_tap_command(config, command),
         SkillsSubcommand::Toggle { name } => toggle_skill(config, &name),
+        SkillsSubcommand::Market { command } => handle_market_command(config, command).await,
     }
+}
+
+// ---------------------------------------------------------------------------
+// Marketplace handlers (iter-133)
+// ---------------------------------------------------------------------------
+
+async fn handle_market_command(config: &AppConfig, cmd: MarketCommand) -> Result<()> {
+    let marketplace = operant_core::skill_marketplace::SkillMarketplace::new();
+    match cmd {
+        MarketCommand::Search { query } => {
+            let entries = marketplace.search(&query).await?;
+            if entries.is_empty() {
+                println!("No skills found matching '{}'.", style(&query).cyan());
+                return Ok(());
+            }
+            println!("Found {} skill(s):\n", entries.len());
+            for e in &entries {
+                println!("  {} v{} — {}", style(&e.name).green().bold(), style(&e.version).dim(), e.description);
+            }
+        }
+        MarketCommand::Install { name, force } => {
+            let skills_dir = operant_core::platform::operant_skills_dir();
+            match marketplace.install(&name, &skills_dir, force).await {
+                Ok(path) => println!("{} Installed '{}' to {}", style("✓").green(), style(&name).bold(), path.display()),
+                Err(e) => anyhow::bail!("Install failed: {e}"),
+            }
+        }
+        MarketCommand::List => {
+            let entries = marketplace.fetch_index().await?;
+            println!("{} skill(s) available:\n", entries.len());
+            for e in &entries {
+                println!("  {} v{} — {}", style(&e.name).green().bold(), style(&e.version).dim(), e.description);
+            }
+        }
+        MarketCommand::Refresh => {
+            let entries = marketplace.refresh_index().await?;
+            println!("{} Refreshed — {} skill(s)", style("✓").green(), entries.len());
+        }
+        MarketCommand::Updates => {
+            let skills_dir = operant_core::platform::operant_skills_dir();
+            let mut mgr = SkillManager::new(skills_dir);
+            let installed = mgr.load_all().unwrap_or_default();
+            if installed.is_empty() {
+                println!("No installed skills to check.");
+                return Ok(());
+            }
+            for skill in &installed {
+                match marketplace.check_for_update(&skill.name, &skill.version).await {
+                    Ok(Some(entry)) => println!("  {} v{} → v{}", style(&skill.name).green().bold(), skill.version, entry.version),
+                    Ok(None) => println!("  {} v{} (up to date)", style(&skill.name).dim(), skill.version),
+                    Err(e) => println!("  {} (check failed: {e})", style(&skill.name).yellow()),
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------

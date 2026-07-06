@@ -81,6 +81,7 @@ pub mod profile;
 pub mod rate_limiter;
 pub mod schema;
 pub mod security;
+pub mod skill_marketplace;
 pub mod skill_usage;
 pub mod skills;
 pub mod skills_guard;
