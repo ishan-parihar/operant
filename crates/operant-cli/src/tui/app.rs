@@ -4649,15 +4649,21 @@ permission_rx: None,
             }
 
             // ---- Submit ------------------------------------------------
-            // Shift+Enter / Alt+Enter / Ctrl+Enter insert a literal newline
-            // so users can compose multi-line prompts before sending
-            // (issue #149 follow-up).
+            // Shift+Enter / Alt+Enter / Ctrl+Enter / Ctrl+J insert a literal
+            // newline so users can compose multi-line prompts before sending.
+            // Ctrl+J is the traditional Unix "newline" key and is what
+            // hermes-agent uses for line breaks in the TUI.
+            // (iter-120 — user-requested: Ctrl+J was not working.)
             KeyCode::Enter
                 if !self.is_streaming
                     && (key.modifiers.contains(KeyModifiers::SHIFT)
                         || key.modifiers.contains(KeyModifiers::ALT)
                         || key.modifiers.contains(KeyModifiers::CONTROL)) =>
             {
+                self.prompt_input.insert_newline();
+                self.refresh_prompt_input();
+            }
+            KeyCode::Char('j') if !self.is_streaming && key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.prompt_input.insert_newline();
                 self.refresh_prompt_input();
             }

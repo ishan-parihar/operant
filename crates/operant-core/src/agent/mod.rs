@@ -571,14 +571,15 @@ impl OperantAgent {
                 });
             }
 
-            // Emit thinking event
-            self.emit(AgentEvent::Thinking {
-                content: format!(
-                    "Iteration {}/{}: Requesting LLM response...",
-                    iteration, self.config.max_iterations
-                ),
-            })
-            .await;
+            // Log iteration progress (not as a Thinking event — that pollutes
+            // the TUI's thinking display with debug text. Use tracing instead.)
+            // (iter-120 — user-reported bug: "Iteration 1/90: Requesting LLM
+            // response..." was appearing in the thinking block.)
+            tracing::debug!(
+                iteration,
+                max = self.config.max_iterations,
+                "Requesting LLM response"
+            );
 
             // Get tool schemas
             let tools = self.registry.get_schemas().await;
