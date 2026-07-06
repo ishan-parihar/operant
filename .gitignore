@@ -52,3 +52,4 @@ autonomous-status.toml
 telegram_offset.txt
 build.log
 build*.log
+test-build.log
