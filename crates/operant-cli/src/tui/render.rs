@@ -1804,10 +1804,14 @@ fn render_input(frame: &mut Frame, app: &App, area: Rect, focused: bool) {
 
     // Render model + agent mode status line above the prompt.
     if let Some(status_area) = status_area {
-        let agent_mode = match app.agent_mode.as_deref() {
-            Some(m) => m,
-            None if app.plan_mode => "plan",
-            _ => "build",
+        // Only show a mode tag when there's an explicit agent_mode set or
+        // plan_mode is active. The default "build" tag was noise — the user
+        // doesn't need to see "BUILD" when they're just chatting.
+        // (iter-113 — user requested removal of the redundant BUILD MODE tag.)
+        let agent_mode: Option<&str> = match app.agent_mode.as_deref() {
+            Some(m) if !m.is_empty() => Some(m),
+            _ if app.plan_mode => Some("plan"),
+            _ => None,
         };
 
         let pink = app.accent_color;
@@ -1823,20 +1827,22 @@ fn render_input(frame: &mut Frame, app: &App, area: Rect, focused: bool) {
             } else {
                 ("local".to_string(), app.model_name.clone())
             };
-            let mut spans = vec![
-                Span::styled(
-                    format!(" {} ", agent_mode.to_uppercase()),
+            let mut spans: Vec<Span> = Vec::new();
+            // Only render the mode tag when one is active (not the default "build").
+            if let Some(mode) = agent_mode {
+                spans.push(Span::styled(
+                    format!(" {} ", mode.to_uppercase()),
                     Style::default()
                         .fg(Color::Black)
                         .bg(pink)
                         .add_modifier(Modifier::BOLD),
-                ),
-                Span::raw(" "),
-                Span::styled(
-                    model_short,
-                    Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
-                ),
-            ];
+                ));
+                spans.push(Span::raw(" "));
+            }
+            spans.push(Span::styled(
+                model_short,
+                Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+            ));
             spans.push(Span::styled(
                 format!(" · {}", provider),
                 Style::default().fg(dim),

@@ -15,13 +15,13 @@ pub fn spawn_bridge() -> (
         while let Some(event) = agent_rx.recv().await {
             let query_event = match event {
                 AgentEvent::Thinking { content } => {
-                    Some(QueryEvent::Stream(StreamEvent::ContentBlockDelta {
-                        delta: format!("[thinking] {}", content),
+                    Some(QueryEvent::Stream(StreamEvent::ThinkingDelta {
+                        delta: content,
                     }))
                 }
                 AgentEvent::Reasoning { text } => {
-                    Some(QueryEvent::Stream(StreamEvent::ContentBlockDelta {
-                        delta: format!("[reasoning] {}", text),
+                    Some(QueryEvent::Stream(StreamEvent::ThinkingDelta {
+                        delta: text,
                     }))
                 }
                 AgentEvent::Content { text } => {

@@ -889,6 +889,10 @@ pub mod query {
     #[derive(Debug, Clone)]
     pub enum StreamEvent {
         ContentBlockDelta { delta: String },
+        /// Thinking/reasoning content — routed to streaming_thinking, not
+        /// streaming_text. (iter-113 — fixes the "incorrect reasoning blocks
+        /// preview" bug where [thinking] prefixes appeared as literal text.)
+        ThinkingDelta { delta: String },
         ContentBlockStart,
         ContentBlockStop,
         MessageStart,
