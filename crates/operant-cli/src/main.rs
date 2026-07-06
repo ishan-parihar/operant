@@ -213,6 +213,9 @@ enum Commands {
     Sessions {
         #[command(subcommand)]
         cmd: cmd_sessions::SessionsSubcommand,
+        /// Output as JSON (for scripting/CI)
+        #[arg(long, global = true)]
+        json: bool,
     },
     /// Manage MCP servers
     Mcp {
@@ -301,6 +304,9 @@ enum Commands {
         /// Show all configuration keys as YAML
         #[arg(long)]
         all: bool,
+        /// Output as JSON (for scripting/CI)
+        #[arg(long)]
+        json: bool,
     },
     /// View log files
     Logs {
@@ -1432,8 +1438,8 @@ async fn main() -> Result<()> {
         Some(Commands::Config { cmd }) => {
             cmd_config::handle_config_command(&loaded.config, cmd.clone()).await?;
         }
-        Some(Commands::Sessions { cmd }) => {
-            cmd_sessions::handle_sessions_command(&loaded.config, cmd.clone()).await?;
+        Some(Commands::Sessions { cmd, json }) => {
+            cmd_sessions::handle_sessions_command(&loaded.config, cmd.clone(), *json).await?;
         }
         Some(Commands::Mcp { cmd }) => {
             let mcp_manager = operant_core::mcp::McpManager::new();
@@ -1484,8 +1490,8 @@ async fn main() -> Result<()> {
         Some(Commands::Status { deep, json }) => {
             cmd_status::handle_status_command(&loaded.config, *deep, *json).await?;
         }
-        Some(Commands::Dump { all }) => {
-            cmd_dump::handle_dump_command(&loaded.config, *all).await?;
+        Some(Commands::Dump { all, json }) => {
+            cmd_dump::handle_dump_command(&loaded.config, *all, *json).await?;
         }
         Some(Commands::Logs { cmd }) => {
             cmd_logs::handle_logs_command(&loaded.config, cmd.clone()).await?;

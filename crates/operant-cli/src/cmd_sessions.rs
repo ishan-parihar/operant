@@ -69,12 +69,12 @@ pub enum SessionsSubcommand {
 }
 
 /// Dispatch a sessions subcommand.
-pub async fn handle_sessions_command(config: &AppConfig, cmd: SessionsSubcommand) -> Result<()> {
+pub async fn handle_sessions_command(config: &AppConfig, cmd: SessionsSubcommand, json: bool) -> Result<()> {
     match cmd {
-        SessionsSubcommand::List => cmd_list(config).await,
+        SessionsSubcommand::List => cmd_list(config, json).await,
         SessionsSubcommand::Show { id } => cmd_show(config, &id).await,
         SessionsSubcommand::Delete { id } => cmd_delete(config, &id).await,
-        SessionsSubcommand::Stats => cmd_stats(config).await,
+        SessionsSubcommand::Stats => cmd_stats(config, json).await,
         SessionsSubcommand::Export { id, output, format } => {
             cmd_export(config, &id, output, &format).await
         }
@@ -88,9 +88,25 @@ pub async fn handle_sessions_command(config: &AppConfig, cmd: SessionsSubcommand
     }
 }
 
-async fn cmd_list(config: &AppConfig) -> Result<()> {
+async fn cmd_list(config: &AppConfig, json: bool) -> Result<()> {
     let db = Database::init(config.database_path.clone()).context("Failed to open database")?;
     let sessions = db.list_sessions(20).context("Failed to list sessions")?;
+
+    if json {
+        let items: Vec<serde_json::Value> = sessions
+            .iter()
+            .enumerate()
+            .map(|(i, s)| serde_json::json!({
+                "index": i + 1,
+                "id": s.id,
+                "title": s.title.as_deref().unwrap_or("(untitled)"),
+                "updated_at": s.updated_at,
+                "message_count": s.message_count,
+            }))
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&items)?);
+        return Ok(());
+    }
 
     if sessions.is_empty() {
         println!("No sessions found.");
@@ -156,17 +172,28 @@ async fn cmd_delete(config: &AppConfig, id: &str) -> Result<()> {
     Ok(())
 }
 
-async fn cmd_stats(config: &AppConfig) -> Result<()> {
+async fn cmd_stats(config: &AppConfig, json: bool) -> Result<()> {
     let db = Database::init(config.database_path.clone()).context("Failed to open database")?;
     let session_count = db
         .get_session_count()
         .context("Failed to get session count")?;
 
+    let db_size = std::fs::metadata(&config.database_path).map(|m| m.len()).ok();
+
+    if json {
+        let stats = serde_json::json!({
+            "database_path": config.database_path.display().to_string(),
+            "total_sessions": session_count,
+            "database_size_bytes": db_size,
+        });
+        println!("{}", serde_json::to_string_pretty(&stats)?);
+        return Ok(());
+    }
+
     println!("Database path: {}", config.database_path.display());
     println!("Total sessions: {}", session_count);
 
-    if let Ok(meta) = std::fs::metadata(&config.database_path) {
-        let size = meta.len();
+    if let Some(size) = db_size {
         if size >= 1_000_000_000 {
             println!("Database size: {:.2} GB", size as f64 / 1_000_000_000.0);
         } else if size >= 1_000_000 {
