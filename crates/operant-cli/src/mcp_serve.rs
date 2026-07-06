@@ -241,14 +241,51 @@ async fn connect_mcp_server(
 // MCP Method Handlers
 // ──────────────────────────────────────────────
 
+/// Server-side protocol versions we support, newest first.
+/// (iter-130 — see handle_initialize.)
+const SERVER_SUPPORTED_VERSIONS: &[&str] = &["2025-06-18", "2024-11-05"];
+
+/// Pick the highest mutually-supported version. If the client requests a
+/// version we don't support, we respond with our newest (best-effort
+/// forward compatibility).
+fn negotiate_server_protocol_version(client_version: &str) -> &'static str {
+    // If the client's version is one we support, use it.
+    for v in SERVER_SUPPORTED_VERSIONS {
+        if *v == client_version {
+            return v;
+        }
+    }
+    // Fallback: prefix match (some clients send "2025-06-18-draft").
+    for v in SERVER_SUPPORTED_VERSIONS {
+        if client_version.starts_with(*v) {
+            return v;
+        }
+    }
+    // No match — return our newest (forward-compat).
+    SERVER_SUPPORTED_VERSIONS[0]
+}
+
 /// Handle the `initialize` handshake.
 ///
 /// Returns protocol version, server info, and capabilities.
+///
+/// (iter-130: protocol version negotiation. Previously the server hardcoded
+/// "2024-11-05". Now it reads the client's requested version and responds
+/// with the highest mutually-supported version. Supports "2025-06-18" and
+/// "2024-11-05".)
 fn handle_initialize(request: &JsonRpcRequest) -> JsonRpcResponse {
+    // Negotiate the protocol version based on what the client requested.
+    let client_version = request
+        .params
+        .get("protocolVersion")
+        .and_then(|v| v.as_str())
+        .unwrap_or("2024-11-05");
+    let server_version = negotiate_server_protocol_version(client_version);
+
     make_response(
         request.id.clone(),
         Some(serde_json::json!({
-            "protocolVersion": "2024-11-05",
+            "protocolVersion": server_version,
             "capabilities": {
                 "tools": {
                     "listChanged": false
@@ -613,6 +650,43 @@ mod tests {
         assert_eq!(result["protocolVersion"], "2024-11-05");
         assert_eq!(result["serverInfo"]["name"], "operant-mcp");
         assert!(result["capabilities"]["tools"].is_object());
+    }
+
+    /// Test that the server returns the highest mutually-supported protocol
+    /// version when the client requests "2025-06-18". (iter-130)
+    #[test]
+    fn test_initialize_negotiates_2025_version() {
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: Value::Number(1.into()),
+            method: "initialize".to_string(),
+            params: serde_json::json!({"protocolVersion": "2025-06-18"}),
+        };
+        let response = handle_initialize(&request);
+        assert!(response.error.is_none());
+        assert_eq!(
+            response.result.unwrap()["protocolVersion"],
+            "2025-06-18"
+        );
+    }
+
+    /// Test that the server falls back to its newest version when the client
+    /// requests an unknown version. (iter-130)
+    #[test]
+    fn test_initialize_falls_back_on_unknown_version() {
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: Value::Number(1.into()),
+            method: "initialize".to_string(),
+            params: serde_json::json!({"protocolVersion": "2099-01-01"}),
+        };
+        let response = handle_initialize(&request);
+        assert!(response.error.is_none());
+        // Should fall back to our newest supported version.
+        assert_eq!(
+            response.result.unwrap()["protocolVersion"],
+            "2025-06-18"
+        );
     }
 
     /// Test `ping` returns null result.
