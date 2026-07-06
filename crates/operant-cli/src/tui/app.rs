@@ -2583,6 +2583,42 @@ permission_rx: None,
                 self.status_message = Some("Launching setup wizard…".to_string());
                 true
             }
+            // /whoami — show what the agent knows about the user.
+            // (P1-9 from UX audit — transparency + trust.)
+            "whoami" => {
+                let mem_dir = operant_core::platform::operant_home().join("memory");
+                let store = operant_core::memory::MemoryStore::new(mem_dir);
+                match store.read_memories() {
+                    Ok(map) if map.is_empty() => {
+                        self.status_message = Some(
+                            "I don't know much about you yet. Chat with me and I'll start remembering.".to_string()
+                        );
+                    }
+                    Ok(map) => {
+                        let blocks: Vec<_> = map.into_values().collect();
+                        let mut summary = format!("Here's what I know about you ({} memories):\n\n", blocks.len());
+                        for block in blocks.iter().take(10) {
+                            let preview: String = block.content.lines().next().unwrap_or("").chars().take(80).collect();
+                            summary.push_str(&format!(
+                                "  [{:>3}] {:<10} {}\n",
+                                block.importance,
+                                &block.block_type,
+                                preview,
+                            ));
+                        }
+                        if blocks.len() > 10 {
+                            summary.push_str(&format!("\n  ...and {} more\n", blocks.len() - 10));
+                        }
+                        self.push_system_message(summary, crate::tui::app::SystemMessageStyle::Info);
+                    }
+                    Err(_) => {
+                        self.status_message = Some(
+                            "No memory store found. Use /memory to manage memory files.".to_string()
+                        );
+                    }
+                }
+                true
+            }
             _ => false,
         }
     }

@@ -2374,6 +2374,36 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
             ));
         }
 
+        // 7b. Infrastructure pill — shows memory + skills counts so the
+        // invisible infrastructure is visible. (P2-14 from UX audit.)
+        {
+            let mem_count = {
+                let mem_dir = operant_core::platform::operant_home().join("memory");
+                operant_core::memory::MemoryStore::new(mem_dir)
+                    .read_memories()
+                    .map(|m| m.len())
+                    .unwrap_or(0)
+            };
+            let skills_count = app.skills_view.skills.len();
+            if mem_count > 0 || skills_count > 0 {
+                if !parts.is_empty() {
+                    parts.push(Span::raw("  "));
+                }
+                let mut pill = String::new();
+                if mem_count > 0 {
+                    pill.push_str(&format!("mem:{}", mem_count));
+                }
+                if skills_count > 0 {
+                    if !pill.is_empty() { pill.push_str(" · "); }
+                    pill.push_str(&format!("skills:{}", skills_count));
+                }
+                parts.push(Span::styled(
+                    pill,
+                    Style::default().fg(Color::DarkGray),
+                ));
+            }
+        }
+
         // Git branch (if settings enabled)
         if app.settings_screen.show_git_branch {
             if let Some(ref branch) = app.git_branch {

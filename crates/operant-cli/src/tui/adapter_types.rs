@@ -588,8 +588,45 @@ pub fn format_permission_reason(_kind: &str, _detail: &str) -> String {
     format!("{}: {}", _kind, _detail)
 }
 
-pub fn sample_completion_verb(_seed: u64) -> &'static str { "done" }
-pub fn sample_spinner_verb(_seed: u64) -> &'static str { "thinking" }
+/// Rotating completion verbs — shown after a turn completes ("✽ Worked for 2m 5s").
+/// Varied per turn so the UI feels alive rather than mechanical.
+/// (P2-15 from UX audit — was always "done".)
+pub fn sample_completion_verb(seed: u64) -> &'static str {
+    const VERBS: &[&str] = &[
+        "done",
+        "finished",
+        "completed",
+        "wrapped up",
+        "sorted",
+        "nailed it",
+        "shipped",
+        "landed",
+    ];
+    VERBS[(seed as usize) % VERBS.len()]
+}
+
+/// Rotating spinner verbs — shown while the agent is thinking ("Thinking…").
+/// Varied per turn so the status row feels expressive.
+/// (P2-15 from UX audit — was always "thinking".)
+pub fn sample_spinner_verb(seed: u64) -> &'static str {
+    const VERBS: &[&str] = &[
+        "thinking",
+        "processing",
+        "working",
+        "pondering",
+        "analyzing",
+        "computing",
+        "reasoning",
+        "reflecting",
+        "considering",
+        "exploring",
+        "investigating",
+        "composing",
+        "searching",
+        "crafting",
+    ];
+    VERBS[(seed as usize) % VERBS.len()]
+}
 
 pub mod voice {
     //! Voice recording + transcription bridge for the TUI.
