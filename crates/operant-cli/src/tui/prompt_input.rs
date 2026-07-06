@@ -3046,7 +3046,11 @@ pub fn render_prompt_input(
     });
 
     // Render each visual row (truncated to area height).
-    let max_text_rows = area.height.saturating_sub(2) as usize;
+    // Ensure at least 1 text row so the input is always visible.
+    // (iter-120 — user-reported bug: input text was not showing up,
+    // appearing as a "black bar". Root cause: max_text_rows was 0 when
+    // area.height <= 2, so no text rows were rendered.)
+    let max_text_rows = ((area.height as usize).saturating_sub(2)).max(1);
     // Scroll so the cursor row is visible.
     let scroll_offset = match cursor_visual {
         Some((vi, _)) if visual_rows.len() > max_text_rows && vi >= max_text_rows => {
