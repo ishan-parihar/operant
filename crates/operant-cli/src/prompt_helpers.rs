@@ -175,6 +175,14 @@ pub fn print_warning(msg: &str) {
 
 /// Print a bordered page header with centered title (60 chars wide).
 pub fn print_page_header(title: &str) {
+    // Clear the terminal before each page so the wizard doesn't append and
+    // extend everything into a long scrolling wall of text.
+    // (iter-119 — user-reported bug: setup wizard pages stack on top of
+    // each other instead of refreshing.)
+    print!("\x1b[2J\x1b[H");  // ANSI clear screen + move cursor to top
+    use std::io::Write;
+    let _ = std::io::stdout().flush();
+
     const WIDTH: usize = 60;
     const INNER: usize = WIDTH - 2; // 58 chars between borders
     println!();
