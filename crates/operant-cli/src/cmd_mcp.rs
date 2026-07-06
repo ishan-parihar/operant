@@ -473,7 +473,8 @@ async fn handle_mcp_login(
         Ok(token) => {
             println!();
             println!("✓ OAuth login successful for '{}'.", name);
-            println!("  Access token:  {}...{}", &token.access_token[..token.access_token.len().min(8)], "");
+            let token_hint: String = token.access_token.chars().take(8).collect();
+            println!("  Access token:  {}...", token_hint);
             if let Some(ref refresh) = token.refresh_token {
                 let hint: String = refresh.chars().take(8).collect();
                 println!("  Refresh token: {}...", hint);

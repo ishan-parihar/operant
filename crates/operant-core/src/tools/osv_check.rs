@@ -45,8 +45,8 @@ fn parse_command(command: &str) -> Vec<PackageInfo> {
     for (prefix, ecosystem) in [
         ("npx ", "npm"),
         ("npx.cmd ", "npm"),
-        ("uvx ", "npm"),
-        ("uvx.cmd ", "npm"),
+        ("uvx ", "PyPI"),
+        ("uvx.cmd ", "PyPI"),
         ("pipx ", "PyPI"),
     ] {
         if let Some(rest) = trimmed.strip_prefix(prefix) {
@@ -276,7 +276,7 @@ mod tests {
         let pkgs = parse_command("uvx some-package --flag value");
         assert_eq!(pkgs.len(), 1);
         assert_eq!(pkgs[0].name, "some-package");
-        assert_eq!(pkgs[0].ecosystem, "npm");
+        assert_eq!(pkgs[0].ecosystem, "PyPI");
     }
 
     #[test]
