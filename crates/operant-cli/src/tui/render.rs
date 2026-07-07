@@ -488,10 +488,8 @@ pub fn render_app(frame: &mut Frame, app: &App) {
             &app.prompt_input.history,
             size,
         );
-    } else if let Some(ref hs) = app.history_search {
-        // Legacy history search rendering
-        render_legacy_history_search(frame, hs, app, size);
     }
+    // (iter-156: legacy history_search render deleted — field is always None)
 
     // Settings screen (highest-priority full-screen overlay)
     if app.settings_screen.visible {
@@ -2566,88 +2564,5 @@ fn kb_line<'a>(key: &str, desc: &str) -> Line<'a> {
         ),
         Span::raw(desc.to_string()),
     ])
-}
-
-// -----------------------------------------------------------------------
-// Legacy history search overlay (used when history_search_overlay is not open)
-// -----------------------------------------------------------------------
-
-fn render_legacy_history_search(
-    frame: &mut Frame,
-    hs: &crate::app::HistorySearch,
-    app: &App,
-    area: Rect,
-) {
-    let dialog_width = 60u16.min(area.width.saturating_sub(4));
-    let visible_matches = 8usize;
-    let dialog_height =
-        (4 + visible_matches.min(hs.matches.len().max(1)) as u16).min(area.height.saturating_sub(4));
-    let dialog_area = crate::overlays::centered_rect(dialog_width, dialog_height, area);
-
-    frame.render_widget(Clear, dialog_area);
-
-    let mut lines: Vec<Line> = Vec::new();
-    lines.push(Line::from(vec![
-        Span::raw("  Search: "),
-        Span::styled(
-            hs.query.clone(),
-            Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
-        ),
-        Span::styled("\u{2588}", Style::default().fg(Color::White)),
-    ]));
-    lines.push(Line::from(""));
-
-    if hs.matches.is_empty() {
-        lines.push(Line::from(vec![Span::styled(
-            "  (no matches)",
-            Style::default().fg(Color::DarkGray),
-        )]));
-    } else {
-        let start = hs.selected.saturating_sub(visible_matches / 2);
-        let end = (start + visible_matches).min(hs.matches.len());
-        let start = end.saturating_sub(visible_matches).min(start);
-
-        for (display_idx, &hist_idx) in hs.matches[start..end].iter().enumerate() {
-            let real_idx = start + display_idx;
-            let is_selected = real_idx == hs.selected;
-            let entry = app
-                .prompt_input
-                .history
-                .get(hist_idx)
-                .map(String::as_str)
-                .unwrap_or("");
-
-            let truncated = if UnicodeWidthStr::width(entry) > (dialog_width as usize - 6) {
-                let mut s = entry.to_string();
-                s.truncate(dialog_width as usize - 9);
-                format!("{}\u{2026}", s)
-            } else {
-                entry.to_string()
-            };
-
-            let (prefix, style) = if is_selected {
-                (
-                    "  \u{25BA} ",
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD),
-                )
-            } else {
-                ("    ", Style::default().fg(Color::White))
-            };
-            lines.push(Line::from(vec![
-                Span::raw(prefix),
-                Span::styled(truncated, style),
-            ]));
-        }
-    }
-
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(" History Search (Esc to cancel) ")
-        .border_style(Style::default().fg(Color::Cyan));
-
-    let para = Paragraph::new(lines).block(block);
-    frame.render_widget(para, dialog_area);
 }
 
