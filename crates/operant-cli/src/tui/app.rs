@@ -973,9 +973,7 @@ pub struct App {
     /// Current git branch name.
     pub git_branch: Option<String>,
     /// Count of in-progress background tasks (drives the footer pill).
-    pub background_task_count: usize,
     /// Background task status text shown in footer pill.
-    pub background_task_status: Option<String>,
     /// External status line command output (from CLAUDE_STATUS_COMMAND).
     /// Whether auto-compact is enabled (from settings).
     pub auto_compact_enabled: bool,
@@ -1037,9 +1035,7 @@ pub struct App {
     pub rate_limit_7day_pct: Option<f32>,
     /// Active worktree name (if in a worktree). Rendered in the footer.
     /// Active worktree branch (if in a worktree). Rendered in the footer.
-    pub worktree_branch: Option<String>,
     /// Agent type badge: "agent" | "coordinator" | "subagent".
-    pub agent_type_badge: Option<String>,
     /// Goal badge string shown in the footer, e.g. "active · 5m · 3 turns".
     /// None when no goal is active. Updated by the REPL after each turn.
 
@@ -1422,8 +1418,6 @@ impl App {
             git_branch: crate::tui::adapter_types::git_utils::get_repo_root(
                 std::env::current_dir().as_deref().unwrap_or_else(|_| std::path::Path::new("."))
             ).and_then(|repo_root| crate::tui::adapter_types::git_utils::get_current_branch(&repo_root)),
-            background_task_count: 0,
-            background_task_status: None,
             auto_compact_enabled: false,
             auto_compact_threshold: 95,
             auto_compact_running: false,
@@ -1467,8 +1461,6 @@ permission_rx: None,
             context_used_tokens: 0,
             rate_limit_5h_pct: None,
             rate_limit_7day_pct: None,
-            worktree_branch: None,
-            agent_type_badge: None,
             thinking_expanded: std::collections::HashSet::new(),
             last_msg_area: Cell::new(ratatui::layout::Rect::default()),
             last_selectable_area: Cell::new(ratatui::layout::Rect::default()),
