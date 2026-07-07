@@ -155,7 +155,7 @@ impl SkillManager {
 
         // Check required commands
         for cmd in &skill.prerequisites_commands {
-            if !command_exists(cmd) {
+            if !which::which(cmd).is_ok() {
                 return false;
             }
         }
@@ -398,25 +398,6 @@ fn current_platform() -> &'static str {
     }
 }
 
-/// Check whether a command is available on the system PATH.
-fn command_exists(cmd: &str) -> bool {
-    #[cfg(target_os = "windows")]
-    {
-        std::process::Command::new("where")
-            .arg(cmd)
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        std::process::Command::new("which")
-            .arg(cmd)
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Tests

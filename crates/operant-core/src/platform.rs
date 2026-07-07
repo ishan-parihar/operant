@@ -42,7 +42,7 @@ fn detect_shell_windows() -> ShellInfo {
         ("powershell.exe", vec!["-Command"]),
         ("cmd.exe", vec!["/C"]),
     ] {
-        if command_exists(cmd) {
+        if which::which(cmd).is_ok() {
             return ShellInfo {
                 path: PathBuf::from(cmd),
                 args_pattern: args.iter().map(|s| s.to_string()).collect(),
@@ -59,7 +59,7 @@ fn detect_shell_windows() -> ShellInfo {
 #[cfg(not(target_os = "windows"))]
 fn detect_shell_unix() -> ShellInfo {
     if let Ok(shell) = env::var("SHELL") {
-        if !shell.is_empty() && command_exists(&shell) {
+        if !shell.is_empty() && which::which(&shell).is_ok() {
             return ShellInfo {
                 path: PathBuf::from(shell),
                 args_pattern: vec!["-c".to_string()],
@@ -67,7 +67,7 @@ fn detect_shell_unix() -> ShellInfo {
         }
     }
     for candidate in &["bash", "sh"] {
-        if command_exists(candidate) {
+        if which::which(candidate).is_ok() {
             return ShellInfo {
                 path: PathBuf::from(candidate),
                 args_pattern: vec!["-c".to_string()],
@@ -81,28 +81,9 @@ fn detect_shell_unix() -> ShellInfo {
     }
 }
 
-/// Returns `true` if `cmd` can be invoked (very cheap check via `--version`
-/// or `/C ver` on Windows).
-fn command_exists(cmd: &str) -> bool {
-    #[cfg(target_os = "windows")]
-    {
-        Command::new(cmd)
-            .arg("--version")
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .is_ok()
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        Command::new(cmd)
-            .arg("--version")
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .is_ok()
-    }
-}
+// (iter-148: command_exists deleted — use which::which(cmd).is_ok()
+// instead, already in deps. Was a hand-rolled fork+exec that runs
+// `cmd --version` which doesn't work for all commands.)
 
 // ---------------------------------------------------------------------------
 // 2. Config directory helpers

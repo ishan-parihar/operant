@@ -89,7 +89,7 @@ async fn execute_python(
 
     // Create a temp file for the code
     let temp_dir = std::env::temp_dir();
-    let script_path = temp_dir.join(format!("operant_code_{}.py", uuid_simple()));
+    let script_path = temp_dir.join(format!("operant_code_{}.py", uuid::Uuid::new_v4().to_string()));
 
     std::fs::write(&script_path, code)
         .map_err(|e| format!("Failed to write temp script: {}", e))?;
@@ -159,7 +159,7 @@ async fn execute_javascript(
 
     // Create a temp file for the code
     let temp_dir = std::env::temp_dir();
-    let script_path = temp_dir.join(format!("operant_code_{}.js", uuid_simple()));
+    let script_path = temp_dir.join(format!("operant_code_{}.js", uuid::Uuid::new_v4().to_string()));
 
     std::fs::write(&script_path, code)
         .map_err(|e| format!("Failed to write temp script: {}", e))?;
@@ -290,7 +290,7 @@ async fn execute_rust(
     use tokio::process::Command;
 
     let temp_dir = std::env::temp_dir();
-    let project_dir = temp_dir.join(format!("operant_rust_{}", uuid_simple()));
+    let project_dir = temp_dir.join(format!("operant_rust_{}", uuid::Uuid::new_v4().to_string()));
 
     // Create project structure
     std::fs::create_dir_all(project_dir.join("src"))
@@ -405,13 +405,6 @@ path = "src/main.rs"
     }))
 }
 
-fn uuid_simple() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default();
-    format!("{:x}{:x}", now.as_secs(), now.subsec_nanos())
-}
 
 #[cfg(test)]
 mod tests {
@@ -447,7 +440,7 @@ mod tests {
 
     #[test]
     fn test_uuid_simple_not_empty() {
-        let id = uuid_simple();
+        let id = uuid::Uuid::new_v4().to_string();
         assert!(!id.is_empty());
     }
 }
