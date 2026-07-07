@@ -2586,7 +2586,6 @@ permission_rx: None,
                 turns_completed: 0,
                 is_coordinator: false,
                 last_output: Some(status.clone()),
-                agent_role: crate::agents_view::AgentRole::Normal,
                 model_name: None,
                 cost_usd: 0.0,
             })

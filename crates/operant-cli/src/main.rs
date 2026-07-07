@@ -49,7 +49,6 @@ mod prompt_helpers;
 pub mod provider;
 mod tui;
 
-pub(crate) use tui::agents_view;
 pub(crate) use tui::app;
 pub(crate) use tui::dialogs;
 pub(crate) use tui::effort_picker;

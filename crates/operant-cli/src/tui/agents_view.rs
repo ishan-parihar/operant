@@ -19,17 +19,6 @@ use crate::tui::overlays::{
 // Data types
 // ---------------------------------------------------------------------------
 
-/// The role of an agent in the manager-executor architecture.
-#[derive(Debug, Clone, PartialEq)]
-pub enum AgentRole {
-    Normal,
-    Manager,
-    Executor { parent_id: String },
-}
-
-impl Default for AgentRole {
-    fn default() -> Self { AgentRole::Normal }
-}
 
 /// The current status of a sub-agent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -80,9 +69,6 @@ pub struct AgentInfo {
     pub is_coordinator: bool,
     /// Brief description or last output snippet.
     pub last_output: Option<String>,
-    /// Role in the managed agent architecture.
-    #[allow(dead_code)]
-    pub agent_role: AgentRole,
     /// Model name used by this agent.
     pub model_name: Option<String>,
     /// Cost in USD accumulated by this agent.
