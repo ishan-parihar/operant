@@ -394,7 +394,6 @@ pub async fn run_setup_wizard(
     // TUI's settings.json (which overrides the TOML config) would still
     // have the old values. (iter-112 — fixes the "TUI shows hardcoded
     // defaults after setup" bug.)
-    sync_to_settings_json(&updated);
 
     if section.is_none() {
         print_success("Setup complete! Configuration saved.");
@@ -1285,55 +1284,6 @@ async fn step_agent_settings(config: &mut AppConfig, _reconfigure: bool) -> Resu
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Sync the TOML config's provider+model to settings.json so the TUI
-/// picks them up immediately. The TUI reads settings.json on startup
-/// (iter-71); without this sync, `operant setup` writes to operant.toml
-/// but the TUI still shows the old settings.json values.
-/// (iter-112)
-fn sync_to_settings_json(config: &AppConfig) {
-    let settings_path = match dirs::home_dir() {
-        Some(h) => h.join(".operant").join("settings.json"),
-        None => return,
-    };
-
-    // Load existing settings (or default).
-    let mut settings: serde_json::Value = if settings_path.exists() {
-        std::fs::read_to_string(&settings_path)
-            .ok()
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_else(|| serde_json::json!({}))
-    } else {
-        serde_json::json!({})
-    };
-
-    // Infer provider from base_url.
-    let provider = crate::tui::provider::infer_provider_from_model(&config.agent.model)
-        .or_else(|| {
-            let url = &config.client.base_url;
-            if url.contains("anthropic.com") {
-                Some("anthropic".to_string())
-            } else if url.contains("openai.com") {
-                Some("openai".to_string())
-            } else if url.contains("googleapis.com") {
-                Some("google".to_string())
-            } else {
-                None
-            }
-        });
-
-    // Update provider + model in settings.json.
-    if let Some(ref p) = provider {
-        settings["provider"] = serde_json::Value::String(p.clone());
-    }
-    settings["model"] = serde_json::Value::String(config.agent.model.clone());
-
-    // Write back.
-    let _ = std::fs::create_dir_all(settings_path.parent().unwrap_or(std::path::Path::new(".")));
-    let _ = std::fs::write(
-        &settings_path,
-        serde_json::to_string_pretty(&settings).unwrap_or_else(|_| "{}".to_string()),
-    );
-}
 
 /// Save the configuration to disk.
 ///
