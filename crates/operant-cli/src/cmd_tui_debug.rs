@@ -486,74 +486,9 @@ async fn debug_banner(_config: &AppConfig) -> Result<()> {
 
 async fn debug_slash_commands(_config: &AppConfig) -> Result<()> {
     println!("=== Intercepted Slash Commands ===");
-    println!();
-    println!("These commands are intercepted by the TUI's intercept_slash_command");
-    println!("(app.rs ~line 1974). Commands NOT in this list fall through to the");
-    println!("basic command registry and print a one-line help text.");
-    println!();
-
-    let commands: &[(&str, &str)] = &[
-        ("config / settings", "Open the settings screen"),
-        ("theme", "Open the theme picker"),
-        ("stats", "Open the 4-tab stats dialog"),
-        ("mcp", "Open the MCP server view"),
-        ("agents", "Open the subagent spawn-tree view"),
-        ("diff / review", "Open the diff viewer (git diff)"),
-        ("changes", "Open the diff viewer (per-turn)"),
-        ("search / find", "Open the conversation search overlay"),
-        ("survey / feedback", "Open the feedback survey"),
-        ("memory", "Open the AGENTS.md memory file selector"),
-        ("skills", "Open the skills browser (iter-75)"),
-        ("plugins", "Open the plugins hub (iter-76)"),
-        ("journey", "Open the skills+memories journey view (iter-79)"),
-        ("hooks", "Open the hooks config menu"),
-        ("import-config", "Open the import-config picker"),
-        ("connect", "Open the connect-a-provider dialog"),
-        ("model", "Open the model picker for the active provider"),
-        ("clear", "Clear the transcript"),
-        ("vim", "Toggle vim mode in the prompt input"),
-        ("fast", "Toggle fast mode (low effort)"),
-        ("plan", "Toggle plan mode"),
-        ("copy", "Copy last assistant message to clipboard"),
-        ("output-style", "Cycle output style (auto/stream/verbose)"),
-        ("effort", "Open the effort picker"),
-        ("voice", "Toggle voice mode"),
-        ("cost", "Show cost summary"),
-        ("rewind", "Open the rewind flow"),
-        ("export", "Open the export dialog"),
-        ("context", "Open the context-viz overlay"),
-        ("rename", "Rename the current session"),
-        ("keybindings", "Open the keybindings file"),
-        ("help", "Toggle the help overlay"),
-        // iter-77 backfill:
-        ("yolo", "Toggle bypass-permissions mode"),
-        ("busy", "Toggle auto-compact"),
-        ("verbose", "Cycle output style"),
-        ("reasoning", "Show reasoning-stream status"),
-        ("personality", "Show current personality"),
-        ("steer", "Show steer-mode hint"),
-        ("queue", "Show queued messages"),
-        ("background", "Show background-task hint"),
-        ("rollback", "Open diff viewer (turn mode)"),
-        ("reload / reload-mcp / reload-skills", "Show reload hint"),
-        ("browser", "Show browser-backend info"),
-        ("indicator / statusbar", "Toggle status bar"),
-        ("mouse", "Show mouse-capture info"),
-        ("terminal-setup", "Show terminal-setup info"),
-        ("redraw", "Force a full redraw"),
-        ("billing / credits", "Show BYOK billing info"),
-        ("update", "Show update hint"),
-        ("heapdump / mem", "Show debug snapshot"),
-        ("pet", "Easter-egg: trigger Rustle pose"),
-        ("skin", "Alias for /theme"),
-        ("replay / replay-diff", "Show planned-overlay status"),
-        ("setup", "Suspend TUI + run operant setup wizard (iter-80)"),
-    ];
-
-    for (cmd, desc) in commands {
-        println!("  /{:<32} {}", cmd, desc);
-    }
-
+    println!("Use: operant tui debug slash-commands");
+    println!("Source: crates/operant-cli/src/tui/app.rs::PROMPT_SLASH_COMMANDS");
+    // (iter-154: hardcoded 50-command list deleted — was duplicating PROMPT_SLASH_COMMANDS)
     Ok(())
 }
 
