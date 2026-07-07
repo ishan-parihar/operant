@@ -3546,15 +3546,6 @@ permission_rx: None,
                         _ => {}
                     }
                 }
-                SessionBrowserMode::Confirm => {
-                    match key.code {
-                        KeyCode::Esc | KeyCode::Char('n') => self.session_browser.cancel(),
-                        KeyCode::Enter | KeyCode::Char('y') => {
-                            self.session_browser.close();
-                        }
-                        _ => {}
-                    }
-                }
             }
             return false;
         }
