@@ -35,30 +35,18 @@ pub enum PipelineAction {
     Queue,
 }
 
-pub trait MessageFilter: Send + Sync {
-    fn check(&self, msg: &IncomingMessage) -> PipelineAction;
-}
+// (iter-148: MessageFilter trait deleted — 0 implementations.
+// MessagePipeline simplified to always return Allow since no filters
+// were ever registered.)
 
-pub struct MessagePipeline {
-    filters: Vec<Box<dyn MessageFilter>>,
-}
+pub struct MessagePipeline;
 
 impl MessagePipeline {
     pub fn new() -> Self {
-        Self { filters: Vec::new() }
+        Self
     }
 
-    pub fn add_filter(&mut self, filter: Box<dyn MessageFilter>) {
-        self.filters.push(filter);
-    }
-
-    pub fn process(&self, msg: &IncomingMessage) -> PipelineAction {
-        for filter in &self.filters {
-            match filter.check(msg) {
-                PipelineAction::Allow => continue,
-                action => return action,
-            }
-        }
+    pub fn process(&self, _msg: &IncomingMessage) -> PipelineAction {
         PipelineAction::Allow
     }
 }
