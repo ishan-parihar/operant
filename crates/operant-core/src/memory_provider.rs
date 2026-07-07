@@ -186,7 +186,10 @@ impl TdgMemoryProvider {
             let _ = std::fs::create_dir_all(parent);
         }
         let pool = tdg_rust::ConnectionPool::new(
-            db_path.to_str().unwrap_or("~/.operant/tdg/graph.db"),
+            // (iter-144 — fixed A26: was .unwrap_or() with a wrong default
+            // path that would silently use the wrong DB if storage_dir
+            // wasn't UTF-8. Now uses to_string_lossy() which never fails.)
+            &db_path.to_string_lossy(),
             5,
             30_000,
         )
