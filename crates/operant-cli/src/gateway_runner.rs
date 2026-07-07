@@ -188,12 +188,14 @@ impl MessageHandler for GatewayMessageHandler {
                 None
             }
         };
-        if let Some(ref _model) = model_override {
-            // The agent's config.model is private; we can't set it at runtime
-            // without an API. For now, log the override — a future iteration
-            // will add agent.set_model(). The metadata IS read; the apply
-            // step needs an agent API extension.
-            tracing::info!(model_override = ?model_override, "Session has model override (apply needs agent API)");
+        if let Some(ref model) = model_override {
+            // (iter-162: apply model override via agent.set_model(). Was
+            // previously read but not applied — the agent's config.model
+            // was private with no setter API.)
+            if *model != self.agent.model() {
+                tracing::info!(model_override = %model, "Applying model override from session metadata");
+                self.agent.set_model(model.clone());
+            }
         }
 
         match self.agent.run(query).await {

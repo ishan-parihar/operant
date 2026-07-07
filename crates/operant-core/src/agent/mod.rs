@@ -146,6 +146,11 @@ pub enum AgentEvent {
 /// Operant Agent for tool orchestration
 pub struct OperantAgent {
     config: AgentConfig,
+    /// Runtime model override (set via set_model() by the gateway).
+    /// When Some, takes precedence over config.model. (iter-162)
+    /// Uses std::sync::RwLock (not tokio) since reads/writes are fast
+    /// and don't need to be async.
+    model_override: Arc<std::sync::RwLock<Option<String>>>,
     client: Arc<dyn ModelClient>,
     registry: ToolRegistry,
     conversation: Arc<RwLock<Vec<Message>>>,
@@ -204,6 +209,7 @@ impl OperantAgent {
     ) -> Self {
         Self {
             config,
+            model_override: Arc::new(std::sync::RwLock::new(None::<String>)),
             client: Arc::from(client),
             registry,
             conversation: Arc::new(RwLock::new(Vec::new())),
@@ -231,6 +237,7 @@ impl OperantAgent {
     ) -> Self {
         Self {
             config,
+            model_override: Arc::new(std::sync::RwLock::new(None::<String>)),
             client: Arc::from(client),
             registry,
             conversation: Arc::new(RwLock::new(Vec::new())),
@@ -434,6 +441,30 @@ impl OperantAgent {
         &self.database
     }
 
+    /// Update the model at runtime. Used by the gateway to apply
+    /// per-session model overrides via /model command. (iter-162 —
+    /// closes ponytail-audit gap B36: 'model_override is read but
+    /// never applied — the agent's config.model is private.')
+    ///
+    /// Takes &self (not &mut self) so it works through Arc<OperantAgent>.
+    /// Uses Arc<RwLock<String>> for the model override, checked at each
+    /// run() call.
+    pub fn set_model(&self, model: impl Into<String>) {
+        let new_model = model.into();
+        tracing::info!(model = %new_model, "Agent model override set at runtime");
+        *self.model_override.write().unwrap() = Some(new_model);
+    }
+
+    /// Get the current model name (effective model = override or config).
+    pub fn model(&self) -> String {
+        self.model_override.read().unwrap().as_ref().map(|m| m.clone()).unwrap_or_else(|| self.config.model.clone())
+    }
+
+    /// Get the effective model for API calls. Checks override first.
+    fn effective_model(&self) -> String {
+        self.model()
+    }
+
     /// Run the agent with a user query
     #[instrument(skip(self), fields(model = % self.config.model))]
     pub async fn run(&self, user_query: String) -> Result<Message> {
@@ -542,7 +573,7 @@ impl OperantAgent {
                 warn!(max = self.config.max_iterations, "Max iterations exceeded — attempting grace call");
 
                 // Build a grace-call request: same messages but no tools
-                let grace_request = ChatRequest::new(&self.config.model, messages.clone())
+                let grace_request = ChatRequest::new(&self.effective_model(), messages.clone())
                     .with_stream(self.config.stream);
 
                 let grace_result = if self.config.stream {
@@ -601,7 +632,7 @@ impl OperantAgent {
             // Get tool schemas
             let tools = self.registry.get_schemas().await;
 
-            let request = ChatRequest::new(&self.config.model, messages.clone())
+            let request = ChatRequest::new(&self.effective_model(), messages.clone())
                 .with_tools(tools)
                 .with_stream(self.config.stream);
 
@@ -624,7 +655,7 @@ impl OperantAgent {
                             );
                             // Rebuild request with compressed messages
                             let tools = self.registry.get_schemas().await;
-                            let retry_request = ChatRequest::new(&self.config.model, messages.clone())
+                            let retry_request = ChatRequest::new(&self.effective_model(), messages.clone())
                                 .with_tools(tools)
                                 .with_stream(self.config.stream);
                             self.client.chat_streaming(retry_request).await?
@@ -648,7 +679,7 @@ impl OperantAgent {
                                 messages, budget, 4096,
                             );
                             let tools = self.registry.get_schemas().await;
-                            let retry_request = ChatRequest::new(&self.config.model, messages.clone())
+                            let retry_request = ChatRequest::new(&self.effective_model(), messages.clone())
                                 .with_tools(tools)
                                 .with_stream(self.config.stream);
                             self.client.chat(retry_request).await?
