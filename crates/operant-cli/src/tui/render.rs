@@ -1564,7 +1564,7 @@ fn render_welcome_box(frame: &mut Frame, app: &App, area: Rect) {
     } else {
         "Welcome back!".to_string()
     };
-    let rustle = rustle_lines(&app.rustle_current_pose);
+    let rustle = rustle_lines();
     let mut left_lines: Vec<Line> = Vec::new();
     left_lines.push(Line::from(Span::styled(
         welcome_msg,

@@ -1,12 +1,10 @@
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum RustlePose {
-    Default,
-    LookRight,
-    Loading { frame: u64 },
-}
+// (iter-144: RustlePose enum deleted — rustle_lines() ignores the pose
+// anyway (`let _ = pose;`). The App fields (rustle_current_pose,
+// rustle_pose_until, rustle_temp_pose, rustle_next_blink) and the
+// tick_rustle_pose() method were also deleted — tick was never called.)
 
 fn accent_style() -> Style {
     Style::default()
@@ -19,8 +17,7 @@ fn dim_style() -> Style {
         .fg(Color::Rgb(140, 110, 0))
 }
 
-pub fn rustle_lines(pose: &RustlePose) -> [Line<'static>; 5] {
-    let _ = pose;
+pub fn rustle_lines() -> [Line<'static>; 5] {
     [
         Line::from(vec![
             Span::styled("  ┌──────────┐", dim_style()),
@@ -53,13 +50,7 @@ mod tests {
 
     #[test]
     fn rustle_lines_returns_5_lines() {
-        for pose in [
-            RustlePose::Default,
-            RustlePose::LookRight,
-            RustlePose::Loading { frame: 0 },
-        ] {
-            let lines = rustle_lines(&pose);
-            assert_eq!(lines.len(), 5);
-        }
+        let lines = rustle_lines();
+        assert_eq!(lines.len(), 5);
     }
 }
