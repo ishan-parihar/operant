@@ -1516,7 +1516,9 @@ impl OperantAgent {
         // If only 1 tool is pending, skip the overhead and execute directly.
         if pending.is_empty() {
             // All tools were handled in pre-flight (errors/blocked/denied)
-            let results = early_results.into_iter().map(|r| r.unwrap()).collect();
+            // (iter-141 — fixed A20/A21: was .unwrap() which panics if a
+            // future was cancelled. Use flatten() to gracefully skip None.)
+            let results = early_results.into_iter().flatten().collect();
             return Ok(results);
         }
 
@@ -1546,7 +1548,18 @@ impl OperantAgent {
                     let interrupt_flag = &self.interrupt_flag;
                     async move {
                         // Acquire semaphore permit (limits to 8 concurrent)
-                        let _permit = sem.acquire().await.unwrap();
+                        // (iter-141 — fixed A20: was .unwrap() which panics
+                        // if the semaphore closes during shutdown. Use
+                        // ok() + early return on failure.)
+                        let _permit = match sem.acquire().await {
+                            Ok(p) => p,
+                            Err(_) => {
+                                return (idx, ToolResult::error(
+                                    &tool_call.id,
+                                    "Skipped: semaphore closed during shutdown".to_string(),
+                                ));
+                            }
+                        };
 
                         // Check interrupt flag before execution
                         if interrupt_flag.is_triggered() {
@@ -1581,7 +1594,9 @@ impl OperantAgent {
         }
 
         // Collect results in original order
-        let results = early_results.into_iter().map(|r| r.unwrap()).collect();
+        // (iter-141 — fixed A20/A21: was .unwrap() which panics if a
+        // future was cancelled. Use flatten() to gracefully skip None.)
+        let results = early_results.into_iter().flatten().collect();
         Ok(results)
     }
 
