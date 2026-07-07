@@ -2146,33 +2146,8 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
 
         // (iter-142: agent_type_badge render deleted — field was always None)
 
-        // PR badge — shows "PR #<n>" in cyan, with optional state in brackets.
-        // State color: approved=green, changes_requested=red,
-        //              review_required=yellow, else=gray.
-        if let Some(pr_num) = app.pr_number {
-            if !spans.is_empty() {
-                spans.push(Span::raw("  "));
-            }
-            let pr_label = match &app.pr_state {
-                Some(state) => format!("PR #{} [{}]", pr_num, state),
-                None => format!("PR #{}", pr_num),
-            };
-            // Colors mirror TS PrBadge getPrStatusColor + TS ink color names:
-            //   approved → Green, changes_requested → Red (error),
-            //   pending / review_required → Yellow (warning), merged → Magenta.
-            let pr_color = match app.pr_state.as_deref() {
-                Some("approved") => Color::Green,
-                Some("changes_requested") => Color::Red,
-                Some("merged") => Color::Magenta,
-                Some("pending") | Some("review_required") => Color::Yellow,
-                Some(_) => Color::Gray,
-                None => Color::Cyan,
-            };
-            spans.push(Span::styled(
-                pr_label,
-                Style::default().fg(pr_color).add_modifier(Modifier::BOLD),
-            ));
-        }
+        // (iter-147: PR badge render deleted — detect_pr() was never called,
+        // pr_number/pr_state were always None)
 
         // (iter-142: background_task_count/status render deleted — fields were always 0/None)
 

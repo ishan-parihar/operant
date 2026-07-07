@@ -171,84 +171,7 @@ fn help_overlay_entries() -> Vec<HelpEntry> {
 // Provider connection helpers
 // ---------------------------------------------------------------------------
 
-/// Return the environment variable name for a given provider ID.
-#[allow(dead_code)]
-fn get_env_var_for_provider(id: &str) -> &'static str {
-    match id {
-        "anthropic" => "ANTHROPIC_API_KEY",
-        "openai" => "OPENAI_API_KEY",
-        "google" | "google-vertex" => "GOOGLE_API_KEY",
-        "github-copilot" => "GITHUB_TOKEN",
-        "groq" => "GROQ_API_KEY",
-        "cerebras" => "CEREBRAS_API_KEY",
-        "sambanova" => "SAMBANOVA_API_KEY",
-        "deepseek" => "DEEPSEEK_API_KEY",
-        "mistral" => "MISTRAL_API_KEY",
-        "openrouter" => "OPENROUTER_API_KEY",
-        "togetherai" => "TOGETHER_API_KEY",
-        "perplexity" => "PERPLEXITY_API_KEY",
-        "cohere" => "COHERE_API_KEY",
-        "xai" => "XAI_API_KEY",
-        "deepinfra" => "DEEPINFRA_API_KEY",
-        "azure" => "AZURE_API_KEY",
-        "amazon-bedrock" => "AWS_ACCESS_KEY_ID",
-        "sap-ai-core" => "AICORE_SERVICE_KEY",
-        "gitlab" => "GITLAB_TOKEN",
-        "cloudflare-ai-gateway" | "cloudflare-workers-ai" => "CLOUDFLARE_API_TOKEN",
-        "vercel" => "AI_GATEWAY_API_KEY",
-        "helicone" => "HELICONE_API_KEY",
-        "huggingface" => "HF_TOKEN",
-        "nvidia" => "NVIDIA_API_KEY",
-        "alibaba" => "DASHSCOPE_API_KEY",
-        "venice" => "VENICE_API_KEY",
-        "moonshotai" => "MOONSHOT_API_KEY",
-        "zhipuai" => "ZHIPU_API_KEY",
-        "zai" => "ZAI_API_KEY",
-        "siliconflow" => "SILICONFLOW_API_KEY",
-        "nebius" => "NEBIUS_API_KEY",
-        "novita" => "NOVITA_API_KEY",
-        "minimax" => "MINIMAX_API_KEY",
-        "ovhcloud" => "OVHCLOUD_API_KEY",
-        "scaleway" => "SCALEWAY_API_KEY",
-        "vultr" => "VULTR_API_KEY",
-        "baseten" => "BASETEN_API_KEY",
-        "friendli" => "FRIENDLI_TOKEN",
-        "upstage" => "UPSTAGE_API_KEY",
-        "stepfun" => "STEPFUN_API_KEY",
-        "fireworks" => "FIREWORKS_API_KEY",
-        _ => "API_KEY",
-    }
-}
 
-/// Return a URL hint for obtaining an API key from a given provider.
-#[allow(dead_code)]
-fn get_url_for_provider(id: &str) -> &'static str {
-    match id {
-        "anthropic" => "console.anthropic.com",
-        "openai" => "platform.openai.com/api-keys",
-        "google" => "aistudio.google.com/apikey",
-        "github-copilot" => "github.com/settings/tokens",
-        "groq" => "console.groq.com/keys",
-        "cerebras" => "cloud.cerebras.ai",
-        "sambanova" => "cloud.sambanova.ai",
-        "deepseek" => "platform.deepseek.com/api_keys",
-        "mistral" => "console.mistral.ai/api-keys",
-        "openrouter" => "openrouter.ai/keys",
-        "togetherai" => "api.together.xyz/settings/api-keys",
-        "perplexity" => "perplexity.ai/settings/api",
-        "cohere" => "dashboard.cohere.com/api-keys",
-        "xai" => "console.x.ai",
-        "deepinfra" => "deepinfra.com/dash/api_keys",
-        "azure" => "portal.azure.com",
-        "amazon-bedrock" => "console.aws.amazon.com/bedrock",
-        "minimax" => "platform.minimaxi.com",
-        "huggingface" => "huggingface.co/settings/tokens",
-        "nvidia" => "build.nvidia.com",
-        "venice" => "venice.ai/settings/api",
-        "zai" => "z.ai/manage-apikey/apikey-list",
-        _ => "the provider's website",
-    }
-}
 
 
 fn import_config_picker_items() -> Vec<SelectItem> {
@@ -955,10 +878,8 @@ pub struct App {
     /// Output style: "auto" | "stream" | "verbose".
     pub output_style: String,
     /// PR number for the current branch (None if not in a PR context).
-    pub pr_number: Option<u32>,
     /// PR URL for the current branch.
     /// PR review state: "approved", "changes_requested", "review_required", etc.
-    pub pr_state: Option<String>,
     /// Current working directory path.
     pub current_dir: Option<String>,
     /// Current git branch name.
@@ -971,7 +892,6 @@ pub struct App {
     /// Context threshold (0-100) at which to auto-compact.
     pub auto_compact_threshold: u8,
     /// Guard to prevent re-triggering auto-compact while one is in flight.
-    pub auto_compact_running: bool,
 
     // ---- Voice hold-to-talk ------------------------------------------------
 
@@ -1377,8 +1297,6 @@ impl App {
                 DialogSelectState::new("Command Palette", items)
             },
             output_style: "auto".to_string(),
-            pr_number: None,
-            pr_state: None,
             current_dir: std::env::current_dir().ok().and_then(|p| {
                 p.to_str().map(|s| s.to_string())
             }),
@@ -1387,7 +1305,6 @@ impl App {
             ).and_then(|repo_root| crate::tui::adapter_types::git_utils::get_current_branch(&repo_root)),
             auto_compact_enabled: false,
             auto_compact_threshold: 95,
-            auto_compact_running: false,
             voice_recorder: {
                 // Check whether voice input has been enabled via the /voice command
                 // (stored in ~/.operant/ui-settings.json).  We also accept
@@ -3115,39 +3032,6 @@ permission_rx: None,
         None // Actual result is read by CLI loop via mcp_approval.visible + confirm()
     }
 
-    /// Detect the current PR from environment variables or git.
-    pub fn detect_pr(&mut self) {
-        // Check CLAUDE_PR_NUMBER and CLAUDE_PR_URL env vars
-        if let Ok(num) = std::env::var("CLAUDE_PR_NUMBER") {
-            if let Ok(n) = num.parse::<u32>() {
-                self.pr_number = Some(n);
-            }
-        }
-        if let Ok(url) = std::env::var("CLAUDE_PR_URL") {
-        }
-        if let Ok(state) = std::env::var("CLAUDE_PR_STATE") {
-            if !state.trim().is_empty() {
-                self.pr_state = Some(state.trim().to_string());
-            }
-        }
-        // Fall back to gh CLI if no env vars
-        if self.pr_number.is_none() {
-            if let Ok(output) = std::process::Command::new("gh")
-                .args(["pr", "view", "--json", "number,url", "--jq", ".number,.url"])
-                .output()
-            {
-                if output.status.success() {
-                    let text = String::from_utf8_lossy(&output.stdout);
-                    let parts: Vec<&str> = text.trim().split('\n').collect();
-                    if parts.len() >= 2 {
-                        if let Ok(n) = parts[0].trim().parse::<u32>() {
-                            self.pr_number = Some(n);
-                        }
-                    }
-                }
-            }
-        }
-    }
 
     fn clear_prompt(&mut self) {
         self.prompt_input.clear();
@@ -5265,16 +5149,8 @@ permission_rx: None,
                 }
                 false
             }
-            "jumpToNextError" => {
-                // Ctrl+.: Jump to next error/issue in messages
-                self.jump_to_next_error();
-                false
-            }
-            "jumpToPreviousError" => {
-                // Ctrl+Shift+.: Jump to previous error/issue in messages
-                self.jump_to_previous_error();
-                false
-            }
+            // (iter-146: jumpToNextError + jumpToPreviousError deleted —
+            // dead code, only reachable via the dead KeybindingResolver)
             "reverseIndent" => {
                 // Shift+Tab: Reverse indent (cycle permission mode)
                 use crate::tui::adapter_types::config::PermissionMode;
@@ -6951,61 +6827,7 @@ permission_rx: None,
 
     // ========== NEW KEYBINDING HELPER FUNCTIONS (Phase 1) ==========
 
-    /// Jump to the next error/issue in messages.
-    /// Searches for common error indicators: "Error:", "ERROR:", "error", "failed", "FAIL".
-    fn jump_to_next_error(&mut self) {
-        const ERROR_KEYWORDS: &[&str] = &["error:", "failed:", "fail"];
 
-        // Search forward from current position
-        for i in 0..self.messages.len() {
-            let msg = &self.messages[i];
-            let content = msg.get_all_text().to_lowercase();
-
-            // Check if message contains error keywords
-            let has_error = ERROR_KEYWORDS.iter().any(|keyword| {
-                content.contains(keyword)
-            });
-
-            if has_error && i > (self.messages.len().saturating_sub(self.scroll_offset / 2)) {
-                // Found an error message, scroll to it
-                let new_offset = self.messages.len().saturating_sub(i);
-                self.scroll_offset = new_offset.saturating_mul(2);
-                self.auto_scroll = false;
-                self.status_message = Some(format!("Error found in message {}", i + 1));
-                return;
-            }
-        }
-
-        self.status_message = Some("No more errors found.".to_string());
-    }
-
-    /// Jump to the previous error/issue in messages.
-    /// Searches backwards for common error indicators.
-    fn jump_to_previous_error(&mut self) {
-        const ERROR_KEYWORDS: &[&str] = &["error:", "failed:", "fail"];
-
-        // Search backward from current position
-        for i in (0..self.messages.len()).rev() {
-            let msg = &self.messages[i];
-            let content = msg.get_all_text().to_lowercase();
-
-            // Check if message contains error keywords
-            let has_error = ERROR_KEYWORDS.iter().any(|keyword| {
-                content.contains(keyword)
-            });
-
-            if has_error && i < (self.messages.len().saturating_sub(self.scroll_offset / 2)) {
-                // Found an error message, scroll to it
-                let new_offset = self.messages.len().saturating_sub(i);
-                self.scroll_offset = new_offset.saturating_mul(2);
-                self.auto_scroll = false;
-                self.status_message = Some(format!("Error found in message {}", i + 1));
-                return;
-            }
-        }
-
-        self.status_message = Some("No previous errors found.".to_string());
-    }
 }
 
 // Helper function to open a file in the user's external editor
