@@ -30,7 +30,6 @@
 //! assert!(matches!(verdict, ApprovalVerdict::Blocked { .. }));
 //! ```
 
-use std::time::Duration;
 
 use lazy_static::lazy_static;
 use regex::Regex;

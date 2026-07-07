@@ -6,7 +6,6 @@
 use crate::client::Message;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use tracing::info;
 
 /// A single step in a trajectory
 #[derive(Debug, Clone, Serialize, Deserialize)]

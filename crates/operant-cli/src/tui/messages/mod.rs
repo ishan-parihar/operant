@@ -20,10 +20,6 @@ mod markdown;
 pub use markdown::render_markdown;
 
 mod markdown_enhanced;
-pub use markdown_enhanced::{
-    detect_table, render_table,
-    Table, TableAlignment,
-};
 
 /// Context passed to all renderers.
 pub struct RenderContext {

@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use console::style;
 
-use super::check_result::{check_fail, check_info, check_ok, check_warn, section_header};
+use super::check_result::{check_fail, check_ok, check_warn, section_header};
 use crate::provider::PROVIDERS;
 
 // ---------------------------------------------------------------------------

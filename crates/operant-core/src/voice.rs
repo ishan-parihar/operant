@@ -12,7 +12,6 @@
 //! primitives for voice interaction in the CLI and gateway.
 
 use std::path::{Path, PathBuf};
-use std::pin::Pin;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -48,7 +47,7 @@ pub enum VoiceError {
     #[error("Reqwest error: {0}")]
     Reqwest(#[from] reqwest::Error),
 }
-use tokio::sync::{mpsc, Mutex, Notify, RwLock};
+use tokio::sync::Mutex;
 use tracing::{debug, error, info};
 
 // ---------------------------------------------------------------------------
