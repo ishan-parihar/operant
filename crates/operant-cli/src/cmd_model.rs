@@ -70,15 +70,15 @@ fn infer_provider(base_url: &str) -> &str {
 /// `config` is the loaded (but possibly CLI-overridden) configuration used for
 /// the `Show` variant.  The `Set` variant reads and mutates the installed
 /// runtime configuration so that any prior overrides are preserved.
-pub async fn handle_model_command(config: &AppConfig, cmd: ModelSubcommand) -> Result<()> {
+pub async fn handle_model_command(config: &AppConfig, cmd: ModelSubcommand, json: bool) -> Result<()> {
     match cmd {
-        ModelSubcommand::Show => show_model(config),
+        ModelSubcommand::Show => show_model(config, json),
         ModelSubcommand::Set { name } => set_model(&name).await,
     }
 }
 
 /// Print the current model configuration to stdout.
-fn show_model(config: &AppConfig) -> Result<()> {
+fn show_model(config: &AppConfig, json: bool) -> Result<()> {
     let provider = infer_provider(&config.client.base_url);
     let stream_label = if config.agent.stream {
         "enabled"
@@ -90,6 +90,20 @@ fn show_model(config: &AppConfig) -> Result<()> {
     } else {
         "not set"
     };
+
+    if json {
+        let info = serde_json::json!({
+            "model": config.agent.model,
+            "provider": provider,
+            "base_url": config.client.base_url,
+            "api_key": api_key_label,
+            "streaming": config.agent.stream,
+            "context_window": config.agent.context_window,
+            "max_iterations": config.agent.max_iterations,
+        });
+        println!("{}", serde_json::to_string_pretty(&info)?);
+        return Ok(());
+    }
 
     println!("── Model Configuration ──────────────────────────────");
     println!("  Model name:      {}", config.agent.model);
