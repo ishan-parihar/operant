@@ -854,7 +854,6 @@ pub struct App {
     /// Plan mode — input border turns blue, [PLAN] shown in status bar.
     pub plan_mode: bool,
     /// "While you were away" summary text shown on the welcome screen.
-    pub away_summary: Option<String>,
     /// When streaming stalled (used to turn the spinner red after 3 s).
     pub stall_start: Option<std::time::Instant>,
 
@@ -978,7 +977,6 @@ pub struct App {
     /// Background task status text shown in footer pill.
     pub background_task_status: Option<String>,
     /// External status line command output (from CLAUDE_STATUS_COMMAND).
-    pub status_line_override: Option<String>,
     /// Whether auto-compact is enabled (from settings).
     pub auto_compact_enabled: bool,
     /// Context threshold (0-100) at which to auto-compact.
@@ -1044,7 +1042,6 @@ pub struct App {
     pub agent_type_badge: Option<String>,
     /// Goal badge string shown in the footer, e.g. "active · 5m · 3 turns".
     /// None when no goal is active. Updated by the REPL after each turn.
-    pub active_goal_badge: Option<String>,
 
     // ---- Thinking block expansion state ----------------------------------
     /// Set of thinking block content hashes that are expanded.
@@ -1106,7 +1103,6 @@ pub struct App {
     // ---- Auto-update notification ----------------------------------------
     /// If a newer version was found during background update check, this holds
     /// the latest version string (e.g. "0.1.0"). Shown in the footer status bar.
-    pub update_available: Option<String>,
     /// Whether managed agent mode is currently active.
     /// Timestamp of the first exit key press that showed confirmation (valid for ~2 seconds).
     pub last_exit_key_warning: Option<std::time::Instant>,
@@ -1352,7 +1348,6 @@ impl App {
             current_turn: None,
             slash_usage: crate::tui::slash_usage::UsageStore::load(),
             plan_mode: false,
-            away_summary: None,
             stall_start: None,
             settings_screen: SettingsScreen::new(),
             theme_screen: ThemeScreen::new(),
@@ -1429,7 +1424,6 @@ impl App {
             ).and_then(|repo_root| crate::tui::adapter_types::git_utils::get_current_branch(&repo_root)),
             background_task_count: 0,
             background_task_status: None,
-            status_line_override: None,
             auto_compact_enabled: false,
             auto_compact_threshold: 95,
             auto_compact_running: false,
@@ -1475,7 +1469,6 @@ permission_rx: None,
             rate_limit_7day_pct: None,
             worktree_branch: None,
             agent_type_badge: None,
-            active_goal_badge: None,
             thinking_expanded: std::collections::HashSet::new(),
             last_msg_area: Cell::new(ratatui::layout::Rect::default()),
             last_selectable_area: Cell::new(ratatui::layout::Rect::default()),
@@ -1497,7 +1490,6 @@ permission_rx: None,
             scroll_accel: 3.0,
             scroll_last_time: None,
             bash_prefix_allowlist: std::collections::HashSet::new(),
-            update_available: None,
             last_exit_key_warning: None,
             exit_key_sequence_start: None,
         }

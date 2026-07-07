@@ -249,19 +249,7 @@ fn truncate_text(text: &str, max_width: usize) -> String {
 fn startup_notice_lines(app: &App, width: u16) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     let max_width = width.saturating_sub(10) as usize;
-
-    if let Some(summary) = app.away_summary.as_deref() {
-        lines.push(Line::from(vec![
-            Span::styled(
-                format!(" {} ", crate::figures::REFERENCE_MARK),
-                Style::default().fg(ACCENT_PRIMARY).add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                truncate_end(summary, max_width),
-                Style::default().fg(Color::DarkGray),
-            ),
-        ]));
-    }
+    // (iter-141: away_summary render branch deleted — field was always None)
 
     // Bridge connection state is always Disconnected today (bridge feature
     // not yet wired). When it is, restore the Connected/Reconnecting/Failed
@@ -2344,12 +2332,6 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
                         Style::default().fg(Color::Yellow),
                     ));
                 }
-            } else if let Some(ref version) = app.update_available {
-                // Update available and context is fine — show update nudge in bottom-right.
-                parts.push(Span::styled(
-                    format!("⬆ v{} available  Run: /update", version),
-                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
-                ));
             } else if used_pct >= 70 {
                 // 70–84%: mild warning.
                 parts.push(Span::styled(
@@ -2438,16 +2420,6 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
 
         // 5. Vim mode — displayed on the left side as "-- MODE --"; nothing extra on right.
 
-        // 5b. Goal badge — shown when a goal is active for this session.
-        if let Some(ref badge) = app.active_goal_badge {
-            if !parts.is_empty() {
-                parts.push(Span::raw("  "));
-            }
-            parts.push(Span::styled(
-                format!("[goal: {}]", badge),
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
-            ));
-        }
 
         // 6. Agent type badge
         if let Some(ref badge) = app.agent_type_badge {
@@ -2550,18 +2522,6 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
             ));
         }
 
-        // External status line override
-        if let Some(ref override_text) = app.status_line_override {
-            if !parts.is_empty() {
-                parts.push(Span::raw("  "));
-            }
-            // Strip any ANSI escapes for terminal rendering (plain text)
-            let clean: String = override_text
-                .chars()
-                .filter(|c| c.is_ascii_graphic() || *c == ' ')
-                .collect();
-            parts.push(Span::styled(clean, Style::default().fg(Color::DarkGray)));
-        }
 
         // 8. Bridge badge — bridge feature not yet wired (state is always
         // Disconnected). When wired, restore status_badge() call here.
