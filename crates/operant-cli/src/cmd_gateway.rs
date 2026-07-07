@@ -119,10 +119,10 @@ pub enum GatewaySubcommand {
 /// `config` is the currently active `AppConfig`.  Because the gateway
 /// requires runtime adapter setup, this handler provides a management view
 /// that works without an active gateway instance.
-pub async fn handle_gateway_command(config: &AppConfig, cmd: GatewaySubcommand) -> Result<()> {
+pub async fn handle_gateway_command(config: &AppConfig, cmd: GatewaySubcommand, json: bool) -> Result<()> {
     match cmd {
         GatewaySubcommand::Run => cmd_run(config).await,
-        GatewaySubcommand::Status { deep } => cmd_status(config, deep),
+        GatewaySubcommand::Status { deep } => cmd_status(config, deep, json),
         GatewaySubcommand::Sessions => cmd_sessions(config),
         GatewaySubcommand::Channels => cmd_channels(config),
         GatewaySubcommand::Stats => cmd_stats(config),
@@ -155,8 +155,49 @@ pub async fn handle_gateway_command(config: &AppConfig, cmd: GatewaySubcommand) 
 ///
 /// Shows which platforms are enabled, the webhook state, and a reminder
 /// that the gateway must be started for these to be active.
-fn cmd_status(config: &AppConfig, deep: bool) -> Result<()> {
+fn cmd_status(config: &AppConfig, deep: bool, json: bool) -> Result<()> {
     let gw = &config.gateway;
+
+    // Cross-process running check via PID file
+    let pid_path = operant_core::platform::operant_home().join("gateway.pid");
+    let running = std::fs::read_to_string(&pid_path)
+        .ok()
+        .and_then(|pid_str| pid_str.trim().parse::<u32>().ok())
+        .map(|pid| {
+            std::process::Command::new("kill")
+                .arg("-0")
+                .arg(pid.to_string())
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false)
+        })
+        .unwrap_or(false);
+
+    if !running && pid_path.exists() {
+        let _ = std::fs::remove_file(&pid_path);
+    }
+
+    if json {
+        let status = serde_json::json!({
+            "platforms": {
+                "telegram": {"enabled": gw.telegram_enabled, "token_configured": gw.telegram_token.is_some()},
+                "discord": {"enabled": gw.discord_enabled, "token_configured": gw.discord_token.is_some()},
+                "slack": {"enabled": gw.slack_enabled, "token_configured": gw.slack_token.is_some()},
+                "whatsapp": {"enabled": gw.whatsapp_enabled, "token_configured": gw.whatsapp_token.is_some()},
+                "email": {"enabled": gw.email_enabled, "smtp_host_configured": gw.email_smtp_host.is_some()},
+                "sms": {"enabled": gw.sms_twilio_enabled},
+            },
+            "webhooks": {
+                "enabled": gw.webhooks_enabled,
+                "listen_addr": gw.webhooks_addr.as_deref().unwrap_or("localhost:0"),
+            },
+            "admins": gw.admins,
+            "running": running,
+            "pid_file": pid_path.display().to_string(),
+        });
+        println!("{}", serde_json::to_string_pretty(&status)?);
+        return Ok(());
+    }
 
     println!("Gateway Status (from config)");
     println!("────────────────────────────");
@@ -206,28 +247,11 @@ fn cmd_status(config: &AppConfig, deep: bool) -> Result<()> {
         }
     );
     println!();
-    // Cross-process running check via PID file
-    let pid_path = operant_core::platform::operant_home().join("gateway.pid");
-    let running = std::fs::read_to_string(&pid_path)
-        .ok()
-        .and_then(|pid_str| pid_str.trim().parse::<u32>().ok())
-        .map(|pid| {
-            std::process::Command::new("kill")
-                .arg("-0")
-                .arg(pid.to_string())
-                .status()
-                .map(|s| s.success())
-                .unwrap_or(false)
-        })
-        .unwrap_or(false);
 
     if running {
         println!("Runtime: running (PID from {})", pid_path.display());
     } else {
         println!("Runtime: not running");
-        if pid_path.exists() {
-            let _ = std::fs::remove_file(&pid_path);
-        }
     }
 
     if deep {
