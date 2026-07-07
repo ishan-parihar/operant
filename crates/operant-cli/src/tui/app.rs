@@ -264,7 +264,6 @@ fn provider_picker_items() -> Vec<SelectItem> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SystemMessageStyle {
     Info,
-    Warning,
     /// Compact / auto-compact boundary marker.
     Compact,
 }

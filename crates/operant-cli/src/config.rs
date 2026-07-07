@@ -1648,8 +1648,6 @@ impl Default for OnboardingConfig {
 pub enum ConfigError {
     Io(std::io::Error),
     Parse(String),
-    Migration(String),
-    Env(String),
 }
 
 impl std::fmt::Display for ConfigError {
@@ -1657,8 +1655,6 @@ impl std::fmt::Display for ConfigError {
         match self {
             ConfigError::Io(e) => write!(f, "Config IO error: {}", e),
             ConfigError::Parse(msg) => write!(f, "Config parse error: {}", msg),
-            ConfigError::Migration(msg) => write!(f, "Config migration error: {}", msg),
-            ConfigError::Env(msg) => write!(f, "Config env error: {}", msg),
         }
     }
 }
