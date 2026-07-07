@@ -29,13 +29,18 @@ use tokio::sync::mpsc;
 use tokio::sync::Mutex;
 
 /// Global store of pending permission requests, keyed by channel_id.
-/// Populated by the permission receiver task in start_gateway(), consumed
-/// by /approve and /deny commands in gateway_commands.rs. (iter-160)
 pub static PENDING_PERMISSIONS: OnceLock<std::sync::Mutex<Option<Arc<Mutex<HashMap<String, operant_core::agent::ToolPermissionRequest>>>>>> = OnceLock::new();
 
-/// Initialize the PENDING_PERMISSIONS static (call once at startup).
+/// Global store of pending user-question replies, keyed by channel_id.
+/// When the clarify tool asks a question, we store the reply_tx here.
+/// The next incoming message from that channel is routed as the reply
+/// instead of being sent to the agent. (iter-161)
+pub static PENDING_USER_QUESTIONS: OnceLock<std::sync::Mutex<Option<Arc<Mutex<HashMap<String, tokio::sync::oneshot::Sender<String>>>>>>> = OnceLock::new();
+
+/// Initialize the globals (call once at startup).
 fn init_pending_permissions() {
     PENDING_PERMISSIONS.get_or_init(|| std::sync::Mutex::new(None));
+    PENDING_USER_QUESTIONS.get_or_init(|| std::sync::Mutex::new(None));
 }
 
 /// Returns the path to the gateway PID file used for cross-process status checks.
@@ -64,6 +69,46 @@ impl MessageHandler for GatewayMessageHandler {
     async fn handle(&self, message: IncomingMessage) -> operant_core::Result<OutgoingMessage> {
         use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
+
+        // (iter-161: Check for pending user-question reply before routing
+        // to the agent. If there's a pending clarify() question for this
+        // channel, route the user's message as the reply instead.)
+        let channel_key = format!("{}:{}", message.platform, message.channel_id);
+        let pending_map_clone = {
+            let global_uq = crate::gateway_runner::PENDING_USER_QUESTIONS.get();
+            global_uq
+                .and_then(|g| g.lock().ok())
+                .and_then(|mut guard| guard.take())
+        };
+        if let Some(pending_map) = pending_map_clone {
+            let reply_tx = {
+                let mut pending = pending_map.lock().await;
+                pending.remove(&channel_key)
+            };
+            if let Some(reply_tx) = reply_tx {
+                tracing::info!(
+                    channel = %channel_key,
+                    "Routing message as user-question reply (intercepted)"
+                );
+                let _ = reply_tx.send(message.content.clone());
+                // Restore the map for future questions
+                if let Some(g) = crate::gateway_runner::PENDING_USER_QUESTIONS.get() {
+                    if let Ok(mut guard) = g.lock() {
+                        *guard = Some(pending_map);
+                    }
+                }
+                return Ok(OutgoingMessage::new(
+                    message.channel_id.clone(),
+                    "✅ Reply received — resuming...",
+                ).no_markdown());
+            }
+            // No pending question — restore the map and continue to agent
+            if let Some(g) = crate::gateway_runner::PENDING_USER_QUESTIONS.get() {
+                if let Ok(mut guard) = g.lock() {
+                    *guard = Some(pending_map);
+                }
+            }
+        }
 
         // Build session key: per-user for DMs, per-channel for groups
         let session_key = if message.is_group_chat {
@@ -859,6 +904,15 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
     // View, Slack Block Kit, WhatsApp native poll).
     let gw_for_uq = gw.clone();
     let current_channel_for_uq = current_channel.clone();
+    let pending_uq: Arc<Mutex<HashMap<String, tokio::sync::oneshot::Sender<String>>>> =
+        Arc::new(Mutex::new(HashMap::new()));
+    // Store in the global so GatewayMessageHandler can check it
+    if let Some(global_uq) = PENDING_USER_QUESTIONS.get() {
+        if let Ok(mut guard) = global_uq.lock() {
+            *guard = Some(pending_uq.clone());
+        }
+    }
+    let pending_uq_for_task = pending_uq.clone();
     tokio::spawn(async move {
         tracing::info!("User question receiver started");
         while let Some(req) = uq_rx.recv().await {
@@ -881,11 +935,30 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                 };
                 let msg = OutgoingMessage::new(channel_id, &body).no_markdown();
                 let _ = gw_for_uq.send_to_platform(&platform, msg).await;
+
+                // Store the reply_tx so the next message from this channel
+                // is routed as the reply. (iter-161 — replaces the hardcoded
+                // placeholder string with real reply interception.)
+                pending_uq_for_task.lock().await.insert(channel_id.clone(), req.reply_tx);
+
+                // Spawn a timeout — if no reply in 120s, send a timeout message
+                let pending_uq_for_timeout = pending_uq_for_task.clone();
+                let timeout_channel = channel_id.clone();
+                tokio::spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_secs(120)).await;
+                    let mut pending = pending_uq_for_timeout.lock().await;
+                    if let Some(reply_tx) = pending.remove(&timeout_channel) {
+                        tracing::warn!(
+                            channel = %timeout_channel,
+                            "User question timed out — sending timeout reply"
+                        );
+                        let _ = reply_tx.send("(no reply received within 120s — timeout)".to_string());
+                    }
+                });
+            } else {
+                // No active channel — can't prompt
+                let _ = req.reply_tx.send("(no active channel for user question)".to_string());
             }
-            // For now, resolve with a timeout message. A future iteration
-            // will intercept the user's next message and send it as the reply.
-            // TODO: implement per-platform reply interception.
-            let _ = req.reply_tx.send("(gateway mode — reply interception not yet implemented)".to_string());
         }
         tracing::warn!("User question receiver exited (uq_rx closed)");
     });
