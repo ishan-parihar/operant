@@ -136,8 +136,6 @@ pub enum DotRepeatAction {
     Insert { text: String, mode_after_insert: bool },
     /// Simplified: re-delete the same number of chars.
     DeleteChars { count: usize },
-    /// Change: delete + insert.
-    Change { deleted: String, inserted: String },
     /// Replace char.
     ReplaceChar { ch: char },
 }
@@ -1050,7 +1048,6 @@ pub fn apply_vim_command(
 pub enum TypeaheadSource {
     SlashCommand,
     FileRef,
-    History,
 }
 
 /// A single typeahead suggestion.
@@ -2184,13 +2181,6 @@ impl PromptInputState {
                         self.normalize();
                         return;
                     }
-                    DotRepeatAction::Change { deleted: _del, inserted: ins } => {
-                        self.push_undo();
-                        self.text.insert_str(self.cursor, &ins);
-                        self.cursor += ins.len();
-                        self.normalize();
-                        return;
-                    }
                     DotRepeatAction::ReplaceChar { ch } => {
                         if self.cursor < self.text.len() {
                             self.push_undo();
@@ -2658,7 +2648,7 @@ impl PromptInputState {
         if let Some(idx) = self.suggestion_index {
             if let Some(s) = self.suggestions.get(idx) {
                 let new_cursor = match s.source {
-                    TypeaheadSource::SlashCommand | TypeaheadSource::History => {
+                    TypeaheadSource::SlashCommand => {
                         // Replace entire text; discard anything after cursor too.
                         self.text = s.text.clone();
                         self.text.len()
