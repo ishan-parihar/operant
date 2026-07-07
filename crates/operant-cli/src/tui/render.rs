@@ -1697,7 +1697,6 @@ fn render_system_annotation_lines(
 
     let (text_color, border_color) = match ann.style {
         SystemMessageStyle::Info => (Color::DarkGray, Color::DarkGray),
-        SystemMessageStyle::Warning => (Color::Yellow, Color::Yellow),
         SystemMessageStyle::Compact => (Color::DarkGray, Color::DarkGray),
     };
 
