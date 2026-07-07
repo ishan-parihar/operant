@@ -5,7 +5,6 @@
 //!
 //! All probes run concurrently via `tokio::spawn`.
 
-#![allow(unused)]
 
 use std::io::Write;
 use std::time::Duration;

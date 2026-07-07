@@ -11,14 +11,12 @@ pub enum InsightsSubcommand {
         #[arg(short, long, default_value = "7")]
         days: u64,
     },
-    /// Show all insights in one view
-    All,
+    // (iter-154: All variant deleted — just called cmd_sessions(config, 7))
 }
 
 pub async fn handle_insights_command(config: &AppConfig, cmd: InsightsSubcommand) -> Result<()> {
     match cmd {
         InsightsSubcommand::Sessions { days } => cmd_sessions(config, days).await,
-        InsightsSubcommand::All => cmd_all(config).await,
     }
 }
 
@@ -41,10 +39,5 @@ async fn cmd_sessions(config: &AppConfig, _days: u64) -> Result<()> {
         println!("First recorded: {}", sessions.last().unwrap().created_at);
         println!("Last recorded:  {}", sessions.first().unwrap().updated_at);
     }
-    Ok(())
-}
-
-async fn cmd_all(config: &AppConfig) -> Result<()> {
-    cmd_sessions(config, 7).await?;
     Ok(())
 }
