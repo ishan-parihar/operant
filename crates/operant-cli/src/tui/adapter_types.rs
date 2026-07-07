@@ -303,7 +303,6 @@ pub mod config {
 
 pub use config::Settings;
 
-use serde::{Serialize, Deserialize};
 
 pub mod constants {
     pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -466,7 +465,6 @@ pub mod types {
     }
 }
 
-pub use types::{ContentBlock, Message, MessageContent, Role, ToolResultContent};
 
 pub mod output_styles {
     use ratatui::style::Color;
@@ -796,7 +794,7 @@ pub mod compact {
 }
 
 pub mod import_config {
-    use super::config::Config;
+    
     use serde::{Serialize, Deserialize};
 
     #[derive(Debug, Clone)]
@@ -1107,8 +1105,7 @@ impl AuthStore {
 }
 
 pub use import_config::{
-    ImportPaths, ImportSelection, ImportPreview, ImportResult, PreviewAction,
-    StoredCredential as ImportStoredCredential,
+    ImportPaths, ImportSelection,
     build_import_preview, execute_import, summarize_import_result,
 };
 
@@ -1133,7 +1130,7 @@ pub mod file_injection {
 
     pub fn parse_at_refs(text: &str) -> (Vec<AtFileRef>, Vec<AtFileIssue>) {
         let mut refs = Vec::new();
-        let mut issues = Vec::new();
+        let issues = Vec::new();
         for word in text.split_whitespace() {
             if word.starts_with('@') && word.len() > 1 {
                 let path = word[1..].to_string();

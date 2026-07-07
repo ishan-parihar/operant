@@ -2370,7 +2370,7 @@ impl PlatformAdapter for WebhookAdapter {
         use axum::extract::{Path, State};
         use axum::http::HeaderMap;
         use axum::response::IntoResponse;
-        use axum::routing::{get, post};
+        use axum::routing::get;
         use axum::Router;
 
         let addr: std::net::SocketAddr = self

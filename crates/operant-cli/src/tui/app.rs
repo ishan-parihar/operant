@@ -411,8 +411,7 @@ pub fn try_copy_to_clipboard(text: &str) -> bool {
     false
 }
 
-/// Map a character to its QWERTY Latin keyboard-position equivalent.
-///
+// (iter-166: layout_to_latin deleted — 0 callers, dead code)
 /// When a modifier key (Ctrl, Alt) is held together with a non-ASCII character
 /// (e.g. Cyrillic С on a Ukrainian/Russian layout), the char produced by
 /// crossterm is the non-Latin glyph rather than the Latin letter that occupies

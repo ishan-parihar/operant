@@ -21,7 +21,6 @@
 use crate::gateway::IncomingMessage;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
-use tokio::sync::mpsc;
 use tracing::debug;
 
 // ---------------------------------------------------------------------------

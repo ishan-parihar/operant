@@ -19,7 +19,6 @@ use std::sync::Arc;
 
 use crate::tui::overlays::centered_rect;
 use crate::tui::adapter_types::tools::TaskStatus;
-use chrono;
 
 // ---------------------------------------------------------------------------
 // Helper functions for TaskStatus (defined in cc_tools)

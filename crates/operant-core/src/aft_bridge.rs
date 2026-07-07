@@ -48,7 +48,7 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::process::{Child, Command, ChildStdin, ChildStdout};
+use tokio::process::{Child, Command, ChildStdin};
 use tokio::sync::{Mutex, oneshot};
 use uuid::Uuid;
 
