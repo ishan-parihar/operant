@@ -967,7 +967,6 @@ pub struct App {
     /// PR number for the current branch (None if not in a PR context).
     pub pr_number: Option<u32>,
     /// PR URL for the current branch.
-    pub pr_url: Option<String>,
     /// PR review state: "approved", "changes_requested", "review_required", etc.
     pub pr_state: Option<String>,
     /// Current working directory path.
@@ -1039,7 +1038,6 @@ pub struct App {
     /// Rate limit info — 7-day window usage percentage (0–100).
     pub rate_limit_7day_pct: Option<f32>,
     /// Active worktree name (if in a worktree). Rendered in the footer.
-    pub worktree_name: Option<String>,
     /// Active worktree branch (if in a worktree). Rendered in the footer.
     pub worktree_branch: Option<String>,
     /// Agent type badge: "agent" | "coordinator" | "subagent".
@@ -1110,7 +1108,6 @@ pub struct App {
     /// the latest version string (e.g. "0.1.0"). Shown in the footer status bar.
     pub update_available: Option<String>,
     /// Whether managed agent mode is currently active.
-    pub managed_agents_active: bool,
     /// Timestamp of the first exit key press that showed confirmation (valid for ~2 seconds).
     pub last_exit_key_warning: Option<std::time::Instant>,
     /// Which exit key ('c' or 'd') started the current confirmation sequence.
@@ -1423,7 +1420,6 @@ impl App {
             },
             output_style: "auto".to_string(),
             pr_number: None,
-            pr_url: None,
             pr_state: None,
             current_dir: std::env::current_dir().ok().and_then(|p| {
                 p.to_str().map(|s| s.to_string())
@@ -1477,7 +1473,6 @@ permission_rx: None,
             context_used_tokens: 0,
             rate_limit_5h_pct: None,
             rate_limit_7day_pct: None,
-            worktree_name: None,
             worktree_branch: None,
             agent_type_badge: None,
             active_goal_badge: None,
@@ -1503,7 +1498,6 @@ permission_rx: None,
             scroll_last_time: None,
             bash_prefix_allowlist: std::collections::HashSet::new(),
             update_available: None,
-            managed_agents_active: false,
             last_exit_key_warning: None,
             exit_key_sequence_start: None,
         }
@@ -3255,7 +3249,6 @@ permission_rx: None,
             }
         }
         if let Ok(url) = std::env::var("CLAUDE_PR_URL") {
-            self.pr_url = Some(url);
         }
         if let Ok(state) = std::env::var("CLAUDE_PR_STATE") {
             if !state.trim().is_empty() {
@@ -3274,7 +3267,6 @@ permission_rx: None,
                     if parts.len() >= 2 {
                         if let Ok(n) = parts[0].trim().parse::<u32>() {
                             self.pr_number = Some(n);
-                            self.pr_url = Some(parts[1].trim().to_string());
                         }
                     }
                 }
