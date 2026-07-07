@@ -46,7 +46,6 @@ pub mod import_config_dialog;
 pub mod key_input_dialog;
 pub mod memory_file_selector;
 pub mod voice_mode_notice;
-pub mod plugin_views;
 pub mod theme_screen;
 
 pub use adapter_types::TuiApp;

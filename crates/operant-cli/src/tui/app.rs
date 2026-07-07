@@ -16,7 +16,6 @@ use crate::tui::overlays::{
     GlobalSearchState, HelpEntry, HelpOverlay, HistorySearchOverlay,
     RewindFlowOverlay, SelectorMessage,
 };
-use crate::tui::plugin_views::PluginHintBanner;
 use crate::tui::prompt_input::{InputMode, PromptInputState, VimMode};
 use crate::tui::render;
 use crate::tui::settings_screen::SettingsScreen;
