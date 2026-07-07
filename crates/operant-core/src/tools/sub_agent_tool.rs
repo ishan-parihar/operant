@@ -98,7 +98,6 @@ struct SubAgentArgs {
 }
 
 /// Runtime state for delegation
-static CURRENT_DEPTH: AtomicU32 = AtomicU32::new(0);
 static MAX_SPAWN_DEPTH: AtomicU32 = AtomicU32::new(DEFAULT_MAX_SPAWN_DEPTH);
 static ORCHESTRATOR_ENABLED: AtomicU32 = AtomicU32::new(1); // default true
 static MAX_CONCURRENT_CHILDREN: AtomicU32 = AtomicU32::new(DEFAULT_MAX_CONCURRENT_CHILDREN as u32);
