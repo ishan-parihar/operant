@@ -237,6 +237,9 @@ enum Commands {
     Model {
         #[command(subcommand)]
         cmd: cmd_model::ModelSubcommand,
+        /// Output as JSON (for scripting/CI)
+        #[arg(long, global = true)]
+        json: bool,
     },
     /// Generate shell completion scripts
     Completion {
@@ -1467,8 +1470,8 @@ async fn main() -> Result<()> {
         Some(Commands::Skills { cmd, json }) => {
             cmd_skills::handle_skills_command(&loaded.config, cmd.clone(), *json).await?;
         }
-        Some(Commands::Model { cmd }) => {
-            cmd_model::handle_model_command(&loaded.config, cmd.clone()).await?;
+        Some(Commands::Model { cmd, json }) => {
+            cmd_model::handle_model_command(&loaded.config, cmd.clone(), *json).await?;
         }
         Some(Commands::Completion { cmd }) => {
             cmd_completion::handle_completion_command(cmd.clone())?;
