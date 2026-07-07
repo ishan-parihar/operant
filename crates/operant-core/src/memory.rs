@@ -504,7 +504,7 @@ impl MemoryManager {
 
     /// Start a new session
     pub async fn start_session(&self, title: impl Into<String>) -> String {
-        let session_id = format!("session_{}", uuid_simple());
+        let session_id = format!("session_{}", uuid::Uuid::new_v4().to_string());
         let session = Session::new(&session_id, title);
 
         self.sessions
@@ -770,14 +770,8 @@ impl MemoryManager {
     }
 }
 
-/// Generate a simple UUID-like string
-fn uuid_simple() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default();
-    format!("{:x}-{:x}", now.as_secs(), now.subsec_nanos())
-}
+// (iter-148: uuid_simple deleted — use uuid::Uuid::new_v4() instead,
+// already in deps. Was a hand-rolled time-based pseudo-UUID.)
 
 /// Returns the active memory provider name from config (`"tdg"`, `"builtin"`,
 /// or `"disabled"` when memory is turned off). Other provider names that were

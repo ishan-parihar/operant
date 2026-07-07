@@ -639,7 +639,7 @@ fn check_skill(config: &AppConfig, name: &str) -> Result<()> {
         println!("  {} Commands: none required", style("✓").green());
     } else {
         for cmd in &skill.prerequisites_commands {
-            if command_exists(cmd) {
+            if which::which(cmd).is_ok() {
                 println!("  {} Command '{}': found", style("✓").green(), cmd);
             } else {
                 println!("  {} Command '{}': NOT found", style("✗").red(), cmd);
@@ -739,7 +739,7 @@ fn audit_skills(config: &AppConfig) -> Result<()> {
                     }
                 }
                 for cmd in &s.prerequisites_commands {
-                    if !command_exists(cmd) {
+                    if !which::which(cmd).is_ok() {
                         issues.push(format!("Missing command: {}", cmd));
                     }
                 }
@@ -1055,25 +1055,5 @@ fn current_platform() -> &'static str {
         "windows"
     } else {
         "unknown"
-    }
-}
-
-/// Check whether a command is available on PATH (mirrors skills.rs logic).
-fn command_exists(cmd: &str) -> bool {
-    #[cfg(target_os = "windows")]
-    {
-        std::process::Command::new("where")
-            .arg(cmd)
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        std::process::Command::new("which")
-            .arg(cmd)
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
     }
 }

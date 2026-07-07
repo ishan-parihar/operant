@@ -2,14 +2,12 @@
 
 use sha2::{Digest, Sha256};
 
-fn hex_encode(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{:02x}", b)).collect()
-}
+// (iter-148: hex_encode deleted — use hex::encode instead, already in deps)
 
 /// Redact a user ID to a privacy-safe hash prefix.
 pub fn redact_id(raw_id: &str) -> String {
     let hash = Sha256::digest(raw_id.as_bytes());
-    format!("user_{}", &hex_encode(&hash)[..12])
+    format!("user_{}", &hex::encode(hash)[..12])
 }
 
 /// Redact a chat/channel ID to a privacy-safe hash prefix.
@@ -18,7 +16,7 @@ pub fn redact_chat_id(raw_id: &str) -> String {
     hasher.update(b"chat:");
     hasher.update(raw_id.as_bytes());
     let hash = hasher.finalize();
-    format!("chat_{}", &hex_encode(&hash)[..12])
+    format!("chat_{}", &hex::encode(hash)[..12])
 }
 
 #[cfg(test)]
