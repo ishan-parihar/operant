@@ -357,9 +357,6 @@ pub fn render_transcript_user_message(
     // badge so the raw slash command doesn't sit next to the `[Goal started]`
     // event the machinery injects right after.
     if let Some(ContentBlock::Text { text }) = msg.content_blocks().into_iter().next() {
-        if is_goal_event_message(&text) {
-            return render_goal_event(&text, width);
-        }
         if let Some(objective) = extract_goal_slash_objective(&text) {
             return render_goal_active_block(&objective);
         }
@@ -2016,51 +2013,6 @@ pub fn render_grouped_tool_use(names: &[&str], expanded: bool) -> Vec<Line<'stat
 // Goal event rendering
 // ---------------------------------------------------------------------------
 
-/// Returns `true` when a user message was injected by the goal machinery
-/// (i.e. it should NOT render as a regular user message bubble).
-pub fn is_goal_event_message(text: &str) -> bool {
-    text.starts_with("[Goal started]")
-        || text.starts_with("[Goal continuation \u{2014}")  // em dash
-        || text.starts_with("[Goal continuation -")         // fallback
-}
-
-/// Extract the turn number from a "[Goal continuation — turn N]" header.
-fn extract_goal_turn(text: &str) -> Option<u32> {
-    // Find the first [...] bracket, search inside for "turn <N>"
-    let open = text.find('[')?;
-    let close = text.find(']')?;
-    if close <= open { return None; }
-    let segment = &text[open..close];
-    let tag = "turn ";
-    let idx = segment.rfind(tag)? + tag.len();
-    segment[idx..].trim().parse().ok()
-}
-
-/// Render a goal-event message block.
-///
-/// `[Goal started]` renders as nothing — the user's typed `/goal …` line
-/// already produces the canonical GOAL ACTIVE block via
-/// `render_goal_active_block`, so showing the kickoff event too would
-/// duplicate it.
-/// `[Goal continuation — turn N]` shows a compact inline turn marker.
-pub fn render_goal_event(text: &str, _width: u16) -> Vec<Line<'static>> {
-    if text.starts_with("[Goal continuation —") {
-        let turn = extract_goal_turn(text).unwrap_or(0);
-        return vec![Line::from(vec![
-            Span::styled(
-                "  \u{21ba} ".to_string(),  // ↺
-                Style::default().fg(GOAL_MUTED),
-            ),
-            Span::styled(
-                format!("goal \u{00b7} turn {}", turn),  // ·
-                Style::default().fg(GOAL_MUTED).add_modifier(Modifier::ITALIC),
-            ),
-        ])];
-    }
-
-    // [Goal started] — hidden.
-    Vec::new()
-}
 
 #[cfg(test)]
 mod tests {
