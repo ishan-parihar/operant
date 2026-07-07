@@ -353,54 +353,7 @@ pub struct TurnMetadata {
     pub interrupted: bool,
 }
 
-/// State for Ctrl+R history search mode (legacy inline struct, kept for test
-/// compatibility — the overlay version lives in `overlays::HistorySearchOverlay`).
-#[derive(Debug, Clone)]
-pub struct HistorySearch {
-    pub query: String,
-    /// Indices into `input_history` that match the current query.
-    pub matches: Vec<usize>,
-    /// Which match is currently highlighted.
-    pub selected: usize,
-}
-
-impl HistorySearch {
-    pub fn new() -> Self {
-        Self {
-            query: String::new(),
-            matches: Vec::new(),
-            selected: 0,
-        }
-    }
-
-    /// Re-compute matches against the given history slice.
-    pub fn update_matches(&mut self, history: &[String]) {
-        let q = self.query.to_lowercase();
-        self.matches = history
-            .iter()
-            .enumerate()
-            .filter_map(|(i, s)| {
-                if s.to_lowercase().contains(&q) {
-                    Some(i)
-                } else {
-                    None
-                }
-            })
-            .collect();
-        // Clamp selected to valid range
-        if !self.matches.is_empty() && self.selected >= self.matches.len() {
-            self.selected = self.matches.len() - 1;
-        }
-    }
-
-    /// Return the currently selected history entry, if any.
-    pub fn current_entry<'a>(&self, history: &'a [String]) -> Option<&'a str> {
-        self.matches
-            .get(self.selected)
-            .and_then(|&i| history.get(i))
-            .map(String::as_str)
-    }
-}
+// (iter-156: HistorySearch struct + impl deleted — always None)
 
 /// Attempt to copy text to the system clipboard using platform CLI tools.
 /// Returns true if successful.
@@ -677,7 +630,7 @@ pub struct App {
     /// and tool list to match the newly-selected agent.
     pub agent_mode_changed: bool,
     pub agent_status: Vec<(String, String)>,
-    pub history_search: Option<HistorySearch>,
+    pub history_search: Option<()>, // (iter-156: always None — struct deleted)
     pub keybindings: KeybindingResolver,
 
     // Cursor position within input (byte offset)
@@ -2497,7 +2450,7 @@ permission_rx: None,
             || self.help_overlay.visible
             || self.show_help
             || self.history_search_overlay.visible
-            || self.history_search.is_some()
+           
             || self.settings_screen.visible
             || self.theme_screen.visible
             || self.stats_dialog.visible
@@ -2511,15 +2464,15 @@ permission_rx: None,
             || self.plugins_hub.visible
             || self.journey_view.visible
             || self.hooks_config_menu.visible
-            || false
+           
             || self.voice_mode_notice.visible
-            || false
-            || false
+           
+           
             || self.import_config_dialog.visible
-            || false
+           
             || self.bypass_permissions_dialog.visible
             || self.ask_user_dialog.visible
-            || false
+           
             || self.import_config_picker.visible
             || self.connect_dialog.visible
             || self.key_input_dialog.visible
@@ -2527,14 +2480,14 @@ permission_rx: None,
             || self.free_mode_dialog.visible
             || self.device_auth_dialog.visible
             || self.command_palette.visible
-            || false
+           
             || self.model_picker.visible
             || self.session_browser.visible
             || self.session_branching.visible
             || self.export_dialog.visible
             || self.context_viz.visible
             || self.mcp_approval.visible
-            || false
+           
             || self.context_menu_state.is_some()
     }
 
@@ -4565,7 +4518,7 @@ permission_rx: None,
             KeyContext::Confirmation
         } else if self.help_overlay.visible {
             KeyContext::Help
-        } else if self.history_search_overlay.visible || self.history_search.is_some() {
+        } else if self.history_search_overlay.visible {
             KeyContext::HistorySearch
         } else if self.permission_request.is_some() {
             KeyContext::Confirmation
@@ -4734,7 +4687,6 @@ permission_rx: None,
         match key.code {
             KeyCode::Esc => {
                 self.history_search_overlay.close();
-                self.history_search = None;
             }
             KeyCode::Enter => {
                 if let Some(entry) = self
@@ -4744,37 +4696,16 @@ permission_rx: None,
                     self.set_prompt_text(entry.to_string());
                 }
                 self.history_search_overlay.close();
-                self.history_search = None;
             }
             KeyCode::Up => {
                 self.history_search_overlay.select_prev();
-                if let Some(hs) = self.history_search.as_mut() {
-                    let count = hs.matches.len();
-                    if count > 0 {
-                        if hs.selected == 0 {
-                            hs.selected = count - 1;
-                        } else {
-                            hs.selected -= 1;
-                        }
-                    }
-                }
             }
             KeyCode::Down => {
                 self.history_search_overlay.select_next();
-                if let Some(hs) = self.history_search.as_mut() {
-                    let count = hs.matches.len();
-                    if count > 0 {
-                        hs.selected = (hs.selected + 1) % count;
-                    }
-                }
             }
             KeyCode::Backspace => {
                 let history = self.prompt_input.history.clone();
                 self.history_search_overlay.pop_char(&history);
-                if let Some(hs) = self.history_search.as_mut() {
-                    hs.query.pop();
-                    hs.update_matches(&history);
-                }
             }
             // 'p' with no modifiers and an empty query = pin/unpin the selected entry.
             // When the query is non-empty 'p' is treated as a filter character so
@@ -4789,10 +4720,6 @@ permission_rx: None,
                 let c = normalize_char_with_shift(c, key.modifiers);
                 let history = self.prompt_input.history.clone();
                 self.history_search_overlay.push_char(c, &history);
-                if let Some(hs) = self.history_search.as_mut() {
-                    hs.query.push(c);
-                    hs.update_matches(&history);
-                }
             }
             _ => {}
         }
@@ -5075,41 +5002,18 @@ permission_rx: None,
             }
             "select" => {
                 // Legacy history search select
-                if let Some(hs) = self.history_search.as_ref() {
-                    if let Some(entry) = hs.current_entry(&self.prompt_input.history) {
-                        self.set_prompt_text(entry.to_string());
-                    }
-                }
-                self.history_search = None;
                 self.history_search_overlay.close();
                 false
             }
             "cancel" => {
-                self.history_search = None;
                 self.history_search_overlay.close();
                 false
             }
             "prevResult" => {
-                if let Some(hs) = self.history_search.as_mut() {
-                    let count = hs.matches.len();
-                    if count > 0 {
-                        if hs.selected == 0 {
-                            hs.selected = count - 1;
-                        } else {
-                            hs.selected -= 1;
-                        }
-                    }
-                }
                 self.history_search_overlay.select_prev();
                 false
             }
             "nextResult" => {
-                if let Some(hs) = self.history_search.as_mut() {
-                    let count = hs.matches.len();
-                    if count > 0 {
-                        hs.selected = (hs.selected + 1) % count;
-                    }
-                }
                 self.history_search_overlay.select_next();
                 false
             }
@@ -5582,7 +5486,7 @@ permission_rx: None,
         !self.is_streaming
             && self.permission_request.is_none()
             && !self.history_search_overlay.visible
-            && self.history_search.is_none()
+            
             && !matches!(
                 self.prompt_input.vim_mode,
                 crate::prompt_input::VimMode::Normal
@@ -5660,7 +5564,7 @@ permission_rx: None,
             && self.permission_request.is_none()
             && !self.ask_user_dialog.visible
             && !self.history_search_overlay.visible
-            && self.history_search.is_none()
+            
             && !self.settings_screen.visible
             && !self.theme_screen.visible
             && !self.key_input_dialog.visible
@@ -6750,7 +6654,7 @@ permission_rx: None,
                         if !self.is_streaming
                             && self.permission_request.is_none()
                             && !self.history_search_overlay.visible
-                            && self.history_search.is_none() =>
+                             =>
                     {
                         if self.key_input_dialog.visible {
                             for ch in data.chars() {
