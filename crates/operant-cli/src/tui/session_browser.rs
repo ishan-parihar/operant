@@ -21,8 +21,6 @@ pub enum SessionBrowserMode {
     Browse,
     /// User is typing a new name for the selected session.
     Rename,
-    /// Waiting for the user to confirm a destructive action (delete / export).
-    Confirm,
 }
 
 /// A single session entry shown in the browser list.
@@ -154,7 +152,7 @@ impl SessionBrowserState {
     pub fn cancel(&mut self) {
         match self.mode {
             SessionBrowserMode::Browse => self.close(),
-            SessionBrowserMode::Rename | SessionBrowserMode::Confirm => {
+            SessionBrowserMode::Rename => {
                 self.mode = SessionBrowserMode::Browse;
                 self.rename_input.clear();
             }
@@ -366,26 +364,6 @@ pub fn render_session_browser(state: &SessionBrowserState, area: Rect, buf: &mut
                     Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
                 ),
                 Span::styled("=cancel", Style::default().fg(Color::DarkGray)),
-            ]));
-        }
-        SessionBrowserMode::Confirm => {
-            lines.push(Line::from(vec![
-                Span::styled(
-                    "  Confirm? ",
-                    Style::default()
-                        .fg(Color::Yellow)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(
-                    "Enter",
-                    Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
-                ),
-                Span::styled("=yes  ", Style::default().fg(Color::DarkGray)),
-                Span::styled(
-                    "Esc",
-                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
-                ),
-                Span::styled("=no", Style::default().fg(Color::DarkGray)),
             ]));
         }
     }
