@@ -77,9 +77,9 @@ pub enum CronSubcommand {
 }
 
 /// Dispatch a cron subcommand.
-pub async fn handle_cron_command(config: &AppConfig, cmd: CronSubcommand) -> Result<()> {
+pub async fn handle_cron_command(config: &AppConfig, cmd: CronSubcommand, json: bool) -> Result<()> {
     match cmd {
-        CronSubcommand::List => cmd_list(config).await,
+        CronSubcommand::List => cmd_list(config, json).await,
         CronSubcommand::Create {
             name,
             schedule,
@@ -104,9 +104,34 @@ pub async fn handle_cron_command(config: &AppConfig, cmd: CronSubcommand) -> Res
     }
 }
 
-async fn cmd_list(config: &AppConfig) -> Result<()> {
+async fn cmd_list(config: &AppConfig, json: bool) -> Result<()> {
     let db = CronDb::init(config.database_path.clone()).context("Failed to open cron database")?;
     let jobs = db.list_jobs(true).context("Failed to list cron jobs")?;
+
+    if json {
+        let items: Vec<serde_json::Value> = jobs
+            .iter()
+            .map(|j| {
+                let status = if j.state == "paused" {
+                    "paused"
+                } else if j.enabled {
+                    "active"
+                } else {
+                    "disabled"
+                };
+                serde_json::json!({
+                    "id": j.id,
+                    "name": j.name,
+                    "schedule": j.schedule_display,
+                    "status": status,
+                    "next_run": j.next_run_at,
+                    "last_status": j.last_status,
+                })
+            })
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&items)?);
+        return Ok(());
+    }
 
     if jobs.is_empty() {
         println!("No cron jobs found.");
