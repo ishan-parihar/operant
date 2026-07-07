@@ -760,7 +760,6 @@ impl McpStdioClient {
             // elicitation/create, notifications/*).
             let method = parsed["method"].as_str().unwrap_or("");
             let id = parsed.get("id").and_then(|v| v.as_u64());
-            let params = parsed.get("params").cloned().unwrap_or(Value::Null);
 
             match method {
                 "sampling/createMessage" => {
