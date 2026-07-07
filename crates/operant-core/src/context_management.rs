@@ -93,7 +93,15 @@ pub fn evict_to_budget(messages: Vec<Message>, budget_tokens: usize) -> Vec<Mess
     // ~6. Clamped to [6, 50] to avoid degenerate cases. Was fixed at 6,
     // which was too few for large contexts (the agent lost too much recent
     // context) and too many for tiny contexts (it couldn't evict enough).
-    let keep_recent = ((budget_tokens / 4096) as usize).clamp(6, 50).min(messages.len());
+    //
+    // (iter-139 — fixed ponytail-audit bug A25: the previous .min(messages.len())
+    // made keep_recent = messages.len() when there were < 6 messages, which
+    // made the recency reserve cover ALL messages → eviction impossible.
+    // Dropping the .min() is correct: if there are fewer messages than
+    // keep_recent, the eviction loop simply finds nothing to evict, which
+    // is the right behavior — you don't need to evict when you have few
+    // messages.)
+    let keep_recent = ((budget_tokens / 4096) as usize).clamp(6, 50);
     let n = messages.len();
 
     // Build a list of (index, tier) for evictable messages. System
