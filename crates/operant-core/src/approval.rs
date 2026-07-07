@@ -659,17 +659,9 @@ fn extract_command_from_args(tool_name: &str, args: &Value) -> String {
 // Helper Functions
 // ============================================================================
 
-/// Check if a command matches any of the hardline blocklist regex patterns.
-fn check_hardline_regex(command: &str, patterns: &[&str]) -> bool {
-    for pattern in patterns {
-        if let Ok(re) = Regex::new(pattern) {
-            if re.is_match(command) {
-                return true;
-            }
-        }
-    }
-    false
-}
+// (iter-139 — deleted check_hardline_regex: zero callers, dead code.
+// Was also ponytail-audit bug A24: compiled Regex::new() on every call
+// instead of using the pre-compiled lazy_static patterns above.)
 
 // ============================================================================
 // Tests
