@@ -1019,94 +1019,8 @@ async fn chat_non_tui(config: &AppConfig, system_prompt: Option<&str>) -> Result
         }
     });
 
-    let mut registry = CommandRegistry::new();
-
-    struct NewHandler;
-    #[async_trait::async_trait]
-    impl CommandHandler for NewHandler {
-        async fn execute(&self, _ctx: &CommandContext<'_>) -> commands::CommandResult {
-            Ok("Use /exit or Ctrl+C to end the session.".to_string())
-        }
-    }
-    registry.register_handler("new", Box::new(NewHandler)).ok();
-
-    struct HelpHandler;
-    #[async_trait::async_trait]
-    impl CommandHandler for HelpHandler {
-        async fn execute(&self, _ctx: &CommandContext<'_>) -> commands::CommandResult {
-            Ok("System status: running. Use `operant status` for details.".to_string())
-        }
-    }
-    registry
-        .register_handler("help", Box::new(HelpHandler))
-        .ok();
-
-    struct StatusHandler;
-    #[async_trait::async_trait]
-    impl CommandHandler for StatusHandler {
-        async fn execute(&self, _ctx: &CommandContext<'_>) -> commands::CommandResult {
-            Ok("System status: running. Use `operant status` for details.".to_string())
-        }
-    }
-    registry
-        .register_handler("status", Box::new(StatusHandler))
-        .ok();
-
-    struct TimeHandler;
-    #[async_trait::async_trait]
-    impl CommandHandler for TimeHandler {
-        async fn execute(&self, _ctx: &CommandContext<'_>) -> commands::CommandResult {
-            use chrono::Local;
-            Ok(format!(
-                "Current time: {}",
-                Local::now().format("%Y-%m-%d %H:%M:%S")
-            ))
-        }
-    }
-    registry
-        .register_handler("time", Box::new(TimeHandler))
-        .ok();
-
-    struct SessionHandler;
-    #[async_trait::async_trait]
-    impl CommandHandler for SessionHandler {
-        async fn execute(&self, _ctx: &CommandContext<'_>) -> commands::CommandResult {
-            Ok("Conversation session active. Use /history to see messages.".to_string())
-        }
-    }
-    registry
-        .register_handler("session", Box::new(SessionHandler))
-        .ok();
-
-    struct SkillsHandler {
-        skills_dir: PathBuf,
-    }
-    #[async_trait::async_trait]
-    impl CommandHandler for SkillsHandler {
-        async fn execute(&self, _ctx: &CommandContext<'_>) -> commands::CommandResult {
-            let mut skill_manager = SkillManager::new(self.skills_dir.clone());
-            if let Err(e) = skill_manager.load_all() {
-                return Ok(format!("Failed to load skills: {}", e));
-            }
-            let skills = skill_manager.list();
-            if skills.is_empty() {
-                return Ok("No skills installed.".to_string());
-            }
-            let mut output = String::from("Installed skills:\n");
-            for (name, description) in &skills {
-                output.push_str(&format!("  /{} — {}\n", name, description));
-            }
-            Ok(output)
-        }
-    }
-    registry
-        .register_handler(
-            "skills",
-            Box::new(SkillsHandler {
-                skills_dir: config.skills.root_dir.clone(),
-            }),
-        )
-        .ok();
+    // (iter-157: 6 inline handler structs deleted — replaced with a simple
+    // match in the command loop. The handlers just returned hardcoded strings.)
 
     loop {
         print!("You: ");
@@ -1121,36 +1035,51 @@ async fn chat_non_tui(config: &AppConfig, system_prompt: Option<&str>) -> Result
 
         if input.starts_with('/') {
             let parts: Vec<&str> = input.splitn(2, char::is_whitespace).collect();
-            let cmd_name = parts[0];
-            let cmd_args = parts.get(1).copied().unwrap_or("");
+            let cmd = parts[0].trim_start_matches('/');
 
-            match registry.resolve(cmd_name) {
-                Some("exit") => break,
-                Some("new") | Some("reset") => {
+            match cmd {
+                "exit" | "quit" => break,
+                "new" | "reset" => {
                     agent.clear_history().await;
                     println!("Conversation cleared. Starting new session.");
-                    continue;
                 }
-                Some("history") => {
-                    // TODO: print conversation history from agent
-                    println!("History not yet available in non-TUI mode.");
-                    continue;
+                "help" => {
+                    println!("Commands: /exit, /new, /help, /status, /time, /skills, /history");
                 }
-                Some(canonical) => {
-                    match registry.execute(canonical, cmd_args).await {
-                        Ok(output) => println!("{}", output),
-                        Err(e) => eprintln!("Command error: {}", e),
+                "status" => {
+                    println!("System status: running. Use `operant status` for details.");
+                }
+                "time" => {
+                    use chrono::Local;
+                    println!("Current time: {}", Local::now().format("%Y-%m-%d %H:%M:%S"));
+                }
+                "session" => {
+                    println!("Conversation session active. Use /history to see messages.");
+                }
+                "skills" => {
+                    let mut sm = SkillManager::new(config.skills.root_dir.clone());
+                    match sm.load_all() {
+                        Ok(skills) => {
+                            if skills.is_empty() {
+                                println!("No skills installed.");
+                            } else {
+                                println!("Installed skills:");
+                                for skill in &skills {
+                                    println!("  /{} — {}", skill.name, skill.description);
+                                }
+                            }
+                        }
+                        Err(e) => println!("Failed to load skills: {}", e),
                     }
-                    continue;
                 }
-                None => {
-                    println!(
-                        "Unknown command: {}. Type /help for available commands.",
-                        cmd_name
-                    );
-                    continue;
+                "history" => {
+                    println!("History not yet available in non-TUI mode.");
+                }
+                _ => {
+                    println!("Unknown command: /{}. Type /help for available commands.", cmd);
                 }
             }
+            continue;
         }
 
         match agent.run(input.to_string()).await {
