@@ -200,20 +200,20 @@ impl ProviderRegistry {
     pub fn register(&self, profile: Arc<dyn ProviderProfile>) {
         let name = profile.name().to_string();
         let aliases: Vec<String> = profile.aliases().into_iter().map(String::from).collect();
-        let mut profiles = self.profiles.write().unwrap();
+        let mut profiles = self.profiles.write().unwrap_or_else(|e| e.into_inner());
         profiles.insert(name.clone(), profile);
-        let mut al = self.aliases.write().unwrap();
+        let mut al = self.aliases.write().unwrap_or_else(|e| e.into_inner());
         for alias in aliases {
             al.insert(alias, name.clone());
         }
     }
 
     pub fn get(&self, name: &str) -> Option<Arc<dyn ProviderProfile>> {
-        let profiles = self.profiles.read().unwrap();
+        let profiles = self.profiles.read().unwrap_or_else(|e| e.into_inner());
         if let Some(p) = profiles.get(name) {
             return Some(Arc::clone(p));
         }
-        let al = self.aliases.read().unwrap();
+        let al = self.aliases.read().unwrap_or_else(|e| e.into_inner());
         if let Some(resolved) = al.get(name) {
             return profiles.get(resolved).cloned();
         }
@@ -221,27 +221,27 @@ impl ProviderRegistry {
     }
 
     pub fn list(&self) -> Vec<Arc<dyn ProviderProfile>> {
-        let profiles = self.profiles.read().unwrap();
+        let profiles = self.profiles.read().unwrap_or_else(|e| e.into_inner());
         profiles.values().cloned().collect()
     }
 
     pub fn resolve_alias(&self, name: &str) -> Option<String> {
-        let al = self.aliases.read().unwrap();
+        let al = self.aliases.read().unwrap_or_else(|e| e.into_inner());
         al.get(name).cloned()
     }
 
     pub fn add_alias(&self, alias: String, target: String) {
-        let mut al = self.aliases.write().unwrap();
+        let mut al = self.aliases.write().unwrap_or_else(|e| e.into_inner());
         al.insert(alias, target);
     }
 
     pub fn set_fallback_chain(&self, chain: Vec<String>) {
-        let mut chains = self.fallback_chains.write().unwrap();
+        let mut chains = self.fallback_chains.write().unwrap_or_else(|e| e.into_inner());
         chains.push(chain);
     }
 
     pub fn get_fallback_chain(&self, name: &str) -> Option<Vec<String>> {
-        let chains = self.fallback_chains.read().unwrap();
+        let chains = self.fallback_chains.read().unwrap_or_else(|e| e.into_inner());
         chains
             .iter()
             .find(|c| c.first().map(|s| s.as_str()) == Some(name))

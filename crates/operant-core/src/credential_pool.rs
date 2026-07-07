@@ -369,7 +369,7 @@ impl CredentialPool {
     /// Returns the credential's unique id.
     pub fn add(&self, credential: PooledCredential) -> String {
         let id = credential.id.clone();
-        let mut inner = self.inner.write().expect("credential pool lock poisoned");
+        let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
         inner.ordered_ids.push(id.clone());
         inner.credentials.insert(id.clone(), credential);
         debug!(provider = %self.provider, id = %id, "Added credential to pool");
@@ -378,7 +378,7 @@ impl CredentialPool {
 
     /// Retrieve a credential by id.
     pub fn get(&self, id: &str) -> Option<PooledCredential> {
-        let inner = self.inner.read().expect("credential pool lock poisoned");
+        let inner = self.inner.read().unwrap_or_else(|e| e.into_inner());
         inner.credentials.get(id).cloned()
     }
 
@@ -386,7 +386,7 @@ impl CredentialPool {
     ///
     /// Returns the removed credential, or `None` if it was not found.
     pub fn remove(&self, id: &str) -> Option<PooledCredential> {
-        let mut inner = self.inner.write().expect("credential pool lock poisoned");
+        let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
         let removed = inner.credentials.remove(id)?;
         inner.ordered_ids.retain(|i| i != id);
         info!(provider = %self.provider, id = %id, "Removed credential from pool");
@@ -395,7 +395,7 @@ impl CredentialPool {
 
     /// Return a snapshot of all credentials in the pool.
     pub fn list(&self) -> Vec<PooledCredential> {
-        let inner = self.inner.read().expect("credential pool lock poisoned");
+        let inner = self.inner.read().unwrap_or_else(|e| e.into_inner());
         inner
             .ordered_ids
             .iter()
@@ -405,7 +405,7 @@ impl CredentialPool {
 
     /// Return the number of credentials in the pool.
     pub fn len(&self) -> usize {
-        let inner = self.inner.read().expect("credential pool lock poisoned");
+        let inner = self.inner.read().unwrap_or_else(|e| e.into_inner());
         inner.credentials.len()
     }
 
@@ -421,7 +421,7 @@ impl CredentialPool {
 
     /// Returns `true` if at least one credential is not exhausted.
     pub fn has_available(&self) -> bool {
-        let inner = self.inner.read().expect("credential pool lock poisoned");
+        let inner = self.inner.read().unwrap_or_else(|e| e.into_inner());
         inner.credentials.values().any(|c| c.is_available())
     }
 
@@ -431,7 +431,7 @@ impl CredentialPool {
     /// the credential id is not found in the pool.
     pub fn update(&self, credential: PooledCredential) -> Result<()> {
         let id = credential.id.clone();
-        let mut inner = self.inner.write().expect("credential pool lock poisoned");
+        let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
         if !inner.credentials.contains_key(&id) {
             return Err(Error::Agent(format!(
                 "Credential '{}' not found in pool for provider '{}'",
@@ -447,7 +447,7 @@ impl CredentialPool {
     ///
     /// Returns `None` if no available credentials exist.
     pub fn select(&self) -> Option<PooledCredential> {
-        let mut inner = self.inner.write().expect("credential pool lock poisoned");
+        let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
         self.select_inner(&mut inner)
     }
 
@@ -456,7 +456,7 @@ impl CredentialPool {
     /// Unlike [`select`](Self::select), this does not apply strategy rotation
     /// or update usage counts.
     pub fn peek(&self) -> Option<PooledCredential> {
-        let inner = self.inner.read().expect("credential pool lock poisoned");
+        let inner = self.inner.read().unwrap_or_else(|e| e.into_inner());
         // Return first available credential
         inner
             .ordered_ids
@@ -481,7 +481,7 @@ impl CredentialPool {
         message: Option<&str>,
         rotate: bool,
     ) -> Option<PooledCredential> {
-        let mut inner = self.inner.write().expect("credential pool lock poisoned");
+        let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
 
         if let Some(cred) = inner.credentials.get_mut(id) {
             cred.status = Some(STATUS_EXHAUSTED.to_string());
@@ -510,7 +510,7 @@ impl CredentialPool {
     /// Refresh all OAuth credentials in the pool.
     pub async fn refresh_async(&self) -> Result<()> {
         let refresher = crate::oauth_refresh::OAuthRefresher::new()?;
-        let inner = self.inner.read().expect("credential pool lock poisoned");
+        let inner = self.inner.read().unwrap_or_else(|e| e.into_inner());
 
         for cred in inner.credentials.values() {
             if cred.credential_type == AuthType::OAuth && cred.needs_oauth_refresh(120) {
@@ -550,7 +550,7 @@ impl CredentialPool {
     /// Attempt an OAuth refresh for a specific provider type.
     pub async fn refresh_oauth_async(&self, provider_type: &str) -> Result<()> {
         let refresher = crate::oauth_refresh::OAuthRefresher::new()?;
-        let inner = self.inner.read().expect("credential pool lock poisoned");
+        let inner = self.inner.read().unwrap_or_else(|e| e.into_inner());
 
         for cred in inner.credentials.values() {
             if cred.credential_type == AuthType::OAuth {
@@ -588,7 +588,7 @@ impl CredentialPool {
     ///
     /// Returns the number of credentials that were reset.
     pub fn reset_statuses(&self) -> usize {
-        let mut inner = self.inner.write().expect("credential pool lock poisoned");
+        let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
         let mut count = 0usize;
         for cred in inner.credentials.values_mut() {
             if cred.status.is_some()
