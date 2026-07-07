@@ -155,18 +155,6 @@ pub fn begin_modal_buf(
     layout
 }
 
-pub fn modal_title_line(title: &str, right_hint: &str) -> Line<'static> {
-    Line::from(vec![
-        Span::styled(
-            format!(" {}", title),
-            Style::default().fg(OPERANT_TEXT).add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            format!("  {}", right_hint),
-            Style::default().fg(OPERANT_MUTED),
-        ),
-    ])
-}
 
 pub fn render_modal_title_frame(frame: &mut Frame, area: Rect, title: &str, right_hint: &str) {
     if area.height == 0 {

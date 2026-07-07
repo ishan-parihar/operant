@@ -300,15 +300,6 @@ pub fn build_turn_diff(
         .collect()
 }
 
-pub fn build_latest_turn_diff(
-    file_history: &FileHistory,
-    project_root: &std::path::Path,
-) -> Vec<FileDiffStats> {
-    let Some(turn_index) = file_history.latest_turn_index() else {
-        return Vec::new();
-    };
-    build_turn_diff(file_history, turn_index, project_root)
-}
 
 fn relative_diff_path(path: &std::path::Path, project_root: &std::path::Path) -> String {
     path.strip_prefix(project_root)
