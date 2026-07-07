@@ -3952,10 +3952,7 @@ permission_rx: None,
             return self.handle_global_search_key(key);
         }
 
-        // Legacy history-search mode intercepts most keys
-        if self.history_search.is_some() {
-            return self.handle_history_search_key(key);
-        }
+        // (iter-155: legacy history_search.is_some() check deleted — always None)
 
         // Permission dialog mode intercepts most keys
         if self.permission_request.is_some() {
@@ -5220,58 +5217,6 @@ permission_rx: None,
         }
     }
 
-    /// Handle a key event while in legacy history-search mode.
-    fn handle_history_search_key(&mut self, key: KeyEvent) -> bool {
-        let hs = match self.history_search.as_mut() {
-            Some(h) => h,
-            None => return false,
-        };
-        match key.code {
-            KeyCode::Esc => {
-                self.history_search = None;
-                self.history_search_overlay.close();
-            }
-            KeyCode::Enter => {
-                if let Some(entry) = hs.current_entry(&self.prompt_input.history) {
-                    self.set_prompt_text(entry.to_string());
-                }
-                self.history_search = None;
-                self.history_search_overlay.close();
-            }
-            KeyCode::Up => {
-                let count = hs.matches.len();
-                if count > 0 {
-                    if hs.selected == 0 {
-                        hs.selected = count - 1;
-                    } else {
-                        hs.selected -= 1;
-                    }
-                }
-            }
-            KeyCode::Down => {
-                let count = hs.matches.len();
-                if count > 0 {
-                    hs.selected = (hs.selected + 1) % count;
-                }
-            }
-            KeyCode::Backspace => {
-                hs.query.pop();
-                let history = self.prompt_input.history.clone();
-                if let Some(hs) = self.history_search.as_mut() {
-                    hs.update_matches(&history);
-                }
-            }
-            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                hs.query.push(c);
-                let history = self.prompt_input.history.clone();
-                if let Some(hs) = self.history_search.as_mut() {
-                    hs.update_matches(&history);
-                }
-            }
-            _ => {}
-        }
-        false
-    }
 
     /// Resolve the currently-shown permission dialog by mapping the selected
     /// option to a `ToolPermissionResponse` and sending it to the agent.
