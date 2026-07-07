@@ -4311,10 +4311,6 @@ permission_rx: None,
                 self.prompt_input.insert_newline();
                 self.refresh_prompt_input();
             }
-            KeyCode::Char('j') if !self.is_streaming && key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.prompt_input.insert_newline();
-                self.refresh_prompt_input();
-            }
             KeyCode::Enter if !self.is_streaming => {
                 if !self.prompt_input.suggestions.is_empty()
                     && self.prompt_input.suggestion_index.is_some()
@@ -5743,9 +5739,8 @@ permission_rx: None,
                 self.refresh_turn_diff_from_history();
             }
 
-            AgentEvent::ToolError { tool_call_id, name, error } => {
+            AgentEvent::ToolError { tool_call_id, name: _, error } => {
                 let tool_id = tool_call_id.clone();
-                let is_error = true;
                 let result_text = error;
                 let all_lines: Vec<&str> = result_text.lines().collect();
                 let preview_lines = all_lines.len().min(3);
