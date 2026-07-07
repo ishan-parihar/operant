@@ -9,7 +9,6 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::sync::Arc;
-use std::sync::OnceLock;
 use tracing::{debug, info};
 
 use crate::error::Result;
@@ -47,27 +46,6 @@ struct SessionSearchArgs {
     role_filter: Option<String>,
     /// Max sessions to return (default: 3, max: 5)
     limit: Option<usize>,
-}
-
-/// Global session search state
-static SESSION_SEARCH: OnceLock<SessionSearchState> = OnceLock::new();
-
-struct SessionSearchState {
-    db_path: Option<std::path::PathBuf>,
-}
-
-impl SessionSearchState {
-    fn new() -> Self {
-        Self { db_path: None }
-    }
-
-    fn set_db_path(&mut self, path: std::path::PathBuf) {
-        self.db_path = Some(path);
-    }
-}
-
-fn get_session_search_state() -> &'static SessionSearchState {
-    SESSION_SEARCH.get_or_init(|| SessionSearchState::new())
 }
 
 /// Session Search Tool
