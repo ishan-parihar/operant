@@ -168,7 +168,7 @@ pub async fn handle_skills_command(config: &AppConfig, cmd: SkillsSubcommand, js
 // Marketplace handlers (iter-133)
 // ---------------------------------------------------------------------------
 
-async fn handle_market_command(config: &AppConfig, cmd: MarketCommand) -> Result<()> {
+async fn handle_market_command(_config: &AppConfig, cmd: MarketCommand) -> Result<()> {
     let marketplace = operant_core::skill_marketplace::SkillMarketplace::new();
     match cmd {
         MarketCommand::Search { query } => {

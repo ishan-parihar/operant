@@ -48,9 +48,6 @@ impl Default for RenderContext {
     }
 }
 
-/// A styled line for rendering.
-pub type StyledLine<'a> = Line<'a>;
-
 const MAX_USER_PROMPT_DISPLAY_CHARS: usize = 10_000;
 const TRUNCATE_USER_PROMPT_HEAD_CHARS: usize = 2_500;
 const TRUNCATE_USER_PROMPT_TAIL_CHARS: usize = 2_500;

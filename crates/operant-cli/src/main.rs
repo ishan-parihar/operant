@@ -85,7 +85,7 @@ use operant_core::config::{
 use operant_core::mcp::McpManager;
 use operant_core::memory::MemoryManager;
 use operant_core::skills::SkillManager;
-use operant_core::tools::{OperantTool, ToolContext, ToolRegistry};
+use operant_core::tools::{ToolContext, ToolRegistry};
 use serde_json::Value;
 use tokio::sync::mpsc;
 use tracing::{warn, Level};
