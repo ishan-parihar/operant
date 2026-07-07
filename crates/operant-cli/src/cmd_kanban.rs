@@ -232,12 +232,13 @@ pub async fn handle_kanban_command(
     config: &AppConfig,
     board_slug: &str,
     cmd: KanbanSubcommand,
+    json: bool,
 ) -> Result<()> {
     match cmd {
-        KanbanSubcommand::ListBoards => cmd_list_boards(config).await,
+        KanbanSubcommand::ListBoards => cmd_list_boards(config, json).await,
         KanbanSubcommand::CreateBoard { slug } => cmd_create_board(config, &slug).await,
         KanbanSubcommand::DeleteBoard { slug } => cmd_delete_board(config, &slug).await,
-        KanbanSubcommand::List => cmd_list(config, board_slug).await,
+        KanbanSubcommand::List => cmd_list(config, board_slug, json).await,
         KanbanSubcommand::Show { id } => cmd_show(config, board_slug, &id).await,
         KanbanSubcommand::Create {
             title,
@@ -301,9 +302,22 @@ pub async fn handle_kanban_command(
     }
 }
 
-async fn cmd_list_boards(config: &AppConfig) -> Result<()> {
+async fn cmd_list_boards(config: &AppConfig, json: bool) -> Result<()> {
     let mgr = KanbanManager::new(kanban_dir(config));
     let boards = mgr.list_boards().context("Failed to list boards")?;
+
+    if json {
+        let items: Vec<serde_json::Value> = boards
+            .iter()
+            .map(|b| serde_json::json!({
+                "slug": b.slug,
+                "task_count": b.task_count,
+                "exists": b.exists,
+            }))
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&items)?);
+        return Ok(());
+    }
 
     if boards.is_empty() {
         println!("No kanban boards found.");
@@ -339,12 +353,29 @@ async fn cmd_delete_board(config: &AppConfig, slug: &str) -> Result<()> {
     Ok(())
 }
 
-async fn cmd_list(config: &AppConfig, board_slug: &str) -> Result<()> {
+async fn cmd_list(config: &AppConfig, board_slug: &str, json: bool) -> Result<()> {
     let mgr = KanbanManager::new(kanban_dir(config));
     let db = mgr
         .open_board(board_slug)
         .context("Failed to open kanban database")?;
     let tasks = db.list_tasks().context("Failed to list tasks")?;
+
+    if json {
+        let items: Vec<serde_json::Value> = tasks
+            .iter()
+            .enumerate()
+            .map(|(i, t)| serde_json::json!({
+                "index": i + 1,
+                "id": t.id,
+                "title": t.title,
+                "status": t.status.as_str(),
+                "priority": t.priority,
+                "created_at": t.created_at,
+            }))
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&items)?);
+        return Ok(());
+    }
 
     if tasks.is_empty() {
         println!("No kanban tasks found.");
