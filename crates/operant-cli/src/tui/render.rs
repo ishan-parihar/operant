@@ -2493,20 +2493,6 @@ fn render_prompt_suggestions(frame: &mut Frame, app: &App, area: Rect) {
                     ));
                 }
             }
-            TypeaheadSource::History => {
-                let display_name = truncate_text(&suggestion.text, label_width);
-                spans.push(Span::styled(
-                    format!("{display_name:<width$}", width = label_width),
-                    label_style,
-                ));
-                spans.push(Span::styled(" [history] ", Style::default().fg(Color::DarkGray)));
-                if !suggestion.description.is_empty() {
-                    spans.push(Span::styled(
-                        truncate_text(&suggestion.description, area.width as usize / 2),
-                        detail_style,
-                    ));
-                }
-            }
         }
 
         frame.render_widget(
