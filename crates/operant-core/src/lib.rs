@@ -137,12 +137,8 @@ pub use plugins::{
     register_plugin_command, resolve_plugin_command, PluginCommand, PluginHandler, PluginManifest,
 };
 pub use process_registry::{ProcessRegistry, ProcessSession, ProcessStatus};
-pub use profile::{
-    clone_profile, create_profile, delete_profile, get_active_profile, get_operant_home,
-    get_profile_dir, get_profiles_root, list_profiles, normalize_profile_name, profile_exists,
-    set_active_profile, set_operant_home_override, use_profile, validate_profile_name,
-    OperantHomeToken, ProfileInfo,
-};
+// (iter-159: profile re-exports deleted — only set_operant_home_override is
+// used externally, and it's accessed via operant_core::profile:: directly.)
 pub use skill_usage::{LifecycleState, SkillUsageTracker, UsageRecord, UsageTelemetry};
 pub use skills::{Skill, SkillManager};
 pub use skills_guard::{
