@@ -984,8 +984,6 @@ fn preview_tool_args(args: &str) -> Option<String> {
 }
 
 async fn chat_non_tui(config: &AppConfig, system_prompt: Option<&str>) -> Result<()> {
-    use crate::commands::{CommandContext, CommandHandler, CommandRegistry};
-
     let mcp_manager = McpManager::new();
     let (event_tx, mut event_rx) = mpsc::channel::<AgentEvent>(256);
     let agent = create_runtime_agent(

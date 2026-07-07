@@ -788,7 +788,6 @@ pub struct App {
     /// When set, the main loop should spawn the async auth task for this provider.
     pub device_auth_pending: Option<String>,
     /// Shared provider registry for dynamic model fetching.
-    pub provider_registry: Option<std::sync::Arc<crate::tui::adapter_types::ProviderRegistry>>,
     /// Model registry populated from models.dev — single source of truth for
     /// all provider models shown in the `/model` picker.
     pub model_registry: crate::tui::adapter_types::ModelRegistry,
@@ -1213,7 +1212,6 @@ impl App {
             free_mode_dialog: crate::tui::free_mode_dialog::FreeModeDialogState::new(),
             device_auth_dialog: crate::tui::device_auth_dialog::DeviceAuthDialogState::new(),
             device_auth_pending: None,
-            provider_registry: None,
             model_registry: {
                 let mut reg = crate::tui::adapter_types::ModelRegistry::new();
                 // Try to load cached models.dev data from disk.
@@ -1764,14 +1762,13 @@ permission_rx: None,
     pub fn apply_provider_refresh(
         &mut self,
         config: Config,
-        provider_registry: Option<std::sync::Arc<crate::tui::adapter_types::ProviderRegistry>>,
         auth_store: crate::tui::adapter_types::AuthStore,
         has_credentials: bool,
         status_message: String,
     ) {
         self.close_secondary_views();
         self.config = config;
-        self.provider_registry = provider_registry;
+        // (iter-158: provider_registry assignment deleted — field was always None)
         self.model_registry.ensure_provider_defaults();
         self.auth_store = auth_store;
         self.connect_dialog = DialogSelectState::new("Connect a provider", provider_picker_items());

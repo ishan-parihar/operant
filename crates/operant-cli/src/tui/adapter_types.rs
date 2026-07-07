@@ -1455,11 +1455,6 @@ impl ModelRegistry {
     }
 }
 
-pub struct ProviderRegistry;
-
-impl ProviderRegistry {
-    pub fn new() -> Self { Self }
-}
 
 pub struct AnthropicClient {
     api_key: Option<String>,
