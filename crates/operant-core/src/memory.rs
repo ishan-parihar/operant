@@ -184,7 +184,7 @@ impl MemoryStore {
     /// § [id: test1, type: fact, importance: 80, tags: geography,facts, created_at: 123, last_accessed: 456]
     /// Paris is the capital of France
     /// ```
-    pub fn serialize_memories(memories: &HashMap<String, MemoryBlock>) -> String {
+    fn serialize_memories(memories: &HashMap<String, MemoryBlock>) -> String {
         let mut out = String::new();
         // Sort by id for deterministic output
         let mut entries: Vec<_> = memories.iter().collect();
@@ -209,7 +209,7 @@ impl MemoryStore {
     }
 
     /// Parse MEMORY.md content into memory blocks
-    pub fn deserialize_memories(content: &str) -> HashMap<String, MemoryBlock> {
+    fn deserialize_memories(content: &str) -> HashMap<String, MemoryBlock> {
         let mut memories = HashMap::new();
         // Split by § character
         let sections: Vec<&str> = content.split('\u{00A7}').collect();
@@ -307,7 +307,7 @@ impl MemoryStore {
     /// Facts:
     ///   [fact] Likes coding
     /// ```
-    pub fn serialize_profiles(profiles: &HashMap<String, UserProfile>) -> String {
+    fn serialize_profiles(profiles: &HashMap<String, UserProfile>) -> String {
         let mut out = String::new();
         // Sort by user_id for deterministic output
         let mut entries: Vec<_> = profiles.iter().collect();
@@ -340,7 +340,7 @@ impl MemoryStore {
     }
 
     /// Parse USER.md content into user profiles
-    pub fn deserialize_profiles(content: &str) -> HashMap<String, UserProfile> {
+    fn deserialize_profiles(content: &str) -> HashMap<String, UserProfile> {
         let mut profiles = HashMap::new();
         let sections: Vec<&str> = content.split('\u{00A7}').collect();
 
@@ -727,12 +727,6 @@ impl MemoryManager {
             .collect()
     }
 
-    /// Archive a session
-    pub async fn archive_session(&self, session_id: &str) {
-        if let Some(session) = self.sessions.write().await.get_mut(session_id) {
-            session.archived = true;
-        }
-    }
 
     /// Delete a session
     pub async fn delete_session(&self, session_id: &str) {
