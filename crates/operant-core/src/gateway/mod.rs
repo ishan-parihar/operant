@@ -697,14 +697,8 @@ impl Gateway {
         *self.running.read().await
     }
 
-    /// Get the status of all adapters
-    pub async fn status(&self) -> HashMap<String, bool> {
-        let mut status = HashMap::new();
-        for (name, adapter) in &self.adapters {
-            status.insert(name.clone(), adapter.is_enabled());
-        }
-        status
-    }
+    // (iter-151: Gateway::status() deleted — duplicate of get_platform_status,
+    // both had zero external callers. Use adapters.len() for adapter count.)
 
     /// Route an incoming message to the handler and send response
     pub async fn route_message(&self, message: IncomingMessage) -> Result<Option<OutgoingMessage>> {
@@ -864,15 +858,7 @@ impl Gateway {
         }
     }
 
-    /// Get health status of all platform adapters
-    pub async fn get_platform_status(&self) -> HashMap<String, bool> {
-        let mut status = HashMap::new();
-        for (name, adapter) in &self.adapters {
-            let healthy = adapter.health_check().unwrap_or(false);
-            status.insert(name.clone(), healthy);
-        }
-        status
-    }
+    // (iter-151: get_platform_status deleted — zero external callers)
 
     /// Get a reference to the session store
     pub fn get_session_store(&self) -> &SessionStore {
