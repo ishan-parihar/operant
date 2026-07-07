@@ -229,6 +229,9 @@ enum Commands {
     Skills {
         #[command(subcommand)]
         cmd: cmd_skills::SkillsSubcommand,
+        /// Output as JSON (for scripting/CI)
+        #[arg(long, global = true)]
+        json: bool,
     },
     /// View or change the active model configuration
     Model {
@@ -1461,8 +1464,8 @@ async fn main() -> Result<()> {
             let mcp_manager = operant_core::mcp::McpManager::new();
             cmd_mcp::handle_mcp_command(&loaded.config, &mcp_manager, cmd.clone(), *json).await?;
         }
-        Some(Commands::Skills { cmd }) => {
-            cmd_skills::handle_skills_command(&loaded.config, cmd.clone()).await?;
+        Some(Commands::Skills { cmd, json }) => {
+            cmd_skills::handle_skills_command(&loaded.config, cmd.clone(), *json).await?;
         }
         Some(Commands::Model { cmd }) => {
             cmd_model::handle_model_command(&loaded.config, cmd.clone()).await?;
