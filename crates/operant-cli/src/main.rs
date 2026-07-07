@@ -250,6 +250,9 @@ enum Commands {
     Cron {
         #[command(subcommand)]
         cmd: cmd_cron::CronSubcommand,
+        /// Output as JSON (for scripting/CI)
+        #[arg(long, global = true)]
+        json: bool,
     },
     /// Manage kanban tasks
     Kanban {
@@ -1485,8 +1488,8 @@ async fn main() -> Result<()> {
         Some(Commands::Completion { cmd }) => {
             cmd_completion::handle_completion_command(cmd.clone())?;
         }
-        Some(Commands::Cron { cmd }) => {
-            cmd_cron::handle_cron_command(&loaded.config, cmd.clone()).await?;
+        Some(Commands::Cron { cmd, json }) => {
+            cmd_cron::handle_cron_command(&loaded.config, cmd.clone(), *json).await?;
         }
         Some(Commands::Kanban { board, cmd, json }) => {
             cmd_kanban::handle_kanban_command(&loaded.config, &board, cmd.clone(), *json).await?;
