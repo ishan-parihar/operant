@@ -278,17 +278,6 @@ pub struct SystemAnnotation {
     pub style: SystemMessageStyle,
 }
 
-/// A displayable item in the conversation pane — either a real message or
-/// a synthetic system annotation (e.g. compact boundary).
-/// Used only by `render.rs`; constructed on the fly from `messages` +
-/// `system_annotations`.
-#[derive(Debug, Clone)]
-pub enum DisplayMessage {
-    /// A real conversation turn.
-    Conversation(Message),
-    /// An injected system notice (e.g. compact boundary).
-    System { text: String, style: SystemMessageStyle },
-}
 
 /// Context menu state: position and currently selected item index.
 #[derive(Debug, Clone, Copy)]
@@ -524,10 +513,6 @@ pub struct App {
     /// Command registry for dispatching slash commands to backend handlers.
     pub command_registry: crate::commands::CommandRegistry,
     pub messages: Vec<Message>,
-    /// Combined display list kept in sync with `messages`: real conversation turns
-    /// plus injected system annotations. Used by the renderer so it can iterate
-    /// a single sequence instead of merging two lists on every frame.
-    pub display_messages: Vec<DisplayMessage>,
     /// Synthetic system annotations interleaved between real messages at render time.
     pub system_annotations: Vec<SystemAnnotation>,
     pub input: String,
@@ -1060,7 +1045,6 @@ impl App {
             cost_tracker,
             command_registry,
             messages: Vec::new(),
-            display_messages: Vec::new(),
             system_annotations: Vec::new(),
             input: String::new(),
             prompt_input: {
@@ -1854,7 +1838,6 @@ permission_rx: None,
             "clear" => {
                 self.messages.clear();
                 self.system_annotations.clear();
-                self.display_messages.clear();
                 self.streaming_text.clear();
                 self.streaming_thinking.clear();
                 self.tool_use_blocks.clear();
@@ -5921,7 +5904,6 @@ permission_rx: None,
                 match rx.try_recv() {
                     Ok(msgs) => {
                         self.messages.clear();
-                        self.display_messages.clear();
                         use crate::tui::adapter_types::types::{Message, MessageContent, Role};
                         for (role, content) in msgs {
                             let r = match role.as_str() {
