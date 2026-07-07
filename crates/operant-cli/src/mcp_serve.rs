@@ -219,6 +219,19 @@ async fn connect_mcp_server(
                 .add_server(server.name.clone(), url, server.auth_token.clone())
                 .await?;
         }
+        operant_core::config::McpTransportKind::StreamableHttp => {
+            let url = server
+                .url
+                .clone()
+                .context("Streamable-HTTP MCP server is missing a URL")?;
+            mcp_manager
+                .add_streamable_http_server(
+                    server.name.clone(),
+                    url,
+                    server.auth_token.clone(),
+                )
+                .await?;
+        }
         operant_core::config::McpTransportKind::Stdio => {
             let cmd = server
                 .command

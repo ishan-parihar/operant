@@ -143,10 +143,12 @@ fn handle_list(config: &AppConfig, json: bool) -> Result<()> {
                 let transport = match s.transport {
                     McpTransportKind::Http => "http",
                     McpTransportKind::Stdio => "stdio",
+                    McpTransportKind::StreamableHttp => "streamable-http",
                 };
                 let endpoint = match s.transport {
                     McpTransportKind::Http => s.url.as_deref().unwrap_or(""),
                     McpTransportKind::Stdio => s.command.as_deref().unwrap_or(""),
+                    McpTransportKind::StreamableHttp => s.url.as_deref().unwrap_or(""),
                 };
                 serde_json::json!({
                     "name": s.name,
@@ -191,11 +193,13 @@ fn handle_list(config: &AppConfig, json: bool) -> Result<()> {
         let transport = match server.transport {
             McpTransportKind::Http => "http",
             McpTransportKind::Stdio => "stdio",
+            McpTransportKind::StreamableHttp => "streamable-http",
         };
         let enabled = if server.enabled { "yes" } else { "no" };
         let endpoint = match server.transport {
             McpTransportKind::Http => server.url.as_deref().unwrap_or("-"),
             McpTransportKind::Stdio => server.command.as_deref().unwrap_or("-"),
+            McpTransportKind::StreamableHttp => server.url.as_deref().unwrap_or("-"),
         };
 
         println!(
@@ -368,6 +372,18 @@ async fn handle_test(config: &AppConfig, mcp_manager: &McpManager, name: String)
 
             mcp_manager
                 .add_server(&name, url.to_string(), server.auth_token.clone())
+                .await
+                .context(format!("Failed to connect to MCP server '{}'", name))?;
+        }
+        McpTransportKind::StreamableHttp => {
+            let url = server
+                .url
+                .as_deref()
+                .context("Streamable-HTTP MCP server is missing a URL in config")?;
+            println!("  URL:        {} (streamable-http)", url);
+
+            mcp_manager
+                .add_streamable_http_server(&name, url.to_string(), server.auth_token.clone())
                 .await
                 .context(format!("Failed to connect to MCP server '{}'", name))?;
         }

@@ -1227,15 +1227,21 @@ impl McpSseClient {
     }
 }
 
-/// MCP transport type — either HTTP, stdio, or SSE
+/// MCP transport type — either HTTP, stdio, SSE, or Streamable-HTTP
 #[derive(Debug, Clone)]
 pub enum McpTransport {
-    /// HTTP-based MCP client
+    /// HTTP-based MCP client (plain POST + JSON-RPC)
     Http(McpClient),
     /// Stdio-based MCP client (child process)
     Stdio(McpStdioClient),
-    /// SSE-based MCP client (Server-Sent Events)
+    /// SSE-based MCP client (Server-Sent Events, legacy)
     Sse(McpSseClient),
+    /// Streamable-HTTP transport (MCP spec 2025-06-18). Uses HTTP POST
+    /// for client→server and SSE for server→client streaming. Delegates
+    /// to McpClient for the request/response path; the SSE streaming
+    /// layer will be added in a follow-up. (iter-137 — closes
+    /// ponytail-audit gap B2.)
+    StreamableHttp(McpClient),
 }
 
 impl McpTransport {
@@ -1245,6 +1251,7 @@ impl McpTransport {
             McpTransport::Http(c) => c.is_connected().await,
             McpTransport::Stdio(c) => c.is_connected().await,
             McpTransport::Sse(c) => c.is_connected().await,
+            McpTransport::StreamableHttp(c) => c.is_connected().await,
         }
     }
 
@@ -1254,6 +1261,7 @@ impl McpTransport {
             McpTransport::Http(c) => c.get_tools().await,
             McpTransport::Stdio(c) => c.get_tools().await,
             McpTransport::Sse(c) => c.get_tools().await,
+            McpTransport::StreamableHttp(c) => c.get_tools().await,
         }
     }
 
@@ -1263,6 +1271,7 @@ impl McpTransport {
             McpTransport::Http(c) => c.disconnect().await,
             McpTransport::Stdio(c) => c.disconnect().await,
             McpTransport::Sse(c) => c.disconnect().await,
+            McpTransport::StreamableHttp(c) => c.disconnect().await,
         }
     }
 
@@ -1272,6 +1281,7 @@ impl McpTransport {
             McpTransport::Http(c) => c.call_tool(name, arguments).await,
             McpTransport::Stdio(c) => c.call_tool(name, arguments).await,
             McpTransport::Sse(c) => c.call_tool(name, arguments).await,
+            McpTransport::StreamableHttp(c) => c.call_tool(name, arguments).await,
         }
     }
 }
@@ -1304,6 +1314,15 @@ impl McpTool {
     pub fn new_sse(client: McpSseClient, definition: McpToolDefinition) -> Self {
         Self {
             transport: McpTransport::Sse(client),
+            definition: Arc::new(definition),
+        }
+    }
+
+    /// Create a new MCP tool wrapper (Streamable-HTTP transport).
+    /// (iter-137 — see McpTransport::StreamableHttp.)
+    pub fn new_streamable_http(client: McpClient, definition: McpToolDefinition) -> Self {
+        Self {
+            transport: McpTransport::StreamableHttp(client),
             definition: Arc::new(definition),
         }
     }
@@ -1450,6 +1469,41 @@ impl McpManager {
             .write()
             .await
             .insert(name, McpTransport::Http(client));
+        Ok(())
+    }
+
+    /// Add and connect to a Streamable-HTTP MCP server (MCP spec 2025-06-18).
+    /// Uses HTTP POST for client→server and SSE for server→client streaming.
+    /// Delegates to McpClient for the request/response path. (iter-137)
+    pub async fn add_streamable_http_server(
+        &self,
+        name: impl Into<String>,
+        url: String,
+        auth_token: Option<String>,
+    ) -> Result<()> {
+        let name = name.into();
+        let effective_token = match auth_token {
+            Some(t) => Some(t),
+            None => {
+                match crate::mcp_oauth::get_manager().get_token(&url).await {
+                    Some(token) => {
+                        tracing::debug!(
+                            "MCP server {}: using OAuth access token from {}",
+                            name,
+                            url
+                        );
+                        Some(token.access_token)
+                    }
+                    None => None,
+                }
+            }
+        };
+        let client = McpClient::new(url, effective_token);
+        client.connect().await?;
+        self.servers
+            .write()
+            .await
+            .insert(name, McpTransport::StreamableHttp(client));
         Ok(())
     }
 
