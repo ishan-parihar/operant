@@ -2280,32 +2280,6 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
             ));
         }
 
-        // 3b. Token budget (feature-gated)
-        #[cfg(feature = "token_budget")]
-        if let Some(max_tokens) = app.token_budget {
-            if !parts.is_empty() {
-                parts.push(Span::raw("  "));
-            }
-            let used = app.token_count as u64;
-            let max = max_tokens as u64;
-            let pct = if max > 0 {
-                (used as f64 / max as f64 * 100.0) as u32
-            } else {
-                0
-            };
-            let color = if pct >= 90 {
-                Color::Red
-            } else if pct >= 75 {
-                Color::Yellow
-            } else {
-                Color::DarkGray
-            };
-            parts.push(Span::styled(
-                format!("Tokens: {}/{} ({}%)", used, max, pct),
-                Style::default().fg(color),
-            ));
-        }
-
         // 4. Rate limits
         if let Some(pct) = app.rate_limit_5h_pct {
             if pct > 0.0 {

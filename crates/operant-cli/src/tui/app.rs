@@ -562,8 +562,6 @@ pub struct App {
     pub permission_request: Option<PermissionRequest>,
     pub frame_count: u64,
     pub token_count: u32,
-    /// Maximum token budget (from env var or model context window) — P2 feature flag
-    pub token_budget: Option<u32>,
     pub cost_usd: f64,
     pub model_name: String,
     /// Whether the app has valid API credentials configured.
@@ -1092,7 +1090,6 @@ impl App {
             permission_request: None,
             frame_count: 0,
             token_count: 0,
-            token_budget: Self::load_token_budget(),
             cost_usd: 0.0,
             model_name,
             has_credentials,
@@ -1271,26 +1268,6 @@ permission_rx: None,
             last_exit_key_warning: None,
             exit_key_sequence_start: None,
         }
-    }
-
-    /// Load token budget from environment or model defaults.
-    /// Returns Some(max_tokens) if available, None otherwise.
-    /// Only enabled when the `token_budget` feature flag is active.
-    #[cfg(feature = "token_budget")]
-    fn load_token_budget() -> Option<u32> {
-        // First check OPERANT_TOKEN_BUDGET env var
-        if let Ok(budget_str) = std::env::var("OPERANT_TOKEN_BUDGET") {
-            if let Ok(budget) = budget_str.parse::<u32>() {
-                return Some(budget);
-            }
-        }
-        // Could extend this to check model defaults, but for now just env var
-        None
-    }
-
-    #[cfg(not(feature = "token_budget"))]
-    fn load_token_budget() -> Option<u32> {
-        None
     }
 
     pub fn open_import_config_picker(&mut self) {
