@@ -70,10 +70,16 @@ pub struct OpenAIClient {
 impl OpenAIClient {
     /// Create a new OpenAI client
     pub fn new(config: ClientConfig) -> Self {
+        // (iter-139 — fixed ponytail-audit bug A23: was .expect() which
+        // panics on reqwest builder failure (e.g. TLS backend missing).
+        // Fall back to a default client if the configured builder fails.)
         let http_client = Client::builder()
             .timeout(config.timeout)
             .build()
-            .expect("Failed to create HTTP client");
+            .unwrap_or_else(|e| {
+                tracing::warn!(error = %e, "Failed to build HTTP client with config, falling back to default");
+                Client::new()
+            });
 
         let rate_limiter = RateLimiter::new(
             config.rate_limit.bucket_capacity,
@@ -264,7 +270,12 @@ impl OpenAIClient {
             return Err(classify_http_error(status.as_u16(), &body));
         }
 
-        unreachable!("retry loop must return")
+        // (iter-139 — fixed ponytail-audit bug A22: was unreachable!() which
+        // is technically reachable when max_retries == 0 and the loop body
+        // somehow doesn't return. Replaced with an explicit error.)
+        Err(crate::error::Error::Agent(
+            "retry loop exhausted without returning a result".to_string(),
+        ))
     }
 
     /// Execute an API POST request with rate-limit checking and automatic retry.
