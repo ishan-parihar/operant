@@ -3954,23 +3954,10 @@ permission_rx: None,
 
         // MCP elicitation dialog — highest priority modal
 
-        // ---- Keybinding processor (runs AFTER all dialog checks) ----------
-        let key_context = self.current_key_context();
-        if let Some(keystroke) = key_event_to_keystroke(&key) {
-            let had_pending_chord = self.keybindings.has_pending_chord();
-            match self.keybindings.process(&keystroke, &key_context) {
-                KeybindingResult::Action(action) => {
-                    return self.handle_keybinding_action(&action);
-                }
-                KeybindingResult::Pending => return false,
-                KeybindingResult::NoMatch if had_pending_chord => return false,
-                KeybindingResult::Unbound | KeybindingResult::NoMatch => {
-                    // Fall through to hardcoded keybinding handlers
-                }
-            }
-        } else {
-            self.keybindings.cancel_chord();
-        }
+        // (iter-163: KeybindingResolver processor deleted — process() always
+        // returned NoMatch, has_pending_chord() always returned false, and
+        // cancel_chord() was a no-op. The entire block was dead code that
+        // always fell through to the hardcoded handlers.)
 
         // Clear any active text selection on key press (except Ctrl+C which copies it).
         let is_copy = key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL);
