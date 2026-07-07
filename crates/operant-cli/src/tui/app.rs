@@ -1191,13 +1191,6 @@ fn format_elapsed_ms(ms: u128) -> String {
     }
 }
 
-fn format_turn_time_label() -> String {
-    chrono::Local::now()
-        .format("%I:%M %p")
-        .to_string()
-        .trim_start_matches('0')
-        .to_lowercase()
-}
 
 impl App {
     pub fn new(mut config: Config, cost_tracker: Arc<CostTracker>, command_registry: crate::commands::CommandRegistry) -> Self {
