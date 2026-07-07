@@ -1153,117 +1153,6 @@ pub fn render_tool_result_error(error: &str) -> Vec<Line<'static>> {
     lines
 }
 
-/// Render a cancelled tool result.
-pub fn render_tool_result_cancelled(tool_name: &str) -> Vec<Line<'static>> {
-    vec![Line::from(vec![Span::styled(
-        format!("  \u{2717} {} \u{2014} cancelled", tool_name),
-        Style::default()
-            .fg(Color::DarkGray)
-            .add_modifier(Modifier::DIM),
-    )])]
-}
-
-/// Render a rejected (interrupted) tool result with reason.
-pub fn render_tool_result_rejected(tool_name: &str, reason: &str) -> Vec<Line<'static>> {
-    vec![
-        Line::from(vec![Span::styled(
-            format!("  \u{2717} {} \u{2014} interrupted", tool_name),
-            Style::default().fg(ACCENT_PRIMARY),
-        )]),
-        Line::from(vec![Span::styled(
-            format!("    {}", reason),
-            Style::default()
-                .fg(Color::DarkGray)
-                .add_modifier(Modifier::DIM),
-        )]),
-    ]
-}
-
-/// Render an attachment message (skill listing, agent listing, MCP instructions, hook results, etc.)
-pub fn render_attachment_message(kind_label: &str, content: &str, width: u16) -> Vec<Line<'static>> {
-    // Reserve space for the "  [label] " prefix and a small margin.
-    let prefix_len = kind_label.len() + 6; // "  [label] "
-    let preview_max = (width as usize).saturating_sub(prefix_len).max(20).min(120);
-    let preview: String = content.chars().take(preview_max).collect();
-    let preview = if content.chars().count() > preview_max {
-        format!("{preview}\u{2026}")
-    } else {
-        preview
-    };
-    vec![Line::from(vec![
-        Span::styled(
-            format!("  [{kind_label}] "),
-            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(preview, Style::default().fg(Color::White)),
-    ])]
-}
-
-/// Render an advisor status line.
-pub fn render_advisor_message(
-    is_loading: bool,
-    model_name: Option<&str>,
-) -> Vec<Line<'static>> {
-    let model_suffix = model_name
-        .map(|m| format!(" ({})", m))
-        .unwrap_or_default();
-    if is_loading {
-        vec![Line::from(vec![Span::styled(
-            format!("  \u{25cc} Advising\u{2026}{}", model_suffix),
-            Style::default()
-                .fg(Color::DarkGray)
-                .add_modifier(Modifier::DIM | Modifier::ITALIC),
-        )])]
-    } else {
-        vec![Line::from(vec![Span::styled(
-            format!("  \u{2713} Advisor reviewed{}", model_suffix),
-            Style::default().fg(Color::DarkGray).add_modifier(Modifier::DIM),
-        )])]
-    }
-}
-
-/// Render an agent notification line.
-pub fn render_agent_notification(agent_name: &str, message: &str) -> Vec<Line<'static>> {
-    render_agent_notification_with_severity(agent_name, message, "info")
-}
-
-/// Render an agent notification line with a severity level.
-/// severity: "info" (cyan), "warn" (yellow), "error" (red).
-pub fn render_agent_notification_with_severity(
-    agent_name: &str,
-    message: &str,
-    severity: &str,
-) -> Vec<Line<'static>> {
-    let color = match severity {
-        "warn" => Color::Yellow,
-        "error" => Color::Red,
-        _ => Color::Cyan,
-    };
-    vec![Line::from(vec![
-        Span::styled(
-            format!("  [{}] ", agent_name),
-            Style::default().fg(color).add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(message.to_string(), Style::default().fg(color)),
-    ])]
-}
-
-/// Render a session shutdown message.
-pub fn render_shutdown_message(reason: &str) -> Vec<Line<'static>> {
-    vec![
-        Line::from(vec![Span::styled(
-            "\u{2014}\u{2014}\u{2014}\u{2014}\u{2014}\u{2014}\u{2014}\u{2014}\u{2014}\u{2014}\u{2014}\u{2014}\u{2014}\u{2014}\u{2014}\u{2014}\u{2014}\u{2014}\u{2014}\u{2014}",
-            Style::default().fg(Color::DarkGray).add_modifier(Modifier::DIM),
-        )]),
-        Line::from(vec![Span::styled(
-            format!(
-                "  \u{2014} Session ended: {} \u{2014}",
-                reason
-            ),
-            Style::default().fg(Color::DarkGray).add_modifier(Modifier::DIM),
-        )]),
-    ]
-}
 
 /// Render a bash command input line with a green `$ ` prefix.
 pub fn render_bash_input_line(command: &str) -> Vec<Line<'static>> {
@@ -1302,71 +1191,6 @@ pub fn render_bash_output_block(output: &str, max_lines: usize) -> Vec<Line<'sta
     lines
 }
 
-/// Render a plan with numbered steps.
-pub fn render_plan_steps(steps: &[String]) -> Vec<Line<'static>> {
-    let mut lines = Vec::new();
-    lines.push(Line::from(vec![Span::styled(
-        "  Plan:".to_string(),
-        Style::default().fg(ACCENT_PRIMARY).add_modifier(Modifier::BOLD),
-    )]));
-    for (i, step) in steps.iter().enumerate() {
-        lines.push(Line::from(vec![
-            Span::styled(
-                format!("  {}. ", i + 1),
-                Style::default().fg(ACCENT_PRIMARY),
-            ),
-            Span::styled(step.clone(), Style::default().fg(Color::White)),
-        ]));
-    }
-    lines
-}
-
-/// Render a plan approval prompt.
-pub fn render_plan_approval_prompt() -> Vec<Line<'static>> {
-    vec![Line::from(vec![
-        Span::styled(
-            "  Approve this plan? ".to_string(),
-            Style::default().fg(ACCENT_PRIMARY).add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            "[y] yes  [n] no  [e] edit".to_string(),
-            Style::default().fg(Color::White),
-        ),
-    ])]
-}
-
-/// Render a "compact boundary" separator.
-pub fn render_compact_boundary() -> Vec<Line<'static>> {
-    vec![Line::from(vec![Span::styled(
-        "----------- context compacted -----------",
-        Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
-    )])]
-}
-
-/// Render a summary message (post-compact).
-pub fn render_summary_message(text: &str) -> Vec<Line<'static>> {
-    let mut lines = Vec::new();
-    lines.push(Line::from(vec![Span::styled(
-        "Summary",
-        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
-    )]));
-    for line in text.lines() {
-        lines.push(Line::from(vec![
-            Span::styled("  ", Style::default()),
-            Span::styled(line.to_string(), Style::default().fg(Color::Gray)),
-        ]));
-    }
-    lines
-}
-
-/// Render an unseen divider.
-pub fn render_unseen_divider(count: usize) -> Vec<Line<'static>> {
-    vec![Line::from(vec![Span::styled(
-        format!("---- {} new message{} ----", count, if count == 1 { "" } else { "s" }),
-        Style::default().fg(Color::Yellow),
-    )])]
-}
-
 /// Render a system message (dimmed, italic).
 pub fn render_system_message(text: &str) -> Vec<Line<'static>> {
     text.lines()
@@ -1402,48 +1226,6 @@ pub fn render_thinking_block(text: &str, expanded: bool) -> Vec<Line<'static>> {
                 Span::styled(line.to_string(), Style::default().fg(Color::DarkGray)),
             ]));
         }
-    }
-    lines
-}
-
-/// Render a rate-limit warning banner.
-pub fn render_rate_limit_banner(retry_after_secs: u64) -> Vec<Line<'static>> {
-    render_rate_limit_with_hint(retry_after_secs, false)
-}
-
-/// Render a rate-limit warning banner with optional upgrade hint.
-pub fn render_rate_limit_with_hint(retry_after_secs: u64, show_upgrade_hint: bool) -> Vec<Line<'static>> {
-    let mut lines = vec![
-        Line::from(vec![Span::styled(
-            "Rate limit exceeded",
-            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
-        )]),
-        Line::from(vec![Span::styled(
-            format!("  Retrying in {}s...", retry_after_secs),
-            Style::default().fg(Color::Yellow),
-        )]),
-    ];
-    if show_upgrade_hint {
-        lines.push(Line::from(vec![Span::styled(
-            "  \u{2192} /providers to configure API keys",
-            Style::default().fg(Color::DarkGray),
-        )]));
-    }
-    lines
-}
-
-/// Render a hook progress line (grey spinner + command).
-pub fn render_hook_progress(command: &str, last_line: Option<&str>) -> Vec<Line<'static>> {
-    let mut lines = Vec::new();
-    lines.push(Line::from(vec![
-        Span::styled("... ", Style::default().fg(Color::DarkGray)),
-        Span::styled(command.to_string(), Style::default().fg(Color::DarkGray)),
-    ]));
-    if let Some(line) = last_line {
-        lines.push(Line::from(vec![Span::styled(
-            format!("  {}", line),
-            Style::default().fg(Color::DarkGray),
-        )]));
     }
     lines
 }
@@ -1899,22 +1681,6 @@ pub fn render_user_local_command_output(
     lines
 }
 
-/// Render a resource update notification line.
-/// Shows: `↻ ` in cyan + `{server}: ` in dark gray bold + `{uri}` in white + ` · {reason}` in dark gray.
-pub fn render_resource_update(server: &str, uri: &str, reason: &str) -> Vec<Line<'static>> {
-    vec![Line::from(vec![
-        Span::styled("\u{21bb} ", Style::default().fg(Color::Cyan)),
-        Span::styled(
-            format!("{}: ", server),
-            Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(uri.to_string(), Style::default().fg(Color::White)),
-        Span::styled(
-            format!(" \u{00b7} {}", reason),
-            Style::default().fg(Color::DarkGray),
-        ),
-    ])]
-}
 
 /// Render a collapsed read/search tool use summary.
 /// Shows: `▸ ` in yellow + `{tool_name} ` in yellow bold + first few paths comma-joined,
