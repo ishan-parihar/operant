@@ -86,23 +86,6 @@ impl MarkdownConverter {
         result
     }
 
-    /// Reinsert all protected inline code and code block content, wrapping
-    /// each in the appropriate Telegram HTML tag.
-    fn reinsert_all(&self, text: &str) -> String {
-        let mut result = text.to_string();
-        // Inline codes first, then code blocks (groups are disjoint so
-        // the order of global replacement does not matter).
-        for (i, code) in self.inline_codes.iter().enumerate() {
-            let ph = make_placeholder("INLINE_CODE", i);
-            result = result.replace(&ph, &format!("<code>{}</code>", code));
-        }
-        for (i, code) in self.code_blocks.iter().enumerate() {
-            let ph = make_placeholder("CODE_BLOCK", i);
-            result = result.replace(&ph, &format!("<pre>{}</pre>", code));
-        }
-        result
-    }
-
     /// Reinsert all protected inline code and code block content, HTML-escaping
     /// the raw code content before wrapping in Telegram HTML tags.
     ///

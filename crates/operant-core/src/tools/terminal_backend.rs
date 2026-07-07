@@ -242,99 +242,6 @@ impl DockerBackend {
             .map(|s| s.success())
             .unwrap_or(false)
     }
-
-    /// Start a container if not already running.
-    async fn ensure_container(&mut self) -> anyhow::Result<String> {
-        if let Some(ref id) = self.container_id {
-            return Ok(id.clone());
-        }
-
-        let container_name = format!("operant-{}", &uuid::Uuid::new_v4().to_string()[..8]);
-
-        let mut run_args = vec![
-            "run".to_string(),
-            "-d".to_string(),
-            "--name".to_string(),
-            container_name.clone(),
-        ];
-
-        if !self.config.cwd.is_empty() {
-            run_args.extend(["-w".to_string(), self.config.cwd.clone()]);
-        }
-
-        for vol in &self.config.volumes {
-            run_args.extend(["-v".to_string(), vol.clone()]);
-        }
-
-        for (k, v) in &self.config.env {
-            run_args.extend(["-e".to_string(), format!("{}={}", k, v)]);
-        }
-
-        if self.config.cpu > 0.0 {
-            run_args.extend(["--cpus".to_string(), self.config.cpu.to_string()]);
-        }
-        if self.config.memory_mb > 0 {
-            run_args.extend([
-                "--memory".to_string(),
-                format!("{}m", self.config.memory_mb),
-            ]);
-        }
-
-        // Security: drop all capabilities, add back minimal set
-        run_args.extend([
-            "--cap-drop".to_string(),
-            "ALL".to_string(),
-            "--cap-add".to_string(),
-            "DAC_OVERRIDE".to_string(),
-            "--cap-add".to_string(),
-            "CHOWN".to_string(),
-            "--cap-add".to_string(),
-            "FOWNER".to_string(),
-            "--security-opt".to_string(),
-            "no-new-privileges".to_string(),
-            "--pids-limit".to_string(),
-            "256".to_string(),
-        ]);
-
-        run_args.push(self.config.image.clone());
-        run_args.extend(["sleep".to_string(), "infinity".to_string()]);
-
-        debug!(
-            "Starting Docker container: {} {}",
-            self.docker_exe,
-            run_args.join(" ")
-        );
-
-        let output = Command::new(&self.docker_exe)
-            .args(&run_args)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .output()
-            .await
-            .map_err(|e| anyhow::anyhow!("Failed to start Docker container: {}", e))?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(anyhow::anyhow!("Docker run failed: {}", stderr));
-        }
-
-        let id = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        self.container_id = Some(id.clone());
-        debug!(
-            "Started container {} ({})",
-            container_name,
-            &id[..12.min(id.len())]
-        );
-        Ok(id)
-    }
-
-    /// Find or create a container, handling "no such container" errors.
-    async fn recover_container(&mut self) -> anyhow::Result<()> {
-        warn!("Container gone — attempting recovery");
-        self.container_id = None;
-        self.ensure_container().await?;
-        Ok(())
-    }
 }
 
 #[async_trait]
@@ -491,21 +398,6 @@ impl SshBackend {
         cmd.extend(extra_args.iter().cloned());
         cmd.push(format!("{}@{}", self.config.user, self.config.host));
         cmd
-    }
-
-    /// Test SSH connectivity.
-    fn test_connection(&self) -> bool {
-        let cmd = self.build_ssh_command(&[
-            "echo".to_string(),
-            "'SSH connection established'".to_string(),
-        ]);
-        std::process::Command::new(&cmd[0])
-            .args(&cmd[1..])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false)
     }
 
     /// Cleanup the SSH ControlMaster connection.

@@ -115,10 +115,6 @@ impl OpenAIClient {
         self.http_client.clone()
     }
 
-    pub(crate) fn rate_limiter_clone(&self) -> RateLimiter {
-        self.rate_limiter.clone()
-    }
-
     /// Create from environment variables
     pub fn from_env() -> Result<Self> {
         let base = runtime_config();
