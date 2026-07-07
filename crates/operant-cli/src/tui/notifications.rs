@@ -20,7 +20,7 @@ pub enum NotificationKind {
 /// A single notification entry.
 #[derive(Debug, Clone)]
 pub struct Notification {
-    /// Unique identifier (used for dismissal).
+    /// Unique identifier (used for dismissal — currently only used in tests).
     pub id: String,
     pub kind: NotificationKind,
     pub message: String,
@@ -28,8 +28,9 @@ pub struct Notification {
     pub pushed_at: Instant,
     /// When `Some`, the notification auto-expires at this instant.
     pub expires_at: Option<Instant>,
-    /// Whether the user can manually dismiss this notification.
-    pub dismissible: bool,
+    // (iter-140: dismissible field deleted — was always true, never read
+    // outside dismiss_current() which always checked it. Now all
+    // notifications are dismissible.)
 }
 
 /// A FIFO queue of active notifications.
@@ -63,7 +64,6 @@ impl NotificationQueue {
             message: msg,
             pushed_at,
             expires_at,
-            dismissible: true,
         });
     }
 
@@ -87,11 +87,9 @@ impl NotificationQueue {
 
     /// Dismiss the currently visible notification.
     pub fn dismiss_current(&mut self) {
-        if let Some(n) = self.notifications.back().cloned() {
-            if n.dismissible {
-                self.notifications.pop_back();
-            }
-        }
+        // (iter-140: removed dismissible check — all notifications are
+        // now dismissible since the field was always true.)
+        self.notifications.pop_back();
     }
 
     pub fn current_is_error(&self) -> bool {
@@ -172,7 +170,7 @@ pub fn render_notification_banner(frame: &mut Frame, queue: &NotificationQueue, 
     let esc_hint = "  esc";
     let icon_with_spaces = format!(" {} ", notif.kind.icon());
     let icon_width = icon_with_spaces.width();
-    let esc_width = if notif.dismissible { esc_hint.width() } else { 0 };
+    let esc_width = esc_hint.width();
 
     // Available width for message: use inner_w as the base
     let msg_width_budget = inner_w.saturating_sub(icon_width + esc_width);
@@ -200,7 +198,7 @@ pub fn render_notification_banner(frame: &mut Frame, queue: &NotificationQueue, 
         Span::styled(icon_with_spaces.clone(), Style::default().fg(color).add_modifier(Modifier::BOLD)),
         Span::styled(message, Style::default().fg(OPERANT_TEXT)),
     ];
-    if notif.dismissible {
+    if true {
         row0_spans.push(Span::styled(esc_hint.to_string(), Style::default().fg(OPERANT_MUTED)));
     }
 
@@ -365,7 +363,6 @@ mod tests {
             message: "gone".to_string(),
             pushed_at: Instant::now(),
             expires_at: Some(Instant::now() - std::time::Duration::from_secs(1)),
-            dismissible: true,
         });
         assert!(!q.is_empty());
         q.tick();
