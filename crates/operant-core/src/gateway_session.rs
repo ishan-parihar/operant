@@ -1255,32 +1255,6 @@ impl PersistentSessionStore {
         }
     }
 
-    /// Find a session by its Operant session ID (legacy API).
-    pub fn get_operant_session(&self, operant_session_id: &str) -> Option<PlatformSession> {
-        self.entries
-            .read()
-            .unwrap()
-            .values()
-            .find(|e| e.session_id == operant_session_id)
-            .map(|e| PlatformSession {
-                session_id: e.session_id.clone(),
-                platform: e.platform.clone().unwrap_or_default(),
-                platform_user_id: e
-                    .origin
-                    .as_ref()
-                    .and_then(|o| o.user_id.clone())
-                    .unwrap_or_default(),
-                platform_channel_id: e
-                    .origin
-                    .as_ref()
-                    .map(|o| o.chat_id.clone())
-                    .unwrap_or_default(),
-                operant_session_id: String::new(),
-                created_at: e.created_at.clone(),
-                last_active: e.updated_at.clone(),
-                metadata: HashMap::new(),
-            })
-    }
 
     /// Check if any sessions exist.
     pub fn has_any_sessions(&self) -> bool {
