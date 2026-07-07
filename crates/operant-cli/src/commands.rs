@@ -848,29 +848,6 @@ pub fn commands_by_category() -> Vec<(&'static str, Vec<&'static CommandDef>)> {
 /// Set of all command names + aliases recognized by the gateway.
 /// Includes config-gated commands so the gateway can dispatch them
 /// (the handler checks the config gate at runtime).
-pub fn gateway_known_commands() -> std::collections::HashSet<&'static str> {
-    COMMAND_REGISTRY
-        .iter()
-        .filter(|cmd| !cmd.cli_only || cmd.gateway_config_gate.is_some())
-        .flat_map(|cmd| {
-            let mut names = vec![cmd.name];
-            for alias in cmd.aliases {
-                names.push(alias);
-            }
-            names
-        })
-        .collect()
-}
-
-/// Check if a command name resolves to a gateway-dispatchable slash command.
-pub fn is_gateway_known_command(name: &str) -> bool {
-    let trimmed = name.trim().trim_start_matches('/');
-    let map = build_command_map();
-    match map.get(trimmed) {
-        Some(cmd) => !cmd.cli_only || cmd.gateway_config_gate.is_some(),
-        None => false,
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -1416,29 +1393,7 @@ mod tests {
         assert!(deny.gateway_only, "/deny must be gateway_only");
     }
 
-    #[test]
-    fn test_gateway_known_commands_includes_approve() {
-        let known = gateway_known_commands();
-        assert!(known.contains("approve"), "Gateway must know /approve");
-        assert!(known.contains("deny"), "Gateway must know /deny");
-    }
 
-    #[test]
-    fn test_gateway_known_commands_excludes_cli_only() {
-        let known = gateway_known_commands();
-        // /clear is cli_only (mapped to "new" alias), /history is cli_only
-        // but we check raw cli_only commands
-        let history = COMMAND_REGISTRY
-            .iter()
-            .find(|c| c.name == "history")
-            .unwrap();
-        assert!(history.cli_only, "/history should be cli_only");
-        // Gateway should NOT include purely cli_only commands
-        assert!(
-            !known.contains("history"),
-            "Gateway must not include /history (cli_only)"
-        );
-    }
 
     #[test]
     fn test_snapshot_alias_snap() {
