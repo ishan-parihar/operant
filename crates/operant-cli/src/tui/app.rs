@@ -745,9 +745,7 @@ pub struct App {
     /// Whether fast mode is currently active (model locked to FAST_MODE_MODEL).
     pub fast_mode: bool,
     /// Active speech mode: None = normal, Some("caveman") / Some("rocky").
-    pub speech_mode: Option<String>,
     /// Speech mode intensity: "lite", "full", "ultra".
-    pub speech_level: String,
     /// Current agent mode name: "build", "plan", "explore", etc.
     pub agent_mode: Option<String>,
     /// Accent color derived from the current agent mode.
@@ -818,7 +816,6 @@ pub struct App {
     /// Scroll offset for error modal text (in lines).
     pub error_modal_scroll_offset: usize,
     /// Plugin hint banners.
-    pub plugin_hints: Vec<PluginHintBanner>,
     /// Optional session title shown in the status bar.
     pub session_title: Option<String>,
     /// Remote session URL (set when bridge connects; readable by commands).
@@ -1117,13 +1114,6 @@ pub struct App {
 // ---------------------------------------------------------------------------
 
 /// Return the system prompt injection for the active speech mode + level.
-pub fn speech_mode_prompt(mode: &str, level: &str) -> String {
-    match mode {
-        "caveman" => caveman_prompt(level),
-        "rocky" => rocky_prompt(level),
-        _ => String::new(),
-    }
-}
 
 fn caveman_prompt(level: &str) -> String {
     let base = "\
@@ -1297,8 +1287,6 @@ impl App {
             has_credentials,
             effort_level: initial_effort,
             fast_mode: false,
-            speech_mode: None,
-            speech_level: "full".to_string(),
             agent_mode: None,
             agent_mode_changed: false,
             accent_color: ACCENT_BUILD,
@@ -1332,7 +1320,6 @@ impl App {
             rewind_flow: RewindFlowOverlay::new(),
             notifications: NotificationQueue::new(),
             error_modal_scroll_offset: 0,
-            plugin_hints: Vec::new(),
             session_title: None,
             remote_session_url: None,
             mcp_manager: None,
@@ -1897,35 +1884,6 @@ permission_rx: None,
         self.status_message = Some(format!("Switched to {} mode.", label));
     }
 
-    /// Activate a speech mode (caveman/rocky) with a level (lite/full/ultra).
-    /// Pass `mode = None` to deactivate.
-    pub fn set_speech_mode(&mut self, mode: Option<&str>, level: &str) {
-        match mode {
-            Some(m) => {
-                self.speech_mode = Some(m.to_string());
-                self.speech_level = level.to_string();
-                let prompt = speech_mode_prompt(m, level);
-                self.config.append_system_prompt = Some(prompt);
-
-                let confirm = match (m, level) {
-                    ("caveman", "lite") => "Caveman mode. Lite.",
-                    ("caveman", "ultra") => "CAVEMAN ULTRA. NO WORD. ONLY FIX.",
-                    ("caveman", _) => "Caveman mode. Full. Oog.",
-                    ("rocky", "lite") => "Rocky mode. Lite.",
-                    ("rocky", "ultra") => "Rocky ultra. Big science. Amaze amaze amaze.",
-                    ("rocky", _) => "Rocky mode. Full. Good good good.",
-                    _ => "Speech mode activated.",
-                };
-                self.status_message = Some(confirm.to_string());
-            }
-            None => {
-                self.speech_mode = None;
-                self.speech_level = "full".to_string();
-                self.config.append_system_prompt = None;
-                self.status_message = Some("Normal mode.".to_string());
-            }
-        }
-    }
 
     /// Update the context window size from the model registry for the current model.
     pub fn refresh_context_window_size(&mut self) {
@@ -4194,13 +4152,7 @@ permission_rx: None,
             return false;
         }
 
-        // Plugin hint dismiss
-        if key.code == KeyCode::Esc {
-            if let Some(hint) = self.plugin_hints.iter_mut().find(|h| h.is_visible()) {
-                hint.dismiss();
-                return false;
-            }
-        }
+        // (iter-143: plugin_hints dismiss handler deleted — Vec was always empty)
 
         // Overage upsell dismiss — the overage_upsell dialog was deleted in
         // iter-58; this block is kept as a placeholder for future dismiss

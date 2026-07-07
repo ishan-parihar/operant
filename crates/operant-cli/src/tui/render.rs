@@ -38,7 +38,6 @@ use crate::tui::overlays::{
     render_global_search, render_help_overlay, render_history_search_overlay, render_rewind_flow,
     OPERANT_ACCENT,
 };
-use crate::tui::plugin_views::render_plugin_hints;
 use crate::tui::prompt_input::{InputMode, TypeaheadSource, VimMode, input_height, render_prompt_input};
 use crate::tui::settings_screen::render_settings_screen;
 use crate::tui::stats_dialog::render_stats_dialog;
@@ -894,27 +893,7 @@ fn render_context_menu(frame: &mut Frame, app: &App) {
 // -----------------------------------------------------------------------
 
 fn render_messages(frame: &mut Frame, app: &App, area: Rect) {
-    // Reserve space at the top for plugin hint banners
-    let hint_height = if app.plugin_hints.iter().any(|h| h.is_visible()) {
-        3u16
-    } else {
-        0
-    };
-
-    let (hint_area, content_area) = if hint_height > 0 && area.height > hint_height + 2 {
-        let splits = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Length(hint_height), Constraint::Min(1)])
-            .split(area);
-        (Some(splits[0]), splits[1])
-    } else {
-        (None, area)
-    };
-
-    // Render plugin hint banner if there is one
-    if let Some(ha) = hint_area {
-        render_plugin_hints(frame, &app.plugin_hints, ha);
-    }
+    let content_area = area; // (iter-143: plugin_hints deleted — Vec was always empty)
 
     let notice_lines = startup_notice_lines(app, content_area.width);
     // The banner sits above the welcome box. Height is responsive: 8 lines
