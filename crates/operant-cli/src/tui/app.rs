@@ -27,7 +27,7 @@ use crate::tui::adapter_types::cost::CostTracker;
 use crate::tui::adapter_types::file_history::FileHistory;
 use crate::tui::adapter_types::{sample_completion_verb, sample_spinner_verb};
 use crate::tui::adapter_types::keybindings::{
-    KeyContext, KeybindingResolver, KeybindingResult, ParsedKeystroke, UserKeybindings,
+    
 };
 use crate::tui::adapter_types::types::{ContentBlock, Message, Role};
 use operant_core::agent::AgentEvent;
@@ -502,49 +502,7 @@ fn normalize_char_with_shift(c: char, modifiers: KeyModifiers) -> char {
     }
 }
 
-fn key_event_to_keystroke(key: &KeyEvent) -> Option<ParsedKeystroke> {
-    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-    let alt  = key.modifiers.contains(KeyModifiers::ALT);
-
-    let normalized_key = match key.code {
-        KeyCode::Backspace => "backspace".to_string(),
-        KeyCode::Delete    => "delete".to_string(),
-        KeyCode::Down      => "down".to_string(),
-        KeyCode::End       => "end".to_string(),
-        KeyCode::Enter     => "enter".to_string(),
-        KeyCode::Esc       => "escape".to_string(),
-        KeyCode::Home      => "home".to_string(),
-        KeyCode::Left      => "left".to_string(),
-        KeyCode::PageDown  => "pagedown".to_string(),
-        KeyCode::PageUp    => "pageup".to_string(),
-        KeyCode::Right     => "right".to_string(),
-        KeyCode::Tab       => "tab".to_string(),
-        KeyCode::Up        => "up".to_string(),
-        KeyCode::BackTab   => "tab".to_string(),
-        KeyCode::Char(' ') => "space".to_string(),
-        KeyCode::Char(c) => {
-            // For modifier-key combos (Ctrl/Alt + letter), normalize to the
-            // ASCII Latin key at the same physical QWERTY position.  This
-            // makes shortcuts like Ctrl+C work regardless of the active
-            // keyboard layout (Ukrainian, Russian, Greek, …).
-            if (ctrl || alt) && !c.is_ascii() {
-                layout_to_latin(c)
-            } else {
-                c.to_lowercase().to_string()
-            }
-        }
-        _ => return None,
-    };
-
-    Some(ParsedKeystroke {
-        modifiers: vec![],
-        key: normalized_key,
-        ctrl,
-        alt,
-        shift: key.modifiers.contains(KeyModifiers::SHIFT),
-        meta: key.modifiers.contains(KeyModifiers::SUPER),
-    })
-}
+    // (iter-164: fn key_event_to_keystroke deleted — unused after keybinding processor removal)
 
 // ---------------------------------------------------------------------------
 // Focus target
@@ -631,7 +589,6 @@ pub struct App {
     pub agent_mode_changed: bool,
     pub agent_status: Vec<(String, String)>,
     pub history_search: Option<()>, // (iter-156: always None — struct deleted)
-    pub keybindings: KeybindingResolver,
 
     // Cursor position within input (byte offset)
     pub cursor_pos: usize,
@@ -1066,7 +1023,6 @@ fn format_elapsed_ms(ms: u128) -> String {
 
 impl App {
     pub fn new(mut config: Config, cost_tracker: Arc<CostTracker>, command_registry: crate::commands::CommandRegistry) -> Self {
-        let user_keybindings = UserKeybindings::load(&Settings::config_dir());
         let auth_store = crate::tui::adapter_types::AuthStore::load();
         let has_credentials = auth_store.has_any_key() || config.resolve_api_key().is_some();
 
@@ -1151,7 +1107,6 @@ impl App {
             accent_color: ACCENT_BUILD,
             agent_status: Vec::new(),
             history_search: None,
-            keybindings: KeybindingResolver::new(&user_keybindings),
             cursor_pos: 0,
             auto_scroll: true,
             new_messages_while_scrolled: 0,
@@ -4487,31 +4442,7 @@ permission_rx: None,
         false
     }
 
-    fn current_key_context(&self) -> KeyContext {
-        if self.diff_viewer.visible {
-            KeyContext::DiffDialog
-        } else if self.agents_menu.visible || self.mcp_view.visible || self.stats_dialog.visible {
-            KeyContext::Select
-        } else if self.import_config_dialog.visible {
-            KeyContext::Confirmation
-        } else if self.settings_screen.visible {
-            KeyContext::Settings
-        } else if self.theme_screen.visible {
-            KeyContext::ThemePicker
-        } else if self.rewind_flow.visible {
-            KeyContext::Confirmation
-        } else if self.help_overlay.visible {
-            KeyContext::Help
-        } else if self.history_search_overlay.visible {
-            KeyContext::HistorySearch
-        } else if self.permission_request.is_some() {
-            KeyContext::Confirmation
-        } else if self.show_help {
-            KeyContext::Help
-        } else {
-            KeyContext::Chat
-        }
-    }
+    // (iter-164: fn current_key_context deleted — unused after keybinding processor removal)
 
     // -------------------------------------------------------------------
     // New overlay key handlers
@@ -4810,300 +4741,7 @@ permission_rx: None,
         self.exit_key_sequence_start = Some(key_char);
     }
 
-    fn handle_keybinding_action(&mut self, action: &str) -> bool {
-        match action {
-            "interrupt" => {
-                if self.is_streaming {
-                    self.is_streaming = false;
-                    self.spinner_verb = None;
-                    self.streaming_text.clear();
-                    self.streaming_thinking.clear();
-                    self.tool_use_blocks.clear();
-                    self.status_message = Some("Cancelled.".to_string());
-                } else {
-                    // Handle exit confirmation: require two exit key presses within 2 seconds.
-                    // Always clear the prompt input on Ctrl+C.
-                    if !self.prompt_input.is_empty() {
-                        self.prompt_input.clear();
-                        self.refresh_prompt_input();
-                    }
-
-                    let elapsed = self.last_exit_key_warning.map(|t| t.elapsed().as_secs_f64());
-                    let is_valid = elapsed.map(|e| e <= 2.0).unwrap_or(false);
-
-                    if self.last_exit_key_warning.is_some() && is_valid {
-                        // A warning is active and within 2 seconds: exit.
-                        self.should_exit = true;
-                        self.last_exit_key_warning = None;
-                        self.exit_key_sequence_start = None;
-                    } else {
-                        // First press or timeout expired: show exit confirmation.
-                        self.push_notification(NotificationKind::Info, "Press Ctrl+C again to exit".to_string(), Some(2));
-                        self.last_exit_key_warning = Some(std::time::Instant::now());
-                        self.exit_key_sequence_start = Some('c');
-                    }
-                }
-                false
-            }
-            "exit" => {
-                if self.prompt_input.is_empty() {
-                    self.should_exit = true;
-                }
-                false
-            }
-            "redraw" => false,
-            "historySearch" => {
-                let overlay = HistorySearchOverlay::open(&self.prompt_input.history);
-                self.history_search_overlay = overlay;
-                false
-            }
-            "openSearch" => {
-                self.global_search.open();
-                self.refresh_global_search();
-                false
-            }
-            "submit" => {
-                if !self.is_streaming {
-                    if !self.prompt_input.suggestions.is_empty()
-                        && self.prompt_input.suggestion_index.is_some()
-                    {
-                        self.prompt_input.accept_suggestion();
-                        self.refresh_prompt_input();
-                        false
-                    } else {
-                        true
-                    }
-                } else {
-                    false
-                }
-            }
-            "historyPrev" => {
-                // Suggestions (slash commands or file refs) take priority over cursor/history.
-                if !self.prompt_input.suggestions.is_empty()
-                    && (self.prompt_input.text.starts_with('/') || self.prompt_input.has_active_file_ref())
-                {
-                    self.prompt_input.suggestion_prev();
-                    self.refresh_prompt_input();
-                } else {
-                    let width = self.last_input_area.get().width.saturating_sub(4) as usize;
-                    let moved = !self.prompt_input.text.is_empty()
-                        && self.prompt_input.move_visual_up(width);
-                    if !moved && !self.prompt_input.history.is_empty() {
-                        self.prompt_input.history_up();
-                    }
-                    self.refresh_prompt_input();
-                }
-                false
-            }
-            "historyNext" => {
-                // Suggestions (slash commands or file refs) take priority over cursor/history.
-                if !self.prompt_input.suggestions.is_empty()
-                    && (self.prompt_input.text.starts_with('/') || self.prompt_input.has_active_file_ref())
-                {
-                    self.prompt_input.suggestion_next();
-                    self.refresh_prompt_input();
-                } else {
-                    let width = self.last_input_area.get().width.saturating_sub(4) as usize;
-                    let moved = !self.prompt_input.text.is_empty()
-                        && self.prompt_input.move_visual_down(width);
-                    if !moved && self.prompt_input.history_pos.is_some() {
-                        self.prompt_input.history_down();
-                    }
-                    self.refresh_prompt_input();
-                }
-                false
-            }
-            "goLineStart" => {
-                if !self.is_streaming {
-                    self.prompt_input.cursor = 0;
-                    self.sync_legacy_prompt_fields();
-                }
-                false
-            }
-            "goLineEnd" => {
-                if !self.is_streaming {
-                    self.prompt_input.cursor = self.prompt_input.text.len();
-                    self.sync_legacy_prompt_fields();
-                }
-                false
-            }
-            "killToStart" => {
-                if !self.is_streaming {
-                    self.prompt_input.kill_line_backward();
-                    self.refresh_prompt_input();
-                }
-                false
-            }
-            "killWord" => {
-                if !self.is_streaming {
-                    self.prompt_input.kill_word_backward();
-                    self.refresh_prompt_input();
-                }
-                false
-            }
-            "scrollUp" => {
-                self.scroll_offset = self.scroll_offset.saturating_add(10);
-                self.auto_scroll = false;
-                false
-            }
-            "scrollDown" => {
-                let new_off = self.scroll_offset.saturating_sub(10);
-                self.scroll_offset = new_off;
-                if new_off == 0 {
-                    self.auto_scroll = true;
-                    self.new_messages_while_scrolled = 0;
-                }
-                false
-            }
-            "yes" => {
-                self.permission_request = None;
-                false
-            }
-            "no" => {
-                self.permission_request = None;
-                false
-            }
-            "prevOption" => {
-                if let Some(pr) = self.permission_request.as_mut() {
-                    if pr.selected_option > 0 {
-                        pr.selected_option -= 1;
-                    }
-                }
-                false
-            }
-            "nextOption" => {
-                if let Some(pr) = self.permission_request.as_mut() {
-                    if pr.selected_option + 1 < pr.options.len() {
-                        pr.selected_option += 1;
-                    }
-                }
-                false
-            }
-            "close" => {
-                self.show_help = false;
-                self.help_overlay.close();
-                false
-            }
-            "select" => {
-                // Legacy history search select
-                self.history_search_overlay.close();
-                false
-            }
-            "cancel" => {
-                self.history_search_overlay.close();
-                false
-            }
-            "prevResult" => {
-                self.history_search_overlay.select_prev();
-                false
-            }
-            "nextResult" => {
-                self.history_search_overlay.select_next();
-                false
-            }
-            // ========== NEW KEYBINDING ACTIONS (Phase 1) ==========
-            "clearLine" => {
-                // Ctrl+L: Clear the current input line (like bash Ctrl+L)
-                if !self.is_streaming {
-                    self.prompt_input.text.clear();
-                    self.prompt_input.cursor = 0;
-                    self.refresh_prompt_input();
-                }
-                false
-            }
-            "deleteCharBefore" => {
-                // Ctrl+H: Delete character before cursor (backspace equivalent)
-                if !self.is_streaming {
-                    self.prompt_input.backspace();
-                    self.refresh_prompt_input();
-                }
-                false
-            }
-            "previousMessage" => {
-                // Alt+←: Navigate to previous message in transcript
-                self.scroll_offset = self.scroll_offset.saturating_add(5);
-                self.auto_scroll = false;
-                false
-            }
-            "nextMessage" => {
-                // Alt+→: Navigate to next message in transcript
-                let new_off = self.scroll_offset.saturating_sub(5);
-                self.scroll_offset = new_off;
-                if new_off == 0 {
-                    self.auto_scroll = true;
-                }
-                false
-            }
-            // (iter-146: jumpToNextError + jumpToPreviousError deleted —
-            // dead code, only reachable via the dead KeybindingResolver)
-            "reverseIndent" => {
-                // Shift+Tab: Reverse indent (cycle permission mode)
-                use crate::tui::adapter_types::config::PermissionMode;
-                self.config.permission_mode = match self.config.permission_mode {
-                    PermissionMode::Default => PermissionMode::AcceptEdits,
-                    PermissionMode::AcceptEdits => PermissionMode::BypassPermissions,
-                    PermissionMode::BypassPermissions => PermissionMode::Default,
-                    PermissionMode::Plan => PermissionMode::Default,
-                };
-                let label = match self.config.permission_mode {
-                    PermissionMode::Default => "Default permissions",
-                    PermissionMode::AcceptEdits => "Accept-edits mode",
-                    PermissionMode::BypassPermissions => "Bypass permissions (dangerous)",
-                    PermissionMode::Plan => "Plan mode",
-                };
-                self.status_message = Some(label.to_string());
-                false
-            }
-            "openHelp" => {
-                // Alt+H: Open help (alternative to F1)
-                self.show_help = !self.show_help;
-                self.help_overlay.toggle();
-                false
-            }
-            "openModelPicker" => {
-                if !self.is_streaming {
-                    self.intercept_slash_command("model");
-                }
-                false
-            }
-            "openCommandPalette" => {
-                if !self.is_streaming {
-                    self.command_palette.open();
-                }
-                false
-            }
-            "deleteWord" => {
-                // Alt+D: Delete word forward
-                if !self.is_streaming {
-                    self.prompt_input.delete_word_at_cursor();
-                    self.refresh_prompt_input();
-                }
-                false
-            }
-            "newline" => {
-                // Shift+Enter: insert a literal newline into the prompt.
-                if !self.is_streaming {
-                    self.prompt_input.insert_newline();
-                    self.refresh_prompt_input();
-                }
-                false
-            }
-            "indent" => {
-                // Tab: accept slash-command suggestion if available.
-                if !self.is_streaming {
-                    if !self.prompt_input.suggestions.is_empty() {
-                        if self.prompt_input.suggestion_index.is_none() {
-                            self.prompt_input.suggestion_index = Some(0);
-                        }
-                        self.prompt_input.accept_suggestion();
-                        self.refresh_prompt_input();
-                    }
-                }
-                false
-            }
-            _ => false,
-        }
-    }
+    // (iter-164: fn handle_keybinding_action deleted — unused after keybinding processor removal)
 
 
     /// Resolve the currently-shown permission dialog by mapping the selected
