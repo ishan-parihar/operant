@@ -1926,12 +1926,6 @@ fn render_input(frame: &mut Frame, app: &App, area: Rect, focused: bool) {
                 format!(" · {}", provider),
                 Style::default().fg(dim),
             ));
-            if let Some(ref badge) = app.agent_type_badge {
-                spans.push(Span::styled(
-                    format!(" · {}", badge),
-                    Style::default().fg(dim),
-                ));
-            }
 
             // Iteration count — read from the Arc<AtomicUsize> the agent loop
             // bumps each turn. Shown as "· iter N" so it clusters visually
@@ -2171,13 +2165,7 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
     } else {
         let mut spans: Vec<Span> = Vec::new();
 
-        // Agent type badge (shown when running as subagent / coordinator)
-        if let Some(ref badge) = app.agent_type_badge {
-            spans.push(Span::styled(
-                format!("\u{2699} {}", badge),
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
-            ));
-        }
+        // (iter-142: agent_type_badge render deleted — field was always None)
 
         // PR badge — shows "PR #<n>" in cyan, with optional state in brackets.
         // State color: approved=green, changes_requested=red,
@@ -2207,30 +2195,7 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
             ));
         }
 
-        // Background task status pill — shows "⟳ N tasks" when count > 0.
-        // Falls back to background_task_status pre-formatted string if set.
-        if app.background_task_count > 0 {
-            if !spans.is_empty() {
-                spans.push(Span::raw("  "));
-            }
-            let label = if app.background_task_count == 1 {
-                "\u{27f3} 1 task".to_string()
-            } else {
-                format!("\u{27f3} {} tasks", app.background_task_count)
-            };
-            spans.push(Span::styled(
-                label,
-                Style::default().fg(Color::Yellow),
-            ));
-        } else if let Some(ref task_status) = app.background_task_status {
-            if !spans.is_empty() {
-                spans.push(Span::raw("  "));
-            }
-            spans.push(Span::styled(
-                format!("\u{27f3} {}", task_status),
-                Style::default().fg(Color::Yellow),
-            ));
-        }
+        // (iter-142: background_task_count/status render deleted — fields were always 0/None)
 
         // Vim mode indicator — shown for all modes using neovim "-- MODE --" convention.
         // INSERT is dim (common, low-noise); other modes use bright colour.
@@ -2420,28 +2385,7 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
 
         // 5. Vim mode — displayed on the left side as "-- MODE --"; nothing extra on right.
 
-
-        // 6. Agent type badge
-        if let Some(ref badge) = app.agent_type_badge {
-            if !parts.is_empty() {
-                parts.push(Span::raw("  "));
-            }
-            parts.push(Span::styled(
-                format!("[{}]", badge),
-                Style::default().fg(OPERANT_ACCENT),
-            ));
-        }
-
-        // 7. Worktree branch
-        if let Some(ref branch) = app.worktree_branch {
-            if !parts.is_empty() {
-                parts.push(Span::raw("  "));
-            }
-            parts.push(Span::styled(
-                format!("[{}]", branch),
-                Style::default().fg(Color::Green),
-            ));
-        }
+        // (iter-142: agent_type_badge + worktree_branch render deleted — fields were always None)
 
         // 7b. Infrastructure pill — shows memory + skills counts so the
         // invisible infrastructure is visible. (P2-14 from UX audit.)
