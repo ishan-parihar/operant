@@ -478,9 +478,6 @@ pub fn render_app(frame: &mut Frame, app: &App) {
     // New help overlay
     if app.help_overlay.visible {
         render_help_overlay(frame, &app.help_overlay, size);
-    } else if app.show_help {
-        // Legacy fallback â€” render the simple help overlay
-        render_simple_help_overlay(frame, size);
     }
 
     // History search overlay
@@ -2557,59 +2554,6 @@ fn render_prompt_suggestions(frame: &mut Frame, app: &App, area: Rect) {
 // Legacy simple help overlay (fallback when help_overlay is not open)
 // -----------------------------------------------------------------------
 
-fn render_simple_help_overlay(frame: &mut Frame, area: Rect) {
-    let help_width = 50u16.min(area.width.saturating_sub(4));
-    let help_height = 20u16.min(area.height.saturating_sub(4));
-    let help_area = crate::overlays::centered_rect(help_width, help_height, area);
-
-    frame.render_widget(Clear, help_area);
-
-    let lines = vec![
-        Line::from(vec![Span::styled(
-            " Key Bindings",
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
-        )]),
-        Line::from(""),
-        kb_line("Enter", "Submit message"),
-        kb_line("Ctrl+C", "Cancel streaming / Quit"),
-        kb_line("Ctrl+D", "Quit (empty input)"),
-        kb_line("Up / Down", "Navigate input history"),
-        kb_line("Ctrl+R", "Search input history"),
-        kb_line("PageUp / PageDown", "Scroll messages"),
-        kb_line("F1 / ?", "Toggle this help"),
-        Line::from(""),
-        Line::from(vec![Span::styled(
-            " Permission Dialog",
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
-        )]),
-        Line::from(""),
-        kb_line("1 / 2 / 3", "Select option"),
-        kb_line("y / a / n", "Allow / Always / Deny"),
-        kb_line("Enter", "Confirm selection"),
-        kb_line("Esc", "Deny (close dialog)"),
-        Line::from(""),
-        Line::from(vec![Span::styled(
-            " press F1 or ? to close ",
-            Style::default()
-                .fg(Color::DarkGray)
-                .add_modifier(Modifier::ITALIC),
-        )]),
-    ];
-
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(" Help ")
-        .border_style(Style::default().fg(Color::Cyan));
-
-    let para = Paragraph::new(lines)
-        .block(block)
-        .alignment(Alignment::Left);
-    frame.render_widget(para, help_area);
-}
 
 fn kb_line<'a>(key: &str, desc: &str) -> Line<'a> {
     Line::from(vec![
