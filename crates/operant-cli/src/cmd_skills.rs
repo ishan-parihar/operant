@@ -136,9 +136,9 @@ pub enum TapCommand {
     },
 }
 
-pub async fn handle_skills_command(config: &AppConfig, cmd: SkillsSubcommand) -> Result<()> {
+pub async fn handle_skills_command(config: &AppConfig, cmd: SkillsSubcommand, json: bool) -> Result<()> {
     match cmd {
-        SkillsSubcommand::List => list_skills(config),
+        SkillsSubcommand::List => list_skills(config, json),
         SkillsSubcommand::Search { query } => search_skills(config, &query),
         SkillsSubcommand::Inspect { id } => inspect_skill(config, &id),
         SkillsSubcommand::Install { source, name, force } => {
@@ -224,11 +224,15 @@ async fn handle_market_command(config: &AppConfig, cmd: MarketCommand) -> Result
 // Handlers
 // ---------------------------------------------------------------------------
 
-fn list_skills(config: &AppConfig) -> Result<()> {
+fn list_skills(config: &AppConfig, json: bool) -> Result<()> {
     let skills_dir = &config.skills.root_dir;
 
     if !skills_dir.exists() {
-        println!("No skills installed.");
+        if json {
+            println!("[]");
+        } else {
+            println!("No skills installed.");
+        }
         return Ok(());
     }
 
@@ -238,6 +242,15 @@ fn list_skills(config: &AppConfig) -> Result<()> {
         .with_context(|| format!("Failed to load skills from '{}'", skills_dir.display()))?;
 
     let skills = manager.list();
+
+    if json {
+        let items: Vec<serde_json::Value> = skills
+            .iter()
+            .map(|(name, desc)| serde_json::json!({"name": name, "description": desc}))
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&items)?);
+        return Ok(());
+    }
 
     if skills.is_empty() {
         println!("No skills installed.");
