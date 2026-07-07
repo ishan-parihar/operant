@@ -208,6 +208,14 @@ fn handle_check(config: &AppConfig) -> Result<()> {
                     ));
                 }
             }
+            McpTransportKind::StreamableHttp => {
+                if server.url.is_none() {
+                    issues.push(format!(
+                        "Streamable-HTTP MCP server '{}' has no URL configured.",
+                        server.name
+                    ));
+                }
+            }
             McpTransportKind::Stdio => {
                 if server.command.is_none() {
                     issues.push(format!(

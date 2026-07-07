@@ -300,12 +300,18 @@ impl Default for TuiSettings {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum McpTransportKind {
     #[default]
     Http,
     Stdio,
+    /// Streamable-HTTP transport (MCP spec 2025-06-18). Uses HTTP POST
+    /// for client→server requests and SSE (Server-Sent Events) for
+    /// server→client streaming. This is the modern recommended HTTP
+    /// transport, superseding the old plain-POST HTTP + legacy SSE.
+    /// (iter-137 — closes ponytail-audit gap B2.)
+    StreamableHttp,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
