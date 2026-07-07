@@ -263,6 +263,9 @@ enum Commands {
     Gateway {
         #[command(subcommand)]
         cmd: cmd_gateway::GatewaySubcommand,
+        /// Output as JSON (for scripting/CI)
+        #[arg(long, global = true)]
+        json: bool,
     },
     /// Manage checkpoints
     Checkpoints {
@@ -298,6 +301,9 @@ enum Commands {
         /// Attempt to auto-fix common issues
         #[arg(long)]
         fix: bool,
+        /// Output as JSON (for scripting/CI)
+        #[arg(long)]
+        json: bool,
     },
     /// Show system status overview
     Status {
@@ -1482,8 +1488,8 @@ async fn main() -> Result<()> {
         Some(Commands::Kanban { board, cmd }) => {
             cmd_kanban::handle_kanban_command(&loaded.config, &board, cmd.clone()).await?;
         }
-        Some(Commands::Gateway { cmd }) => {
-            cmd_gateway::handle_gateway_command(&loaded.config, cmd.clone()).await?;
+        Some(Commands::Gateway { cmd, json }) => {
+            cmd_gateway::handle_gateway_command(&loaded.config, cmd.clone(), *json).await?;
         }
         Some(Commands::Checkpoints { cmd }) => {
             cmd_checkpoints::handle_checkpoints_command(&loaded.config, cmd.clone()).await?;
@@ -1506,8 +1512,8 @@ async fn main() -> Result<()> {
         Some(Commands::Version { detailed }) => {
             cmd_version::handle_version_command(&loaded.config, *detailed).await?;
         }
-        Some(Commands::Doctor { fix }) => {
-            cmd_doctor::handle_doctor_command(&loaded.config, *fix).await?;
+        Some(Commands::Doctor { fix, json }) => {
+            cmd_doctor::handle_doctor_command(&loaded.config, *fix, *json).await?;
         }
         Some(Commands::Status { deep, json }) => {
             cmd_status::handle_status_command(&loaded.config, *deep, *json).await?;

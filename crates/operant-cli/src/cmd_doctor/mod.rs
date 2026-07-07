@@ -15,13 +15,12 @@ use operant_core::config::AppConfig;
 
 use self::check_result::{print_banner, print_summary};
 
-/// Dispatch handle — called from `main.rs` for `operant doctor [--fix]`.
-pub async fn handle_doctor_command(config: &AppConfig, fix: bool) -> Result<()> {
+/// Dispatch handle — called from `main.rs` for `operant doctor [--fix] [--json]`.
+pub async fn handle_doctor_command(config: &AppConfig, fix: bool, json: bool) -> Result<()> {
     if fix {
         return checks_fix::cmd_fix(config).await;
     }
 
-    print_banner();
     let mut issues: Vec<String> = Vec::new();
     let mut manual_issues: Vec<String> = Vec::new();
 
@@ -31,6 +30,18 @@ pub async fn handle_doctor_command(config: &AppConfig, fix: bool) -> Result<()> 
     checks_api::run_api_checks(&mut issues).await;
     checks_tools::run_platform_checks(config, &mut issues, &mut manual_issues);
 
-    print_summary(&issues, &manual_issues, 0, false);
+    if json {
+        let result = serde_json::json!({
+            "issues": issues,
+            "manual_issues": manual_issues,
+            "total_issues": issues.len() + manual_issues.len(),
+            "auto_fixable": issues.len(),
+            "manual_required": manual_issues.len(),
+        });
+        println!("{}", serde_json::to_string_pretty(&result)?);
+    } else {
+        print_banner();
+        print_summary(&issues, &manual_issues, 0, false);
+    }
     Ok(())
 }
