@@ -1030,14 +1030,6 @@ impl TelegramAdapter {
     }
 }
 
-/// Escape HTML special characters for Telegram HTML parse_mode
-fn escape_html(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-}
-
 /// Count UTF-16 code units in a string (Telegram's length metric).
 fn utf16_len(s: &str) -> usize {
     s.encode_utf16().count()
