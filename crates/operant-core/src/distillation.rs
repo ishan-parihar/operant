@@ -1,7 +1,7 @@
 //! State distillation for durable long-term memory.
 
 use std::collections::HashSet;
-use std::hash::{Hash, Hasher};
+
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -112,9 +112,14 @@ fn distilled_memory_id(fact: &str, index: usize) -> String {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs())
         .unwrap_or_default();
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    fact.hash(&mut hasher);
-    format!("distilled_{}_{}_{}", now, index, hasher.finish())
+    // (iter-144 — fixed A28: was DefaultHasher which is NOT stable across
+    // Rust versions — IDs would change when the toolchain updates. Now
+    // uses SHA-256 which is stable + already in deps.)
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(fact.as_bytes());
+    let hash = hex::encode(&hasher.finalize()[..8]);
+    format!("distilled_{}_{}_{}", now, index, hash)
 }
 
 #[cfg(test)]
