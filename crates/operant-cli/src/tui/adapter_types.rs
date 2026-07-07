@@ -1221,10 +1221,7 @@ pub mod file_injection {
         }
         (refs, issues)
     }
-
-    pub fn build_file_blocks(_refs: &[AtFileRef]) -> Vec<String> {
-        vec![]
-    }
+    // (iter-155: build_file_blocks deleted — always returned empty Vec)
 }
 
 #[derive(Debug, Clone)]
@@ -1665,21 +1662,7 @@ impl std::str::FromStr for ProviderId {
 }
 
 pub mod streaming {
-    #[derive(Debug, Clone)]
-    pub enum AnthropicStreamEvent {
-        ContentBlockStart { index: usize },
-        ContentBlockDelta { index: usize, delta: ContentDelta },
-        ContentBlockStop { index: usize },
-        MessageStart,
-        MessageStop,
-        Ping,
-    }
-
-    #[derive(Debug, Clone)]
-    pub enum ContentDelta {
-        TextDelta { text: String },
-        ThinkingDelta { thinking: String },
-    }
+    // (iter-155: AnthropicStreamEvent + ContentDelta deleted — zero callers)
 }
 
 pub mod mcp {
