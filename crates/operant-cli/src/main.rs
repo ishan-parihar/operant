@@ -601,8 +601,8 @@ pub(crate) async fn build_registry(
         event_tx,
     )
     .await?;
-    registry.register(EchoTool::new()).await?;
-    registry.register(CalculatorTool::new()).await?;
+    // (iter-153: EchoTool + CalculatorTool deleted — toy demo tools.
+    // operant-core already has a real EchoTool in debug_helpers.rs.)
 
     // Register TDG tools only when the TDG memory provider is active.
     // This requires the TdgMemoryProvider to be initialized so we can
@@ -1228,125 +1228,6 @@ async fn test_tool(config: &AppConfig, tool_name: &str, args: Option<&str>) -> R
     Ok(())
 }
 
-struct EchoTool;
-
-impl EchoTool {
-    fn new() -> Self {
-        Self
-    }
-}
-
-#[async_trait::async_trait]
-impl OperantTool for EchoTool {
-    fn name(&self) -> &str {
-        "echo"
-    }
-
-    fn description(&self) -> &str {
-        "Echo back the input message. Useful for testing."
-    }
-
-    fn schema(&self) -> operant_core::schema::ToolSchema {
-        use schemars::JsonSchema;
-
-        #[derive(JsonSchema, Deserialize)]
-        #[serde(rename_all = "camelCase")]
-        #[allow(dead_code)]
-        struct EchoArgs {
-            message: String,
-        }
-
-        operant_core::schema::ToolSchema::from_type::<EchoArgs>(
-            "echo",
-            "Echo back the input message",
-        )
-    }
-
-    async fn execute(&self, args: Value, _context: ToolContext) -> operant_core::tools::ToolResult {
-        if let Some(msg) = args.get("message").and_then(|value| value.as_str()) {
-            operant_core::tools::ToolResult::success("echo", serde_json::json!({ "echoed": msg }))
-        } else {
-            operant_core::tools::ToolResult::error("echo", "Missing 'message' argument")
-        }
-    }
-}
-
-struct CalculatorTool;
-
-impl CalculatorTool {
-    fn new() -> Self {
-        Self
-    }
-}
-
-#[async_trait::async_trait]
-impl OperantTool for CalculatorTool {
-    fn name(&self) -> &str {
-        "calculate"
-    }
-
-    fn description(&self) -> &str {
-        "Perform a calculation. Supports add, subtract, multiply, and divide."
-    }
-
-    fn schema(&self) -> operant_core::schema::ToolSchema {
-        use schemars::JsonSchema;
-
-        #[derive(JsonSchema, Deserialize)]
-        #[serde(rename_all = "camelCase")]
-        #[allow(dead_code)]
-        struct CalcArgs {
-            operation: String,
-            a: f64,
-            b: f64,
-        }
-
-        operant_core::schema::ToolSchema::from_type::<CalcArgs>("calculate", "Perform calculations")
-    }
-
-    async fn execute(&self, args: Value, _context: ToolContext) -> operant_core::tools::ToolResult {
-        let operation = args
-            .get("operation")
-            .and_then(|value| value.as_str())
-            .unwrap_or("add");
-        let a = args
-            .get("a")
-            .and_then(|value| value.as_f64())
-            .unwrap_or(0.0);
-        let b = args
-            .get("b")
-            .and_then(|value| value.as_f64())
-            .unwrap_or(0.0);
-
-        let result = match operation {
-            "add" | "+" => a + b,
-            "subtract" | "-" => a - b,
-            "multiply" | "*" | "x" => a * b,
-            "divide" | "/" => {
-                if b == 0.0 {
-                    return operant_core::tools::ToolResult::error("calculate", "Division by zero");
-                }
-                a / b
-            }
-            _ => {
-                return operant_core::tools::ToolResult::error(
-                    "calculate",
-                    format!("Unknown operation: {}", operation),
-                )
-            }
-        };
-
-        operant_core::tools::ToolResult::success(
-            "calculate",
-            serde_json::json!({
-                "operation": operation,
-                "operand_a": a,
-                "operand_b": b,
-                "result": result
-            }),
-        )
-    }
-}
 
 #[tokio::main]
 async fn main() -> Result<()> {
