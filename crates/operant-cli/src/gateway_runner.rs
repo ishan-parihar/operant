@@ -1094,7 +1094,7 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
         }
     });
 
-    let platform_count = gateway.status().await.len();
+    let platform_count = gateway.adapter_count();
     *guard = Some(gateway.clone());
 
     // ── Spawn Cron Scheduler ─────────────────────────────────────────────

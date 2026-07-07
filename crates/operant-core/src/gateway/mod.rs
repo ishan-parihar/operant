@@ -697,8 +697,13 @@ impl Gateway {
         *self.running.read().await
     }
 
+    /// Get the number of registered adapters.
+    pub fn adapter_count(&self) -> usize {
+        self.adapters.len()
+    }
+
     // (iter-151: Gateway::status() deleted — duplicate of get_platform_status,
-    // both had zero external callers. Use adapters.len() for adapter count.)
+    // both had zero external callers. Use adapter_count() for adapter count.)
 
     /// Route an incoming message to the handler and send response
     pub async fn route_message(&self, message: IncomingMessage) -> Result<Option<OutgoingMessage>> {
