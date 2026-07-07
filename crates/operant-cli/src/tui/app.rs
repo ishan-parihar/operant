@@ -26,9 +26,6 @@ use crate::tui::adapter_types::config::{Config, Settings, Theme};
 use crate::tui::adapter_types::cost::CostTracker;
 use crate::tui::adapter_types::file_history::FileHistory;
 use crate::tui::adapter_types::{sample_completion_verb, sample_spinner_verb};
-use crate::tui::adapter_types::keybindings::{
-    
-};
 use crate::tui::adapter_types::types::{ContentBlock, Message, Role};
 use operant_core::agent::AgentEvent;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
