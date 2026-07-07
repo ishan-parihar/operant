@@ -119,7 +119,7 @@ pub use error::{Error, Result};
 pub use gateway::{
     format_startup_message, handle_admin_command, ChannelDirectory, ChannelInfo, ChannelType,
     Gateway, GatewayConfig, GatewayStats, IncomingMessage, OutgoingMessage, PlatformAdapter,
-    PlatformSession, SessionStore, TelegramAdapter, TelegramPoller, UserInfo,
+    PlatformSession, SessionStore, TelegramAdapter, UserInfo,
     WebhookAdapter, WhatsAppAdapter, EmailAdapter, SmsAdapter,
 };
 pub use gateway_session::{
