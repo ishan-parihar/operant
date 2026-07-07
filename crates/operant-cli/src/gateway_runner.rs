@@ -22,10 +22,21 @@ use crate::gateway_commands::{
 };
 use operant_core::mcp::McpManager;
 use operant_core::tools::{OperantTool, ToolContext, TranscriptionTool};
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::OnceLock;
 use tokio::sync::mpsc;
 use tokio::sync::Mutex;
+
+/// Global store of pending permission requests, keyed by channel_id.
+/// Populated by the permission receiver task in start_gateway(), consumed
+/// by /approve and /deny commands in gateway_commands.rs. (iter-160)
+pub static PENDING_PERMISSIONS: OnceLock<std::sync::Mutex<Option<Arc<Mutex<HashMap<String, operant_core::agent::ToolPermissionRequest>>>>>> = OnceLock::new();
+
+/// Initialize the PENDING_PERMISSIONS static (call once at startup).
+fn init_pending_permissions() {
+    PENDING_PERMISSIONS.get_or_init(|| std::sync::Mutex::new(None));
+}
 
 /// Returns the path to the gateway PID file used for cross-process status checks.
 fn pid_file_path() -> std::path::PathBuf {
@@ -366,6 +377,7 @@ fn build_session_context(platform: &str, channel_id: &str, app_config: &AppConfi
 /// builds the enabled platform adapters, creates the gateway session
 /// handler, and starts polling for incoming messages.
 pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
+    init_pending_permissions();
     let mut guard = runner().lock().await;
 
     if guard.is_some() {
@@ -760,39 +772,81 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
     // ToolPermissionRequest. We surface it to the user via the chat platform
     // and await their /approve or /deny response. (Bug #1 from iter-98 audit.)
     //
-    // For now, we auto-approve all permission requests in gateway mode
-    // because the per-platform inline-keyboard / button UI is not yet
-    // implemented. This matches the TUI's /yolo mode. A future iteration
-    // will add per-platform prompts (Telegram InlineKeyboardMarkup, Discord
-    // View, Slack Block Kit, numbered-text fallback for WhatsApp/Email/SMS).
-    // The /approve and /deny commands in gateway_commands.rs will be wired
-    // to store the user's response so this drain can read it.
+    // ToolPermissionRequest. We surface it to the user via the chat platform
+    // and await their /approve or /deny response. (iter-160 — replaces the
+    // auto-approve mode with real per-platform prompts.)
+    //
+    // The flow:
+    // 1. Permission request arrives → send "🔧 Tool: X — description. Reply
+    //    /approve to allow, /deny to cancel" to the current channel.
+    // 2. Store the pending request (response_tx) in a shared HashMap keyed
+    //    by channel_id.
+    // 3. When /approve or /deny arrives (handled in gateway_commands.rs),
+    //    it looks up the pending request and sends AllowSession/Deny.
+    // 4. If no response within 60s, auto-deny (safety timeout).
     let gw_for_perm = gw.clone();
     let current_channel_for_perm = current_channel.clone();
+    let pending_permissions: Arc<Mutex<HashMap<String, operant_core::agent::ToolPermissionRequest>>> =
+        Arc::new(Mutex::new(HashMap::new()));
+    let pending_permissions_for_cmd = pending_permissions.clone();
+    let pending_permissions_for_perm = pending_permissions.clone();
+
+    // Spawn the permission receiver task
     tokio::spawn(async move {
-        tracing::info!("Permission request receiver started (auto-approve mode)");
+        tracing::info!("Permission request receiver started (prompt mode)");
         while let Some(req) = permission_rx.recv().await {
             tracing::info!(
                 tool = %req.tool_name,
                 description = %req.description,
-                "Permission request received — auto-approving (gateway mode)"
+                "Permission request received — prompting user"
             );
-            // Surface the request to the user as a status message.
-            if let Some((platform, channel_id)) = current_channel_for_perm.lock().await.as_ref() {
-                let msg = OutgoingMessage::new(
-                    channel_id,
-                    &format!("🔧 Tool: {} — {}", req.tool_name, req.description),
-                )
-                .no_markdown();
-                let _ = gw_for_perm.send_to_platform(&platform, msg).await;
+
+            // Get the current channel to send the prompt to
+            let channel_info = current_channel_for_perm.lock().await.clone();
+
+            if let Some((platform, channel_id)) = &channel_info {
+                // Send the permission prompt
+                let prompt = format!(
+                    "🔧 Permission required: {} — {}\nReply /approve to allow, /deny to cancel (60s timeout)",
+                    req.tool_name,
+                    req.description
+                );
+                let msg = OutgoingMessage::new(channel_id, &prompt).no_markdown();
+                let _ = gw_for_perm.send_to_platform(platform, msg).await;
+
+                // Store the pending request keyed by channel_id
+                pending_permissions_for_perm.lock().await.insert(channel_id.clone(), req);
+
+                // Spawn a timeout task — auto-deny after 60s
+                let pending_for_timeout = pending_permissions_for_perm.clone();
+                let timeout_channel = channel_id.clone();
+                tokio::spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                    let mut pending = pending_for_timeout.lock().await;
+                    if let Some(req) = pending.remove(&timeout_channel) {
+                        tracing::warn!(
+                            channel = %timeout_channel,
+                            "Permission request timed out — auto-denying"
+                        );
+                        let _ = req.response_tx.send(
+                            operant_core::agent::ToolPermissionResponse::Deny,
+                        );
+                    }
+                });
+            } else {
+                // No active channel — auto-approve (can't prompt)
+                tracing::warn!("No active channel for permission prompt — auto-approving");
+                let _ = req.response_tx.send(
+                    operant_core::agent::ToolPermissionResponse::AllowSession,
+                );
             }
-            // Auto-approve for now. TODO: implement per-platform prompts.
-            let _ = req
-                .response_tx
-                .send(operant_core::agent::ToolPermissionResponse::AllowSession);
         }
         tracing::warn!("Permission request receiver exited (permission_rx closed)");
     });
+
+    // Store the pending_permissions Arc so gateway_commands can access it
+    // when /approve or /deny is received.
+    PENDING_PERMISSIONS.get_or_init(|| std::sync::Mutex::new(Some(pending_permissions_for_cmd)));
 
     // Drain user-question requests from the clarify tool. When the agent
     // calls clarify(), it pushes a UserQuestionRequest and blocks. We surface

@@ -1737,29 +1737,49 @@ pub fn handle_command(cmd_name: &str, _args: &str, ctx: &CommandContext<'_>) -> 
 
         // ── Admin ────────────────────────────────────────────────────
         "approve" => {
-            let a = _args.trim();
+            // (iter-160: resolve pending permission request)
             let mut msg = String::from("✅ **Action approved.**");
-            if let Some(gateway) = ctx.gateway {
-                let store = gateway.get_session_store();
-                let approval_scope = if a == "always" { "always" } else { "session" };
-                store.update_session_metadata(ctx.platform, ctx.user_id, ctx.channel_id, &[
-                    ("approval_granted".to_string(), "true".to_string()),
-                    ("approval_scope".to_string(), approval_scope.to_string()),
-                    ("approved_at".to_string(), Utc::now().to_rfc3339()),
-                ]);
-                msg.push_str(&format!("\nApproval scope: `{}`", approval_scope));
+            let resolved = crate::gateway_runner::PENDING_PERMISSIONS
+                .get()
+                .and_then(|s| s.lock().ok())
+                .and_then(|mut guard| guard.take())
+                .and_then(|pending| {
+                    // Try to resolve the pending permission for this channel
+                    pending.try_lock().ok().and_then(|mut pending_map| {
+                        pending_map.remove(ctx.channel_id).and_then(|req| {
+                            req.response_tx.send(
+                                operant_core::agent::ToolPermissionResponse::AllowSession,
+                            ).ok()
+                        })
+                    })
+                });
+            if resolved.is_some() {
+                msg.push_str("\nTool execution resumed.");
+            } else {
+                msg.push_str("\n(No pending permission request found.)");
             }
             msg
         }
         "deny" => {
+            // (iter-160: resolve pending permission request)
             let mut msg = String::from("❌ **Action denied.**");
-            if let Some(gateway) = ctx.gateway {
-                let store = gateway.get_session_store();
-                store.update_session_metadata(ctx.platform, ctx.user_id, ctx.channel_id, &[
-                    ("approval_granted".to_string(), "false".to_string()),
-                    ("denied_at".to_string(), Utc::now().to_rfc3339()),
-                ]);
+            let resolved = crate::gateway_runner::PENDING_PERMISSIONS
+                .get()
+                .and_then(|s| s.lock().ok())
+                .and_then(|mut guard| guard.take())
+                .and_then(|pending| {
+                    pending.try_lock().ok().and_then(|mut pending_map| {
+                        pending_map.remove(ctx.channel_id).and_then(|req| {
+                            req.response_tx.send(
+                                operant_core::agent::ToolPermissionResponse::Deny,
+                            ).ok()
+                        })
+                    })
+                });
+            if resolved.is_some() {
                 msg.push_str("\nThe pending action has been cancelled.");
+            } else {
+                msg.push_str("\n(No pending permission request found.)");
             }
             msg
         }
