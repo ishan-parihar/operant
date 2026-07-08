@@ -14,6 +14,8 @@ use tokio::sync::RwLock;
 use crate::schema::ToolSchema;
 use crate::tools::{OperantTool, ToolContext, ToolResult};
 
+use std::sync::LazyLock;
+
 fn memory_file_path() -> PathBuf {
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
@@ -41,9 +43,7 @@ fn save_store(store: &HashMap<String, MemoryEntry>) {
     );
 }
 
-lazy_static::lazy_static! {
-    static ref MEMORY_STORE: Arc<RwLock<HashMap<String, MemoryEntry>>> = Arc::new(RwLock::new(load_store()));
-}
+static MEMORY_STORE: LazyLock<Arc<RwLock<HashMap<String, MemoryEntry>>>> = LazyLock::new(|| Arc::new(RwLock::new(load_store())));
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct MemoryEntry {

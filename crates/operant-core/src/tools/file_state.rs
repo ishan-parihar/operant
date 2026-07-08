@@ -1,12 +1,11 @@
 use async_trait::async_trait;
-use lazy_static::lazy_static;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fs;
-use std::sync::Mutex;
+use std::sync::{LazyLock, Mutex};
 use std::time::UNIX_EPOCH;
 
 use crate::schema::ToolSchema;
@@ -21,9 +20,7 @@ struct FileSnapshot {
     permissions: String,
 }
 
-lazy_static! {
-    static ref FILE_STATES: Mutex<HashMap<String, FileSnapshot>> = Mutex::new(HashMap::new());
-}
+static FILE_STATES: LazyLock<Mutex<HashMap<String, FileSnapshot>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 
 pub struct FileStateTool;
 

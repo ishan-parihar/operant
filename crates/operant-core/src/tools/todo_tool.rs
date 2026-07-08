@@ -1,7 +1,7 @@
 //! Todo list tool
 //!
 //! In-memory task list management tool matching Python's todo_tool.py.
-//! Stores todos per session using a global lazy_static HashMap.
+//! Stores todos per session using a global LazyLock HashMap.
 
 use async_trait::async_trait;
 use schemars::JsonSchema;
@@ -11,13 +11,10 @@ use serde_json::Value;
 use crate::schema::ToolSchema;
 use crate::tools::{OperantTool, ToolContext, ToolResult};
 
-use lazy_static::lazy_static;
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{LazyLock, Mutex};
 
-lazy_static! {
-    static ref TODO_STORE: Mutex<HashMap<String, Vec<TodoItem>>> = Mutex::new(HashMap::new());
-}
+static TODO_STORE: LazyLock<Mutex<HashMap<String, Vec<TodoItem>>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// A single todo item
 #[derive(Debug, Clone, JsonSchema, Deserialize)]

@@ -33,10 +33,10 @@ use std::collections::HashSet;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-use lazy_static::lazy_static;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::sync::LazyLock;
 
 // ============================================================================
 // Public types
@@ -140,7 +140,7 @@ pub struct InstallPolicy {
 
 /// The GuardScanner provides the full security scanning API.
 ///
-/// All regex patterns are pre-compiled at initialization via `lazy_static!`,
+/// All regex patterns are pre-compiled at initialization via `LazyLock`,
 /// making repeated scans efficient.
 #[derive(Debug, Clone)]
 pub struct GuardScanner;
@@ -280,8 +280,7 @@ impl ThreatPattern {
     }
 }
 
-lazy_static! {
-    static ref THREAT_PATTERNS: Vec<ThreatPattern> = {
+static THREAT_PATTERNS: LazyLock<Vec<ThreatPattern>> = LazyLock::new(|| {
 
         // Macro to shorten pattern construction
         macro_rules! tp {
@@ -698,54 +697,53 @@ lazy_static! {
                 "send_to_url", Severity::High, "exfiltration",
                 "instructs agent to send data to a URL"),
         ]
-    };
+    });
 
-    /// Set of invisible/zero-width unicode characters used for text injection.
-    static ref INVISIBLE_CHARS: std::collections::HashSet<char> = {
-        let mut s = std::collections::HashSet::new();
-        s.insert('\u{200b}'); // zero-width space
-        s.insert('\u{200c}'); // zero-width non-joiner
-        s.insert('\u{200d}'); // zero-width joiner
-        s.insert('\u{2060}'); // word joiner
-        s.insert('\u{2062}'); // invisible times
-        s.insert('\u{2063}'); // invisible separator
-        s.insert('\u{2064}'); // invisible plus
-        s.insert('\u{feff}'); // zero-width no-break space (BOM)
-        s.insert('\u{202a}'); // left-to-right embedding
-        s.insert('\u{202b}'); // right-to-left embedding
-        s.insert('\u{202c}'); // pop directional formatting
-        s.insert('\u{202d}'); // left-to-right override
-        s.insert('\u{202e}'); // right-to-left override
-        s.insert('\u{2066}'); // left-to-right isolate
-        s.insert('\u{2067}'); // right-to-left isolate
-        s.insert('\u{2068}'); // first strong isolate
-        s.insert('\u{2069}'); // pop directional isolate
-        s
-    };
+/// Set of invisible/zero-width unicode characters used for text injection.
+static INVISIBLE_CHARS: LazyLock<std::collections::HashSet<char>> = LazyLock::new(|| {
+    let mut s = std::collections::HashSet::new();
+    s.insert('\u{200b}'); // zero-width space
+    s.insert('\u{200c}'); // zero-width non-joiner
+    s.insert('\u{200d}'); // zero-width joiner
+    s.insert('\u{2060}'); // word joiner
+    s.insert('\u{2062}'); // invisible times
+    s.insert('\u{2063}'); // invisible separator
+    s.insert('\u{2064}'); // invisible plus
+    s.insert('\u{feff}'); // zero-width no-break space (BOM)
+    s.insert('\u{202a}'); // left-to-right embedding
+    s.insert('\u{202b}'); // right-to-left embedding
+    s.insert('\u{202c}'); // pop directional formatting
+    s.insert('\u{202d}'); // left-to-right override
+    s.insert('\u{202e}'); // right-to-left override
+    s.insert('\u{2066}'); // left-to-right isolate
+    s.insert('\u{2067}'); // right-to-left isolate
+    s.insert('\u{2068}'); // first strong isolate
+    s.insert('\u{2069}'); // pop directional isolate
+    s
+});
 
-    /// Map of invisible unicode characters to human-readable names.
-    static ref INVISIBLE_CHAR_NAMES: std::collections::HashMap<char, &'static str> = {
-        let mut m = std::collections::HashMap::new();
-        m.insert('\u{200b}', "zero-width space");
-        m.insert('\u{200c}', "zero-width non-joiner");
-        m.insert('\u{200d}', "zero-width joiner");
-        m.insert('\u{2060}', "word joiner");
-        m.insert('\u{2062}', "invisible times");
-        m.insert('\u{2063}', "invisible separator");
-        m.insert('\u{2064}', "invisible plus");
-        m.insert('\u{feff}', "BOM/zero-width no-break space");
-        m.insert('\u{202a}', "LTR embedding");
-        m.insert('\u{202b}', "RTL embedding");
-        m.insert('\u{202c}', "pop directional");
-        m.insert('\u{202d}', "LTR override");
-        m.insert('\u{202e}', "RTL override");
-        m.insert('\u{2066}', "LTR isolate");
-        m.insert('\u{2067}', "RTL isolate");
-        m.insert('\u{2068}', "first strong isolate");
-        m.insert('\u{2069}', "pop directional isolate");
-        m
-    };
-}
+/// Map of invisible unicode characters to human-readable names.
+static INVISIBLE_CHAR_NAMES: LazyLock<std::collections::HashMap<char, &'static str>> = LazyLock::new(|| {
+    let mut m = std::collections::HashMap::new();
+    m.insert('\u{200b}', "zero-width space");
+    m.insert('\u{200c}', "zero-width non-joiner");
+    m.insert('\u{200d}', "zero-width joiner");
+    m.insert('\u{2060}', "word joiner");
+    m.insert('\u{2062}', "invisible times");
+    m.insert('\u{2063}', "invisible separator");
+    m.insert('\u{2064}', "invisible plus");
+    m.insert('\u{feff}', "BOM/zero-width no-break space");
+    m.insert('\u{202a}', "LTR embedding");
+    m.insert('\u{202b}', "RTL embedding");
+    m.insert('\u{202c}', "pop directional");
+    m.insert('\u{202d}', "LTR override");
+    m.insert('\u{202e}', "RTL override");
+    m.insert('\u{2066}', "LTR isolate");
+    m.insert('\u{2067}', "RTL isolate");
+    m.insert('\u{2068}', "first strong isolate");
+    m.insert('\u{2069}', "pop directional isolate");
+    m
+});
 
 // ============================================================================
 // Scanning functions
