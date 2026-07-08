@@ -220,12 +220,14 @@ async fn connect_mcp_server(
                 .await?;
         }
         operant_core::config::McpTransportKind::StreamableHttp => {
+            // iter-190: StreamableHttp is now handled by the same add_server
+            // path as Http.
             let url = server
                 .url
                 .clone()
                 .context("Streamable-HTTP MCP server is missing a URL")?;
             mcp_manager
-                .add_streamable_http_server(
+                .add_server(
                     server.name.clone(),
                     url,
                     server.auth_token.clone(),
