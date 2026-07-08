@@ -1740,29 +1740,6 @@ impl CliConfig {
         Ok(config)
     }
 
-    /// Load config from a specific YAML file.
-    pub fn from_file(path: &Path) -> ConfigResult<Self> {
-        let raw = std::fs::read_to_string(path)?;
-        let value: Value =
-            serde_yaml::from_str(&raw).map_err(|e| ConfigError::Parse(e.to_string()))?;
-        let expanded = expand_env_vars_in_value(&value);
-        let config: CliConfig =
-            serde_yaml::from_value(expanded).map_err(|e| ConfigError::Parse(e.to_string()))?;
-        Ok(config)
-    }
-
-    /// Load config and apply env var overrides (both .env file and HERMES_*).
-    pub fn load_with_env() -> ConfigResult<Self> {
-        let mut config = Self::load()?;
-
-        // Load .env if it exists (already done in load(), but ensure)
-        if config.env_file.exists() {
-            load_dotenv_file(&config.env_file)?;
-        }
-
-        config.apply_operant_env_overrides();
-        Ok(config)
-    }
 
     /// Apply HERMES_* environment variable overrides to the config.
     fn apply_operant_env_overrides(&mut self) {

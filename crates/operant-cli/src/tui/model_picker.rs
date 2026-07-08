@@ -151,69 +151,6 @@ pub fn format_model_line(model_str: &str, context_window: Option<u32>, cost_per_
     parts.join("  ")
 }
 
-/// A group of models belonging to the same provider, for structured display.
-pub struct ProviderSection {
-    pub provider_name: String,
-    pub models: Vec<String>, // model ID strings in "provider/model" format
-}
-
-impl ModelPickerState {
-    /// Build grouped model sections from a flat list of model strings.
-    ///
-    /// Models with a `"provider/model"` slash format are grouped by their
-    /// provider prefix.  Bare model names are heuristically assigned to a
-    /// provider based on the model name pattern.
-    pub fn build_provider_sections(models: &[String]) -> Vec<ProviderSection> {
-        use std::collections::HashMap;
-        let mut by_provider: HashMap<String, Vec<String>> = HashMap::new();
-
-        for m in models {
-            let provider = if let Some((p, _)) = m.split_once('/') {
-                p.to_string()
-            } else {
-                // Bare model name — detect provider from model name
-                if m.contains("claude") {
-                    "anthropic".to_string()
-                } else if m.starts_with("gpt") || m.starts_with("o3") || m.starts_with("o4") {
-                    "openai".to_string()
-                } else if m.contains("gemini") {
-                    "google".to_string()
-                } else if m.contains("minimax") {
-                    "minimax".to_string()
-                } else {
-                    "other".to_string()
-                }
-            };
-            by_provider.entry(provider).or_default().push(m.clone());
-        }
-
-        // Define display order
-        let order = ["anthropic", "openai", "google", "ollama", "other"];
-        let mut sections = Vec::new();
-        for provider in order {
-            if let Some(models) = by_provider.remove(provider) {
-                sections.push(ProviderSection {
-                    provider_name: match provider {
-                        "anthropic" => "ANTHROPIC".to_string(),
-                        "openai" => "OPENAI".to_string(),
-                        "google" => "GOOGLE".to_string(),
-                        "ollama" => "OLLAMA".to_string(),
-                        _ => provider.to_uppercase(),
-                    },
-                    models,
-                });
-            }
-        }
-        // Add any remaining providers not in the order list
-        for (provider, models) in by_provider {
-            sections.push(ProviderSection {
-                provider_name: provider.to_uppercase(),
-                models,
-            });
-        }
-        sections
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Types
