@@ -7,7 +7,6 @@
 
 use std::path::{Path, PathBuf};
 
-use regex::Regex;
 use std::sync::LazyLock;
 use tracing::{debug, warn};
 

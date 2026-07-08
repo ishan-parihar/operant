@@ -49,7 +49,7 @@ pub enum VoiceError {
     Reqwest(#[from] reqwest::Error),
 }
 use tokio::sync::Mutex;
-use tracing::{debug, error, info};
+use tracing::{debug, info};
 
 // ---------------------------------------------------------------------------
 // Constants
