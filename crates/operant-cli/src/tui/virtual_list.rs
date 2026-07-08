@@ -84,21 +84,6 @@ impl<T: VirtualItem> VirtualList<T> {
         self.search_matches.clear();
     }
 
-    /// Push a single item and optionally scroll to bottom.
-    pub fn push_item(&mut self, item: T) {
-        self.search_index.push(item.search_text());
-        self.items.push(item);
-        if self.sticky_bottom {
-            self.jump_to_bottom();
-        }
-    }
-
-    /// Notify that the terminal has been resized; invalidate the height cache.
-    pub fn on_resize(&mut self, new_viewport_height: u16) {
-        self.viewport_height = new_viewport_height;
-        self.height_cache.clear();
-    }
-
     /// Get the cached height for item `idx` at `width`, computing it if needed.
     fn item_height(&mut self, idx: usize, width: u16) -> u16 {
         let key = (idx, width);
@@ -121,37 +106,11 @@ impl<T: VirtualItem> VirtualList<T> {
             .sum::<u16>()
     }
 
-    /// Scroll so item `idx` is visible, with 3 rows of headroom above.
-    pub fn scroll_to_index(&mut self, idx: usize, width: u16) {
-        let mut row = 0u16;
-        for i in 0..idx.min(self.items.len()) {
-            row = row.saturating_add(self.item_height(i, width));
-        }
-        // Put it 3 rows from the top of viewport
-        self.scroll_offset = row.saturating_sub(3);
-    }
-
     /// Scroll to the very bottom.
     pub fn jump_to_bottom(&mut self) {
         // We don't know viewport height in advance without width — set a high value;
         // render() will clamp scroll_offset appropriately.
         self.scroll_offset = u16::MAX;
-    }
-
-    /// Scroll up by `rows` rows.
-    pub fn scroll_up(&mut self, rows: u16) {
-        self.scroll_offset = self.scroll_offset.saturating_sub(rows);
-        self.sticky_bottom = false;
-    }
-
-    /// Scroll down by `rows` rows.
-    pub fn scroll_down(&mut self, rows: u16, width: u16) {
-        let total = self.total_height(width);
-        let max_offset = total.saturating_sub(self.viewport_height);
-        self.scroll_offset = (self.scroll_offset + rows).min(max_offset);
-        if self.scroll_offset >= max_offset {
-            self.sticky_bottom = true;
-        }
     }
 
     /// Find the index of the section header that should be pinned at the top.
@@ -267,49 +226,6 @@ impl<T: VirtualItem> VirtualList<T> {
         }
     }
 
-    /// Build/rebuild the search index (idempotent).
-    pub fn warm_search_index(&mut self) {
-        self.search_index = self.items.iter().map(|i| i.search_text()).collect();
-    }
-
-    /// Find indices of items matching `query` (case-insensitive substring).
-    pub fn find_matches(&mut self, query: &str) -> &[usize] {
-        if self.last_search.as_deref() == Some(query) {
-            return &self.search_matches;
-        }
-        let q = query.to_lowercase();
-        self.search_matches = self
-            .search_index
-            .iter()
-            .enumerate()
-            .filter(|(_, text)| text.to_lowercase().contains(&q))
-            .map(|(i, _)| i)
-            .collect();
-        self.last_search = Some(query.to_string());
-        &self.search_matches
-    }
-
-    /// Scroll to the next search match after `current_idx`.
-    pub fn next_match(&mut self, query: &str, current_idx: usize, width: u16) -> Option<usize> {
-        let matches = self.find_matches(query).to_vec();
-        let next = matches.iter().find(|&&i| i > current_idx).copied()
-            .or_else(|| matches.first().copied());
-        if let Some(idx) = next {
-            self.scroll_to_index(idx, width);
-        }
-        next
-    }
-
-    /// Scroll to the previous search match before `current_idx`.
-    pub fn prev_match(&mut self, query: &str, current_idx: usize, width: u16) -> Option<usize> {
-        let matches = self.find_matches(query).to_vec();
-        let prev = matches.iter().rev().find(|&&i| i < current_idx).copied()
-            .or_else(|| matches.last().copied());
-        if let Some(idx) = prev {
-            self.scroll_to_index(idx, width);
-        }
-        prev
-    }
 }
 
 impl<T: VirtualItem> Default for VirtualList<T> {
