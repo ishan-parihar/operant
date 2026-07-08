@@ -539,11 +539,6 @@ pub struct HistoryEntry {
 }
 
 impl HistoryEntry {
-    /// Create a new entry stamped with the current time.
-    pub fn new(text: String) -> Self {
-        Self { text, timestamp: Some(current_unix_secs()), pinned: false }
-    }
-
     /// Create a legacy entry without a timestamp.
     pub fn legacy(text: String) -> Self {
         Self { text, timestamp: None, pinned: false }

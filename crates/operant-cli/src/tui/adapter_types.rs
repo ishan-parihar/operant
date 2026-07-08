@@ -589,17 +589,6 @@ pub mod voice {
             }
         }
 
-        /// Build a VoiceRecorder from an explicit VoiceConfig (e.g. loaded
-        /// from operant.toml's [voice] section).
-        pub fn with_config(config: operant_core::voice::VoiceConfig) -> Self {
-            Self {
-                enabled: false,
-                config,
-                recorder: None,
-                stt_engine: None,
-                event_tx: None,
-            }
-        }
 
         pub fn set_enabled(&mut self, enabled: bool) {
             self.enabled = enabled;
