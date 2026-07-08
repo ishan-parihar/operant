@@ -28,7 +28,6 @@ const XAI_CLIENT_ID: &str = "b1a00492-073a-47ea-816f-4c329264a828";
 const NOUS_CLIENT_ID: &str = "operant-cli";
 const NOUS_PORTAL_URL: &str = "https://portal.nousresearch.com";
 const NOUS_INFERENCE_URL: &str = "https://inference-api.nousresearch.com/v1";
-const ACCESS_TOKEN_REFRESH_SKEW_SECONDS: u64 = 120;
 
 // ── Auth Store Structures ─────────────────────────────────────────────────
 
