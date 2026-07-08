@@ -1069,7 +1069,6 @@ pub struct ApprovalsConfig {
     pub timeout: Option<u64>,
     pub cron_mode: Option<String>,
     pub mcp_reload_confirm: Option<bool>,
-    pub destructive_slash_confirm: Option<bool>,
 }
 
 impl Default for ApprovalsConfig {
@@ -1079,7 +1078,6 @@ impl Default for ApprovalsConfig {
             timeout: Some(60),
             cron_mode: Some("deny".to_string()),
             mcp_reload_confirm: Some(true),
-            destructive_slash_confirm: Some(true),
         }
     }
 }

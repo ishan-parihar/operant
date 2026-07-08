@@ -6,7 +6,6 @@ use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::Value;
-use std::collections::HashMap;
 use std::process::Stdio;
 
 use crate::config::runtime_config;
@@ -21,12 +20,6 @@ pub struct CodeExecutionTool;
 struct CodeExecutionArgs {
     code: String,
     language: String,
-    /// Additional command-line arguments to pass to the script
-    #[allow(dead_code)]
-    args: Option<Vec<String>>,
-    /// Environment variables to set for the execution
-    #[allow(dead_code)]
-    env_vars: Option<HashMap<String, String>>,
     timeout: Option<u64>,
 }
 
