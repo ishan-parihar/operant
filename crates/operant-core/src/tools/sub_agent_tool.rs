@@ -41,7 +41,7 @@ type BoxedToolError = Box<dyn StdError + Send + Sync>;
 /// Role of the sub-agent - determines capabilities
 #[derive(Debug, Clone, Copy, PartialEq, Eq, JsonSchema, Default, Deserialize)]
 #[serde(rename_all = "lowercase")]
-enum SubAgentRole {
+pub(crate) enum SubAgentRole {
     /// Leaf agent - focused worker, cannot delegate further
     #[default]
     Leaf,
