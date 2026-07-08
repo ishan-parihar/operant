@@ -30,7 +30,6 @@
 //! assert!(matches!(verdict, ApprovalVerdict::Blocked { .. }));
 //! ```
 
-
 use lazy_static::lazy_static;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -652,7 +651,6 @@ fn extract_command_from_args(tool_name: &str, args: &Value) -> String {
 // ============================================================================
 // Interactive Approval Prompt
 // ============================================================================
-
 
 // ============================================================================
 // Helper Functions

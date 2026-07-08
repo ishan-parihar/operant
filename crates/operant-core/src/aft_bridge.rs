@@ -48,8 +48,8 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::process::{Child, Command, ChildStdin};
-use tokio::sync::{Mutex, oneshot};
+use tokio::process::{Child, ChildStdin, Command};
+use tokio::sync::{oneshot, Mutex};
 use uuid::Uuid;
 
 use crate::error::{Error, Result};
@@ -118,7 +118,9 @@ async fn find_cached_binary(cache_dir: &Path) -> Option<PathBuf> {
         if !name.starts_with("aft-") {
             continue;
         }
-        let bin_path = entry.path().join(if cfg!(windows) { "aft.exe" } else { "aft" });
+        let bin_path = entry
+            .path()
+            .join(if cfg!(windows) { "aft.exe" } else { "aft" });
         if !bin_path.exists() {
             continue;
         }
@@ -275,7 +277,8 @@ async fn download_aft_release(tag: &str) -> Result<PathBuf> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let _ = tokio::fs::set_permissions(&final_path, std::fs::Permissions::from_mode(0o755)).await;
+        let _ =
+            tokio::fs::set_permissions(&final_path, std::fs::Permissions::from_mode(0o755)).await;
     }
 
     Ok(final_path)
@@ -310,10 +313,12 @@ fn get_target_triple() -> Result<String> {
         ("macos", "x86_64") => "x86_64-apple-darwin",
         ("macos", "aarch64") => "aarch64-apple-darwin",
         ("windows", "x86_64") => "x86_64-pc-windows-msvc",
-        _ => return Err(Error::Agent(format!(
-            "aft: unsupported platform {}-{}; set AFT_BINARY to use a custom binary",
-            os, arch
-        ))),
+        _ => {
+            return Err(Error::Agent(format!(
+                "aft: unsupported platform {}-{}; set AFT_BINARY to use a custom binary",
+                os, arch
+            )))
+        }
     };
     Ok(triple.to_string())
 }
@@ -347,14 +352,19 @@ impl AftBridge {
             .spawn()
             .map_err(|e| Error::Agent(format!("aft: failed to spawn subprocess: {e}")))?;
 
-        let stdin = child.stdin.take().ok_or_else(|| {
-            Error::Agent("aft: failed to capture stdin".to_string())
-        })?;
-        let stdout = child.stdout.take().ok_or_else(|| {
-            Error::Agent("aft: failed to capture stdout".to_string())
-        })?;
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| Error::Agent("aft: failed to capture stdin".to_string()))?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| Error::Agent("aft: failed to capture stdout".to_string()))?;
 
-        let pending = Arc::new(Mutex::new(HashMap::<String, oneshot::Sender<serde_json::Value>>::new()));
+        let pending = Arc::new(Mutex::new(HashMap::<
+            String,
+            oneshot::Sender<serde_json::Value>,
+        >::new()));
         let pending_clone = pending.clone();
 
         // Spawn the stdout reader task — routes responses to waiters.
@@ -402,7 +412,11 @@ impl AftBridge {
     ///
     /// `command` is the aft command name (e.g. "edit", "search", "bash").
     /// `params` is the command-specific parameters object.
-    pub async fn call(&self, command: &str, params: serde_json::Value) -> Result<serde_json::Value> {
+    pub async fn call(
+        &self,
+        command: &str,
+        params: serde_json::Value,
+    ) -> Result<serde_json::Value> {
         let id = Uuid::new_v4().to_string();
         let request = serde_json::json!({
             "id": id,
@@ -441,7 +455,9 @@ impl AftBridge {
         let response = tokio::time::timeout(std::time::Duration::from_secs(600), rx)
             .await
             .map_err(|_| Error::Agent(format!("aft: request {} timed out (600s)", id)))?
-            .map_err(|_| Error::Agent(format!("aft: response channel closed for request {}", id)))?;
+            .map_err(|_| {
+                Error::Agent(format!("aft: response channel closed for request {}", id))
+            })?;
 
         if response["success"].as_bool() == Some(false) {
             let error = response["error"]

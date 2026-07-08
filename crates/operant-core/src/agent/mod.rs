@@ -97,11 +97,19 @@ pub enum AgentEvent {
     /// Model reasoning content
     Reasoning { text: String },
     /// Tool execution started
-    ToolStart { tool_call_id: String, name: String, arguments: String },
+    ToolStart {
+        tool_call_id: String,
+        name: String,
+        arguments: String,
+    },
     /// Tool execution completed
     ToolComplete { result: ToolResult },
     /// Tool execution failed
-    ToolError { tool_call_id: String, name: String, error: String },
+    ToolError {
+        tool_call_id: String,
+        name: String,
+        error: String,
+    },
     /// Response content received
     Content { text: String },
     /// Agent finished with final response
@@ -457,7 +465,12 @@ impl OperantAgent {
 
     /// Get the current model name (effective model = override or config).
     pub fn model(&self) -> String {
-        self.model_override.read().unwrap().as_ref().map(|m| m.clone()).unwrap_or_else(|| self.config.model.clone())
+        self.model_override
+            .read()
+            .unwrap()
+            .as_ref()
+            .map(|m| m.clone())
+            .unwrap_or_else(|| self.config.model.clone())
     }
 
     /// Get the effective model for API calls. Checks override first.
@@ -474,10 +487,9 @@ impl OperantAgent {
         if let Some(ref hooks) = self.hook_registry {
             let ctx = crate::gateway_pipeline::HookContext::new()
                 .with_session(self.persistent_session_id.as_deref().unwrap_or(""));
-            hooks.emit(
-                crate::gateway_pipeline::HookEvent::AgentStart,
-                ctx,
-            ).await;
+            hooks
+                .emit(crate::gateway_pipeline::HookEvent::AgentStart, ctx)
+                .await;
         }
 
         // Reset interrupt flag from any previous run() call. Without this,
@@ -570,7 +582,10 @@ impl OperantAgent {
                 // extra "grace call" with tools stripped, asking the model
                 // to summarize what it has so far. This gives the user a
                 // partial answer instead of a hard error.
-                warn!(max = self.config.max_iterations, "Max iterations exceeded — attempting grace call");
+                warn!(
+                    max = self.config.max_iterations,
+                    "Max iterations exceeded — attempting grace call"
+                );
 
                 // Build a grace-call request: same messages but no tools
                 let grace_request = ChatRequest::new(&self.effective_model(), messages.clone())
@@ -582,7 +597,9 @@ impl OperantAgent {
                     Ok((text, reasoning))
                 } else {
                     let response = self.client.chat(grace_request).await?;
-                    self.process_response(response).await.map(|(t, r, _)| (t, r))
+                    self.process_response(response)
+                        .await
+                        .map(|(t, r, _)| (t, r))
                 };
 
                 match grace_result {
@@ -590,16 +607,28 @@ impl OperantAgent {
                         let result = Message::assistant(&text);
                         if self.record_trajectories {
                             self.save_trajectory(
-                                &session_id, &messages, iteration, total_tool_calls,
-                                false, Some(&result),
-                            ).await;
+                                &session_id,
+                                &messages,
+                                iteration,
+                                total_tool_calls,
+                                false,
+                                Some(&result),
+                            )
+                            .await;
                         }
-                        self.emit(AgentEvent::Done { message: result.clone() }).await;
+                        self.emit(AgentEvent::Done {
+                            message: result.clone(),
+                        })
+                        .await;
                         // Emit AgentEnd hook
                         if let Some(ref hooks) = self.hook_registry {
-                            hooks.emit(crate::gateway_pipeline::HookEvent::AgentEnd,
-                                crate::gateway_pipeline::HookContext::new()
-                                    .with_session(&session_id)).await;
+                            hooks
+                                .emit(
+                                    crate::gateway_pipeline::HookEvent::AgentEnd,
+                                    crate::gateway_pipeline::HookContext::new()
+                                        .with_session(&session_id),
+                                )
+                                .await;
                         }
                         return Ok(result);
                     }
@@ -610,9 +639,14 @@ impl OperantAgent {
 
                 if self.record_trajectories {
                     self.save_trajectory(
-                        &session_id, &messages, iteration, total_tool_calls,
-                        false, None,
-                    ).await;
+                        &session_id,
+                        &messages,
+                        iteration,
+                        total_tool_calls,
+                        false,
+                        None,
+                    )
+                    .await;
                 }
                 return Err(Error::MaxIterationsExceeded {
                     max: self.config.max_iterations,
@@ -650,14 +684,14 @@ impl OperantAgent {
                         if classified.should_compress {
                             warn!(reason = %classified.reason, "Context overflow detected — compressing and retrying");
                             let budget = self.config.context_window;
-                            messages = crate::context_management::manage_context(
-                                messages, budget, 4096,
-                            );
+                            messages =
+                                crate::context_management::manage_context(messages, budget, 4096);
                             // Rebuild request with compressed messages
                             let tools = self.registry.get_schemas().await;
-                            let retry_request = ChatRequest::new(&self.effective_model(), messages.clone())
-                                .with_tools(tools)
-                                .with_stream(self.config.stream);
+                            let retry_request =
+                                ChatRequest::new(&self.effective_model(), messages.clone())
+                                    .with_tools(tools)
+                                    .with_stream(self.config.stream);
                             self.client.chat_streaming(retry_request).await?
                         } else {
                             return Err(e);
@@ -675,13 +709,13 @@ impl OperantAgent {
                         if classified.should_compress {
                             warn!(reason = %classified.reason, "Context overflow detected — compressing and retrying");
                             let budget = self.config.context_window;
-                            messages = crate::context_management::manage_context(
-                                messages, budget, 4096,
-                            );
+                            messages =
+                                crate::context_management::manage_context(messages, budget, 4096);
                             let tools = self.registry.get_schemas().await;
-                            let retry_request = ChatRequest::new(&self.effective_model(), messages.clone())
-                                .with_tools(tools)
-                                .with_stream(self.config.stream);
+                            let retry_request =
+                                ChatRequest::new(&self.effective_model(), messages.clone())
+                                    .with_tools(tools)
+                                    .with_stream(self.config.stream);
                             self.client.chat(retry_request).await?
                         } else {
                             return Err(e);
@@ -804,7 +838,9 @@ impl OperantAgent {
                             let assistant_text = result.content.clone();
                             let provider = provider.clone();
                             tokio::spawn(async move {
-                                if let Err(e) = provider.sync_turn(&user_text, &assistant_text).await {
+                                if let Err(e) =
+                                    provider.sync_turn(&user_text, &assistant_text).await
+                                {
                                     tracing::warn!(error = %e, "TDG sync_turn hook failed");
                                 }
                             });
@@ -812,9 +848,13 @@ impl OperantAgent {
 
                         // Emit AgentEnd hook
                         if let Some(ref hooks) = self.hook_registry {
-                            hooks.emit(crate::gateway_pipeline::HookEvent::AgentEnd,
-                                crate::gateway_pipeline::HookContext::new()
-                                    .with_session(&session_id)).await;
+                            hooks
+                                .emit(
+                                    crate::gateway_pipeline::HookEvent::AgentEnd,
+                                    crate::gateway_pipeline::HookContext::new()
+                                        .with_session(&session_id),
+                                )
+                                .await;
                         }
 
                         return Ok(result);
@@ -1273,7 +1313,9 @@ impl OperantAgent {
         // original stream error, so fall back to an empty vec.
         let mut remaining_parser = ToolCallParser::new();
         let remaining_calls = if stream_error.is_some() {
-            remaining_parser.parse(&accumulated_text).unwrap_or_default()
+            remaining_parser
+                .parse(&accumulated_text)
+                .unwrap_or_default()
         } else {
             remaining_parser.parse(&accumulated_text)?
         };
@@ -1288,9 +1330,7 @@ impl OperantAgent {
             // processing failed" string) so the caller can see what went
             // wrong. Trajectory saving is handled by the caller (run()) when
             // this error propagates up — see the Err(e) arm in the run() loop.
-            return Err(Error::Agent(format!(
-                "Stream processing failed: {err}"
-            )));
+            return Err(Error::Agent(format!("Stream processing failed: {err}")));
         }
 
         Ok((
@@ -1361,9 +1401,11 @@ impl OperantAgent {
         let cost_usd = crate::models_dev::get_model_capabilities(&provider, &model_name)
             .await
             .and_then(|caps| {
-                let input_cost = caps.cost_input_per_million
+                let input_cost = caps
+                    .cost_input_per_million
                     .map(|c| (response.usage.prompt_tokens as f64 / 1_000_000.0) * c);
-                let output_cost = caps.cost_output_per_million
+                let output_cost = caps
+                    .cost_output_per_million
                     .map(|c| (response.usage.completion_tokens as f64 / 1_000_000.0) * c);
                 input_cost.zip(output_cost).map(|(i, o)| i + o)
             });
@@ -1478,7 +1520,12 @@ impl OperantAgent {
                         warn!(tool = %name, "Tool call blocked by approval guard");
                         early_results[idx] = Some(ToolResult::error(
                             &tool_call.id,
-                            format!("Blocked by security policy: {}", approval_result.reason.unwrap_or_else(|| "blocked".to_string())),
+                            format!(
+                                "Blocked by security policy: {}",
+                                approval_result
+                                    .reason
+                                    .unwrap_or_else(|| "blocked".to_string())
+                            ),
                         ));
                         continue;
                     }
@@ -1493,15 +1540,24 @@ impl OperantAgent {
             if let Some(ref permission_tx) = self.permission_tx {
                 let needs_permission = matches!(
                     name.as_str(),
-                    "bash" | "terminal" | "execute_command" | "code_execution"
-                        | "file_read" | "file_write" | "file_edit" | "patch"
-                        | "process" | "browser"
+                    "bash"
+                        | "terminal"
+                        | "execute_command"
+                        | "code_execution"
+                        | "file_read"
+                        | "file_write"
+                        | "file_edit"
+                        | "patch"
+                        | "process"
+                        | "browser"
                 );
                 if needs_permission {
                     let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
                     let description = format!("Execute {} tool", name);
                     let danger = match name.as_str() {
-                        "bash" | "terminal" | "execute_command" => "This runs a shell command on your system".to_string(),
+                        "bash" | "terminal" | "execute_command" => {
+                            "This runs a shell command on your system".to_string()
+                        }
                         "code_execution" => "This executes code in a sandbox".to_string(),
                         "file_read" => "This reads a file from your system".to_string(),
                         "file_write" => "This writes content to a file".to_string(),
@@ -1526,7 +1582,8 @@ impl OperantAgent {
                         _ = tokio::time::sleep(Duration::from_secs(120)) => ToolPermissionResponse::Deny,
                     };
                     match response {
-                        ToolPermissionResponse::AllowOnce | ToolPermissionResponse::AllowSession => {}
+                        ToolPermissionResponse::AllowOnce
+                        | ToolPermissionResponse::AllowSession => {}
                         ToolPermissionResponse::Deny => {
                             early_results[idx] = Some(ToolResult::error(
                                 &tool_call.id,
@@ -1559,12 +1616,17 @@ impl OperantAgent {
             let name = tool_call.function.name.clone();
             let result = timeout(
                 self.config.tool_timeout,
-                self.registry.execute(&name, &tool_call.id, args, ToolContext::default()),
-            ).await;
+                self.registry
+                    .execute(&name, &tool_call.id, args, ToolContext::default()),
+            )
+            .await;
             early_results[idx] = Some(match result {
                 Ok(Ok(r)) => r,
                 Ok(Err(e)) => ToolResult::error(&tool_call.id, e.to_string()),
-                Err(_) => ToolResult::error(&tool_call.id, format!("Tool timed out after {:?}", self.config.tool_timeout)),
+                Err(_) => ToolResult::error(
+                    &tool_call.id,
+                    format!("Tool timed out after {:?}", self.config.tool_timeout),
+                ),
             });
         } else {
             // Multiple tools — execute concurrently with semaphore
@@ -1585,29 +1647,45 @@ impl OperantAgent {
                         let _permit = match sem.acquire().await {
                             Ok(p) => p,
                             Err(_) => {
-                                return (idx, ToolResult::error(
-                                    &tool_call.id,
-                                    "Skipped: semaphore closed during shutdown".to_string(),
-                                ));
+                                return (
+                                    idx,
+                                    ToolResult::error(
+                                        &tool_call.id,
+                                        "Skipped: semaphore closed during shutdown".to_string(),
+                                    ),
+                                );
                             }
                         };
 
                         // Check interrupt flag before execution
                         if interrupt_flag.is_triggered() {
-                            return (idx, ToolResult::error(&tool_call.id, "Skipped: interrupted".to_string()));
+                            return (
+                                idx,
+                                ToolResult::error(
+                                    &tool_call.id,
+                                    "Skipped: interrupted".to_string(),
+                                ),
+                            );
                         }
 
                         let name = tool_call.function.name.clone();
                         let result = timeout(
                             tool_timeout,
                             registry.execute(&name, &tool_call.id, args, ToolContext::default()),
-                        ).await;
+                        )
+                        .await;
 
-                        (idx, match result {
-                            Ok(Ok(r)) => r,
-                            Ok(Err(e)) => ToolResult::error(&tool_call.id, e.to_string()),
-                            Err(_) => ToolResult::error(&tool_call.id, format!("Tool timed out after {:?}", tool_timeout)),
-                        })
+                        (
+                            idx,
+                            match result {
+                                Ok(Ok(r)) => r,
+                                Ok(Err(e)) => ToolResult::error(&tool_call.id, e.to_string()),
+                                Err(_) => ToolResult::error(
+                                    &tool_call.id,
+                                    format!("Tool timed out after {:?}", tool_timeout),
+                                ),
+                            },
+                        )
                     }
                 })
                 .collect();
@@ -2034,8 +2112,6 @@ fn strip_tool_call_markup(content: &str) -> String {
     visible
 }
 
-
-
 mod model_client;
 pub use model_client::{ChatRequest, ModelClient, StreamChunk};
 
@@ -2124,7 +2200,6 @@ mod tests {
         assert_eq!(config.model, "gpt-4");
         assert_eq!(config.max_iterations, 90);
     }
-
 
     #[serial]
     #[tokio::test]

@@ -350,10 +350,7 @@ fn parse_sse_event(
                     // identified by `index`.
                     let partial = delta["partial_json"].as_str().unwrap_or("");
                     let index = json["index"].as_u64().unwrap_or(0);
-                    let (id, name) = index_map
-                        .get(&index)
-                        .cloned()
-                        .unwrap_or_default();
+                    let (id, name) = index_map.get(&index).cloned().unwrap_or_default();
                     Some(StreamChunk::new(
                         None,
                         None,
@@ -428,7 +425,10 @@ mod tests {
         assert_eq!(tc.id, "toolu_abc");
         assert_eq!(tc.function.name, "Bash");
         assert_eq!(tc.function.arguments, "");
-        assert_eq!(map.get(&0), Some(&("toolu_abc".to_string(), "Bash".to_string())));
+        assert_eq!(
+            map.get(&0),
+            Some(&("toolu_abc".to_string(), "Bash".to_string()))
+        );
     }
 
     /// `input_json_delta` events are attributed to the correct tool call via
@@ -461,7 +461,10 @@ mod tests {
 
         let tc1 = &c1.tool_calls.unwrap()[0];
         assert_eq!(tc1.id, "toolu_abc", "delta must carry the real tool id");
-        assert_eq!(tc1.function.name, "Bash", "delta must carry the real tool name");
+        assert_eq!(
+            tc1.function.name, "Bash",
+            "delta must carry the real tool name"
+        );
         assert_eq!(tc1.function.arguments, r#"{"command":"#);
 
         let tc2 = &c2.tool_calls.unwrap()[0];
@@ -584,6 +587,9 @@ mod tests {
         assert_eq!(tool_calls.len(), 1, "should merge into a single tool call");
         assert_eq!(tool_calls[0].id, "toolu_abc");
         assert_eq!(tool_calls[0].function.name, "Bash");
-        assert_eq!(tool_calls[0].function.arguments, r#"{"command": "echo hi"}"#);
+        assert_eq!(
+            tool_calls[0].function.arguments,
+            r#"{"command": "echo hi"}"#
+        );
     }
 }

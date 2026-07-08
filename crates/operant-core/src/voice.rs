@@ -1475,7 +1475,6 @@ pub async fn transcribe_recording(
     Ok(result)
 }
 
-
 // ---------------------------------------------------------------------------
 // TESTS
 // ---------------------------------------------------------------------------
@@ -1508,5 +1507,4 @@ mod tests {
         assert_eq!(SttProvider::from_str("local"), SttProvider::Local);
         assert_eq!(SttProvider::from_str("unknown"), SttProvider::Whisper);
     }
-
 }

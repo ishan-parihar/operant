@@ -727,7 +727,6 @@ impl MemoryManager {
             .collect()
     }
 
-
     /// Delete a session
     pub async fn delete_session(&self, session_id: &str) {
         self.sessions.write().await.remove(session_id);
