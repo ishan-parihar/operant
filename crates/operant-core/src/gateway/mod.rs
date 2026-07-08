@@ -883,9 +883,6 @@ pub struct TelegramAdapter {
     enabled: bool,
     running: Arc<AtomicBool>,
     client: reqwest::Client,
-    bot_username: Option<String>,
-    // (iter-151: dm_topics_enabled deleted — never read)
-    dm_topic_map: Arc<RwLock<HashMap<String, i64>>>,
 }
 
 impl TelegramAdapter {
@@ -897,16 +894,13 @@ impl TelegramAdapter {
             enabled,
             running: Arc::new(AtomicBool::new(false)),
             client: reqwest::Client::new(),
-            bot_username: None,
-            // (iter-151: dm_topics_enabled deleted)
-            dm_topic_map: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
     /// Create a Telegram adapter with full configuration
     pub fn with_config(
         token: Option<String>,
-        bot_username: Option<String>,
+        _bot_username: Option<String>,
         _dm_topics_enabled: bool,
         proxy_url: Option<&str>,
     ) -> Self {
@@ -929,9 +923,6 @@ impl TelegramAdapter {
             enabled,
             running: Arc::new(AtomicBool::new(false)),
             client,
-            bot_username,
-            // (iter-151: dm_topics_enabled deleted)
-            dm_topic_map: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
