@@ -505,11 +505,11 @@ mod tests {
         assert_eq!(body, content);
     }
 
-    #[test]
-    fn test_skill_view_execute_missing_name() {
+    #[tokio::test]
+    async fn test_skill_view_execute_missing_name() {
         let (_dir, skills_dir) = setup_test_env();
         let tool = SkillViewTool::new(skills_dir);
-        let result = tool.execute_sync(serde_json::json!({}));
+        let result = tool.execute(serde_json::json!({}), ToolContext::default()).await;
         assert!(!result.success);
         assert!(result
             .error
@@ -526,12 +526,4 @@ mod tests {
     }
 }
 
-impl SkillViewTool {
-    fn execute_sync(&self, args: Value) -> ToolResult {
-        let name = args.get("name").and_then(|v| v.as_str());
-        if name.is_none() {
-            return ToolResult::error("skill_view", "name is required");
-        }
-        ToolResult::error("skill_view", "name is required")
-    }
-}
+
