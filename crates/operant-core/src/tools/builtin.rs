@@ -283,12 +283,13 @@ mod tests {
 
         let count = registry.len().await;
         // register_builtin_tools registers everything in builtin_tool_names
-        // EXCEPT delegate_task (only in _with_sub_agent variant).
-        // So: registry.len() + 1 == builtin_tool_names().len().
+        // EXCEPT delegate_task (only in _with_sub_agent variant) AND
+        // mcp_management (conditionally registered only when mcp_manager is Some).
+        // So: registry.len() + 2 == builtin_tool_names().len().
         assert_eq!(
-            count + 1,
+            count + 2,
             builtin_tool_names().len(),
-            "registry has {} tools, names list has {}; the difference should be 1 (delegate_task)",
+            "registry has {} tools, names list has {}; the difference should be 2 (delegate_task + mcp_management)",
             count,
             builtin_tool_names().len()
         );
@@ -319,10 +320,12 @@ mod tests {
         .unwrap();
 
         let count = registry.len().await;
+        // _with_sub_agent registers delegate_task but mcp_management is
+        // still conditional on mcp_manager being Some (passed as None here).
         assert_eq!(
-            count,
+            count + 1,
             builtin_tool_names().len(),
-            "registry has {} tools, names list has {}; _with_sub_agent registers all names",
+            "registry has {} tools, names list has {}; difference should be 1 (mcp_management)",
             count,
             builtin_tool_names().len()
         );
