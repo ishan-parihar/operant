@@ -87,14 +87,12 @@ pub struct PluginManifest {
 /// Thread-safe registry of plugin commands, shared via a global [`OnceLock`].
 struct PluginRegistry {
     commands: RwLock<HashMap<String, PluginCommand>>,
-    initialized: RwLock<bool>,
 }
 
 impl PluginRegistry {
     fn new() -> Self {
         Self {
             commands: RwLock::new(HashMap::new()),
-            initialized: RwLock::new(false),
         }
     }
 

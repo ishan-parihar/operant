@@ -168,7 +168,6 @@ pub fn build_memory_provider(
 
 pub struct TdgMemoryProvider {
     pool: std::sync::Arc<tdg_rust::ConnectionPool>,
-    storage_dir: std::path::PathBuf,
 }
 
 impl TdgMemoryProvider {
@@ -203,7 +202,6 @@ impl TdgMemoryProvider {
         .map_err(|e| Error::Agent(format!("failed to initialize TDG schema: {e}")))?;
         Ok(Self {
             pool: std::sync::Arc::new(pool),
-            storage_dir,
         })
     }
 

@@ -67,8 +67,6 @@ pub struct McpClient {
     /// JSON-RPC id; non-monotonic, can collide, and the response isn't
     /// verified to match the id".)
     request_id: Arc<AtomicU64>,
-    /// Server name (set after connect, for logging).
-    server_name: Arc<RwLock<String>>,
 }
 
 /// Server capabilities
@@ -235,7 +233,6 @@ impl McpClient {
             capabilities: Arc::new(RwLock::new(McpCapabilities::default())),
             connected: Arc::new(RwLock::new(false)),
             request_id: Arc::new(AtomicU64::new(1)),
-            server_name: Arc::new(RwLock::new(String::new())),
         }
     }
 
