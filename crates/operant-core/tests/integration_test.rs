@@ -16,16 +16,15 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use operant_core::tools::builtin::{
-    ApprovalTool, BinaryExtensionsTool, CamofoxStateTool, CheckpointTool, ClarifyTool,
-    CodeExecutionTool, DateTimeTool, DiscordAdminTool, DiscordTool, EnvVarTool, FileListTool,
-    FileReadTool, FileSearchTool, FileStateTool, FileWriteTool, HomeAssistantTool, HttpRequestTool,
-    ImageGenerationTool, InspectJsonTool, MemoryRecallTool, MemorySearchTool, MemoryStoreTool,
-    NeuttsSynthTool, NotificationTool, OpenRouterTool, OsvCheckTool, PatchTool, SendMessageTool,
-    SkillViewTool, SkillsTool, SlashConfirmTool, SpotifyAlbumsTool, SpotifyDevicesTool,
-    SpotifyLibraryTool, SpotifyPlaybackTool, SpotifyPlaylistsTool, SpotifyQueueTool,
-    SpotifySearchTool, SystemInfoTool, TerminalTool, TimestampTool, TodoTool, ToolBackendTool,
-    TranscriptionTool, TruncateOutputTool, TtsTool, VideoAnalysisTool, VisionTool,
-    WebFetchTool, WebSearchTool, XaiHttpTool,
+    ApprovalTool, CamofoxStateTool, CheckpointTool, ClarifyTool, CodeExecutionTool,
+    DateTimeTool, DiscordAdminTool, DiscordTool, EnvVarTool, FileListTool, FileReadTool,
+    FileSearchTool, FileStateTool, FileWriteTool, HomeAssistantTool, HttpRequestTool,
+    ImageGenerationTool, MemoryRecallTool, MemorySearchTool, MemoryStoreTool, NeuttsSynthTool,
+    NotificationTool, OpenRouterTool, OsvCheckTool, PatchTool, SendMessageTool, SkillViewTool,
+    SkillsTool, SpotifyAlbumsTool, SpotifyDevicesTool, SpotifyLibraryTool, SpotifyPlaybackTool,
+    SpotifyPlaylistsTool, SpotifyQueueTool, SpotifySearchTool, SystemInfoTool, TerminalTool,
+    TimestampTool, TodoTool, ToolBackendTool, TranscriptionTool, TtsTool, VideoAnalysisTool,
+    VisionTool, WebFetchTool, WebSearchTool, XaiHttpTool,
 };
 use operant_core::tools::{OperantTool, ToolContext, ToolRegistry};
 
@@ -41,7 +40,7 @@ async fn setup_registry() -> ToolRegistry {
     registry.register(TimestampTool).await.unwrap();
     registry.register(ClarifyTool).await.unwrap();
     registry.register(ApprovalTool).await.unwrap();
-    registry.register(InspectJsonTool).await.unwrap();
+    registry.register(EnvVarTool).await.unwrap();
     registry
 }
 
@@ -62,7 +61,7 @@ async fn test_registry_register_and_lookup() {
     assert!(registry.contains("timestamp").await);
     assert!(registry.contains("clarify").await);
     assert!(registry.contains("approval_request").await);
-    assert!(registry.contains("debug_inspect_json").await);
+    assert!(registry.contains("debug_env").await);
 
     // Total count matches
     assert_eq!(registry.len().await, 6);
@@ -142,7 +141,7 @@ async fn test_registry_get_schemas_returns_all() {
     assert!(names.contains(&"timestamp"));
     assert!(names.contains(&"clarify"));
     assert!(names.contains(&"approval_request"));
-    assert!(names.contains(&"debug_inspect_json"));
+    assert!(names.contains(&"debug_env"));
 }
 
 // =============================================================================
@@ -205,7 +204,7 @@ async fn test_schema_name_matches_tool_name() {
         TimestampTool.name(),
         ClarifyTool.name(),
         ApprovalTool.name(),
-        InspectJsonTool.name(),
+        EnvVarTool.name(),
     ]
     .into_iter()
     .collect();
@@ -402,7 +401,6 @@ fn zero_dep_tools() -> Vec<(&'static str, Box<dyn OperantTool>)> {
         ("datetime", Box::new(DateTimeTool)),
         ("timestamp", Box::new(TimestampTool)),
         ("clarify", Box::new(ClarifyTool)),
-        ("debug_inspect_json", Box::new(InspectJsonTool)),
         ("debug_env", Box::new(EnvVarTool)),
         ("debug_system", Box::new(SystemInfoTool)),
         ("send_message", Box::new(SendMessageTool)),
@@ -419,13 +417,10 @@ fn zero_dep_tools() -> Vec<(&'static str, Box<dyn OperantTool>)> {
         ("vision_analyze", Box::new(VisionTool)),
         ("code_execution", Box::new(CodeExecutionTool)),
         ("todo", Box::new(TodoTool)),
-        ("slash_confirm", Box::new(SlashConfirmTool)),
-        ("check_binary_file", Box::new(BinaryExtensionsTool)),
         ("memory_store", Box::new(MemoryStoreTool)),
         ("memory_search", Box::new(MemorySearchTool)),
         ("memory_recall", Box::new(MemoryRecallTool)),
         ("tool_backend", Box::new(ToolBackendTool)),
-        ("apply_output_limits", Box::new(TruncateOutputTool)),
         ("browser_camofox_state", Box::new(CamofoxStateTool)),
         ("openrouter_query", Box::new(OpenRouterTool)),
         ("xai_http_request", Box::new(XaiHttpTool)),

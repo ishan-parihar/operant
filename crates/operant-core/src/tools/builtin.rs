@@ -14,7 +14,6 @@ use crate::tools::{SessionSearchTool, ToolRegistry};
 use std::path::Path;
 use std::sync::Arc;
 
-pub use super::binary_extensions::BinaryExtensionsTool;
 pub use super::browser_camofox_state::CamofoxStateTool;
 pub use super::browser_cdp_tool::BrowserCdpTool;
 pub use super::browser_dialog_tool::BrowserDialogTool;
@@ -25,7 +24,7 @@ pub use super::code_execution::CodeExecutionTool;
 pub use super::computer_use_tool::ComputerUseTool;
 pub use super::cron_tool::CronTool;
 pub use super::datetime_tool::{DateTimeTool, TimestampTool};
-pub use super::debug_helpers::{EchoTool, EnvVarTool, InspectJsonTool, SystemInfoTool};
+pub use super::debug_helpers::{EchoTool, EnvVarTool, SystemInfoTool};
 pub use super::discord_tool::{DiscordAdminTool, DiscordTool};
 pub use super::feishu_tool::{FeishuDocTool, FeishuDriveTool};
 pub use super::file_state::FileStateTool;
@@ -44,7 +43,6 @@ pub use super::patch_tool::PatchTool;
 pub use super::process_tool::ProcessTool;
 pub use super::send_message_tool::SendMessageTool;
 pub use super::skills_tool::{SkillManageTool, SkillViewTool, SkillsTool};
-pub use super::slash_confirm::SlashConfirmTool;
 pub use super::spotify_tool::{
     SpotifyAlbumsTool, SpotifyDevicesTool, SpotifyLibraryTool, SpotifyPlaybackTool,
     SpotifyPlaylistsTool, SpotifyQueueTool, SpotifySearchTool,
@@ -54,7 +52,6 @@ pub use super::tdg_tools::{TdgConnectTool, TdgCreateTool, TdgGetRelatedTool, Tdg
 pub use super::terminal_tool::TerminalTool;
 pub use super::todo_tool::TodoTool;
 pub use super::tool_backend_helpers::ToolBackendTool;
-pub use super::tool_output_limits::TruncateOutputTool;
 pub use super::transcription_tool::TranscriptionTool;
 pub use super::tts_tool::TtsTool;
 pub use super::video_analysis_tool::VideoAnalysisTool;
@@ -71,7 +68,6 @@ pub async fn register_builtin_tools(
     kanban_db: Arc<KanbanDb>,
     mcp_manager: Option<McpManager>,
 ) -> Result<()> {
-    registry.register(BinaryExtensionsTool).await?;
     registry.register(CamofoxStateTool).await?;
     registry.register(BrowserTool).await?;
     registry.register(CheckpointTool::new()).await?;
@@ -80,7 +76,6 @@ pub async fn register_builtin_tools(
     registry.register(FileSearchTool).await?;
     registry.register(FileListTool).await?;
     registry.register(TerminalTool).await?;
-    registry.register(TruncateOutputTool).await?;
     registry.register(ToolBackendTool).await?;
     registry.register(WebSearchTool).await?;
     registry.register(WebFetchTool).await?;
@@ -102,7 +97,6 @@ pub async fn register_builtin_tools(
     registry.register(DateTimeTool).await?;
     registry.register(TimestampTool).await?;
     registry.register(EchoTool).await?;
-    registry.register(InspectJsonTool).await?;
     registry.register(EnvVarTool).await?;
     registry.register(SystemInfoTool).await?;
     registry.register(FileStateTool).await?;
@@ -119,7 +113,6 @@ pub async fn register_builtin_tools(
     registry
         .register(SkillManageTool::new(skills_dir.to_path_buf()))
         .await?;
-    registry.register(SlashConfirmTool).await?;
     registry
         .register(ProcessTool::new(ProcessRegistry::new()))
         .await?;
@@ -195,11 +188,9 @@ pub async fn register_builtin_tools_with_sub_agent(
 /// Get a list of all built-in tool names
 pub fn builtin_tool_names() -> Vec<&'static str> {
     vec![
-        "apply_output_limits",
         "approval_request",
         "browser",
         "browser_camofox_state",
-        "check_binary_file",
         "checkpoint",
         "clarify",
         "code_execution",
@@ -207,7 +198,6 @@ pub fn builtin_tool_names() -> Vec<&'static str> {
         "datetime",
         "echo",
         "debug_env",
-        "debug_inspect_json",
         "debug_system",
         "file_list",
         "file_read",
@@ -231,7 +221,6 @@ pub fn builtin_tool_names() -> Vec<&'static str> {
         "skills_list",
         "skill_manage",
         "skill_view",
-        "slash_confirm",
         "terminal",
         "tool_backend",
         "timestamp",

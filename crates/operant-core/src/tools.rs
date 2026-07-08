@@ -6,7 +6,6 @@
 //! - Built-in tools for common operations
 
 pub mod aft_tools;
-pub mod binary_extensions;
 pub mod browser_camofox_state;
 pub mod browser_cdp_tool;
 pub mod browser_dialog_tool;
@@ -41,7 +40,6 @@ pub mod process_tool;
 pub mod send_message_tool;
 pub mod session_search_tool;
 pub mod skills_tool;
-pub mod slash_confirm;
 pub mod spotify_tool;
 pub mod sub_agent_tool;
 pub mod tdg_tools;
@@ -49,7 +47,6 @@ pub mod terminal_backend;
 pub mod terminal_tool;
 pub mod todo_tool;
 pub mod tool_backend_helpers;
-pub mod tool_output_limits;
 pub mod transcription_tool;
 pub mod tts_command_provider;
 pub mod tts_provider;
