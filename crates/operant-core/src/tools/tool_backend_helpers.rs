@@ -3,12 +3,10 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::Value;
 use std::collections::HashMap;
+use std::sync::LazyLock;
 
 use crate::schema::ToolSchema;
 use crate::tools::{OperantTool, ToolContext, ToolResult};
-
-use std::collections::HashMap;
-use std::sync::LazyLock;
 
 static BACKEND_MAP: LazyLock<HashMap<&'static str, (&'static [&'static str], &'static str)>> = LazyLock::new(|| {
     let mut m = HashMap::new();
