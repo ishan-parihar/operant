@@ -376,6 +376,8 @@ async fn handle_test(config: &AppConfig, mcp_manager: &McpManager, name: String)
                 .context(format!("Failed to connect to MCP server '{}'", name))?;
         }
         McpTransportKind::StreamableHttp => {
+            // iter-190: StreamableHttp is now handled by the same add_server
+            // path as Http.
             let url = server
                 .url
                 .as_deref()
@@ -383,7 +385,7 @@ async fn handle_test(config: &AppConfig, mcp_manager: &McpManager, name: String)
             println!("  URL:        {} (streamable-http)", url);
 
             mcp_manager
-                .add_streamable_http_server(&name, url.to_string(), server.auth_token.clone())
+                .add_server(&name, url.to_string(), server.auth_token.clone())
                 .await
                 .context(format!("Failed to connect to MCP server '{}'", name))?;
         }

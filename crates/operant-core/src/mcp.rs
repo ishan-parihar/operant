@@ -437,6 +437,16 @@ impl McpClient {
             crate::error::Error::ParseResponse(format!("Failed to parse MCP response: {}", e))
         })?;
 
+        // iter-187: Verify response ID matches request ID. Without this,
+        // out-of-order or mismatched responses would silently return
+        // the wrong result.
+        if rpc_response.id != request_id {
+            return Err(crate::error::Error::Agent(format!(
+                "MCP response ID mismatch: expected {}, got {} (possible out-of-order response)",
+                request_id, rpc_response.id
+            )));
+        }
+
         if let Some(error) = rpc_response.error {
             return Err(crate::error::Error::Agent(format!(
                 "MCP error {}: {}",
@@ -580,11 +590,32 @@ impl McpStdioClient {
             ))
         })?;
 
-        debug!(
-            server = %init_response.server_info.name,
-            version = %init_response.server_info.version,
-            "MCP stdio server initialized"
-        );
+        // iter-191: protocol version negotiation for stdio transport.
+        // The HTTP path already did this; the stdio path was missing it.
+        match negotiate_protocol_version(&init_response.protocol_version) {
+            Some(negotiated) => {
+                if negotiated != init_response.protocol_version.as_str() {
+                    debug!(
+                        server_version = %init_response.protocol_version,
+                        negotiated_version = %negotiated,
+                        "MCP stdio server returned a non-exact version match — using negotiated version"
+                    );
+                }
+                debug!(
+                    server = %init_response.server_info.name,
+                    version = %init_response.server_info.version,
+                    protocol = %negotiated,
+                    "MCP stdio server initialized"
+                );
+            }
+            None => {
+                warn!(
+                    server_version = %init_response.protocol_version,
+                    supported = ?MCP_SUPPORTED_VERSIONS,
+                    "MCP stdio server returned an unsupported protocolVersion. Continuing with best-effort compatibility."
+                );
+            }
+        }
 
         // Update capabilities
         {
@@ -1232,12 +1263,7 @@ pub enum McpTransport {
     Stdio(McpStdioClient),
     /// SSE-based MCP client (Server-Sent Events, legacy)
     Sse(McpSseClient),
-    /// Streamable-HTTP transport (MCP spec 2025-06-18). Uses HTTP POST
-    /// for client→server and SSE for server→client streaming. Delegates
-    /// to McpClient for the request/response path; the SSE streaming
-    /// layer will be added in a follow-up. (iter-137 — closes
-    /// ponytail-audit gap B2.)
-    StreamableHttp(McpClient),
+
 }
 
 impl McpTransport {
@@ -1247,7 +1273,7 @@ impl McpTransport {
             McpTransport::Http(c) => c.is_connected().await,
             McpTransport::Stdio(c) => c.is_connected().await,
             McpTransport::Sse(c) => c.is_connected().await,
-            McpTransport::StreamableHttp(c) => c.is_connected().await,
+
         }
     }
 
@@ -1257,7 +1283,7 @@ impl McpTransport {
             McpTransport::Http(c) => c.get_tools().await,
             McpTransport::Stdio(c) => c.get_tools().await,
             McpTransport::Sse(c) => c.get_tools().await,
-            McpTransport::StreamableHttp(c) => c.get_tools().await,
+
         }
     }
 
@@ -1267,7 +1293,7 @@ impl McpTransport {
             McpTransport::Http(c) => c.disconnect().await,
             McpTransport::Stdio(c) => c.disconnect().await,
             McpTransport::Sse(c) => c.disconnect().await,
-            McpTransport::StreamableHttp(c) => c.disconnect().await,
+
         }
     }
 
@@ -1277,7 +1303,7 @@ impl McpTransport {
             McpTransport::Http(c) => c.call_tool(name, arguments).await,
             McpTransport::Stdio(c) => c.call_tool(name, arguments).await,
             McpTransport::Sse(c) => c.call_tool(name, arguments).await,
-            McpTransport::StreamableHttp(c) => c.call_tool(name, arguments).await,
+
         }
     }
 }
@@ -1314,14 +1340,7 @@ impl McpTool {
         }
     }
 
-    /// Create a new MCP tool wrapper (Streamable-HTTP transport).
-    /// (iter-137 — see McpTransport::StreamableHttp.)
-    pub fn new_streamable_http(client: McpClient, definition: McpToolDefinition) -> Self {
-        Self {
-            transport: McpTransport::StreamableHttp(client),
-            definition: Arc::new(definition),
-        }
-    }
+
 
     /// Get the tool name
     pub fn name(&self) -> &str {
@@ -1468,40 +1487,9 @@ impl McpManager {
         Ok(())
     }
 
-    /// Add and connect to a Streamable-HTTP MCP server (MCP spec 2025-06-18).
-    /// Uses HTTP POST for client→server and SSE for server→client streaming.
-    /// Delegates to McpClient for the request/response path. (iter-137)
-    pub async fn add_streamable_http_server(
-        &self,
-        name: impl Into<String>,
-        url: String,
-        auth_token: Option<String>,
-    ) -> Result<()> {
-        let name = name.into();
-        let effective_token = match auth_token {
-            Some(t) => Some(t),
-            None => {
-                match crate::mcp_oauth::get_manager().get_token(&url).await {
-                    Some(token) => {
-                        tracing::debug!(
-                            "MCP server {}: using OAuth access token from {}",
-                            name,
-                            url
-                        );
-                        Some(token.access_token)
-                    }
-                    None => None,
-                }
-            }
-        };
-        let client = McpClient::new(url, effective_token);
-        client.connect().await?;
-        self.servers
-            .write()
-            .await
-            .insert(name, McpTransport::StreamableHttp(client));
-        Ok(())
-    }
+    // iter-190: add_streamable_http_server was deleted — it was a duplicate
+    // of add_server with a different McpTransport variant. Streamable HTTP
+    // is now handled by the same McpClient::connect() path.
 
     /// Add and connect to a stdio MCP server (child process)
     pub async fn add_stdio_server(
