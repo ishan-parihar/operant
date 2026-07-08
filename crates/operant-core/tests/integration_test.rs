@@ -20,12 +20,12 @@ use operant_core::tools::builtin::{
     CodeExecutionTool, DateTimeTool, DiscordAdminTool, DiscordTool, EnvVarTool, FileListTool,
     FileReadTool, FileSearchTool, FileStateTool, FileWriteTool, HomeAssistantTool, HttpRequestTool,
     ImageGenerationTool, InspectJsonTool, MemoryRecallTool, MemorySearchTool, MemoryStoreTool,
-    MixtureOfAgentsTool, NeuttsSynthTool, NotificationTool, OpenRouterTool, OsvCheckTool,
-    PatchTool, RlTrainingTool, SendMessageTool, SkillViewTool, SkillsTool, SlashConfirmTool,
-    SpotifyAlbumsTool, SpotifyDevicesTool, SpotifyLibraryTool, SpotifyPlaybackTool,
-    SpotifyPlaylistsTool, SpotifyQueueTool, SpotifySearchTool, SystemInfoTool, TerminalTool,
-    TimestampTool, TodoTool, ToolBackendTool, TranscriptionTool, TruncateOutputTool, TtsTool,
-    VideoAnalysisTool, VisionTool, WebFetchTool, WebSearchTool, XaiHttpTool,
+    NeuttsSynthTool, NotificationTool, OpenRouterTool, OsvCheckTool, PatchTool, SendMessageTool,
+    SkillViewTool, SkillsTool, SlashConfirmTool, SpotifyAlbumsTool, SpotifyDevicesTool,
+    SpotifyLibraryTool, SpotifyPlaybackTool, SpotifyPlaylistsTool, SpotifyQueueTool,
+    SpotifySearchTool, SystemInfoTool, TerminalTool, TimestampTool, TodoTool, ToolBackendTool,
+    TranscriptionTool, TruncateOutputTool, TtsTool, VideoAnalysisTool, VisionTool,
+    WebFetchTool, WebSearchTool, XaiHttpTool,
 };
 use operant_core::tools::{OperantTool, ToolContext, ToolRegistry};
 
@@ -437,8 +437,6 @@ fn zero_dep_tools() -> Vec<(&'static str, Box<dyn OperantTool>)> {
             "skill_view",
             Box::new(SkillViewTool::new(PathBuf::from("/tmp"))),
         ),
-        ("mixture_of_agents", Box::new(MixtureOfAgentsTool)),
-        ("rl", Box::new(RlTrainingTool)),
         ("spotify_playback", Box::new(SpotifyPlaybackTool)),
         ("spotify_devices", Box::new(SpotifyDevicesTool)),
         ("spotify_queue", Box::new(SpotifyQueueTool)),
