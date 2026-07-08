@@ -1,0 +1,29 @@
+<output>
+<compartments>
+<compartment start="38" end="46" title="Investigation into kokoro espeak/bindgen dependency chain" episode_type="investigation" importance="42">
+<p1>
+Confirmed remote sync at HEAD `f6a2aeab` (docs(iter-70)), fully up to date with origin/main.
+U: Why do we have "clang for bindgen (needed by espeak-rs-sys)"? Is it really required for kokoro? Check other rust crates for kokoro and see how we can implement it effectively
+
+The assistant began investigating the dependency chain: kokoro-tiny pulls in espeak-rs-sys, which requires bindgen, which requires libclang. Multiple exploratory bash commands were run to search for alternative Rust kokoro implementations and to trace the exact dependency edges, but the investigation was still in progress at the end of this chunk — no conclusion reached on whether espeak/bindgen can be eliminated.
+</p1>
+<p2>
+U: Why do we have "clang for bindgen (needed by espeak-rs-sys)"? Is it really required for kokoro? Check other rust crates for kokoro and see how we can implement it effectively
+
+Confirmed HEAD at `f6a2aeab`. Started tracing why kokoro-tiny requires espeak-rs-sys → bindgen → libclang and searching for alternative Rust kokoro crates that might avoid the chain. Investigation ongoing.
+</p2>
+<p3>
+Started investigating whether kokoro's espeak-rs-sys/bindgen/libclang dependency chain can be eliminated by finding alternative Rust TTS implementations.
+</p3>
+<p4>espeak-rs-sys; bindgen; kokoro dependency chain; libclang</p4>
+</compartment>
+</compartments>
+<facts>
+</facts>
+<events>
+</events>
+<meta>
+<messages_processed>38-46</messages_processed>
+<unprocessed_from>42</unprocessed_from>
+</meta>
+</output>
