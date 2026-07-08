@@ -36,15 +36,6 @@ const MAX_SPAWN_DEPTH_CAP: u32 = 3;
 /// Default max spawn depth (flat: parent -> child, no grandchildren)
 const DEFAULT_MAX_SPAWN_DEPTH: u32 = 1;
 
-/// Tools that children must never have access to
-const DELEGATE_BLOCKED_TOOLS: &[&str] = &[
-    "delegate_task", // no recursive delegation
-    "clarify",       // no user interaction
-    "memory",        // no writes to shared memory
-    "send_message",  // no cross-platform side effects
-    "execute_code",  // children should reason step-by-step
-];
-
 type BoxedToolError = Box<dyn StdError + Send + Sync>;
 
 /// Role of the sub-agent - determines capabilities
