@@ -142,23 +142,24 @@ pub async fn run_dashboard(
 }
 
 /// Generate a cryptographically random session token.
-/// Uses /dev/urandom on Unix; uuid::Uuid::new_v4 on Windows.
+/// Uses /dev/urandom on Unix for unpredictability.
 fn generate_session_token() -> String {
+    use std::io::Read;
+    let mut bytes = [0u8; 32];
     // ponytail: stdlib /dev/urandom — cryptographically secure, no extra deps.
-    #[cfg(unix)]
-    {
-        use std::io::Read;
-        let mut bytes = [0u8; 32];
-        if let Ok(mut f) = std::fs::File::open("/dev/urandom") {
-            let _ = f.read_exact(&mut bytes);
-        }
-        let hex: String = bytes.iter().map(|b| format!("{:02x}", b)).collect();
-        format!("operant_{}", hex)
+    if let Ok(mut f) = std::fs::File::open("/dev/urandom") {
+        let _ = f.read_exact(&mut bytes);
     }
-    #[cfg(not(unix))]
-    {
-        format!("operant_{}", uuid::Uuid::new_v4())
+    // hex-encode the 32 random bytes → 64-char token.
+    // ponytail: byte→hex via lookup instead of format! per byte.
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut hex = String::with_capacity(64);
+    for &b in &bytes {
+        hex.push(HEX[(b >> 4) as usize] as char);
+        hex.push(HEX[(b & 0x0f) as usize] as char);
     }
+    format!("operant_{}", hex)
+}
 }
 
 /// Check the Authorization header against the session token.
