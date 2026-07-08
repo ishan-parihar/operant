@@ -5,42 +5,6 @@
 
 use console::style;
 
-/// The outcome of a single diagnostic check.
-#[derive(Debug)]
-pub struct CheckResult {
-    /// Human-readable check label (e.g. `"Config file loaded"`).
-    pub label: String,
-    /// Whether the check passed (`true`) or had an issue (`false`).
-    pub passed: bool,
-    /// Optional detail / hint string shown after the label.
-    pub detail: Option<String>,
-}
-
-impl CheckResult {
-    pub fn new(label: impl Into<String>, passed: bool, detail: Option<String>) -> Self {
-        Self {
-            label: label.into(),
-            passed,
-            detail,
-        }
-    }
-
-    pub fn ok(label: impl Into<String>) -> Self {
-        Self::new(label, true, None)
-    }
-
-    pub fn ok_with(label: impl Into<String>, detail: impl Into<String>) -> Self {
-        Self::new(label, true, Some(detail.into()))
-    }
-
-    pub fn fail(label: impl Into<String>) -> Self {
-        Self::new(label, false, None)
-    }
-
-    pub fn fail_with(label: impl Into<String>, detail: impl Into<String>) -> Self {
-        Self::new(label, false, Some(detail.into()))
-    }
-}
 
 /// Print a passed check line.
 ///
