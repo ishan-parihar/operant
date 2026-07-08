@@ -19,6 +19,7 @@ use base64::Engine;
 use regex::Regex;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use std::sync::LazyLock;
 use thiserror::Error;
 use tokio::process::{Child, Command};
 
@@ -1396,9 +1397,8 @@ pub fn create_stt_engine(config: &VoiceConfig) -> Result<Box<dyn SttEngine>, Voi
 // Whisper Hallucination Filter
 // ---------------------------------------------------------------------------
 
-lazy_static::lazy_static! {
-    /// Known Whisper hallucination phrases on silent/near-silent audio
-    static ref WHISPER_HALLUCINATIONS: std::collections::HashSet<&'static str> = {
+/// Known Whisper hallucination phrases on silent/near-silent audio
+static WHISPER_HALLUCINATIONS: LazyLock<std::collections::HashSet<&'static str>> = LazyLock::new(|| {
         let mut set = std::collections::HashSet::new();
         set.insert("thank you.");
         set.insert("thank you");
@@ -1425,13 +1425,12 @@ lazy_static::lazy_static! {
         set.insert("www.mooji.org");
         set.insert("ご視聴ありがとうございました");
         set
-    };
+});
 
-    /// Regex pattern for repetitive hallucinations
-    static ref HALLUCINATION_REPEAT_RE: Regex = Regex::new(
-        r"^(?:thank you|thanks|bye|you|ok|okay|the end|\.|\s|,|!)+$"
-    ).expect("Invalid hallucination regex");
-}
+/// Regex pattern for repetitive hallucinations
+static HALLUCINATION_REPEAT_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(
+    r"^(?:thank you|thanks|bye|you|ok|okay|the end|\.|\s|,|!)+$"
+).expect("Invalid hallucination regex"));
 
 /// Check if a transcript is a known Whisper hallucination on silence
 pub fn is_whisper_hallucination(transcript: &str) -> bool {

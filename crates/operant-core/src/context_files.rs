@@ -7,6 +7,8 @@
 
 use std::path::{Path, PathBuf};
 
+use regex::Regex;
+use std::sync::LazyLock;
 use tracing::{debug, warn};
 
 const MAX_CONTEXT_FILE_CHARS: usize = 20_000;
@@ -36,16 +38,16 @@ const THREAT_PATTERNS: &[(&str, &str)] = &[
     ),
 ];
 
-lazy_static::lazy_static! {
-    static ref THREAT_REGEXES: Vec<(regex::Regex, &'static str)> = THREAT_PATTERNS
+static THREAT_REGEXES: LazyLock<Vec<(regex::Regex, &'static str)>> = LazyLock::new(|| {
+    THREAT_PATTERNS
         .iter()
         .map(|&(pattern, id)| {
             let re = regex::Regex::new(&format!("(?i){}", pattern))
                 .expect("Invalid context scan pattern");
             (re, id)
         })
-        .collect();
-}
+        .collect()
+});
 
 const INVISIBLE_CHARS: &[char] = &[
     '\u{200b}', '\u{200c}', '\u{200d}', '\u{2060}', '\u{feff}', '\u{202a}', '\u{202b}', '\u{202c}',

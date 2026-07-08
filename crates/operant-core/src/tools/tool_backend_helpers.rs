@@ -7,16 +7,17 @@ use std::collections::HashMap;
 use crate::schema::ToolSchema;
 use crate::tools::{OperantTool, ToolContext, ToolResult};
 
-lazy_static::lazy_static! {
-    static ref BACKEND_MAP: HashMap<&'static str, (&'static [&'static str], &'static str)> = {
-        let mut m = HashMap::new();
-        m.insert("web_search", (&["tavily", "exa", "searxng", "ddg"][..], "tavily"));
-        m.insert("code_execution", (&["local", "docker"][..], "local"));
-        m.insert("terminal", (&["local", "docker", "ssh"][..], "local"));
-        m.insert("vision", (&["openai", "anthropic"][..], "openai"));
-        m
-    };
-}
+use std::collections::HashMap;
+use std::sync::LazyLock;
+
+static BACKEND_MAP: LazyLock<HashMap<&'static str, (&'static [&'static str], &'static str)>> = LazyLock::new(|| {
+    let mut m = HashMap::new();
+    m.insert("web_search", (&["tavily", "exa", "searxng", "ddg"][..], "tavily"));
+    m.insert("code_execution", (&["local", "docker"][..], "local"));
+    m.insert("terminal", (&["local", "docker", "ssh"][..], "local"));
+    m.insert("vision", (&["openai", "anthropic"][..], "openai"));
+    m
+});
 
 pub struct ToolBackendTool;
 
