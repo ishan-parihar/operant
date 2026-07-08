@@ -122,7 +122,18 @@ pub async fn handle_mcp_command(
             scope,
             timeout,
             redirect_port,
-        } => handle_mcp_login(config, name, auth_url, client_id, scope, timeout, redirect_port).await,
+        } => {
+            handle_mcp_login(
+                config,
+                name,
+                auth_url,
+                client_id,
+                scope,
+                timeout,
+                redirect_port,
+            )
+            .await
+        }
         McpSubcommand::Configure {
             name,
             auth_token,
@@ -501,7 +512,11 @@ async fn handle_mcp_login(
         client_id: client_id.clone(),
         client_secret: None,
         scope: scope.clone(),
-        redirect_port: if redirect_port == 0 { None } else { Some(redirect_port) },
+        redirect_port: if redirect_port == 0 {
+            None
+        } else {
+            Some(redirect_port)
+        },
         client_name: Some(format!("operant-{}", name)),
         timeout,
     };
@@ -532,7 +547,9 @@ async fn handle_mcp_login(
             }
             println!();
             println!("  Tokens saved to ~/.operant/mcp-tokens/");
-            println!("  Future connections to this server will use the saved tokens automatically.");
+            println!(
+                "  Future connections to this server will use the saved tokens automatically."
+            );
             Ok(())
         }
         Err(e) => {
@@ -540,10 +557,16 @@ async fn handle_mcp_login(
             eprintln!("✗ OAuth login failed for '{}': {}", name, e);
             eprintln!();
             eprintln!("  Common causes:");
-            eprintln!("    - The server does not support OAuth (check `operant mcp test {}`)", name);
+            eprintln!(
+                "    - The server does not support OAuth (check `operant mcp test {}`)",
+                name
+            );
             eprintln!("    - The server's OAuth metadata endpoint is unreachable");
             eprintln!("    - The authorization timed out (use --timeout to extend)");
-            eprintln!("    - You already have valid tokens (use `operant mcp test {}` to verify)", name);
+            eprintln!(
+                "    - You already have valid tokens (use `operant mcp test {}` to verify)",
+                name
+            );
             Err(anyhow::anyhow!("OAuth login failed: {}", e))
         }
     }

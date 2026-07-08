@@ -211,7 +211,9 @@ pub fn render_plugins_hub(frame: &mut Frame, state: &PluginsHubState, area: Rect
         let lines = vec![
             Line::from(Span::styled(
                 "No plugins installed.",
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
             )),
             Line::from(""),
             Line::from("Plugins are git repositories cloned into your operant"),
@@ -249,7 +251,9 @@ pub fn render_plugins_hub(frame: &mut Frame, state: &PluginsHubState, area: Rect
     )));
 
     let viewport = inner.height.saturating_sub(6) as usize;
-    let start = state.scroll.min(state.plugins.len().saturating_sub(viewport));
+    let start = state
+        .scroll
+        .min(state.plugins.len().saturating_sub(viewport));
     let end = (start + viewport).min(state.plugins.len());
 
     for i in start..end {
@@ -266,7 +270,9 @@ pub fn render_plugins_hub(frame: &mut Frame, state: &PluginsHubState, area: Rect
         };
         let status_str = if entry.enabled { "enabled" } else { "disabled" };
         let status_style = if entry.enabled {
-            Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(Color::DarkGray)
         };
@@ -291,7 +297,9 @@ pub fn render_plugins_hub(frame: &mut Frame, state: &PluginsHubState, area: Rect
     if let Some(ref msg) = state.flash {
         lines.push(Line::from(Span::styled(
             msg.clone(),
-            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
         )));
     } else {
         lines.push(Line::from(""));

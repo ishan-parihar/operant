@@ -119,7 +119,11 @@ pub enum GatewaySubcommand {
 /// `config` is the currently active `AppConfig`.  Because the gateway
 /// requires runtime adapter setup, this handler provides a management view
 /// that works without an active gateway instance.
-pub async fn handle_gateway_command(config: &AppConfig, cmd: GatewaySubcommand, json: bool) -> Result<()> {
+pub async fn handle_gateway_command(
+    config: &AppConfig,
+    cmd: GatewaySubcommand,
+    json: bool,
+) -> Result<()> {
     match cmd {
         GatewaySubcommand::Run => cmd_run(config).await,
         GatewaySubcommand::Status { deep } => cmd_status(config, deep, json),
@@ -224,10 +228,7 @@ fn cmd_status(config: &AppConfig, deep: bool, json: bool) -> Result<()> {
         "  Email     {}",
         indicator(gw.email_enabled, gw.email_smtp_host.is_some())
     );
-    println!(
-        "  SMS       {}",
-        indicator(gw.sms_twilio_enabled, false)
-    );
+    println!("  SMS       {}", indicator(gw.sms_twilio_enabled, false));
     println!();
     println!(
         "Webhooks:  {}",

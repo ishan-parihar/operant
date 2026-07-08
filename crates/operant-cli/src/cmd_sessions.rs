@@ -69,7 +69,11 @@ pub enum SessionsSubcommand {
 }
 
 /// Dispatch a sessions subcommand.
-pub async fn handle_sessions_command(config: &AppConfig, cmd: SessionsSubcommand, json: bool) -> Result<()> {
+pub async fn handle_sessions_command(
+    config: &AppConfig,
+    cmd: SessionsSubcommand,
+    json: bool,
+) -> Result<()> {
     match cmd {
         SessionsSubcommand::List => cmd_list(config, json).await,
         SessionsSubcommand::Show { id } => cmd_show(config, &id).await,
@@ -96,13 +100,15 @@ async fn cmd_list(config: &AppConfig, json: bool) -> Result<()> {
         let items: Vec<serde_json::Value> = sessions
             .iter()
             .enumerate()
-            .map(|(i, s)| serde_json::json!({
-                "index": i + 1,
-                "id": s.id,
-                "title": s.title.as_deref().unwrap_or("(untitled)"),
-                "updated_at": s.updated_at,
-                "message_count": s.message_count,
-            }))
+            .map(|(i, s)| {
+                serde_json::json!({
+                    "index": i + 1,
+                    "id": s.id,
+                    "title": s.title.as_deref().unwrap_or("(untitled)"),
+                    "updated_at": s.updated_at,
+                    "message_count": s.message_count,
+                })
+            })
             .collect();
         println!("{}", serde_json::to_string_pretty(&items)?);
         return Ok(());
@@ -178,7 +184,9 @@ async fn cmd_stats(config: &AppConfig, json: bool) -> Result<()> {
         .get_session_count()
         .context("Failed to get session count")?;
 
-    let db_size = std::fs::metadata(&config.database_path).map(|m| m.len()).ok();
+    let db_size = std::fs::metadata(&config.database_path)
+        .map(|m| m.len())
+        .ok();
 
     if json {
         let stats = serde_json::json!({

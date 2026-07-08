@@ -70,7 +70,11 @@ fn infer_provider(base_url: &str) -> &str {
 /// `config` is the loaded (but possibly CLI-overridden) configuration used for
 /// the `Show` variant.  The `Set` variant reads and mutates the installed
 /// runtime configuration so that any prior overrides are preserved.
-pub async fn handle_model_command(config: &AppConfig, cmd: ModelSubcommand, json: bool) -> Result<()> {
+pub async fn handle_model_command(
+    config: &AppConfig,
+    cmd: ModelSubcommand,
+    json: bool,
+) -> Result<()> {
     match cmd {
         ModelSubcommand::Show => show_model(config, json),
         ModelSubcommand::Set { name } => set_model(&name).await,

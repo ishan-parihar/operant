@@ -175,13 +175,21 @@ mod tests {
         let lines = banner_lines(100);
         assert_eq!(lines.len(), 7, "banner_lines(100) returns 7 art lines");
         let with_sub = banner_with_subtitle(100, "0.1.3");
-        assert_eq!(with_sub.len(), 8, "banner_with_subtitle adds a subtitle rule");
+        assert_eq!(
+            with_sub.len(),
+            8,
+            "banner_with_subtitle adds a subtitle rule"
+        );
     }
 
     #[test]
     fn banner_lines_compact_width_returns_four_lines() {
         let lines = banner_lines(50);
-        assert_eq!(lines.len(), 4, "banner_lines(50) returns 4 compact art lines");
+        assert_eq!(
+            lines.len(),
+            4,
+            "banner_lines(50) returns 4 compact art lines"
+        );
     }
 
     #[test]
@@ -190,4 +198,3 @@ mod tests {
         assert_eq!(lines.len(), 1, "<40 cols falls back to single styled line");
     }
 }
-

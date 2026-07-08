@@ -203,11 +203,7 @@ async fn debug_skills(config: &AppConfig) -> Result<()> {
     println!("{}", "-".repeat(100));
 
     for (i, skill) in skills.iter().enumerate() {
-        let desc = skill
-            .description
-            .chars()
-            .take(40)
-            .collect::<String>();
+        let desc = skill.description.chars().take(40).collect::<String>();
         println!(
             "{:<3}  {:<24} {:<14} {:<8}  {}",
             i + 1,
@@ -257,10 +253,7 @@ async fn debug_plugins(config: &AppConfig) -> Result<()> {
     println!("Installed plugins ({}):", found.len());
     println!("Directory: {}", plugins_dir.display());
     println!();
-    println!(
-        "{:<3}  {:<8}  {:<24}  {:>8}",
-        "#", "Status", "Name", "Size"
-    );
+    println!("{:<3}  {:<8}  {:<24}  {:>8}", "#", "Status", "Name", "Size");
     println!("{}", "-".repeat(60));
 
     for (i, (name, enabled, size)) in found.iter().enumerate() {
@@ -314,7 +307,14 @@ async fn debug_journey(config: &AppConfig) -> Result<()> {
             let mut blocks: Vec<_> = map.into_values().collect();
             blocks.sort_by(|a, b| b.created_at.cmp(&a.created_at));
             for m in &blocks {
-                let content_preview: String = m.content.lines().next().unwrap_or("").chars().take(50).collect();
+                let content_preview: String = m
+                    .content
+                    .lines()
+                    .next()
+                    .unwrap_or("")
+                    .chars()
+                    .take(50)
+                    .collect();
                 println!(
                     "  [{:>3}] {:<10} {:<14} {}",
                     m.importance,
@@ -347,15 +347,12 @@ async fn debug_mcp(config: &AppConfig) -> Result<()> {
     println!("{}", "-".repeat(90));
 
     for (i, server) in config.mcp.servers.iter().enumerate() {
-        let url_or_cmd = server
-            .url
-            .clone()
-            .unwrap_or_else(|| {
-                server
-                    .command
-                    .clone()
-                    .unwrap_or_else(|| "(none)".to_string())
-            });
+        let url_or_cmd = server.url.clone().unwrap_or_else(|| {
+            server
+                .command
+                .clone()
+                .unwrap_or_else(|| "(none)".to_string())
+        });
         println!(
             "{:<3}  {:<24} {:<10} {:<8}  {}",
             i + 1,
@@ -386,7 +383,11 @@ async fn debug_stats(_config: &AppConfig) -> Result<()> {
     let last_n = lines.len().min(10);
     let start = lines.len().saturating_sub(last_n);
 
-    println!("Showing last {} entries from {}:", last_n, stats_path.display());
+    println!(
+        "Showing last {} entries from {}:",
+        last_n,
+        stats_path.display()
+    );
     println!();
     for line in &lines[start..] {
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(line) {
@@ -416,7 +417,10 @@ async fn debug_context(config: &AppConfig) -> Result<()> {
     let model = &config.agent.model;
     let provider = infer_provider_from_model(model);
     println!("Active model:    {}", model);
-    println!("Active provider: {}", provider.as_deref().unwrap_or("(unknown)"));
+    println!(
+        "Active provider: {}",
+        provider.as_deref().unwrap_or("(unknown)")
+    );
     println!();
 
     // Context window size — read from the settings.json if present.
@@ -448,7 +452,10 @@ async fn debug_sessions(config: &AppConfig) -> Result<()> {
     let sessions = db.list_sessions(20)?;
 
     if sessions.is_empty() {
-        println!("No sessions found in database: {}", config.database_path.display());
+        println!(
+            "No sessions found in database: {}",
+            config.database_path.display()
+        );
         return Ok(());
     }
 
@@ -621,10 +628,29 @@ fn infer_provider_from_model(model: &str) -> Option<String> {
     }
     if let Some((provider, _)) = model.split_once('/') {
         let known = [
-            "anthropic", "openai", "google", "groq", "cerebras", "deepseek", "mistral",
-            "xai", "openrouter", "github-copilot", "codex", "cohere", "perplexity",
-            "togetherai", "together-ai", "deepinfra", "venice", "minimax", "sambanova",
-            "nvidia", "moonshotai", "zhipuai", "siliconflow",
+            "anthropic",
+            "openai",
+            "google",
+            "groq",
+            "cerebras",
+            "deepseek",
+            "mistral",
+            "xai",
+            "openrouter",
+            "github-copilot",
+            "codex",
+            "cohere",
+            "perplexity",
+            "togetherai",
+            "together-ai",
+            "deepinfra",
+            "venice",
+            "minimax",
+            "sambanova",
+            "nvidia",
+            "moonshotai",
+            "zhipuai",
+            "siliconflow",
         ];
         if known.contains(&provider) {
             return Some(provider.to_string());
@@ -655,7 +681,10 @@ async fn handle_effort(_config: &AppConfig, cmd: Option<EffortSubcommand>) -> Re
     let mut settings = load_settings();
     match cmd {
         None => {
-            let cur = settings.effort_level.clone().unwrap_or_else(|| "normal".to_string());
+            let cur = settings
+                .effort_level
+                .clone()
+                .unwrap_or_else(|| "normal".to_string());
             println!("Current effort level: {}", cur);
             println!();
             println!("Set with: operant tui effort set low|normal|high|max");
@@ -673,7 +702,10 @@ async fn handle_effort(_config: &AppConfig, cmd: Option<EffortSubcommand>) -> Re
                     println!("Effort level set to: {}", lvl);
                 }
                 _ => {
-                    anyhow::bail!("Invalid effort level '{}'. Must be one of: low, normal, high, max", level);
+                    anyhow::bail!(
+                        "Invalid effort level '{}'. Must be one of: low, normal, high, max",
+                        level
+                    );
                 }
             }
         }
@@ -702,9 +734,7 @@ async fn handle_mode(_config: &AppConfig, mode: Option<String>) -> Result<()> {
                     crate::tui::adapter_types::config::PermissionMode::BypassPermissions
                 }
                 "plan" => crate::tui::adapter_types::config::PermissionMode::Plan,
-                "default" | "normal" => {
-                    crate::tui::adapter_types::config::PermissionMode::Default
-                }
+                "default" | "normal" => crate::tui::adapter_types::config::PermissionMode::Default,
                 "accept-edits" | "acceptedits" | "accept_edits" => {
                     crate::tui::adapter_types::config::PermissionMode::AcceptEdits
                 }
@@ -728,7 +758,10 @@ async fn handle_output_style(_config: &AppConfig, style: Option<String>) -> Resu
     let mut settings = load_settings();
     match style {
         None => {
-            let cur = settings.output_style.clone().unwrap_or_else(|| "auto".to_string());
+            let cur = settings
+                .output_style
+                .clone()
+                .unwrap_or_else(|| "auto".to_string());
             println!("Current output style: {}", cur);
             println!();
             println!("Set with: operant tui output-style <style>");
@@ -802,39 +835,43 @@ async fn handle_vim(_config: &AppConfig, state: Option<String>) -> Result<()> {
     let mut settings = load_settings();
     match state {
         None => {
-            println!("Vim mode: {}", if settings.vim_enabled { "on" } else { "off" });
+            println!(
+                "Vim mode: {}",
+                if settings.vim_enabled { "on" } else { "off" }
+            );
             println!();
             println!("Set with: operant tui vim on | operant tui vim off");
         }
-        Some(s) => {
-            match s.to_lowercase().as_str() {
-                "on" | "true" | "1" | "yes" => {
-                    settings.vim_enabled = true;
-                    save_settings(&settings)?;
-                    println!("Vim mode enabled.");
-                }
-                "off" | "false" | "0" | "no" => {
-                    settings.vim_enabled = false;
-                    save_settings(&settings)?;
-                    println!("Vim mode disabled.");
-                }
-                _ => {
-                    anyhow::bail!("Invalid state '{}'. Must be one of: on, off", s);
-                }
+        Some(s) => match s.to_lowercase().as_str() {
+            "on" | "true" | "1" | "yes" => {
+                settings.vim_enabled = true;
+                save_settings(&settings)?;
+                println!("Vim mode enabled.");
             }
-        }
+            "off" | "false" | "0" | "no" => {
+                settings.vim_enabled = false;
+                save_settings(&settings)?;
+                println!("Vim mode disabled.");
+            }
+            _ => {
+                anyhow::bail!("Invalid state '{}'. Must be one of: on, off", s);
+            }
+        },
     }
     Ok(())
 }
 
 /// `operant tui keybindings` — open the user keybindings file in $EDITOR.
 async fn handle_keybindings(_config: &AppConfig) -> Result<()> {
-    let kb_path = crate::tui::adapter_types::config::Settings::config_dir()
-        .join("keybindings.json");
+    let kb_path =
+        crate::tui::adapter_types::config::Settings::config_dir().join("keybindings.json");
     if !kb_path.exists() {
         // Write a default empty keybindings file.
         std::fs::create_dir_all(kb_path.parent().unwrap())?;
-        std::fs::write(&kb_path, "{\n  \"//\": \"User keybindings. See docs for the schema.\"\n}\n")?;
+        std::fs::write(
+            &kb_path,
+            "{\n  \"//\": \"User keybindings. See docs for the schema.\"\n}\n",
+        )?;
         println!("Created default keybindings file: {}", kb_path.display());
     }
 
@@ -843,9 +880,7 @@ async fn handle_keybindings(_config: &AppConfig) -> Result<()> {
         .unwrap_or_else(|_| "vi".to_string());
 
     println!("Opening {} in {}…", kb_path.display(), editor);
-    let status = std::process::Command::new(&editor)
-        .arg(&kb_path)
-        .status()?;
+    let status = std::process::Command::new(&editor).arg(&kb_path).status()?;
     if !status.success() {
         anyhow::bail!("Editor exited with non-zero status");
     }
@@ -868,7 +903,10 @@ async fn handle_voice(_config: &AppConfig) -> Result<()> {
         false
     };
 
-    println!("Voice recorder available: {}", if is_available { "yes" } else { "no" });
+    println!(
+        "Voice recorder available: {}",
+        if is_available { "yes" } else { "no" }
+    );
     if !is_available {
         println!();
         println!("Voice mode requires:");

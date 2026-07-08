@@ -5,7 +5,6 @@
 
 use console::style;
 
-
 /// Print a passed check line.
 ///
 /// Output: `  ✓ <label> <detail>` (detail in dim style).

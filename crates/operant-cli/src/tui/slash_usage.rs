@@ -54,8 +54,7 @@ impl UsageStore {
         entry.last_used_ms = now;
         // Trim if we've grown past MAX_TRACKED — keep the most-recently-used.
         if self.commands.len() > MAX_TRACKED {
-            let mut entries: Vec<(String, UsageStat)> =
-                self.commands.drain().collect();
+            let mut entries: Vec<(String, UsageStat)> = self.commands.drain().collect();
             entries.sort_by_key(|(_, s)| u64::MAX.saturating_sub(s.last_used_ms));
             entries.truncate(MAX_TRACKED);
             self.commands = entries.into_iter().collect();
@@ -111,10 +110,7 @@ pub fn usage_path() -> Option<PathBuf> {
 ///   3. Then by declaration order (stable)
 ///
 /// Returns the indices into the input slice in ranked order.
-pub fn rank_commands(
-    commands: &[(&str, &str)],
-    usage: &UsageStore,
-) -> Vec<usize> {
+pub fn rank_commands(commands: &[(&str, &str)], usage: &UsageStore) -> Vec<usize> {
     let mut indices: Vec<usize> = (0..commands.len()).collect();
     indices.sort_by(|&a, &b| {
         let ra = usage.recency_rank(commands[a].0);
@@ -164,15 +160,24 @@ mod tests {
         // Record in order: a, b, c (so c is most recent)
         usage.commands.insert(
             "a".to_string(),
-            UsageStat { count: 1, last_used_ms: 1_000_000 },
+            UsageStat {
+                count: 1,
+                last_used_ms: 1_000_000,
+            },
         );
         usage.commands.insert(
             "b".to_string(),
-            UsageStat { count: 1, last_used_ms: 1_001_000 },
+            UsageStat {
+                count: 1,
+                last_used_ms: 1_001_000,
+            },
         );
         usage.commands.insert(
             "c".to_string(),
-            UsageStat { count: 1, last_used_ms: 1_002_000 },
+            UsageStat {
+                count: 1,
+                last_used_ms: 1_002_000,
+            },
         );
         let cmds = vec![("a", ""), ("b", ""), ("c", "")];
         let ranked = rank_commands(&cmds, &usage);
@@ -186,11 +191,17 @@ mod tests {
         // a and b have the same last_used_ms but a has higher count
         usage.commands.insert(
             "a".to_string(),
-            UsageStat { count: 10, last_used_ms: 1_000_000 },
+            UsageStat {
+                count: 10,
+                last_used_ms: 1_000_000,
+            },
         );
         usage.commands.insert(
             "b".to_string(),
-            UsageStat { count: 2, last_used_ms: 1_000_000 },
+            UsageStat {
+                count: 2,
+                last_used_ms: 1_000_000,
+            },
         );
         let cmds = vec![("a", ""), ("b", "")];
         let ranked = rank_commands(&cmds, &usage);

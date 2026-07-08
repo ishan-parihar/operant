@@ -77,7 +77,11 @@ pub enum CronSubcommand {
 }
 
 /// Dispatch a cron subcommand.
-pub async fn handle_cron_command(config: &AppConfig, cmd: CronSubcommand, json: bool) -> Result<()> {
+pub async fn handle_cron_command(
+    config: &AppConfig,
+    cmd: CronSubcommand,
+    json: bool,
+) -> Result<()> {
     match cmd {
         CronSubcommand::List => cmd_list(config, json).await,
         CronSubcommand::Create {
@@ -375,8 +379,14 @@ async fn cmd_run(config: &AppConfig, id: &str) -> Result<()> {
     // Mark the job as "triggered" (not "success") — actual execution requires
     // the cron scheduler or the gateway. Previously this marked the job as
     // "ran successfully" without executing anything, which was misleading.
-    db.mark_job_run(id, false, Some("triggered_manually".to_string()), None, None)
-        .context("Failed to mark cron job run")?;
+    db.mark_job_run(
+        id,
+        false,
+        Some("triggered_manually".to_string()),
+        None,
+        None,
+    )
+    .context("Failed to mark cron job run")?;
 
     println!("Cron job '{}' triggered.", job.name);
     println!("  Prompt: {}", job.prompt);
@@ -386,8 +396,13 @@ async fn cmd_run(config: &AppConfig, id: &str) -> Result<()> {
     }
     println!();
     println!("  Note: Manual execution via CLI is not yet implemented.");
-    println!("  The job has been marked as 'triggered' and will execute on the next scheduler tick.");
-    println!("  To run the prompt now, use: operant run --query \"{}\"", job.prompt);
+    println!(
+        "  The job has been marked as 'triggered' and will execute on the next scheduler tick."
+    );
+    println!(
+        "  To run the prompt now, use: operant run --query \"{}\"",
+        job.prompt
+    );
     Ok(())
 }
 
@@ -427,7 +442,11 @@ async fn cmd_tick(config: &AppConfig) -> Result<()> {
 
 /// Create a cron job from a pre-built blueprint.
 /// (iter-107 — the #1 transformative feature from the UX audit.)
-async fn cmd_blueprint(config: &AppConfig, name: &str, schedule_override: Option<String>) -> Result<()> {
+async fn cmd_blueprint(
+    config: &AppConfig,
+    name: &str,
+    schedule_override: Option<String>,
+) -> Result<()> {
     let (display_name, default_schedule, prompt): (&str, &str, String) = match name {
         "morning-brief" => (
             "Morning Brief",
@@ -460,7 +479,18 @@ async fn cmd_blueprint(config: &AppConfig, name: &str, schedule_override: Option
             schedule.clone(),
             None,
             "local".to_string(),
-            None, None, None, None, None, None, None, None, None, None, None, None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
             false,
         )
         .context("Failed to create cron job")?;
@@ -475,7 +505,10 @@ async fn cmd_blueprint(config: &AppConfig, name: &str, schedule_override: Option
     println!("   or in the TUI if no gateway is running.");
     println!();
     println!("   To test it now: operant cron run {}", id);
-    println!("   To customize:   operant cron update {} --command <your prompt>", id);
+    println!(
+        "   To customize:   operant cron update {} --command <your prompt>",
+        id
+    );
     println!("   To delete:       operant cron delete {}", id);
 
     Ok(())

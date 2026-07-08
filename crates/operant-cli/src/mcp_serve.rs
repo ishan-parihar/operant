@@ -225,11 +225,7 @@ async fn connect_mcp_server(
                 .clone()
                 .context("Streamable-HTTP MCP server is missing a URL")?;
             mcp_manager
-                .add_streamable_http_server(
-                    server.name.clone(),
-                    url,
-                    server.auth_token.clone(),
-                )
+                .add_streamable_http_server(server.name.clone(), url, server.auth_token.clone())
                 .await?;
         }
         operant_core::config::McpTransportKind::Stdio => {
@@ -677,10 +673,7 @@ mod tests {
         };
         let response = handle_initialize(&request);
         assert!(response.error.is_none());
-        assert_eq!(
-            response.result.unwrap()["protocolVersion"],
-            "2025-06-18"
-        );
+        assert_eq!(response.result.unwrap()["protocolVersion"], "2025-06-18");
     }
 
     /// Test that the server falls back to its newest version when the client
@@ -696,10 +689,7 @@ mod tests {
         let response = handle_initialize(&request);
         assert!(response.error.is_none());
         // Should fall back to our newest supported version.
-        assert_eq!(
-            response.result.unwrap()["protocolVersion"],
-            "2025-06-18"
-        );
+        assert_eq!(response.result.unwrap()["protocolVersion"], "2025-06-18");
     }
 
     /// Test `ping` returns null result.

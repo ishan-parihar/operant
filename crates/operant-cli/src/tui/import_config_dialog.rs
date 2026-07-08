@@ -35,11 +35,7 @@ impl ImportConfigDialogState {
     }
 }
 
-pub fn render_import_config_dialog(
-    frame: &mut Frame,
-    state: &ImportConfigDialogState,
-    area: Rect,
-) {
+pub fn render_import_config_dialog(frame: &mut Frame, state: &ImportConfigDialogState, area: Rect) {
     if !state.visible {
         return;
     }
@@ -104,7 +100,9 @@ pub fn render_import_config_dialog(
     frame.render_widget(
         Paragraph::new(Line::from(vec![Span::styled(
             " Enter to import  ·  Esc to cancel",
-            Style::default().fg(OPERANT_MUTED).add_modifier(Modifier::ITALIC),
+            Style::default()
+                .fg(OPERANT_MUTED)
+                .add_modifier(Modifier::ITALIC),
         )])),
         layout.footer_area,
     );
@@ -113,6 +111,11 @@ pub fn render_import_config_dialog(
 fn section_title(title: &str) -> Line<'static> {
     Line::from(vec![
         Span::styled(" ", Style::default()),
-        Span::styled(title.to_string(), Style::default().fg(OPERANT_ACCENT).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            title.to_string(),
+            Style::default()
+                .fg(OPERANT_ACCENT)
+                .add_modifier(Modifier::BOLD),
+        ),
     ])
 }

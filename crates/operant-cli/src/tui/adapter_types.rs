@@ -1,6 +1,6 @@
 pub mod config {
+    use serde::{Deserialize, Serialize};
     use std::collections::HashMap;
-    use serde::{Serialize, Deserialize};
 
     // ---------- Theme (enum, not struct) ----------
 
@@ -129,9 +129,7 @@ pub mod config {
             Ok(settings)
         }
         pub fn config_dir() -> std::path::PathBuf {
-            dirs::home_dir()
-                .unwrap_or_default()
-                .join(".operant")
+            dirs::home_dir().unwrap_or_default().join(".operant")
         }
         pub fn effective_config(&self) -> Config {
             Config {
@@ -256,10 +254,29 @@ pub mod config {
         }
         if let Some((provider, _)) = model.split_once('/') {
             let known = [
-                "anthropic", "openai", "google", "groq", "cerebras", "deepseek",
-                "mistral", "xai", "openrouter", "github-copilot", "codex", "cohere",
-                "perplexity", "togetherai", "together-ai", "deepinfra", "venice", "minimax",
-                "sambanova", "nvidia", "moonshotai", "zhipuai", "siliconflow",
+                "anthropic",
+                "openai",
+                "google",
+                "groq",
+                "cerebras",
+                "deepseek",
+                "mistral",
+                "xai",
+                "openrouter",
+                "github-copilot",
+                "codex",
+                "cohere",
+                "perplexity",
+                "togetherai",
+                "together-ai",
+                "deepinfra",
+                "venice",
+                "minimax",
+                "sambanova",
+                "nvidia",
+                "moonshotai",
+                "zhipuai",
+                "siliconflow",
             ];
             if known.contains(&provider) {
                 return Some(provider.to_string());
@@ -270,9 +287,7 @@ pub mod config {
 
     impl Config {
         pub fn effective_model(&self) -> &str {
-            self.model
-                .as_deref()
-                .unwrap_or(&self.inner.agent.model)
+            self.model.as_deref().unwrap_or(&self.inner.agent.model)
         }
         pub fn resolve_api_key(&self) -> Option<String> {
             std::env::var("ANTHROPIC_API_KEY")
@@ -286,23 +301,18 @@ pub mod config {
                 "openai" => "OPENAI_API_KEY",
                 _ => return self.inner.client.api_key.clone(),
             };
-            std::env::var(env_var)
-                .ok()
-                .filter(|k| !k.is_empty())
+            std::env::var(env_var).ok().filter(|k| !k.is_empty())
         }
         pub fn set_model(&mut self, model: &str) {
             self.model = Some(model.to_string());
         }
         pub fn config_dir() -> std::path::PathBuf {
-            dirs::home_dir()
-                .unwrap_or_default()
-                .join(".operant")
+            dirs::home_dir().unwrap_or_default().join(".operant")
         }
     }
 }
 
 pub use config::Settings;
-
 
 pub mod constants {
     pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -375,23 +385,70 @@ pub mod file_history {
 
 pub mod types {
     #[derive(Debug, Clone, PartialEq)]
-    pub enum Role { User, Assistant, System }
+    pub enum Role {
+        User,
+        Assistant,
+        System,
+    }
 
     #[derive(Debug, Clone)]
     pub enum ContentBlock {
-        Text { text: String },
-        Thinking { thinking: String, signature: String },
-        RedactedThinking { data: String },
-        ToolUse { id: String, name: String, input: serde_json::Value },
-        ToolResult { tool_use_id: String, content: ToolResultContent, is_error: bool },
-        Image { source: String, data: String, media_type: String },
-        Document { title: String, context: String, source: String },
-        UserLocalCommandOutput { command: String, output: String },
-        UserCommand { name: String, args: String },
-        UserMemoryInput { key: String, value: String },
-        SystemAPIError { message: String, retry_secs: Option<u64> },
-        CollapsedReadSearch { tool_name: String, paths: Vec<String>, n_hidden: usize },
-        TaskAssignment { id: String, subject: String, description: String },
+        Text {
+            text: String,
+        },
+        Thinking {
+            thinking: String,
+            signature: String,
+        },
+        RedactedThinking {
+            data: String,
+        },
+        ToolUse {
+            id: String,
+            name: String,
+            input: serde_json::Value,
+        },
+        ToolResult {
+            tool_use_id: String,
+            content: ToolResultContent,
+            is_error: bool,
+        },
+        Image {
+            source: String,
+            data: String,
+            media_type: String,
+        },
+        Document {
+            title: String,
+            context: String,
+            source: String,
+        },
+        UserLocalCommandOutput {
+            command: String,
+            output: String,
+        },
+        UserCommand {
+            name: String,
+            args: String,
+        },
+        UserMemoryInput {
+            key: String,
+            value: String,
+        },
+        SystemAPIError {
+            message: String,
+            retry_secs: Option<u64>,
+        },
+        CollapsedReadSearch {
+            tool_name: String,
+            paths: Vec<String>,
+            n_hidden: usize,
+        },
+        TaskAssignment {
+            id: String,
+            subject: String,
+            description: String,
+        },
     }
 
     #[derive(Debug, Clone)]
@@ -415,13 +472,22 @@ pub mod types {
 
     impl Message {
         pub fn user(text: String) -> Self {
-            Self { role: Role::User, content: MessageContent::Text(text) }
+            Self {
+                role: Role::User,
+                content: MessageContent::Text(text),
+            }
         }
         pub fn assistant(text: String) -> Self {
-            Self { role: Role::Assistant, content: MessageContent::Text(text) }
+            Self {
+                role: Role::Assistant,
+                content: MessageContent::Text(text),
+            }
         }
         pub fn assistant_blocks(blocks: Vec<ContentBlock>) -> Self {
-            Self { role: Role::Assistant, content: MessageContent::Blocks(blocks) }
+            Self {
+                role: Role::Assistant,
+                content: MessageContent::Blocks(blocks),
+            }
         }
         pub fn content_blocks(&self) -> Vec<&ContentBlock> {
             match &self.content {
@@ -454,7 +520,9 @@ pub mod types {
                 _ => vec![],
             }
         }
-        pub fn total_tokens(&self) -> u32 { 0 }
+        pub fn total_tokens(&self) -> u32 {
+            0
+        }
     }
 
     #[derive(Debug, Clone)]
@@ -464,7 +532,6 @@ pub mod types {
         pub is_error: bool,
     }
 }
-
 
 pub mod output_styles {
     use ratatui::style::Color;
@@ -589,7 +656,6 @@ pub mod voice {
             }
         }
 
-
         pub fn set_enabled(&mut self, enabled: bool) {
             self.enabled = enabled;
         }
@@ -627,18 +693,14 @@ pub mod voice {
         ) -> std::result::Result<(), String> {
             if !self.enabled {
                 let _ = tx
-                    .send(VoiceEvent::Error(
-                        "Voice mode is not enabled".to_string(),
-                    ))
+                    .send(VoiceEvent::Error("Voice mode is not enabled".to_string()))
                     .await;
                 return Ok(());
             }
 
             // Lazily create the recorder.
             if self.recorder.is_none() {
-                self.recorder = Some(operant_core::voice::create_recorder(
-                    self.config.clone(),
-                ));
+                self.recorder = Some(operant_core::voice::create_recorder(self.config.clone()));
             }
 
             let recorder = self.recorder.as_mut().unwrap();
@@ -677,9 +739,7 @@ pub mod voice {
                 Ok(None) => {
                     if let Some(tx) = &self.event_tx {
                         let _ = tx
-                            .send(VoiceEvent::Error(
-                                "No audio captured".to_string(),
-                            ))
+                            .send(VoiceEvent::Error("No audio captured".to_string()))
                             .await;
                     }
                     return Ok(vec![]);
@@ -708,10 +768,7 @@ pub mod voice {
                     Err(e) => {
                         if let Some(tx) = &self.event_tx {
                             let _ = tx
-                                .send(VoiceEvent::Error(format!(
-                                    "STT engine init failed: {}",
-                                    e
-                                )))
+                                .send(VoiceEvent::Error(format!("STT engine init failed: {}", e)))
                                 .await;
                         }
                         return Ok(vec![]);
@@ -720,7 +777,8 @@ pub mod voice {
             }
 
             let stt_engine = self.stt_engine.as_ref().unwrap();
-            match operant_core::voice::transcribe_recording(&audio_path, stt_engine.as_ref()).await {
+            match operant_core::voice::transcribe_recording(&audio_path, stt_engine.as_ref()).await
+            {
                 Ok(result) => {
                     if result.success && !result.transcript.is_empty() {
                         if let Some(tx) = &self.event_tx {
@@ -744,10 +802,7 @@ pub mod voice {
                 Err(e) => {
                     if let Some(tx) = &self.event_tx {
                         let _ = tx
-                            .send(VoiceEvent::Error(format!(
-                                "Transcription failed: {}",
-                                e
-                            )))
+                            .send(VoiceEvent::Error(format!("Transcription failed: {}", e)))
                             .await;
                     }
                 }
@@ -776,15 +831,17 @@ pub mod voice {
 /// QueryEvent/StreamEvent/UsageInfo types were deleted with the bridge
 /// in iter-114. Only this function survived because it's still used by
 /// refresh_context_window_size in app.rs.)
-pub fn context_window_for_model(_model: &str) -> usize { 128000 }
+pub fn context_window_for_model(_model: &str) -> usize {
+    128000
+}
 
 pub mod compact {
     // (iter-136: TokenWarningState deleted — never used)
 }
 
 pub mod import_config {
-    
-    use serde::{Serialize, Deserialize};
+
+    use serde::{Deserialize, Serialize};
 
     #[derive(Debug, Clone)]
     pub struct ImportPaths {
@@ -794,12 +851,19 @@ pub mod import_config {
 
     impl ImportPaths {
         pub fn detect() -> Self {
-            Self { settings_json: None, claude_md: None }
+            Self {
+                settings_json: None,
+                claude_md: None,
+            }
         }
     }
 
     #[derive(Debug, Clone, PartialEq)]
-    pub enum ImportSelection { Both, Settings, ClaudeMd }
+    pub enum ImportSelection {
+        Both,
+        Settings,
+        ClaudeMd,
+    }
 
     #[derive(Debug, Clone)]
     pub struct ImportResult {
@@ -812,8 +876,14 @@ pub mod import_config {
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
     pub enum StoredCredential {
-        ApiKey { key: String },
-        OAuthToken { access: String, refresh: String, expires: String },
+        ApiKey {
+            key: String,
+        },
+        OAuthToken {
+            access: String,
+            refresh: String,
+            expires: String,
+        },
     }
 
     #[derive(Debug, Clone)]
@@ -835,12 +905,19 @@ pub mod import_config {
     }
 
     pub fn build_import_preview(sel: ImportSelection) -> Result<ImportPreview, String> {
-        Ok(ImportPreview { settings: false, claude_md: false, auth: false, selection: Some(sel) })
+        Ok(ImportPreview {
+            settings: false,
+            claude_md: false,
+            auth: false,
+            selection: Some(sel),
+        })
     }
 
     pub fn execute_import(sel: ImportSelection) -> Result<ImportResult, String> {
         let _ = sel;
-        Ok(ImportResult { imported_fields: vec![] })
+        Ok(ImportResult {
+            imported_fields: vec![],
+        })
     }
 
     pub fn summarize_import_result(_result: &ImportResult, _paths: &ImportPaths) -> String {
@@ -849,10 +926,8 @@ pub mod import_config {
 }
 
 pub mod codex_oauth {
-    pub const CODEX_MODELS: &[(&str, &str)] = &[
-        ("codex-mini", "Codex Mini"),
-        ("o3-mini", "O3 Mini"),
-    ];
+    pub const CODEX_MODELS: &[(&str, &str)] =
+        &[("codex-mini", "Codex Mini"), ("o3-mini", "O3 Mini")];
 }
 
 pub mod history {
@@ -927,9 +1002,7 @@ pub mod history {
                 Ok(m) => m,
                 Err(_) => return Vec::new(),
             };
-            msgs.into_iter()
-                .map(|m| (m.role, m.content))
-                .collect()
+            msgs.into_iter().map(|m| (m.role, m.content)).collect()
         })
         .await
         .unwrap_or_default()
@@ -980,22 +1053,35 @@ pub mod tips {
 pub mod git_utils {
     pub fn get_current_branch(_repo_root: &std::path::Path) -> Option<String> {
         std::process::Command::new("git")
-            .arg("rev-parse").arg("--abbrev-ref").arg("HEAD")
-            .output().ok()
+            .arg("rev-parse")
+            .arg("--abbrev-ref")
+            .arg("HEAD")
+            .output()
+            .ok()
             .and_then(|o| {
                 if o.status.success() {
-                    String::from_utf8(o.stdout).ok().map(|s| s.trim().to_string())
-                } else { None }
+                    String::from_utf8(o.stdout)
+                        .ok()
+                        .map(|s| s.trim().to_string())
+                } else {
+                    None
+                }
             })
     }
     pub fn get_repo_root(_start: &std::path::Path) -> Option<std::path::PathBuf> {
         std::process::Command::new("git")
-            .arg("rev-parse").arg("--show-toplevel")
-            .output().ok()
+            .arg("rev-parse")
+            .arg("--show-toplevel")
+            .output()
+            .ok()
             .and_then(|o| {
                 if o.status.success() {
-                    String::from_utf8(o.stdout).ok().map(|s| std::path::PathBuf::from(s.trim()))
-                } else { None }
+                    String::from_utf8(o.stdout)
+                        .ok()
+                        .map(|s| std::path::PathBuf::from(s.trim()))
+                } else {
+                    None
+                }
             })
     }
 }
@@ -1013,51 +1099,55 @@ pub struct AuthStore {
 
 #[derive(Debug, Clone)]
 pub enum StoredCredential {
-    ApiKey { key: String },
-    OAuthToken { access: String, refresh: String, expires: u64 },
+    ApiKey {
+        key: String,
+    },
+    OAuthToken {
+        access: String,
+        refresh: String,
+        expires: u64,
+    },
 }
 
 impl AuthStore {
     pub fn load() -> Self {
         let mut credentials = std::collections::HashMap::new();
-        
+
         // Load from environment variables
         if let Ok(key) = std::env::var("ANTHROPIC_API_KEY") {
             if !key.is_empty() {
-                credentials.insert(
-                    "anthropic".to_string(),
-                    StoredCredential::ApiKey { key },
-                );
+                credentials.insert("anthropic".to_string(), StoredCredential::ApiKey { key });
             }
         }
         if let Ok(key) = std::env::var("OPENAI_API_KEY") {
             if !key.is_empty() {
-                credentials.insert(
-                    "openai".to_string(),
-                    StoredCredential::ApiKey { key },
-                );
+                credentials.insert("openai".to_string(), StoredCredential::ApiKey { key });
             }
         }
-        
+
         // Load from persisted auth file (simple format: {"provider": "key", ...})
         if let Ok(auth_data) = std::fs::read_to_string(Self::auth_path()) {
-            if let Ok(saved) = serde_json::from_str::<std::collections::HashMap<String, String>>(&auth_data) {
+            if let Ok(saved) =
+                serde_json::from_str::<std::collections::HashMap<String, String>>(&auth_data)
+            {
                 for (provider, key) in saved {
                     if !key.is_empty() {
-                        credentials.entry(provider).or_insert(StoredCredential::ApiKey { key });
+                        credentials
+                            .entry(provider)
+                            .or_insert(StoredCredential::ApiKey { key });
                     }
                 }
             }
         }
-        
+
         Self { credentials }
     }
-    
+
     fn auth_path() -> std::path::PathBuf {
         let dir = Settings::config_dir();
         dir.join("auth.json")
     }
-    
+
     pub fn save(&self) -> anyhow::Result<()> {
         let dir = Settings::config_dir();
         std::fs::create_dir_all(&dir)?;
@@ -1076,7 +1166,7 @@ impl AuthStore {
         std::fs::write(Self::auth_path(), json)?;
         Ok(())
     }
-    
+
     pub fn set(&mut self, key: &str, value: StoredCredential) {
         self.credentials.insert(key.to_string(), value);
         let _ = self.save();
@@ -1089,13 +1179,14 @@ impl AuthStore {
         }
     }
     pub fn has_any_key(&self) -> bool {
-        self.credentials.values().any(|c| matches!(c, StoredCredential::ApiKey { key } if !key.is_empty()))
+        self.credentials
+            .values()
+            .any(|c| matches!(c, StoredCredential::ApiKey { key } if !key.is_empty()))
     }
 }
 
 pub use import_config::{
-    ImportPaths, ImportSelection,
-    build_import_preview, execute_import, summarize_import_result,
+    build_import_preview, execute_import, summarize_import_result, ImportPaths, ImportSelection,
 };
 
 pub mod file_injection {
@@ -1123,7 +1214,11 @@ pub mod file_injection {
         for word in text.split_whitespace() {
             if word.starts_with('@') && word.len() > 1 {
                 let path = word[1..].to_string();
-                refs.push(AtFileRef { path, line_start: None, line_end: None });
+                refs.push(AtFileRef {
+                    path,
+                    line_start: None,
+                    line_end: None,
+                });
             }
         }
         (refs, issues)
@@ -1143,11 +1238,51 @@ pub struct FreeUpstream {
 }
 
 pub const FREE_CATALOG: &[FreeUpstream] = &[
-    FreeUpstream { id: "groq", name: "Groq", title: "Groq", api_key_env: "GROQ_API_KEY", default_model: "llama-3.3-70b-versatile", note: "Blazing fast inference", key_url: "console.groq.com" },
-    FreeUpstream { id: "cerebras", name: "Cerebras", title: "Cerebras", api_key_env: "CEREBRAS_API_KEY", default_model: "llama-3.3-70b", note: "Ultra-fast wafer-scale", key_url: "cloud.cerebras.ai" },
-    FreeUpstream { id: "google", name: "Google Gemini", title: "Google Gemini", api_key_env: "GOOGLE_API_KEY", default_model: "gemini-2.0-flash", note: "Multimodal, generous free tier", key_url: "aistudio.google.com" },
-    FreeUpstream { id: "mistral", name: "Mistral", title: "Mistral", api_key_env: "MISTRAL_API_KEY", default_model: "mistral-small-latest", note: "Strong coding models", key_url: "console.mistral.ai" },
-    FreeUpstream { id: "sambanova", name: "SambaNova", title: "SambaNova", api_key_env: "SAMBANOVA_API_KEY", default_model: "Meta-Llama-3.3-70B-Instruct", note: "Fast inference, free tier", key_url: "cloud.sambanova.ai" },
+    FreeUpstream {
+        id: "groq",
+        name: "Groq",
+        title: "Groq",
+        api_key_env: "GROQ_API_KEY",
+        default_model: "llama-3.3-70b-versatile",
+        note: "Blazing fast inference",
+        key_url: "console.groq.com",
+    },
+    FreeUpstream {
+        id: "cerebras",
+        name: "Cerebras",
+        title: "Cerebras",
+        api_key_env: "CEREBRAS_API_KEY",
+        default_model: "llama-3.3-70b",
+        note: "Ultra-fast wafer-scale",
+        key_url: "cloud.cerebras.ai",
+    },
+    FreeUpstream {
+        id: "google",
+        name: "Google Gemini",
+        title: "Google Gemini",
+        api_key_env: "GOOGLE_API_KEY",
+        default_model: "gemini-2.0-flash",
+        note: "Multimodal, generous free tier",
+        key_url: "aistudio.google.com",
+    },
+    FreeUpstream {
+        id: "mistral",
+        name: "Mistral",
+        title: "Mistral",
+        api_key_env: "MISTRAL_API_KEY",
+        default_model: "mistral-small-latest",
+        note: "Strong coding models",
+        key_url: "console.mistral.ai",
+    },
+    FreeUpstream {
+        id: "sambanova",
+        name: "SambaNova",
+        title: "SambaNova",
+        api_key_env: "SAMBANOVA_API_KEY",
+        default_model: "Meta-Llama-3.3-70B-Instruct",
+        note: "Fast inference, free tier",
+        key_url: "cloud.sambanova.ai",
+    },
 ];
 
 fn reverse_provider_lookup(dev_provider: &str) -> String {
@@ -1197,14 +1332,16 @@ impl ModelRegistry {
     pub fn ensure_provider_defaults(&mut self) {
         for provider in crate::provider::PROVIDERS {
             if !self.models.contains_key(provider.name) {
-                let entries: Vec<crate::tui::model_picker::ModelEntry> = provider.models.iter().map(|model_id| {
-                    crate::tui::model_picker::ModelEntry {
+                let entries: Vec<crate::tui::model_picker::ModelEntry> = provider
+                    .models
+                    .iter()
+                    .map(|model_id| crate::tui::model_picker::ModelEntry {
                         id: model_id.to_string(),
                         display_name: model_id.to_string(),
                         description: provider.display_name.to_string(),
                         is_current: false,
-                    }
-                }).collect();
+                    })
+                    .collect();
                 if !entries.is_empty() {
                     self.models.insert(provider.name.to_string(), entries);
                 }
@@ -1235,7 +1372,10 @@ impl ModelRegistry {
             )
             .map(|_| reverse_provider_lookup(m_provider))
             .or_else(|| {
-                if crate::provider::PROVIDERS.iter().any(|p| p.name == m_provider) {
+                if crate::provider::PROVIDERS
+                    .iter()
+                    .any(|p| p.name == m_provider)
+                {
                     Some(m_provider.to_string())
                 } else {
                     None
@@ -1291,9 +1431,15 @@ impl ModelRegistry {
     /// uses `x-api-key` + `anthropic-version` headers — the OpenAI-compat
     /// `Authorization: Bearer` pattern does NOT work for Anthropic). All other
     /// providers go through the OpenAI-compat path.
-    pub async fn fetch_from_provider_async(&mut self, provider_id: &str, api_key: &str, base_url: &str) {
+    pub async fn fetch_from_provider_async(
+        &mut self,
+        provider_id: &str,
+        api_key: &str,
+        base_url: &str,
+    ) {
         let fetched = if provider_id == "anthropic" {
-            let client = AnthropicClient::new(Some(api_key.to_string()), Some(base_url.to_string()));
+            let client =
+                AnthropicClient::new(Some(api_key.to_string()), Some(base_url.to_string()));
             client.fetch_available_models().await
         } else {
             fetch_openai_compatible_models_async(api_key, base_url).await
@@ -1330,38 +1476,44 @@ impl ModelRegistry {
                 info: ModelInfo::default(),
             })
     }
-    
-    pub fn list_visible_by_provider(&self, provider: &str) -> Vec<crate::tui::model_picker::ModelEntry> {
+
+    pub fn list_visible_by_provider(
+        &self,
+        provider: &str,
+    ) -> Vec<crate::tui::model_picker::ModelEntry> {
         self.list_by_provider(provider)
     }
-    
+
     pub fn list_by_provider(&self, provider: &str) -> Vec<crate::tui::model_picker::ModelEntry> {
         self.models.get(provider).cloned().unwrap_or_default()
     }
-    
+
     pub fn best_model_for_provider(&self, provider: &str) -> Option<String> {
         self.list_by_provider(provider)
             .first()
             .map(|m| m.id.clone())
     }
 
-    fn populate_default_models(models: &mut std::collections::HashMap<String, Vec<crate::tui::model_picker::ModelEntry>>) {
+    fn populate_default_models(
+        models: &mut std::collections::HashMap<String, Vec<crate::tui::model_picker::ModelEntry>>,
+    ) {
         for provider in crate::provider::PROVIDERS {
-            let entries: Vec<crate::tui::model_picker::ModelEntry> = provider.models.iter().map(|model_id| {
-                crate::tui::model_picker::ModelEntry {
+            let entries: Vec<crate::tui::model_picker::ModelEntry> = provider
+                .models
+                .iter()
+                .map(|model_id| crate::tui::model_picker::ModelEntry {
                     id: model_id.to_string(),
                     display_name: model_id.to_string(),
                     description: provider.display_name.to_string(),
                     is_current: false,
-                }
-            }).collect();
+                })
+                .collect();
             if !entries.is_empty() {
                 models.insert(provider.name.to_string(), entries);
             }
         }
     }
 }
-
 
 pub struct AnthropicClient {
     api_key: Option<String>,
@@ -1472,10 +1624,7 @@ impl AnthropicClient {
     }
 }
 
-pub async fn fetch_openai_compatible_models_async(
-    api_key: &str,
-    base_url: &str,
-) -> Vec<String> {
+pub async fn fetch_openai_compatible_models_async(api_key: &str, base_url: &str) -> Vec<String> {
     let base = base_url.trim_end_matches('/');
     let base = base.strip_suffix("/v1").unwrap_or(base);
     let url = format!("{}/v1/models", base);
@@ -1589,12 +1738,18 @@ pub mod mcp {
     }
 
     impl McpManager {
-        pub fn new() -> Arc<Self> { Arc::new(Self) }
-        pub fn all_tool_definitions(&self) -> Vec<(String, McpToolDef)> { vec![] }
+        pub fn new() -> Arc<Self> {
+            Arc::new(Self)
+        }
+        pub fn all_tool_definitions(&self) -> Vec<(String, McpToolDef)> {
+            vec![]
+        }
         pub fn server_status(&self, _name: &str) -> McpServerStatus {
             McpServerStatus::Disconnected { last_error: None }
         }
-        pub fn server_catalog(&self, _name: &str) -> Option<McpCatalogEntry> { None }
+        pub fn server_catalog(&self, _name: &str) -> Option<McpCatalogEntry> {
+            None
+        }
     }
 
     #[derive(Debug, Clone, PartialEq)]
@@ -1612,7 +1767,14 @@ pub mod tools {
     /// code, UserQuestionEvent was replaced by operant_core::user_question::
     /// UserQuestionRequest in iter-97.)
     #[derive(Debug, Clone, PartialEq)]
-    pub enum TaskStatus { Pending, Running, Completed, Failed, InProgress, Deleted }
+    pub enum TaskStatus {
+        Pending,
+        Running,
+        Completed,
+        Failed,
+        InProgress,
+        Deleted,
+    }
 
     impl std::fmt::Display for TaskStatus {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -1664,9 +1826,9 @@ impl TuiApp {
         _mode: LaunchMode,
         no_mouse: bool,
     ) -> anyhow::Result<Self> {
+        use crate::commands::{CommandContext, CommandHandler, CommandRegistry, CommandResult};
         use crate::tui::adapter_types::config::Config;
         use crate::tui::adapter_types::cost::CostTracker;
-        use crate::commands::{CommandRegistry, CommandHandler, CommandContext, CommandResult};
         use std::sync::Arc;
 
         let initial_query = match &_mode {
@@ -1716,7 +1878,9 @@ impl TuiApp {
                 Ok("Context compaction is handled automatically by the agent.".to_string())
             }
         }
-        command_registry.register_handler("compact", Box::new(CompactHandler)).ok();
+        command_registry
+            .register_handler("compact", Box::new(CompactHandler))
+            .ok();
 
         struct DoctorHandler;
         #[async_trait::async_trait]
@@ -1724,7 +1888,10 @@ impl TuiApp {
             async fn execute(&self, _ctx: &CommandContext<'_>) -> CommandResult {
                 let mut report = String::from("Operant Diagnostics:\n");
                 report.push_str(&format!("  Version: {}\n", env!("CARGO_PKG_VERSION")));
-                report.push_str(&format!("  Config dir: {:?}\n", crate::tui::adapter_types::config::Settings::config_dir()));
+                report.push_str(&format!(
+                    "  Config dir: {:?}\n",
+                    crate::tui::adapter_types::config::Settings::config_dir()
+                ));
                 let api_key_set = std::env::var("ANTHROPIC_API_KEY").is_ok()
                     || std::env::var("OPENAI_API_KEY").is_ok();
                 report.push_str(&format!("  API key configured: {}\n", api_key_set));
@@ -1732,7 +1899,9 @@ impl TuiApp {
                 Ok(report)
             }
         }
-        command_registry.register_handler("doctor", Box::new(DoctorHandler)).ok();
+        command_registry
+            .register_handler("doctor", Box::new(DoctorHandler))
+            .ok();
 
         struct InitHandler;
         #[async_trait::async_trait]
@@ -1749,7 +1918,9 @@ impl TuiApp {
                 }
             }
         }
-        command_registry.register_handler("init", Box::new(InitHandler)).ok();
+        command_registry
+            .register_handler("init", Box::new(InitHandler))
+            .ok();
 
         struct LoginHandler;
         #[async_trait::async_trait]
@@ -1758,7 +1929,9 @@ impl TuiApp {
                 Ok("Set your API key: export ANTHROPIC_API_KEY=sk-... or export OPENAI_API_KEY=sk-...".to_string())
             }
         }
-        command_registry.register_handler("login", Box::new(LoginHandler)).ok();
+        command_registry
+            .register_handler("login", Box::new(LoginHandler))
+            .ok();
 
         struct LogoutHandler;
         #[async_trait::async_trait]
@@ -1767,7 +1940,9 @@ impl TuiApp {
                 Ok("Clear your API key: unset ANTHROPIC_API_KEY OPENAI_API_KEY".to_string())
             }
         }
-        command_registry.register_handler("logout", Box::new(LogoutHandler)).ok();
+        command_registry
+            .register_handler("logout", Box::new(LogoutHandler))
+            .ok();
 
         struct RefreshHandler;
         #[async_trait::async_trait]
@@ -1776,7 +1951,9 @@ impl TuiApp {
                 Ok("Provider auth and model caches cleared.".to_string())
             }
         }
-        command_registry.register_handler("refresh", Box::new(RefreshHandler)).ok();
+        command_registry
+            .register_handler("refresh", Box::new(RefreshHandler))
+            .ok();
 
         struct ProvidersHandler;
         #[async_trait::async_trait]
@@ -1791,14 +1968,20 @@ impl TuiApp {
                     report.push_str(&format!(
                         "  {}: {}\n",
                         p.display_name,
-                        if configured { "configured" } else { "not configured" }
+                        if configured {
+                            "configured"
+                        } else {
+                            "not configured"
+                        }
                     ));
                 }
                 report.push_str("\nUsage: /provider <name> — switch LLM provider");
                 Ok(report)
             }
         }
-        command_registry.register_handler("providers", Box::new(ProvidersHandler)).ok();
+        command_registry
+            .register_handler("providers", Box::new(ProvidersHandler))
+            .ok();
 
         struct StatusHandler;
         #[async_trait::async_trait]
@@ -1810,12 +1993,22 @@ impl TuiApp {
                 Ok(format!(
                     "Session Status:\n  Model: {}\n  Anthropic: {}\n  OpenAI: {}",
                     model,
-                    if anthropic { "configured" } else { "not configured" },
-                    if openai { "configured" } else { "not configured" }
+                    if anthropic {
+                        "configured"
+                    } else {
+                        "not configured"
+                    },
+                    if openai {
+                        "configured"
+                    } else {
+                        "not configured"
+                    }
                 ))
             }
         }
-        command_registry.register_handler("status", Box::new(StatusHandler)).ok();
+        command_registry
+            .register_handler("status", Box::new(StatusHandler))
+            .ok();
 
         struct VersionHandler;
         #[async_trait::async_trait]
@@ -1824,7 +2017,9 @@ impl TuiApp {
                 Ok(format!("operant v{}", env!("CARGO_PKG_VERSION")))
             }
         }
-        command_registry.register_handler("version", Box::new(VersionHandler)).ok();
+        command_registry
+            .register_handler("version", Box::new(VersionHandler))
+            .ok();
 
         struct TimeHandler;
         #[async_trait::async_trait]
@@ -1833,7 +2028,9 @@ impl TuiApp {
                 Ok(chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string())
             }
         }
-        command_registry.register_handler("time", Box::new(TimeHandler)).ok();
+        command_registry
+            .register_handler("time", Box::new(TimeHandler))
+            .ok();
 
         struct DebugHandler;
         #[async_trait::async_trait]
@@ -1841,12 +2038,20 @@ impl TuiApp {
             async fn execute(&self, _ctx: &CommandContext<'_>) -> CommandResult {
                 let mut info = String::from("Debug Info:\n");
                 info.push_str(&format!("  Version: {}\n", env!("CARGO_PKG_VERSION")));
-                info.push_str(&format!("  Config dir: {:?}\n", crate::tui::adapter_types::config::Settings::config_dir()));
-                info.push_str(&format!("  Rust version: {}\n", env!("CARGO_PKG_RUST_VERSION")));
+                info.push_str(&format!(
+                    "  Config dir: {:?}\n",
+                    crate::tui::adapter_types::config::Settings::config_dir()
+                ));
+                info.push_str(&format!(
+                    "  Rust version: {}\n",
+                    env!("CARGO_PKG_RUST_VERSION")
+                ));
                 Ok(info)
             }
         }
-        command_registry.register_handler("debug", Box::new(DebugHandler)).ok();
+        command_registry
+            .register_handler("debug", Box::new(DebugHandler))
+            .ok();
 
         struct NewHandler;
         #[async_trait::async_trait]
@@ -1855,25 +2060,37 @@ impl TuiApp {
                 Ok("Starting a new session. Type your message to begin.".to_string())
             }
         }
-        command_registry.register_handler("new", Box::new(NewHandler)).ok();
+        command_registry
+            .register_handler("new", Box::new(NewHandler))
+            .ok();
 
         struct HistoryHandler;
         #[async_trait::async_trait]
         impl CommandHandler for HistoryHandler {
             async fn execute(&self, _ctx: &CommandContext<'_>) -> CommandResult {
-                Ok("Session history is displayed in the transcript above. Use ↑/↓ to scroll.".to_string())
+                Ok(
+                    "Session history is displayed in the transcript above. Use ↑/↓ to scroll."
+                        .to_string(),
+                )
             }
         }
-        command_registry.register_handler("history", Box::new(HistoryHandler)).ok();
+        command_registry
+            .register_handler("history", Box::new(HistoryHandler))
+            .ok();
 
         struct RetryHandler;
         #[async_trait::async_trait]
         impl CommandHandler for RetryHandler {
             async fn execute(&self, _ctx: &CommandContext<'_>) -> CommandResult {
-                Ok("Retry: resend the last message to the agent. (Implementation pending)".to_string())
+                Ok(
+                    "Retry: resend the last message to the agent. (Implementation pending)"
+                        .to_string(),
+                )
             }
         }
-        command_registry.register_handler("retry", Box::new(RetryHandler)).ok();
+        command_registry
+            .register_handler("retry", Box::new(RetryHandler))
+            .ok();
 
         struct UndoHandler;
         #[async_trait::async_trait]
@@ -1882,7 +2099,9 @@ impl TuiApp {
                 Ok("Undo: back up the last turn. (Implementation pending)".to_string())
             }
         }
-        command_registry.register_handler("undo", Box::new(UndoHandler)).ok();
+        command_registry
+            .register_handler("undo", Box::new(UndoHandler))
+            .ok();
 
         struct StopHandler;
         #[async_trait::async_trait]
@@ -1891,7 +2110,9 @@ impl TuiApp {
                 Ok("Stopping all running background processes.".to_string())
             }
         }
-        command_registry.register_handler("stop", Box::new(StopHandler)).ok();
+        command_registry
+            .register_handler("stop", Box::new(StopHandler))
+            .ok();
 
         struct CompressHandler;
         #[async_trait::async_trait]
@@ -1900,16 +2121,23 @@ impl TuiApp {
                 Ok("Context compaction is handled automatically by the agent.".to_string())
             }
         }
-        command_registry.register_handler("compress", Box::new(CompressHandler)).ok();
+        command_registry
+            .register_handler("compress", Box::new(CompressHandler))
+            .ok();
 
         struct RollbackHandler;
         #[async_trait::async_trait]
         impl CommandHandler for RollbackHandler {
             async fn execute(&self, _ctx: &CommandContext<'_>) -> CommandResult {
-                Ok("Rollback: restore filesystem checkpoints. (Implementation pending)".to_string())
+                Ok(
+                    "Rollback: restore filesystem checkpoints. (Implementation pending)"
+                        .to_string(),
+                )
             }
         }
-        command_registry.register_handler("rollback", Box::new(RollbackHandler)).ok();
+        command_registry
+            .register_handler("rollback", Box::new(RollbackHandler))
+            .ok();
 
         struct TitleHandler;
         #[async_trait::async_trait]
@@ -1922,7 +2150,9 @@ impl TuiApp {
                 }
             }
         }
-        command_registry.register_handler("title", Box::new(TitleHandler)).ok();
+        command_registry
+            .register_handler("title", Box::new(TitleHandler))
+            .ok();
 
         struct BranchHandler;
         #[async_trait::async_trait]
@@ -1935,7 +2165,9 @@ impl TuiApp {
                 }
             }
         }
-        command_registry.register_handler("branch", Box::new(BranchHandler)).ok();
+        command_registry
+            .register_handler("branch", Box::new(BranchHandler))
+            .ok();
 
         struct GoalHandler;
         #[async_trait::async_trait]
@@ -1948,7 +2180,9 @@ impl TuiApp {
                 }
             }
         }
-        command_registry.register_handler("goal", Box::new(GoalHandler)).ok();
+        command_registry
+            .register_handler("goal", Box::new(GoalHandler))
+            .ok();
 
         struct ProviderHandler;
         #[async_trait::async_trait]
@@ -1961,7 +2195,9 @@ impl TuiApp {
                 }
             }
         }
-        command_registry.register_handler("provider", Box::new(ProviderHandler)).ok();
+        command_registry
+            .register_handler("provider", Box::new(ProviderHandler))
+            .ok();
 
         struct YoloHandler;
         #[async_trait::async_trait]
@@ -1970,7 +2206,9 @@ impl TuiApp {
                 Ok("YOLO mode: skip confirmations for dangerous operations. (Toggle not yet wired)".to_string())
             }
         }
-        command_registry.register_handler("yolo", Box::new(YoloHandler)).ok();
+        command_registry
+            .register_handler("yolo", Box::new(YoloHandler))
+            .ok();
 
         struct PersonalityHandler;
         #[async_trait::async_trait]
@@ -1983,16 +2221,23 @@ impl TuiApp {
                 }
             }
         }
-        command_registry.register_handler("personality", Box::new(PersonalityHandler)).ok();
+        command_registry
+            .register_handler("personality", Box::new(PersonalityHandler))
+            .ok();
 
         struct ReasoningHandler;
         #[async_trait::async_trait]
         impl CommandHandler for ReasoningHandler {
             async fn execute(&self, _ctx: &CommandContext<'_>) -> CommandResult {
-                Ok("Reasoning: toggle extended thinking for complex tasks. (Toggle not yet wired)".to_string())
+                Ok(
+                    "Reasoning: toggle extended thinking for complex tasks. (Toggle not yet wired)"
+                        .to_string(),
+                )
             }
         }
-        command_registry.register_handler("reasoning", Box::new(ReasoningHandler)).ok();
+        command_registry
+            .register_handler("reasoning", Box::new(ReasoningHandler))
+            .ok();
 
         struct ToolsHandler;
         #[async_trait::async_trait]
@@ -2001,16 +2246,23 @@ impl TuiApp {
                 Ok("Available tools: memory, web_search, web_fetch, bash, and more. Use /toolsets for the full list.".to_string())
             }
         }
-        command_registry.register_handler("tools", Box::new(ToolsHandler)).ok();
+        command_registry
+            .register_handler("tools", Box::new(ToolsHandler))
+            .ok();
 
         struct SkillsHandler;
         #[async_trait::async_trait]
         impl CommandHandler for SkillsHandler {
             async fn execute(&self, _ctx: &CommandContext<'_>) -> CommandResult {
-                Ok("Skills are installed in ~/.operant/skills/. Use /reload-skills to rescan.".to_string())
+                Ok(
+                    "Skills are installed in ~/.operant/skills/. Use /reload-skills to rescan."
+                        .to_string(),
+                )
             }
         }
-        command_registry.register_handler("skills", Box::new(SkillsHandler)).ok();
+        command_registry
+            .register_handler("skills", Box::new(SkillsHandler))
+            .ok();
 
         struct BundlesHandler;
         #[async_trait::async_trait]
@@ -2019,7 +2271,9 @@ impl TuiApp {
                 Ok("Skill bundles: curated sets of skills for specific workflows. (No bundles installed)".to_string())
             }
         }
-        command_registry.register_handler("bundles", Box::new(BundlesHandler)).ok();
+        command_registry
+            .register_handler("bundles", Box::new(BundlesHandler))
+            .ok();
 
         struct UsageHandler;
         #[async_trait::async_trait]
@@ -2028,7 +2282,9 @@ impl TuiApp {
                 Ok("Token usage and rate limits are displayed in the stats dialog. Use /stats to view.".to_string())
             }
         }
-        command_registry.register_handler("usage", Box::new(UsageHandler)).ok();
+        command_registry
+            .register_handler("usage", Box::new(UsageHandler))
+            .ok();
 
         struct CreditsHandler;
         #[async_trait::async_trait]
@@ -2037,7 +2293,9 @@ impl TuiApp {
                 Ok("Credits: check your provider dashboard for balance information.".to_string())
             }
         }
-        command_registry.register_handler("credits", Box::new(CreditsHandler)).ok();
+        command_registry
+            .register_handler("credits", Box::new(CreditsHandler))
+            .ok();
 
         struct BillingHandler;
         #[async_trait::async_trait]
@@ -2046,7 +2304,9 @@ impl TuiApp {
                 Ok("Billing: manage your subscription at your provider's dashboard.".to_string())
             }
         }
-        command_registry.register_handler("billing", Box::new(BillingHandler)).ok();
+        command_registry
+            .register_handler("billing", Box::new(BillingHandler))
+            .ok();
 
         struct InsightsHandler;
         #[async_trait::async_trait]
@@ -2055,7 +2315,9 @@ impl TuiApp {
                 Ok("Insights: session analysis and conversation statistics. Use /stats for details.".to_string())
             }
         }
-        command_registry.register_handler("insights", Box::new(InsightsHandler)).ok();
+        command_registry
+            .register_handler("insights", Box::new(InsightsHandler))
+            .ok();
 
         struct UpdateHandler;
         #[async_trait::async_trait]
@@ -2064,7 +2326,9 @@ impl TuiApp {
                 Ok(format!("Current version: {}. Check https://github.com/operant-ai/operant-rs for updates.", env!("CARGO_PKG_VERSION")))
             }
         }
-        command_registry.register_handler("update", Box::new(UpdateHandler)).ok();
+        command_registry
+            .register_handler("update", Box::new(UpdateHandler))
+            .ok();
 
         struct WhoamiHandler;
         #[async_trait::async_trait]
@@ -2073,7 +2337,9 @@ impl TuiApp {
                 Ok("Access level: admin (local TUI session)".to_string())
             }
         }
-        command_registry.register_handler("whoami", Box::new(WhoamiHandler)).ok();
+        command_registry
+            .register_handler("whoami", Box::new(WhoamiHandler))
+            .ok();
 
         struct SessionsHandler;
         #[async_trait::async_trait]
@@ -2082,7 +2348,9 @@ impl TuiApp {
                 Ok("Use /session to browse and manage sessions.".to_string())
             }
         }
-        command_registry.register_handler("sessions", Box::new(SessionsHandler)).ok();
+        command_registry
+            .register_handler("sessions", Box::new(SessionsHandler))
+            .ok();
 
         let mut app = crate::tui::app::App::new(config, cost_tracker, command_registry);
 
@@ -2101,24 +2369,30 @@ impl TuiApp {
             let settings = Settings::load_sync().unwrap_or_default();
             if !settings.has_completed_onboarding {
                 app.connect_dialog.open();
-                app.status_message = Some(
-                    "Welcome to Operant! Connect a provider to get started.".to_string()
-                );
+                app.status_message =
+                    Some("Welcome to Operant! Connect a provider to get started.".to_string());
             }
         }
 
-        Ok(Self { app, initial_query, no_mouse })
+        Ok(Self {
+            app,
+            initial_query,
+            no_mouse,
+        })
     }
 
     pub async fn run(mut self) -> anyhow::Result<()> {
         // Create the agent event channel directly — no bridge.
         // (iter-114 — eliminates the bridge layer. The TUI now receives
         // AgentEvent directly and handles it in handle_agent_event.)
-        let (agent_tx, agent_rx) = tokio::sync::mpsc::channel::<operant_core::agent::AgentEvent>(256);
+        let (agent_tx, agent_rx) =
+            tokio::sync::mpsc::channel::<operant_core::agent::AgentEvent>(256);
         self.app.agent_event_rx = Some(agent_rx);
 
-        use crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
         use crossterm::execute;
+        use crossterm::terminal::{
+            disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
+        };
         use ratatui::backend::CrosstermBackend;
         use ratatui::Terminal;
 
@@ -2156,27 +2430,31 @@ impl TuiApp {
         // agent_tx was created above; agent_rx is stored on app.
         // No bridge — the agent sends AgentEvent directly to the TUI.
 
-        let (permission_tx, permission_rx) = tokio::sync::mpsc::channel::<operant_core::agent::ToolPermissionRequest>(4);
+        let (permission_tx, permission_rx) =
+            tokio::sync::mpsc::channel::<operant_core::agent::ToolPermissionRequest>(4);
         self.app.permission_rx = Some(permission_rx);
 
         let config = self.app.config.inner.clone();
         let mcp_manager = operant_core::mcp::McpManager::new();
         let skills_dir = config.skills.root_dir.clone();
 
-        let agent: Option<std::sync::Arc<operant_core::agent::OperantAgent>> = match crate::create_runtime_agent(
-            &config,
-            &config.agent,
-            None,
-            agent_tx,
-            &mcp_manager,
-            &skills_dir,
-        ).await {
-            Ok(agent) => Some(std::sync::Arc::new(agent.with_permissions(permission_tx))),
-            Err(e) => {
-                self.app.status_message = Some(format!("Agent init failed: {}", e));
-                None
-            }
-        };
+        let agent: Option<std::sync::Arc<operant_core::agent::OperantAgent>> =
+            match crate::create_runtime_agent(
+                &config,
+                &config.agent,
+                None,
+                agent_tx,
+                &mcp_manager,
+                &skills_dir,
+            )
+            .await
+            {
+                Ok(agent) => Some(std::sync::Arc::new(agent.with_permissions(permission_tx))),
+                Err(e) => {
+                    self.app.status_message = Some(format!("Agent init failed: {}", e));
+                    None
+                }
+            };
 
         // Store the real McpManager + steer queue handle on the App so the
         // run loop can act on /mcp reconnect and /steer. (iter-93 — closes
@@ -2191,7 +2469,9 @@ impl TuiApp {
         // UserQuestionRequest { question, choices, reply_tx } to this
         // channel; the TUI drains it in the run loop and opens the
         // ask_user_dialog. (iter-97 — closes Bug #2 from iter-82 audit.)
-        let (uq_tx, uq_rx) = tokio::sync::mpsc::unbounded_channel::<operant_core::user_question::UserQuestionRequest>();
+        let (uq_tx, uq_rx) = tokio::sync::mpsc::unbounded_channel::<
+            operant_core::user_question::UserQuestionRequest,
+        >();
         let _ = operant_core::user_question::set_user_question_sender(uq_tx);
         self.app.user_question_rx = Some(uq_rx);
 
@@ -2268,10 +2548,31 @@ impl TuiApp {
                         if let Some(ref mcp) = self.app.core_mcp_manager {
                             let mcp_clone = std::sync::Arc::clone(mcp);
                             // Extract server configs into Send-safe tuples.
-                            let server_configs: Vec<(String, Option<String>, Option<String>, Vec<String>, std::collections::HashMap<String, String>, bool)> =
-                                self.app.config.inner.mcp.servers.iter().map(|s| {
-                                    (s.name.clone(), s.url.clone(), s.auth_token.clone(), s.args.clone(), s.env.clone(), s.enabled)
-                                }).collect();
+                            let server_configs: Vec<(
+                                String,
+                                Option<String>,
+                                Option<String>,
+                                Vec<String>,
+                                std::collections::HashMap<String, String>,
+                                bool,
+                            )> = self
+                                .app
+                                .config
+                                .inner
+                                .mcp
+                                .servers
+                                .iter()
+                                .map(|s| {
+                                    (
+                                        s.name.clone(),
+                                        s.url.clone(),
+                                        s.auth_token.clone(),
+                                        s.args.clone(),
+                                        s.env.clone(),
+                                        s.enabled,
+                                    )
+                                })
+                                .collect();
                             tokio::spawn(async move {
                                 for (name, url, auth_token, args, env, enabled) in server_configs {
                                     if !enabled {
@@ -2281,9 +2582,7 @@ impl TuiApp {
                                     let _ = mcp_clone.remove_server(&name).await;
                                     // Re-add based on transport.
                                     if let Some(url) = url {
-                                        let _ = mcp_clone
-                                            .add_server(&name, url, auth_token)
-                                            .await;
+                                        let _ = mcp_clone.add_server(&name, url, auth_token).await;
                                     }
                                     // Note: stdio servers need a command, which
                                     // we didn't capture here. SSE servers need
@@ -2298,7 +2597,8 @@ impl TuiApp {
                             );
                         } else {
                             self.app.status_message = Some(
-                                "MCP reconnect requested but no McpManager is attached.".to_string()
+                                "MCP reconnect requested but no McpManager is attached."
+                                    .to_string(),
                             );
                         }
                     }
@@ -2332,9 +2632,9 @@ impl TuiApp {
                         }
                         // Force a redraw on the next frame so the status
                         // message + restored terminal show immediately.
-                        self.app.transcript_version.set(
-                            self.app.transcript_version.get().wrapping_add(1)
-                        );
+                        self.app
+                            .transcript_version
+                            .set(self.app.transcript_version.get().wrapping_add(1));
                     }
 
                     if crate::input::is_slash_command(&input) {
@@ -2346,13 +2646,15 @@ impl TuiApp {
                             // that, run it NOW if it was set.
                             if let Some(argv) = self.app.pending_shell_command.take() {
                                 if let Err(e) = run_suspended_shell_command(&mut terminal, &argv) {
-                                    self.app.status_message = Some(format!("Shell command failed: {}", e));
+                                    self.app.status_message =
+                                        Some(format!("Shell command failed: {}", e));
                                 } else {
-                                    self.app.status_message = Some("Returned to operant.".to_string());
+                                    self.app.status_message =
+                                        Some("Returned to operant.".to_string());
                                 }
-                                self.app.transcript_version.set(
-                                    self.app.transcript_version.get().wrapping_add(1)
-                                );
+                                self.app
+                                    .transcript_version
+                                    .set(self.app.transcript_version.get().wrapping_add(1));
                             }
                             continue;
                         }
@@ -2413,7 +2715,10 @@ impl TuiApp {
 
         disable_raw_mode()?;
         if !self.no_mouse {
-            let _ = execute!(terminal.backend_mut(), crossterm::event::DisableMouseCapture);
+            let _ = execute!(
+                terminal.backend_mut(),
+                crossterm::event::DisableMouseCapture
+            );
         }
         execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
         result
@@ -2439,8 +2744,10 @@ fn run_suspended_shell_command(
     terminal: &mut ratatui::Terminal<ratatui::backend::CrosstermBackend<std::io::Stdout>>,
     argv: &[String],
 ) -> anyhow::Result<std::process::ExitStatus> {
-    use crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
     use crossterm::execute;
+    use crossterm::terminal::{
+        disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
+    };
     use std::io::Write;
 
     if argv.is_empty() {
