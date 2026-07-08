@@ -65,8 +65,6 @@ pub struct ToolCallParser {
     position: usize,
     /// Callback for early tool call detection
     on_tool_call: Option<ToolCallCallback>,
-    /// Regex for extracting JSON from tool_call content
-    json_re: Regex,
 }
 
 impl Default for ToolCallParser {
@@ -86,7 +84,6 @@ impl ToolCallParser {
             in_tool_call: false,
             position: 0,
             on_tool_call: None,
-            json_re: Regex::new(r#"\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}"#).unwrap(),
         }
     }
 

@@ -7,14 +7,12 @@ use tracing::warn;
 /// Dispatcher engine for spawning and managing task workers.
 pub struct Dispatcher {
     db: Arc<Mutex<Connection>>,
-    poll_interval: std::time::Duration,
 }
 
 impl Dispatcher {
     pub fn new(conn: Arc<Mutex<Connection>>) -> Self {
         Self {
             db: conn,
-            poll_interval: std::time::Duration::from_secs(5),
         }
     }
 
