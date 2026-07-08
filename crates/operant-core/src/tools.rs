@@ -5,6 +5,7 @@
 //! - `ToolRegistry` for managing and executing tools
 //! - Built-in tools for common operations
 
+pub mod aft_tools;
 pub mod binary_extensions;
 pub mod browser_camofox_state;
 pub mod browser_cdp_tool;
@@ -23,18 +24,20 @@ pub mod debug_helpers;
 pub mod file_state;
 pub mod file_tools;
 pub mod http_tool;
+#[cfg(feature = "igs")]
+pub mod igs_tools;
 pub mod image_generation_tool;
 pub mod kanban_tool;
+#[cfg(feature = "lifeos")]
+pub mod lifeos_tools;
 pub mod mcp_tool;
 pub mod memory_tools;
-pub mod mixture_of_agents_tool;
 pub mod neutts_synth;
 pub mod notification_tool;
 pub mod openrouter_client;
 pub mod osv_check;
 pub mod patch_tool;
 pub mod process_tool;
-pub mod rl_training_tool;
 pub mod send_message_tool;
 pub mod session_search_tool;
 pub mod skills_tool;
@@ -42,11 +45,6 @@ pub mod slash_confirm;
 pub mod spotify_tool;
 pub mod sub_agent_tool;
 pub mod tdg_tools;
-pub mod aft_tools;
-#[cfg(feature = "igs")]
-pub mod igs_tools;
-#[cfg(feature = "lifeos")]
-pub mod lifeos_tools;
 pub mod terminal_backend;
 pub mod terminal_tool;
 pub mod todo_tool;
@@ -71,6 +69,7 @@ pub mod feishu_tool;
 pub mod home_assistant_tool;
 
 // Re-export commonly used types
+pub use aft_tools::register_aft_tools;
 pub use browser_cdp_tool::BrowserCdpTool;
 pub use browser_dialog_tool::BrowserDialogTool;
 pub use builtin::{
@@ -80,12 +79,6 @@ pub use builtin::{
     MemorySearchTool, MemoryStoreTool, PatchTool, SubAgentTool, TerminalTool, TimestampTool,
     TodoTool, TtsTool, VideoAnalysisTool, VisionTool, WebFetchTool, WebSearchTool,
 };
-pub use tdg_tools::register_tdg_tools;
-pub use aft_tools::register_aft_tools;
-#[cfg(feature = "igs")]
-pub use igs_tools::register_igs_tools;
-#[cfg(feature = "lifeos")]
-pub use lifeos_tools::{register_lifeos_tools, LifeosState};
 pub use checkpoint_tool::{
     get_checkpoint_manager, Checkpoint, CheckpointConfig, CheckpointManager, CheckpointTool,
 };
@@ -94,12 +87,14 @@ pub use cron_tool::CronTool;
 pub use discord_tool::{DiscordAdminTool, DiscordTool};
 pub use feishu_tool::{FeishuDocTool, FeishuDriveTool};
 pub use home_assistant_tool::HomeAssistantTool;
+#[cfg(feature = "igs")]
+pub use igs_tools::register_igs_tools;
 pub use kanban_tool::KanbanTool;
+#[cfg(feature = "lifeos")]
+pub use lifeos_tools::{register_lifeos_tools, LifeosState};
 pub use mcp_tool::McpManagementTool;
-pub use mixture_of_agents_tool::MixtureOfAgentsTool;
 pub use osv_check::OsvCheckTool;
 pub use process_tool::ProcessTool;
-pub use rl_training_tool::RlTrainingTool;
 pub use send_message_tool::SendMessageTool;
 pub use session_search_tool::{SessionMeta, SessionResult, SessionSearchTool};
 pub use skills_tool::{SkillViewTool, SkillsTool};
@@ -107,6 +102,7 @@ pub use spotify_tool::{
     SpotifyAlbumsTool, SpotifyDevicesTool, SpotifyLibraryTool, SpotifyPlaybackTool,
     SpotifyPlaylistsTool, SpotifyQueueTool, SpotifySearchTool,
 };
+pub use tdg_tools::register_tdg_tools;
 pub use transcription_tool::TranscriptionTool;
 pub use tts_command_provider::CommandProvider;
 pub use tts_provider::{AudioFormat, TtsError, TtsProvider};
@@ -206,18 +202,6 @@ impl ToolResult {
             success: false,
             content: String::new(),
             error: Some(error.into()),
-        }
-    }
-
-    /// Create a result from a serde_json::Value
-    pub fn from_value(tool_call_id: impl Into<String>, value: Value) -> Self {
-        let content = serde_json::to_string(&value).unwrap_or_else(|_| "{}".to_string());
-        Self {
-            tool_call_id: tool_call_id.into(),
-            name: String::new(),
-            success: true,
-            content,
-            error: None,
         }
     }
 
@@ -467,17 +451,7 @@ impl ToolRegistry {
         }
     }
 
-    #[allow(dead_code)]
-    pub async fn execute_all(
-        &self,
-        requests: Vec<(String, String, Value, ToolContext)>,
-    ) -> Vec<Result<ToolResult>> {
-        let mut results = Vec::new();
-        for (name, id, args, ctx) in requests {
-            results.push(self.execute(&name, &id, args, ctx).await);
-        }
-        results
-    }
+
 }
 
 #[cfg(test)]

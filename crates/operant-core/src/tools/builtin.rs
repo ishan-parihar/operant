@@ -36,14 +36,12 @@ pub use super::image_generation_tool::ImageGenerationTool;
 pub use super::kanban_tool::KanbanTool;
 pub use super::mcp_tool::McpManagementTool;
 pub use super::memory_tools::{MemoryRecallTool, MemorySearchTool, MemoryStoreTool};
-pub use super::mixture_of_agents_tool::MixtureOfAgentsTool;
 pub use super::neutts_synth::NeuttsSynthTool;
 pub use super::notification_tool::{ApprovalTool, NotificationTool};
 pub use super::openrouter_client::OpenRouterTool;
 pub use super::osv_check::OsvCheckTool;
 pub use super::patch_tool::PatchTool;
 pub use super::process_tool::ProcessTool;
-pub use super::rl_training_tool::RlTrainingTool;
 pub use super::send_message_tool::SendMessageTool;
 pub use super::skills_tool::{SkillManageTool, SkillViewTool, SkillsTool};
 pub use super::slash_confirm::SlashConfirmTool;
@@ -143,9 +141,7 @@ pub async fn register_builtin_tools(
     registry.register(BrowserDialogTool).await?;
     registry.register(BrowserCdpTool).await?;
     registry.register(ComputerUseTool).await?;
-    registry.register(MixtureOfAgentsTool).await?;
     registry.register(TranscriptionTool::new()).await?;
-    registry.register(RlTrainingTool).await?;
     registry.register(SpotifyPlaybackTool).await?;
     registry.register(SpotifyDevicesTool).await?;
     registry.register(SpotifyQueueTool).await?;
@@ -257,7 +253,6 @@ pub fn builtin_tool_names() -> Vec<&'static str> {
         "browser_dialog",
         "browser_cdp",
         "computer_use",
-        "mixture_of_agents",
         "spotify_playback",
         "spotify_devices",
         "spotify_queue",
@@ -301,9 +296,13 @@ mod tests {
         // register_builtin_tools registers everything in builtin_tool_names
         // EXCEPT delegate_task (only in _with_sub_agent variant).
         // So: registry.len() + 1 == builtin_tool_names().len().
-        assert_eq!(count + 1, builtin_tool_names().len(),
+        assert_eq!(
+            count + 1,
+            builtin_tool_names().len(),
             "registry has {} tools, names list has {}; the difference should be 1 (delegate_task)",
-            count, builtin_tool_names().len());
+            count,
+            builtin_tool_names().len()
+        );
         assert!(!registry.contains("delegate_to_sub_agent").await);
     }
 
@@ -331,9 +330,13 @@ mod tests {
         .unwrap();
 
         let count = registry.len().await;
-        assert_eq!(count, builtin_tool_names().len(),
+        assert_eq!(
+            count,
+            builtin_tool_names().len(),
             "registry has {} tools, names list has {}; _with_sub_agent registers all names",
-            count, builtin_tool_names().len());
+            count,
+            builtin_tool_names().len()
+        );
         assert!(registry.contains("delegate_task").await);
     }
 }
