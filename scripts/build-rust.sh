@@ -47,6 +47,11 @@ cd "$PROJECT_DIR"
 PROJECT_NAME=$(grep -m1 '^name' Cargo.toml 2>/dev/null | sed 's/.*= *"\([^"]*\)"/\1/' || echo "rust-project")
 echo "Project: $PROJECT_NAME"
 
+# Auto-detect parallelism
+JOBS=$(nproc 2>/dev/null || echo 1)
+CARGO_JOBS="--jobs $JOBS"
+echo "  Parallelism: $JOBS jobs"
+
 # ── Step 1: Pull latest ──
 echo "=== Step 1: Pull latest code ==="
 git pull --ff-only 2>/dev/null || echo "  (pull skipped — not on a tracking branch or already up to date)"
@@ -92,12 +97,12 @@ case "$MODE" in
             cargo metadata --no-deps --format-version 1 2>/dev/null | grep '"name"' | sed 's/.*"name": "\([^"]*\)".*/  - \1/' || echo "  (could not list packages)"
             exit 1
         fi
-        echo "Building $TARGET_PKG ($PROFILE)..."
-        cargo build --profile "$PROFILE" -p "$TARGET_PKG" 2>&1
+        echo "Building $TARGET_PKG ($PROFILE, $JOBS jobs)..."
+        cargo build --profile "$PROFILE" $CARGO_JOBS -p "$TARGET_PKG" 2>&1
         ;;
     full)
-        echo "Building full workspace ($PROFILE)..."
-        cargo build --profile "$PROFILE" 2>&1
+        echo "Building full workspace ($PROFILE, $JOBS jobs)..."
+        cargo build --profile "$PROFILE" $CARGO_JOBS 2>&1
         ;;
 esac
 
@@ -112,22 +117,14 @@ if [ "$DO_INSTALL" = true ]; then
     echo "=== Step 4: Install to ~/.cargo/bin ==="
     if [ -n "$TARGET_PKG" ]; then
         cargo install --path "$TARGET_PKG" --locked 2>&1
-        INSTALLED_BIN=$(cargo metadata --no-deps --format-version 1 2>/dev/null | grep -A5 "\"name\": \"$TARGET_PKG\"" | grep -o '"bin":\["[^\"]*"\]' | head -1 | sed 's/"bin":\["\([^"]*\)"\]/\1/' || echo "$TARGET_PKG")
     else
-        # Try to find the main binary
-        if [ -f "Cargo.toml" ]; then
-            MAIN_BIN=$(grep -A5 '\[\[bin\]\]' Cargo.toml 2>/dev/null | grep 'name' | head -1 | sed 's/.*name.*= *"\([^"]*\)"/\1/' || echo "$PROJECT_NAME")
-            cargo install --path . --locked 2>&1
-            INSTALLED_BIN="$MAIN_BIN"
-        else
-            echo "ERROR: No Cargo.toml found — cannot install"
-            exit 1
-        fi
+        cargo install --path . --locked 2>&1
     fi
-    if command -v "$INSTALLED_BIN" &>/dev/null; then
+    INSTALLED_BIN=$(cargo metadata --no-deps --format-version 1 2>/dev/null | grep -o '"default_run":"[^"]*"' | head -1 | sed 's/"default_run":"\([^"]*\)"/\1/' || true)
+    if [ -n "$INSTALLED_BIN" ] && command -v "$INSTALLED_BIN" &>/dev/null; then
         echo "  Installed: $($INSTALLED_BIN --version 2>/dev/null || echo 'unknown version')"
     else
-        echo "  Binary not found in PATH — check ~/.cargo/bin"
+        echo "  Installed to ~/.cargo/bin — run 'cargo install --list' to see binaries"
     fi
 fi
 
