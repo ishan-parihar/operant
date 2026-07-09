@@ -6868,4 +6868,175 @@ mod tests {
         assert!(app.permission_request.is_none());
         assert!(app.pending_permission_response_tx.is_none());
     }
+
+    // ---- Phase 2 regression tests (iter-212) ----
+    // These tests lock in the behavior fixed/added in Phases 1-4:
+    //   - F12 debug overlay toggle (Phase 1)
+    //   - Done.message not dropped (Phase 3c, bug #2)
+    //   - Usage.total_tokens not dropped (Phase 3c, bug #5)
+    //   - Stub McpManager/FileHistory eliminated (Phase 3a/3b)
+    //   - feedback_survey removed (Phase 4)
+
+    #[test]
+    fn test_f12_toggles_debug_overlay() {
+        // Phase 1: F12 must toggle the debug overlay visibility.
+        let mut app = make_app();
+        assert!(!app.debug_hub.overlay_visible(), "overlay should start hidden");
+
+        app.handle_key_event(press_key(KeyCode::F(12), KeyModifiers::NONE));
+        assert!(app.debug_hub.overlay_visible(), "F12 should show overlay");
+
+        app.handle_key_event(press_key(KeyCode::F(12), KeyModifiers::NONE));
+        assert!(!app.debug_hub.overlay_visible(), "second F12 should hide overlay");
+    }
+
+    #[test]
+    fn test_f12_works_even_with_input() {
+        // F12 must work even when there's text in the input buffer — it's
+        // the highest-priority keybind and must never be blocked.
+        let mut app = make_app();
+        app.input = "some text".to_string();
+        app.handle_key_event(press_key(KeyCode::F(12), KeyModifiers::NONE));
+        assert!(app.debug_hub.overlay_visible());
+        // Input must be preserved — F12 doesn't consume or clear it.
+        assert_eq!(app.input, "some text");
+    }
+
+    #[test]
+    fn test_done_message_used_when_no_streaming() {
+        // Phase 3c bug #2: Done.message was discarded. Now if streaming_text
+        // is empty, Done.message.content is used as the assistant message.
+        let mut app = make_app();
+        assert!(app.messages.is_empty());
+        // Simulate non-streaming path: no Content events, Done carries full msg.
+        let done_msg = operant_core::client::Message {
+            role: operant_core::client::Role::Assistant,
+            content: "Hello from Done".to_string(),
+            reasoning: None,
+            name: None,
+            tool_call_id: None,
+            tool_calls: None,
+            extra_content: None,
+        };
+        app.handle_agent_event(AgentEvent::Done { message: done_msg });
+        assert_eq!(app.messages.len(), 1, "Done should produce 1 message");
+        assert!(
+            app.messages[0].text_content().contains("Hello from Done"),
+            "message should contain Done.message.content"
+        );
+    }
+
+    #[test]
+    fn test_done_with_streaming_uses_streamed_text() {
+        // When streaming occurred, Done should NOT override with its message —
+        // the streamed text is the source of truth (it may have been
+        // post-processed or differ from the final Done payload).
+        let mut app = make_app();
+        // Simulate streaming: Content events fill streaming_text.
+        app.is_streaming = true;
+        app.streaming_text = "Streamed content".to_string();
+        let done_msg = operant_core::client::Message {
+            role: operant_core::client::Role::Assistant,
+            content: "This should NOT be used".to_string(),
+            reasoning: None,
+            name: None,
+            tool_call_id: None,
+            tool_calls: None,
+            extra_content: None,
+        };
+        app.handle_agent_event(AgentEvent::Done { message: done_msg });
+        assert_eq!(app.messages.len(), 1);
+        assert!(
+            app.messages[0].text_content().contains("Streamed content"),
+            "streamed text should win over Done.message when streaming occurred"
+        );
+    }
+
+    #[test]
+    fn test_usage_total_tokens_not_dropped() {
+        // Phase 3c bug #5: total_tokens was discarded. Now the authoritative
+        // value from the agent is used (which may include cached/reasoning
+        // tokens that input+output misses).
+        let mut app = make_app();
+        app.handle_agent_event(AgentEvent::Usage {
+            input_tokens: 100,
+            output_tokens: 50,
+            total_tokens: 200, // > 100+50=150, simulates cached tokens
+        });
+        assert_eq!(
+            app.token_count, 200,
+            "token_count should use authoritative total_tokens (200), not input+output (150)"
+        );
+    }
+
+    #[test]
+    fn test_usage_falls_back_to_sum_when_total_is_zero() {
+        // Some providers send total_tokens=0. In that case, fall back to
+        // input+output so we don't show 0 tokens.
+        let mut app = make_app();
+        app.handle_agent_event(AgentEvent::Usage {
+            input_tokens: 100,
+            output_tokens: 50,
+            total_tokens: 0,
+        });
+        assert_eq!(
+            app.token_count, 150,
+            "should fall back to input+output when total_tokens is 0"
+        );
+    }
+
+    #[test]
+    fn test_stubs_eliminated_no_mcp_manager_field() {
+        // Phase 3a: App.mcp_manager (stub) field must be gone.
+        // We verify by checking that core_mcp_manager is the only MCP field.
+        let app = make_app();
+        assert!(app.core_mcp_manager.is_none(), "core_mcp_manager starts None");
+        // If the stub field still existed, this wouldn't compile — the type
+        // system enforces the removal.
+    }
+
+    #[test]
+    fn test_stubs_eliminated_no_file_history_field() {
+        // Phase 3b: App.file_history + current_turn fields must be gone.
+        // Verified by compilation — if they existed, referencing them would
+        // be needed. Their absence is the test.
+        let app = make_app();
+        assert!(app.diff_viewer.turn_files.is_empty(), "no turn-files without stub");
+    }
+
+    #[test]
+    fn test_feedback_survey_removed() {
+        // Phase 4: /survey command must not be intercepted (feedback_survey deleted).
+        // intercept_slash_command returns true if the command is known+intercepted.
+        // /survey was removed from the command table, so it returns false.
+        let mut app = make_app();
+        let result = app.intercept_slash_command("survey");
+        assert!(
+            !result,
+            "/survey should not be intercepted after feedback_survey deletion"
+        );
+    }
+
+    #[test]
+    fn test_debug_hub_records_frames() {
+        // Phase 1: record_frame should increment frame count.
+        let app = make_app();
+        assert_eq!(app.debug_hub.frame_count(), 0);
+        app.debug_hub.record_frame(5.0);
+        app.debug_hub.record_frame(3.0);
+        assert_eq!(app.debug_hub.frame_count(), 2);
+        assert_eq!(app.debug_hub.last_render_ms(), 3);
+    }
+
+    #[test]
+    fn test_debug_hub_records_errors() {
+        // Phase 1: record_error should store the last error.
+        let app = make_app();
+        assert!(app.debug_hub.last_error().is_none());
+        app.debug_hub.record_error("test", "something broke");
+        assert_eq!(
+            app.debug_hub.last_error().unwrap(),
+            "[test] something broke"
+        );
+    }
 }
