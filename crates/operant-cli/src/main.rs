@@ -605,6 +605,7 @@ pub(crate) async fn build_registry(
     // share its connection pool — if TDG init failed (and we fell back
     // to BuiltinProvider), the tools are skipped. Previously these tools
     // were registered unconditionally for every agent.
+    #[cfg(feature = "tdg")]
     if config.memory.enabled && config.memory.provider == "tdg" {
         let storage_dir = operant_core::platform::operant_home();
         match operant_core::TdgMemoryProvider::new(storage_dir) {

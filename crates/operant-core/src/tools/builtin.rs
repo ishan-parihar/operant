@@ -48,6 +48,7 @@ pub use super::spotify_tool::{
     SpotifyPlaylistsTool, SpotifyQueueTool, SpotifySearchTool,
 };
 pub use super::sub_agent_tool::SubAgentTool;
+#[cfg(feature = "tdg")]
 pub use super::tdg_tools::{TdgConnectTool, TdgCreateTool, TdgGetRelatedTool, TdgSearchTool};
 pub use super::terminal_tool::TerminalTool;
 pub use super::todo_tool::TodoTool;

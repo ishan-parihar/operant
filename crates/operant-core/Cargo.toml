@@ -51,7 +51,7 @@ base64 = "0.22"
 kokoro-tiny = "0.1.0"
 hound = "3.5"
 rusqlite = { version = "0.32", features = ["bundled"] }
-tdg-rust = { workspace = true }
+tdg-rust = { workspace = true, optional = true }
 uuid = { version = "1.7", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
 cron = "0.12"
@@ -68,6 +68,7 @@ image = { workspace = true }
 [features]
 default = []
 anthropic = []
+tdg = ["dep:tdg-rust"]
 
 [build-dependencies]
 cc = "1.0"
