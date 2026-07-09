@@ -41,7 +41,7 @@ type BoxedToolError = Box<dyn StdError + Send + Sync>;
 /// Role of the sub-agent - determines capabilities
 #[derive(Debug, Clone, Copy, PartialEq, Eq, JsonSchema, Default, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub(crate) enum SubAgentRole {
+pub enum SubAgentRole {
     /// Leaf agent - focused worker, cannot delegate further
     #[default]
     Leaf,
@@ -51,6 +51,7 @@ pub(crate) enum SubAgentRole {
 
 /// A single task in batch mode
 #[derive(Debug, Deserialize, JsonSchema)]
+#[allow(dead_code)]
 struct DelegationTask {
     /// The focused task instruction for the child agent
     goal: String,
@@ -64,6 +65,7 @@ struct DelegationTask {
 
 /// Arguments for delegated sub-agent work.
 #[derive(Debug, Deserialize, JsonSchema)]
+#[allow(dead_code)]
 struct SubAgentArgs {
     /// The focused task instruction for the child agent (single mode)
     #[serde(default, alias = "task")]

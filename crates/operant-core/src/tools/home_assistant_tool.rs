@@ -215,6 +215,7 @@ fn parse_service_response(domain: &str, service: &str, result: &Value) -> Value 
 /// Arguments for the Home Assistant tool.
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
 struct HomeAssistantArgs {
     /// Action to perform: list_entities, get_state, list_services, or call_service.
     action: String,

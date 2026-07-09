@@ -122,12 +122,14 @@ pub struct SkillsTool {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
 struct SkillsListArgs {
     category: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
 struct SkillViewArgs {
     name: String,
     file_path: Option<String>,

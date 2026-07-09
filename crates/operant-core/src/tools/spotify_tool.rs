@@ -243,6 +243,7 @@ pub struct SpotifyDevicesTool;
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
 struct DevicesArgs {
     action: DevicesAction,
 }
@@ -286,6 +287,7 @@ pub struct SpotifyQueueTool;
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
 struct QueueArgs {
     action: QueueAction,
     #[serde(default)]
@@ -341,6 +343,7 @@ pub struct SpotifySearchTool;
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
 struct SearchArgs {
     action: SearchAction,
     query: String,
