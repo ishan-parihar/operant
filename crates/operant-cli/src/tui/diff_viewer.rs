@@ -4,7 +4,7 @@
 //! Shows a two-pane diff dialog: file list (left) + unified diff detail (right).
 //! Keyboard: ↑↓ navigate files, Tab switch pane, t toggle diff type, Esc close.
 
-use crate::tui::adapter_types::file_history::FileHistory;
+// (iter-209: FileHistory import deleted — stub removed)
 use std::sync::LazyLock;
 use ratatui::{
     buffer::Buffer,
@@ -270,35 +270,9 @@ pub fn load_git_diff(project_root: &std::path::Path) -> Vec<FileDiffStats> {
     parse_unified_diff(&text)
 }
 
-/// Build a turn-local diff from file-history snapshots.
-pub fn build_turn_diff(
-    file_history: &FileHistory,
-    turn_index: usize,
-    project_root: &std::path::Path,
-) -> Vec<FileDiffStats> {
-    file_history
-        .snapshots_for_turn(turn_index)
-        .into_iter()
-        .map(|snapshot| {
-            let path = relative_diff_path(std::path::Path::new(&snapshot.path), project_root);
-            if snapshot.binary {
-                return FileDiffStats {
-                    path,
-                    added: 0,
-                    removed: 0,
-                    binary: true,
-                    is_new_file: false,
-                    hunks: Vec::new(),
-                };
-            }
-
-            let before = snapshot.before_text.clone();
-            let after = snapshot.after_text.clone();
-            build_file_diff_from_snapshots(path, &before, &after)
-        })
-        .filter(|file| file.binary || !file.hunks.is_empty())
-        .collect()
-}
+/// (iter-209: build_turn_diff deleted — took a &FileHistory stub that
+/// always returned empty snapshots. /changes now uses the git-diff path.
+/// To re-implement per-turn diffs, wire to a real snapshot store in core.)
 
 
 fn relative_diff_path(path: &std::path::Path, project_root: &std::path::Path) -> String {

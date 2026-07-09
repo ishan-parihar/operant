@@ -5,7 +5,7 @@ use crate::tui::dialog_select::{DialogSelectState, SelectItem};
 use crate::tui::export_dialog::{ExportDialogState, ExportFormat};
 use crate::tui::import_config_dialog::ImportConfigDialogState;
 use crate::tui::dialogs::PermissionRequest;
-use crate::tui::diff_viewer::{DiffViewerState, build_turn_diff};
+use crate::tui::diff_viewer::DiffViewerState;
 use crate::tui::model_picker::{EffortLevel, ModelPickerState};
 use crate::tui::session_browser::SessionBrowserState;
 use crate::tui::tasks_overlay::TasksOverlay;
@@ -24,7 +24,7 @@ use crate::tui::theme_screen::ThemeScreen;
 use crate::tui::{agents_view::{AgentInfo, AgentStatus, AgentsMenuState, AgentsRoute}, diff_viewer::DiffPane};
 use crate::tui::adapter_types::config::{Config, Settings, Theme};
 use crate::tui::adapter_types::cost::CostTracker;
-use crate::tui::adapter_types::file_history::FileHistory;
+// (iter-209: FileHistory import deleted — stub removed, turn-diff feature cut)
 use crate::tui::adapter_types::{sample_completion_verb, sample_spinner_verb};
 use crate::tui::adapter_types::types::{ContentBlock, Message, Role};
 use operant_core::agent::AgentEvent;
@@ -646,10 +646,8 @@ pub struct App {
     pub pending_mcp_reconnect: bool,
     /// Pending MCP panel-auth request for the interactive loop.
     pub pending_mcp_panel_auth: Option<String>,
-    /// Shared file-history service used for turn diff reconstruction.
-    pub file_history: Option<Arc<parking_lot::Mutex<FileHistory>>>,
-    /// Shared query-loop turn counter for turn-local diff reconstruction.
-    pub current_turn: Option<Arc<std::sync::atomic::AtomicUsize>>,
+    // (iter-209: file_history + current_turn fields deleted — stub
+    // FileHistory removed, turn-diff feature cut as YAGNI.)
     /// Slash-command usage stats (recency + frequency) for smart ordering
     /// of `/` suggestions. Loaded from `~/.operant/slash-usage.json` on
     /// startup; saved back on every command invocation.
@@ -1115,8 +1113,7 @@ impl App {
             steer_queue_handle: None,
             pending_mcp_reconnect: false,
             pending_mcp_panel_auth: None,
-            file_history: None,
-            current_turn: None,
+            // (iter-209: file_history + current_turn init deleted)
             slash_usage: crate::tui::slash_usage::UsageStore::load(),
             plan_mode: false,
             stall_start: None,
@@ -1776,7 +1773,7 @@ permission_rx: None,
             }
             "changes" => {
                 let root = self.project_root();
-                self.refresh_turn_diff_from_history();
+                // (iter-209: refresh_turn_diff_from_history removed — turn-diff stub deleted)
                 self.diff_viewer.open_turn(&root);
                 true
             }
@@ -2130,7 +2127,7 @@ permission_rx: None,
             // implemented) instead of silently dropping /rollback.
             "rollback" => {
                 let root = self.project_root();
-                self.refresh_turn_diff_from_history();
+                // (iter-209: refresh_turn_diff_from_history removed — turn-diff stub deleted)
                 self.diff_viewer.open_turn(&root);
                 self.status_message = Some("Rollback: review last turn diff. Use /rewind to step back.".to_string());
                 true
@@ -2884,15 +2881,9 @@ permission_rx: None,
         self.status_message = Some("Transcribing\u{2026}".to_string());
     }
 
-    pub fn attach_turn_diff_state(
-        &mut self,
-        file_history: Arc<parking_lot::Mutex<FileHistory>>,
-        current_turn: Arc<std::sync::atomic::AtomicUsize>,
-    ) {
-        self.file_history = Some(file_history);
-        self.current_turn = Some(current_turn);
-        self.refresh_turn_diff_from_history();
-    }
+    // (iter-209: attach_turn_diff_state + refresh_turn_diff_from_history
+    // deleted — stub FileHistory removed, turn-diff feature cut as YAGNI.
+    // /changes overlay now uses git-diff via diff_viewer's real path.)
 
     // (iter-208: attach_mcp_manager deleted — stub mcp_manager field removed.
     // load_mcp_servers now reads from core_mcp_manager, which is set directly
@@ -2928,29 +2919,8 @@ permission_rx: None,
         self.refresh_prompt_input();
     }
 
-    fn refresh_turn_diff_from_history(&mut self) {
-        let Some(file_history) = self.file_history.as_ref() else {
-            self.diff_viewer.set_turn_diff(Vec::new());
-            return;
-        };
-        let Some(current_turn) = self.current_turn.as_ref() else {
-            self.diff_viewer.set_turn_diff(Vec::new());
-            return;
-        };
-
-        let turn_index = current_turn.load(std::sync::atomic::Ordering::Relaxed);
-        if turn_index == 0 {
-            self.diff_viewer.set_turn_diff(Vec::new());
-            return;
-        }
-
-        let root = self.project_root();
-        let files = {
-            let history = file_history.lock();
-            build_turn_diff(&history, turn_index, &root)
-        };
-        self.diff_viewer.set_turn_diff(files);
-    }
+    // (iter-209: refresh_turn_diff_from_history deleted — turn-diff feature
+    // cut. Call sites now no-op; /changes uses git-diff instead.)
 
     // -------------------------------------------------------------------
     // Event handling
@@ -5728,7 +5698,7 @@ permission_rx: None,
                 } else {
                     self.status_message = None;
                 }
-                self.refresh_turn_diff_from_history();
+                // (iter-209: refresh_turn_diff_from_history removed)
             }
 
             AgentEvent::ToolError { tool_call_id, name: _, error } => {
@@ -5757,7 +5727,7 @@ permission_rx: None,
                 }
                 self.invalidate_transcript();
                 self.status_message = Some(format!("Tool error: {}", result_text));
-                self.refresh_turn_diff_from_history();
+                // (iter-209: refresh_turn_diff_from_history removed)
             }
 
             AgentEvent::Done { message: _ } => {
@@ -5777,7 +5747,7 @@ permission_rx: None,
                 self.tool_use_blocks.retain(|b| b.status != ToolStatus::Running);
                 self.complete_current_turn_snapshot(false);
                 self.invalidate_transcript();
-                self.refresh_turn_diff_from_history();
+                // (iter-209: refresh_turn_diff_from_history removed)
 
                 // Show a "copy" hint after each response so the user knows
                 // they can copy the last response with /copy.
@@ -5832,9 +5802,10 @@ permission_rx: None,
 
             AgentEvent::IterationComplete { iteration } => {
                 // Update the current_turn counter for the "iter N" status pill.
-                if let Some(ref turn) = self.current_turn {
-                    turn.store(iteration, std::sync::atomic::Ordering::Relaxed);
-                }
+                // (iter-209: current_turn field deleted with FileHistory stub.
+                // The iteration count is still tracked via frame_count + the
+                // IterationComplete event being published to the debug bus.)
+                let _ = iteration;
             }
 
             AgentEvent::ToolPermissionRequest { tool_name, description, .. } => {

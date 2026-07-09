@@ -336,38 +336,15 @@ pub mod cost {
     }
 }
 
-pub mod file_history {
-    #[derive(Debug, Clone, Default)]
-    pub struct FileSnapshot {
-        pub path: String,
-        pub binary: bool,
-        pub before_text: String,
-        pub after_text: String,
-    }
-
-    #[derive(Debug, Clone, Default)]
-    pub struct FileHistory {
-        entries: Vec<String>,
-    }
-
-    impl FileHistory {
-        pub fn new() -> Self {
-            Self::default()
-        }
-        pub fn push(&mut self, entry: String) {
-            self.entries.push(entry);
-        }
-        pub fn entries(&self) -> &[String] {
-            &self.entries
-        }
-        pub fn snapshots_for_turn(&self, _turn: usize) -> Vec<FileSnapshot> {
-            vec![]
-        }
-        pub fn latest_turn_index(&self) -> Option<usize> {
-            None
-        }
-    }
-}
+// (iter-209: pub mod file_history { ... } deleted — stub where
+// snapshots_for_turn always returned vec![] and latest_turn_index
+// returned None. The /changes turn-diff feature never worked.
+// Removed: FileHistory, FileSnapshot, App.file_history field,
+// App.attach_turn_diff_state, refresh_turn_diff_from_history,
+// build_turn_diff in diff_viewer.rs. The diff_viewer's real git-diff
+// functionality (/diff, /review) is unaffected.
+// To re-implement: wire to operant_core::tools::file_state or a new
+// per-turn snapshot store in core.)
 
 // (iter-136: ImageSource enum deleted — zero callers, ponytail-audit Tier-2 cut)
 
@@ -2168,14 +2145,8 @@ impl TuiApp {
         // (iter-208: stub TUI McpManager deleted. load_mcp_servers now reads
         // directly from core_mcp_manager, which is set below at line ~2148.)
 
-        // File-history: create a fresh FileHistory the bridge will populate
-        // as the agent emits FileEdit events. The current_turn counter is
-        // bumped by the bridge on each TurnComplete.
-        let file_history = std::sync::Arc::new(parking_lot::Mutex::new(
-            crate::tui::adapter_types::file_history::FileHistory::new(),
-        ));
-        let current_turn = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        self.app.attach_turn_diff_state(file_history, current_turn);
+        // (iter-209: FileHistory + current_turn stub creation deleted.
+        // The turn-diff feature never worked — /changes now uses git-diff.)
 
         // Force a context-window-size refresh so /context shows real numbers
         // on the first frame instead of "0 / 0" (Bug #13 from iter-82 audit).
