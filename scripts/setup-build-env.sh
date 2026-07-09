@@ -26,15 +26,39 @@ else
 fi
 
 # ── Libclang (needed by bindgen for espeak-rs-sys) ──
-# System libclang at /usr/lib works on this machine
-if [ -d "/usr/lib" ] && ls /usr/lib/libclang.so* >/dev/null 2>&1; then
-    export LIBCLANG_PATH=/usr/lib
-    echo "  LIBCLANG_PATH: $LIBCLANG_PATH"
-elif [ -d "/usr/lib/llvm21/lib" ]; then
-    export LIBCLANG_PATH=/usr/lib/llvm21/lib
-    echo "  LIBCLANG_PATH: $LIBCLANG_PATH"
-else
-    echo "  WARNING: libclang not found at /usr/lib or /usr/lib/llvm21/lib"
+# Auto-detect libclang location
+LIBCLANG_FOUND=false
+
+# Try common locations first
+for dir in /usr/lib /usr/lib/llvm*/lib /usr/lib64 /usr/local/lib; do
+    if [ -d "$dir" ] && ls "$dir"/libclang.so* >/dev/null 2>&1; then
+        export LIBCLANG_PATH="$dir"
+        echo "  LIBCLANG_PATH: $LIBCLANG_PATH"
+        LIBCLANG_FOUND=true
+        break
+    fi
+done
+
+# Fallback: use pkg-config or find
+if [ "$LIBCLANG_FOUND" = false ]; then
+    if command -v pkg-config &>/dev/null; then
+        LIBCLANG_PATH=$(pkg-config --variable=libdir libclang 2>/dev/null)
+        if [ -n "$LIBCLANG_PATH" ] && [ -d "$LIBCLANG_PATH" ]; then
+            export LIBCLANG_PATH
+            echo "  LIBCLANG_PATH: $LIBCLANG_PATH (via pkg-config)"
+            LIBCLANG_FOUND=true
+        fi
+    fi
+fi
+
+if [ "$LIBCLANG_FOUND" = false ]; then
+    LIBCLANG_PATH=$(find /usr -name 'libclang.so*' -exec dirname {} \; 2>/dev/null | head -1)
+    if [ -n "$LIBCLANG_PATH" ]; then
+        export LIBCLANG_PATH
+        echo "  LIBCLANG_PATH: $LIBCLANG_PATH (via find)"
+    else
+        echo "  WARNING: libclang not found — bindgen may fail"
+    fi
 fi
 
 # ── Bindgen clang args ──
