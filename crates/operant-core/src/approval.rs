@@ -401,12 +401,12 @@ impl ApprovalGuard {
     /// - `RequiresApproval` — command needs human approval (dangerous pattern match).
     pub fn check(&self, command: &str, _context: &ApprovalContext) -> ApprovalVerdict {
         match self.mode {
-            ApprovalMode::Off => return ApprovalVerdict::Allowed,
+            ApprovalMode::Off => ApprovalVerdict::Allowed,
             ApprovalMode::Manual => {
-                return ApprovalVerdict::RequiresApproval {
+                ApprovalVerdict::RequiresApproval {
                     risk_level: RiskLevel::High,
                     reason: "Manual approval mode requires approval for all operations".into(),
-                };
+                }
             }
             ApprovalMode::Smart => {
                 // Layer 1: Hardline blocklist check

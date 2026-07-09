@@ -117,8 +117,8 @@ impl AccessibilityNode {
 
     /// Whether this node has visible text content.
     pub fn has_text(&self) -> bool {
-        self.name.as_ref().map_or(false, |n| !n.is_empty())
-            || self.value.as_ref().map_or(false, |v| !v.is_empty())
+        self.name.as_ref().is_some_and(|n| !n.is_empty())
+            || self.value.as_ref().is_some_and(|v| !v.is_empty())
     }
 }
 
