@@ -1563,48 +1563,13 @@ impl std::str::FromStr for ProviderId {
     }
 }
 
-pub mod streaming {
-    // (iter-155: AnthropicStreamEvent + ContentDelta deleted — zero callers)
-}
-
-pub mod mcp {
-    use std::sync::Arc;
-
-    pub struct McpManager;
-
-    #[derive(Debug, Clone)]
-    pub struct McpToolDef {
-        pub name: String,
-        pub description: String,
-        pub input_schema: serde_json::Value,
-    }
-
-    #[derive(Debug, Clone, Default)]
-    pub struct McpCatalogEntry {
-        pub tool_count: usize,
-        pub resource_count: usize,
-        pub prompt_count: usize,
-        pub resources: Vec<String>,
-        pub prompts: Vec<String>,
-    }
-
-    impl McpManager {
-        pub fn new() -> Arc<Self> { Arc::new(Self) }
-        pub fn all_tool_definitions(&self) -> Vec<(String, McpToolDef)> { vec![] }
-        pub fn server_status(&self, _name: &str) -> McpServerStatus {
-            McpServerStatus::Disconnected { last_error: None }
-        }
-        pub fn server_catalog(&self, _name: &str) -> Option<McpCatalogEntry> { None }
-    }
-
-    #[derive(Debug, Clone, PartialEq)]
-    pub enum McpServerStatus {
-        Connected { name: String },
-        Connecting,
-        Disconnected { last_error: Option<String> },
-        Failed { error: String },
-    }
-}
+// (iter-208: pub mod mcp { ... } deleted — stub McpManager that returned
+// empty data for /mcp overlay. load_mcp_servers now reads from
+// App.core_mcp_manager (the real operant_core::mcp::McpManager).
+// McpServerStatus/McpCatalogEntry/McpToolDef were never used outside
+// the stub itself.)
+//
+// (iter-155: pub mod streaming {} deleted — was empty, only a deletion marker.)
 
 pub mod tools {
     /// Task status enum used by the tasks overlay. (TaskStore and
@@ -2199,12 +2164,9 @@ impl TuiApp {
         // App. Without these, /mcp always shows "Disconnected" for every
         // server, /changes always shows "No changes", the "iter N" status
         // pill never renders, and the subagent HUD never renders. (Bug #3
-        // from iter-82 audit.) The TUI's McpManager is currently a thin
-        // stub — wrapping the core McpManager is a future iteration; for
-        // now, attach a fresh TUI McpManager so /mcp at least opens with
-        // "no servers" instead of crashing on None.
-        let tui_mcp = crate::tui::adapter_types::mcp::McpManager::new();
-        self.app.attach_mcp_manager(tui_mcp);
+        // from iter-82 audit.)
+        // (iter-208: stub TUI McpManager deleted. load_mcp_servers now reads
+        // directly from core_mcp_manager, which is set below at line ~2148.)
 
         // File-history: create a fresh FileHistory the bridge will populate
         // as the agent emits FileEdit events. The current_turn counter is
