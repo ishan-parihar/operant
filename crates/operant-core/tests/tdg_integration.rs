@@ -1,3 +1,7 @@
+#![cfg(feature = "tdg")]
+// This integration test requires the `tdg` feature (which pulls in the real
+// tdg-rust crate). When the feature is off, the entire file is cfg'd out.
+
 use operant_core::MemoryProvider;
 use std::path::PathBuf;
 
