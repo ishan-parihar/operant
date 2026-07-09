@@ -13,7 +13,7 @@ use crate::tui::session_browser::render_session_browser;
 use crate::tui::session_branching::render_session_branching;
 use crate::tui::tasks_overlay::render_tasks_overlay;
 use crate::tui::dialogs::{render_mcp_approval_dialog, render_permission_dialog};
-use crate::tui::feedback_survey::render_feedback_survey;
+// (iter-211: feedback_survey render import deleted — no telemetry backend)
 use crate::tui::voice_mode_notice::render_voice_mode_notice;
 use crate::tui::import_config_dialog::render_import_config_dialog;
 use crate::tui::bypass_permissions_dialog::render_bypass_permissions_dialog;
@@ -522,9 +522,7 @@ pub fn render_app(frame: &mut Frame, app: &App) {
         render_global_search(&app.global_search, size, frame.buffer_mut());
     }
 
-    if app.feedback_survey.visible {
-        render_feedback_survey(&app.feedback_survey, size, frame.buffer_mut());
-    }
+    // (iter-211: feedback_survey render block deleted — no telemetry backend)
 
     if app.memory_file_selector.visible {
         render_memory_file_selector(&app.memory_file_selector, size, frame.buffer_mut());

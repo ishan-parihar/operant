@@ -41,7 +41,7 @@ pub mod device_auth_dialog;
 pub mod dialog_select;
 pub mod effort_picker;
 pub mod export_dialog;
-pub mod feedback_survey;
+// (iter-211: feedback_survey module deleted — no telemetry backend, YAGNI)
 pub mod free_mode_dialog;
 pub mod hooks_config_menu;
 pub mod import_config_dialog;

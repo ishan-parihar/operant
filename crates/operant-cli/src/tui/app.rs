@@ -64,7 +64,7 @@ const PROMPT_SLASH_COMMANDS: &[(&str, &str)] = &[
     ("review", "Review changes (git diff)"),
     ("search", "Search conversation"),
     ("stats", "Open token and cost stats"),
-    ("survey", "Give feedback"),
+    // (iter-211: survey/feedback slash command deleted — no telemetry backend)
     ("theme", "Open the theme picker"),
     ("vim", "Toggle vim keybindings"),
     ("voice", "Toggle voice mode"),
@@ -676,8 +676,7 @@ pub struct App {
     pub agents_menu: AgentsMenuState,
     /// Diff viewer overlay.
     pub diff_viewer: DiffViewerState,
-    /// Session-quality feedback survey overlay.
-    pub feedback_survey: crate::tui::feedback_survey::FeedbackSurveyState,
+    // (iter-211: feedback_survey field deleted — no telemetry backend, YAGNI)
     /// Memory file selector overlay (AGENTS.md browser).
     pub memory_file_selector: crate::tui::memory_file_selector::MemoryFileSelectorState,
     pub skills_view: crate::tui::skills_view::SkillsViewState,
@@ -1123,7 +1122,7 @@ impl App {
             mcp_view: McpViewState::new(),
             agents_menu: AgentsMenuState::new(),
             diff_viewer: DiffViewerState::new(),
-            feedback_survey: crate::tui::feedback_survey::FeedbackSurveyState::new(),
+            // (iter-211: feedback_survey init deleted)
             memory_file_selector: crate::tui::memory_file_selector::MemoryFileSelectorState::new(),
             skills_view: crate::tui::skills_view::SkillsViewState::new(),
             plugins_hub: crate::tui::plugins_hub::PluginsHubState::new(),
@@ -1781,10 +1780,7 @@ permission_rx: None,
                 self.global_search.open();
                 true
             }
-            "survey" | "feedback" => {
-                self.feedback_survey.open();
-                true
-            }
+            // (iter-211: survey/feedback slash command deleted — no telemetry backend)
             "memory" => {
                 let root = self.project_root();
                 self.memory_file_selector.open(&root);
@@ -2328,7 +2324,7 @@ permission_rx: None,
         self.mcp_view.close();
         self.agents_menu.close();
         self.diff_viewer.close();
-        self.feedback_survey.close();
+        // (iter-211: feedback_survey.close() deleted)
         self.memory_file_selector.close();
         self.skills_view.close();
         self.plugins_hub.close();
@@ -2367,7 +2363,7 @@ permission_rx: None,
             || self.agents_menu.visible
             || self.diff_viewer.visible
             || self.global_search.visible
-            || self.feedback_survey.visible
+            // (iter-211: feedback_survey.visible deleted)
             || self.memory_file_selector.visible
             || self.skills_view.visible
             || self.plugins_hub.visible
@@ -3622,20 +3618,7 @@ permission_rx: None,
             return false;
         }
 
-        // Feedback survey intercepts digit keys and Esc
-        if self.feedback_survey.visible {
-            if key.code == KeyCode::Esc {
-                self.feedback_survey.close();
-                return false;
-            }
-            if let KeyCode::Char(c) = key.code {
-                if let Some(d) = c.to_digit(10) {
-                    self.feedback_survey.handle_digit(d as u8);
-                    return false;
-                }
-            }
-            return false;
-        }
+        // (iter-211: feedback_survey key handler deleted — no telemetry backend)
 
         // Memory file selector intercepts navigation and Esc
         if self.memory_file_selector.visible {

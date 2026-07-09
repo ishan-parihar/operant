@@ -755,9 +755,7 @@ pub mod voice {
 /// refresh_context_window_size in app.rs.)
 pub fn context_window_for_model(_model: &str) -> usize { 128000 }
 
-pub mod compact {
-    // (iter-136: TokenWarningState deleted — never used)
-}
+// (iter-211: pub mod compact {} deleted — empty module, zero callers)
 
 pub mod import_config {
     

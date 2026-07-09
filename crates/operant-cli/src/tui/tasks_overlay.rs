@@ -194,7 +194,7 @@ impl TasksOverlay {
             let task_id = task.id.clone();
             let new_status = next_status(&task.status);
 
-            // ponytail: TaskStore.tasks private in stub — global update deferred
+            // (iter-211: stale TaskStore comment removed — TaskStore deleted in iter-115)
 
             // Update local display
             if let Some(local_task) = self.tasks.get_mut(self.selected_idx) {
