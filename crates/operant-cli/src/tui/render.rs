@@ -1907,15 +1907,10 @@ fn render_input(frame: &mut Frame, app: &App, area: Rect, focused: bool) {
             // bumps each turn. Shown as "· iter N" so it clusters visually
             // with the model/provider pills. Only shown when current_turn is
             // wired (i.e. after the first agent invocation).
-            if let Some(ref turn) = app.current_turn {
-                let n = turn.load(std::sync::atomic::Ordering::Relaxed);
-                if n > 0 {
-                    spans.push(Span::styled(
-                        format!(" · iter {}", n),
-                        Style::default().fg(dim),
-                    ));
-                }
-            }
+            // (iter-209: current_turn field deleted with FileHistory stub.
+            // The "iter N" pill is cut — to re-add, track iteration count in
+            // a new field on App that doesn't depend on the FileHistory stub.)
+            // if let Some(ref turn) = app.current_turn { ... }
 
             // Subagent HUD — a small "· N agents" pill when there are live
             // subagent status entries. Mirrors hermes' SpawnHud widget.
