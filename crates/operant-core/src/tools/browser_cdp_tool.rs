@@ -10,6 +10,7 @@ pub struct BrowserCdpTool;
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
 struct BrowserCdpArgs {
     method: String,
     #[serde(default)]

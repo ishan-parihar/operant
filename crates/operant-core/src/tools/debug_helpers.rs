@@ -9,6 +9,7 @@ pub struct EnvVarTool;
 
 #[derive(JsonSchema, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
 struct EnvVarArgs {
     filter: Option<String>,
 }

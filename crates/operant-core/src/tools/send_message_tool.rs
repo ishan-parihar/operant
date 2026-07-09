@@ -26,6 +26,7 @@ pub struct SendMessageTool;
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
 struct SendMessageArgs {
     /// Action: "send" (deliver a message) or "list" (show configured platforms)
     action: String,

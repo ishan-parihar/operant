@@ -9,6 +9,7 @@ use crate::tools::{OperantTool, ToolContext, ToolResult};
 
 #[derive(JsonSchema, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
 struct ProcessToolArgs {
     /// Action: list, spawn, poll, wait, kill, get_output
     action: String,

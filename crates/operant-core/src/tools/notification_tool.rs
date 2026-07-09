@@ -11,6 +11,7 @@ pub struct NotificationTool;
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
 struct NotifyArgs {
     message: String,
     title: Option<String>,
@@ -62,6 +63,7 @@ pub struct ApprovalTool;
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
 struct ApprovalRequestArgs {
     request: String,
     reason: Option<String>,

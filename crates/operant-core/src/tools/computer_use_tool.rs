@@ -13,6 +13,7 @@ pub struct ComputerUseTool;
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
 struct CuaArgs {
     action: CuaAction,
     #[serde(default)]

@@ -22,6 +22,7 @@ struct OsvQueryResponse {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct OsvVulnerability {
     id: String,
     summary: Option<String>,
