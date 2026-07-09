@@ -139,6 +139,7 @@ pub fn build_memory_provider(
     storage_dir: std::path::PathBuf,
 ) -> Arc<dyn MemoryProvider> {
     match provider_name {
+        #[cfg(feature = "tdg")]
         "tdg" => match TdgMemoryProvider::new(storage_dir.clone()) {
             Ok(provider) => Arc::new(provider),
             Err(e) => {
@@ -151,6 +152,8 @@ pub fn build_memory_provider(
                 ))
             }
         },
+        // When the `tdg` feature is off, "tdg" falls through to the default
+        // arm and is silently downgraded to BuiltinProvider.
         // "builtin", "disabled", and any other value → BuiltinProvider.
         // Old provider names (hindsight/retaindb/mem0/local-vector) also
         // land here — they're treated as unknown and silently downgraded
@@ -165,11 +168,15 @@ pub fn build_memory_provider(
 // ---------------------------------------------------------------------------
 // TDG — Graph memory via tdg-rust
 // ---------------------------------------------------------------------------
+// Gated behind the `tdg` feature. When off, TdgMemoryProvider is not compiled
+// and `build_memory_provider("tdg", ...)` falls back to BuiltinProvider.
 
+#[cfg(feature = "tdg")]
 pub struct TdgMemoryProvider {
     pool: std::sync::Arc<tdg_rust::ConnectionPool>,
 }
 
+#[cfg(feature = "tdg")]
 impl TdgMemoryProvider {
     /// Create a new TDG memory provider backed by a SQLite database at
     /// `<storage_dir>/tdg/graph.db`.
@@ -216,6 +223,7 @@ impl TdgMemoryProvider {
 }
 
 #[async_trait]
+#[cfg(feature = "tdg")]
 impl MemoryProvider for TdgMemoryProvider {
     fn name(&self) -> &str {
         "tdg"
@@ -524,6 +532,7 @@ mod tests {
     /// `TdgMemoryProvider::new` now returns `Result<Self>` instead of
     /// `.expect()`ing. A bad storage directory (e.g. a path under a file
     /// where a directory is expected) produces an `Err`, not a process crash.
+    #[cfg(feature = "tdg")]
     #[test]
     fn tdg_memory_provider_new_returns_err_on_bad_storage_dir() {
         // Use a file path as the storage dir's parent — create_dir_all will
@@ -547,6 +556,7 @@ mod tests {
     /// `build_memory_provider("tdg", ...)` falls back to `BuiltinProvider`
     /// when TDG init fails, instead of panicking. The agent stays functional
     /// with a degraded memory backend.
+    #[cfg(feature = "tdg")]
     #[test]
     fn build_memory_provider_tdg_falls_back_on_init_failure() {
         let tmp = tempfile::NamedTempFile::new().unwrap();

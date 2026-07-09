@@ -75,5 +75,6 @@ tempfile = { workspace = true }
 
 [features]
 default = []
+tdg = ["operant-core/tdg"]
 
 [dev-dependencies]

@@ -129,7 +129,9 @@ pub use gateway_session::{
 };
 pub use mcp::{McpClient, McpNamespacedTool, McpStdioClient, McpTool, McpTransport};
 pub use memory::{MemoryBlock, MemoryManager, Session, UserProfile};
-pub use memory_provider::{build_memory_provider, BuiltinProvider, MemoryProvider, TdgMemoryProvider};
+pub use memory_provider::{build_memory_provider, BuiltinProvider, MemoryProvider};
+#[cfg(feature = "tdg")]
+pub use memory_provider::TdgMemoryProvider;
 pub use parser::ToolCallParser;
 pub use platform::PlatformInfo;
 pub use plugins::{
