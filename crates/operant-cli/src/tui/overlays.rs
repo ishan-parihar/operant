@@ -1953,7 +1953,7 @@ mod tests {
 
     #[test]
     fn history_entry_relative_time_just_now() {
-        let entry = HistoryEntry::new("hello".to_string());
+        let entry = HistoryEntry::legacy("hello".to_string());
         assert_eq!(entry.relative_time(), "just now");
     }
 
@@ -2000,7 +2000,7 @@ mod tests {
     #[test]
     fn history_search_with_timestamps_stores_snapshot() {
         let entries = vec![
-            HistoryEntry::new("cargo test".to_string()),
+            HistoryEntry::legacy("cargo test".to_string()),
             HistoryEntry::legacy("old cmd".to_string()),
         ];
         let hs = HistorySearchOverlay::open_with_entries(entries);

@@ -1854,79 +1854,6 @@ mod tests {
     }
 
     #[test]
-    fn test_render_tool_result_cancelled() {
-        let result = render_tool_result_cancelled("Bash");
-        assert!(!result.is_empty());
-        let text = line_text(&result[0]);
-        assert!(text.contains("Bash"));
-        assert!(text.contains("cancelled"));
-    }
-
-    #[test]
-    fn test_render_tool_result_rejected() {
-        let result = render_tool_result_rejected("Edit", "user pressed ctrl-c");
-        assert!(!result.is_empty());
-        let text = line_text(&result[0]);
-        assert!(text.contains("Edit"));
-        assert!(text.contains("interrupted"));
-        let reason = line_text(&result[1]);
-        assert!(reason.contains("user pressed ctrl-c"));
-    }
-
-    #[test]
-    fn test_render_attachment_message() {
-        let result = render_attachment_message("skill_listing", "5 tools available: Bash, Read", 80);
-        assert!(!result.is_empty());
-        let text = line_text(&result[0]);
-        assert!(text.contains("skill_listing"));
-        assert!(text.contains("5 tools"));
-    }
-
-    #[test]
-    fn test_render_attachment_message_truncates_long_content() {
-        let long = "x".repeat(200);
-        let result = render_attachment_message("kind", &long, 80);
-        assert!(!result.is_empty());
-        let text = line_text(&result[0]);
-        assert!(text.contains('\u{2026}') || text.len() < long.len(), "expected truncation");
-    }
-
-    #[test]
-    fn test_render_advisor_message_loading() {
-        let result = render_advisor_message(true, Some("claude-3"));
-        assert!(!result.is_empty());
-        let text = line_text(&result[0]);
-        assert!(text.contains("Advising"));
-        assert!(text.contains("claude-3"));
-    }
-
-    #[test]
-    fn test_render_advisor_message_done() {
-        let result = render_advisor_message(false, None);
-        assert!(!result.is_empty());
-        let text = line_text(&result[0]);
-        assert!(text.contains("Advisor reviewed"));
-    }
-
-    #[test]
-    fn test_render_agent_notification() {
-        let result = render_agent_notification("Planner", "Starting task analysis...");
-        assert!(!result.is_empty());
-        let text = line_text(&result[0]);
-        assert!(text.contains("Planner"));
-        assert!(text.contains("Starting task analysis"));
-    }
-
-    #[test]
-    fn test_render_shutdown_message() {
-        let result = render_shutdown_message("max turns reached");
-        assert!(!result.is_empty());
-        let combined = result.iter().map(|l| line_text(l)).collect::<Vec<_>>().join("\n");
-        assert!(combined.contains("Session ended"));
-        assert!(combined.contains("max turns reached"));
-    }
-
-    #[test]
     fn test_render_bash_input_line() {
         let result = render_bash_input_line("ls -la");
         assert!(!result.is_empty());
@@ -1951,30 +1878,6 @@ mod tests {
         let output = "line 1\nline 2\nline 3";
         let result = render_bash_output_block(output, 10);
         assert_eq!(result.len(), 3);
-    }
-
-    #[test]
-    fn test_render_plan_steps() {
-        let steps = vec!["First step".to_string(), "Second step".to_string()];
-        let result = render_plan_steps(&steps);
-        assert!(!result.is_empty());
-        let combined = result.iter().map(|l| line_text(l)).collect::<Vec<_>>().join("\n");
-        assert!(combined.contains("Plan:"));
-        assert!(combined.contains("1."));
-        assert!(combined.contains("First step"));
-        assert!(combined.contains("2."));
-        assert!(combined.contains("Second step"));
-    }
-
-    #[test]
-    fn test_render_plan_approval_prompt() {
-        let result = render_plan_approval_prompt();
-        assert!(!result.is_empty());
-        let text = line_text(&result[0]);
-        assert!(text.contains("Approve this plan?"));
-        assert!(text.contains("[y]"));
-        assert!(text.contains("[n]"));
-        assert!(text.contains("[e]"));
     }
 
     #[test]
@@ -2221,17 +2124,6 @@ mod tests {
     }
 
     #[test]
-    fn test_render_resource_update() {
-        let result = render_resource_update("mcp-server", "file:///tmp/foo.txt", "modified");
-        assert!(!result.is_empty());
-        let text = line_text(&result[0]);
-        assert!(text.contains('\u{21bb}'), "should have ↻ prefix");
-        assert!(text.contains("mcp-server"));
-        assert!(text.contains("file:///tmp/foo.txt"));
-        assert!(text.contains("modified"));
-    }
-
-    #[test]
     fn test_render_collapsed_read_search_no_hidden() {
         let paths = vec!["src/lib.rs", "src/main.rs"];
         let result = render_collapsed_read_search("Read", &paths, 0);
@@ -2295,67 +2187,12 @@ mod tests {
         assert!(combined.contains('\u{2022}'), "expanded lines should have • prefix");
     }
 
-    #[test]
-    fn test_render_rate_limit_with_hint_false() {
-        let result = render_rate_limit_with_hint(60, false);
-        assert_eq!(result.len(), 2, "without hint should have 2 lines");
-        let combined = result.iter().map(|l| line_text(l)).collect::<Vec<_>>().join("\n");
-        assert!(combined.contains("Rate limit exceeded"));
-        assert!(combined.contains("Retrying in 60s"));
-        assert!(!combined.contains("upgrade"));
-    }
-
-    #[test]
-    fn test_render_rate_limit_with_hint_true() {
-        let result = render_rate_limit_with_hint(60, true);
-        assert_eq!(result.len(), 3, "with hint should have 3 lines");
-        let last = line_text(result.last().unwrap());
-        assert!(last.contains("/providers"));
-    }
-
-    #[test]
-    fn test_render_rate_limit_banner_is_wrapper() {
-        // render_rate_limit_banner must produce identical output to render_rate_limit_with_hint(n, false)
-        let banner = render_rate_limit_banner(45);
-        let hint_false = render_rate_limit_with_hint(45, false);
-        let banner_text: Vec<_> = banner.iter().map(|l| line_text(l)).collect();
-        let hint_text: Vec<_> = hint_false.iter().map(|l| line_text(l)).collect();
-        assert_eq!(banner_text, hint_text);
-    }
-
-    #[test]
-    fn test_render_agent_notification_with_severity_info() {
-        let result = render_agent_notification_with_severity("Scout", "All clear", "info");
-        let text = line_text(&result[0]);
-        assert!(text.contains("Scout"));
-        assert!(text.contains("All clear"));
-    }
-
-    #[test]
-    fn test_render_agent_notification_with_severity_warn() {
-        let result = render_agent_notification_with_severity("Scout", "Low memory", "warn");
-        assert!(!result.is_empty());
-        let text = line_text(&result[0]);
-        assert!(text.contains("Scout"));
-        assert!(text.contains("Low memory"));
-    }
-
-    #[test]
-    fn test_render_agent_notification_with_severity_error() {
-        let result = render_agent_notification_with_severity("Scout", "Crash detected", "error");
-        assert!(!result.is_empty());
-        let text = line_text(&result[0]);
-        assert!(text.contains("Scout"));
-        assert!(text.contains("Crash detected"));
-    }
-
-    #[test]
-    fn test_render_agent_notification_defaults_to_info() {
-        // render_agent_notification delegates to severity "info"
-        let a = render_agent_notification("Bot", "hello");
-        let b = render_agent_notification_with_severity("Bot", "hello", "info");
-        let a_text: Vec<_> = a.iter().map(|l| line_text(l)).collect();
-        let b_text: Vec<_> = b.iter().map(|l| line_text(l)).collect();
-        assert_eq!(a_text, b_text);
-    }
+    // (iter-213: 18 broken test functions deleted — they referenced
+    // render functions that were deleted in prior iterations:
+    // render_agent_notification, render_attachment_message,
+    // render_advisor_message, render_tool_result_cancelled/rejected,
+    // render_shutdown_message, render_resource_update,
+    // render_rate_limit_*, render_plan_*. The functions were
+    // removed but the tests were never updated. YAGNI: delete
+    // the tests rather than re-add unused render functions.)
 }
