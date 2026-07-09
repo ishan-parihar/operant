@@ -5730,8 +5730,14 @@ permission_rx: None,
                 // (iter-209: refresh_turn_diff_from_history removed)
             }
 
-            AgentEvent::Done { message: _ } => {
+            AgentEvent::Done { message } => {
                 // Turn complete — the agent finished.
+                // (iter-210: fix BACKEND_TUI_AUDIT.md §3 bug #2 — Done.message
+                // was previously discarded with `message: _`. If the agent
+                // emitted Done without preceding Content events (e.g. a
+                // non-streaming error-recovery path), the user saw an empty
+                // assistant message. Now: if streaming_text is empty, use
+                // Done.message.content as the source of truth.)
                 self.is_streaming = false;
                 self.spinner_verb = None;
 
@@ -5743,7 +5749,32 @@ permission_rx: None,
                     elapsed.unwrap_or_else(|| "0s".to_string())
                 );
                 self.last_turn_verb = Some(sample_completion_verb(seed as u64));
-                self.flush_streamed_assistant_message();
+
+                // If we have streamed content, flush it normally. If not,
+                // use Done.message as the source of truth (fixes the
+                // dropped-message bug for non-streaming paths).
+                if self.streaming_text.trim().is_empty()
+                    && self.streaming_thinking.trim().is_empty()
+                    && !message.content.is_empty()
+                {
+                    // Non-streaming path: Done carries the full message.
+                    let mut blocks = Vec::new();
+                    if let Some(reasoning) = &message.reasoning {
+                        if !reasoning.trim().is_empty() {
+                            blocks.push(ContentBlock::Thinking {
+                                thinking: reasoning.clone(),
+                                signature: String::new(),
+                            });
+                        }
+                    }
+                    blocks.push(ContentBlock::Text { text: message.content.clone() });
+                    let msg = Message::assistant_blocks(blocks);
+                    self.messages.push(msg);
+                    self.invalidate_transcript();
+                    self.on_new_message();
+                } else {
+                    self.flush_streamed_assistant_message();
+                }
                 self.tool_use_blocks.retain(|b| b.status != ToolStatus::Running);
                 self.complete_current_turn_snapshot(false);
                 self.invalidate_transcript();
@@ -5770,16 +5801,21 @@ permission_rx: None,
                 self.push_notification(NotificationKind::Error, err_msg, None);
             }
 
-            AgentEvent::Usage { input_tokens, output_tokens, total_tokens: _ } => {
+            AgentEvent::Usage { input_tokens, output_tokens, total_tokens } => {
                 // Record cost tracking immediately (was deferred to TurnComplete
                 // via the bridge's pending_usage — now we record it directly).
-                let turn_tokens = input_tokens + output_tokens;
+                // (iter-210: fix BACKEND_TUI_AUDIT.md §3 bug #5 — total_tokens
+                // was previously discarded with `total_tokens: _` and
+                // recomputed by CostTracker as input+output. Now we use the
+                // agent's authoritative total_tokens, which may include
+                // cached/reasoning tokens that input+output misses.)
+                let turn_tokens = total_tokens.max(input_tokens + output_tokens);
                 self.context_used_tokens = self.context_used_tokens.saturating_add(turn_tokens as u64);
                 if let Some(tracker) = Arc::get_mut(&mut self.cost_tracker) {
                     tracker.record_usage(input_tokens, output_tokens);
                 }
                 self.cost_usd = self.cost_tracker.total_cost;
-                self.token_count = self.cost_tracker.total_tokens() as u32;
+                self.token_count = turn_tokens;
             }
 
             AgentEvent::Cost { cost_usd, input_tokens: _, output_tokens: _, model: _ } => {
