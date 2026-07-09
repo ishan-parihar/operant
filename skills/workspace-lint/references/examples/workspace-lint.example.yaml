@@ -1,0 +1,63 @@
+project:
+  name: Example Project
+  version: "1.0"
+
+ignore_dirs:
+  - .git
+  - __pycache__
+  - node_modules
+  - .venv
+
+structure:
+  canonical:
+    - path: src
+      description: Application source code
+      children: [api, core, utils]
+    - path: tests
+      description: Test files
+      children: [unit, integration]
+    - path: docs
+      description: Documentation
+    - path: scripts
+      description: Build and utility scripts
+
+root:
+  allowed_root_files:
+    - README.md
+    - LICENSE
+    - .gitignore
+    - setup.py
+    - pyproject.toml
+    - package.json
+    - Cargo.toml
+    - Makefile
+  forbidden_files:
+    - "*.pyc"
+    - "*.pyo"
+    - "*.egg-info"
+    - "*.log"
+    - "*.tmp"
+    - ".DS_Store"
+    - "Thumbs.db"
+    - "*.swp"
+    - "*~"
+    - "*.bak"
+
+files:
+  "*.py":
+    preferred_dir: src
+    max_size_kb: 50
+  "*.js":
+    preferred_dir: src
+    max_size_kb: 100
+  "*.md":
+    preferred_dir: docs
+    max_size_kb: 200
+  "*.log":
+    preferred_dir: logs
+    max_size_kb: 0
+
+directories:
+  forbidden_patterns:
+    - ".*\\s.*"  # No spaces in directory names
+    - "^\\d+\\."  # No numeric prefixes (handled by naming convention)
