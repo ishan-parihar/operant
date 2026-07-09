@@ -677,6 +677,9 @@ pub fn render_app(frame: &mut Frame, app: &App) {
     apply_selection_highlight(frame, app);
     cache_selectable_row_text(frame, app);
     render_context_menu(frame, app);
+
+    // ---- Debug overlay (F12) — topmost, always last ---------------------
+    crate::tui::debug::overlay::render_debug_overlay(frame, &app.debug_hub, size);
 }
 
 /// Snapshot the rendered text of every row inside the selectable area into

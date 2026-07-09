@@ -510,6 +510,9 @@ pub struct App {
     // Core state
     pub config: Config,
     pub cost_tracker: Arc<CostTracker>,
+    /// TUI debugging hub — event bus, frame counter, F12 overlay.
+    /// Enabled by OPERANT_TUI_DEBUG=1. Zero overhead when disabled.
+    pub debug_hub: crate::tui::debug::TuiDebugHub,
     /// Command registry for dispatching slash commands to backend handlers.
     pub command_registry: crate::commands::CommandRegistry,
     pub messages: Vec<Message>,
@@ -1043,6 +1046,7 @@ impl App {
         Self {
             config,
             cost_tracker,
+            debug_hub: crate::tui::debug::TuiDebugHub::new_from_env(),
             command_registry,
             messages: Vec::new(),
             system_annotations: Vec::new(),
@@ -2942,6 +2946,24 @@ permission_rx: None,
     /// Process a keyboard event. Returns `true` when the input should be
     /// submitted (Enter pressed with no blocking dialog).
     pub fn handle_key_event(&mut self, key: KeyEvent) -> bool {
+        // ── F12: toggle debug overlay (highest priority, never blocked) ──
+        if key.code == KeyCode::F(12) {
+            self.debug_hub.toggle_overlay();
+            self.debug_hub.publish(crate::tui::debug::TuiEvent::Key {
+                code: "F12".into(),
+                modifiers: 0,
+                at: crate::tui::debug::event_bus::now_secs(),
+            });
+            return false;
+        }
+
+        // Publish key event to debug bus (no-op when disabled).
+        self.debug_hub.publish(crate::tui::debug::TuiEvent::Key {
+            code: format!("{:?}", key.code),
+            modifiers: key.modifiers.bits(),
+            at: crate::tui::debug::event_bus::now_secs(),
+        });
+
         // Dismiss error modal with Esc
         if key.code == KeyCode::Esc && self.notifications.current_is_error() {
             self.dismiss_error_notifications();
@@ -5521,6 +5543,15 @@ permission_rx: None,
     /// Handle an AgentEvent from the agent. (iter-114 — replaces
     /// handle_query_event; eliminates the bridge layer.)
     pub fn handle_agent_event(&mut self, event: AgentEvent) {
+        // Publish to debug bus (no-op when disabled).
+        let event_variant = format!("{:?}", std::mem::discriminant(&event));
+        let event_summary: String = format!("{:?}", &event).chars().take(80).collect();
+        self.debug_hub.publish(crate::tui::debug::TuiEvent::AgentEvent {
+            variant: event_variant,
+            summary: event_summary,
+            at: crate::tui::debug::event_bus::now_secs(),
+        });
+
         // Auto-dismiss error modal when assistant responds
         match &event {
             AgentEvent::Content { .. } | AgentEvent::Thinking { .. }
@@ -6103,7 +6134,10 @@ permission_rx: None,
             // `terminal.current_buffer_mut()` points at the empty next-frame
             // slot. `CompletedFrame.buffer` is the one we actually want.
             let osc8_hits = {
+                let draw_start = std::time::Instant::now();
                 let completed = terminal.draw(|f| render::render_app(f, self))?;
+                let render_ms = draw_start.elapsed().as_secs_f64() * 1000.0;
+                self.debug_hub.record_frame(render_ms);
                 crate::osc8::scan_buffer_for_urls(completed.buffer)
             };
 
@@ -6186,6 +6220,7 @@ permission_rx: None,
                             self.should_exit = true;
                         }
                         if self.should_exit {
+                            self.debug_hub.dump_on_exit();
                             return Ok(None);
                         }
                         if should_submit {

@@ -1,6 +1,8 @@
 pub mod adapter_types;
 pub mod provider;
 
+pub mod debug;
+
 pub mod app;
 pub mod render;
 pub mod prompt_input;
