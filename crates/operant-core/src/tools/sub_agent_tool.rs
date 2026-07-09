@@ -231,7 +231,7 @@ impl SubAgentTool {
         tasks: Vec<(String, Option<String>, SubAgentRole, Option<u32>, u64)>,
     ) -> std::result::Result<String, BoxedToolError> {
         let max_concurrent = MAX_CONCURRENT_CHILDREN.load(Ordering::Relaxed) as usize;
-        let max_concurrent = max_concurrent.max(1).min(10);
+        let max_concurrent = max_concurrent.clamp(1, 10);
 
         // Use semaphore to limit concurrency
         let semaphore = Arc::new(tokio::sync::Semaphore::new(max_concurrent));
@@ -567,7 +567,7 @@ pub fn set_orchestrator_enabled(enabled: bool) {
 
 /// Set maximum concurrent children
 pub fn set_max_concurrent_children(count: usize) {
-    MAX_CONCURRENT_CHILDREN.store(count.max(1).min(10) as u32, Ordering::Relaxed);
+    MAX_CONCURRENT_CHILDREN.store(count.clamp(1, 10) as u32, Ordering::Relaxed);
 }
 
 #[cfg(test)]

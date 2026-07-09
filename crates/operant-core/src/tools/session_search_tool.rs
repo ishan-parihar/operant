@@ -150,8 +150,7 @@ impl OperantTool for SessionSearchTool {
             .and_then(|v| v.as_u64())
             .map(|v| v as usize)
             .unwrap_or(3)
-            .max(1)
-            .min(5);
+            .clamp(1, 5);
 
         // Recent sessions mode (empty query)
         if query.as_ref().map(|q| q.is_empty()).unwrap_or(true) {
