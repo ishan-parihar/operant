@@ -160,7 +160,6 @@ fn generate_session_token() -> String {
     }
     format!("operant_{}", hex)
 }
-}
 
 /// Check the Authorization header against the session token.
 /// Returns Ok(()) if authorized, Err(response) if not.
