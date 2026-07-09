@@ -629,11 +629,13 @@ pub struct App {
     /// Remote session URL (set when bridge connects; readable by commands).
     pub remote_session_url: Option<String>,
     /// Live MCP manager snapshot source when available.
-    pub mcp_manager: Option<Arc<crate::tui::adapter_types::mcp::McpManager>>,
+    /// (iter-208: stub mcp_manager field deleted — load_mcp_servers now reads
+    /// from core_mcp_manager directly.)
     /// Real operant-core McpManager handle for reconnect operations.
     /// Set by TuiApp::run after create_runtime_agent. When /mcp 'r' is
     /// pressed, the run loop calls remove_server + add_server on this.
     /// (iter-93 — closes the /mcp reconnect parity gap.)
+    /// (iter-208 — also used by load_mcp_servers for live tool/status data.)
     pub core_mcp_manager: Option<Arc<operant_core::mcp::McpManager>>,
     /// Agent steer queue handle. Set by TuiApp::run after create_runtime_agent.
     /// When the user types while a turn is streaming, the input is pushed here
@@ -1109,7 +1111,6 @@ impl App {
             error_modal_scroll_offset: 0,
             session_title: None,
             remote_session_url: None,
-            mcp_manager: None,
             core_mcp_manager: None,
             steer_queue_handle: None,
             pending_mcp_reconnect: false,
@@ -2446,8 +2447,31 @@ permission_rx: None,
     }
 
     fn load_mcp_servers(&self) -> Vec<McpServerView> {
-        if let Some(manager) = self.mcp_manager.as_ref() {
-            let tool_defs = manager.all_tool_definitions();
+        // Phase 3a (iter-208): rewired to use the REAL core_mcp_manager
+        // instead of the deleted stub. The stub always returned empty data,
+        // so /mcp showed 0 tools and all servers Disconnected. Now we read
+        // the real connection state from operant_core::mcp::McpManager.
+        //
+        // The core API is async (tokio::sync::RwLock), but load_mcp_servers
+        // is called from the sync render path. We use block_in_place +
+        // Handle::block_on to safely call the async methods from within
+        // the TUI's tokio runtime. This is the same pattern used by
+        // operant's other sync→async bridges.
+        if let Some(core_manager) = self.core_mcp_manager.as_ref() {
+            // Try to get a runtime handle. If we're not in a tokio context
+            // (e.g. unit tests), fall back to the config-only path below.
+            let Ok(handle) = tokio::runtime::Handle::try_current() else {
+                return self.load_mcp_servers_config_only();
+            };
+            let result = tokio::task::block_in_place(|| {
+                handle.block_on(async {
+                    let server_names = core_manager.server_names().await;
+                    let all_servers = core_manager.all_servers().await;
+                    (server_names, all_servers)
+                })
+            });
+
+            let (server_names, all_servers) = result;
             return self
                 .config
                 .mcp_servers
@@ -2460,65 +2484,62 @@ permission_rx: None,
                         .or_else(|| server.command.as_ref().map(|_| "stdio".to_string()))
                         .unwrap_or_else(|| server.server_type.clone());
 
-                    let tools: Vec<McpToolView> = tool_defs
-                        .iter()
-                        .filter(|(server_name, _)| server_name == &server.name)
-                        .map(|(_, tool_def)| McpToolView {
-                            name: tool_def
-                                .name
-                                .strip_prefix(&format!("{}_", server.name))
-                                .unwrap_or(&tool_def.name)
-                                .to_string(),
-                            server: server.name.clone(),
-                            description: tool_def.description.clone(),
-                            input_schema: Some(tool_def.input_schema.to_string()),
-                        })
-                        .collect();
+                    // Check if this server is connected in the core manager.
+                    let connected = all_servers.contains_key(&server.name);
 
-                    let (status, error_message) = match manager.server_status(&server.name) {
-                        crate::tui::adapter_types::mcp::McpServerStatus::Connected { .. } => {
-                            (McpViewStatus::Connected, None)
+                    // Collect tools from the core transport if connected.
+                    let tools: Vec<McpToolView> = if connected {
+                        // Use block_in_place again for the async get_tools call.
+                        let handle = tokio::runtime::Handle::try_current().ok();
+                        if let Some(handle) = handle {
+                            let transport_tools = tokio::task::block_in_place(|| {
+                                handle.block_on(async {
+                                    if let Some(t) = all_servers.get(&server.name) {
+                                        t.get_tools().await
+                                    } else {
+                                        Vec::new()
+                                    }
+                                })
+                            });
+                            transport_tools
+                                .into_iter()
+                                .map(|t| {
+                                    let def = t.definition();
+                                    McpToolView {
+                                        name: def.name.clone(),
+                                        server: server.name.clone(),
+                                        description: def.description.clone(),
+                                        input_schema: Some(
+                                            serde_json::to_string(&def.input_schema)
+                                                .unwrap_or_default(),
+                                        ),
+                                    }
+                                })
+                                .collect()
+                        } else {
+                            vec![]
                         }
-                        crate::tui::adapter_types::mcp::McpServerStatus::Connecting => {
-                            (McpViewStatus::Connecting, None)
-                        }
-                        crate::tui::adapter_types::mcp::McpServerStatus::Disconnected { last_error } => {
-                            if last_error.is_some() {
-                                (McpViewStatus::Error, last_error)
-                            } else {
-                                (McpViewStatus::Disconnected, None)
-                            }
-                        }
-                        crate::tui::adapter_types::mcp::McpServerStatus::Failed { error, .. } => {
-                            (McpViewStatus::Error, Some(error))
-                        }
+                    } else {
+                        vec![]
                     };
 
-                    let catalog = manager.server_catalog(&server.name);
+                    let (status, error_message) = if connected {
+                        (McpViewStatus::Connected, None)
+                    } else if server_names.contains(&server.name) {
+                        (McpViewStatus::Connecting, None)
+                    } else {
+                        (McpViewStatus::Disconnected, None)
+                    };
+
                     McpServerView {
                         name: server.name.clone(),
                         transport,
                         status,
-                        tool_count: catalog
-                            .as_ref()
-                            .map(|entry| entry.tool_count)
-                            .unwrap_or_else(|| tools.len()),
-                        resource_count: catalog
-                            .as_ref()
-                            .map(|entry| entry.resource_count)
-                            .unwrap_or(0),
-                        prompt_count: catalog
-                            .as_ref()
-                            .map(|entry| entry.prompt_count)
-                            .unwrap_or(0),
-                        resources: catalog
-                            .as_ref()
-                            .map(|entry| entry.resources.clone())
-                            .unwrap_or_default(),
-                        prompts: catalog
-                            .as_ref()
-                            .map(|entry| entry.prompts.clone())
-                            .unwrap_or_default(),
+                        tool_count: tools.len(),
+                        resource_count: 0,
+                        prompt_count: 0,
+                        resources: vec![],
+                        prompts: vec![],
                         error_message,
                         tools,
                     }
@@ -2526,6 +2547,12 @@ permission_rx: None,
                 .collect();
         }
 
+        self.load_mcp_servers_config_only()
+    }
+
+    /// Fallback: build McpServerView list from config only (no live data).
+    /// Used when core_mcp_manager is None or when not in a tokio runtime.
+    fn load_mcp_servers_config_only(&self) -> Vec<McpServerView> {
         self.config
             .mcp_servers
             .iter()
@@ -2867,9 +2894,9 @@ permission_rx: None,
         self.refresh_turn_diff_from_history();
     }
 
-    pub fn attach_mcp_manager(&mut self, mcp_manager: Arc<crate::tui::adapter_types::mcp::McpManager>) {
-        self.mcp_manager = Some(mcp_manager);
-    }
+    // (iter-208: attach_mcp_manager deleted — stub mcp_manager field removed.
+    // load_mcp_servers now reads from core_mcp_manager, which is set directly
+    // in TuiApp::enter via self.app.core_mcp_manager = Some(...).)
 
     pub fn refresh_mcp_view(&mut self) {
         let servers = self.load_mcp_servers();
