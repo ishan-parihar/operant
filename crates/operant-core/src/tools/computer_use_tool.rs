@@ -288,7 +288,7 @@ impl ComputerUseTool {
         };
 
         let direction = args.direction.clone().unwrap_or_else(|| "down".to_string());
-        let amount = args.amount.unwrap_or(3).max(1).min(50);
+        let amount = args.amount.unwrap_or(3).clamp(1, 50);
 
         let mut tool_args = json!({"pid": pid, "direction": direction, "amount": amount});
         if let Some(elem) = args.element {
