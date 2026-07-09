@@ -648,52 +648,6 @@ pub(crate) async fn build_registry(
         }
     }
 
-    // Register IGS (Intelligence Gathering System) tools if enabled.
-    // IGS provides 14 OSINT/research tools (news, Reddit, research,
-    // web scraping, finance, security, YouTube, analysis).
-    #[cfg(feature = "igs")]
-    if config.tools.igs_enabled {
-        match operant_core::tools::register_igs_tools(&registry).await {
-            Ok(()) => tracing::info!("IGS tools registered (14 OSINT/research tools)"),
-            Err(e) => tracing::warn!(error = %e, "IGS tool registration failed (non-fatal)"),
-        }
-    }
-
-    // Register LifeOS tools if enabled. LifeOS provides 22 Notion-backed
-    // holonic life-management tools (query, mutate, intelligence, review,
-    // relational navigation, audit, workflows).
-    #[cfg(feature = "lifeos")]
-    if config.tools.lifeos_enabled {
-        match std::env::var("NOTION_API_TOKEN") {
-            Ok(token) => {
-                match lifeos_core::config::load_config() {
-                    Ok(lifeos_cfg) => {
-                        let lifeos_cfg = std::sync::Arc::new(lifeos_cfg);
-                        let notion = std::sync::Arc::new(
-                            lifeos_core::notion::client::NotionClient::new(
-                                (*lifeos_cfg).clone(), token,
-                            ),
-                        );
-                        let schema_cache = std::sync::Arc::new(
-                            lifeos_core::util::schema_engine::SchemaCache::new(notion.clone()),
-                        );
-                        let state = operant_core::tools::LifeosState {
-                            config: lifeos_cfg,
-                            notion,
-                            schema_cache,
-                        };
-                        match operant_core::tools::register_lifeos_tools(&registry, state).await {
-                            Ok(()) => tracing::info!("LifeOS tools registered (22 Notion-backed tools)"),
-                            Err(e) => tracing::warn!(error = %e, "LifeOS tool registration failed (non-fatal)"),
-                        }
-                    }
-                    Err(e) => tracing::warn!(error = %e, "LifeOS config load failed"),
-                }
-            }
-            Err(_) => tracing::warn!("LifeOS enabled but NOTION_API_TOKEN not set — skipping"),
-        }
-    }
-
     let disabled_tools: std::collections::HashSet<String> =
         config.tools.disabled_tools.iter().cloned().collect();
     let disabled_toolsets: std::collections::HashSet<String> =

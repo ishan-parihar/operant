@@ -23,12 +23,8 @@ pub mod debug_helpers;
 pub mod file_state;
 pub mod file_tools;
 pub mod http_tool;
-#[cfg(feature = "igs")]
-pub mod igs_tools;
 pub mod image_generation_tool;
 pub mod kanban_tool;
-#[cfg(feature = "lifeos")]
-pub mod lifeos_tools;
 pub mod mcp_tool;
 pub mod memory_tools;
 pub mod neutts_synth;
@@ -84,11 +80,7 @@ pub use cron_tool::CronTool;
 pub use discord_tool::{DiscordAdminTool, DiscordTool};
 pub use feishu_tool::{FeishuDocTool, FeishuDriveTool};
 pub use home_assistant_tool::HomeAssistantTool;
-#[cfg(feature = "igs")]
-pub use igs_tools::register_igs_tools;
 pub use kanban_tool::KanbanTool;
-#[cfg(feature = "lifeos")]
-pub use lifeos_tools::{register_lifeos_tools, LifeosState};
 pub use mcp_tool::McpManagementTool;
 pub use osv_check::OsvCheckTool;
 pub use process_tool::ProcessTool;
