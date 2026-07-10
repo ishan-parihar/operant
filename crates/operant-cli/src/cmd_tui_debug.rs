@@ -154,6 +154,10 @@ pub enum TuiDebugSubcommand {
         /// Optional JSON output file path to write the simulation log.
         #[arg(long)]
         output: Option<std::path::PathBuf>,
+
+        /// Optional state assertions to evaluate (e.g. "help_overlay.visible == true").
+        #[arg(long)]
+        assert: Option<String>,
     },
 }
 
@@ -185,8 +189,8 @@ pub async fn handle_tui_debug_command(config: &AppConfig, cmd: TuiDebugSubcomman
         TuiDebugSubcommand::SlashCommands => debug_slash_commands(config).await,
         TuiDebugSubcommand::State => debug_state(config).await,
         TuiDebugSubcommand::Cost => debug_cost(config).await,
-        TuiDebugSubcommand::Simulate { keys, output } => {
-            debug_simulate(config, keys, output).await
+        TuiDebugSubcommand::Simulate { keys, output, assert } => {
+            debug_simulate(config, keys, output, assert).await
         }
     }
 }
@@ -1033,10 +1037,74 @@ fn parse_key_sequence(seq: &str) -> Vec<crossterm::event::KeyEvent> {
     events
 }
 
+fn evaluate_assertions(app: &crate::tui::app::App, assertions_str: &str) -> Result<()> {
+    for assertion in assertions_str.split(',') {
+        let assertion = assertion.trim();
+        if assertion.is_empty() {
+            continue;
+        }
+
+        let parts: Vec<&str> = if assertion.contains("==") {
+            assertion.split("==").map(|s| s.trim()).collect()
+        } else if assertion.contains("!=") {
+            assertion.split("!=").map(|s| s.trim()).collect()
+        } else {
+            anyhow::bail!("Invalid assertion format: '{}'. Must use '==' or '!='.", assertion);
+        };
+
+        if parts.len() != 2 {
+            anyhow::bail!("Invalid assertion format: '{}'. Must be key == value or key != value.", assertion);
+        }
+
+        let key = parts[0];
+        let mut val_str = parts[1];
+
+        // Strip outer quotes if any
+        if (val_str.starts_with('"') && val_str.ends_with('"')) || (val_str.starts_with('\'') && val_str.ends_with('\'')) {
+            val_str = &val_str[1..val_str.len() - 1];
+        }
+
+        let is_eq = assertion.contains("==");
+
+        let actual_val = match key {
+            "help_overlay.visible" => app.help_overlay.visible,
+            "should_exit" => app.should_exit,
+            "plan_mode" => app.plan_mode,
+            "show_help" => app.show_help,
+            "is_streaming" => app.is_streaming,
+            "is_simulating" => app.is_simulating,
+            "history_search_overlay.visible" => app.history_search_overlay.visible,
+            "global_search.visible" => app.global_search.visible,
+            "settings_screen.visible" => app.settings_screen.visible,
+            "mcp_view.visible" => app.mcp_view.visible,
+            _ => anyhow::bail!("Unsupported assertion field: '{}'", key),
+        };
+
+        let expected_val = match val_str {
+            "true" => true,
+            "false" => false,
+            _ => anyhow::bail!("Unsupported assertion value: '{}'. Must be 'true' or 'false'.", val_str),
+        };
+
+        let condition = if is_eq {
+            actual_val == expected_val
+        } else {
+            actual_val != expected_val
+        };
+
+        if !condition {
+            let op = if is_eq { "==" } else { "!=" };
+            anyhow::bail!("Assertion failed: {} {} {} (actual value is {})", key, op, expected_val, actual_val);
+        }
+    }
+    Ok(())
+}
+
 async fn debug_simulate(
     config: &AppConfig,
     keys: String,
     output: Option<std::path::PathBuf>,
+    assert_str: Option<String>,
 ) -> Result<()> {
     use crate::tui::adapter_types::{LaunchMode, TuiApp};
     use crate::tui::debug::TuiEvent;
@@ -1046,12 +1114,15 @@ async fn debug_simulate(
     println!("Parsed {} key events.", parsed_keys.len());
 
     let tui_app = TuiApp::enter(config.clone(), None, LaunchMode::Landing, true).await?;
-    let events = tui_app.run_headless(parsed_keys).await?;
+    let (events, app) = tui_app.run_headless(parsed_keys).await?;
 
     println!("Simulation completed. Analyzing events...");
     let mut has_errors = false;
     for event in &events {
-        if let TuiEvent::Error { source, message, .. } = event {
+        if let TuiEvent::Error {
+            source, message, ..
+        } = event
+        {
             eprintln!("TUI ERROR [{}]: {}", source, message);
             has_errors = true;
         }
@@ -1065,6 +1136,11 @@ async fn debug_simulate(
 
     if has_errors {
         anyhow::bail!("Simulation failed: Errors detected in TUI event log.");
+    }
+
+    if let Some(ref assert_val) = assert_str {
+        println!("Evaluating state assertions: {}", assert_val);
+        evaluate_assertions(&app, assert_val)?;
     }
 
     println!("Simulation succeeded without errors.");
