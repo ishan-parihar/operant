@@ -4,12 +4,13 @@
 // in a single scrollable list with live search filtering.
 // Changes are persisted via Settings::save_sync() or settings.json writes.
 
-use crate::tui::adapter_types::config::{Config, Settings};
+use crate::tui::adapter_types::config::Settings;
 use crate::tui::adapter_types::output_styles::{builtin_styles, find_style};
 use crate::tui::overlays::{
     centered_rect, modal_search_line, render_dark_overlay, render_dialog_bg, OPERANT_ACCENT,
     OPERANT_MUTED, OPERANT_PANEL_BG,
 };
+use operant_core::config::AppConfig;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -116,7 +117,12 @@ impl SettingsScreen {
         self.auto_compact = self.settings_snapshot.auto_compact;
         self.notifications = self.settings_snapshot.notifications;
         self.show_turn_duration = self.settings_snapshot.show_turn_duration;
-        self.output_style = self.settings_snapshot.config.output_style.clone().unwrap_or_else(|| "default".to_string());
+        self.output_style = self
+            .settings_snapshot
+            .config
+            .output_style
+            .clone()
+            .unwrap_or_else(|| "default".to_string());
         self.reduce_motion = self.settings_snapshot.reduce_motion;
         self.terminal_progress_bar = self.settings_snapshot.terminal_progress_bar;
         self.verbose = self.settings_snapshot.config.verbose;
@@ -129,13 +135,26 @@ impl SettingsScreen {
         self.output_format = match &self.settings_snapshot.config.output_format {
             crate::tui::adapter_types::config::OutputFormat::Text => "text".to_string(),
             crate::tui::adapter_types::config::OutputFormat::Json => "json".to_string(),
-            crate::tui::adapter_types::config::OutputFormat::StreamJson => "stream_json".to_string(),
+            crate::tui::adapter_types::config::OutputFormat::StreamJson => {
+                "stream_json".to_string()
+            }
         };
         self.disable_claude_mds = self.settings_snapshot.config.disable_claude_mds;
         self.file_injection_enabled = self.settings_snapshot.config.file_injection_enabled;
-        self.file_autocomplete_limit = self.settings_snapshot.config.file_autocomplete_limit.to_string();
-        self.file_autocomplete_show_hidden_files = self.settings_snapshot.config.file_autocomplete_show_hidden_files;
-        self.file_injection_max_size = self.settings_snapshot.config.file_injection_max_size.to_string();
+        self.file_autocomplete_limit = self
+            .settings_snapshot
+            .config
+            .file_autocomplete_limit
+            .to_string();
+        self.file_autocomplete_show_hidden_files = self
+            .settings_snapshot
+            .config
+            .file_autocomplete_show_hidden_files;
+        self.file_injection_max_size = self
+            .settings_snapshot
+            .config
+            .file_injection_max_size
+            .to_string();
     }
 
     pub fn open(&mut self) {
@@ -201,16 +220,16 @@ impl SettingsScreen {
     }
 
     /// Apply all pending changes to settings and persist them.
-    pub fn apply_and_save(&mut self, config: &mut Config) {
+    pub fn apply_and_save(&mut self, config: &mut AppConfig, settings: &mut Settings) {
         for (field, value) in &self.pending_changes {
             match field.as_str() {
                 "max_tokens" => {
                     if let Ok(n) = value.parse::<usize>() {
-                        config.max_tokens = n;
+                        config.agent.context_window = n;
                     }
                 }
                 "output_style" => {
-                    config.output_style = if value.is_empty() {
+                    settings.output_style = if value.is_empty() {
                         None
                     } else {
                         Some(value.clone())
@@ -218,19 +237,19 @@ impl SettingsScreen {
                 }
                 "compact_threshold" => {
                     if let Ok(n) = value.parse::<f64>() {
-                        config.compact_threshold = n;
+                        config.agent.context_compression_threshold = n;
                         self.compact_threshold = value.clone();
                     }
                 }
                 "fileAutocompleteLimit" => {
                     if let Ok(n) = value.parse::<usize>() {
-                        config.file_autocomplete_limit = n;
+                        settings.config.file_autocomplete_limit = n;
                         self.file_autocomplete_limit = value.clone();
                     }
                 }
                 "fileInjectionMaxSize" => {
                     if let Ok(n) = value.parse::<usize>() {
-                        config.file_injection_max_size = n;
+                        settings.config.file_injection_max_size = n;
                         self.file_injection_max_size = value.clone();
                     }
                 }
@@ -243,17 +262,26 @@ impl SettingsScreen {
             auto_commits: None,
             disable_claude_mds: false,
             file_injection_enabled: false,
-            file_autocomplete_limit: config.file_autocomplete_limit,
-            file_autocomplete_show_hidden_files: config.file_autocomplete_show_hidden_files,
-            file_injection_max_size: config.file_injection_max_size,
-            output_style: config.output_style.clone(),
+            file_autocomplete_limit: settings.config.file_autocomplete_limit,
+            file_autocomplete_show_hidden_files: settings
+                .config
+                .file_autocomplete_show_hidden_files,
+            file_injection_max_size: settings.config.file_injection_max_size,
+            output_style: settings.output_style.clone(),
             output_format: crate::tui::adapter_types::config::OutputFormat::default(),
-            compact_threshold: config.compact_threshold,
-            theme: config.theme.clone(),
-            provider: config.provider.clone(),
-            model: config.model.clone(),
-            max_tokens: config.max_tokens,
+            compact_threshold: config.agent.context_compression_threshold,
+            theme: settings.theme.clone(),
+            provider: settings.provider.clone(),
+            model: settings.model.clone(),
+            max_tokens: config.agent.context_window,
         };
+        self.settings_snapshot.theme = settings.theme.clone();
+        self.settings_snapshot.provider = settings.provider.clone();
+        self.settings_snapshot.model = settings.model.clone();
+        self.settings_snapshot.output_style = settings.output_style.clone();
+        self.settings_snapshot.effort_level = settings.effort_level.clone();
+        self.settings_snapshot.vim_enabled = settings.vim_enabled;
+
         let _ = self.settings_snapshot.save_sync();
         self.pending_changes.clear();
     }
@@ -290,14 +318,24 @@ fn all_entries(screen: &SettingsScreen) -> Vec<SettingsEntry> {
             label: "Desktop notifications",
             description: "Notify when a turn completes.",
             kind: SettingKind::Bool,
-            value: if screen.notifications { "true" } else { "false" }.to_string(),
+            value: if screen.notifications {
+                "true"
+            } else {
+                "false"
+            }
+            .to_string(),
         },
         SettingsEntry {
             key: "show_turn_duration",
             label: "Show turn duration",
             description: "Display elapsed time per turn in status bar.",
             kind: SettingKind::Bool,
-            value: if screen.show_turn_duration { "true" } else { "false" }.to_string(),
+            value: if screen.show_turn_duration {
+                "true"
+            } else {
+                "false"
+            }
+            .to_string(),
         },
         SettingsEntry {
             key: "output_style",
@@ -313,14 +351,24 @@ fn all_entries(screen: &SettingsScreen) -> Vec<SettingsEntry> {
             label: "Reduce motion",
             description: "Disable UI animations.",
             kind: SettingKind::Bool,
-            value: if screen.reduce_motion { "true" } else { "false" }.to_string(),
+            value: if screen.reduce_motion {
+                "true"
+            } else {
+                "false"
+            }
+            .to_string(),
         },
         SettingsEntry {
             key: "terminal_progress_bar",
             label: "Terminal progress bar",
             description: "Show progress during tool use.",
             kind: SettingKind::Bool,
-            value: if screen.terminal_progress_bar { "true" } else { "false" }.to_string(),
+            value: if screen.terminal_progress_bar {
+                "true"
+            } else {
+                "false"
+            }
+            .to_string(),
         },
         SettingsEntry {
             key: "verbose",
@@ -334,14 +382,24 @@ fn all_entries(screen: &SettingsScreen) -> Vec<SettingsEntry> {
             label: "Cursor blinking",
             description: "Enable cursor blinking in the chat prompt.",
             kind: SettingKind::Bool,
-            value: if screen.cursor_blink_enabled { "true" } else { "false" }.to_string(),
+            value: if screen.cursor_blink_enabled {
+                "true"
+            } else {
+                "false"
+            }
+            .to_string(),
         },
         SettingsEntry {
             key: "auto_copy_enabled",
             label: "Auto-copy on highlight",
             description: "Automatically copy highlighted text to clipboard.",
             kind: SettingKind::Bool,
-            value: if screen.auto_copy_enabled { "true" } else { "false" }.to_string(),
+            value: if screen.auto_copy_enabled {
+                "true"
+            } else {
+                "false"
+            }
+            .to_string(),
         },
         SettingsEntry {
             key: "show_cwd",
@@ -355,7 +413,12 @@ fn all_entries(screen: &SettingsScreen) -> Vec<SettingsEntry> {
             label: "Show git branch",
             description: "Display the current git branch in the footer.",
             kind: SettingKind::Bool,
-            value: if screen.show_git_branch { "true" } else { "false" }.to_string(),
+            value: if screen.show_git_branch {
+                "true"
+            } else {
+                "false"
+            }
+            .to_string(),
         },
         SettingsEntry {
             key: "compact_threshold",
@@ -385,14 +448,24 @@ fn all_entries(screen: &SettingsScreen) -> Vec<SettingsEntry> {
             label: "Disable CLAUDE.md",
             description: "Ignore CLAUDE.md files in projects (use defaults instead).",
             kind: SettingKind::Bool,
-            value: if screen.disable_claude_mds { "true" } else { "false" }.to_string(),
+            value: if screen.disable_claude_mds {
+                "true"
+            } else {
+                "false"
+            }
+            .to_string(),
         },
         SettingsEntry {
             key: "fileInjectionEnabled",
             label: "File injection (@)",
             description: "Auto-inject @file references into message context.",
             kind: SettingKind::Bool,
-            value: if screen.file_injection_enabled { "true" } else { "false" }.to_string(),
+            value: if screen.file_injection_enabled {
+                "true"
+            } else {
+                "false"
+            }
+            .to_string(),
         },
     ];
 
@@ -410,7 +483,12 @@ fn all_entries(screen: &SettingsScreen) -> Vec<SettingsEntry> {
             label: "Show hidden files",
             description: "Include hidden files (.) in @ autocomplete.",
             kind: SettingKind::Bool,
-            value: if screen.file_autocomplete_show_hidden_files { "true" } else { "false" }.to_string(),
+            value: if screen.file_autocomplete_show_hidden_files {
+                "true"
+            } else {
+                "false"
+            }
+            .to_string(),
         });
         entries.push(SettingsEntry {
             key: "fileInjectionMaxSize",
@@ -436,8 +514,12 @@ pub fn render_settings_screen(frame: &mut Frame, screen: &SettingsScreen, area: 
     render_dark_overlay(frame, area);
 
     // 80% width, 90% height, centred
-    let w = (area.width * 4 / 5).max(60).min(area.width.saturating_sub(2));
-    let h = (area.height * 9 / 10).max(20).min(area.height.saturating_sub(2));
+    let w = (area.width * 4 / 5)
+        .max(60)
+        .min(area.width.saturating_sub(2));
+    let h = (area.height * 9 / 10)
+        .max(20)
+        .min(area.height.saturating_sub(2));
     let popup = centered_rect(w, h, area);
     render_dialog_bg(frame, popup);
 
@@ -474,26 +556,51 @@ pub fn render_settings_screen(frame: &mut Frame, screen: &SettingsScreen, area: 
 
     // Header
     let title = Line::from(vec![
-        Span::styled(" Settings", Style::default().fg(OPERANT_ACCENT).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            " Settings",
+            Style::default()
+                .fg(OPERANT_ACCENT)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::styled(" — Operant", Style::default().fg(OPERANT_MUTED)),
         Span::styled(
-            format!("{:>width$}", "Esc close", width = inner.width.saturating_sub(19) as usize),
+            format!(
+                "{:>width$}",
+                "Esc close",
+                width = inner.width.saturating_sub(19) as usize
+            ),
             Style::default().fg(OPERANT_MUTED),
         ),
     ]);
-    frame.render_widget(Paragraph::new(title).style(Style::default().bg(OPERANT_PANEL_BG)), header_area);
+    frame.render_widget(
+        Paragraph::new(title).style(Style::default().bg(OPERANT_PANEL_BG)),
+        header_area,
+    );
 
     // Search
-    let search_line = modal_search_line(&screen.search_query, "Type to search settings...", Color::DarkGray, OPERANT_ACCENT);
-    frame.render_widget(Paragraph::new(search_line).style(Style::default().bg(OPERANT_PANEL_BG)), search_area);
+    let search_line = modal_search_line(
+        &screen.search_query,
+        "Type to search settings...",
+        Color::DarkGray,
+        OPERANT_ACCENT,
+    );
+    frame.render_widget(
+        Paragraph::new(search_line).style(Style::default().bg(OPERANT_PANEL_BG)),
+        search_area,
+    );
 
     // Content
     render_settings_list(frame, screen, content_area);
 
     // Description of selected entry
     let all = all_entries(screen);
-    let filtered: Vec<_> = all.iter()
-        .filter(|e| e.label.to_lowercase().contains(&screen.search_query.to_lowercase()))
+    let filtered: Vec<_> = all
+        .iter()
+        .filter(|e| {
+            e.label
+                .to_lowercase()
+                .contains(&screen.search_query.to_lowercase())
+        })
         .collect();
 
     let desc_text = if let Some(entry) = filtered.get(screen.selected_idx) {
@@ -502,9 +609,16 @@ pub fn render_settings_screen(frame: &mut Frame, screen: &SettingsScreen, area: 
             let mut lines = vec![entry.description.to_string(), String::new()];
 
             let all_styles = builtin_styles();
-            let current_style_name = if screen.output_style.is_empty() { "default" } else { &screen.output_style };
+            let current_style_name = if screen.output_style.is_empty() {
+                "default"
+            } else {
+                &screen.output_style
+            };
             if let Some(current_style) = find_style(&all_styles, current_style_name) {
-                lines.push(format!("Current: {} — {}", current_style.label, current_style.description));
+                lines.push(format!(
+                    "Current: {} — {}",
+                    current_style.label, current_style.description
+                ));
                 lines.push(String::new());
             }
 
@@ -528,18 +642,43 @@ pub fn render_settings_screen(frame: &mut Frame, screen: &SettingsScreen, area: 
     // Footer
     let footer = if screen.edit_field.is_some() {
         Line::from(vec![
-            Span::styled(" Enter ", Style::default().fg(OPERANT_ACCENT).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                " Enter ",
+                Style::default()
+                    .fg(OPERANT_ACCENT)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::raw("save  "),
-            Span::styled(" Esc ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                " Esc ",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::raw("cancel"),
         ])
     } else {
         Line::from(vec![
-            Span::styled(" ↑↓ ", Style::default().fg(OPERANT_ACCENT).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                " ↑↓ ",
+                Style::default()
+                    .fg(OPERANT_ACCENT)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::raw("navigate  "),
-            Span::styled(" Enter ", Style::default().fg(OPERANT_ACCENT).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                " Enter ",
+                Style::default()
+                    .fg(OPERANT_ACCENT)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::raw("toggle/edit  "),
-            Span::styled(" Esc ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                " Esc ",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::raw("close"),
         ])
     };
@@ -555,11 +694,16 @@ fn render_settings_list(frame: &mut Frame, screen: &SettingsScreen, area: Rect) 
     // Filter entries by search query
     let filtered: Vec<_> = all
         .iter()
-        .filter(|e| e.label.to_lowercase().contains(&screen.search_query.to_lowercase()))
+        .filter(|e| {
+            e.label
+                .to_lowercase()
+                .contains(&screen.search_query.to_lowercase())
+        })
         .collect();
 
     if filtered.is_empty() {
-        let para = Paragraph::new("No settings match your search.").style(Style::default().fg(Color::DarkGray));
+        let para = Paragraph::new("No settings match your search.")
+            .style(Style::default().fg(Color::DarkGray));
         frame.render_widget(para, area);
         return;
     }
@@ -576,7 +720,7 @@ fn render_settings_list(frame: &mut Frame, screen: &SettingsScreen, area: Rect) 
 
         // Show edit value if currently editing this field, otherwise show the entry value
         let value_str = if screen.edit_field.as_deref() == Some(entry.key) && is_selected {
-            format!("{}_ ", screen.edit_value)  // Add cursor indicator
+            format!("{}_ ", screen.edit_value) // Add cursor indicator
         } else {
             entry.value.clone()
         };
@@ -619,7 +763,8 @@ fn render_settings_list(frame: &mut Frame, screen: &SettingsScreen, area: Rect) 
 
 pub fn handle_settings_key(
     screen: &mut SettingsScreen,
-    config: &mut Config,
+    config: &mut AppConfig,
+    settings: &mut Settings,
     key: crossterm::event::KeyEvent,
 ) -> bool {
     use crossterm::event::KeyCode;
@@ -633,7 +778,7 @@ pub fn handle_settings_key(
         match key.code {
             KeyCode::Enter => {
                 screen.commit_edit();
-                screen.apply_and_save(config);
+                screen.apply_and_save(config, settings);
             }
             KeyCode::Esc => {
                 screen.cancel_edit();
@@ -673,7 +818,11 @@ pub fn handle_settings_key(
             let all = all_entries(screen);
             let filtered: Vec<_> = all
                 .iter()
-                .filter(|e| e.label.to_lowercase().contains(&screen.search_query.to_lowercase()))
+                .filter(|e| {
+                    e.label
+                        .to_lowercase()
+                        .contains(&screen.search_query.to_lowercase())
+                })
                 .collect();
             screen.select_next(filtered.len());
             update_scroll_offset_for_selection(screen);
@@ -683,6 +832,7 @@ pub fn handle_settings_key(
         }
         _ => {}
     }
+    *settings = screen.settings_snapshot.clone();
     true
 }
 
@@ -699,7 +849,11 @@ fn toggle_or_cycle_current(screen: &mut SettingsScreen) {
     let all = all_entries(screen);
     let filtered: Vec<_> = all
         .iter()
-        .filter(|e| e.label.to_lowercase().contains(&screen.search_query.to_lowercase()))
+        .filter(|e| {
+            e.label
+                .to_lowercase()
+                .contains(&screen.search_query.to_lowercase())
+        })
         .collect();
 
     if let Some(entry) = filtered.get(screen.selected_idx) {
@@ -759,7 +913,8 @@ fn toggle_or_cycle_current(screen: &mut SettingsScreen) {
                     }
                     "auto_commits" => {
                         screen.auto_commits = new_value;
-                        screen.settings_snapshot.config.auto_commits = if new_value { Some(true) } else { None };
+                        screen.settings_snapshot.config.auto_commits =
+                            if new_value { Some(true) } else { None };
                         let _ = screen.settings_snapshot.save_sync();
                     }
                     "disable_claude_mds" => {
@@ -774,7 +929,10 @@ fn toggle_or_cycle_current(screen: &mut SettingsScreen) {
                     }
                     "fileAutocompleteShowHiddenFiles" => {
                         screen.file_autocomplete_show_hidden_files = new_value;
-                        screen.settings_snapshot.config.file_autocomplete_show_hidden_files = new_value;
+                        screen
+                            .settings_snapshot
+                            .config
+                            .file_autocomplete_show_hidden_files = new_value;
                         let _ = screen.settings_snapshot.save_sync();
                     }
                     _ => {}
@@ -795,7 +953,9 @@ fn toggle_or_cycle_current(screen: &mut SettingsScreen) {
                         screen.output_format = new_value.to_string();
                         screen.settings_snapshot.config.output_format = match new_value {
                             "json" => crate::tui::adapter_types::config::OutputFormat::Json,
-                            "stream_json" => crate::tui::adapter_types::config::OutputFormat::StreamJson,
+                            "stream_json" => {
+                                crate::tui::adapter_types::config::OutputFormat::StreamJson
+                            }
                             _ => crate::tui::adapter_types::config::OutputFormat::Text,
                         };
                         let _ = screen.settings_snapshot.save_sync();
@@ -833,8 +993,16 @@ mod tests {
         let screen = SettingsScreen::new();
         let entries = all_entries(&screen);
         // Base settings are always present, plus 0-3 conditional file injection settings
-        assert!(entries.len() >= 16, "Should have at least 16 editable settings, got {}", entries.len());
-        assert!(entries.len() <= 20, "Should have at most 20 editable settings, got {}", entries.len());
+        assert!(
+            entries.len() >= 16,
+            "Should have at least 16 editable settings, got {}",
+            entries.len()
+        );
+        assert!(
+            entries.len() <= 20,
+            "Should have at most 20 editable settings, got {}",
+            entries.len()
+        );
     }
 
     #[test]
@@ -845,7 +1013,11 @@ mod tests {
             .iter()
             .filter(|e| e.label.to_lowercase().contains("token"))
             .collect();
-        assert_eq!(filtered.len(), 1, "Should find exactly 1 entry matching 'token'");
+        assert_eq!(
+            filtered.len(),
+            1,
+            "Should find exactly 1 entry matching 'token'"
+        );
         assert_eq!(filtered[0].label, "Max Tokens");
     }
 
