@@ -121,6 +121,9 @@ registry_timeout_secs = 30
 event_channel_size = 100
 # disabled_tools = ["spotify_playback", "homeassistant"]
 # disabled_toolsets = ["messaging", "media", "smart_home"]
+aft_enabled = false
+igs_enabled = false
+lifeos_enabled = false
 
 [tools.web]
 search_url = "https://lite.duckduckgo.com/lite/?q={query}"
