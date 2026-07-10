@@ -2539,7 +2539,7 @@ impl TuiApp {
     pub async fn run_headless(
         mut self,
         keys: Vec<crossterm::event::KeyEvent>,
-    ) -> anyhow::Result<Vec<crate::tui::debug::TuiEvent>> {
+    ) -> anyhow::Result<(Vec<crate::tui::debug::TuiEvent>, crate::tui::app::App)> {
         let (agent_tx, agent_rx) =
             tokio::sync::mpsc::channel::<operant_core::agent::AgentEvent>(256);
         self.app.agent_event_rx = Some(agent_rx);
@@ -2645,7 +2645,9 @@ impl TuiApp {
                 }
                 Ok(None) => break,
                 Err(e) => {
-                    self.app.debug_hub.record_error("headless_simulation", &e.to_string());
+                    self.app
+                        .debug_hub
+                        .record_error("headless_simulation", &e.to_string());
                     break;
                 }
             }
@@ -2653,7 +2655,7 @@ impl TuiApp {
         }
 
         let events = self.app.debug_hub.event_bus().recent(1000);
-        Ok(events)
+        Ok((events, self.app))
     }
 }
 
