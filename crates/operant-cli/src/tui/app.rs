@@ -1931,13 +1931,11 @@ impl App {
     }
 
     fn persist_provider_and_model(&self) {
-        // Write to settings.json for TUI visual prefs (theme, vim, etc.).
-        // Provider+model now live exclusively in operant.toml via sync_model_to_toml.
-        // (iter-117: was writing ONLY to settings.json — now both files stay in sync.)
-        let settings = Settings::load_sync().unwrap_or_default();
-        let _ = settings.save_sync();
-
-        // Also sync to operant.toml so the setup wizard reads the current values.
+        // Provider+model live exclusively in operant.toml — written via
+        // sync_model_to_toml below. settings.json is NOT written here; it only
+        // stores visual prefs (theme, vim_enabled, reduce_motion, etc.) which are
+        // persisted separately. (iter-221: removed dead settings.json round-trip
+        // that was a no-op after iter-220 removed provider/model from Settings.)
         self.sync_model_to_toml(&self.config.agent.model);
     }
 
