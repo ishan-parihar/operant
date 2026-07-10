@@ -859,6 +859,8 @@ pub struct App {
     pub config: AppConfig,
     pub settings: Settings,
     pub project_dir: Option<std::path::PathBuf>,
+    pub is_simulating: bool,
+    pub simulated_keys: Vec<crossterm::event::KeyEvent>,
     pub cost_tracker: Arc<CostTracker>,
     /// TUI debugging hub — event bus, frame counter, F12 overlay.
     /// Enabled by OPERANT_TUI_DEBUG=1. Zero overhead when disabled.
@@ -1403,6 +1405,8 @@ impl App {
             config,
             settings,
             project_dir: std::env::current_dir().ok(),
+            is_simulating: false,
+            simulated_keys: Vec::new(),
             cost_tracker,
             debug_hub: crate::tui::debug::TuiDebugHub::new_from_env(),
             command_registry,
@@ -6507,11 +6511,18 @@ impl App {
 
     /// Run the TUI event loop. Returns `Some(input)` when the user submits
     /// a message, or `None` when the user quits.
-    pub fn run(
+    pub fn run<B: ratatui::backend::Backend>(
         &mut self,
-        terminal: &mut Terminal<CrosstermBackend<Stdout>>,
+        terminal: &mut Terminal<B>,
     ) -> anyhow::Result<Option<String>> {
         loop {
+            if self.is_simulating && self.simulated_keys.is_empty() && !self.is_streaming {
+                self.should_exit = true;
+            }
+            if self.should_exit {
+                self.debug_hub.dump_on_exit();
+                return Ok(None);
+            }
             self.frame_count = self.frame_count.wrapping_add(1);
 
             // Tick notifications so expired ones are removed. Without this,
@@ -6838,13 +6849,22 @@ impl App {
             // Replay a key that was saved by try_detect_paste_burst in a
             // previous iteration (e.g. a modifier key that terminated a burst).
             let pending = self.pending_key.take();
+            let has_simulated = !self.simulated_keys.is_empty();
 
             // Poll for events with a short timeout so we can redraw for animation
-            let got_event = pending.is_some() || event::poll(std::time::Duration::from_millis(50))?;
+            let got_event = pending.is_some() || has_simulated || {
+                if self.is_simulating {
+                    false
+                } else {
+                    event::poll(std::time::Duration::from_millis(50))?
+                }
+            };
 
             if got_event {
                 let event = if let Some(k) = pending {
                     Event::Key(k)
+                } else if has_simulated {
+                    Event::Key(self.simulated_keys.remove(0))
                 } else {
                     event::read()?
                 };
