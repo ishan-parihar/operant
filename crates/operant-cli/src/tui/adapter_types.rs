@@ -2535,6 +2535,126 @@ impl TuiApp {
         execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
         result
     }
+
+    pub async fn run_headless(
+        mut self,
+        keys: Vec<crossterm::event::KeyEvent>,
+    ) -> anyhow::Result<Vec<crate::tui::debug::TuiEvent>> {
+        let (agent_tx, agent_rx) =
+            tokio::sync::mpsc::channel::<operant_core::agent::AgentEvent>(256);
+        self.app.agent_event_rx = Some(agent_rx);
+
+        let (permission_tx, permission_rx) =
+            tokio::sync::mpsc::channel::<operant_core::agent::ToolPermissionRequest>(4);
+        self.app.permission_rx = Some(permission_rx);
+
+        let config = self.app.config.clone();
+        let mcp_manager = operant_core::mcp::McpManager::new();
+        let skills_dir = config.skills.root_dir.clone();
+
+        let agent: Option<std::sync::Arc<operant_core::agent::OperantAgent>> =
+            match crate::create_runtime_agent(
+                &config,
+                &config.agent,
+                None,
+                agent_tx,
+                &mcp_manager,
+                &skills_dir,
+            )
+            .await
+            {
+                Ok(agent) => Some(std::sync::Arc::new(agent.with_permissions(permission_tx))),
+                Err(e) => {
+                    self.app.status_message = Some(format!("Agent init failed: {}", e));
+                    None
+                }
+            };
+
+        self.app.core_mcp_manager = Some(std::sync::Arc::new(mcp_manager));
+        if let Some(ref agent) = agent {
+            self.app.steer_queue_handle = Some(agent.steer_queue_handle());
+        }
+
+        let (uq_tx, uq_rx) = tokio::sync::mpsc::unbounded_channel::<
+            operant_core::user_question::UserQuestionRequest,
+        >();
+        let _ = operant_core::user_question::set_user_question_sender(uq_tx);
+        self.app.user_question_rx = Some(uq_rx);
+
+        self.app.refresh_context_window_size();
+        self.app.model_registry.load_models_dev().await;
+
+        if let Some(query) = self.initial_query.take() {
+            if let Some(ref agent) = agent {
+                use crate::tui::adapter_types::types::{Message, MessageContent, Role};
+                self.app.messages.push(Message {
+                    role: Role::User,
+                    content: MessageContent::Text(query.clone()),
+                });
+                self.app.is_streaming = true;
+                self.app.streaming_text.clear();
+                self.app.streaming_thinking.clear();
+
+                let agent_clone = std::sync::Arc::clone(agent);
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                tokio::spawn(async move {
+                    let result = agent_clone.run(query).await.map(|_| ());
+                    let _ = tx.send(result);
+                });
+                self.app.run_complete_rx = Some(rx);
+            }
+        }
+
+        use ratatui::backend::TestBackend;
+        use ratatui::Terminal;
+        let backend = TestBackend::new(120, 40);
+        let mut terminal = Terminal::new(backend)?;
+
+        self.app.is_simulating = true;
+        self.app.simulated_keys = keys;
+        self.app.debug_hub.event_bus().set_enabled(true);
+
+        loop {
+            match self.app.run(&mut terminal) {
+                Ok(Some(input)) => {
+                    if let Some(ref agent) = agent {
+                        if self.app.is_streaming {
+                            if let Some(ref handle) = self.app.steer_queue_handle {
+                                let mut q = handle.lock().await;
+                                q.push(input.clone());
+                                continue;
+                            }
+                        }
+                        use crate::tui::adapter_types::types::{Message, MessageContent, Role};
+                        self.app.messages.push(Message {
+                            role: Role::User,
+                            content: MessageContent::Text(input.clone()),
+                        });
+                        self.app.is_streaming = true;
+                        self.app.streaming_text.clear();
+                        self.app.streaming_thinking.clear();
+
+                        let agent_clone = std::sync::Arc::clone(agent);
+                        let (tx, rx) = tokio::sync::oneshot::channel();
+                        tokio::spawn(async move {
+                            let result = agent_clone.run(input).await.map(|_| ());
+                            let _ = tx.send(result);
+                        });
+                        self.app.run_complete_rx = Some(rx);
+                    }
+                }
+                Ok(None) => break,
+                Err(e) => {
+                    self.app.debug_hub.record_error("headless_simulation", &e.to_string());
+                    break;
+                }
+            }
+            tokio::task::yield_now().await;
+        }
+
+        let events = self.app.debug_hub.event_bus().recent(1000);
+        Ok(events)
+    }
 }
 
 /// Suspend the TUI, run a shell command with inherited stdio, then resume.

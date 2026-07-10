@@ -144,6 +144,17 @@ pub enum TuiDebugSubcommand {
     State,
     /// Show cost / token / turn-count summary (same data as /cost /heapdump /mem).
     Cost,
+
+    /// Headless TUI simulator to replay a key sequence and assert correctness.
+    Simulate {
+        /// Keystroke sequence to replay (e.g. "hello\n/quit\n" or "<up><enter>").
+        #[arg(long)]
+        keys: String,
+
+        /// Optional JSON output file path to write the simulation log.
+        #[arg(long)]
+        output: Option<std::path::PathBuf>,
+    },
 }
 
 /// Entry point dispatch for `operant tui <subcommand>`.
@@ -174,6 +185,9 @@ pub async fn handle_tui_debug_command(config: &AppConfig, cmd: TuiDebugSubcomman
         TuiDebugSubcommand::SlashCommands => debug_slash_commands(config).await,
         TuiDebugSubcommand::State => debug_state(config).await,
         TuiDebugSubcommand::Cost => debug_cost(config).await,
+        TuiDebugSubcommand::Simulate { keys, output } => {
+            debug_simulate(config, keys, output).await
+        }
     }
 }
 
@@ -203,11 +217,7 @@ async fn debug_skills(config: &AppConfig) -> Result<()> {
     println!("{}", "-".repeat(100));
 
     for (i, skill) in skills.iter().enumerate() {
-        let desc = skill
-            .description
-            .chars()
-            .take(40)
-            .collect::<String>();
+        let desc = skill.description.chars().take(40).collect::<String>();
         println!(
             "{:<3}  {:<24} {:<14} {:<8}  {}",
             i + 1,
@@ -257,10 +267,7 @@ async fn debug_plugins(config: &AppConfig) -> Result<()> {
     println!("Installed plugins ({}):", found.len());
     println!("Directory: {}", plugins_dir.display());
     println!();
-    println!(
-        "{:<3}  {:<8}  {:<24}  {:>8}",
-        "#", "Status", "Name", "Size"
-    );
+    println!("{:<3}  {:<8}  {:<24}  {:>8}", "#", "Status", "Name", "Size");
     println!("{}", "-".repeat(60));
 
     for (i, (name, enabled, size)) in found.iter().enumerate() {
@@ -314,7 +321,14 @@ async fn debug_journey(config: &AppConfig) -> Result<()> {
             let mut blocks: Vec<_> = map.into_values().collect();
             blocks.sort_by(|a, b| b.created_at.cmp(&a.created_at));
             for m in &blocks {
-                let content_preview: String = m.content.lines().next().unwrap_or("").chars().take(50).collect();
+                let content_preview: String = m
+                    .content
+                    .lines()
+                    .next()
+                    .unwrap_or("")
+                    .chars()
+                    .take(50)
+                    .collect();
                 println!(
                     "  [{:>3}] {:<10} {:<14} {}",
                     m.importance,
@@ -347,15 +361,12 @@ async fn debug_mcp(config: &AppConfig) -> Result<()> {
     println!("{}", "-".repeat(90));
 
     for (i, server) in config.mcp.servers.iter().enumerate() {
-        let url_or_cmd = server
-            .url
-            .clone()
-            .unwrap_or_else(|| {
-                server
-                    .command
-                    .clone()
-                    .unwrap_or_else(|| "(none)".to_string())
-            });
+        let url_or_cmd = server.url.clone().unwrap_or_else(|| {
+            server
+                .command
+                .clone()
+                .unwrap_or_else(|| "(none)".to_string())
+        });
         println!(
             "{:<3}  {:<24} {:<10} {:<8}  {}",
             i + 1,
@@ -386,7 +397,11 @@ async fn debug_stats(_config: &AppConfig) -> Result<()> {
     let last_n = lines.len().min(10);
     let start = lines.len().saturating_sub(last_n);
 
-    println!("Showing last {} entries from {}:", last_n, stats_path.display());
+    println!(
+        "Showing last {} entries from {}:",
+        last_n,
+        stats_path.display()
+    );
     println!();
     for line in &lines[start..] {
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(line) {
@@ -416,7 +431,10 @@ async fn debug_context(config: &AppConfig) -> Result<()> {
     let model = &config.agent.model;
     let provider = infer_provider_from_model(model);
     println!("Active model:    {}", model);
-    println!("Active provider: {}", provider.as_deref().unwrap_or("(unknown)"));
+    println!(
+        "Active provider: {}",
+        provider.as_deref().unwrap_or("(unknown)")
+    );
     println!();
 
     // Context window size — read from the settings.json if present.
@@ -448,7 +466,10 @@ async fn debug_sessions(config: &AppConfig) -> Result<()> {
     let sessions = db.list_sessions(20)?;
 
     if sessions.is_empty() {
-        println!("No sessions found in database: {}", config.database_path.display());
+        println!(
+            "No sessions found in database: {}",
+            config.database_path.display()
+        );
         return Ok(());
     }
 
@@ -621,10 +642,29 @@ fn infer_provider_from_model(model: &str) -> Option<String> {
     }
     if let Some((provider, _)) = model.split_once('/') {
         let known = [
-            "anthropic", "openai", "google", "groq", "cerebras", "deepseek", "mistral",
-            "xai", "openrouter", "github-copilot", "codex", "cohere", "perplexity",
-            "togetherai", "together-ai", "deepinfra", "venice", "minimax", "sambanova",
-            "nvidia", "moonshotai", "zhipuai", "siliconflow",
+            "anthropic",
+            "openai",
+            "google",
+            "groq",
+            "cerebras",
+            "deepseek",
+            "mistral",
+            "xai",
+            "openrouter",
+            "github-copilot",
+            "codex",
+            "cohere",
+            "perplexity",
+            "togetherai",
+            "together-ai",
+            "deepinfra",
+            "venice",
+            "minimax",
+            "sambanova",
+            "nvidia",
+            "moonshotai",
+            "zhipuai",
+            "siliconflow",
         ];
         if known.contains(&provider) {
             return Some(provider.to_string());
@@ -655,7 +695,10 @@ async fn handle_effort(_config: &AppConfig, cmd: Option<EffortSubcommand>) -> Re
     let mut settings = load_settings();
     match cmd {
         None => {
-            let cur = settings.effort_level.clone().unwrap_or_else(|| "normal".to_string());
+            let cur = settings
+                .effort_level
+                .clone()
+                .unwrap_or_else(|| "normal".to_string());
             println!("Current effort level: {}", cur);
             println!();
             println!("Set with: operant tui effort set low|normal|high|max");
@@ -673,7 +716,10 @@ async fn handle_effort(_config: &AppConfig, cmd: Option<EffortSubcommand>) -> Re
                     println!("Effort level set to: {}", lvl);
                 }
                 _ => {
-                    anyhow::bail!("Invalid effort level '{}'. Must be one of: low, normal, high, max", level);
+                    anyhow::bail!(
+                        "Invalid effort level '{}'. Must be one of: low, normal, high, max",
+                        level
+                    );
                 }
             }
         }
@@ -702,9 +748,7 @@ async fn handle_mode(_config: &AppConfig, mode: Option<String>) -> Result<()> {
                     crate::tui::adapter_types::config::PermissionMode::BypassPermissions
                 }
                 "plan" => crate::tui::adapter_types::config::PermissionMode::Plan,
-                "default" | "normal" => {
-                    crate::tui::adapter_types::config::PermissionMode::Default
-                }
+                "default" | "normal" => crate::tui::adapter_types::config::PermissionMode::Default,
                 "accept-edits" | "acceptedits" | "accept_edits" => {
                     crate::tui::adapter_types::config::PermissionMode::AcceptEdits
                 }
@@ -728,7 +772,10 @@ async fn handle_output_style(_config: &AppConfig, style: Option<String>) -> Resu
     let mut settings = load_settings();
     match style {
         None => {
-            let cur = settings.output_style.clone().unwrap_or_else(|| "auto".to_string());
+            let cur = settings
+                .output_style
+                .clone()
+                .unwrap_or_else(|| "auto".to_string());
             println!("Current output style: {}", cur);
             println!();
             println!("Set with: operant tui output-style <style>");
@@ -802,39 +849,43 @@ async fn handle_vim(_config: &AppConfig, state: Option<String>) -> Result<()> {
     let mut settings = load_settings();
     match state {
         None => {
-            println!("Vim mode: {}", if settings.vim_enabled { "on" } else { "off" });
+            println!(
+                "Vim mode: {}",
+                if settings.vim_enabled { "on" } else { "off" }
+            );
             println!();
             println!("Set with: operant tui vim on | operant tui vim off");
         }
-        Some(s) => {
-            match s.to_lowercase().as_str() {
-                "on" | "true" | "1" | "yes" => {
-                    settings.vim_enabled = true;
-                    save_settings(&settings)?;
-                    println!("Vim mode enabled.");
-                }
-                "off" | "false" | "0" | "no" => {
-                    settings.vim_enabled = false;
-                    save_settings(&settings)?;
-                    println!("Vim mode disabled.");
-                }
-                _ => {
-                    anyhow::bail!("Invalid state '{}'. Must be one of: on, off", s);
-                }
+        Some(s) => match s.to_lowercase().as_str() {
+            "on" | "true" | "1" | "yes" => {
+                settings.vim_enabled = true;
+                save_settings(&settings)?;
+                println!("Vim mode enabled.");
             }
-        }
+            "off" | "false" | "0" | "no" => {
+                settings.vim_enabled = false;
+                save_settings(&settings)?;
+                println!("Vim mode disabled.");
+            }
+            _ => {
+                anyhow::bail!("Invalid state '{}'. Must be one of: on, off", s);
+            }
+        },
     }
     Ok(())
 }
 
 /// `operant tui keybindings` — open the user keybindings file in $EDITOR.
 async fn handle_keybindings(_config: &AppConfig) -> Result<()> {
-    let kb_path = crate::tui::adapter_types::config::Settings::config_dir()
-        .join("keybindings.json");
+    let kb_path =
+        crate::tui::adapter_types::config::Settings::config_dir().join("keybindings.json");
     if !kb_path.exists() {
         // Write a default empty keybindings file.
         std::fs::create_dir_all(kb_path.parent().unwrap())?;
-        std::fs::write(&kb_path, "{\n  \"//\": \"User keybindings. See docs for the schema.\"\n}\n")?;
+        std::fs::write(
+            &kb_path,
+            "{\n  \"//\": \"User keybindings. See docs for the schema.\"\n}\n",
+        )?;
         println!("Created default keybindings file: {}", kb_path.display());
     }
 
@@ -843,9 +894,7 @@ async fn handle_keybindings(_config: &AppConfig) -> Result<()> {
         .unwrap_or_else(|_| "vi".to_string());
 
     println!("Opening {} in {}…", kb_path.display(), editor);
-    let status = std::process::Command::new(&editor)
-        .arg(&kb_path)
-        .status()?;
+    let status = std::process::Command::new(&editor).arg(&kb_path).status()?;
     if !status.success() {
         anyhow::bail!("Editor exited with non-zero status");
     }
@@ -868,7 +917,10 @@ async fn handle_voice(_config: &AppConfig) -> Result<()> {
         false
     };
 
-    println!("Voice recorder available: {}", if is_available { "yes" } else { "no" });
+    println!(
+        "Voice recorder available: {}",
+        if is_available { "yes" } else { "no" }
+    );
     if !is_available {
         println!();
         println!("Voice mode requires:");
@@ -893,4 +945,128 @@ fn load_settings() -> crate::tui::adapter_types::config::Settings {
 
 fn save_settings(settings: &crate::tui::adapter_types::config::Settings) -> Result<()> {
     settings.save_sync().map_err(Into::into)
+}
+
+fn parse_key_sequence(seq: &str) -> Vec<crossterm::event::KeyEvent> {
+    use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
+    let mut events = Vec::new();
+    let chars: Vec<char> = seq.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] == '<' {
+            if let Some(close_idx) = chars[i..].iter().position(|&c| c == '>') {
+                let name: String = chars[i + 1..i + close_idx].iter().collect();
+                let lower = name.to_lowercase();
+                let mut modifiers = KeyModifiers::NONE;
+                let mut parsed = true;
+                let code = match lower.as_str() {
+                    "enter" => KeyCode::Enter,
+                    "esc" | "escape" => KeyCode::Esc,
+                    "tab" => KeyCode::Tab,
+                    "up" => KeyCode::Up,
+                    "down" => KeyCode::Down,
+                    "left" => KeyCode::Left,
+                    "right" => KeyCode::Right,
+                    "backspace" | "bs" => KeyCode::Backspace,
+                    "ctrl+a" => {
+                        modifiers.insert(KeyModifiers::CONTROL);
+                        KeyCode::Char('a')
+                    }
+                    "ctrl+c" => {
+                        modifiers.insert(KeyModifiers::CONTROL);
+                        KeyCode::Char('c')
+                    }
+                    "ctrl+t" => {
+                        modifiers.insert(KeyModifiers::CONTROL);
+                        KeyCode::Char('t')
+                    }
+                    "ctrl+r" => {
+                        modifiers.insert(KeyModifiers::CONTROL);
+                        KeyCode::Char('r')
+                    }
+                    "shift+tab" => {
+                        modifiers.insert(KeyModifiers::SHIFT);
+                        KeyCode::BackTab
+                    }
+                    _ => {
+                        parsed = false;
+                        KeyCode::Null
+                    }
+                };
+                if parsed {
+                    events.push(KeyEvent {
+                        code,
+                        modifiers,
+                        kind: KeyEventKind::Press,
+                        state: KeyEventState::NONE,
+                    });
+                    i += close_idx + 1;
+                    continue;
+                }
+            }
+        }
+
+        // Handle escaped newlines or tabs
+        let (code, modifiers) = if chars[i] == '\\' && i + 1 < chars.len() {
+            let next = chars[i + 1];
+            let res = match next {
+                'n' => (KeyCode::Enter, KeyModifiers::NONE),
+                't' => (KeyCode::Tab, KeyModifiers::NONE),
+                '\\' => (KeyCode::Char('\\'), KeyModifiers::NONE),
+                _ => (KeyCode::Char('\\'), KeyModifiers::NONE),
+            };
+            if next == 'n' || next == 't' || next == '\\' {
+                i += 1;
+            }
+            res
+        } else {
+            (KeyCode::Char(chars[i]), KeyModifiers::NONE)
+        };
+        events.push(KeyEvent {
+            code,
+            modifiers,
+            kind: KeyEventKind::Press,
+            state: KeyEventState::NONE,
+        });
+        i += 1;
+    }
+    events
+}
+
+async fn debug_simulate(
+    config: &AppConfig,
+    keys: String,
+    output: Option<std::path::PathBuf>,
+) -> Result<()> {
+    use crate::tui::adapter_types::{LaunchMode, TuiApp};
+    use crate::tui::debug::TuiEvent;
+
+    println!("Starting headless TUI simulation...");
+    let parsed_keys = parse_key_sequence(&keys);
+    println!("Parsed {} key events.", parsed_keys.len());
+
+    let tui_app = TuiApp::enter(config.clone(), None, LaunchMode::Landing, true).await?;
+    let events = tui_app.run_headless(parsed_keys).await?;
+
+    println!("Simulation completed. Analyzing events...");
+    let mut has_errors = false;
+    for event in &events {
+        if let TuiEvent::Error { source, message, .. } = event {
+            eprintln!("TUI ERROR [{}]: {}", source, message);
+            has_errors = true;
+        }
+    }
+
+    if let Some(ref out_path) = output {
+        let json = serde_json::to_string_pretty(&events)?;
+        std::fs::write(out_path, json)?;
+        println!("Saved simulation event log to {:?}", out_path);
+    }
+
+    if has_errors {
+        anyhow::bail!("Simulation failed: Errors detected in TUI event log.");
+    }
+
+    println!("Simulation succeeded without errors.");
+    Ok(())
 }
