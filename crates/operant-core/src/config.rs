@@ -523,6 +523,10 @@ pub struct ToolSettings {
     /// When false (default), only the basic built-in file tools are
     /// available.
     pub aft_enabled: bool,
+    #[serde(default)]
+    pub igs_enabled: bool,
+    #[serde(default)]
+    pub lifeos_enabled: bool,
 }
 
 impl Default for ToolSettings {
@@ -539,6 +543,8 @@ impl Default for ToolSettings {
             disabled_tools: Vec::new(),
             disabled_toolsets: Vec::new(),
             aft_enabled: false,
+            igs_enabled: false,
+            lifeos_enabled: false,
         }
     }
 }
