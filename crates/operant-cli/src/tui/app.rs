@@ -903,6 +903,10 @@ pub struct App {
     pub token_count: u32,
     pub cost_usd: f64,
     pub model_name: String,
+    /// Active provider for the current session (e.g. "anthropic", "openai").
+    /// This is a runtime-only field — it is NOT persisted to settings.json.
+    /// Source of truth is `config.agent.model`; provider is inferred from it.
+    pub active_provider: Option<String>,
     /// Whether the app has valid API credentials configured.
     /// False = show the in-TUI provider setup dialog on startup.
     pub has_credentials: bool,
@@ -1401,6 +1405,8 @@ impl App {
                 raw
             }
         };
+        let initial_active_provider =
+            super::provider::infer_provider_from_model(&config.agent.model);
         Self {
             config,
             settings,
@@ -1441,6 +1447,7 @@ impl App {
             token_count: 0,
             cost_usd: 0.0,
             model_name,
+            active_provider: initial_active_provider,
             has_credentials,
             effort_level: initial_effort,
             fast_mode: false,
@@ -1873,7 +1880,7 @@ impl App {
         }
 
         let provider_prefix = format!("{}/", provider_id);
-        let current_model = if self.settings.provider.as_deref() == Some(provider_id) {
+        let current_model = if self.active_provider.as_deref() == Some(provider_id) {
             self.model_name
                 .strip_prefix(&provider_prefix)
                 .unwrap_or(self.model_name.as_str())
@@ -1924,14 +1931,10 @@ impl App {
     }
 
     fn persist_provider_and_model(&self) {
-        // Write to settings.json for TUI prefs (theme, vim, etc.) AND
-        // sync provider+model to operant.toml so `operant setup` sees them.
-        // (iter-117 — was writing ONLY to settings.json, which caused the
-        // "setup shows hardcoded defaults" bug. Now both files stay in sync.)
-        let mut settings = Settings::load_sync().unwrap_or_default();
-        settings.provider = self.settings.provider.clone();
-        settings.config.provider = self.settings.provider.clone();
-        settings.config.model = Some(self.config.agent.model.clone());
+        // Write to settings.json for TUI visual prefs (theme, vim, etc.).
+        // Provider+model now live exclusively in operant.toml via sync_model_to_toml.
+        // (iter-117: was writing ONLY to settings.json — now both files stay in sync.)
+        let settings = Settings::load_sync().unwrap_or_default();
         let _ = settings.save_sync();
 
         // Also sync to operant.toml so the setup wizard reads the current values.
@@ -1947,7 +1950,7 @@ impl App {
         // re-parsing the TOML file, to avoid format issues.
         let mut config = operant_core::config::runtime_config();
         config.agent.model = model.to_string();
-        if let Some(ref provider) = self.settings.provider {
+        if let Some(ref provider) = self.active_provider {
             // Update base_url based on provider.
             if let Some(p) = crate::provider::PROVIDERS
                 .iter()
@@ -1969,7 +1972,7 @@ impl App {
 
     /// Switch the active provider while clearing any explicit model override.
     fn set_provider_default(&mut self, provider_id: String) {
-        self.settings.provider = Some(provider_id.clone());
+        self.active_provider = Some(provider_id.clone());
 
         let model = self.display_default_model_for_provider(&provider_id);
         if let Some(tracker) = Arc::get_mut(&mut self.cost_tracker) {
@@ -2006,7 +2009,7 @@ impl App {
 
     /// Update the context window size from the model registry for the current model.
     pub fn refresh_context_window_size(&mut self) {
-        let provider = self.settings.provider.as_deref().unwrap_or("anthropic");
+        let provider = self.active_provider.as_deref().unwrap_or("anthropic");
         let model_id = self
             .model_name
             .strip_prefix(&format!("{}/", provider))
@@ -2048,7 +2051,7 @@ impl App {
         self.model_name = model.clone();
         self.config.agent.model = model.clone();
         if let Some(provider) = super::provider::infer_provider_from_model(&model) {
-            self.settings.provider = Some(provider);
+            self.active_provider = Some(provider);
         }
         self.refresh_context_window_size();
         // Reset used tokens when switching models (context is fresh).
@@ -2228,8 +2231,7 @@ impl App {
                     return true;
                 }
                 let provider = self
-                    .settings
-                    .provider
+                    .active_provider
                     .clone()
                     .unwrap_or_else(|| "anthropic".to_string());
                 self.open_model_picker_for_provider(&provider, None);
@@ -3996,7 +3998,7 @@ impl App {
                         // are already prefixed with `openrouter/…` — check
                         // for that to avoid `openrouter/openrouter/anthropic/…`.
                         // (Bug #14 from iter-82 audit.)
-                        let provider = self.settings.provider.as_deref().unwrap_or("anthropic");
+                        let provider = self.active_provider.as_deref().unwrap_or("anthropic");
                         let prefix = format!("{}/", provider);
                         let full_model = if provider == "anthropic" {
                             model_id.clone()
@@ -4625,7 +4627,7 @@ impl App {
             KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 if !self.is_streaming && self.has_credentials {
                     self.open_model_picker_for_provider(
-                        &self.settings.provider.clone().unwrap_or_default(),
+                        &self.active_provider.clone().unwrap_or_default(),
                         None,
                     );
                 }
@@ -7284,7 +7286,7 @@ mod tests {
     fn test_ctrl_a_shortcut_opens_model_picker() {
         let mut app = make_app();
         app.has_credentials = true;
-        app.settings.provider = Some("anthropic".to_string());
+        app.active_provider = Some("anthropic".to_string());
 
         app.handle_key_event(press_key(KeyCode::Char('a'), KeyModifiers::CONTROL));
 
@@ -7737,5 +7739,79 @@ mod tests {
             app.debug_hub.last_error().unwrap(),
             "[test] something broke"
         );
+    }
+
+    #[test]
+    fn test_interactive_multi_step_simulation() {
+        use ratatui::backend::TestBackend;
+        use ratatui::Terminal;
+
+        let backend = TestBackend::new(120, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        let mut app = make_app();
+        app.is_simulating = true;
+
+        // 1. Simulate typing a slash command "/help"
+        app.simulated_keys = vec![
+            press_key(KeyCode::Char('/'), KeyModifiers::NONE),
+            press_key(KeyCode::Char('h'), KeyModifiers::NONE),
+            press_key(KeyCode::Char('e'), KeyModifiers::NONE),
+            press_key(KeyCode::Char('l'), KeyModifiers::NONE),
+            press_key(KeyCode::Char('p'), KeyModifiers::NONE),
+            press_key(KeyCode::Enter, KeyModifiers::NONE),
+        ];
+
+        // 2. Run the loop ticks
+        while !app.simulated_keys.is_empty() && !app.should_exit {
+            if let Ok(Some(input)) = app.run(&mut terminal) {
+                if crate::input::is_slash_command(&input) {
+                    let (cmd, args) = crate::input::parse_slash_command(&input);
+                    app.handle_tui_command(cmd, args);
+                }
+            }
+        }
+
+        // 3. Assert the help overlay is open
+        assert!(app.help_overlay.visible);
+        assert!(app.show_help);
+
+        // 4. Simulate pressing Escape to close the overlay
+        app.simulated_keys = vec![press_key(KeyCode::Esc, KeyModifiers::NONE)];
+
+        while !app.simulated_keys.is_empty() && !app.should_exit {
+            if let Ok(Some(input)) = app.run(&mut terminal) {
+                if crate::input::is_slash_command(&input) {
+                    let (cmd, args) = crate::input::parse_slash_command(&input);
+                    app.handle_tui_command(cmd, args);
+                }
+            }
+        }
+
+        // 5. Assert the help overlay is closed
+        assert!(!app.help_overlay.visible);
+        assert!(!app.show_help);
+
+        // 6. Simulate quitting
+        app.simulated_keys = vec![
+            press_key(KeyCode::Char('/'), KeyModifiers::NONE),
+            press_key(KeyCode::Char('q'), KeyModifiers::NONE),
+            press_key(KeyCode::Char('u'), KeyModifiers::NONE),
+            press_key(KeyCode::Char('i'), KeyModifiers::NONE),
+            press_key(KeyCode::Char('t'), KeyModifiers::NONE),
+            press_key(KeyCode::Enter, KeyModifiers::NONE),
+        ];
+
+        while !app.simulated_keys.is_empty() && !app.should_exit {
+            if let Ok(Some(input)) = app.run(&mut terminal) {
+                if crate::input::is_slash_command(&input) {
+                    let (cmd, args) = crate::input::parse_slash_command(&input);
+                    app.handle_tui_command(cmd, args);
+                }
+            }
+        }
+
+        // 7. Assert app wants to exit
+        assert!(app.should_exit);
     }
 }

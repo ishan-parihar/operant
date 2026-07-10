@@ -66,8 +66,6 @@ pub mod config {
         pub output_format: OutputFormat,
         pub compact_threshold: f64,
         pub theme: Theme,
-        pub provider: Option<String>,
-        pub model: Option<String>,
         pub max_tokens: usize,
     }
 
@@ -86,8 +84,6 @@ pub mod config {
         pub theme: Theme,
         pub permission_mode: PermissionMode,
         pub max_output_tokens: usize,
-        pub model: Option<String>,
-        pub provider: Option<String>,
         pub output_style: Option<String>,
         /// Reasoning effort level: "low" | "normal" | "high" | "max".
         /// Mirrors EffortLevel in model_picker.rs. Set by `operant tui effort set`.
@@ -1662,26 +1658,10 @@ impl TuiApp {
         let mut app_config = config;
         let mut settings = Settings::load_sync().unwrap_or_default();
 
-        // Layer in the user's saved settings.json (written by App::persist_provider_and_model
-        // and App::set_provider_default). Without this, the provider+model picked in a prior
-        // TUI session are silently dropped on every restart.
-        //
-        // BUT: the TOML config (from `operant setup`) is the authoritative source.
-        // settings.json should only override when the TOML config has the DEFAULT
-        // values (gpt-4 / empty base_url). This prevents stale settings.json from
-        // overriding a fresh `operant setup` run.
-        let toml_has_real_provider = !app_config.client.base_url.is_empty()
-            && app_config.client.base_url != "https://api.openai.com/v1";
-        if settings.provider.is_some() && !toml_has_real_provider {
-            // Keep provider in settings
-        } else {
-            settings.provider = config::infer_provider_from_model(&app_config.agent.model);
-        }
-        if settings.model.is_some() && app_config.agent.model == "gpt-4" {
-            app_config.agent.model = settings.model.clone().unwrap_or_default();
-        } else {
-            settings.model = Some(app_config.agent.model.clone());
-        }
+        // Layer in the user's saved settings.json (written by App::persist_provider_and_model).
+        // provider+model are now exclusively stored in operant.toml (config.agent.model /
+        // config.client.base_url). The settings.json only carries visual prefs (theme, vim, etc.).
+
         if let Some(entry) = settings.providers.get("custom-openai") {
             if let Some(ref base) = entry.api_base {
                 app_config.client.base_url = base.clone();
