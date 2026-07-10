@@ -271,13 +271,9 @@ impl SettingsScreen {
             output_format: crate::tui::adapter_types::config::OutputFormat::default(),
             compact_threshold: config.agent.context_compression_threshold,
             theme: settings.theme.clone(),
-            provider: settings.provider.clone(),
-            model: settings.model.clone(),
             max_tokens: config.agent.context_window,
         };
         self.settings_snapshot.theme = settings.theme.clone();
-        self.settings_snapshot.provider = settings.provider.clone();
-        self.settings_snapshot.model = settings.model.clone();
         self.settings_snapshot.output_style = settings.output_style.clone();
         self.settings_snapshot.effort_level = settings.effort_level.clone();
         self.settings_snapshot.vim_enabled = settings.vim_enabled;
