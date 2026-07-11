@@ -873,11 +873,23 @@ pub mod history {
                 .map(|s| SessionRecord {
                     id: s.id,
                     title: s.title,
-                    // DatabaseSession stores created_at/updated_at as strings;
-                    // parse them into DateTime<Utc> for the TUI's relative-time
-                    // formatting. Fall back to now() on parse failure.
-                    updated_at: chrono::Utc::now(),
-                    messages: Vec::new(),
+                    // DatabaseSession stores updated_at (ended_at) as an
+                    // rfc3339 string; parse it into DateTime<Utc> for the
+                    // TUI's relative-time formatting. Fall back to now()
+                    // only if the stored string can't be parsed.
+                    updated_at: chrono::DateTime::parse_from_rfc3339(&s.updated_at)
+                        .map(|dt| dt.with_timezone(&chrono::Utc))
+                        .unwrap_or_else(|_| chrono::Utc::now()),
+                    // The list view only needs the message *count* (the
+                    // consumer calls .messages.len()), so carry the DB's
+                    // message_count as placeholders rather than loading
+                    // every message body per session.
+                    // ponytail: count-carrier vec, not real content — make
+                    // this a usize field if a caller ever needs the bodies.
+                    messages: vec![String::new(); s.message_count],
+                    // list_sessions doesn't select the per-session cost
+                    // columns, so DatabaseSession exposes no cost; stays 0.0
+                    // until the DB layer surfaces it.
                     total_cost: 0.0,
                 })
                 .collect()
