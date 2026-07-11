@@ -2671,6 +2671,17 @@ impl TuiApp {
         loop {
             match self.app.run(&mut terminal) {
                 Ok(Some(input)) => {
+                    // Intercept slash commands exactly like the interactive
+                    // run loop (see TuiApp::run) so the simulator is faithful:
+                    // submitting "/help" opens the help overlay instead of
+                    // being sent to the agent as a prompt. This also lets the
+                    // SlashCommand debug event fire on the headless path.
+                    if crate::input::is_slash_command(&input) {
+                        let (cmd, args) = crate::input::parse_slash_command(&input);
+                        if self.app.handle_tui_command(cmd, args) {
+                            continue;
+                        }
+                    }
                     if let Some(ref agent) = agent {
                         if self.app.is_streaming {
                             if let Some(ref handle) = self.app.steer_queue_handle {
