@@ -2144,6 +2144,12 @@ impl App {
         // (iter-125 — recency + frequency ranking.)
         self.slash_usage.record(cmd);
         self.slash_usage.save();
+        self.debug_hub
+            .publish(crate::tui::debug::TuiEvent::SlashCommand {
+                name: cmd.to_string(),
+                args_preview: args.chars().take(40).collect(),
+                at: crate::tui::debug::event_bus::now_secs(),
+            });
         match cmd {
             "config" | "settings" => {
                 self.settings_screen.open();
@@ -6534,6 +6540,11 @@ impl App {
             if let Some(ref mut rx) = self.session_list_rx {
                 match rx.try_recv() {
                     Ok(entries) => {
+                        self.debug_hub
+                            .publish(crate::tui::debug::TuiEvent::SessionList {
+                                count: entries.len(),
+                                at: crate::tui::debug::event_bus::now_secs(),
+                            });
                         self.session_browser.sessions = entries;
                         self.session_browser.selected_idx = 0;
                         self.session_list_rx = None;
@@ -6549,6 +6560,12 @@ impl App {
             if let Some(ref mut rx) = self.model_fetch_rx {
                 match rx.try_recv() {
                     Ok(Ok(models)) => {
+                        self.debug_hub
+                            .publish(crate::tui::debug::TuiEvent::ModelFetch {
+                                ok: true,
+                                count: models.len(),
+                                at: crate::tui::debug::event_bus::now_secs(),
+                            });
                         self.model_picker.set_models(models);
                         self.model_fetch_rx = None;
                         self.model_picker_fetch_pending = false;
@@ -6625,6 +6642,12 @@ impl App {
                             });
                         }
                         self.invalidate_transcript();
+                        self.debug_hub
+                            .publish(crate::tui::debug::TuiEvent::SessionLoad {
+                                session_id: self.session_title.clone().unwrap_or_default(),
+                                msg_count: self.messages.len(),
+                                at: crate::tui::debug::event_bus::now_secs(),
+                            });
                         self.session_load_rx = None;
                         self.status_message = Some("Session loaded.".to_string());
                     }
@@ -6649,6 +6672,11 @@ impl App {
                 // we process at most one event per frame and don't starve
                 // the render loop.
                 if let Ok(req) = rx.try_recv() {
+                    self.debug_hub
+                        .publish(crate::tui::debug::TuiEvent::UserQuestion {
+                            question_preview: req.question.chars().take(40).collect(),
+                            at: crate::tui::debug::event_bus::now_secs(),
+                        });
                     // Open the ask_user_dialog with the real reply_tx.
                     // The dialog stores it and sends the user's answer when
                     // confirm() is called. If the user presses Esc, the
@@ -6673,6 +6701,11 @@ impl App {
                     }
                 }
                 for ev in events {
+                    self.debug_hub
+                        .publish(crate::tui::debug::TuiEvent::VoiceEvent {
+                            variant: format!("{ev:?}"),
+                            at: crate::tui::debug::event_bus::now_secs(),
+                        });
                     match ev {
                         VoiceEvent::RecordingStarted => {
                             self.voice_recording = true;
@@ -6750,6 +6783,11 @@ impl App {
             {
                 if let Some(ref mut rx) = self.permission_rx {
                     while let Ok(req) = rx.try_recv() {
+                        self.debug_hub
+                            .publish(crate::tui::debug::TuiEvent::PermissionRequest {
+                                tool_name: req.tool_name.clone(),
+                                at: crate::tui::debug::event_bus::now_secs(),
+                            });
                         if self.permission_request.is_some() {
                             // A dialog is already shown — deny the new request
                             // so the agent doesn't block forever.
