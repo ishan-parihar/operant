@@ -362,10 +362,25 @@ struct CompletedMsgCache {
     lines: Vec<RenderedLineItem>,
 }
 
+/// Memoizes the markdown render of the live streaming text (C1). During
+/// streaming the frame loop redraws unconditionally (~20×/s) but `streaming_text`
+/// only changes when a new Content chunk arrives, so most frames redraw with an
+/// identical buffer. Without this we re-run syntect over the whole growing
+/// buffer every frame — the `append_live_content` CPU hog called out in the
+/// render-pipeline audit. Validity is checked by full content equality (cheap
+/// next to syntect) so a flush→new-segment of the same length can't collide.
+#[derive(Clone)]
+struct StreamingTextCache {
+    width: u16,
+    text: String,
+    lines: Vec<Line<'static>>,
+}
+
 thread_local! {
     static MESSAGE_LINES_CACHE: RefCell<Option<MessageLinesCache>> = const { RefCell::new(None) };
     /// Stores rendered lines for committed messages only; valid even during streaming.
     static COMPLETED_MSG_CACHE: RefCell<Option<CompletedMsgCache>> = const { RefCell::new(None) };
+    static STREAMING_TEXT_CACHE: RefCell<Option<StreamingTextCache>> = const { RefCell::new(None) };
 }
 
 // -----------------------------------------------------------------------
@@ -1526,8 +1541,25 @@ fn append_live_content(
     }
 
     // 3. Live streaming text (the model's final response — appears LAST).
+    //    Reuse the cached render when the buffer is unchanged since the last
+    //    frame so syntect doesn't re-highlight the whole growing text every
+    //    redraw. (C1: eliminates the per-frame render_markdown hog.)
     if !app.streaming_text.is_empty() {
-        let text_lines = render_markdown(&app.streaming_text, width);
+        let text_lines = STREAMING_TEXT_CACHE.with(|cache| {
+            let mut slot = cache.borrow_mut();
+            if let Some(cached) = slot.as_ref() {
+                if cached.width == width && cached.text == app.streaming_text {
+                    return cached.lines.clone();
+                }
+            }
+            let lines = render_markdown(&app.streaming_text, width);
+            *slot = Some(StreamingTextCache {
+                width,
+                text: app.streaming_text.clone(),
+                lines: lines.clone(),
+            });
+            lines
+        });
         push_rendered_items(&mut items, text_lines, None, false);
     }
 
