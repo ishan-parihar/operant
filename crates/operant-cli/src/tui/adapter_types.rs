@@ -2559,10 +2559,18 @@ impl TuiApp {
         result
     }
 
+    /// Run the real `App::run` loop headlessly against a `TestBackend`,
+    /// replaying `keys`. Returns the captured event log, the final `App`
+    /// state (for assertions), and the final rendered screen as trimmed
+    /// text rows (for screen-content assertions and snapshots).
     pub async fn run_headless(
         mut self,
         keys: Vec<crossterm::event::KeyEvent>,
-    ) -> anyhow::Result<(Vec<crate::tui::debug::TuiEvent>, crate::tui::app::App)> {
+    ) -> anyhow::Result<(
+        Vec<crate::tui::debug::TuiEvent>,
+        crate::tui::app::App,
+        Vec<String>,
+    )> {
         let (agent_tx, agent_rx) =
             tokio::sync::mpsc::channel::<operant_core::agent::AgentEvent>(256);
         self.app.agent_event_rx = Some(agent_rx);
@@ -2677,8 +2685,30 @@ impl TuiApp {
             tokio::task::yield_now().await;
         }
 
+        // The run loop's exit check fires at the top of the loop before the
+        // draw, so the last key's effect (and, with zero keys, the landing
+        // screen) is never painted. Do one final render of the terminal state
+        // so the captured screen reflects the final App state after all keys.
+        let _ = terminal.draw(|f| crate::tui::render::render_app(f, &mut self.app));
+
+        // Capture the final rendered screen as trimmed text rows. The
+        // TestBackend buffer is row-major; chunk the flat cell slice by width.
+        let screen = {
+            let buf = terminal.backend().buffer();
+            let width = (buf.area.width as usize).max(1);
+            buf.content()
+                .chunks(width)
+                .map(|row| {
+                    row.iter()
+                        .map(|c| c.symbol())
+                        .collect::<String>()
+                        .trim_end()
+                        .to_string()
+                })
+                .collect::<Vec<String>>()
+        };
         let events = self.app.debug_hub.event_bus().recent(1000);
-        Ok((events, self.app))
+        Ok((events, self.app, screen))
     }
 }
 

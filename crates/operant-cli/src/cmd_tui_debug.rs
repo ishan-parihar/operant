@@ -158,6 +158,16 @@ pub enum TuiDebugSubcommand {
         /// Optional state assertions to evaluate (e.g. "help_overlay.visible == true").
         #[arg(long)]
         assert: Option<String>,
+
+        /// Optional path to dump the final rendered screen (one text row per line).
+        #[arg(long)]
+        dump_screen: Option<std::path::PathBuf>,
+
+        /// Optional screen-content assertions, comma-separated
+        /// (e.g. "contains:Help,not-contains:Error"). Matched against the
+        /// full rendered screen text. Fails the run on mismatch.
+        #[arg(long)]
+        assert_screen: Option<String>,
     },
 }
 
@@ -193,7 +203,9 @@ pub async fn handle_tui_debug_command(config: &AppConfig, cmd: TuiDebugSubcomman
             keys,
             output,
             assert,
-        } => debug_simulate(config, keys, output, assert).await,
+            dump_screen,
+            assert_screen,
+        } => debug_simulate(config, keys, output, assert, dump_screen, assert_screen).await,
     }
 }
 
@@ -1124,6 +1136,8 @@ async fn debug_simulate(
     keys: String,
     output: Option<std::path::PathBuf>,
     assert_str: Option<String>,
+    dump_screen: Option<std::path::PathBuf>,
+    assert_screen: Option<String>,
 ) -> Result<()> {
     use crate::tui::adapter_types::{LaunchMode, TuiApp};
     use crate::tui::debug::TuiEvent;
@@ -1133,7 +1147,7 @@ async fn debug_simulate(
     println!("Parsed {} key events.", parsed_keys.len());
 
     let tui_app = TuiApp::enter(config.clone(), None, LaunchMode::Landing, true).await?;
-    let (events, app) = tui_app.run_headless(parsed_keys).await?;
+    let (events, app, screen) = tui_app.run_headless(parsed_keys).await?;
 
     println!("Simulation completed. Analyzing events...");
     let mut has_errors = false;
@@ -1153,6 +1167,11 @@ async fn debug_simulate(
         println!("Saved simulation event log to {:?}", out_path);
     }
 
+    if let Some(ref screen_path) = dump_screen {
+        std::fs::write(screen_path, screen.join("\n"))?;
+        println!("Saved final rendered screen to {:?}", screen_path);
+    }
+
     if has_errors {
         anyhow::bail!("Simulation failed: Errors detected in TUI event log.");
     }
@@ -1162,6 +1181,46 @@ async fn debug_simulate(
         evaluate_assertions(&app, assert_val)?;
     }
 
+    if let Some(ref screen_asserts) = assert_screen {
+        println!("Evaluating screen assertions: {}", screen_asserts);
+        evaluate_screen_assertions(&screen, screen_asserts)?;
+    }
+
     println!("Simulation succeeded without errors.");
+    Ok(())
+}
+
+/// Evaluate comma-separated screen-content assertions against the rendered
+/// screen text. Each clause is `contains:TEXT` or `not-contains:TEXT`.
+/// Returns an error (failing the run) on the first mismatch.
+fn evaluate_screen_assertions(screen: &[String], assertions_str: &str) -> Result<()> {
+    let haystack = screen.join("\n");
+    for clause in assertions_str.split(',') {
+        let clause = clause.trim();
+        if clause.is_empty() {
+            continue;
+        }
+        let (negate, needle) = if let Some(rest) = clause.strip_prefix("not-contains:") {
+            (true, rest)
+        } else if let Some(rest) = clause.strip_prefix("contains:") {
+            (false, rest)
+        } else {
+            anyhow::bail!(
+                "Invalid screen assertion '{}': expected 'contains:TEXT' or 'not-contains:TEXT'",
+                clause
+            );
+        };
+        let present = haystack.contains(needle);
+        if negate && present {
+            anyhow::bail!(
+                "Screen assertion failed: expected NOT to contain '{}'",
+                needle
+            );
+        }
+        if !negate && !present {
+            anyhow::bail!("Screen assertion failed: expected to contain '{}'", needle);
+        }
+        println!("  ✓ {}", clause);
+    }
     Ok(())
 }
