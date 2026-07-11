@@ -50,17 +50,6 @@ impl EffortLevel {
         }
     }
 
-    /// Returns the budget_tokens value to pass to the API, or `None` for the
-    /// default (no extended thinking).
-    pub fn budget_tokens(self) -> Option<u32> {
-        match self {
-            Self::Low => Some(1_024),
-            Self::Normal => None,
-            Self::High => Some(16_000),
-            Self::Max => Some(32_000),
-        }
-    }
-
     /// Cycle to next level; skips `Max` when the selected model does not
     /// support it.
     pub fn next(self, supports_max: bool) -> Self {
@@ -109,60 +98,6 @@ pub fn model_supports_effort(id: &str) -> bool {
 /// Returns `true` for models that support the maximum effort tier.
 pub fn model_supports_max_effort(id: &str) -> bool {
     id.starts_with("claude-opus-4")
-}
-
-/// Returns a short description string based on the model family inferred from
-/// the model ID.  Used when converting API model entries to `ModelEntry`.
-pub fn model_family_description(id: &str) -> String {
-    let lower = id.to_lowercase();
-    if lower.contains("opus") {
-        "Most capable — best for complex reasoning and analysis".to_string()
-    } else if lower.contains("sonnet") {
-        "Balanced performance and speed — great for coding tasks".to_string()
-    } else if lower.contains("haiku") {
-        "Fast and efficient — ideal for quick completions".to_string()
-    } else {
-        "AI model".to_string()
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Provider grouping helpers
-// ---------------------------------------------------------------------------
-
-/// Format context window tokens for display in the model picker.
-pub fn format_context_window(context_window: u32) -> String {
-    if context_window >= 1_000_000 {
-        if context_window.is_multiple_of(1_000_000) {
-            format!("{}M context", context_window / 1_000_000)
-        } else {
-            format!("{:.1}M context", context_window as f64 / 1_000_000.0)
-        }
-    } else {
-        format!("{}K context", context_window / 1000)
-    }
-}
-
-/// Format a model display line with optional context window and cost info.
-///
-/// Example: `"gpt-4o  128K ctx  $5.00/M"`
-pub fn format_model_line(
-    model_str: &str,
-    context_window: Option<u32>,
-    cost_per_1m: Option<f64>,
-) -> String {
-    let mut parts = vec![model_str.to_string()];
-    if let Some(ctx) = context_window {
-        parts.push(format_context_window(ctx).replace(" context", " ctx"));
-    }
-    if let Some(cost) = cost_per_1m {
-        if cost == 0.0 {
-            parts.push("free".to_string());
-        } else {
-            parts.push(format!("${:.2}/M", cost));
-        }
-    }
-    parts.join("  ")
 }
 
 // ---------------------------------------------------------------------------
@@ -475,21 +410,6 @@ impl ModelPickerState {
         self.effort_level = self.effort_level.prev(supports_max);
     }
 
-    /// Returns the effective effort for the currently highlighted model:
-    /// `None` if the model does not support extended thinking.
-    pub fn effective_effort(&self) -> Option<EffortLevel> {
-        let filtered = self.filtered_models();
-        let id = filtered
-            .get(self.selected_idx)
-            .map(|m| m.id.as_str())
-            .unwrap_or("");
-        if model_supports_effort(id) {
-            Some(self.effort_level)
-        } else {
-            None
-        }
-    }
-
     /// Confirm the current selection.
     ///
     /// Returns `(model_id, effort)` where `effort` is `None` for models that
@@ -562,36 +482,6 @@ impl ModelPickerState {
         if count > 0 && self.selected_idx >= count {
             self.selected_idx = count - 1;
         }
-    }
-
-    /// Fetch the list of available models from the Anthropic API and convert
-    /// them to `ModelEntry` values.
-    ///
-    /// On success, models are sorted newest-first (by `created_at` descending).
-    /// On any error, returns `default_models()` as a fallback so the picker is
-    /// never left empty.
-    pub async fn fetch_models(
-        client: &crate::tui::adapter_types::AnthropicClient,
-    ) -> Vec<ModelEntry> {
-        let available = client.fetch_available_models().await;
-        if available.is_empty() {
-            return Self::default_models();
-        }
-
-        let entries: Vec<ModelEntry> = available
-            .into_iter()
-            .map(|m| {
-                let description = model_family_description(&m);
-                ModelEntry {
-                    id: m.clone(),
-                    display_name: m,
-                    description,
-                    is_current: false,
-                }
-            })
-            .collect();
-
-        entries
     }
 }
 

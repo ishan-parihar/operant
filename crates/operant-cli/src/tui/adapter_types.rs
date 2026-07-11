@@ -114,73 +114,11 @@ pub mod config {
         }
     }
 
-    // ---------- McpServerEntry (for Config.mcp_servers) ----------
-
-    #[derive(Debug, Clone, Default)]
-    pub struct McpServerEntry {
-        pub name: String,
-        pub url: Option<String>,
-        pub server_type: String,
-        pub command: Option<String>,
-        pub args: Vec<String>,
-        pub enabled: bool,
-    }
-
-    pub fn infer_provider_from_model(model: &str) -> Option<String> {
-        if model == "free/auto"
-            || model.starts_with("free/")
-            || model.starts_with("zen/")
-            || model.starts_with("opencode-zen/")
-        {
-            return Some("free".to_string());
-        }
-        if let Some((provider, _)) = model.split_once('/') {
-            let known = [
-                "anthropic",
-                "openai",
-                "google",
-                "groq",
-                "cerebras",
-                "deepseek",
-                "mistral",
-                "xai",
-                "openrouter",
-                "github-copilot",
-                "codex",
-                "cohere",
-                "perplexity",
-                "togetherai",
-                "together-ai",
-                "deepinfra",
-                "venice",
-                "minimax",
-                "sambanova",
-                "nvidia",
-                "moonshotai",
-                "zhipuai",
-                "siliconflow",
-            ];
-            if known.contains(&provider) {
-                return Some(provider.to_string());
-            }
-        }
-        None
-    }
-
     pub fn resolve_api_key() -> Option<String> {
         std::env::var("ANTHROPIC_API_KEY")
             .or_else(|_| std::env::var("OPENAI_API_KEY"))
             .ok()
             .filter(|k| !k.is_empty())
-    }
-
-    pub fn api_key_for(config: &operant_core::config::AppConfig, provider: &str) -> Option<String> {
-        let env_var = match provider {
-            "anthropic" => "ANTHROPIC_API_KEY",
-            "openai" => "OPENAI_API_KEY",
-            _ => return config.client.api_key.clone(),
-        };
-        std::env::var(env_var).ok().filter(|k| !k.is_empty())
     }
 }
 
@@ -188,7 +126,6 @@ pub use config::Settings;
 
 pub mod constants {
     pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
-    pub const DEFAULT_MAX_TOKENS: usize = 8192;
 }
 
 pub mod cost {
@@ -213,9 +150,6 @@ pub mod cost {
         /// model isn't in the models_dev catalog).
         pub fn record_cost(&mut self, cost_usd: f64) {
             self.total_cost += cost_usd;
-        }
-        pub fn total_tokens(&self) -> u64 {
-            self.input_tokens as u64 + self.output_tokens as u64
         }
         pub fn set_model(&mut self, model: &str) {
             self.model = model.to_string();
@@ -414,32 +348,15 @@ pub mod types {
                 _ => vec![],
             }
         }
-        pub fn total_tokens(&self) -> u32 {
-            0
-        }
-    }
-
-    /// Standalone ToolResult used when constructing `ContentBlock::ToolResult` blocks
-    /// outside the main streaming path.  This is a TUI-side struct; it is NOT the same
-    /// as `operant_core::client::ToolCall` (which is the wire-format tool call record).
-    #[derive(Debug, Clone)]
-    pub struct ToolResult {
-        pub tool_use_id: String,
-        pub content: ToolResultContent,
-        pub is_error: bool,
     }
 }
 
 pub mod output_styles {
-    use ratatui::style::Color;
-
     #[derive(Debug, Clone)]
     pub struct StyleInfo {
         pub name: String,
         pub label: String,
         pub description: String,
-        pub accent: Color,
-        pub muted: Color,
     }
 
     pub fn builtin_styles() -> Vec<StyleInfo> {
@@ -447,18 +364,12 @@ pub mod output_styles {
             name: "default".to_string(),
             label: "Default".to_string(),
             description: "Standard theme".to_string(),
-            accent: ratatui::style::Color::Rgb(232, 165, 54),
-            muted: ratatui::style::Color::Rgb(134, 132, 126),
         }]
     }
 
     pub fn find_style<'a>(styles: &'a [StyleInfo], name: &str) -> Option<&'a StyleInfo> {
         styles.iter().find(|s| s.name == name)
     }
-}
-
-pub fn format_permission_reason(_kind: &str, _detail: &str) -> String {
-    format!("{}: {}", _kind, _detail)
 }
 
 /// Rotating completion verbs — shown after a turn completes ("✽ Worked for 2m 5s").
@@ -736,20 +647,12 @@ pub fn context_window_for_model(_model: &str) -> usize {
 
 pub mod import_config {
 
-    use serde::{Deserialize, Serialize};
-
     #[derive(Debug, Clone)]
-    pub struct ImportPaths {
-        pub settings_json: Option<std::path::PathBuf>,
-        pub claude_md: Option<std::path::PathBuf>,
-    }
+    pub struct ImportPaths {}
 
     impl ImportPaths {
         pub fn detect() -> Self {
-            Self {
-                settings_json: None,
-                claude_md: None,
-            }
+            Self {}
         }
     }
 
@@ -765,46 +668,18 @@ pub mod import_config {
         pub imported_fields: Vec<String>,
     }
 
-    pub struct AuthStoreInner {
-        pub credentials: std::collections::HashMap<String, StoredCredential>,
-    }
-
-    #[derive(Debug, Clone, Serialize, Deserialize)]
-    pub enum StoredCredential {
-        ApiKey {
-            key: String,
-        },
-        OAuthToken {
-            access: String,
-            refresh: String,
-            expires: String,
-        },
-    }
-
     #[derive(Debug, Clone)]
     pub struct ImportPreview {
         pub settings: bool,
         pub claude_md: bool,
         pub auth: bool,
-        pub selection: Option<ImportSelection>,
     }
 
-    #[derive(Debug, Clone, PartialEq)]
-    pub enum PreviewAction {
-        Apply,
-        Skip,
-        Cancel,
-        Import,
-        Replace,
-        Keep,
-    }
-
-    pub fn build_import_preview(sel: ImportSelection) -> Result<ImportPreview, String> {
+    pub fn build_import_preview(_sel: ImportSelection) -> Result<ImportPreview, String> {
         Ok(ImportPreview {
             settings: false,
             claude_md: false,
             auth: false,
-            selection: Some(sel),
         })
     }
 
@@ -1095,49 +970,14 @@ pub use import_config::{
     build_import_preview, execute_import, summarize_import_result, ImportPaths, ImportSelection,
 };
 
-pub mod file_injection {
-    #[derive(Debug, Clone)]
-    pub struct AtFileRef {
-        pub path: String,
-        pub line_start: Option<usize>,
-        pub line_end: Option<usize>,
-    }
-
-    #[derive(Debug, Clone)]
-    pub enum AtFileIssue {
-        Binary,
-        IsDirectory,
-        NoMatch,
-        TooLarge(u64),
-        FileNotFound(String),
-        PermissionDenied(String),
-        Unreadable(String),
-    }
-
-    pub fn parse_at_refs(text: &str) -> (Vec<AtFileRef>, Vec<AtFileIssue>) {
-        let mut refs = Vec::new();
-        let issues = Vec::new();
-        for word in text.split_whitespace() {
-            if word.starts_with('@') && word.len() > 1 {
-                let path = word[1..].to_string();
-                refs.push(AtFileRef {
-                    path,
-                    line_start: None,
-                    line_end: None,
-                });
-            }
-        }
-        (refs, issues)
-    }
-    // (iter-155: build_file_blocks deleted — always returned empty Vec)
-}
+// (iter-223: pub mod file_injection { AtFileRef, AtFileIssue, parse_at_refs }
+// deleted — zero callers anywhere; the @-file parsing path they supported
+// was never wired to a consumer.)
 
 #[derive(Debug, Clone)]
 pub struct FreeUpstream {
     pub id: &'static str,
-    pub name: &'static str,
     pub title: &'static str,
-    pub api_key_env: &'static str,
     pub default_model: &'static str,
     pub note: &'static str,
     pub key_url: &'static str,
@@ -1146,45 +986,35 @@ pub struct FreeUpstream {
 pub const FREE_CATALOG: &[FreeUpstream] = &[
     FreeUpstream {
         id: "groq",
-        name: "Groq",
         title: "Groq",
-        api_key_env: "GROQ_API_KEY",
         default_model: "llama-3.3-70b-versatile",
         note: "Blazing fast inference",
         key_url: "console.groq.com",
     },
     FreeUpstream {
         id: "cerebras",
-        name: "Cerebras",
         title: "Cerebras",
-        api_key_env: "CEREBRAS_API_KEY",
         default_model: "llama-3.3-70b",
         note: "Ultra-fast wafer-scale",
         key_url: "cloud.cerebras.ai",
     },
     FreeUpstream {
         id: "google",
-        name: "Google Gemini",
         title: "Google Gemini",
-        api_key_env: "GOOGLE_API_KEY",
         default_model: "gemini-2.0-flash",
         note: "Multimodal, generous free tier",
         key_url: "aistudio.google.com",
     },
     FreeUpstream {
         id: "mistral",
-        name: "Mistral",
         title: "Mistral",
-        api_key_env: "MISTRAL_API_KEY",
         default_model: "mistral-small-latest",
         note: "Strong coding models",
         key_url: "console.mistral.ai",
     },
     FreeUpstream {
         id: "sambanova",
-        name: "SambaNova",
         title: "SambaNova",
-        api_key_env: "SAMBANOVA_API_KEY",
         default_model: "Meta-Llama-3.3-70B-Instruct",
         note: "Fast inference, free tier",
         key_url: "cloud.sambanova.ai",
@@ -1211,18 +1041,12 @@ pub struct ModelRegistry {
 
 #[derive(Debug, Clone)]
 pub struct RegistryModelEntry {
-    pub id: String,
-    pub display_name: String,
-    pub description: String,
     pub info: ModelInfo,
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct ModelInfo {
     pub context_window: u32,
-    pub release_date: Option<String>,
-    pub cost_input: Option<f64>,
-    pub cost_output: Option<f64>,
 }
 
 impl ModelRegistry {
@@ -1375,10 +1199,7 @@ impl ModelRegistry {
         self.list_by_provider(provider)
             .into_iter()
             .find(|m| m.id == model_id)
-            .map(|m| RegistryModelEntry {
-                id: m.id.clone(),
-                display_name: m.display_name.clone(),
-                description: m.description.clone(),
+            .map(|_| RegistryModelEntry {
                 info: ModelInfo::default(),
             })
     }
@@ -1650,19 +1471,6 @@ pub mod tools {
                 TaskStatus::Failed => write!(f, "Failed"),
                 TaskStatus::InProgress => write!(f, "In Progress"),
                 TaskStatus::Deleted => write!(f, "Deleted"),
-            }
-        }
-    }
-
-    impl TaskStatus {
-        pub fn emoji(&self) -> &'static str {
-            match self {
-                TaskStatus::Pending => "⏳",
-                TaskStatus::Running => "🔄",
-                TaskStatus::Completed => "✅",
-                TaskStatus::Failed => "❌",
-                TaskStatus::InProgress => "🟡",
-                TaskStatus::Deleted => "🗑",
             }
         }
     }

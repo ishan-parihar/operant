@@ -36,7 +36,6 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 /// A JSON-RPC request from the MCP client.
 #[derive(Debug, Deserialize)]
 struct JsonRpcRequest {
-    jsonrpc: String,
     id: Value,
     method: String,
     #[serde(default)]
@@ -643,7 +642,6 @@ mod tests {
     #[test]
     fn test_initialize_response() {
         let request = JsonRpcRequest {
-            jsonrpc: "2.0".to_string(),
             id: Value::Number(1.into()),
             method: "initialize".to_string(),
             params: Value::Null,
@@ -665,7 +663,6 @@ mod tests {
     #[test]
     fn test_initialize_negotiates_2025_version() {
         let request = JsonRpcRequest {
-            jsonrpc: "2.0".to_string(),
             id: Value::Number(1.into()),
             method: "initialize".to_string(),
             params: serde_json::json!({"protocolVersion": "2025-06-18"}),
@@ -680,7 +677,6 @@ mod tests {
     #[test]
     fn test_initialize_falls_back_on_unknown_version() {
         let request = JsonRpcRequest {
-            jsonrpc: "2.0".to_string(),
             id: Value::Number(1.into()),
             method: "initialize".to_string(),
             params: serde_json::json!({"protocolVersion": "2099-01-01"}),
@@ -695,7 +691,6 @@ mod tests {
     #[test]
     fn test_ping_response() {
         let request = JsonRpcRequest {
-            jsonrpc: "2.0".to_string(),
             id: Value::String("req-1".to_string()),
             method: "ping".to_string(),
             params: Value::Null,
@@ -711,7 +706,6 @@ mod tests {
     #[test]
     fn test_unknown_method() {
         let request = JsonRpcRequest {
-            jsonrpc: "2.0".to_string(),
             id: Value::Number(42.into()),
             method: "unknown_method".to_string(),
             params: Value::Null,
@@ -736,7 +730,6 @@ mod tests {
     async fn test_tools_list() {
         let registry = test_registry().await;
         let request = JsonRpcRequest {
-            jsonrpc: "2.0".to_string(),
             id: Value::Number(1.into()),
             method: "tools/list".to_string(),
             params: Value::Null,
@@ -759,7 +752,6 @@ mod tests {
     async fn test_tools_call_success() {
         let registry = test_registry().await;
         let request = JsonRpcRequest {
-            jsonrpc: "2.0".to_string(),
             id: Value::Number(1.into()),
             method: "tools/call".to_string(),
             params: serde_json::json!({
@@ -783,7 +775,6 @@ mod tests {
     async fn test_tools_call_calculator() {
         let registry = test_registry().await;
         let request = JsonRpcRequest {
-            jsonrpc: "2.0".to_string(),
             id: Value::Number(1.into()),
             method: "tools/call".to_string(),
             params: serde_json::json!({
@@ -805,7 +796,6 @@ mod tests {
     async fn test_tools_call_unknown_tool() {
         let registry = test_registry().await;
         let request = JsonRpcRequest {
-            jsonrpc: "2.0".to_string(),
             id: Value::Number(1.into()),
             method: "tools/call".to_string(),
             params: serde_json::json!({
@@ -824,7 +814,6 @@ mod tests {
     async fn test_tools_call_missing_name() {
         let registry = test_registry().await;
         let request = JsonRpcRequest {
-            jsonrpc: "2.0".to_string(),
             id: Value::Number(1.into()),
             method: "tools/call".to_string(),
             params: serde_json::json!({}),
@@ -859,7 +848,6 @@ mod tests {
     #[test]
     fn test_resources_list() {
         let request = JsonRpcRequest {
-            jsonrpc: "2.0".to_string(),
             id: Value::Number(1.into()),
             method: "resources/list".to_string(),
             params: Value::Null,
@@ -879,7 +867,6 @@ mod tests {
     #[test]
     fn test_resources_read_valid() {
         let request = JsonRpcRequest {
-            jsonrpc: "2.0".to_string(),
             id: Value::Number(1.into()),
             method: "resources/read".to_string(),
             params: serde_json::json!({ "uri": "operant://status" }),
@@ -894,7 +881,6 @@ mod tests {
     #[test]
     fn test_resources_read_unknown() {
         let request = JsonRpcRequest {
-            jsonrpc: "2.0".to_string(),
             id: Value::Number(1.into()),
             method: "resources/read".to_string(),
             params: serde_json::json!({ "uri": "operant://unknown" }),
@@ -929,7 +915,6 @@ mod tests {
 
         // Step 1: Initialize
         let init_req = JsonRpcRequest {
-            jsonrpc: "2.0".to_string(),
             id: Value::Number(1.into()),
             method: "initialize".to_string(),
             params: Value::Null,
@@ -943,7 +928,6 @@ mod tests {
 
         // Step 2: List tools
         let list_req = JsonRpcRequest {
-            jsonrpc: "2.0".to_string(),
             id: Value::Number(2.into()),
             method: "tools/list".to_string(),
             params: Value::Null,
@@ -958,7 +942,6 @@ mod tests {
 
         // Step 3: Call a tool
         let call_req = JsonRpcRequest {
-            jsonrpc: "2.0".to_string(),
             id: Value::Number(3.into()),
             method: "tools/call".to_string(),
             params: serde_json::json!({

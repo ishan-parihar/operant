@@ -275,9 +275,6 @@ type AdapterFactory = fn(&GatewayConfig) -> Option<Arc<dyn PlatformAdapter>>;
 /// and metadata. This replaces the hardcoded if/elif chain and allows
 /// new platforms to be added by simply appending to the registry.
 struct PlatformEntry {
-    name: &'static str,
-    label: &'static str,
-    emoji: &'static str,
     factory: AdapterFactory,
 }
 
@@ -291,9 +288,6 @@ struct PlatformEntry {
 fn platform_registry() -> Vec<PlatformEntry> {
     vec![
         PlatformEntry {
-            name: "telegram",
-            label: "Telegram",
-            emoji: "📱",
             factory: |config| {
                 if config.telegram_enabled {
                     Some(Arc::new(TelegramAdapter::with_config(
@@ -308,9 +302,6 @@ fn platform_registry() -> Vec<PlatformEntry> {
             },
         },
         PlatformEntry {
-            name: "discord",
-            label: "Discord",
-            emoji: "💬",
             factory: |config| {
                 if config.discord_enabled {
                     Some(Arc::new(DiscordAdapter::new(config.discord_token.clone())))
@@ -320,9 +311,6 @@ fn platform_registry() -> Vec<PlatformEntry> {
             },
         },
         PlatformEntry {
-            name: "slack",
-            label: "Slack",
-            emoji: "💼",
             factory: |config| {
                 if config.slack_enabled {
                     Some(Arc::new(SlackAdapter::new(
@@ -335,9 +323,6 @@ fn platform_registry() -> Vec<PlatformEntry> {
             },
         },
         PlatformEntry {
-            name: "whatsapp",
-            label: "WhatsApp",
-            emoji: "📲",
             factory: |config| {
                 if config.whatsapp_enabled {
                     Some(Arc::new(
@@ -350,9 +335,6 @@ fn platform_registry() -> Vec<PlatformEntry> {
             },
         },
         PlatformEntry {
-            name: "email",
-            label: "Email (SMTP)",
-            emoji: "📧",
             factory: |config| {
                 if config.email_enabled {
                     Some(Arc::new(EmailAdapter::new(config.email_enabled).with_smtp(
@@ -366,9 +348,6 @@ fn platform_registry() -> Vec<PlatformEntry> {
             },
         },
         PlatformEntry {
-            name: "sms",
-            label: "SMS (Twilio)",
-            emoji: "📱",
             factory: |config| {
                 if config.sms_twilio_enabled {
                     Some(Arc::new(SmsAdapter::new(config.sms_twilio_enabled)))
@@ -378,9 +357,6 @@ fn platform_registry() -> Vec<PlatformEntry> {
             },
         },
         PlatformEntry {
-            name: "webhooks",
-            label: "Webhook",
-            emoji: "🔗",
             factory: |config| {
                 if config.webhooks_enabled {
                     let addr = config
@@ -1308,12 +1284,6 @@ pub async fn stop_gateway() -> Result<String> {
     }
 }
 
-/// Restart the gateway
-pub async fn restart_gateway(app_config: &AppConfig) -> Result<String> {
-    stop_gateway().await?;
-    start_gateway(app_config).await
-}
-
 /// Check if gateway is running
 pub async fn is_running() -> bool {
     let guard = runner().lock().await;
@@ -1321,12 +1291,6 @@ pub async fn is_running() -> bool {
         Some(gw) => gw.is_running().await,
         None => false,
     }
-}
-
-/// Get reference to running gateway (for other modules)
-pub async fn get_gateway() -> Option<Arc<Gateway>> {
-    let guard = runner().lock().await;
-    guard.clone()
 }
 
 // ── Message enrichment helpers ──────────────────────────────────────────────

@@ -26,10 +26,6 @@ impl ContextVizState {
         Self::default()
     }
 
-    pub fn open(&mut self) {
-        self.visible = true;
-    }
-
     pub fn close(&mut self) {
         self.visible = false;
     }
@@ -220,7 +216,7 @@ mod tests {
     fn context_viz_renders_without_panic() {
         let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
         let mut state = ContextVizState::new();
-        state.open();
+        state.toggle();
         terminal
             .draw(|frame| {
                 render_context_viz(

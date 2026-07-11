@@ -12,7 +12,6 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Paragraph, Widget},
 };
-use similar::{ChangeTag, TextDiff};
 use std::collections::HashMap;
 use std::sync::LazyLock;
 use syntect::easy::HighlightLines;
@@ -34,10 +33,6 @@ static THEME_SET: LazyLock<ThemeSet> = LazyLock::new(ThemeSet::load_defaults);
 /// A single hunk of a unified diff.
 #[derive(Debug, Clone)]
 pub struct DiffHunk {
-    /// Original line number range: (start, count).
-    pub old_range: (u32, u32),
-    /// New line number range: (start, count).
-    pub new_range: (u32, u32),
     /// Lines in this hunk.
     pub lines: Vec<DiffLine>,
 }
@@ -276,100 +271,6 @@ pub fn load_git_diff(project_root: &std::path::Path) -> Vec<FileDiffStats> {
 // always returned empty snapshots. /changes now uses the git-diff path.
 // To re-implement per-turn diffs, wire to a real snapshot store in core.)
 
-fn relative_diff_path(path: &std::path::Path, project_root: &std::path::Path) -> String {
-    path.strip_prefix(project_root)
-        .unwrap_or(path)
-        .to_string_lossy()
-        .replace('\\', "/")
-}
-
-fn build_file_diff_from_snapshots(path: String, before: &str, after: &str) -> FileDiffStats {
-    let diff = TextDiff::from_lines(before, after);
-    let mut added = 0u32;
-    let mut removed = 0u32;
-    let mut hunks = Vec::new();
-
-    for group in diff.grouped_ops(3) {
-        let mut lines = Vec::new();
-
-        for op in group {
-            for change in diff.iter_changes(&op) {
-                let mut content = change.to_string();
-                if content.ends_with('\n') {
-                    content.pop();
-                    if content.ends_with('\r') {
-                        content.pop();
-                    }
-                }
-
-                let kind = match change.tag() {
-                    ChangeTag::Equal => DiffLineKind::Context,
-                    ChangeTag::Delete => {
-                        removed += 1;
-                        DiffLineKind::Removed
-                    }
-                    ChangeTag::Insert => {
-                        added += 1;
-                        DiffLineKind::Added
-                    }
-                };
-
-                lines.push(DiffLine {
-                    kind,
-                    content,
-                    old_line_no: change.old_index().map(|idx| idx as u32 + 1),
-                    new_line_no: change.new_index().map(|idx| idx as u32 + 1),
-                });
-            }
-        }
-
-        let old_range = summarize_old_range(&lines);
-        let new_range = summarize_new_range(&lines);
-        lines.insert(
-            0,
-            DiffLine {
-                kind: DiffLineKind::Header,
-                content: format!(
-                    "@@ -{},{} +{},{} @@",
-                    old_range.0, old_range.1, new_range.0, new_range.1
-                ),
-                old_line_no: None,
-                new_line_no: None,
-            },
-        );
-
-        hunks.push(DiffHunk {
-            old_range,
-            new_range,
-            lines,
-        });
-    }
-
-    FileDiffStats {
-        path,
-        added,
-        removed,
-        binary: false,
-        is_new_file: before.is_empty() && !after.is_empty(),
-        hunks,
-    }
-}
-
-fn summarize_old_range(lines: &[DiffLine]) -> (u32, u32) {
-    summarize_range(lines.iter().filter_map(|line| line.old_line_no).collect())
-}
-
-fn summarize_new_range(lines: &[DiffLine]) -> (u32, u32) {
-    summarize_range(lines.iter().filter_map(|line| line.new_line_no).collect())
-}
-
-fn summarize_range(line_numbers: Vec<u32>) -> (u32, u32) {
-    match (line_numbers.first().copied(), line_numbers.last().copied()) {
-        (Some(start), Some(end)) => (start, end.saturating_sub(start) + 1),
-        _ => (0, 0),
-    }
-}
-
 /// Parse unified diff text into `Vec<FileDiffStats>`.
 pub fn parse_unified_diff(text: &str) -> Vec<FileDiffStats> {
     let mut files: Vec<FileDiffStats> = Vec::new();
@@ -419,12 +320,10 @@ pub fn parse_unified_diff(text: &str) -> Vec<FileDiffStats> {
                 }
             }
             // Parse @@ -old_start,old_count +new_start,new_count @@
-            let (old_start, old_count, new_start, new_count) = parse_hunk_header(raw_line);
+            let (old_start, _old_count, new_start, _new_count) = parse_hunk_header(raw_line);
             old_line = old_start;
             new_line = new_start;
             current_hunk = Some(DiffHunk {
-                old_range: (old_start, old_count),
-                new_range: (new_start, new_count),
                 lines: vec![DiffLine {
                     kind: DiffLineKind::Header,
                     content: raw_line.to_string(),
@@ -1101,27 +1000,6 @@ mod tests {
     }
 
     #[test]
-    fn build_file_diff_from_snapshots_new_file_when_before_empty() {
-        let file = build_file_diff_from_snapshots("src/new.rs".to_string(), "", "fn hello() {}\n");
-        assert!(
-            file.is_new_file,
-            "empty before_text should mark file as new"
-        );
-        assert_eq!(file.added, 1);
-        assert_eq!(file.removed, 0);
-    }
-
-    #[test]
-    fn build_file_diff_from_snapshots_not_new_when_before_present() {
-        let file = build_file_diff_from_snapshots(
-            "src/lib.rs".to_string(),
-            "fn old() {}\n",
-            "fn new() {}\n",
-        );
-        assert!(!file.is_new_file);
-    }
-
-    #[test]
     fn build_inline_diff_spans_equal_content() {
         let (old, new) = build_inline_diff_spans("hello world", "hello world");
         // All spans should have no background (equal, not highlighted)
@@ -1176,8 +1054,6 @@ mod tests {
             binary: false,
             is_new_file: false,
             hunks: vec![DiffHunk {
-                old_range: (1, 1),
-                new_range: (1, 1),
                 lines: vec![
                     DiffLine {
                         kind: DiffLineKind::Removed,

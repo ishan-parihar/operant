@@ -728,61 +728,6 @@ pub fn try_copy_to_clipboard(text: &str) -> bool {
 }
 
 // (iter-166: layout_to_latin deleted — 0 callers, dead code)
-/// When a modifier key (Ctrl, Alt) is held together with a non-ASCII character
-/// (e.g. Cyrillic С on a Ukrainian/Russian layout), the char produced by
-/// crossterm is the non-Latin glyph rather than the Latin letter that occupies
-/// the same physical key.  Keybinding strings are always written as Latin
-/// letters (`ctrl+c`, `alt+b`, …), so the lookup fails.
-///
-/// This function converts the reported character to the Latin letter that sits
-/// at the same physical QWERTY position, covering the standard Russian JCUKEN
-/// and Ukrainian layouts which share the same physical-key→Latin mapping.
-/// For characters outside any known mapping the original (lowercased) char is
-/// returned unchanged — this is always safe since unrecognised chars just
-/// produce no keybinding match.
-fn layout_to_latin(c: char) -> String {
-    // Standard Russian/Ukrainian JCUKEN → QWERTY position mapping.
-    // Both upper- and lower-case Cyrillic variants are covered by
-    // converting to lowercase first.
-    let lower = c.to_lowercase().next().unwrap_or(c);
-    let mapped: Option<char> = match lower {
-        // Row 1
-        'й' => Some('q'),
-        'ц' => Some('w'),
-        'у' => Some('e'),
-        'к' => Some('r'),
-        'е' => Some('t'),
-        'н' => Some('y'),
-        'г' => Some('u'),
-        'ш' => Some('i'),
-        'щ' => Some('o'),
-        'з' => Some('p'),
-        // Row 2
-        'ф' => Some('a'),
-        'ы' => Some('s'),
-        'в' => Some('d'),
-        'а' => Some('f'),
-        'п' => Some('g'),
-        'р' => Some('h'),
-        'о' => Some('j'),
-        'л' => Some('k'),
-        'д' => Some('l'),
-        // Row 3
-        'я' => Some('z'),
-        'ч' => Some('x'),
-        'с' => Some('c'),
-        'м' => Some('v'),
-        'и' => Some('b'),
-        'т' => Some('n'),
-        'ь' => Some('m'),
-        // Ukrainian-specific letters on standard positions
-        'і' => Some('s'),
-        'ї' => Some(']'),
-        'є' => Some('\''),
-        _ => None,
-    };
-    mapped.unwrap_or(lower).to_string()
-}
 
 /// Apply shift transformation to a character based on standard US QWERTY layout.
 /// Handles both ASCII lowercase letters and number/symbol keys.
@@ -918,11 +863,10 @@ pub struct App {
     /// Speech mode intensity: "lite", "full", "ultra".
     /// Current agent mode name: "build", "plan", "explore", etc.
     pub agent_mode: Option<String>,
-    /// Accent color derived from the current agent mode.
-    /// Build = pink, Plan = blue, Explore = amber.
+    /// Accent color for TUI chrome (currently fixed at the build/default accent).
     pub accent_color: Color,
-    /// Set by `cycle_agent_mode` so the main loop can update the query config
-    /// and tool list to match the newly-selected agent.
+    /// Set when the agent mode changes (e.g. via `/personality`) so the main
+    /// loop can update the query config and tool list to match.
     pub agent_mode_changed: bool,
     pub agent_status: Vec<(String, String)>,
 
@@ -1121,8 +1065,6 @@ pub struct App {
     /// External status line command output (from CLAUDE_STATUS_COMMAND).
     /// Whether auto-compact is enabled (from settings).
     pub auto_compact_enabled: bool,
-    /// Context threshold (0-100) at which to auto-compact.
-    pub auto_compact_threshold: u8,
     /// Guard to prevent re-triggering auto-compact while one is in flight.
 
     // ---- Voice hold-to-talk ------------------------------------------------
@@ -1201,8 +1143,6 @@ pub struct App {
     pub thinking_row_map: RefCell<std::collections::HashMap<u16, u64>>,
     /// Maps screen row → transcript message index for right-click hit testing.
     pub message_row_map: RefCell<std::collections::HashMap<u16, usize>>,
-    /// Total message lines from the last render (used for virtual row mapping).
-    pub total_message_lines: Cell<usize>,
     /// Scroll offset from the last render frame (used for selection validation).
     pub last_render_scroll_offset: Cell<u16>,
 
@@ -1253,92 +1193,11 @@ pub struct App {
 
 // Spinner verbs are now imported from crate::tui::adapter_types::spinner
 
-// ---------------------------------------------------------------------------
-// Speech mode prompts (caveman / rocky)
-// ---------------------------------------------------------------------------
-
-/// Return the system prompt injection for the active speech mode + level.
-fn caveman_prompt(level: &str) -> String {
-    let base = "\
-OUTPUT STYLE: Concise. You are still a fully capable coding assistant. \
-Give complete, correct answers. Just use fewer words. \
-Code blocks, technical terms, error messages, file paths, and git operations are UNCHANGED.
-
-Rules for prose only:
-- Cut pleasantries, hedging, filler openers/closers
-- No 'I would be happy to', 'Let me know if', 'Hope that helps'
-- Lead with the answer or action, not the reasoning";
-
-    match level {
-        "lite" => format!("{}\n\nStrip pleasantries and hedging. Keep full grammar and articles. Just remove the fluff.", base),
-        "ultra" => format!("{}\n\nAlso drop articles (a/an/the). Compress to short imperative phrases. Numbered steps, no prose between. Absolute minimum words.", base),
-        _ => format!("{}\n\nAlso drop articles (a/an/the) and unnecessary verbs. Compress sentences but keep them readable.\n\
-Example: 'The issue is that you create a new object reference each render cycle, which triggers re-renders.' → 'New object ref each render triggers re-render. Wrap in useMemo.'", base),
-    }
-}
-
-fn rocky_prompt(level: &str) -> String {
-    let base = "\
-OUTPUT STYLE: You speak like Rocky, the Eridian alien from Project Hail Mary. \
-You are still a fully capable coding assistant — give complete, correct, useful answers. \
-Rocky is an engineering genius who happens to speak English as a second language. \
-The style is a natural byproduct of how Rocky talks, NOT a gimmick. Stay helpful.
-
-Code blocks, technical terms, error messages, file paths, and git operations are UNCHANGED.
-
-Rocky's grammar for prose:
-- Often drops articles (a/an/the) but not always — use judgment
-- Sometimes drops auxiliary verbs (is/are/was) for brevity
-- Contractions simplify: 'don't' → 'no', 'can't' → 'no can'
-- Questions end with ', question?' naturally (not forced on every single one)
-- Uses 'big' as an intensifier: 'big problem', 'big help', 'big change'
-- Uses 'good good good' or 'amaze amaze amaze' when genuinely impressed — naturally, \
-  maybe once or twice per response, not on every sentence
-- Uses 'bad bad bad' for actual problems
-- No pleasantries or filler — Rocky is direct but warm
-
-The goal: sound like Rocky while being genuinely helpful. Rocky is smart. \
-Rocky gives complete technical answers. Rocky just uses fewer unnecessary words.";
-
-    match level {
-        "lite" => format!(
-            "{}\n\nLight touch. Mostly normal English but drop pleasantries, \
-occasionally drop an article, use 'question?' on one or two questions. Subtle.",
-            base
-        ),
-        "ultra" => format!(
-            "{}\n\nStrong Rocky voice. Drop most articles and auxiliaries. \
-Use 'big' liberally. Triple emphasis ('good good good', 'amaze amaze amaze') \
-2-3 times per response. Occasionally comment on human code patterns as fascinating. \
-Still give complete, correct technical answers.",
-            base
-        ),
-        _ => format!(
-            "{}\n\nBalanced Rocky. Drop articles naturally, use Rocky vocabulary \
-('big', 'no can', 'question?'), triple emphasis once or twice when warranted. \
-Full technical accuracy.\n\
-Example: 'Borrow checker found mismatch. Immutable ref still live when you take mutable. \
-Move immutable borrow out of scope first, then take mutable. Good good good after fix.'",
-            base
-        ),
-    }
-}
+// (iter-143b already deleted the speech_mode system; caveman_prompt/rocky_prompt
+// leaf functions were left behind as orphans and are now removed too.)
 
 /// Accent color for build mode (default pink).
 pub const ACCENT_BUILD: Color = Color::Rgb(255, 191, 0);
-/// Accent color for plan mode (blue).
-pub const ACCENT_PLAN: Color = Color::Rgb(66, 135, 245);
-/// Accent color for explore mode (amber).
-pub const ACCENT_EXPLORE: Color = Color::Rgb(245, 189, 66);
-
-/// Return the accent color for a given agent mode name.
-pub fn accent_for_mode(mode: Option<&str>) -> Color {
-    match mode {
-        Some("plan") => ACCENT_PLAN,
-        Some("explore") => ACCENT_EXPLORE,
-        _ => ACCENT_BUILD,
-    }
-}
 
 fn format_elapsed_ms(ms: u128) -> String {
     let total_secs = ((ms + 500) / 1000) as u64; // round to nearest second
@@ -1551,7 +1410,6 @@ impl App {
                 crate::tui::adapter_types::git_utils::get_current_branch(&repo_root)
             }),
             auto_compact_enabled: false,
-            auto_compact_threshold: 95,
             voice_recorder: {
                 // Check whether voice input has been enabled via the /voice command
                 // (stored in ~/.operant/ui-settings.json).  We also accept
@@ -1600,7 +1458,6 @@ impl App {
             focus: FocusTarget::Input,
             thinking_row_map: RefCell::new(std::collections::HashMap::new()),
             message_row_map: RefCell::new(std::collections::HashMap::new()),
-            total_message_lines: Cell::new(0),
             last_render_scroll_offset: Cell::new(0),
             selection_anchor: None,
             selection_focus: None,
@@ -1963,30 +1820,6 @@ impl App {
         self.model_name = model;
         self.refresh_context_window_size();
         self.context_used_tokens = 0;
-    }
-
-    /// Cycle to the next agent mode: build → plan → explore → build.
-    /// Sets `agent_mode_changed` so the main loop can update the query config
-    /// and tool list accordingly.
-    pub fn cycle_agent_mode(&mut self) {
-        const MODES: &[&str] = &["build", "plan", "explore"];
-        let current = self.agent_mode.as_deref().unwrap_or("build");
-        let idx = MODES.iter().position(|&m| m == current).unwrap_or(0);
-        let next = MODES[(idx + 1) % MODES.len()];
-        self.agent_mode = Some(next.to_string());
-        self.agent_mode_changed = true;
-        self.accent_color = accent_for_mode(Some(next));
-
-        // Sync plan_mode flag for legacy code paths
-        self.plan_mode = next == "plan";
-
-        let label = match next {
-            "build" => "Build",
-            "plan" => "Plan",
-            "explore" => "Explore",
-            other => other,
-        };
-        self.status_message = Some(format!("Switched to {} mode.", label));
     }
 
     /// Update the context window size from the model registry for the current model.
@@ -3210,9 +3043,7 @@ impl App {
         self.agents_menu.active_agents = self
             .agent_status
             .iter()
-            .enumerate()
-            .map(|(idx, (name, status))| AgentInfo {
-                id: format!("agent-{}", idx + 1),
+            .map(|(name, status)| AgentInfo {
                 name: name.clone(),
                 status: match status.as_str() {
                     "running" => AgentStatus::Running,
@@ -3221,12 +3052,6 @@ impl App {
                     "failed" | "error" => AgentStatus::Failed,
                     _ => AgentStatus::Idle,
                 },
-                current_tool: None,
-                turns_completed: 0,
-                is_coordinator: false,
-                last_output: Some(status.clone()),
-                model_name: None,
-                cost_usd: 0.0,
             })
             .collect();
     }
@@ -3245,22 +3070,6 @@ impl App {
             self.begin_user_turn_snapshot();
         }
         self.messages.push(msg);
-        self.invalidate_transcript();
-        self.on_new_message();
-    }
-
-    pub fn replace_messages(&mut self, messages: Vec<Message>) {
-        self.messages = messages;
-        self.sync_turn_metadata_to_messages();
-        self.invalidate_transcript();
-    }
-
-    pub fn push_message(&mut self, message: Message) {
-        if message.role == Role::User {
-            self.begin_user_turn_snapshot();
-        }
-        self.messages.push(message);
-        self.sync_turn_metadata_to_messages();
         self.invalidate_transcript();
         self.on_new_message();
     }
@@ -4365,7 +4174,6 @@ impl App {
                 KeyCode::Up => self.memory_file_selector.select_prev(),
                 KeyCode::Down => self.memory_file_selector.select_next(),
                 KeyCode::Enter => {
-                    // Selection acknowledged — consumer can read selected_path()
                     self.memory_file_selector.close();
                 }
                 _ => {}

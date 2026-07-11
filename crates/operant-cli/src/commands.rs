@@ -679,19 +679,6 @@ impl CommandRegistry {
         self.defs.is_empty()
     }
 
-    /// Iterate over all command definitions.
-    pub fn iter_defs(&self) -> impl Iterator<Item = &'static CommandDef> {
-        // Use a set to deduplicate (each canonical name appears once)
-        let mut seen = std::collections::HashSet::new();
-        let mut defs = Vec::new();
-        for (name, def) in &self.defs {
-            if seen.insert(name) {
-                defs.push(*def);
-            }
-        }
-        defs.into_iter()
-    }
-
     /// Collect commands grouped by category, in display order.
     pub fn commands_by_category(&self) -> Vec<(&'static str, Vec<&'static CommandDef>)> {
         let mut categories: Vec<(&str, Vec<&CommandDef>)> = Vec::new();

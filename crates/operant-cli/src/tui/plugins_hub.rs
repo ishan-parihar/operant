@@ -155,10 +155,6 @@ impl PluginsHubState {
             }
         }
     }
-
-    pub fn current(&self) -> Option<&PluginEntry> {
-        self.plugins.get(self.selected)
-    }
 }
 
 pub fn render_plugins_hub(frame: &mut Frame, state: &PluginsHubState, area: Rect) {
