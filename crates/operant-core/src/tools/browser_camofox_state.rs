@@ -42,8 +42,8 @@ struct CamofoxStateData {
     profile: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     cookies: Option<Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    localStorage: Option<Value>,
+    #[serde(rename = "localStorage", skip_serializing_if = "Option::is_none")]
+    local_storage: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     session: Option<Value>,
     created_at: String,
@@ -114,7 +114,7 @@ fn handle_save_state(profile: &str) -> ToolResult {
     let state = CamofoxStateData {
         profile: profile.to_string(),
         cookies: None,
-        localStorage: None,
+        local_storage: None,
         session: Some(serde_json::json!({"saved_at": now})),
         created_at: now.clone(),
         updated_at: now,
@@ -193,7 +193,7 @@ fn handle_load_state(profile: &str) -> ToolResult {
             "created_at": state.created_at,
             "updated_at": state.updated_at,
             "has_cookies": state.cookies.is_some(),
-            "has_local_storage": state.localStorage.is_some(),
+            "has_local_storage": state.local_storage.is_some(),
             "path": path.to_string_lossy()
         }),
     )

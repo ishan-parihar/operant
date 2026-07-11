@@ -16,7 +16,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::Value;
 use std::io::Cursor;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::config::runtime_config;
 use crate::schema::ToolSchema;
@@ -57,7 +57,7 @@ struct VisionAnalyzeArgs {
 }
 
 /// Detect MIME type from file header bytes
-fn detect_mime_type(data: &[u8], path: &PathBuf) -> Option<&'static str> {
+fn detect_mime_type(data: &[u8], path: &Path) -> Option<&'static str> {
     if data.starts_with(&[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]) {
         return Some("image/png");
     }
@@ -81,7 +81,7 @@ fn detect_mime_type(data: &[u8], path: &PathBuf) -> Option<&'static str> {
 }
 
 /// Determine MIME type from file extension
-fn mime_from_extension(path: &PathBuf) -> &'static str {
+fn mime_from_extension(path: &Path) -> &'static str {
     match path.extension().and_then(|e| e.to_str()) {
         Some("jpg") | Some("jpeg") => "image/jpeg",
         Some("png") => "image/png",
@@ -105,16 +105,12 @@ fn is_valid_url(url: &str) -> bool {
 /// Resolve a file path from various URL formats
 fn resolve_file_path(url: &str) -> Option<PathBuf> {
     // Handle file:// scheme
-    let path_str = if url.starts_with("file://") {
-        &url[7..]
-    } else {
-        url
-    };
+    let path_str = url.strip_prefix("file://").unwrap_or(url);
 
     // Expand user home directory
-    let expanded = if path_str.starts_with("~") {
+    let expanded = if let Some(rest) = path_str.strip_prefix("~") {
         if let Ok(home) = std::env::var("HOME") {
-            format!("{}{}", home, &path_str[1..])
+            format!("{}{}", home, rest)
         } else {
             path_str.to_string()
         }

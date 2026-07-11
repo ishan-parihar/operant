@@ -1183,13 +1183,13 @@ fn scan_code_blocks(chunk_body: &str, carry_lang: Option<&str>) -> (bool, String
 
     for line in chunk_body.lines() {
         let stripped = line.trim();
-        if stripped.starts_with("```") {
+        if let Some(rest) = stripped.strip_prefix("```") {
             if in_code {
                 in_code = false;
                 lang = String::new();
             } else {
                 in_code = true;
-                let tag = stripped[3..].trim();
+                let tag = rest.trim();
                 lang = tag.split_whitespace().next().unwrap_or("").to_string();
             }
         }

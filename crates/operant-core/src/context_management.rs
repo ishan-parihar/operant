@@ -14,7 +14,7 @@
 //!    - T3 (lowest priority): tool results — large, ephemeral, replaceable
 //!    - T2 (medium priority): assistant reasoning/thinking — verbose
 //!    - T1 (highest priority): user messages + assistant final answers
-//!    System messages are never evicted.
+//!      System messages are never evicted.
 //!
 //! 2. **Decay curve** (`decay_render`): older messages are rendered into
 //!    progressively shorter summaries based on age + importance. The

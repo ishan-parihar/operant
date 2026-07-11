@@ -80,6 +80,12 @@ pub struct CheckpointManager {
     checkpointed_dirs: std::sync::Mutex<std::collections::HashSet<String>>,
 }
 
+impl Default for CheckpointManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CheckpointManager {
     /// Create a new checkpoint manager
     pub fn new() -> Self {

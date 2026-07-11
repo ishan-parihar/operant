@@ -1711,6 +1711,16 @@ fn resolve_trust_level(source: &str) -> TrustLevel {
 }
 
 /// Determine the overall scan verdict from a list of findings.
+///
+/// Note: `ScanVerdict` only has 3 tiers (Safe/Caution/Dangerous), so any
+/// non-empty, non-Critical finding list — regardless of whether it contains
+/// High, Medium, or Low severity findings — currently maps to `Caution`.
+/// This was previously written as a redundant `if has_high {...} else {...}`
+/// with both branches returning the same value; simplified here since the
+/// `has_high` check had no effect on the outcome. Flagging as a possible
+/// product-policy gap: if High severity findings should be distinguished
+/// from Medium/Low (e.g. a stricter verdict), that needs a new `ScanVerdict`
+/// tier, not just restoring the dead branch.
 fn determine_verdict(findings: &[SecurityFinding]) -> ScanVerdict {
     if findings.is_empty() {
         return ScanVerdict::Safe;
@@ -1719,14 +1729,9 @@ fn determine_verdict(findings: &[SecurityFinding]) -> ScanVerdict {
     let has_critical = findings
         .iter()
         .any(|f| matches!(f.severity, Severity::Critical));
-    let has_high = findings
-        .iter()
-        .any(|f| matches!(f.severity, Severity::High));
 
     if has_critical {
         ScanVerdict::Dangerous
-    } else if has_high {
-        ScanVerdict::Caution
     } else {
         ScanVerdict::Caution
     }
