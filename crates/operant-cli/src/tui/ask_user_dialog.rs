@@ -425,9 +425,15 @@ fn word_wrap(text: &str, max_width: usize) -> Vec<String> {
         }
         let mut current = String::new();
         for word in paragraph.split_whitespace() {
+            // Measure by display width, not byte length, so CJK/emoji wrap
+            // correctly (a byte-length comparison wraps multibyte text short).
+            let fits = unicode_width::UnicodeWidthStr::width(current.as_str())
+                + 1
+                + unicode_width::UnicodeWidthStr::width(word)
+                <= max_width;
             if current.is_empty() {
                 current.push_str(word);
-            } else if current.len() + 1 + word.len() <= max_width {
+            } else if fits {
                 current.push(' ');
                 current.push_str(word);
             } else {
@@ -440,4 +446,31 @@ fn word_wrap(text: &str, max_width: usize) -> Vec<String> {
         }
     }
     lines
+}
+
+#[cfg(test)]
+mod tests {
+    use super::word_wrap;
+
+    #[test]
+    fn word_wrap_uses_display_width_not_bytes() {
+        // Two CJK words (each glyph is 3 bytes but 2 display columns).
+        // "中文 中文" is 4 glyphs = 8 columns + 1 space = 9 columns; it fits
+        // in width 9 on one line. A byte-length wrapper would see 13 bytes
+        // and wrap it incorrectly.
+        let lines = word_wrap("中文 中文", 9);
+        assert_eq!(lines, vec!["中文 中文".to_string()]);
+
+        // At width 4 (one CJK word = 4 columns) each word takes its own line.
+        let lines = word_wrap("中文 中文", 4);
+        assert_eq!(lines, vec!["中文".to_string(), "中文".to_string()]);
+    }
+
+    #[test]
+    fn word_wrap_ascii_unchanged() {
+        assert_eq!(
+            word_wrap("the quick brown fox", 9),
+            vec!["the quick".to_string(), "brown fox".to_string()]
+        );
+    }
 }
