@@ -133,9 +133,9 @@ const PROMPT_SLASH_COMMANDS: &[(&str, &str)] = &[
     ("skin", "Alias for /theme"),
     ("replay", "Replay spawn tree (planned)"),
     ("replay-diff", "Diff replay (planned)"),
-    ("reload", "Reload config (restart required)"),
+    ("reload", "Re-read settings from disk"),
     ("reload-mcp", "Reload MCP servers (restart required)"),
-    ("reload-skills", "Reload skills (restart required)"),
+    ("reload-skills", "Rescan the skills directory"),
 ];
 
 fn help_command_category(name: &str) -> &'static str {
@@ -2694,13 +2694,74 @@ impl App {
                 true
             }
 
-            // /reload, /reload-skills — config/skills hot-reload is not yet
-            // wired; surface a restart hint rather than silently dropping.
-            "reload" | "reload-skills" => {
-                self.status_message = Some(format!(
-                    "{}: hot-reload is not yet wired. Restart operant to pick up changes.",
-                    cmd
-                ));
+            // /reload — re-read TUI settings from disk and re-apply the visual /
+            // preference subset that is safe to swap live (theme, output style,
+            // permission mode). We intentionally do NOT hot-swap the provider /
+            // model client mid-session, so those changes only take effect on
+            // restart. Ref: hermes-agent cli.py reload_env().
+            "reload" => {
+                let new_settings =
+                    crate::tui::adapter_types::Settings::load_sync().unwrap_or_default();
+                // Detect whether the provider/model changed on disk so the
+                // status line can be honest about what applies now vs. on
+                // restart.
+                let disk_model = operant_core::config::load_app_config(None)
+                    .map(|c| c.config.agent.model)
+                    .unwrap_or_else(|_| self.config.agent.model.clone());
+                let model_changed = disk_model != self.config.agent.model;
+
+                self.settings = new_settings;
+                self.plan_mode = matches!(
+                    self.settings.permission_mode,
+                    crate::tui::adapter_types::config::PermissionMode::Plan
+                );
+                self.output_style = match self.settings.output_style.as_deref() {
+                    Some("stream") => "stream".to_string(),
+                    Some("verbose") => "verbose".to_string(),
+                    _ => "auto".to_string(),
+                };
+
+                self.status_message = Some(if model_changed {
+                    "Config reloaded (provider/model changes apply on restart).".to_string()
+                } else {
+                    "Configuration reloaded.".to_string()
+                });
+                true
+            }
+
+            // /reload-skills — re-scan the skills directory and repopulate the
+            // /skills overlay's backing data. The running agent was built with a
+            // fixed SkillManager at startup (main.rs `with_skill_manager`) and
+            // exposes no runtime setter, so rescanned skills reach the model only
+            // after a restart; the status stays honest about that. Ref:
+            // hermes-agent cli.py reload_skills().
+            "reload-skills" => {
+                let skills_dir = self.config.skills.root_dir.clone();
+                let mut mgr = operant_core::skills::SkillManager::new(skills_dir);
+                match mgr.load_all() {
+                    Ok(mut loaded) => {
+                        // Same (category, name) sort skills_view.open() uses so
+                        // the overlay renders identically after a rescan.
+                        loaded.sort_by(|a, b| {
+                            a.category
+                                .cmp(&b.category)
+                                .then_with(|| a.name.cmp(&b.name))
+                        });
+                        let count = loaded.len();
+                        self.skills_view.skills = loaded;
+                        if self.skills_view.selected >= count {
+                            self.skills_view.selected = 0;
+                        }
+                        self.status_message = Some(format!(
+                            "Rescanned {} skill{}. Browse with /skills (agent picks up changes on restart).",
+                            count,
+                            if count == 1 { "" } else { "s" }
+                        ));
+                    }
+                    Err(e) => {
+                        self.status_message = Some(format!("Failed to reload skills: {}", e));
+                    }
+                }
                 true
             }
 
