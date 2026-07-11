@@ -1329,7 +1329,7 @@ async fn debug_simulate(
         None
     };
 
-    let tui_app = TuiApp::enter(config.clone(), None, LaunchMode::Landing, true).await?;
+    let tui_app = TuiApp::enter(config.clone(), None, LaunchMode::Landing, true, false).await?;
     let (events, app, screen) = tui_app
         .run_headless(parsed_keys, script, dims, frame_cap)
         .await?;

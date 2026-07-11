@@ -159,6 +159,10 @@ struct Cli {
     #[arg(long, global = true, action = ArgAction::SetTrue)]
     no_mouse: bool,
 
+    /// Skip all tool-permission prompts for the session (shows a confirmation first).
+    #[arg(long, global = true, action = ArgAction::SetTrue)]
+    dangerously_skip_permissions: bool,
+
     #[command(subcommand)]
     command: Option<Commands>,
 }
@@ -1216,6 +1220,7 @@ async fn main() -> Result<()> {
                     system.clone(),
                     LaunchMode::Query(query.clone()),
                     cli.no_mouse,
+                    cli.dangerously_skip_permissions,
                 )
                 .await?
                 .run()
@@ -1231,6 +1236,7 @@ async fn main() -> Result<()> {
                     system.clone(),
                     LaunchMode::Landing,
                     cli.no_mouse,
+                    cli.dangerously_skip_permissions,
                 )
                 .await?
                 .run()
@@ -1376,6 +1382,7 @@ async fn main() -> Result<()> {
                     None,
                     LaunchMode::Landing,
                     cli.no_mouse,
+                    cli.dangerously_skip_permissions,
                 )
                 .await?
                 .run()
