@@ -99,6 +99,7 @@ impl ModelClient for OpenAIModelClient {
                         reasoning,
                         tool_calls,
                         extra_content,
+                        usage: event.usage,
                     })
                 }
                 Err(e) => Err(e),
@@ -223,6 +224,7 @@ mod tests {
                 },
                 finish_reason: None,
             }],
+            usage: None,
         }
     }
 

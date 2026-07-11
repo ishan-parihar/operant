@@ -7,7 +7,7 @@
 use async_trait::async_trait;
 use futures::stream::BoxStream;
 
-use crate::client::{ChatResponse, Message, ToolCall};
+use crate::client::{ChatResponse, Message, ToolCall, Usage};
 use crate::error::Result;
 use crate::schema::ToolSchema;
 
@@ -69,6 +69,11 @@ pub struct StreamChunk {
     pub tool_calls: Option<Vec<ToolCall>>,
     /// Provider-specific extra data (e.g. Google Gemini thought_signature)
     pub extra_content: Option<serde_json::Value>,
+    /// Token usage, present only on the chunk(s) that carry it (e.g. the
+    /// final usage-only OpenAI chunk, or Anthropic's message_start/
+    /// message_delta events). Callers merge across chunks — see
+    /// `process_stream` in `agent/mod.rs`.
+    pub usage: Option<Usage>,
 }
 
 impl StreamChunk {
@@ -82,6 +87,7 @@ impl StreamChunk {
             reasoning,
             tool_calls,
             extra_content: None,
+            usage: None,
         }
     }
 }

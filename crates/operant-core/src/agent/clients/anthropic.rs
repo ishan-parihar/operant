@@ -398,6 +398,40 @@ fn parse_sse_event(
             index_map.remove(&index);
             None
         }
+        // iter-247: Anthropic reports usage split across two events —
+        // input_tokens on message_start, output_tokens on message_delta.
+        // process_stream (agent/mod.rs) merges the two halves once both
+        // have arrived, so each is emitted independently here.
+        "message_start" => {
+            let input_tokens = json["message"]["usage"]["input_tokens"]
+                .as_u64()
+                .unwrap_or(0) as u32;
+            (input_tokens > 0).then_some(StreamChunk {
+                content: None,
+                reasoning: None,
+                tool_calls: None,
+                extra_content: None,
+                usage: Some(Usage {
+                    prompt_tokens: input_tokens,
+                    completion_tokens: 0,
+                    total_tokens: input_tokens,
+                }),
+            })
+        }
+        "message_delta" => {
+            let output_tokens = json["usage"]["output_tokens"].as_u64().unwrap_or(0) as u32;
+            (output_tokens > 0).then_some(StreamChunk {
+                content: None,
+                reasoning: None,
+                tool_calls: None,
+                extra_content: None,
+                usage: Some(Usage {
+                    prompt_tokens: 0,
+                    completion_tokens: output_tokens,
+                    total_tokens: output_tokens,
+                }),
+            })
+        }
         _ => None,
     }
 }
@@ -591,5 +625,49 @@ mod tests {
             tool_calls[0].function.arguments,
             r#"{"command": "echo hi"}"#
         );
+    }
+
+    /// `message_start` carries `message.usage.input_tokens` — this is the
+    /// only place Anthropic streaming reports prompt token count (iter-247).
+    #[test]
+    fn parse_sse_message_start_extracts_input_tokens() {
+        let mut map = HashMap::new();
+        let block = sse(
+            "message_start",
+            r#"{"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":42,"output_tokens":1}}}"#,
+        );
+        let chunk =
+            parse_sse_event(&block, &mut map).expect("message_start should produce a chunk");
+        let usage = chunk.usage.expect("usage should be present");
+        assert_eq!(usage.prompt_tokens, 42);
+        assert_eq!(usage.completion_tokens, 0);
+    }
+
+    /// `message_delta` carries the final `usage.output_tokens` — the only
+    /// place Anthropic streaming reports completion token count (iter-247).
+    #[test]
+    fn parse_sse_message_delta_extracts_output_tokens() {
+        let mut map = HashMap::new();
+        let block = sse(
+            "message_delta",
+            r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":17}}"#,
+        );
+        let chunk =
+            parse_sse_event(&block, &mut map).expect("message_delta should produce a chunk");
+        let usage = chunk.usage.expect("usage should be present");
+        assert_eq!(usage.completion_tokens, 17);
+        assert_eq!(usage.prompt_tokens, 0);
+    }
+
+    /// A `message_start` with no usage info (e.g. malformed/absent field)
+    /// should not fabricate a zero-token usage chunk.
+    #[test]
+    fn parse_sse_message_start_without_usage_returns_none() {
+        let mut map = HashMap::new();
+        let block = sse(
+            "message_start",
+            r#"{"type":"message_start","message":{"id":"msg_1"}}"#,
+        );
+        assert!(parse_sse_event(&block, &mut map).is_none());
     }
 }
