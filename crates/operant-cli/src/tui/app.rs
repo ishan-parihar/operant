@@ -6640,24 +6640,25 @@ impl App {
 
             AgentEvent::Cost {
                 cost_usd,
-                input_tokens: _,
-                output_tokens: _,
-                model: _,
+                input_tokens,
+                output_tokens,
+                model,
             } => {
-                // iter-132: per-request cost estimate from models_dev.
-                // The CostTracker above already tracks cost via its own
-                // pricing table; this event gives us the models_dev-
-                // sourced cost for the SPECIFIC model used in this
-                // request, which is more accurate for providers like
-                // OpenRouter that route to many different models.
-                //
-                // For now we just log it at debug level. A future iter
-                // can surface this in the /stats dialog as "last request
-                // cost: $X" alongside the cumulative tracker.
-                if let Some(cost) = cost_usd {
-                    debug!(cost_usd = %cost, "Per-request cost (models_dev)");
+                // R3: wire the model-aware per-request cost into the live
+                // tracker instead of discarding it. Falls back to a flat-rate
+                // estimate only when the model isn't in the models_dev catalog.
+                let cost = cost_usd.unwrap_or_else(|| {
+                    input_tokens as f64 * 0.000003 + output_tokens as f64 * 0.000015
+                });
+                if let Some(tracker) = Arc::get_mut(&mut self.cost_tracker) {
+                    tracker.record_cost(cost);
+                    tracker.set_model(&model);
+                }
+                self.cost_usd = self.cost_tracker.total_cost;
+                if cost_usd.is_some() {
+                    debug!(cost_usd = %cost, model = %model, "Per-request cost (models_dev)");
                 } else {
-                    debug!("Per-request cost unknown (model not in models_dev catalog)");
+                    debug!(cost_usd = %cost, model = %model, "Per-request cost (flat-rate fallback, model not in models_dev catalog)");
                 }
             }
 

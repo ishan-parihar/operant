@@ -528,6 +528,17 @@ impl Database {
         Ok(())
     }
 
+    /// Update the accumulated actual cost for a session (R3 — cost fidelity).
+    pub fn update_session_cost(&self, id: &str, actual_cost_usd: f64) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE sessions SET actual_cost_usd = ?1 WHERE id = ?2",
+            params![actual_cost_usd, id],
+        )
+        .map_err(|e| Error::Agent(format!("Failed to update session cost: {}", e)))?;
+        Ok(())
+    }
+
     /// Save a session with full Python-compatible fields.
     pub fn save_session_full(&self, session: &SessionData) -> Result<()> {
         let conn = self.conn.lock().unwrap();
@@ -747,11 +758,12 @@ impl Database {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn
             .prepare(
-                "SELECT s.id, s.title, s.source, s.started_at, s.ended_at, COUNT(m.id) as msg_count 
-                 FROM sessions s 
-                 LEFT JOIN messages m ON s.id = m.session_id 
-                 GROUP BY s.id 
-                 ORDER BY s.ended_at DESC 
+                "SELECT s.id, s.title, s.source, s.started_at, s.ended_at, COUNT(m.id) as msg_count,
+                        s.actual_cost_usd
+                 FROM sessions s
+                 LEFT JOIN messages m ON s.id = m.session_id
+                 GROUP BY s.id
+                 ORDER BY s.ended_at DESC
                  LIMIT ?1",
             )
             .map_err(|e| Error::Agent(format!("Failed to prepare list_sessions: {}", e)))?;
@@ -765,6 +777,7 @@ impl Database {
                     created_at: row.get(3)?,
                     updated_at: row.get(4)?,
                     message_count: row.get::<_, i32>(5)? as usize,
+                    actual_cost_usd: row.get(6)?,
                 })
             })
             .map_err(|e| Error::Agent(format!("List sessions query error: {}", e)))?;
@@ -1604,6 +1617,7 @@ pub struct DatabaseSession {
     pub created_at: String,
     pub updated_at: String,
     pub message_count: usize,
+    pub actual_cost_usd: Option<f64>,
 }
 
 /// A search result from FTS5 query.
