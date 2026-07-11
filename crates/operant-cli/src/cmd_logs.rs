@@ -61,7 +61,7 @@ async fn cmd_show(
     let file =
         fs::File::open(&path).with_context(|| format!("Failed to open log: {}", path.display()))?;
     let reader = BufReader::new(file);
-    let all_lines: Vec<String> = reader.lines().filter_map(|l| l.ok()).collect();
+    let all_lines: Vec<String> = reader.lines().map_while(Result::ok).collect();
     let slice: Vec<&String> = all_lines
         .iter()
         .filter(|l| {
@@ -95,7 +95,7 @@ async fn cmd_follow(config: &AppConfig, level: Option<&str>) -> Result<()> {
             let mut file2 = fs::File::open(&path)?;
             file2.seek(SeekFrom::Start(last_size))?;
             let reader2 = BufReader::new(file2);
-            for line in reader2.lines().filter_map(|l| l.ok()) {
+            for line in reader2.lines().map_while(Result::ok) {
                 if level.is_none_or(|lv| line.contains(lv)) {
                     println!("{}", line);
                 }
