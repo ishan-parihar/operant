@@ -1686,6 +1686,7 @@ impl TuiApp {
         _system: Option<String>,
         _mode: LaunchMode,
         no_mouse: bool,
+        dangerously_skip_permissions: bool,
     ) -> anyhow::Result<Self> {
         use crate::commands::{CommandContext, CommandHandler, CommandRegistry, CommandResult};
         use crate::tui::adapter_types::cost::CostTracker;
@@ -2214,6 +2215,13 @@ impl TuiApp {
                 app.status_message =
                     Some("Welcome to Operant! Connect a provider to get started.".to_string());
             }
+        }
+
+        // --dangerously-skip-permissions: show the bypass-permissions
+        // confirmation dialog at startup. Bypass mode is NOT enabled yet —
+        // it's applied only when the user accepts (see app.rs dialog handler).
+        if dangerously_skip_permissions {
+            app.bypass_permissions_dialog.show();
         }
 
         Ok(Self {

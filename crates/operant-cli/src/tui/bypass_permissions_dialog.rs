@@ -3,8 +3,9 @@
 // Mirrors TS `BypassPermissionsModeDialog.tsx`:
 // - Displayed at startup when the session was launched with bypass-permissions mode.
 // - Shows a red-bordered warning explaining the risks.
-// - User must explicitly accept ("Yes, I accept") or decline ("No, exit").
-// - If declined the app exits immediately.
+// - User must explicitly accept ("Yes, I accept") or decline ("No").
+// - Accepting arms PermissionMode::BypassPermissions; declining closes the
+//   dialog and stays in the current permission mode.
 
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};

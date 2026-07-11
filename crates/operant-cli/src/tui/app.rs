@@ -3489,6 +3489,17 @@ impl App {
         Self::persist_onboarding_complete()
     }
 
+    /// Enable bypass-permissions mode and persist it — the "arm" half of the
+    /// `/yolo` toggle, shared with the `--dangerously-skip-permissions` startup
+    /// dialog accept path.
+    fn arm_bypass_permissions(&mut self) {
+        use crate::tui::adapter_types::config::PermissionMode;
+        let mut settings = crate::tui::adapter_types::Settings::load_sync().unwrap_or_default();
+        settings.permission_mode = PermissionMode::BypassPermissions;
+        let _ = settings.save_sync();
+        self.settings.permission_mode = PermissionMode::BypassPermissions;
+    }
+
     /// Process a keyboard event. Returns `true` when the input should be
     /// submitted (Enter pressed with no blocking dialog).
     pub fn handle_key_event(&mut self, key: KeyEvent) -> bool {
@@ -3544,21 +3555,27 @@ impl App {
         if self.bypass_permissions_dialog.visible {
             match key.code {
                 KeyCode::Char('1') | KeyCode::Esc => {
-                    // "No, exit" — quit immediately
-                    self.should_exit = true;
+                    // "No" — decline; close and stay in the current mode.
+                    self.bypass_permissions_dialog.dismiss();
                 }
                 KeyCode::Char('2') => {
-                    // "Yes, I accept" — dismiss and continue
+                    // "Yes, I accept" — arm bypass-permissions and continue.
+                    self.arm_bypass_permissions();
+                    self.status_message = Some(
+                        "Bypass permissions mode enabled — permissions will be auto-approved. Use with care.".to_string(),
+                    );
                     self.bypass_permissions_dialog.dismiss();
                 }
                 KeyCode::Up | KeyCode::Char('k') => self.bypass_permissions_dialog.select_prev(),
                 KeyCode::Down | KeyCode::Char('j') => self.bypass_permissions_dialog.select_next(),
                 KeyCode::Enter => {
                     if self.bypass_permissions_dialog.is_accept_selected() {
-                        self.bypass_permissions_dialog.dismiss();
-                    } else {
-                        self.should_exit = true;
+                        self.arm_bypass_permissions();
+                        self.status_message = Some(
+                            "Bypass permissions mode enabled — permissions will be auto-approved. Use with care.".to_string(),
+                        );
                     }
+                    self.bypass_permissions_dialog.dismiss();
                 }
                 _ => {}
             }
