@@ -2567,6 +2567,8 @@ impl TuiApp {
         mut self,
         keys: Vec<crossterm::event::KeyEvent>,
         agent_script: Option<Vec<operant_core::agent::AgentEvent>>,
+        size: (u16, u16),
+        max_frames: Option<u64>,
     ) -> anyhow::Result<(
         Vec<crate::tui::debug::TuiEvent>,
         crate::tui::app::App,
@@ -2661,10 +2663,12 @@ impl TuiApp {
 
         use ratatui::backend::TestBackend;
         use ratatui::Terminal;
-        let backend = TestBackend::new(120, 40);
+        let (width, height) = size;
+        let backend = TestBackend::new(width.max(20), height.max(5));
         let mut terminal = Terminal::new(backend)?;
 
         self.app.is_simulating = true;
+        self.app.simulation_max_frames = max_frames;
         self.app.simulated_keys = keys;
         self.app.debug_hub.event_bus().set_enabled(true);
 

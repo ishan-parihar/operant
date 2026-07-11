@@ -861,6 +861,10 @@ pub struct App {
     pub project_dir: Option<std::path::PathBuf>,
     pub is_simulating: bool,
     pub simulated_keys: Vec<crossterm::event::KeyEvent>,
+    /// Headless-simulation frame cap. When simulating, the run loop exits
+    /// once `frame_count` reaches this, so a scenario that never stops
+    /// streaming can't hang the test suite. `None` = no cap (interactive).
+    pub simulation_max_frames: Option<u64>,
     pub cost_tracker: Arc<CostTracker>,
     /// TUI debugging hub — event bus, frame counter, F12 overlay.
     /// Enabled by OPERANT_TUI_DEBUG=1. Zero overhead when disabled.
@@ -1413,6 +1417,7 @@ impl App {
             project_dir: std::env::current_dir().ok(),
             is_simulating: false,
             simulated_keys: Vec::new(),
+            simulation_max_frames: None,
             cost_tracker,
             debug_hub: crate::tui::debug::TuiDebugHub::new_from_env(),
             command_registry,
@@ -2133,6 +2138,82 @@ impl App {
     /// Kept so external callers (and the existing `?` shortcut path) still work.
     pub fn intercept_slash_command(&mut self, cmd: &str) -> bool {
         self.intercept_slash_command_with_args_impl(cmd, "")
+    }
+
+    /// A JSON snapshot of assertable App state for the headless simulator's
+    /// `--assert` engine. Dot-path keys (e.g. `overlays.model_picker`,
+    /// `messages`, `model`) are navigated by `evaluate_assertions`. This is
+    /// the generic replacement for the old hardcoded boolean whitelist.
+    pub fn debug_snapshot(&self) -> serde_json::Value {
+        // Build the overlays map from a flat tuple array rather than a giant
+        // json! literal (which overflows the macro recursion limit).
+        let overlays: serde_json::Map<String, serde_json::Value> = [
+            ("help_overlay", self.help_overlay.visible),
+            (
+                "history_search_overlay",
+                self.history_search_overlay.visible,
+            ),
+            ("global_search", self.global_search.visible),
+            ("rewind_flow", self.rewind_flow.visible),
+            ("settings_screen", self.settings_screen.visible),
+            ("theme_screen", self.theme_screen.visible),
+            ("stats_dialog", self.stats_dialog.visible),
+            ("mcp_view", self.mcp_view.visible),
+            ("agents_menu", self.agents_menu.visible),
+            ("diff_viewer", self.diff_viewer.visible),
+            ("memory_file_selector", self.memory_file_selector.visible),
+            ("skills_view", self.skills_view.visible),
+            ("plugins_hub", self.plugins_hub.visible),
+            ("journey_view", self.journey_view.visible),
+            ("hooks_config_menu", self.hooks_config_menu.visible),
+            ("voice_mode_notice", self.voice_mode_notice.visible),
+            ("model_picker", self.model_picker.visible),
+            ("session_browser", self.session_browser.visible),
+            ("session_branching", self.session_branching.visible),
+            ("tasks_overlay", self.tasks_overlay.visible),
+            ("export_dialog", self.export_dialog.visible),
+            ("context_viz", self.context_viz.visible),
+            ("mcp_approval", self.mcp_approval.visible),
+            (
+                "bypass_permissions_dialog",
+                self.bypass_permissions_dialog.visible,
+            ),
+            ("effort_picker", self.effort_picker.visible),
+            ("key_input_dialog", self.key_input_dialog.visible),
+            (
+                "custom_provider_dialog",
+                self.custom_provider_dialog.visible,
+            ),
+            ("free_mode_dialog", self.free_mode_dialog.visible),
+            ("device_auth_dialog", self.device_auth_dialog.visible),
+            ("connect_dialog", self.connect_dialog.visible),
+            ("import_config_picker", self.import_config_picker.visible),
+            ("import_config_dialog", self.import_config_dialog.visible),
+            ("command_palette", self.command_palette.visible),
+            ("ask_user_dialog", self.ask_user_dialog.visible),
+            ("permission_request", self.permission_request.is_some()),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), serde_json::Value::Bool(v)))
+        .collect();
+
+        serde_json::json!({
+            "should_exit": self.should_exit,
+            "is_streaming": self.is_streaming,
+            "is_simulating": self.is_simulating,
+            "plan_mode": self.plan_mode,
+            "show_help": self.show_help,
+            "show_reasoning": self.show_reasoning,
+            "fast_mode": self.fast_mode,
+            "messages": self.messages.len(),
+            "status_message": self.status_message,
+            "model": self.model_name,
+            "provider": self.active_provider,
+            "focus": format!("{:?}", self.focus),
+            "token_count": self.token_count,
+            "any_modal_open": self.any_modal_open(),
+            "overlays": serde_json::Value::Object(overlays),
+        })
     }
 
     /// Implementation that receives both cmd and args. Most slash commands
@@ -6524,6 +6605,15 @@ impl App {
         loop {
             if self.is_simulating && self.simulated_keys.is_empty() && !self.is_streaming {
                 self.should_exit = true;
+            }
+            // Frame-cap guard: a headless scenario that never stops streaming
+            // (e.g. a real agent that hangs) can't spin the loop forever.
+            if self.is_simulating {
+                if let Some(max) = self.simulation_max_frames {
+                    if self.frame_count >= max {
+                        self.should_exit = true;
+                    }
+                }
             }
             if self.should_exit {
                 self.debug_hub.dump_on_exit();
