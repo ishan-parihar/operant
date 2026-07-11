@@ -19,7 +19,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use ratatui::Frame;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::tui::overlays::centered_rect;
 
@@ -126,7 +126,7 @@ impl PluginsHubState {
 
     /// Toggle the selected plugin's enabled state by creating or removing
     /// the `<name>.enabled` marker file. Returns a flash message.
-    pub fn toggle_selected(&mut self, plugins_dir: &PathBuf) {
+    pub fn toggle_selected(&mut self, plugins_dir: &Path) {
         let Some(entry) = self.plugins.get_mut(self.selected) else {
             return;
         };

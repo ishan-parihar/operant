@@ -225,10 +225,10 @@ async fn probe_apikey_provider(
 async fn probe_bedrock() -> ProbeResult {
     let has_key = std::env::var("AWS_ACCESS_KEY_ID")
         .ok()
-        .map_or(false, |v| !v.is_empty());
+        .is_some_and(|v| !v.is_empty());
     let has_secret = std::env::var("AWS_SECRET_ACCESS_KEY")
         .ok()
-        .map_or(false, |v| !v.is_empty());
+        .is_some_and(|v| !v.is_empty());
 
     if has_key && has_secret {
         ProbeResult::ok_with("AWS Bedrock", "(credentials configured)")

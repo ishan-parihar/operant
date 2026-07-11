@@ -188,7 +188,7 @@ You are Operant, a helpful AI assistant.
             Ok(raw) => {
                 match serde_yaml::from_str::<serde_yaml::Value>(&raw) {
                     Ok(mut value) => {
-                        if let Some(ref map) = value.as_mapping() {
+                        if let Some(map) = value.as_mapping() {
                             let stale = ["provider", "base_url"];
                             let has_stale = stale.iter().any(|k| {
                                 map.get(serde_yaml::Value::String(k.to_string()))

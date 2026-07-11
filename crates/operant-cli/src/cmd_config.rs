@@ -176,11 +176,7 @@ fn handle_check(config: &AppConfig) -> Result<()> {
         ));
     }
 
-    let key_missing = config
-        .client
-        .api_key
-        .as_ref()
-        .map_or(true, |k| k.is_empty());
+    let key_missing = config.client.api_key.as_ref().is_none_or(|k| k.is_empty());
     if key_missing {
         issues.push(
             "No API key configured. Set OPENAI_API_KEY or configure it in the config file."

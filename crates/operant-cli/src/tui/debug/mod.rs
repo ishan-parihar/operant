@@ -50,4 +50,4 @@ pub mod event_bus;
 pub mod overlay;
 
 pub use debug_hub::TuiDebugHub;
-pub use event_bus::{TuiEvent, TuiEventBus};
+pub use event_bus::TuiEvent;

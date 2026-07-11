@@ -1,5 +1,5 @@
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use clap::Subcommand;
@@ -48,7 +48,7 @@ fn copy_dir_recursive(src: &PathBuf, dst: &PathBuf) -> Result<()> {
     Ok(())
 }
 
-async fn cmd_import(_config: &AppConfig, path: &PathBuf, force: bool) -> Result<()> {
+async fn cmd_import(_config: &AppConfig, path: &Path, force: bool) -> Result<()> {
     if !path.exists() {
         anyhow::bail!("Backup directory does not exist: {}", path.display());
     }

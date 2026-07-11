@@ -1271,7 +1271,7 @@ async fn main() -> Result<()> {
             cmd_cron::handle_cron_command(&loaded.config, cmd.clone(), *json).await?;
         }
         Some(Commands::Kanban { board, cmd, json }) => {
-            cmd_kanban::handle_kanban_command(&loaded.config, &board, cmd.clone(), *json).await?;
+            cmd_kanban::handle_kanban_command(&loaded.config, board, cmd.clone(), *json).await?;
         }
         Some(Commands::Gateway { cmd, json }) => {
             cmd_gateway::handle_gateway_command(&loaded.config, cmd.clone(), *json).await?;

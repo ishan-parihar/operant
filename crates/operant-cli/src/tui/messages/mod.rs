@@ -217,7 +217,7 @@ fn normalize_at_tokens(text: &str, injected: &std::collections::HashSet<String>)
         if trimmed.starts_with('@') && trimmed.len() > 1 {
             let mut path_part = trimmed[1..].to_string();
             // Strip trailing punctuation (same logic as parse_at_refs)
-            while path_part.len() > 0
+            while !path_part.is_empty()
                 && path_part.ends_with(|c: char| c.is_ascii_punctuation())
                 && !path_part.ends_with('/')
             {
@@ -308,7 +308,7 @@ pub fn render_transcript_user_message(
     // badge so the raw slash command doesn't sit next to the `[Goal started]`
     // event the machinery injects right after.
     if let Some(ContentBlock::Text { text }) = msg.content_blocks().into_iter().next() {
-        if let Some(objective) = extract_goal_slash_objective(&text) {
+        if let Some(objective) = extract_goal_slash_objective(text) {
             return render_goal_active_block(&objective);
         }
     }
@@ -363,7 +363,7 @@ pub fn render_transcript_user_message(
             ContentBlock::Text { text } => {
                 if text.contains("<file path=\"") {
                     flush_text(&mut pending_text, &mut lines);
-                    for segment in extract_file_segments(&text) {
+                    for segment in extract_file_segments(text) {
                         match segment {
                             TextSegment::FileBlock(path) => {
                                 let label = std::path::Path::new(&path)
@@ -385,7 +385,7 @@ pub fn render_transcript_user_message(
                 } else if !injected_paths.is_empty() {
                     // Shorten @long/path/file.rs → @file.rs since the chips already
                     // show the full path context.
-                    let cleaned = normalize_at_tokens(&text, &injected_paths);
+                    let cleaned = normalize_at_tokens(text, &injected_paths);
                     let trimmed = cleaned.trim();
                     if !trimmed.is_empty() {
                         if !pending_text.is_empty() {
@@ -397,7 +397,7 @@ pub fn render_transcript_user_message(
                     if !pending_text.is_empty() {
                         pending_text.push('\n');
                     }
-                    pending_text.push_str(&text);
+                    pending_text.push_str(text);
                 }
             }
             ContentBlock::Image {
@@ -431,22 +431,22 @@ pub fn render_transcript_user_message(
             }
             ContentBlock::UserLocalCommandOutput { command, output } => {
                 flush_text(&mut pending_text, &mut lines);
-                lines.extend(render_user_local_command_output(&command, &output, 30));
+                lines.extend(render_user_local_command_output(command, output, 30));
             }
             ContentBlock::UserCommand { name, args } => {
                 flush_text(&mut pending_text, &mut lines);
-                lines.extend(render_user_command(&name, &args));
+                lines.extend(render_user_command(name, args));
             }
             ContentBlock::UserMemoryInput { key, value } => {
                 flush_text(&mut pending_text, &mut lines);
-                lines.extend(render_user_memory_input(&key, &value));
+                lines.extend(render_user_memory_input(key, value));
             }
             ContentBlock::SystemAPIError {
                 message,
                 retry_secs,
             } => {
                 flush_text(&mut pending_text, &mut lines);
-                lines.extend(render_system_api_error(&message, *retry_secs));
+                lines.extend(render_system_api_error(message, *retry_secs));
             }
             ContentBlock::CollapsedReadSearch {
                 tool_name,
@@ -456,7 +456,7 @@ pub fn render_transcript_user_message(
                 flush_text(&mut pending_text, &mut lines);
                 let path_refs: Vec<&str> = paths.iter().map(|path| path.as_str()).collect();
                 lines.extend(render_collapsed_read_search(
-                    &tool_name, &path_refs, *n_hidden,
+                    tool_name, &path_refs, *n_hidden,
                 ));
             }
             ContentBlock::TaskAssignment {
@@ -465,11 +465,11 @@ pub fn render_transcript_user_message(
                 description,
             } => {
                 flush_text(&mut pending_text, &mut lines);
-                lines.extend(render_task_assignment(&id, &subject, &description));
+                lines.extend(render_task_assignment(id, subject, description));
             }
             ContentBlock::ToolUse { name, input, .. } => {
                 flush_text(&mut pending_text, &mut lines);
-                lines.extend(render_tool_use_inner(&name, &input));
+                lines.extend(render_tool_use_inner(name, input));
             }
             ContentBlock::ToolResult {
                 tool_use_id: _,
@@ -477,7 +477,7 @@ pub fn render_transcript_user_message(
                 is_error,
             } => {
                 flush_text(&mut pending_text, &mut lines);
-                let text = tool_result_text(&content);
+                let text = tool_result_text(content);
                 let rendered = if *is_error {
                     render_tool_result_error(&text)
                 } else {
@@ -488,7 +488,7 @@ pub fn render_transcript_user_message(
             ContentBlock::Thinking { thinking, .. } => {
                 flush_text(&mut pending_text, &mut lines);
                 lines.extend(render_transcript_reasoning_block(
-                    &thinking,
+                    thinking,
                     false,
                     inner_width,
                 ));
@@ -593,7 +593,7 @@ pub fn render_transcript_assistant_message_tagged(
                 if !pending_text.is_empty() {
                     pending_text.push('\n');
                 }
-                pending_text.push_str(&text);
+                pending_text.push_str(text);
             }
             ContentBlock::Thinking { thinking, .. } => {
                 flush_text(&mut pending_text, &mut out, ctx.width);
@@ -605,7 +605,7 @@ pub fn render_transcript_assistant_message_tagged(
                     h.finish()
                 };
                 let expanded = ctx.show_thinking || ctx.expanded_thinking.contains(&thinking_hash);
-                let block_lines = render_transcript_reasoning_block(&thinking, expanded, ctx.width);
+                let block_lines = render_transcript_reasoning_block(thinking, expanded, ctx.width);
                 for (i, line) in block_lines.into_iter().enumerate() {
                     // Tag only the header line (index 0) with the hash so it's clickable.
                     out.push((line, if i == 0 { Some(thinking_hash) } else { None }));
@@ -626,7 +626,7 @@ pub fn render_transcript_assistant_message_tagged(
             ContentBlock::ToolUse { name, input, .. } => {
                 flush_text(&mut pending_text, &mut out, ctx.width);
                 for line in indent_lines(
-                    render_tool_use_inner(&name, &input),
+                    render_tool_use_inner(name, input),
                     "   ",
                     Style::default(),
                     TRANSCRIPT_TEXT,
@@ -640,7 +640,7 @@ pub fn render_transcript_assistant_message_tagged(
                 is_error,
             } => {
                 flush_text(&mut pending_text, &mut out, ctx.width);
-                let text = tool_result_text(&content);
+                let text = tool_result_text(content);
                 let tool_name = ctx.tool_names.get(tool_use_id).map(|name| name.as_str());
                 let rendered = if *is_error {
                     render_tool_result_error(&text)
@@ -705,7 +705,7 @@ pub fn render_transcript_assistant_message_tagged(
             ContentBlock::UserLocalCommandOutput { command, output } => {
                 flush_text(&mut pending_text, &mut out, ctx.width);
                 for line in indent_lines(
-                    render_user_local_command_output(&command, &output, 30),
+                    render_user_local_command_output(command, output, 30),
                     "   ",
                     Style::default(),
                     TRANSCRIPT_TEXT,
@@ -716,7 +716,7 @@ pub fn render_transcript_assistant_message_tagged(
             ContentBlock::UserCommand { name, args } => {
                 flush_text(&mut pending_text, &mut out, ctx.width);
                 for line in indent_lines(
-                    render_user_command(&name, &args),
+                    render_user_command(name, args),
                     "   ",
                     Style::default(),
                     TRANSCRIPT_TEXT,
@@ -727,7 +727,7 @@ pub fn render_transcript_assistant_message_tagged(
             ContentBlock::UserMemoryInput { key, value } => {
                 flush_text(&mut pending_text, &mut out, ctx.width);
                 for line in indent_lines(
-                    render_user_memory_input(&key, &value),
+                    render_user_memory_input(key, value),
                     "   ",
                     Style::default(),
                     TRANSCRIPT_TEXT,
@@ -741,7 +741,7 @@ pub fn render_transcript_assistant_message_tagged(
             } => {
                 flush_text(&mut pending_text, &mut out, ctx.width);
                 for line in indent_lines(
-                    render_system_api_error(&message, *retry_secs),
+                    render_system_api_error(message, *retry_secs),
                     "   ",
                     Style::default(),
                     TRANSCRIPT_TEXT,
@@ -757,7 +757,7 @@ pub fn render_transcript_assistant_message_tagged(
                 flush_text(&mut pending_text, &mut out, ctx.width);
                 let path_refs: Vec<&str> = paths.iter().map(|path| path.as_str()).collect();
                 for line in indent_lines(
-                    render_collapsed_read_search(&tool_name, &path_refs, *n_hidden),
+                    render_collapsed_read_search(tool_name, &path_refs, *n_hidden),
                     "   ",
                     Style::default(),
                     TRANSCRIPT_TEXT,
@@ -772,7 +772,7 @@ pub fn render_transcript_assistant_message_tagged(
             } => {
                 flush_text(&mut pending_text, &mut out, ctx.width);
                 for line in indent_lines(
-                    render_task_assignment(&id, &subject, &description),
+                    render_task_assignment(id, subject, description),
                     "   ",
                     Style::default(),
                     TRANSCRIPT_TEXT,
@@ -1213,8 +1213,8 @@ fn extract_goal_objective_from_args(args: &str) -> Option<String> {
     let rest = if let Some(after_flag) = trimmed.strip_prefix("--tokens") {
         let after_flag = after_flag.trim_start();
         after_flag
-            .splitn(2, char::is_whitespace)
-            .nth(1)
+            .split_once(char::is_whitespace)
+            .map(|x| x.1)
             .unwrap_or("")
             .trim()
     } else {

@@ -390,7 +390,7 @@ pub fn load_agent_definitions(project_root: &std::path::Path) -> Vec<AgentDefini
         };
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.extension().map_or(false, |e| e == "md") {
+            if path.extension().is_some_and(|e| e == "md") {
                 if let Some(def) = parse_agent_def(&path) {
                     defs.push(def);
                 }

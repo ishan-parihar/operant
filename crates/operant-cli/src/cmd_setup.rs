@@ -90,7 +90,7 @@ fn show_setup_status(config: &AppConfig) {
         .client
         .api_key
         .as_ref()
-        .map_or(false, |k| !k.is_empty());
+        .is_some_and(|k| !k.is_empty());
     print_status(
         "API key",
         if key_ok { "configured" } else { "not set" },
@@ -636,7 +636,7 @@ fn step_api_key(config: &mut AppConfig, provider_key: &str, provider_name: &str)
     let provider_info = provider_by_name(provider_key);
 
     // Skip if provider doesn't need an API key (e.g., ollama local)
-    let needs_key = provider_info.map_or(true, |p| !p.env_var.is_empty());
+    let needs_key = provider_info.is_none_or(|p| !p.env_var.is_empty());
     if !needs_key {
         print_info(&format!("{} does not require an API key.", provider_name));
         return Ok(());
@@ -686,7 +686,7 @@ fn step_fallback_and_strategy(
     _provider_name: &str,
 ) -> Result<()> {
     let provider_info = provider_by_name(provider_key);
-    let needs_key = provider_info.map_or(true, |p| !p.env_var.is_empty());
+    let needs_key = provider_info.is_none_or(|p| !p.env_var.is_empty());
     if !needs_key {
         return Ok(());
     }
@@ -725,7 +725,7 @@ fn step_fallback_and_strategy(
         .client
         .api_key
         .as_deref()
-        .map_or(false, |k| !k.is_empty());
+        .is_some_and(|k| !k.is_empty());
     if (total_keys > 1 || has_primary) && prompt_yes_no("Configure rotation strategy?", true)? {
         let strategies = ["Fill-first / sticky", "Round robin", "Random"];
         let strategy_map = ["fill_first", "round_robin", "random"];

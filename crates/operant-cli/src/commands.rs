@@ -640,7 +640,7 @@ impl CommandRegistry {
     /// Resolve a command name (or alias) to its canonical name.
     ///
     /// Returns `None` if no command matches.
-    pub fn resolve<'a>(&'a self, name: &str) -> Option<&'static str> {
+    pub fn resolve(&self, name: &str) -> Option<&'static str> {
         let trimmed = name.trim().trim_start_matches('/');
         self.defs.get(trimmed).map(|def| def.name)
     }

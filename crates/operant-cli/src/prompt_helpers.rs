@@ -102,7 +102,7 @@ pub fn prompt_multi_select(
 /// Select a number within a range.
 pub fn prompt_range(question: &str, default: f64, min: f64, max: f64) -> Result<f64> {
     let value: String = Input::new()
-        .with_prompt(&format!("{} ({}–{}) [{}]", question, min, max, default))
+        .with_prompt(format!("{} ({}–{}) [{}]", question, min, max, default))
         .default(default.to_string())
         .allow_empty(true)
         .interact_text()

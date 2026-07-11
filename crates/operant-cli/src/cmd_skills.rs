@@ -783,7 +783,7 @@ fn audit_skills(config: &AppConfig) -> Result<()> {
                     }
                 }
                 for cmd in &s.prerequisites_commands {
-                    if !which::which(cmd).is_ok() {
+                    if which::which(cmd).is_err() {
                         issues.push(format!("Missing command: {}", cmd));
                     }
                 }
@@ -931,7 +931,7 @@ fn snapshot_skill(config: &AppConfig, name: &str, output: Option<&str>) -> Resul
     tar.append_dir_all(name, &skill_dir)
         .with_context(|| format!("Failed to archive skill '{}'", name))?;
 
-    let _ = tar.finish().context("Failed to finalize archive")?;
+    tar.finish().context("Failed to finalize archive")?;
 
     println!(
         "{} Snapshot written to {}",

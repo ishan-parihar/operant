@@ -262,8 +262,8 @@ async fn debug_skills(config: &AppConfig) -> Result<()> {
     println!("Directory: {}", config.skills.root_dir.display());
     println!();
     println!(
-        "{:<3}  {:<24} {:<14} {:<8}  {}",
-        "#", "Name", "Category", "Version", "Description"
+        "{:<3}  {:<24} {:<14} {:<8}  Description",
+        "#", "Name", "Category", "Version"
     );
     println!("{}", "-".repeat(100));
 
@@ -406,8 +406,8 @@ async fn debug_mcp(config: &AppConfig) -> Result<()> {
     }
 
     println!(
-        "{:<3}  {:<24} {:<10} {:<8}  {}",
-        "#", "Name", "Type", "Enabled", "URL / Command"
+        "{:<3}  {:<24} {:<10} {:<8}  URL / Command",
+        "#", "Name", "Type", "Enabled"
     );
     println!("{}", "-".repeat(90));
 
@@ -995,7 +995,7 @@ fn load_settings() -> crate::tui::adapter_types::config::Settings {
 }
 
 fn save_settings(settings: &crate::tui::adapter_types::config::Settings) -> Result<()> {
-    settings.save_sync().map_err(Into::into)
+    settings.save_sync()
 }
 
 fn parse_key_sequence(seq: &str) -> Vec<crossterm::event::KeyEvent> {

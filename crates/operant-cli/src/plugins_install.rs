@@ -72,11 +72,7 @@ fn resolve_git_url(identifier: &str) -> String {
 
 /// Derive a plugin name from the identifier (last path segment, no .git).
 fn derive_plugin_name(identifier: &str) -> String {
-    let name = if identifier.ends_with(".git") {
-        &identifier[..identifier.len() - 4]
-    } else {
-        identifier
-    };
+    let name = identifier.strip_suffix(".git").unwrap_or(identifier);
     let name = name.trim_end_matches('/');
     name.rsplit_once('/')
         .map(|(_, last)| last.to_string())
