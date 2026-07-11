@@ -234,7 +234,6 @@ pub struct FFmpegRecorder {
     recording: bool,
     start_time: Option<Instant>,
     output_path: Option<PathBuf>,
-    current_rms: Arc<Mutex<f64>>,
     silence_callback: Arc<Mutex<Option<Box<dyn FnOnce() + Send>>>>,
 }
 
@@ -246,7 +245,6 @@ impl FFmpegRecorder {
             recording: false,
             start_time: None,
             output_path: None,
-            current_rms: Arc::new(Mutex::new(0.0)),
             silence_callback: Arc::new(Mutex::new(None)),
         }
     }
@@ -1086,8 +1084,8 @@ impl SttEngine for AzureSttEngine {
 
         #[derive(Deserialize)]
         struct AzureSttResponse {
-            DisplayText: Option<String>,
-            RecognitionStatus: String,
+            #[serde(rename = "DisplayText")]
+            display_text: Option<String>,
         }
 
         let resp: AzureSttResponse = response
@@ -1095,7 +1093,7 @@ impl SttEngine for AzureSttEngine {
             .await
             .map_err(|e| VoiceError::Stt(format!("Failed to parse Azure STT response: {e}")))?;
 
-        let transcript = resp.DisplayText.unwrap_or_default();
+        let transcript = resp.display_text.unwrap_or_default();
         Ok(SttResult::success(
             &transcript,
             self.provider().as_str(),
@@ -1169,7 +1167,6 @@ impl SttEngine for AssemblyAIEngine {
         #[derive(Deserialize)]
         struct TranscriptResponse {
             id: String,
-            status: String,
         }
 
         let transcript_req: TranscriptResponse = transcribe_resp

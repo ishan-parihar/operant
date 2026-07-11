@@ -501,35 +501,48 @@ impl CredentialPool {
     /// Refresh all OAuth credentials in the pool.
     pub async fn refresh_async(&self) -> Result<()> {
         let refresher = crate::oauth_refresh::OAuthRefresher::new()?;
-        let inner = self.inner.read().unwrap_or_else(|e| e.into_inner());
+        // Collect the credentials that need refreshing and drop the read
+        // guard before the loop below — the loop awaits a network call per
+        // credential, and holding a std::sync::RwLock guard across an await
+        // point would block any writer for the whole loop's duration instead
+        // of just this synchronous filter.
+        let to_refresh: Vec<PooledCredential> = {
+            let inner = self.inner.read().unwrap_or_else(|e| e.into_inner());
+            inner
+                .credentials
+                .values()
+                .filter(|cred| {
+                    cred.credential_type == AuthType::OAuth && cred.needs_oauth_refresh(120)
+                })
+                .cloned()
+                .collect()
+        };
 
-        for cred in inner.credentials.values() {
-            if cred.credential_type == AuthType::OAuth && cred.needs_oauth_refresh(120) {
-                info!(
-                    provider = %self.provider,
-                    credential = %cred.name,
-                    "Refreshing OAuth token"
-                );
-                match refresher.refresh(&self.provider, cred).await {
-                    Ok(response) => {
-                        info!(
-                            provider = %self.provider,
-                            credential = %cred.name,
-                            "OAuth token refreshed successfully"
-                        );
-                        let _ = refresher.persist_to_auth_store(&self.provider, cred, &response);
-                    }
-                    Err(e) => {
-                        warn!(
-                            provider = %self.provider,
-                            credential = %cred.name,
-                            error = %e,
-                            "OAuth refresh failed, attempting sync from auth store"
-                        );
-                        if let Some(synced) = refresher.sync_from_auth_store(&self.provider, cred) {
-                            if synced.value != cred.value {
-                                info!(provider = %self.provider, credential = %cred.name, "Adopted synced token from auth store");
-                            }
+        for cred in &to_refresh {
+            info!(
+                provider = %self.provider,
+                credential = %cred.name,
+                "Refreshing OAuth token"
+            );
+            match refresher.refresh(&self.provider, cred).await {
+                Ok(response) => {
+                    info!(
+                        provider = %self.provider,
+                        credential = %cred.name,
+                        "OAuth token refreshed successfully"
+                    );
+                    let _ = refresher.persist_to_auth_store(&self.provider, cred, &response);
+                }
+                Err(e) => {
+                    warn!(
+                        provider = %self.provider,
+                        credential = %cred.name,
+                        error = %e,
+                        "OAuth refresh failed, attempting sync from auth store"
+                    );
+                    if let Some(synced) = refresher.sync_from_auth_store(&self.provider, cred) {
+                        if synced.value != cred.value {
+                            info!(provider = %self.provider, credential = %cred.name, "Adopted synced token from auth store");
                         }
                     }
                 }
@@ -541,32 +554,40 @@ impl CredentialPool {
     /// Attempt an OAuth refresh for a specific provider type.
     pub async fn refresh_oauth_async(&self, provider_type: &str) -> Result<()> {
         let refresher = crate::oauth_refresh::OAuthRefresher::new()?;
-        let inner = self.inner.read().unwrap_or_else(|e| e.into_inner());
+        // See refresh_async above — collect first, drop the read guard
+        // before the awaiting loop.
+        let to_refresh: Vec<PooledCredential> = {
+            let inner = self.inner.read().unwrap_or_else(|e| e.into_inner());
+            inner
+                .credentials
+                .values()
+                .filter(|cred| cred.credential_type == AuthType::OAuth)
+                .cloned()
+                .collect()
+        };
 
-        for cred in inner.credentials.values() {
-            if cred.credential_type == AuthType::OAuth {
-                match refresher.refresh(provider_type, cred).await {
-                    Ok(response) => {
-                        info!(
-                            provider = %self.provider,
-                            oauth_provider = %provider_type,
-                            credential = %cred.name,
-                            "OAuth credential refreshed"
-                        );
-                        let _ = refresher.persist_to_auth_store(provider_type, cred, &response);
-                    }
-                    Err(e) => {
-                        warn!(
-                            provider = %self.provider,
-                            oauth_provider = %provider_type,
-                            credential = %cred.name,
-                            error = %e,
-                            "OAuth refresh failed"
-                        );
-                        if let Some(synced) = refresher.sync_from_auth_store(provider_type, cred) {
-                            if synced.value != cred.value {
-                                info!(provider = %self.provider, "Adopted synced token from auth store");
-                            }
+        for cred in &to_refresh {
+            match refresher.refresh(provider_type, cred).await {
+                Ok(response) => {
+                    info!(
+                        provider = %self.provider,
+                        oauth_provider = %provider_type,
+                        credential = %cred.name,
+                        "OAuth credential refreshed"
+                    );
+                    let _ = refresher.persist_to_auth_store(provider_type, cred, &response);
+                }
+                Err(e) => {
+                    warn!(
+                        provider = %self.provider,
+                        oauth_provider = %provider_type,
+                        credential = %cred.name,
+                        error = %e,
+                        "OAuth refresh failed"
+                    );
+                    if let Some(synced) = refresher.sync_from_auth_store(provider_type, cred) {
+                        if synced.value != cred.value {
+                            info!(provider = %self.provider, "Adopted synced token from auth store");
                         }
                     }
                 }

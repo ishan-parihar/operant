@@ -776,7 +776,7 @@ fn handle_search_members<'a>(
 ) -> Pin<Box<dyn Future<Output = Result<Value, DiscordApiError>> + Send + 'a>> {
     let guild_id = args.guild_id.clone().unwrap_or_default();
     let query = args.query.clone().unwrap_or_default();
-    let limit = args.limit.unwrap_or(20).min(100).max(1);
+    let limit = args.limit.unwrap_or(20).clamp(1, 100);
     Box::pin(async move {
         let mut params = HashMap::new();
         params.insert("query".to_string(), query);
@@ -821,7 +821,7 @@ fn handle_fetch_messages<'a>(
     args: &'a DiscordArgs,
 ) -> Pin<Box<dyn Future<Output = Result<Value, DiscordApiError>> + Send + 'a>> {
     let channel_id = args.channel_id.clone().unwrap_or_default();
-    let limit = args.limit.unwrap_or(50).min(100).max(1);
+    let limit = args.limit.unwrap_or(50).clamp(1, 100);
     let before = args.before.clone().unwrap_or_default();
     let after = args.after.clone().unwrap_or_default();
     Box::pin(async move {

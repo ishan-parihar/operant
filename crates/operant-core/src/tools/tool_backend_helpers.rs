@@ -26,7 +26,6 @@ pub struct ToolBackendTool;
 #[derive(JsonSchema, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[allow(dead_code)]
-#[allow(dead_code)]
 struct ToolBackendArgs {
     tool_name: String,
     backend: Option<String>,
