@@ -876,8 +876,6 @@ pub struct App {
     pub system_annotations: Vec<SystemAnnotation>,
     pub input: String,
     pub prompt_input: PromptInputState,
-    pub input_history: Vec<String>,
-    pub history_index: Option<usize>,
     pub scroll_offset: usize,
     pub is_streaming: bool,
     pub streaming_text: String,
@@ -929,7 +927,6 @@ pub struct App {
     /// and tool list to match the newly-selected agent.
     pub agent_mode_changed: bool,
     pub agent_status: Vec<(String, String)>,
-    pub history_search: Option<()>, // (iter-156: always None — struct deleted)
 
     // Cursor position within input (byte offset)
     pub cursor_pos: usize,
@@ -1104,12 +1101,6 @@ pub struct App {
     pub session_load_rx: Option<tokio::sync::mpsc::Receiver<Vec<(String, String)>>>,
     /// Credential store for provider API keys and OAuth tokens.
     pub auth_store: crate::tui::adapter_types::AuthStore,
-    /// Messages typed by the user while a query was streaming. They will be
-    /// auto-submitted in order once the current turn completes (issue #149).
-    pub queued_messages: std::collections::VecDeque<String>,
-    /// When `true`, the main loop will inject a synthetic Enter event on the
-    /// next iteration to dequeue and submit the next queued message.
-    pub pending_auto_submit: bool,
     /// Connect-a-provider dialog (/connect command).
     pub connect_dialog: DialogSelectState,
     /// Import-config source picker (/import-config command).
@@ -1434,8 +1425,6 @@ impl App {
                 p.history = crate::tui::input_history::load();
                 p
             },
-            input_history: Vec::new(),
-            history_index: None,
             scroll_offset: 0,
             is_streaming: false,
             streaming_text: String::new(),
@@ -1460,7 +1449,6 @@ impl App {
             agent_mode_changed: false,
             accent_color: ACCENT_BUILD,
             agent_status: Vec::new(),
-            history_search: None,
             cursor_pos: 0,
             auto_scroll: true,
             new_messages_while_scrolled: 0,
@@ -1538,8 +1526,6 @@ impl App {
             session_load_pending: None,
             session_load_rx: None,
             auth_store,
-            queued_messages: std::collections::VecDeque::new(),
-            pending_auto_submit: false,
             connect_dialog: DialogSelectState::new("Connect a provider", provider_picker_items()),
             import_config_picker: DialogSelectState::new(
                 "Import config",
@@ -3278,8 +3264,6 @@ impl App {
             self.prompt_input.history.push(input.clone());
             self.prompt_input.history_pos = None;
             self.prompt_input.history_draft.clear();
-            self.input_history = self.prompt_input.history.clone();
-            self.history_index = self.prompt_input.history_pos;
             // Persist the new entry to ~/.operant/history.jsonl so it
             // survives restarts. (iter-125 — persistent input history.)
             crate::tui::input_history::append(&input);
@@ -3355,7 +3339,6 @@ impl App {
     fn sync_legacy_prompt_fields(&mut self) {
         self.input = self.prompt_input.text.clone();
         self.cursor_pos = self.prompt_input.cursor;
-        self.history_index = self.prompt_input.history_pos;
     }
 
     pub fn refresh_prompt_input(&mut self) {
