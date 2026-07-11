@@ -2213,6 +2213,28 @@ impl App {
         })
     }
 
+    /// Push `text` into the live steer queue if the agent is streaming, and
+    /// return a status string describing the outcome. Mirrors the live steer
+    /// path in adapter_types.rs, but uses `try_lock` because this runs on the
+    /// sync slash-command path while the queue is a tokio Mutex.
+    /// (iter-240 — wires /steer and /queue <text> to the real steer queue.)
+    fn queue_steer(&mut self, text: &str) -> String {
+        const NOT_STREAMING: &str = "Steer is only available while the agent is streaming.";
+        if !self.is_streaming {
+            return NOT_STREAMING.to_string();
+        }
+        match self.steer_queue_handle.as_ref() {
+            Some(handle) => match handle.try_lock() {
+                Ok(mut q) => {
+                    q.push(text.to_string());
+                    format!("Steer queued: {}", text)
+                }
+                Err(_) => NOT_STREAMING.to_string(),
+            },
+            None => NOT_STREAMING.to_string(),
+        }
+    }
+
     /// Implementation that receives both cmd and args. Most slash commands
     /// ignore args; a few (like /personality <name>) consume them.
     fn intercept_slash_command_with_args_impl(&mut self, cmd: &str, args: &str) -> bool {
@@ -2607,22 +2629,38 @@ impl App {
                 true
             }
 
-            // /steer — surface that steer mode is available mid-stream.
+            // /steer <message> — inject guidance into the live steer queue so
+            // the agent picks it up at the next iteration boundary mid-turn.
+            // (iter-240 — wires to the real steer_queue_handle backend.)
             "steer" => {
-                self.status_message = Some(
-                    "Steer mode: type your message while the agent is streaming to queue a steer."
-                        .to_string(),
-                );
+                self.status_message = Some(if args.is_empty() {
+                    "Usage: /steer <message> (inject guidance while the agent is streaming)"
+                        .to_string()
+                } else {
+                    self.queue_steer(args)
+                });
                 true
             }
 
-            // /queue — show queued user messages (operant doesn't maintain an
-            // explicit queue; the input buffer is the queue).
+            // /queue — list the live steer queue; /queue <text> is an alias for
+            // /steer <text>. operant has no separate pending-input queue — the
+            // steer queue IS the queue. (iter-240.)
             "queue" => {
-                self.status_message = Some(
-                    "No queued messages. Type while the agent is streaming to queue a steer."
-                        .to_string(),
-                );
+                let msg = if !args.is_empty() {
+                    self.queue_steer(args)
+                } else {
+                    match self.steer_queue_handle.as_ref() {
+                        Some(handle) => match handle.try_lock() {
+                            Ok(q) if q.is_empty() => "Queue is empty".to_string(),
+                            Ok(q) => format!("Queued ({}): {}", q.len(), q.join("; ")),
+                            Err(_) => "Queue is busy (agent is draining it).".to_string(),
+                        },
+                        None => {
+                            "Nothing queued (queue is active only while streaming).".to_string()
+                        }
+                    }
+                };
+                self.status_message = Some(msg);
                 true
             }
 
@@ -2646,11 +2684,19 @@ impl App {
                 true
             }
 
-            // /reload, /reload-mcp, /reload-skills — surface a "not yet
-            // implemented" message rather than silently dropping. A real
-            // implementation would re-read the MCP server config / skills
-            // dir without restarting the TUI; that's a future iteration.
-            "reload" | "reload-mcp" | "reload-skills" => {
+            // /reload-mcp — request a live MCP reconnect. The run loop drains
+            // pending_mcp_reconnect (adapter_types.rs) and reconnects the MCP
+            // servers without restarting the TUI. (iter-240 — wires to the
+            // pending_mcp_reconnect backend.)
+            "reload-mcp" => {
+                self.pending_mcp_reconnect = true;
+                self.status_message = Some("Reconnecting MCP servers…".to_string());
+                true
+            }
+
+            // /reload, /reload-skills — config/skills hot-reload is not yet
+            // wired; surface a restart hint rather than silently dropping.
+            "reload" | "reload-skills" => {
                 self.status_message = Some(format!(
                     "{}: hot-reload is not yet wired. Restart operant to pick up changes.",
                     cmd
@@ -2685,13 +2731,14 @@ impl App {
                 true
             }
 
-            // /mouse — surface whether mouse capture is active. Mouse capture
-            // is enabled on startup unless --no-mouse was passed. (Bug #24
-            // from iter-82 audit — /mouse mentioned a --no-mouse flag that
-            // didn't exist; now it does.)
+            // /mouse — report the mouse-capture state. Capture is enabled on
+            // startup unless --no-mouse was passed; that flag lives on the
+            // TuiApp runner (adapter_types.rs) and is not threaded into App,
+            // so this reports the real startup default. (iter-240.)
             "mouse" => {
                 self.status_message = Some(
-                    "Mouse capture is enabled on startup. Use --no-mouse to disable (e.g. inside tmux).".to_string()
+                    "Mouse capture: enabled (use --no-mouse to disable, e.g. inside tmux)"
+                        .to_string(),
                 );
                 true
             }
