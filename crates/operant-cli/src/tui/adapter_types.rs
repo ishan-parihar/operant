@@ -1571,16 +1571,16 @@ pub async fn fetch_openai_compatible_models_async(api_key: &str, base_url: &str)
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ProviderId {
-    OPENCODE_GO,
-    OPENCODE_ZEN,
+    OpencodeGo,
+    OpencodeZen,
     Other(String),
 }
 
 impl From<ProviderId> for String {
     fn from(pid: ProviderId) -> String {
         match pid {
-            ProviderId::OPENCODE_GO => "opencode-go".to_string(),
-            ProviderId::OPENCODE_ZEN => "opencode-zen".to_string(),
+            ProviderId::OpencodeGo => "opencode-go".to_string(),
+            ProviderId::OpencodeZen => "opencode-zen".to_string(),
             ProviderId::Other(s) => s,
         }
     }
@@ -1589,8 +1589,8 @@ impl From<ProviderId> for String {
 impl<'a> From<&'a ProviderId> for String {
     fn from(pid: &'a ProviderId) -> String {
         match pid {
-            ProviderId::OPENCODE_GO => "opencode-go".to_string(),
-            ProviderId::OPENCODE_ZEN => "opencode-zen".to_string(),
+            ProviderId::OpencodeGo => "opencode-go".to_string(),
+            ProviderId::OpencodeZen => "opencode-zen".to_string(),
             ProviderId::Other(s) => s.clone(),
         }
     }
@@ -1599,8 +1599,8 @@ impl<'a> From<&'a ProviderId> for String {
 impl std::fmt::Display for ProviderId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ProviderId::OPENCODE_GO => write!(f, "opencode-go"),
-            ProviderId::OPENCODE_ZEN => write!(f, "opencode-zen"),
+            ProviderId::OpencodeGo => write!(f, "opencode-go"),
+            ProviderId::OpencodeZen => write!(f, "opencode-zen"),
             ProviderId::Other(s) => write!(f, "{}", s),
         }
     }
@@ -1611,8 +1611,8 @@ impl std::str::FromStr for ProviderId {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "opencode-go" => Ok(ProviderId::OPENCODE_GO),
-            "opencode-zen" => Ok(ProviderId::OPENCODE_ZEN),
+            "opencode-go" => Ok(ProviderId::OpencodeGo),
+            "opencode-zen" => Ok(ProviderId::OpencodeZen),
             other => Ok(ProviderId::Other(other.to_string())),
         }
     }

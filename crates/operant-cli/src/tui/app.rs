@@ -1253,16 +1253,11 @@ pub struct App {
 
 // Spinner verbs are now imported from crate::tui::adapter_types::spinner
 
-/// Format a duration in milliseconds to a human-readable string.
-///
-/// Matches OpenCode's behaviour: rounds to whole seconds, shows "Xs" for
-/// durations under a minute, "Xm Ys" for longer ones.
 // ---------------------------------------------------------------------------
 // Speech mode prompts (caveman / rocky)
 // ---------------------------------------------------------------------------
 
 /// Return the system prompt injection for the active speech mode + level.
-
 fn caveman_prompt(level: &str) -> String {
     let base = "\
 OUTPUT STYLE: Concise. You are still a fully capable coding assistant. \
@@ -3956,10 +3951,10 @@ impl App {
                                         let key = match upstream.id {
                                             "opencode-zen" => self
                                                 .auth_store
-                                                .api_key_for(crate::tui::adapter_types::ProviderId::OPENCODE_ZEN)
+                                                .api_key_for(crate::tui::adapter_types::ProviderId::OpencodeZen)
                                                 .or_else(|| {
                                                     self.auth_store.api_key_for(
-                                                        crate::tui::adapter_types::ProviderId::OPENCODE_GO,
+                                                        crate::tui::adapter_types::ProviderId::OpencodeGo,
                                                     )
                                                 }),
                                             other => self.auth_store.api_key_for(other),
@@ -4174,9 +4169,7 @@ impl App {
                         // (Bug #14 from iter-82 audit.)
                         let provider = self.active_provider.as_deref().unwrap_or("anthropic");
                         let prefix = format!("{}/", provider);
-                        let full_model = if provider == "anthropic" {
-                            model_id.clone()
-                        } else if provider == "free" {
+                        let full_model = if provider == "anthropic" || provider == "free" {
                             model_id.clone()
                         } else if model_id.starts_with(&prefix) {
                             // Already prefixed (e.g. openrouter/anthropic/claude-…).
@@ -5929,28 +5922,21 @@ impl App {
         let mut buf = String::new();
         buf.push(first);
 
-        loop {
-            match crossterm::event::poll(std::time::Duration::ZERO) {
-                Ok(true) => {
-                    match crossterm::event::read() {
-                        Ok(Event::Key(k)) if k.kind == KeyEventKind::Press => {
-                            match k.code {
-                                KeyCode::Char(c) => buf.push(c),
-                                KeyCode::Enter => buf.push('\n'),
-                                _ => {
-                                    // Non-character key — save it for replay.
-                                    self.pending_key = Some(k);
-                                    break;
-                                }
-                            }
-                        }
-                        // Non-key event (mouse, resize, …) — leave in queue by
-                        // not reading it; we already checked poll() so it will
-                        // be re-read next iteration. But we already read it, so
-                        // we just break (the event is consumed but benign).
-                        _ => break,
+        while let Ok(true) = crossterm::event::poll(std::time::Duration::ZERO) {
+            match crossterm::event::read() {
+                Ok(Event::Key(k)) if k.kind == KeyEventKind::Press => match k.code {
+                    KeyCode::Char(c) => buf.push(c),
+                    KeyCode::Enter => buf.push('\n'),
+                    _ => {
+                        // Non-character key — save it for replay.
+                        self.pending_key = Some(k);
+                        break;
                     }
-                }
+                },
+                // Non-key event (mouse, resize, …) — leave in queue by
+                // not reading it; we already checked poll() so it will
+                // be re-read next iteration. But we already read it, so
+                // we just break (the event is consumed but benign).
                 _ => break,
             }
         }
