@@ -54,24 +54,10 @@ impl AgentStatus {
 /// A sub-agent or coordinator instance.
 #[derive(Debug, Clone)]
 pub struct AgentInfo {
-    /// Unique agent ID.
-    pub id: String,
     /// Display name.
     pub name: String,
     /// Current status.
     pub status: AgentStatus,
-    /// Current tool being executed (if any).
-    pub current_tool: Option<String>,
-    /// Number of turns completed.
-    pub turns_completed: u32,
-    /// Is this the coordinator?
-    pub is_coordinator: bool,
-    /// Brief description or last output snippet.
-    pub last_output: Option<String>,
-    /// Model name used by this agent.
-    pub model_name: Option<String>,
-    /// Cost in USD accumulated by this agent.
-    pub cost_usd: f64,
 }
 
 /// A defined agent (from .operant/agents/*.md or plugin).

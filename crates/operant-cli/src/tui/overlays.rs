@@ -76,7 +76,6 @@ pub fn render_dialog_bg_buf(buf: &mut Buffer, area: Rect) {
 #[derive(Debug, Clone, Copy)]
 pub struct ModalLayout {
     pub dialog_area: Rect,
-    pub inner_area: Rect,
     pub header_area: Rect,
     pub body_area: Rect,
     pub footer_area: Rect,
@@ -108,7 +107,6 @@ fn compute_modal_layout(
     };
     ModalLayout {
         dialog_area,
-        inner_area,
         header_area: Rect {
             x: inner_area.x,
             y: inner_area.y,
@@ -941,12 +939,6 @@ impl HistorySearchOverlay {
         history.get(snap_idx).map(String::as_str)
     }
 
-    /// Like `current_entry` but returns from the internal snapshot.
-    pub fn current_entry_owned(&self) -> Option<&str> {
-        let snap_idx = self.matches.get(self.selected_idx)?.snapshot_idx;
-        self.snapshot.get(snap_idx).map(|e| e.text.as_str())
-    }
-
     pub fn close(&mut self) {
         self.visible = false;
     }
@@ -1533,10 +1525,7 @@ pub struct GlobalSearchState {
 pub struct SearchResult {
     pub file: String,
     pub line: u32,
-    pub col: u32,
     pub text: String,
-    pub context_before: Vec<String>,
-    pub context_after: Vec<String>,
 }
 
 impl GlobalSearchState {
@@ -1617,14 +1606,10 @@ impl GlobalSearchState {
                             .unwrap_or("")
                             .trim_end_matches('\n')
                             .to_string();
-                        let col = data["submatches"][0]["start"].as_u64().unwrap_or(0) as u32;
                         self.results.push(SearchResult {
                             file,
                             line: line_no,
-                            col,
                             text,
-                            context_before: Vec::new(),
-                            context_after: Vec::new(),
                         });
                         self.total_matches += 1;
                         if self.results.len() >= 500 {

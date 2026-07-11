@@ -61,8 +61,6 @@ const TOOL_RESULT_MAX_LINES: usize = 30;
 const GOAL_ACCENT: Color = Color::Rgb(255, 170, 50);
 /// Body text color for goal-event objective display.
 const GOAL_BODY: Color = Color::Rgb(215, 180, 110);
-/// Muted color for goal continuation turn markers.
-const GOAL_MUTED: Color = Color::Rgb(130, 115, 75);
 
 /// Render a user text message body.
 fn render_user_text_with_ctx(text: &str, ctx: &RenderContext) -> Vec<Line<'static>> {

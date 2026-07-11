@@ -14,7 +14,6 @@ use crate::prompt_helpers::{prompt_key_action, prompt_password, KeyAction};
 pub struct GatewayPlatform {
     pub key: &'static str,
     pub name: &'static str,
-    pub icon: &'static str,
     pub description: &'static str,
     pub setup_fn: fn(config: &mut AppConfig) -> Result<()>,
 }
@@ -25,7 +24,6 @@ macro_rules! platform {
         GatewayPlatform {
             key: $key,
             name: concat!($icon, " ", $name),
-            icon: $icon,
             description: concat!($name, " messaging integration"),
             setup_fn: $setup,
         }

@@ -54,15 +54,6 @@ impl VimMode {
             Self::Search => "SEARCH",
         }
     }
-
-    pub fn color(&self) -> Color {
-        match self {
-            Self::Insert => Color::Blue,
-            Self::Normal => Color::Green,
-            Self::Visual | Self::VisualLine | Self::VisualBlock => Color::Magenta,
-            Self::Command | Self::Search => Color::Cyan,
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -137,10 +128,7 @@ pub enum VimFindKind {
 #[derive(Clone, Debug)]
 pub enum DotRepeatAction {
     /// Insert text at current cursor (from i, a, A, o, O, s).
-    Insert {
-        text: String,
-        mode_after_insert: bool,
-    },
+    Insert { text: String },
     /// Simplified: re-delete the same number of chars.
     DeleteChars { count: usize },
     /// Replace char.
@@ -1372,110 +1360,6 @@ fn vim_operator_g(
     }
 }
 
-/// Apply a vim normal-mode motion/command to `text`/`cursor`.
-/// Returns the new (text, cursor_pos) after the command.
-/// Covers: h j k l w b e 0 $ i a I A dd yy x p
-pub fn apply_vim_command(
-    mode: &mut VimMode,
-    text: &mut String,
-    cursor: &mut usize,
-    key: &str,
-    yank_buf: &mut String,
-) {
-    match key {
-        // Mode transitions
-        "i" if *mode == VimMode::Normal => {
-            *mode = VimMode::Insert;
-        }
-        "a" if *mode == VimMode::Normal => {
-            *mode = VimMode::Insert;
-            if *cursor < text.len() {
-                *cursor += 1;
-            }
-        }
-        "I" if *mode == VimMode::Normal => {
-            *mode = VimMode::Insert;
-            *cursor = 0;
-        }
-        "A" if *mode == VimMode::Normal => {
-            *mode = VimMode::Insert;
-            *cursor = text.len();
-        }
-        "Escape" => {
-            *mode = VimMode::Normal;
-        }
-        // Normal mode motions
-        "h" if *mode == VimMode::Normal => {
-            *cursor = cursor.saturating_sub(1);
-        }
-        "l" if *mode == VimMode::Normal => {
-            if *cursor < text.len() {
-                *cursor += 1;
-            }
-        }
-        "0" if *mode == VimMode::Normal => {
-            *cursor = 0;
-        }
-        "$" if *mode == VimMode::Normal => {
-            *cursor = text.len();
-        }
-        "w" if *mode == VimMode::Normal => {
-            // Move to start of next word
-            let rest = &text[*cursor..];
-            let skip_word = rest
-                .chars()
-                .take_while(|c| c.is_alphanumeric() || *c == '_')
-                .count();
-            let skip_space = rest[skip_word..]
-                .chars()
-                .take_while(|c| c.is_whitespace())
-                .count();
-            *cursor = (*cursor + skip_word + skip_space).min(text.len());
-        }
-        "b" if *mode == VimMode::Normal => {
-            // Move to start of previous word
-            let before = &text[..*cursor];
-            let skip_space = before
-                .chars()
-                .rev()
-                .take_while(|c| c.is_whitespace())
-                .count();
-            let skip_word = before[..before.len() - skip_space]
-                .chars()
-                .rev()
-                .take_while(|c| c.is_alphanumeric() || *c == '_')
-                .count();
-            *cursor = cursor.saturating_sub(skip_space + skip_word);
-        }
-        "x" if *mode == VimMode::Normal => {
-            // Delete char under cursor
-            if *cursor < text.len() {
-                *yank_buf = text.chars().nth(*cursor).unwrap_or_default().to_string();
-                text.remove(*cursor);
-                if *cursor > 0 && *cursor >= text.len() {
-                    *cursor = text.len().saturating_sub(1);
-                }
-            }
-        }
-        "dd" if *mode == VimMode::Normal => {
-            // Delete current line
-            *yank_buf = text.clone();
-            text.clear();
-            *cursor = 0;
-        }
-        "yy" if *mode == VimMode::Normal => {
-            *yank_buf = text.clone();
-        }
-        "p" if *mode == VimMode::Normal => {
-            // Paste after cursor
-            let insert_pos = (*cursor + 1).min(text.len());
-            text.insert_str(insert_pos, yank_buf);
-            *cursor = insert_pos + yank_buf.len();
-        }
-        _ => {}
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Typeahead / autocomplete
 // ---------------------------------------------------------------------------
@@ -2212,23 +2096,6 @@ impl PromptInputState {
         self.kill_ring.mark_non_kill();
     }
 
-    /// Ctrl+K: Cut from cursor to end of line and save to kill ring.
-    pub fn kill_line(&mut self) {
-        if self.mode == InputMode::Readonly {
-            return;
-        }
-        let line_end = self.text[self.cursor..]
-            .find('\n')
-            .map(|p| self.cursor + p)
-            .unwrap_or(self.text.len());
-
-        if line_end > self.cursor {
-            let killed = self.text.drain(self.cursor..line_end).collect::<String>();
-            self.kill_ring.push(killed);
-            self.update_token_estimate();
-        }
-    }
-
     /// Ctrl+U: Cut from line start to cursor and save to kill ring.
     pub fn kill_line_backward(&mut self) {
         if self.mode == InputMode::Readonly {
@@ -2471,10 +2338,7 @@ impl PromptInputState {
                         String::new()
                     };
                     if !inserted.is_empty() {
-                        self.vim_dot_action = Some(DotRepeatAction::Insert {
-                            text: inserted,
-                            mode_after_insert: false,
-                        });
+                        self.vim_dot_action = Some(DotRepeatAction::Insert { text: inserted });
                     }
                 }
             }
@@ -3909,122 +3773,6 @@ mod tests {
         assert_eq!(VimMode::Insert.label(), "INSERT");
         assert_eq!(VimMode::Normal.label(), "NORMAL");
         assert_eq!(VimMode::Visual.label(), "VISUAL");
-    }
-
-    #[test]
-    fn vim_insert_to_normal_via_escape() {
-        let mut mode = VimMode::Insert;
-        let mut text = "hello".to_string();
-        let mut cursor = 3;
-        let mut yank = String::new();
-        apply_vim_command(&mut mode, &mut text, &mut cursor, "Escape", &mut yank);
-        assert_eq!(mode, VimMode::Normal);
-    }
-
-    #[test]
-    fn vim_normal_i_enters_insert() {
-        let mut mode = VimMode::Normal;
-        let mut text = "hello".to_string();
-        let mut cursor = 0;
-        let mut yank = String::new();
-        apply_vim_command(&mut mode, &mut text, &mut cursor, "i", &mut yank);
-        assert_eq!(mode, VimMode::Insert);
-        assert_eq!(cursor, 0);
-    }
-
-    #[test]
-    fn vim_normal_a_goes_to_end() {
-        let mut mode = VimMode::Normal;
-        let mut text = "hello".to_string();
-        let mut cursor = 0;
-        let mut yank = String::new();
-        apply_vim_command(&mut mode, &mut text, &mut cursor, "A", &mut yank);
-        assert_eq!(mode, VimMode::Insert);
-        assert_eq!(cursor, 5);
-    }
-
-    #[test]
-    fn vim_h_moves_left() {
-        let mut mode = VimMode::Normal;
-        let mut text = "hello".to_string();
-        let mut cursor = 3;
-        let mut yank = String::new();
-        apply_vim_command(&mut mode, &mut text, &mut cursor, "h", &mut yank);
-        assert_eq!(cursor, 2);
-    }
-
-    #[test]
-    fn vim_l_moves_right() {
-        let mut mode = VimMode::Normal;
-        let mut text = "hello".to_string();
-        let mut cursor = 2;
-        let mut yank = String::new();
-        apply_vim_command(&mut mode, &mut text, &mut cursor, "l", &mut yank);
-        assert_eq!(cursor, 3);
-    }
-
-    #[test]
-    fn vim_dollar_goes_to_end() {
-        let mut mode = VimMode::Normal;
-        let mut text = "hello".to_string();
-        let mut cursor = 0;
-        let mut yank = String::new();
-        apply_vim_command(&mut mode, &mut text, &mut cursor, "$", &mut yank);
-        assert_eq!(cursor, 5);
-    }
-
-    #[test]
-    fn vim_zero_goes_to_start() {
-        let mut mode = VimMode::Normal;
-        let mut text = "hello".to_string();
-        let mut cursor = 4;
-        let mut yank = String::new();
-        apply_vim_command(&mut mode, &mut text, &mut cursor, "0", &mut yank);
-        assert_eq!(cursor, 0);
-    }
-
-    #[test]
-    fn vim_x_deletes_char() {
-        let mut mode = VimMode::Normal;
-        let mut text = "hello".to_string();
-        let mut cursor = 1;
-        let mut yank = String::new();
-        apply_vim_command(&mut mode, &mut text, &mut cursor, "x", &mut yank);
-        assert_eq!(text, "hllo");
-        assert_eq!(yank, "e");
-    }
-
-    #[test]
-    fn vim_dd_clears_text() {
-        let mut mode = VimMode::Normal;
-        let mut text = "hello world".to_string();
-        let mut cursor = 3;
-        let mut yank = String::new();
-        apply_vim_command(&mut mode, &mut text, &mut cursor, "dd", &mut yank);
-        assert!(text.is_empty());
-        assert_eq!(cursor, 0);
-        assert_eq!(yank, "hello world");
-    }
-
-    #[test]
-    fn vim_yy_copies_text() {
-        let mut mode = VimMode::Normal;
-        let mut text = "hello".to_string();
-        let mut cursor = 0;
-        let mut yank = String::new();
-        apply_vim_command(&mut mode, &mut text, &mut cursor, "yy", &mut yank);
-        assert_eq!(yank, "hello");
-        assert_eq!(text, "hello"); // unchanged
-    }
-
-    #[test]
-    fn vim_p_pastes_after_cursor() {
-        let mut mode = VimMode::Normal;
-        let mut text = "ab".to_string();
-        let mut cursor = 0;
-        let mut yank = "XY".to_string();
-        apply_vim_command(&mut mode, &mut text, &mut cursor, "p", &mut yank);
-        assert_eq!(text, "aXYb");
     }
 
     // ---- PromptInputState -----------------------------------------------

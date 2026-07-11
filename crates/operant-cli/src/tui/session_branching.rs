@@ -20,10 +20,6 @@ pub struct BranchInfo {
     pub id: String,
     /// Human-readable name (user-provided).
     pub name: String,
-    /// Message index at which the branch was created.
-    pub branch_at_message: usize,
-    /// Number of messages in this branch beyond the branch point.
-    pub message_count: usize,
     /// When the branch was created (relative time string, e.g. "2 min ago").
     pub created_at: String,
     /// Whether this is the currently active branch.
@@ -117,11 +113,6 @@ impl SessionBranchingState {
     /// Get a reference to the currently selected branch, if any.
     pub fn selected_branch(&self) -> Option<&BranchInfo> {
         self.branches.get(self.selected_idx)
-    }
-
-    /// Get a mutable reference to the currently selected branch, if any.
-    pub fn selected_branch_mut(&mut self) -> Option<&mut BranchInfo> {
-        self.branches.get_mut(self.selected_idx)
     }
 
     /// Start creating a new branch from the current point.

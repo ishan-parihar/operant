@@ -727,7 +727,6 @@ async fn connect_mcp_server(mcp_manager: &McpManager, server: &McpServerConfig) 
 
 /// Shared components produced by the agent core builder.
 struct AgentCore {
-    raw_client: OpenAIClient,
     database: Arc<Database>,
     registry: ToolRegistry,
     agent_config: AgentConfig,
@@ -769,7 +768,6 @@ async fn build_agent_core(
     }
 
     Ok(AgentCore {
-        raw_client,
         database,
         registry,
         agent_config,
@@ -1054,31 +1052,6 @@ async fn chat_non_tui(config: &AppConfig, system_prompt: Option<&str>) -> Result
         match agent.run(input.to_string()).await {
             Ok(response) => println!("Assistant: {}\n", response.content),
             Err(error) => eprintln!("Error: {}\n", error),
-        }
-    }
-
-    Ok(())
-}
-
-async fn list_tools(config: &AppConfig, verbose: bool) -> Result<()> {
-    let mcp_manager = McpManager::new();
-    let client = OpenAIClient::new(client_config(config));
-    let database = Arc::new(Database::init(config.database_path.clone())?);
-    let registry = build_registry(
-        config,
-        &mcp_manager,
-        &client,
-        &config.agent.model,
-        database,
-        None,
-    )
-    .await?;
-    let tools = registry.get_schemas().await;
-
-    for tool in tools {
-        println!("{}: {}", tool.name, tool.description);
-        if verbose {
-            println!("{}", serde_json::to_string_pretty(&tool.parameters)?);
         }
     }
 

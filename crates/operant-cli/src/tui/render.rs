@@ -2764,20 +2764,3 @@ fn render_prompt_suggestions(frame: &mut Frame, app: &App, area: Rect) {
         );
     }
 }
-
-// -----------------------------------------------------------------------
-// Legacy simple help overlay (fallback when help_overlay is not open)
-// -----------------------------------------------------------------------
-
-fn kb_line<'a>(key: &str, desc: &str) -> Line<'a> {
-    Line::from(vec![
-        Span::raw("  "),
-        Span::styled(
-            format!("{:<20}", key),
-            Style::default()
-                .fg(Color::Green)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::raw(desc.to_string()),
-    ])
-}

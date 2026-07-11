@@ -15,7 +15,6 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
-use std::sync::Arc;
 
 use crate::tui::adapter_types::tools::TaskStatus;
 use crate::tui::overlays::centered_rect;
@@ -69,8 +68,6 @@ pub struct TasksOverlay {
     pub tasks: Vec<TaskDisplay>,
     pub selected_idx: usize,
     pub scroll_offset: u16,
-    /// Timestamp of last refresh to debounce reloads.
-    pub last_refresh: Option<std::time::Instant>,
 }
 
 impl TasksOverlay {
@@ -81,7 +78,6 @@ impl TasksOverlay {
             tasks: Vec::new(),
             selected_idx: 0,
             scroll_offset: 0,
-            last_refresh: None,
         }
     }
 
@@ -99,51 +95,6 @@ impl TasksOverlay {
         self.visible = false;
         self.scroll_offset = 0;
         self.selected_idx = 0;
-    }
-
-    /// Update the task list from the global task store.
-    /// Converts tasks from the cc_tools task store to display models.
-    ///
-    /// This should be called periodically (e.g., every frame) to keep the
-    /// overlay in sync with the global task state.
-    pub fn refresh_tasks(
-        &mut self,
-        task_store: &Arc<dashmap::DashMap<String, crate::tui::adapter_types::tools::Task>>,
-    ) {
-        self.tasks.clear();
-
-        for entry in task_store.iter() {
-            let task = entry.value();
-            self.tasks.push(TaskDisplay {
-                id: task.id.clone(),
-                subject: task.subject.clone(),
-                status: task.status.clone(),
-            });
-        }
-
-        // Sort: pending first, then in_progress, then completed
-        self.tasks.sort_by(|a, b| {
-            let priority = |status: &TaskStatus| -> u8 {
-                match status {
-                    TaskStatus::Pending => 0,
-                    TaskStatus::InProgress => 1,
-                    TaskStatus::Completed => 2,
-                    _ => 3, // Deleted, Running, Failed
-                }
-            };
-            let a_pri = priority(&a.status);
-            let b_pri = priority(&b.status);
-            a_pri.cmp(&b_pri).then_with(|| a.subject.cmp(&b.subject))
-        });
-
-        // Clamp selection to valid range
-        if self.tasks.is_empty() {
-            self.selected_idx = 0;
-        } else if self.selected_idx >= self.tasks.len() {
-            self.selected_idx = self.tasks.len() - 1;
-        }
-
-        self.last_refresh = Some(std::time::Instant::now());
     }
 
     /// Navigate to previous task in the list.
@@ -173,22 +124,6 @@ impl TasksOverlay {
             self.scroll_offset = self.selected_idx as u16;
         } else if self.selected_idx >= self.scroll_offset as usize + VIEWPORT_HEIGHT {
             self.scroll_offset = (self.selected_idx - VIEWPORT_HEIGHT + 1) as u16;
-        }
-    }
-
-    /// Get the status of the currently selected task, if any.
-    pub fn selected_status(&self) -> Option<TaskStatus> {
-        self.tasks.get(self.selected_idx).map(|t| t.status.clone())
-    }
-
-    /// Cycle the selected task's status to the next state.
-    /// Returns the new status if successful.
-    pub fn cycle_selected_status(&mut self) -> Option<TaskStatus> {
-        if let Some(task) = self.tasks.get_mut(self.selected_idx) {
-            task.status = next_status(&task.status);
-            Some(task.status.clone())
-        } else {
-            None
         }
     }
 

@@ -23,7 +23,6 @@ pub enum MemoryFileType {
 }
 
 pub struct MemoryFile {
-    pub path: String,
     pub display_path: String,
     pub file_type: MemoryFileType,
     pub exists: bool,
@@ -72,7 +71,6 @@ impl MemoryFileSelectorState {
         };
         self.files.push(MemoryFile {
             exists: user_path.exists(),
-            path: user_path.to_string_lossy().into_owned(),
             display_path: user_display,
             file_type: MemoryFileType::User,
         });
@@ -82,7 +80,6 @@ impl MemoryFileSelectorState {
         let project_display = project_path.display().to_string();
         self.files.push(MemoryFile {
             exists: project_path.exists(),
-            path: project_path.to_string_lossy().into_owned(),
             display_path: project_display,
             file_type: MemoryFileType::Project,
         });
@@ -92,7 +89,6 @@ impl MemoryFileSelectorState {
         let local_display = local_path.display().to_string();
         self.files.push(MemoryFile {
             exists: local_path.exists(),
-            path: local_path.to_string_lossy().into_owned(),
             display_path: local_display,
             file_type: MemoryFileType::Local,
         });
@@ -122,11 +118,6 @@ impl MemoryFileSelectorState {
             return;
         }
         self.selected = (self.selected + 1) % count;
-    }
-
-    /// Return the path of the currently highlighted file, if any.
-    pub fn selected_path(&self) -> Option<&str> {
-        self.files.get(self.selected).map(|f| f.path.as_str())
     }
 }
 

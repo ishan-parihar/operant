@@ -95,8 +95,6 @@ pub struct McpViewState {
     pub selected_server: usize,
     pub selected_tool: usize,
     pub tool_search: String,
-    pub server_scroll: usize,
-    pub tool_scroll: usize,
     /// Whether the full error detail for the selected server is expanded.
     pub error_expanded: bool,
 }
@@ -110,8 +108,6 @@ impl McpViewState {
             selected_server: 0,
             selected_tool: 0,
             tool_search: String::new(),
-            server_scroll: 0,
-            tool_scroll: 0,
             error_expanded: false,
         }
     }

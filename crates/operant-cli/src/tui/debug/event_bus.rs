@@ -159,27 +159,6 @@ impl TuiEvent {
             } => format!("Error({source}: {message})"),
         }
     }
-
-    fn at(&self) -> f64 {
-        match self {
-            Self::Key { at, .. }
-            | Self::Mouse { at, .. }
-            | Self::Resize { at, .. }
-            | Self::Paste { at, .. }
-            | Self::AgentEvent { at, .. }
-            | Self::PermissionRequest { at, .. }
-            | Self::UserQuestion { at, .. }
-            | Self::ModelFetch { at, .. }
-            | Self::SessionList { at, .. }
-            | Self::SessionLoad { at, .. }
-            | Self::VoiceEvent { at, .. }
-            | Self::SlashCommand { at, .. }
-            | Self::OverlayOpened { at, .. }
-            | Self::OverlayClosed { at, .. }
-            | Self::FrameRendered { at, .. }
-            | Self::Error { at, .. } => *at,
-        }
-    }
 }
 
 /// Ring buffer of TUI events. Thread-safe via `Mutex<VecDeque>`.
@@ -233,16 +212,6 @@ impl TuiEventBus {
             Err(_) => return Vec::new(),
         };
         ring.iter().rev().take(last_n).rev().cloned().collect()
-    }
-
-    /// Get the last N events as a formatted string (one per line).
-    pub fn recent_formatted(&self, last_n: usize) -> String {
-        let events = self.recent(last_n);
-        let mut out = String::with_capacity(events.len() * 60);
-        for e in &events {
-            out.push_str(&format!("  [{:.3}] {}\n", e.at(), e.summary()));
-        }
-        out
     }
 
     /// Snapshot the full ring as JSON (for replay / diffing).

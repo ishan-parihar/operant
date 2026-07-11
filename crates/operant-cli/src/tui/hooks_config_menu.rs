@@ -218,16 +218,6 @@ impl HooksConfigMenuState {
         self.selected = (self.selected + 1) % count;
     }
 
-    pub fn scroll_up(&mut self) {
-        self.scroll_offset = self.scroll_offset.saturating_sub(1);
-    }
-
-    pub fn scroll_down(&mut self, max: usize) {
-        if self.scroll_offset + 1 < max {
-            self.scroll_offset += 1;
-        }
-    }
-
     // ---- Private helpers --------------------------------------------------
 
     fn build_events(&mut self) {
