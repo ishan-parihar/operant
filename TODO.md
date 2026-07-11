@@ -57,8 +57,8 @@ All Python tool modules from operant-agent have been fully ported to Rust across
 
 Execute phases in order; each phase's tasks are checkboxed in the audit doc. Continue iteration numbering from iter-223.
 
-- **Phase A (first)** — debug-loop hardening: screen-buffer assertions + `--dump-screen`, mock `--agent-script` injection, publish the 12 dead `TuiEvent` variants, generic dot-path assertions + `--size`/timeout guards, 27-dialog scenario regression pack, document `operant tui debug simulate`
-- **Phase B** — dialog unification: `Modal` trait + registry (replaces the 35-gate key chain, `close_secondary_views`, `any_modal_open`), shared `ListNav`/filter/scroll helpers, delete dead dialogs (R7, R13), slash-command table hygiene (R9, R10)
+- **Phase A (DONE, iter-223→228)** — debug-loop hardening: ✅ screen-buffer assertions + `--dump-screen` (iter-223), ✅ mock `--agent-script` injection (iter-224), ✅ 7 event-bus variants + faithful slash interception (iter-225; Mouse/Resize/Paste/OverlayOpened/Closed deferred to Phase B registry), ✅ generic dot-path assertions + `--size`/`--max-frames` (iter-226), ✅ dialog open/close scenario pack + fixed `effort_picker`/`any_modal_open` drift bug (iter-227), ✅ docs `docs/tui-debugging.md` (iter-228)
+- **Phase B (next)** — dialog unification: `Modal` trait + registry (replaces the 35-gate key chain, `close_secondary_views`, `any_modal_open`), shared `ListNav`/filter/scroll helpers, delete dead dialogs (R7, R13), slash-command table hygiene (R9, R10). Publish `OverlayOpened/Closed` from the registry. Investigate `/tasks` (no dispatch arm → tasks_overlay opens by another route).
 - **Phase C** — render pipeline: fix streaming full-transcript re-render, kill per-frame deep clones, one `text_util` wrap module (fixes R4/R5/R6), delete dead `render_message` subtree, split `prompt_input.rs`
 - **Phase D** — app decomposition + residual bugs: shrink `handle_key_event`, delete dead App fields (R11), honest `SessionRecord` mapping (R1/R2), real cost from `AgentEvent::Cost` (R3), split `app.rs`
 - **Phase E** — config consolidation: deprecate `config.yaml` + remove `"gpt-4"` precedence heuristic

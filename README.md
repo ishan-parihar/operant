@@ -89,6 +89,7 @@ Designed for "Human-in-the-Loop" monitoring, the Ratatui-based interface provide
 - **Reasoning Rails**: Block-style rendering of model thinking.
 - **Activity Feed**: Compact, real-time logs of tool execution.
 - **Workspace Panes**: A multi-pane layout that allows the user to monitor the conversation and the agent's actions simultaneously.
+- **Headless simulator**: `operant tui debug simulate` drives the real TUI loop against a test backend, injects mock agent events, and asserts on state and rendered screen — enabling autonomous debug loops and CI regression tests. See [docs/tui-debugging.md](docs/tui-debugging.md).
 
 ---
 
