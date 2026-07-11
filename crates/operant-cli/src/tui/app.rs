@@ -2275,7 +2275,7 @@ impl App {
                 self.mcp_view.open(servers);
                 true
             }
-            "agents" => {
+            "agents" | "tasks" => {
                 self.open_agents_menu();
                 true
             }
@@ -7357,6 +7357,19 @@ mod tests {
         assert!(!app.model_picker.visible);
         assert!(app.intercept_slash_command("model"));
         assert!(app.model_picker.visible);
+    }
+
+    #[test]
+    fn test_tasks_slash_command_is_an_alias_for_agents() {
+        // /tasks is documented (commands.rs alias + gateway help text) as an
+        // alias for /agents, but this match arm previously only accepted
+        // the literal "agents" — /tasks fell through to a dead
+        // CommandRegistry.handlers fallback and printed a "not yet wired"
+        // error instead of opening the agents menu (iter-248).
+        let mut app = make_app();
+        assert!(!app.agents_menu.visible);
+        assert!(app.intercept_slash_command("tasks"));
+        assert!(app.agents_menu.visible);
     }
 
     #[test]
