@@ -1602,70 +1602,33 @@ impl From<std::io::Error> for ConfigError {
 pub type ConfigResult<T> = std::result::Result<T, ConfigError>;
 
 impl CliConfig {
-    /// Load config from default locations, merging layers.
+    /// Load config from default locations.
+    ///
+    /// `config.yaml`/`config.local.yaml` are deprecated — `operant.toml`
+    /// (loaded separately via `operant-core`) is the sole config source now.
+    /// This only loads the `.env` file and applies `HERMES_*` env overrides;
+    /// the resolved (but unread) legacy paths are kept on the struct solely
+    /// for `operant doctor`'s legacy-file detection.
     ///
     /// Loading order:
     /// 1. Default config values in code
-    /// 2. config.yaml from HERMES_HOME (or HERMES_CONFIG env var)
-    /// 3. config.local.yaml from HERMES_HOME
-    /// 4. .env file from HERMES_HOME
-    /// 5. HERMES_* environment variable overrides
+    /// 2. .env file from HERMES_HOME
+    /// 3. HERMES_* environment variable overrides
     pub fn load() -> ConfigResult<Self> {
-        let default_self = Self::default();
-        let config_dir = default_self.config_dir.clone();
+        let mut config = Self::default();
+        let config_dir = config.config_dir.clone();
 
-        // Start with an empty YAML value and merge layers
-        let mut merged = Value::Mapping(serde_yaml::Mapping::new());
-        let mut config_version: Option<String> = None;
-
-        // Layer 1: Try loading config.yaml
-        let config_path = std::env::var("HERMES_CONFIG")
+        config.config_file = std::env::var("HERMES_CONFIG")
             .map(PathBuf::from)
-            .ok()
-            .unwrap_or_else(|| config_dir.join("config.yaml"));
+            .unwrap_or_else(|_| config_dir.join("config.yaml"));
+        config.local_config_file = config_dir.join("config.local.yaml");
 
-        if config_path.exists() {
-            let raw = std::fs::read_to_string(&config_path)?;
-            if let Ok(value) = serde_yaml::from_str::<Value>(&raw) {
-                // Check version for migration
-                if let Some(ver) = value.get("config_version").and_then(|v| v.as_str()) {
-                    config_version = Some(ver.to_string());
-                }
-                // Expand env vars in the loaded YAML
-                let expanded = expand_env_vars_in_value(&value);
-                deep_merge(&mut merged, &expanded);
-            }
-        }
-
-        // Layer 2: Try loading config.local.yaml (local overrides)
-        let local_config_path = config_dir.join("config.local.yaml");
-        if local_config_path.exists() {
-            let raw = std::fs::read_to_string(&local_config_path)?;
-            if let Ok(value) = serde_yaml::from_str::<Value>(&raw) {
-                let expanded = expand_env_vars_in_value(&value);
-                deep_merge(&mut merged, &expanded);
-            }
-        }
-
-        // Layer 3: Parse merged YAML into CliConfig
-        let mut config: CliConfig =
-            serde_yaml::from_value(merged).map_err(|e| ConfigError::Parse(e.to_string()))?;
-
-        // Restore file paths (they come from defaults, not YAML)
-        config.config_dir = config_dir;
-        config.config_file = config_path;
-        config.local_config_file = local_config_path;
-        config.env_file = default_self.env_file;
-        if let Some(ver) = config_version {
-            config.config_version = Some(ver);
-        }
-
-        // Layer 4: Load .env file
+        // Load .env file
         if config.env_file.exists() {
             load_dotenv_file(&config.env_file)?;
         }
 
-        // Layer 5: Apply HERMES_* env var overrides
+        // Apply HERMES_* env var overrides
         config.apply_operant_env_overrides();
 
         Ok(config)
@@ -1826,67 +1789,6 @@ fn resolve_env_var(name: &str, default: &str, has_default: bool) -> String {
         Ok(val) if !val.is_empty() => val,
         _ if has_default => default.to_string(),
         _ => String::new(),
-    }
-}
-
-/// Recursively expand env vars in all string values of a serde_yaml Value.
-fn expand_env_vars_in_value(value: &Value) -> Value {
-    match value {
-        Value::String(s) => Value::String(expand_env_vars(s)),
-        Value::Mapping(map) => {
-            let mut new_map = serde_yaml::Mapping::new();
-            for (k, v) in map {
-                let new_key = expand_env_vars_in_value(k);
-                let new_val = expand_env_vars_in_value(v);
-                new_map.insert(new_key, new_val);
-            }
-            Value::Mapping(new_map)
-        }
-        Value::Sequence(seq) => {
-            let new_seq: Vec<Value> = seq.iter().map(expand_env_vars_in_value).collect();
-            Value::Sequence(new_seq)
-        }
-        other => other.clone(),
-    }
-}
-
-// =============================================================================
-// Deep Merge
-// =============================================================================
-
-/// Deep-merge `overlay` into `base` recursively.
-///
-/// Rules:
-/// - For objects (Mapping): merge keys recursively
-/// - For arrays (Sequence): concatenate (overlay appended to base)
-/// - For primitives: overlay wins
-/// - Null values in overlay remove the key from base
-pub fn deep_merge(base: &mut Value, overlay: &Value) {
-    match (base, overlay) {
-        (Value::Mapping(base_map), Value::Mapping(overlay_map)) => {
-            for (key, overlay_val) in overlay_map {
-                if overlay_val.is_null() {
-                    base_map.remove(key);
-                    continue;
-                }
-                match base_map.get_mut(key) {
-                    Some(base_val) => {
-                        deep_merge(base_val, overlay_val);
-                    }
-                    None => {
-                        base_map.insert(key.clone(), overlay_val.clone());
-                    }
-                }
-            }
-        }
-        (Value::Sequence(base_seq), Value::Sequence(overlay_seq)) => {
-            // Arrays: overlay items appended to base
-            base_seq.extend(overlay_seq.clone());
-        }
-        (base_val, _) => {
-            // Primitives or type mismatch: overlay wins
-            *base_val = overlay.clone();
-        }
     }
 }
 
@@ -2111,89 +2013,6 @@ mod tests {
         assert_eq!(expand_env_vars("${A} + ${B} = 3"), "1 + 2 = 3");
         restore_env("A", prev_a);
         restore_env("B", prev_b);
-    }
-
-    // ================================================================
-    // Deep Merge Tests
-    // ================================================================
-
-    #[test]
-    fn test_deep_merge_primitives_overlay_wins() {
-        let mut base = serde_yaml::from_str("key: old").unwrap();
-        let overlay = serde_yaml::from_str("key: new").unwrap();
-        deep_merge(&mut base, &overlay);
-        assert_eq!(base.get("key").and_then(|v| v.as_str()), Some("new"));
-    }
-
-    #[test]
-    fn test_deep_merge_nested_objects() {
-        let mut base: Value = serde_yaml::from_str(
-            r#"
-            outer:
-                inner: old
-                keep: preserved
-            "#,
-        )
-        .unwrap();
-        let overlay: Value = serde_yaml::from_str(
-            r#"
-            outer:
-                inner: new
-            "#,
-        )
-        .unwrap();
-        deep_merge(&mut base, &overlay);
-
-        let outer = base.get("outer").and_then(|v| v.as_mapping()).unwrap();
-        assert_eq!(
-            outer
-                .get(&Value::String("inner".into()))
-                .and_then(|v| v.as_str()),
-            Some("new")
-        );
-        assert_eq!(
-            outer
-                .get(&Value::String("keep".into()))
-                .and_then(|v| v.as_str()),
-            Some("preserved")
-        );
-    }
-
-    #[test]
-    fn test_deep_merge_arrays_concatenate() {
-        let mut base: Value = serde_yaml::from_str("items: [1, 2]").unwrap();
-        let overlay: Value = serde_yaml::from_str("items: [3, 4]").unwrap();
-        deep_merge(&mut base, &overlay);
-        let items: Vec<i64> = base["items"]
-            .as_sequence()
-            .unwrap()
-            .iter()
-            .map(|v| v.as_i64().unwrap())
-            .collect();
-        assert_eq!(items, vec![1, 2, 3, 4]);
-    }
-
-    #[test]
-    fn test_deep_merge_null_removes_key() {
-        let mut base: Value = serde_yaml::from_str("key: value").unwrap();
-        let overlay: Value = serde_yaml::from_str("key: ~").unwrap();
-        deep_merge(&mut base, &overlay);
-        assert!(base
-            .as_mapping()
-            .unwrap()
-            .get(&Value::String("key".into()))
-            .is_none());
-    }
-
-    #[test]
-    fn test_deep_merge_new_keys_added() {
-        let mut base: Value = serde_yaml::from_str("existing: old").unwrap();
-        let overlay: Value = serde_yaml::from_str("new_key: new_val").unwrap();
-        deep_merge(&mut base, &overlay);
-        assert_eq!(
-            base.get("new_key").and_then(|v| v.as_str()),
-            Some("new_val")
-        );
     }
 
     // ================================================================

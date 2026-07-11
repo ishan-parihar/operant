@@ -1130,7 +1130,8 @@ async fn test_tool(config: &AppConfig, tool_name: &str, args: Option<&str>) -> R
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    // Load CLI-level config (YAML-based with deep merge, .env, env expansion)
+    // Load CLI-level config (.env file + HERMES_* env overrides; config.yaml
+    // is deprecated — operant.toml below is the sole file-based config source)
     let cli_config = CliConfig::load().unwrap_or_else(|e| {
         eprintln!("Warning: Failed to load CLI config: {}. Using defaults.", e);
         CliConfig::default()
@@ -1143,9 +1144,6 @@ async fn main() -> Result<()> {
     let cli_app_config = cli_config.to_app_config();
     if loaded.config.client.base_url.is_empty() {
         loaded.config.client.base_url = cli_app_config.client.base_url;
-    }
-    if loaded.config.agent.model == "gpt-4" {
-        loaded.config.agent.model = cli_app_config.agent.model;
     }
     if loaded.config.client.api_key.is_none() {
         loaded.config.client.api_key = cli_app_config.client.api_key.clone();
