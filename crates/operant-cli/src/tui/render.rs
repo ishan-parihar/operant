@@ -404,8 +404,10 @@ pub fn render_app(frame: &mut Frame, app: &App) {
             // error strings (e.g. "Error: overloaded_error (529): …") wrap
             // instead of overflowing the input area.  Cap at 3 lines.
             let usable_width = size.width.max(1) as usize;
-            let char_count = text.chars().count();
-            ((char_count + usable_width - 1) / usable_width)
+            // Measure display width (not char count) so wide chars (CJK/emoji)
+            // don't undercount rows and overflow the status area.
+            let text_cols = unicode_width::UnicodeWidthStr::width(text);
+            ((text_cols + usable_width - 1) / usable_width)
                 .max(1)
                 .min(3) as u16
         } else {
@@ -1149,7 +1151,7 @@ fn render_messages(frame: &mut Frame, app: &App, area: Rect) {
                 "s"
             }
         );
-        let ind_len = indicator.len() as u16;
+        let ind_len = unicode_width::UnicodeWidthStr::width(indicator.as_str()) as u16;
         let ind_x = msg_area
             .x
             .saturating_add(msg_area.width.saturating_sub(ind_len + 2));
