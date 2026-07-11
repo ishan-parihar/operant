@@ -175,6 +175,16 @@ pub enum TuiDebugSubcommand {
         /// [{"type":"content","text":"hi"},{"type":"done","text":"hi"}].
         #[arg(long)]
         agent_script: Option<std::path::PathBuf>,
+
+        /// Terminal size as WxH (default 120x40). Reproduce layout/wrapping
+        /// bugs at specific dimensions.
+        #[arg(long)]
+        size: Option<String>,
+
+        /// Max frames before the simulation force-exits (default 100000).
+        /// Guards against a scenario that never stops streaming.
+        #[arg(long)]
+        max_frames: Option<u64>,
     },
 }
 
@@ -213,6 +223,8 @@ pub async fn handle_tui_debug_command(config: &AppConfig, cmd: TuiDebugSubcomman
             dump_screen,
             assert_screen,
             agent_script,
+            size,
+            max_frames,
         } => {
             debug_simulate(
                 config,
@@ -222,6 +234,8 @@ pub async fn handle_tui_debug_command(config: &AppConfig, cmd: TuiDebugSubcomman
                 dump_screen,
                 assert_screen,
                 agent_script,
+                size,
+                max_frames,
             )
             .await
         }
@@ -1070,82 +1084,98 @@ fn parse_key_sequence(seq: &str) -> Vec<crossterm::event::KeyEvent> {
     events
 }
 
+/// Evaluate comma-separated state assertions against `App::debug_snapshot()`.
+/// Each clause is `path OP value`, where OP is `==`, `!=`, or `contains` and
+/// `path` is a dot-path into the snapshot JSON (e.g. `overlays.model_picker`,
+/// `messages`, `model`). Values are matched against booleans, numbers, and
+/// strings. Legacy `<name>.visible` keys are auto-mapped to `overlays.<name>`.
 fn evaluate_assertions(app: &crate::tui::app::App, assertions_str: &str) -> Result<()> {
+    let snapshot = app.debug_snapshot();
     for assertion in assertions_str.split(',') {
         let assertion = assertion.trim();
         if assertion.is_empty() {
             continue;
         }
 
-        let parts: Vec<&str> = if assertion.contains("==") {
-            assertion.split("==").map(|s| s.trim()).collect()
-        } else if assertion.contains("!=") {
-            assertion.split("!=").map(|s| s.trim()).collect()
+        // Detect operator. `contains` is whitespace-delimited to avoid
+        // colliding with substrings; `==`/`!=` are symbolic.
+        let (key, op, val_raw) = if let Some((k, v)) = assertion.split_once("==") {
+            (k.trim(), "==", v.trim())
+        } else if let Some((k, v)) = assertion.split_once("!=") {
+            (k.trim(), "!=", v.trim())
+        } else if let Some((k, v)) = assertion.split_once(" contains ") {
+            (k.trim(), "contains", v.trim())
         } else {
             anyhow::bail!(
-                "Invalid assertion format: '{}'. Must use '==' or '!='.",
+                "Invalid assertion '{}': expected 'path == value', 'path != value', or 'path contains text'.",
                 assertion
             );
         };
 
-        if parts.len() != 2 {
-            anyhow::bail!(
-                "Invalid assertion format: '{}'. Must be key == value or key != value.",
-                assertion
-            );
+        // Strip outer quotes from the value if present.
+        let val_str = val_raw
+            .strip_prefix('"')
+            .and_then(|s| s.strip_suffix('"'))
+            .or_else(|| {
+                val_raw
+                    .strip_prefix('\'')
+                    .and_then(|s| s.strip_suffix('\''))
+            })
+            .unwrap_or(val_raw);
+
+        // Legacy compatibility: `foo.visible` → `overlays.foo`.
+        let path = key
+            .strip_suffix(".visible")
+            .map(|base| format!("overlays.{base}"))
+            .unwrap_or_else(|| key.to_string());
+
+        // Navigate the snapshot by dot-path.
+        let mut node = &snapshot;
+        for seg in path.split('.') {
+            node = node
+                .get(seg)
+                .ok_or_else(|| anyhow::anyhow!("Unknown assertion path: '{}'", key))?;
         }
 
-        let key = parts[0];
-        let mut val_str = parts[1];
-
-        // Strip outer quotes if any
-        if (val_str.starts_with('"') && val_str.ends_with('"'))
-            || (val_str.starts_with('\'') && val_str.ends_with('\''))
-        {
-            val_str = &val_str[1..val_str.len() - 1];
-        }
-
-        let is_eq = assertion.contains("==");
-
-        let actual_val = match key {
-            "help_overlay.visible" => app.help_overlay.visible,
-            "should_exit" => app.should_exit,
-            "plan_mode" => app.plan_mode,
-            "show_help" => app.show_help,
-            "is_streaming" => app.is_streaming,
-            "is_simulating" => app.is_simulating,
-            "history_search_overlay.visible" => app.history_search_overlay.visible,
-            "global_search.visible" => app.global_search.visible,
-            "settings_screen.visible" => app.settings_screen.visible,
-            "mcp_view.visible" => app.mcp_view.visible,
-            _ => anyhow::bail!("Unsupported assertion field: '{}'", key),
+        let actual_display = match node {
+            serde_json::Value::String(s) => s.clone(),
+            other => other.to_string(),
         };
 
-        let expected_val = match val_str {
-            "true" => true,
-            "false" => false,
-            _ => anyhow::bail!(
-                "Unsupported assertion value: '{}'. Must be 'true' or 'false'.",
-                val_str
-            ),
+        let matched = match op {
+            "contains" => actual_display.contains(val_str),
+            "==" | "!=" => {
+                let eq = match node {
+                    serde_json::Value::Bool(b) => {
+                        val_str.parse::<bool>().map(|v| v == *b).unwrap_or(false)
+                    }
+                    serde_json::Value::Number(n) => val_str
+                        .parse::<f64>()
+                        .map(|v| n.as_f64() == Some(v))
+                        .unwrap_or(false),
+                    serde_json::Value::String(s) => s == val_str,
+                    serde_json::Value::Null => val_str == "null",
+                    _ => actual_display == val_str,
+                };
+                if op == "==" {
+                    eq
+                } else {
+                    !eq
+                }
+            }
+            _ => unreachable!(),
         };
 
-        let condition = if is_eq {
-            actual_val == expected_val
-        } else {
-            actual_val != expected_val
-        };
-
-        if !condition {
-            let op = if is_eq { "==" } else { "!=" };
+        if !matched {
             anyhow::bail!(
-                "Assertion failed: {} {} {} (actual value is {})",
+                "Assertion failed: {} {} {} (actual: {})",
                 key,
                 op,
-                expected_val,
-                actual_val
+                val_str,
+                actual_display
             );
         }
+        println!("  ✓ {} {} {}", key, op, val_str);
     }
     Ok(())
 }
@@ -1256,6 +1286,8 @@ async fn debug_simulate(
     dump_screen: Option<std::path::PathBuf>,
     assert_screen: Option<String>,
     agent_script: Option<std::path::PathBuf>,
+    size: Option<String>,
+    max_frames: Option<u64>,
 ) -> Result<()> {
     use crate::tui::adapter_types::{LaunchMode, TuiApp};
     use crate::tui::debug::TuiEvent;
@@ -1263,6 +1295,25 @@ async fn debug_simulate(
     println!("Starting headless TUI simulation...");
     let parsed_keys = parse_key_sequence(&keys);
     println!("Parsed {} key events.", parsed_keys.len());
+
+    // Parse --size WxH (default 120x40).
+    let dims = match size.as_deref() {
+        None => (120u16, 40u16),
+        Some(s) => {
+            let (w, h) = s.split_once(['x', 'X']).ok_or_else(|| {
+                anyhow::anyhow!("Invalid --size '{}': expected WxH, e.g. 80x24", s)
+            })?;
+            (
+                w.trim()
+                    .parse()
+                    .map_err(|_| anyhow::anyhow!("Invalid width in --size '{}'", s))?,
+                h.trim()
+                    .parse()
+                    .map_err(|_| anyhow::anyhow!("Invalid height in --size '{}'", s))?,
+            )
+        }
+    };
+    let frame_cap = Some(max_frames.unwrap_or(100_000));
 
     let script = if let Some(ref path) = agent_script {
         let raw = std::fs::read_to_string(path)?;
@@ -1279,7 +1330,9 @@ async fn debug_simulate(
     };
 
     let tui_app = TuiApp::enter(config.clone(), None, LaunchMode::Landing, true).await?;
-    let (events, app, screen) = tui_app.run_headless(parsed_keys, script).await?;
+    let (events, app, screen) = tui_app
+        .run_headless(parsed_keys, script, dims, frame_cap)
+        .await?;
 
     println!("Simulation completed. Analyzing events...");
     let mut has_errors = false;
