@@ -2222,7 +2222,7 @@ impl App {
                 self.settings_screen.open();
                 true
             }
-            "theme" => {
+            "theme" | "skin" => {
                 let current = match &self.settings.theme {
                     Theme::Dark => "dark",
                     Theme::Light => "light",
@@ -2233,7 +2233,7 @@ impl App {
                 self.theme_screen.open(current);
                 true
             }
-            "stats" => {
+            "stats" | "cost" => {
                 self.stats_dialog.open();
                 true
             }
@@ -2411,7 +2411,7 @@ impl App {
                 }
                 true
             }
-            "output-style" => {
+            "output-style" | "verbose" => {
                 self.output_style = match self.output_style.as_str() {
                     "auto" => "stream".to_string(),
                     "stream" => "verbose".to_string(),
@@ -2461,10 +2461,6 @@ impl App {
                 true
             }
             "doctor" => false,
-            "cost" => {
-                self.stats_dialog.open();
-                true
-            }
             "rewind" => {
                 self.open_rewind_flow();
                 true
@@ -2556,15 +2552,6 @@ impl App {
             }
 
             // /verbose — cycle output-style between auto/stream/verbose.
-            "verbose" => {
-                self.output_style = match self.output_style.as_str() {
-                    "auto" => "stream".to_string(),
-                    "stream" => "verbose".to_string(),
-                    _ => "auto".to_string(),
-                };
-                self.status_message = Some(format!("Output style: {}.", self.output_style));
-                true
-            }
 
             // /reasoning — toggle whether thinking/reasoning blocks are
             // expanded by default in the transcript. (Bug #18 from iter-82
@@ -2755,19 +2742,6 @@ impl App {
             // since the pose system was dead code. Still shows the message.)
             "pet" => {
                 self.status_message = Some("Rustle wags its tail. 🐕".to_string());
-                true
-            }
-
-            // /skin — alias to /theme (operant calls them themes).
-            "skin" => {
-                let current = match &self.settings.theme {
-                    Theme::Dark => "dark",
-                    Theme::Light => "light",
-                    Theme::Default => "default",
-                    Theme::Deuteranopia => "deuteranopia",
-                    Theme::Custom(s) => s.as_str(),
-                };
-                self.theme_screen.open(current);
                 true
             }
 
