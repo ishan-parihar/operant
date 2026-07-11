@@ -51,9 +51,17 @@ pub struct UrlHit {
 }
 
 fn enabled() -> bool {
-    match std::env::var("OPERANT_NO_HYPERLINKS").as_deref() {
-        Ok(v) => !matches!(v.trim(), "1" | "true" | "yes" | "on"),
-        Err(_) => true,
+    is_enabled(std::env::var("OPERANT_NO_HYPERLINKS").ok().as_deref())
+}
+
+/// Pure decision logic for `enabled()`, taking the env var value directly
+/// instead of reading it — lets tests exercise every branch without
+/// mutating process-global env state (which raced with other tests running
+/// in parallel under `cargo test --workspace`).
+fn is_enabled(env_value: Option<&str>) -> bool {
+    match env_value {
+        Some(v) => !matches!(v.trim(), "1" | "true" | "yes" | "on"),
+        None => true,
     }
 }
 
@@ -312,22 +320,12 @@ mod tests {
 
     #[test]
     fn enabled_respects_env_var() {
-        // Save & restore the env var around the asserts so other tests don't
-        // observe stray state. (No #[serial] crate available here.)
-        let prev = std::env::var("OPERANT_NO_HYPERLINKS").ok();
-
-        std::env::remove_var("OPERANT_NO_HYPERLINKS");
-        assert!(enabled());
-
-        std::env::set_var("OPERANT_NO_HYPERLINKS", "1");
-        assert!(!enabled());
-
-        std::env::set_var("OPERANT_NO_HYPERLINKS", "0");
-        assert!(enabled());
-
-        match prev {
-            Some(v) => std::env::set_var("OPERANT_NO_HYPERLINKS", v),
-            None => std::env::remove_var("OPERANT_NO_HYPERLINKS"),
-        }
+        // Exercise the pure decision logic directly instead of mutating the
+        // real process env — env vars are process-global, so setting them
+        // here used to race with any other test reading/setting the same
+        // var concurrently under `cargo test --workspace`.
+        assert!(is_enabled(None));
+        assert!(!is_enabled(Some("1")));
+        assert!(is_enabled(Some("0")));
     }
 }
