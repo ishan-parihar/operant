@@ -207,7 +207,12 @@ pub mod cost {
         pub fn record_usage(&mut self, input: u32, output: u32) {
             self.input_tokens += input;
             self.output_tokens += output;
-            self.total_cost += input as f64 * 0.000003 + output as f64 * 0.000015;
+        }
+        /// Accumulate a real per-request cost (from `AgentEvent::Cost`'s
+        /// models_dev-sourced estimate, or a flat-rate fallback when the
+        /// model isn't in the models_dev catalog).
+        pub fn record_cost(&mut self, cost_usd: f64) {
+            self.total_cost += cost_usd;
         }
         pub fn total_tokens(&self) -> u64 {
             self.input_tokens as u64 + self.output_tokens as u64
@@ -872,10 +877,9 @@ pub mod history {
                     // ponytail: count-carrier vec, not real content — make
                     // this a usize field if a caller ever needs the bodies.
                     messages: vec![String::new(); s.message_count],
-                    // list_sessions doesn't select the per-session cost
-                    // columns, so DatabaseSession exposes no cost; stays 0.0
-                    // until the DB layer surfaces it.
-                    total_cost: 0.0,
+                    // R3: real accumulated cost, persisted by the agent via
+                    // Database::update_session_cost after each completed turn.
+                    total_cost: s.actual_cost_usd.unwrap_or(0.0),
                 })
                 .collect()
         })

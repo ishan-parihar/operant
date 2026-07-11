@@ -194,6 +194,11 @@ pub struct OperantAgent {
     /// When true, a trajectory JSON is saved to ~/.operant/trajectories/
     /// on run() completion. Set via AgentConfig::record_trajectories.
     record_trajectories: bool,
+    /// Cumulative real cost (USD) for the current persistent session,
+    /// accumulated from `AgentEvent::Cost`'s models_dev-sourced estimate
+    /// in `process_response`. Persisted to `sessions.actual_cost_usd` via
+    /// `Database::update_session_cost` (R3 — cost fidelity).
+    session_cost_usd: Arc<std::sync::RwLock<f64>>,
 }
 
 /// A pending permission request sent from the agent to the TUI
@@ -232,6 +237,7 @@ impl OperantAgent {
             persistent_session_id: None,
             interrupt_flag: crate::interrupt::InterruptFlag::new(),
             record_trajectories: false,
+            session_cost_usd: Arc::new(std::sync::RwLock::new(0.0)),
         }
     }
 
@@ -260,6 +266,7 @@ impl OperantAgent {
             persistent_session_id: None,
             interrupt_flag: crate::interrupt::InterruptFlag::new(),
             record_trajectories: false,
+            session_cost_usd: Arc::new(std::sync::RwLock::new(0.0)),
         }
     }
 
@@ -801,6 +808,9 @@ impl OperantAgent {
                             &chrono::Utc::now().to_rfc3339(),
                         )
                         .ok();
+                    if let Ok(total) = self.session_cost_usd.read() {
+                        self.database.update_session_cost(&session_id, *total).ok();
+                    }
 
                     // If no tool calls, we're done
                     if tool_calls.is_empty() {
@@ -882,6 +892,9 @@ impl OperantAgent {
                                 &chrono::Utc::now().to_rfc3339(),
                             )
                             .ok();
+                        if let Ok(total) = self.session_cost_usd.read() {
+                            self.database.update_session_cost(&session_id, *total).ok();
+                        }
                         if result.success {
                             self.emit(AgentEvent::ToolComplete {
                                 result: result.clone(),
@@ -1416,6 +1429,12 @@ impl OperantAgent {
             model: self.config.model.clone(),
         })
         .await;
+
+        if let Some(cost) = cost_usd {
+            if let Ok(mut total) = self.session_cost_usd.write() {
+                *total += cost;
+            }
+        }
 
         Ok((content, reasoning, tool_calls))
     }
