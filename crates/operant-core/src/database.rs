@@ -317,10 +317,8 @@ impl Database {
             })
             .map_err(|e| Error::Agent(format!("Query error for {}: {}", table_name, e)))?;
         let mut cols = std::collections::HashSet::new();
-        for row in rows {
-            if let Ok(name) = row {
-                cols.insert(name);
-            }
+        for name in rows.flatten() {
+            cols.insert(name);
         }
         Ok(cols)
     }

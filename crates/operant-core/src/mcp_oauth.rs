@@ -389,7 +389,7 @@ fn write_json<T: serde::Serialize>(path: &Path, data: &T) -> Result<()> {
     let tmp = parent.join(format!(
         ".tmp.{}.{}.json",
         std::process::id(),
-        uuid::Uuid::new_v4().to_string()
+        uuid::Uuid::new_v4()
     ));
 
     {
@@ -1035,11 +1035,11 @@ impl OAuthProvider {
                 let meta = self
                     .storage
                     .load_metadata()
-                    .or_else(|| {
+                    .or({
                         // Try to discover
                         None
                     })
-                    .unwrap_or_else(|| {
+                    .unwrap_or({
                         // Default structure; discovery will be attempted on first auth
                         OAuthMetadata {
                             issuer: None,
@@ -1111,14 +1111,11 @@ impl OAuthProvider {
                 meta.clone()
             } else {
                 drop(cached);
-                let meta = self
-                    .storage
-                    .load_metadata()
-                    .unwrap_or_else(|| OAuthMetadata {
-                        issuer: None,
-                        authorization_endpoint: None,
-                        token_endpoint: None,
-                    });
+                let meta = self.storage.load_metadata().unwrap_or(OAuthMetadata {
+                    issuer: None,
+                    authorization_endpoint: None,
+                    token_endpoint: None,
+                });
                 *self.metadata.write().await = Some(meta.clone());
                 meta
             }
@@ -1180,14 +1177,11 @@ impl OAuthProvider {
                 meta.clone()
             } else {
                 drop(cached);
-                let meta = self
-                    .storage
-                    .load_metadata()
-                    .unwrap_or_else(|| OAuthMetadata {
-                        issuer: None,
-                        authorization_endpoint: None,
-                        token_endpoint: None,
-                    });
+                let meta = self.storage.load_metadata().unwrap_or(OAuthMetadata {
+                    issuer: None,
+                    authorization_endpoint: None,
+                    token_endpoint: None,
+                });
                 *self.metadata.write().await = Some(meta.clone());
                 meta
             }
@@ -1195,11 +1189,7 @@ impl OAuthProvider {
 
         let client_info = self.get_or_create_client_info().await?;
 
-        let current_token = self
-            .storage
-            .get_tokens()
-            .await
-            .ok_or_else(|| OAuthError::NoToken)?;
+        let current_token = self.storage.get_tokens().await.ok_or(OAuthError::NoToken)?;
 
         let old_refresh_token = current_token.refresh_token.clone();
         let refresh_token = old_refresh_token
@@ -1522,10 +1512,7 @@ impl OAuthManager {
         let provider_guard = entry.provider.read().await;
         let provider = provider_guard.as_ref()?;
 
-        match provider.get_valid_token().await {
-            Ok(token) => Some(token),
-            Err(_) => None,
-        }
+        provider.get_valid_token().await.ok()
     }
 
     pub fn clear_cache(&self, server_url: &str) {

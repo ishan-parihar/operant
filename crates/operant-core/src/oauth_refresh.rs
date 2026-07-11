@@ -266,7 +266,7 @@ impl OAuthRefresher {
             ))
             .send()
             .await
-            .map_err(|e| Error::Network(e))?;
+            .map_err(Error::Network)?;
 
         if !resp.status().is_success() {
             let status = resp.status();
@@ -381,7 +381,7 @@ impl OAuthRefresher {
             ))
             .send()
             .await
-            .map_err(|e| Error::Network(e))?;
+            .map_err(Error::Network)?;
 
         if !resp.status().is_success() {
             let status = resp.status();
@@ -445,7 +445,7 @@ impl OAuthRefresher {
             .form(&[("grant_type", "refresh_token"), ("client_id", client_id)])
             .send()
             .await
-            .map_err(|e| Error::Network(e))?;
+            .map_err(Error::Network)?;
 
         if !resp.status().is_success() {
             let status = resp.status();
@@ -538,7 +538,7 @@ impl OAuthRefresher {
             .header("Accept", "application/json")
             .send()
             .await
-            .map_err(|e| Error::Network(e))?;
+            .map_err(Error::Network)?;
 
         if resp.status().is_success() {
             debug!("Nous agent key minted successfully");
@@ -698,7 +698,7 @@ pub fn auth_store_path() -> PathBuf {
 }
 
 pub fn load_auth_store(path: &Path) -> Result<AuthStore> {
-    let content = fs::read_to_string(path).map_err(|e| Error::Io(e))?;
+    let content = fs::read_to_string(path).map_err(Error::Io)?;
     let store: AuthStore = serde_json::from_str(&content)
         .map_err(|e| Error::ParseResponse(format!("auth.json parse error: {e}")))?;
     Ok(store)
@@ -706,15 +706,15 @@ pub fn load_auth_store(path: &Path) -> Result<AuthStore> {
 
 pub fn save_auth_store(path: &Path, store: &AuthStore) -> Result<()> {
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|e| Error::Io(e))?;
+        fs::create_dir_all(parent).map_err(Error::Io)?;
     }
 
     let json = serde_json::to_string_pretty(store)
         .map_err(|e| Error::ParseResponse(format!("auth.json serialize error: {e}")))?;
 
     let dir = path.parent().unwrap_or(Path::new("."));
-    let mut tmp = tempfile::NamedTempFile::new_in(dir).map_err(|e| Error::Io(e))?;
-    std::io::Write::write_all(&mut tmp, json.as_bytes()).map_err(|e| Error::Io(e))?;
+    let mut tmp = tempfile::NamedTempFile::new_in(dir).map_err(Error::Io)?;
+    std::io::Write::write_all(&mut tmp, json.as_bytes()).map_err(Error::Io)?;
     tmp.persist(path).map_err(|e| Error::Io(e.into()))?;
 
     Ok(())

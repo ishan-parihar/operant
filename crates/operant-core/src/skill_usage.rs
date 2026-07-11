@@ -23,8 +23,10 @@ use std::path::{Path, PathBuf};
 /// Lifecycle state for a skill.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum LifecycleState {
     /// Default state — skill is active and usable.
+    #[default]
     Active,
     /// Skill is deprecated but still present.
     Deprecated,
@@ -32,12 +34,6 @@ pub enum LifecycleState {
     Archived,
     /// Skill is permanently retired.
     Retired,
-}
-
-impl Default for LifecycleState {
-    fn default() -> Self {
-        Self::Active
-    }
 }
 
 /// Per-skill usage telemetry record.

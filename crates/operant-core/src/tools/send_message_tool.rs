@@ -189,7 +189,7 @@ impl SendMessageTool {
         }
 
         // Estimate total chunks needed (conservative: assume max suffix for all).
-        let estimated = (msg_utf16_len + usable - 1) / usable;
+        let estimated = msg_utf16_len.div_ceil(usable);
 
         // ── Helper: find split point within a substring ──────────────────
         fn find_split(s: &str, limit: usize) -> usize {
@@ -250,7 +250,7 @@ impl SendMessageTool {
         // ── Helper: check if byte offset is inside a code block ─────────
         fn inside_code_block(message: &str, offset: usize) -> bool {
             let before = &message[..offset];
-            before.matches("```").count() % 2 != 0
+            !before.matches("```").count().is_multiple_of(2)
         }
 
         // ── Actual splitting ────────────────────────────────────────────

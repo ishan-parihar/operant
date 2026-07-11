@@ -25,6 +25,12 @@ fn default_analysis_type() -> String {
     "describe".to_string()
 }
 
+impl Default for VideoAnalysisTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl VideoAnalysisTool {
     pub fn new() -> Self {
         let fal_key = std::env::var("FAL_KEY").unwrap_or_default();

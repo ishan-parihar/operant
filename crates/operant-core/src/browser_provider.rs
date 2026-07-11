@@ -136,6 +136,12 @@ pub struct CamofoxProvider {
     client: reqwest::Client,
 }
 
+impl Default for CamofoxProvider {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CamofoxProvider {
     pub fn new() -> Self {
         Self {
@@ -200,6 +206,12 @@ pub struct BrowserbaseProvider {
     client: reqwest::Client,
 }
 
+impl Default for BrowserbaseProvider {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl BrowserbaseProvider {
     pub fn new() -> Self {
         Self {
@@ -260,6 +272,12 @@ impl BrowserProvider for BrowserbaseProvider {
 pub struct BrowserUseProvider {
     api_key: String,
     client: reqwest::Client,
+}
+
+impl Default for BrowserUseProvider {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl BrowserUseProvider {
@@ -344,6 +362,12 @@ pub struct FirecrawlProvider {
     api_key: String,
     base_url: String,
     client: reqwest::Client,
+}
+
+impl Default for FirecrawlProvider {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl FirecrawlProvider {

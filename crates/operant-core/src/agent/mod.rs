@@ -595,7 +595,7 @@ impl OperantAgent {
                 );
 
                 // Build a grace-call request: same messages but no tools
-                let grace_request = ChatRequest::new(&self.effective_model(), messages.clone())
+                let grace_request = ChatRequest::new(self.effective_model(), messages.clone())
                     .with_stream(self.config.stream);
 
                 let grace_result = if self.config.stream {
@@ -673,7 +673,7 @@ impl OperantAgent {
             // Get tool schemas
             let tools = self.registry.get_schemas().await;
 
-            let request = ChatRequest::new(&self.effective_model(), messages.clone())
+            let request = ChatRequest::new(self.effective_model(), messages.clone())
                 .with_tools(tools)
                 .with_stream(self.config.stream);
 
@@ -696,7 +696,7 @@ impl OperantAgent {
                             // Rebuild request with compressed messages
                             let tools = self.registry.get_schemas().await;
                             let retry_request =
-                                ChatRequest::new(&self.effective_model(), messages.clone())
+                                ChatRequest::new(self.effective_model(), messages.clone())
                                     .with_tools(tools)
                                     .with_stream(self.config.stream);
                             self.client.chat_streaming(retry_request).await?
@@ -720,7 +720,7 @@ impl OperantAgent {
                                 crate::context_management::manage_context(messages, budget, 4096);
                             let tools = self.registry.get_schemas().await;
                             let retry_request =
-                                ChatRequest::new(&self.effective_model(), messages.clone())
+                                ChatRequest::new(self.effective_model(), messages.clone())
                                     .with_tools(tools)
                                     .with_stream(self.config.stream);
                             self.client.chat(retry_request).await?
@@ -955,7 +955,7 @@ impl OperantAgent {
             // the last tool-role message to preserve role alternation.
             if let Some(steer_text) = self.drain_steers().await {
                 info!(steer = %steer_text, "Injecting steer directive");
-                let steer_msg = Message::user(&format!(
+                let steer_msg = Message::user(format!(
                     "[STEER] {}\n\nPlease adjust your approach based on this guidance.",
                     steer_text
                 ));

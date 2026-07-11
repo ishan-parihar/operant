@@ -39,12 +39,10 @@ fn negotiate_protocol_version(server_version: &str) -> Option<&'static str> {
         }
     }
     // Fallback: prefix match (some servers return "2025-06-18-draft" etc.)
-    for v in MCP_SUPPORTED_VERSIONS {
-        if server_version.starts_with(*v) {
-            return Some(v);
-        }
-    }
-    None
+    MCP_SUPPORTED_VERSIONS
+        .iter()
+        .find(|&v| server_version.starts_with(*v))
+        .map(|v| v as _)
 }
 
 /// MCP client for connecting to MCP servers

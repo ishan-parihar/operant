@@ -597,7 +597,7 @@ impl AudioRecorder for TermuxRecorder {
         }
 
         let metadata = tokio::fs::metadata(&path).await.ok();
-        if metadata.map_or(true, |m| m.len() == 0) {
+        if metadata.is_none_or(|m| m.len() == 0) {
             let _ = tokio::fs::remove_file(&path).await;
             return Ok(None);
         }
@@ -672,7 +672,7 @@ pub fn detect_audio_environment() -> AudioEnvironment {
     // WSL detection
     let is_wsl = std::fs::read_to_string("/proc/version")
         .ok()
-        .map_or(false, |v| v.to_lowercase().contains("microsoft"));
+        .is_some_and(|v| v.to_lowercase().contains("microsoft"));
 
     if is_wsl {
         if std::env::var("PULSE_SERVER").is_ok() {
@@ -1442,7 +1442,7 @@ pub fn is_whisper_hallucination(transcript: &str) -> bool {
     }
 
     // Exact match against known phrases
-    let without_period = cleaned.trim_end_matches(|c| c == '.' || c == '!');
+    let without_period = cleaned.trim_end_matches(['.', '!']);
     if WHISPER_HALLUCINATIONS.contains(cleaned.as_str())
         || WHISPER_HALLUCINATIONS.contains(without_period)
     {

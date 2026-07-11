@@ -155,7 +155,7 @@ impl SkillManager {
 
         // Check required commands
         for cmd in &skill.prerequisites_commands {
-            if !which::which(cmd).is_ok() {
+            if which::which(cmd).is_err() {
                 return false;
             }
         }

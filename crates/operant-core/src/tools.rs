@@ -114,7 +114,7 @@ use crate::error::{Error, Result};
 use crate::schema::ToolSchema;
 
 /// Result of tool execution
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ToolResult {
     /// Tool call ID this result is for
     pub tool_call_id: String,
@@ -127,18 +127,6 @@ pub struct ToolResult {
     /// Optional error details
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
-}
-
-impl Default for ToolResult {
-    fn default() -> Self {
-        Self {
-            tool_call_id: String::new(),
-            name: String::new(),
-            success: false,
-            content: String::new(),
-            error: None,
-        }
-    }
 }
 
 impl ToolResult {

@@ -129,10 +129,6 @@ impl Dispatcher {
                 params![cutoff],
             )
             .map_err(|e| Error::Agent(format!("GC tasks: {}", e)))?;
-        Ok((
-            removed_tasks as usize,
-            removed_runs as usize,
-            removed_events as usize,
-        ))
+        Ok((removed_tasks, removed_runs, removed_events))
     }
 }

@@ -67,6 +67,12 @@ fn default_voice() -> String {
     "af_sky".to_string()
 }
 
+impl Default for TtsTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TtsTool {
     pub fn new() -> Self {
         Self {
@@ -270,7 +276,7 @@ impl TtsTool {
 
         let response = match self
             .client
-            .post(&format!(
+            .post(format!(
                 "https://api.elevenlabs.io/v1/text-to-speech/{}",
                 voice_id
             ))

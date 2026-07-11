@@ -42,7 +42,7 @@ pub fn estimate_tokens(text: &str) -> usize {
     // char count / 4 is the standard heuristic for English text.
     // For CJK text each char is ~1 token, so the heuristic overestimates
     // for English and underestimates for CJK — acceptable for budgeting.
-    (text.chars().count() + 3) / 4
+    text.chars().count().div_ceil(4)
 }
 
 /// Estimate the token count of a single message (role + content).
@@ -101,7 +101,7 @@ pub fn evict_to_budget(messages: Vec<Message>, budget_tokens: usize) -> Vec<Mess
     // keep_recent, the eviction loop simply finds nothing to evict, which
     // is the right behavior — you don't need to evict when you have few
     // messages.)
-    let keep_recent = ((budget_tokens / 4096) as usize).clamp(6, 50);
+    let keep_recent = (budget_tokens / 4096).clamp(6, 50);
     let n = messages.len();
 
     // Build a list of (index, tier) for evictable messages. System

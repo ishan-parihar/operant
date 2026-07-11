@@ -281,9 +281,10 @@ impl SessionSource {
 // ---------------------------------------------------------------------------
 
 /// Reset policy mode.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum ResetMode {
     /// No automatic reset
+    #[default]
     None,
     /// Reset after idle timeout
     Idle,
@@ -291,12 +292,6 @@ pub enum ResetMode {
     Daily,
     /// Both idle and daily reset
     Both,
-}
-
-impl Default for ResetMode {
-    fn default() -> Self {
-        Self::None
-    }
 }
 
 /// Configuration for when sessions should be automatically reset.
@@ -690,10 +685,8 @@ impl PersistentSessionStore {
             .map_err(|e| Error::Agent(format!("Failed to query sessions: {}", e)))?;
 
         let mut entries = self.entries.write().unwrap();
-        for row in rows {
-            if let Ok(entry) = row {
-                entries.insert(entry.session_key.clone(), entry);
-            }
+        for entry in rows.flatten() {
+            entries.insert(entry.session_key.clone(), entry);
         }
         Ok(())
     }
@@ -842,7 +835,7 @@ impl PersistentSessionStore {
             session_id: format!(
                 "{}_{}",
                 chrono::Local::now().format("%Y%m%d_%H%M%S"),
-                Uuid::new_v4().to_string()[..8].to_string()
+                &Uuid::new_v4().to_string()[..8]
             ),
             created_at: now.clone(),
             updated_at: now,
@@ -895,7 +888,7 @@ impl PersistentSessionStore {
             session_id: format!(
                 "{}_{}",
                 chrono::Local::now().format("%Y%m%d_%H%M%S"),
-                Uuid::new_v4().to_string()[..8].to_string()
+                &Uuid::new_v4().to_string()[..8]
             ),
             created_at: now.clone(),
             updated_at: now,

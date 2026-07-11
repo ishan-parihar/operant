@@ -74,7 +74,7 @@ fn detect_mime_type(data: &[u8], path: &PathBuf) -> Option<&'static str> {
         return Some("image/webp");
     }
     // Check for SVG
-    if path.extension().map(|e| e.to_str()).flatten() == Some("svg") {
+    if path.extension().and_then(|e| e.to_str()) == Some("svg") {
         return Some("image/svg+xml");
     }
     None
@@ -264,9 +264,9 @@ async fn download_image(url: &str) -> Result<Vec<u8>, String> {
         .await
         .map_err(|e| format!("URL safety check failed: {}", e))?;
     if !safe {
-        return Err(format!(
-            "URL blocked: points to private/internal address (SSRF protection)"
-        ));
+        return Err(
+            "URL blocked: points to private/internal address (SSRF protection)".to_string(),
+        );
     }
 
     let client = reqwest::Client::builder()
@@ -616,8 +616,8 @@ impl OperantTool for VisionTool {
         match download_image(image_url).await {
             Ok(bytes) => {
                 // Detect MIME type from header
-                let mime = detect_mime_type(&bytes, &PathBuf::from("image"))
-                    .unwrap_or_else(|| "image/jpeg");
+                let mime =
+                    detect_mime_type(&bytes, &PathBuf::from("image")).unwrap_or("image/jpeg");
 
                 // Auto-resize if needed
                 let (processed_bytes, processed_mime) =

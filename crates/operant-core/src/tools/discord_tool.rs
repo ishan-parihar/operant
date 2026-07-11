@@ -212,7 +212,7 @@ fn check_required_params(action: &str, args: &DiscordArgs) -> Vec<String> {
                 "name" => args.name.as_deref(),
                 _ => None,
             };
-            val.map_or(true, |s| s.is_empty())
+            val.is_none_or(|s| s.is_empty())
         })
         .map(|p| p.to_string())
         .collect()

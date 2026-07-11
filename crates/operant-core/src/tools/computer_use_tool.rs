@@ -341,7 +341,7 @@ impl ComputerUseTool {
             None => return ToolResult::error(self.name(), "keys required for key"),
         };
 
-        let parts: Vec<&str> = keys.split(|c| c == '+' || c == '-').collect();
+        let parts: Vec<&str> = keys.split(['+', '-']).collect();
         let mod_names = [
             "cmd", "command", "shift", "option", "alt", "ctrl", "control", "fn",
         ];

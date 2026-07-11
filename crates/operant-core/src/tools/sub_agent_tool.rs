@@ -172,7 +172,7 @@ impl SubAgentTool {
 
         // Build child system prompt based on role
         let system_prompt = build_child_system_prompt(
-            &goal,
+            goal,
             context.map(|c| c.into()).as_deref(),
             effective_role,
             child_depth,
