@@ -33,6 +33,12 @@ pub struct TranscriptionTool {
     config: Option<AppConfig>,
 }
 
+impl Default for TranscriptionTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TranscriptionTool {
     pub fn new() -> Self {
         Self { config: None }

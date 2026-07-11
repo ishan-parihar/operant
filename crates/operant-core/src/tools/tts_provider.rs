@@ -12,18 +12,14 @@ use std::fmt;
 /// Output audio format
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum AudioFormat {
+    #[default]
     Mp3,
     Wav,
     Ogg,
     Opus,
     Flac,
-}
-
-impl Default for AudioFormat {
-    fn default() -> Self {
-        Self::Mp3
-    }
 }
 
 impl fmt::Display for AudioFormat {

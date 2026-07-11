@@ -46,6 +46,12 @@ fn default_model() -> String {
     "flux-pro".to_string()
 }
 
+impl Default for ImageGenerationTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ImageGenerationTool {
     pub fn new() -> Self {
         let api_key = std::env::var("FAL_KEY").unwrap_or_default();
@@ -106,7 +112,7 @@ impl ImageGenerationTool {
 
         let response = match self
             .client
-            .post(&format!("https://queue.fal.run/{}", endpoint))
+            .post(format!("https://queue.fal.run/{}", endpoint))
             .header("Authorization", format!("Key {}", self.api_key))
             .header("Content-Type", "application/json")
             .json(&payload)

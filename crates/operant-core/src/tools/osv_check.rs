@@ -195,7 +195,7 @@ impl OperantTool for OsvCheckTool {
                     .as_object()
                     .map(|obj| {
                         obj.values().any(|v| {
-                            v.as_array().map_or(false, |arr| {
+                            v.as_array().is_some_and(|arr| {
                                 arr.iter().any(|item| {
                                     item.get("type").and_then(|t| t.as_str()) == Some("malware")
                                 })

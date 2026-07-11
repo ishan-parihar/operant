@@ -36,8 +36,10 @@ pub const STATUS_EXHAUSTED: &str = "exhausted";
 /// The authentication type for a pooled credential.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum AuthType {
     /// API key based authentication.
+    #[default]
     ApiKey,
     /// OAuth 2.0 based authentication.
     OAuth,
@@ -62,12 +64,6 @@ impl AuthType {
     }
 }
 
-impl Default for AuthType {
-    fn default() -> Self {
-        AuthType::ApiKey
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Pool strategy enum
 // ---------------------------------------------------------------------------
@@ -75,8 +71,10 @@ impl Default for AuthType {
 /// Selection strategy for choosing a credential from the pool.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum PoolStrategy {
     /// Always select the first available credential (default).
+    #[default]
     FillFirst,
     /// Cycle through credentials in order.
     RoundRobin,
@@ -84,12 +82,6 @@ pub enum PoolStrategy {
     Random,
     /// Pick the credential with the fewest uses so far.
     LeastUsed,
-}
-
-impl Default for PoolStrategy {
-    fn default() -> Self {
-        PoolStrategy::FillFirst
-    }
 }
 
 impl PoolStrategy {
@@ -221,7 +213,7 @@ impl PooledCredential {
 
     /// Returns `true` if the credential has not expired.
     pub fn is_expired(&self) -> bool {
-        self.expires_at.map_or(false, |exp| Utc::now() >= exp)
+        self.expires_at.is_some_and(|exp| Utc::now() >= exp)
     }
 
     /// Mark this credential as used, incrementing the usage counter.
@@ -235,9 +227,8 @@ impl PooledCredential {
         if self.credential_type != AuthType::OAuth {
             return false;
         }
-        self.expires_at.map_or(false, |exp| {
-            Utc::now() + chrono::Duration::seconds(skew_seconds as i64) >= exp
-        })
+        self.expires_at
+            .is_some_and(|exp| Utc::now() + chrono::Duration::seconds(skew_seconds as i64) >= exp)
     }
 
     /// Check if this OAuth credential needs a token refresh.

@@ -504,7 +504,7 @@ impl MemoryManager {
 
     /// Start a new session
     pub async fn start_session(&self, title: impl Into<String>) -> String {
-        let session_id = format!("session_{}", uuid::Uuid::new_v4().to_string());
+        let session_id = format!("session_{}", uuid::Uuid::new_v4());
         let session = Session::new(&session_id, title);
 
         self.sessions
@@ -672,10 +672,10 @@ impl MemoryManager {
         })
         .await
         .map_err(|join_err| {
-            std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!("save_to_disk spawn_blocking panicked: {}", join_err),
-            )
+            std::io::Error::other(format!(
+                "save_to_disk spawn_blocking panicked: {}",
+                join_err
+            ))
         })??;
 
         // Clear the dirty flag after a successful write.

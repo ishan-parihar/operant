@@ -123,33 +123,25 @@ impl Default for RateLimitSettings {
 /// How tool execution progress is reported to the user.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum ToolProgressMode {
     PerStep,
     FinalOnly,
     Streaming,
+    #[default]
     Auto,
-}
-
-impl Default for ToolProgressMode {
-    fn default() -> Self {
-        Self::Auto
-    }
 }
 
 /// When the conversation session should be automatically reset.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum SessionResetMode {
+    #[default]
     Never,
     OnSystemPromptChange,
     OnToolChange,
     Always,
-}
-
-impl Default for SessionResetMode {
-    fn default() -> Self {
-        Self::Never
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -458,7 +450,9 @@ impl Default for PluginSettings {
 /// Terminal execution backends.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum TerminalBackend {
+    #[default]
     Local,
     Docker,
     Modal,
@@ -466,12 +460,6 @@ pub enum TerminalBackend {
     Daytona,
     VercelSandbox,
     Singularity,
-}
-
-impl Default for TerminalBackend {
-    fn default() -> Self {
-        Self::Local
-    }
 }
 
 impl std::fmt::Display for TerminalBackend {
@@ -654,6 +642,7 @@ impl Default for BrowserSettings {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
+#[derive(Default)]
 pub struct VisionSettings {
     pub provider: Option<String>,
     pub model: Option<String>,
@@ -661,37 +650,17 @@ pub struct VisionSettings {
     pub api_key: Option<String>,
 }
 
-impl Default for VisionSettings {
-    fn default() -> Self {
-        Self {
-            provider: None,
-            model: None,
-            base_url: None,
-            api_key: None,
-        }
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
+#[derive(Default)]
 pub struct CredentialPoolSettings {
     pub strategy: Option<String>,
     pub enabled: bool,
     pub strategies: HashMap<String, String>,
 }
 
-impl Default for CredentialPoolSettings {
-    fn default() -> Self {
-        Self {
-            strategy: None,
-            enabled: false,
-            strategies: HashMap::new(),
-        }
-    }
-}
-
 /// Configuration for an auxiliary model assigned to a specific task slot.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AuxiliaryModelConfig {
     pub provider: Option<String>,
     pub model: Option<String>,
@@ -699,19 +668,8 @@ pub struct AuxiliaryModelConfig {
     pub api_key: Option<String>,
 }
 
-impl Default for AuxiliaryModelConfig {
-    fn default() -> Self {
-        Self {
-            provider: None,
-            model: None,
-            base_url: None,
-            api_key: None,
-        }
-    }
-}
-
 /// Auxiliary model routing for specialized task slots.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AuxiliaryModels {
     pub vision: Option<AuxiliaryModelConfig>,
     pub compression: Option<AuxiliaryModelConfig>,
@@ -722,22 +680,6 @@ pub struct AuxiliaryModels {
     pub memory: Option<AuxiliaryModelConfig>,
     pub code_execution: Option<AuxiliaryModelConfig>,
     pub reasoning: Option<AuxiliaryModelConfig>,
-}
-
-impl Default for AuxiliaryModels {
-    fn default() -> Self {
-        Self {
-            vision: None,
-            compression: None,
-            web_extract: None,
-            image_gen: None,
-            embeddings: None,
-            search: None,
-            memory: None,
-            code_execution: None,
-            reasoning: None,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

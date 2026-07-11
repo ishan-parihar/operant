@@ -190,7 +190,7 @@ impl HookRegistry {
                 let result = std::panic::AssertUnwindSafe(handler_clone(event_clone, ctx_clone))
                     .catch_unwind_safe()
                     .await;
-                if let Err(_) = result {
+                if result.is_err() {
                     tracing::warn!("Hook handler panicked — caught and ignored");
                 }
             });

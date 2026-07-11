@@ -227,6 +227,12 @@ pub struct SessionStore {
     sessions: std::sync::RwLock<HashMap<String, PlatformSession>>,
 }
 
+impl Default for SessionStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SessionStore {
     pub fn new() -> Self {
         Self {
@@ -393,6 +399,12 @@ pub struct ChannelInfo {
 /// Directory mapping channels to their metadata
 pub struct ChannelDirectory {
     channels: std::sync::RwLock<HashMap<String, ChannelInfo>>,
+}
+
+impl Default for ChannelDirectory {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ChannelDirectory {
@@ -1042,7 +1054,7 @@ fn chunk_text(text: &str, max_chunk_size: usize) -> Vec<String> {
     // First pass: estimate total chunks to know Y in (X/Y).
     // This is a rough estimate — we refine during actual splitting.
     let body_budget = max_chunk_size - SUFFIX_RESERVE;
-    let estimated_chunks = (utf16_len(text) + body_budget - 1) / body_budget;
+    let estimated_chunks = utf16_len(text).div_ceil(body_budget);
     let estimated_chunks = estimated_chunks.max(1);
 
     // Second pass: actual splitting with code-block awareness.
@@ -2814,7 +2826,7 @@ impl PlatformAdapter for WhatsAppAdapter {
             .json(&body)
             .send()
             .await
-            .map_err(|e| Error::Network(e))?;
+            .map_err(Error::Network)?;
 
         if !resp.status().is_success() {
             return Err(Error::Agent(format!(
@@ -3224,7 +3236,7 @@ impl PlatformAdapter for SmsAdapter {
             ])
             .send()
             .await
-            .map_err(|e| Error::Network(e))?;
+            .map_err(Error::Network)?;
 
         if !resp.status().is_success() {
             return Err(Error::Agent(format!("Twilio API error: {}", resp.status())));

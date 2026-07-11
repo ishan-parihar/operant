@@ -50,7 +50,7 @@ impl SpotifyClient {
     async fn get(&self, path: &str) -> ToolResult {
         match self
             .client
-            .get(&format!("{}{}", self.base, path))
+            .get(format!("{}{}", self.base, path))
             .headers(self.headers())
             .send()
             .await
@@ -63,7 +63,7 @@ impl SpotifyClient {
     async fn post(&self, path: &str, body: Option<Value>) -> ToolResult {
         let mut req = self
             .client
-            .post(&format!("{}{}", self.base, path))
+            .post(format!("{}{}", self.base, path))
             .headers(self.headers());
         if let Some(b) = body {
             req = req.json(&b);
@@ -77,7 +77,7 @@ impl SpotifyClient {
     async fn put(&self, path: &str, body: Option<Value>) -> ToolResult {
         let mut req = self
             .client
-            .put(&format!("{}{}", self.base, path))
+            .put(format!("{}{}", self.base, path))
             .headers(self.headers());
         if let Some(b) = body {
             req = req.json(&b);
@@ -91,7 +91,7 @@ impl SpotifyClient {
     async fn delete(&self, path: &str, body: Option<Value>) -> ToolResult {
         let mut req = self
             .client
-            .delete(&format!("{}{}", self.base, path))
+            .delete(format!("{}{}", self.base, path))
             .headers(self.headers());
         if let Some(b) = body {
             req = req.json(&b);

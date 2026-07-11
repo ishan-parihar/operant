@@ -23,7 +23,7 @@ pub async fn send_cdp_command(url: &str, command: &Value) -> Result<Value> {
     })?;
 
     write
-        .send(Message::Text(cmd_str.into()))
+        .send(Message::Text(cmd_str))
         .await
         .map_err(|e| Error::ToolExecution {
             name: "cdp".into(),
@@ -47,8 +47,7 @@ pub async fn send_cdp_command(url: &str, command: &Value) -> Result<Value> {
             if let Some(error) = response.get("error") {
                 return Err(Error::ToolExecution {
                     name: "cdp".into(),
-                    source: std::io::Error::new(std::io::ErrorKind::Other, error.to_string())
-                        .into(),
+                    source: std::io::Error::other(error.to_string()).into(),
                 });
             }
 

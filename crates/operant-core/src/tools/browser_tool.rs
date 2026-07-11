@@ -17,6 +17,12 @@ use crate::tools::{OperantTool, ToolContext, ToolResult, ToolSchema};
 
 pub struct BrowserTool;
 
+impl Default for BrowserTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl BrowserTool {
     pub fn new() -> Self {
         Self

@@ -82,10 +82,7 @@ async fn execute_python(
 
     // Create a temp file for the code
     let temp_dir = std::env::temp_dir();
-    let script_path = temp_dir.join(format!(
-        "operant_code_{}.py",
-        uuid::Uuid::new_v4().to_string()
-    ));
+    let script_path = temp_dir.join(format!("operant_code_{}.py", uuid::Uuid::new_v4()));
 
     std::fs::write(&script_path, code)
         .map_err(|e| format!("Failed to write temp script: {}", e))?;
@@ -155,10 +152,7 @@ async fn execute_javascript(
 
     // Create a temp file for the code
     let temp_dir = std::env::temp_dir();
-    let script_path = temp_dir.join(format!(
-        "operant_code_{}.js",
-        uuid::Uuid::new_v4().to_string()
-    ));
+    let script_path = temp_dir.join(format!("operant_code_{}.js", uuid::Uuid::new_v4()));
 
     std::fs::write(&script_path, code)
         .map_err(|e| format!("Failed to write temp script: {}", e))?;
@@ -289,7 +283,7 @@ async fn execute_rust(
     use tokio::process::Command;
 
     let temp_dir = std::env::temp_dir();
-    let project_dir = temp_dir.join(format!("operant_rust_{}", uuid::Uuid::new_v4().to_string()));
+    let project_dir = temp_dir.join(format!("operant_rust_{}", uuid::Uuid::new_v4()));
 
     // Create project structure
     std::fs::create_dir_all(project_dir.join("src"))

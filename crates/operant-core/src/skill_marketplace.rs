@@ -85,7 +85,7 @@ pub struct SkillRegistryEntry {
 }
 
 /// Cached registry index with fetch timestamp.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 struct CachedRegistry {
     /// Fetched-at Unix timestamp (seconds)
     fetched_at: u64,
@@ -93,16 +93,6 @@ struct CachedRegistry {
     entries: Vec<SkillRegistryEntry>,
     /// The URL we fetched from (for cache invalidation if URL changes)
     source_url: String,
-}
-
-impl Default for CachedRegistry {
-    fn default() -> Self {
-        Self {
-            fetched_at: 0,
-            entries: Vec::new(),
-            source_url: String::new(),
-        }
-    }
 }
 
 /// The marketplace client. Stateless — all state is in the cache file.

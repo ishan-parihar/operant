@@ -190,7 +190,7 @@ impl OperantTool for OpenRouterTool {
             .choices
             .first()
             .and_then(|c| c.message.content.as_ref())
-            .map(|s| s.clone())
+            .cloned()
             .unwrap_or_default();
 
         let usage = response_body.usage.map(|u| {

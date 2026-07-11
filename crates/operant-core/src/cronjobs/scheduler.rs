@@ -78,11 +78,11 @@ impl CronScheduler {
             success,
             error_msg,
             None,
-            self.compute_next_run(&job),
+            self.compute_next_run(job),
         )?;
 
         if success && final_response != "[SILENT]" {
-            self.deliver_result(&job, &final_response).await?;
+            self.deliver_result(job, &final_response).await?;
         }
 
         Ok(())

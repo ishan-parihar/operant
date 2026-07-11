@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
 use tracing::{debug, info, warn};
@@ -21,7 +21,7 @@ static CHECKPOINT_MANAGER: OnceLock<CheckpointManager> = OnceLock::new();
 
 /// Get the global checkpoint manager
 pub fn get_checkpoint_manager() -> &'static CheckpointManager {
-    CHECKPOINT_MANAGER.get_or_init(|| CheckpointManager::new())
+    CHECKPOINT_MANAGER.get_or_init(CheckpointManager::new)
 }
 
 /// Checkpoint configuration
@@ -125,7 +125,7 @@ impl CheckpointManager {
 
         // Skip root and home directories
         let abs_dir = PathBuf::from(working_dir);
-        if abs_dir == PathBuf::from("/") || abs_dir == dirs::home_dir().unwrap_or_default() {
+        if abs_dir == Path::new("/") || abs_dir == dirs::home_dir().unwrap_or_default() {
             debug!("Checkpoint skipped: directory too broad");
             return false;
         }
@@ -334,6 +334,12 @@ struct CheckpointArgs {
     reason: Option<String>,
     /// Limit for list action
     limit: Option<usize>,
+}
+
+impl Default for CheckpointTool {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl CheckpointTool {
