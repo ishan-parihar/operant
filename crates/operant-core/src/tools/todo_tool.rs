@@ -14,7 +14,8 @@ use crate::tools::{OperantTool, ToolContext, ToolResult};
 use std::collections::HashMap;
 use std::sync::{LazyLock, Mutex};
 
-static TODO_STORE: LazyLock<Mutex<HashMap<String, Vec<TodoItem>>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+static TODO_STORE: LazyLock<Mutex<HashMap<String, Vec<TodoItem>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// A single todo item
 #[derive(Debug, Clone, JsonSchema, Deserialize)]

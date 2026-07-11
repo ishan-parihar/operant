@@ -115,7 +115,6 @@ impl MemoryProvider for BuiltinProvider {
     }
 }
 
-
 // ---------------------------------------------------------------------------
 // Factory
 // ---------------------------------------------------------------------------
@@ -244,33 +243,34 @@ impl MemoryProvider for TdgMemoryProvider {
     async fn prefetch(&self, query: &str) -> String {
         let pool = self.pool.clone();
         let query = query.to_string();
-        let result = tokio::task::spawn_blocking(move || -> std::result::Result<Vec<String>, String> {
-            pool.with_connection(|conn| -> tdg_rust::TdgResult<Vec<String>> {
-                // Use HybridRetriever for combined FTS5 + trust + recency
-                // scoring. Previously this was a raw LIKE '%query%'
-                // sequential scan that ignored the FTS5 virtual table
-                // and all the scoring logic tdg-rust provides.
-                let retriever = tdg_rust::plugins::hybrid_retriever::HybridRetriever::new();
-                let results = retriever.search(conn, &query, 5, None)?;
-                let rows: Vec<String> = results
-                    .iter()
-                    .map(|r| {
-                        format!(
-                            "[{}] {}: {} — {} (score: {:.2}, via {})",
-                            r.node.node_type,
-                            r.node.id,
-                            r.node.name,
-                            r.node.description,
-                            r.score,
-                            r.method
-                        )
-                    })
-                    .collect();
-                Ok(rows)
+        let result =
+            tokio::task::spawn_blocking(move || -> std::result::Result<Vec<String>, String> {
+                pool.with_connection(|conn| -> tdg_rust::TdgResult<Vec<String>> {
+                    // Use HybridRetriever for combined FTS5 + trust + recency
+                    // scoring. Previously this was a raw LIKE '%query%'
+                    // sequential scan that ignored the FTS5 virtual table
+                    // and all the scoring logic tdg-rust provides.
+                    let retriever = tdg_rust::plugins::hybrid_retriever::HybridRetriever::new();
+                    let results = retriever.search(conn, &query, 5, None)?;
+                    let rows: Vec<String> = results
+                        .iter()
+                        .map(|r| {
+                            format!(
+                                "[{}] {}: {} — {} (score: {:.2}, via {})",
+                                r.node.node_type,
+                                r.node.id,
+                                r.node.name,
+                                r.node.description,
+                                r.score,
+                                r.method
+                            )
+                        })
+                        .collect();
+                    Ok(rows)
+                })
+                .map_err(|e| e.to_string())
             })
-            .map_err(|e| e.to_string())
-        })
-        .await;
+            .await;
 
         match result {
             Ok(Ok(rows)) if !rows.is_empty() => format!("[TDG]\n{}", rows.join("\n")),
@@ -320,10 +320,8 @@ impl MemoryProvider for TdgMemoryProvider {
                 // For each extracted entity that already has a node_id
                 // (i.e. it matched an existing node), auto-wire an edge
                 // from the turn node to it.
-                let parent_ids: Vec<String> = entities
-                    .iter()
-                    .filter_map(|e| e.id.clone())
-                    .collect();
+                let parent_ids: Vec<String> =
+                    entities.iter().filter_map(|e| e.id.clone()).collect();
                 if !parent_ids.is_empty() {
                     let _ = tdg_rust::grammar::auto_wire::auto_wire_edges(
                         conn,
@@ -512,11 +510,19 @@ mod tests {
     // fall back to builtin, not error or panic.
     #[test]
     fn test_build_removed_providers_fall_back_to_builtin() {
-        for old in &["hindsight", "retaindb", "mem0", "local-vector", "local_vector"] {
+        for old in &[
+            "hindsight",
+            "retaindb",
+            "mem0",
+            "local-vector",
+            "local_vector",
+        ] {
             let p = build_memory_provider(old, std::path::PathBuf::from("/tmp"));
             assert_eq!(
-                p.name(), "builtin",
-                "old provider '{}' should fall back to builtin", old
+                p.name(),
+                "builtin",
+                "old provider '{}' should fall back to builtin",
+                old
             );
         }
     }

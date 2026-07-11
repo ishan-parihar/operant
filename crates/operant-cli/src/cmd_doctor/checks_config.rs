@@ -6,7 +6,6 @@
 //! - Directory Structure (operant_home, subdirs, SOUL.md, memories, state.db, WAL)
 //! - Gateway Service Linger
 
-
 use operant_core::config::AppConfig;
 use operant_core::platform::operant_home;
 

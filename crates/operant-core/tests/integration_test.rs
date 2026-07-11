@@ -16,12 +16,12 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use operant_core::tools::builtin::{
-    ApprovalTool, CamofoxStateTool, CheckpointTool, ClarifyTool, CodeExecutionTool,
-    DateTimeTool, DiscordAdminTool, DiscordTool, EnvVarTool, FileListTool, FileReadTool,
-    FileSearchTool, FileStateTool, FileWriteTool, HomeAssistantTool, HttpRequestTool,
-    ImageGenerationTool, MemoryRecallTool, MemorySearchTool, MemoryStoreTool, NeuttsSynthTool,
-    NotificationTool, OpenRouterTool, OsvCheckTool, PatchTool, SendMessageTool, SkillViewTool,
-    SkillsTool, SpotifyAlbumsTool, SpotifyDevicesTool, SpotifyLibraryTool, SpotifyPlaybackTool,
+    ApprovalTool, CamofoxStateTool, CheckpointTool, ClarifyTool, CodeExecutionTool, DateTimeTool,
+    DiscordAdminTool, DiscordTool, EnvVarTool, FileListTool, FileReadTool, FileSearchTool,
+    FileStateTool, FileWriteTool, HomeAssistantTool, HttpRequestTool, ImageGenerationTool,
+    MemoryRecallTool, MemorySearchTool, MemoryStoreTool, NeuttsSynthTool, NotificationTool,
+    OpenRouterTool, OsvCheckTool, PatchTool, SendMessageTool, SkillViewTool, SkillsTool,
+    SpotifyAlbumsTool, SpotifyDevicesTool, SpotifyLibraryTool, SpotifyPlaybackTool,
     SpotifyPlaylistsTool, SpotifyQueueTool, SpotifySearchTool, SystemInfoTool, TerminalTool,
     TimestampTool, TodoTool, ToolBackendTool, TranscriptionTool, TtsTool, VideoAnalysisTool,
     VisionTool, WebFetchTool, WebSearchTool, XaiHttpTool,

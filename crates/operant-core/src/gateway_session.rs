@@ -1255,7 +1255,6 @@ impl PersistentSessionStore {
         }
     }
 
-
     /// Check if any sessions exist.
     pub fn has_any_sessions(&self) -> bool {
         !self.entries.read().unwrap().is_empty()

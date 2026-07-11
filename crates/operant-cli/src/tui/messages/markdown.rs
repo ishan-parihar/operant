@@ -1,12 +1,12 @@
 //! Markdown -> ratatui lines renderer used by transcript message families.
 
 use crate::tui::figures;
-use std::sync::LazyLock;
-use regex::Regex;
 use ratatui::{
     style::{Color, Modifier, Style},
     text::{Line, Span},
 };
+use regex::Regex;
+use std::sync::LazyLock;
 use syntect::easy::HighlightLines;
 use syntect::highlighting::ThemeSet;
 use syntect::parsing::SyntaxSet;
@@ -23,8 +23,7 @@ static THEME_SET: LazyLock<ThemeSet> = LazyLock::new(ThemeSet::load_defaults);
 
 /// Regex pattern to detect URLs (http://, https://, ftp://, www.)
 static URL_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?:https?|ftp)://\S+|www\.\S+")
-        .expect("Invalid URL regex pattern")
+    Regex::new(r"(?:https?|ftp)://\S+|www\.\S+").expect("Invalid URL regex pattern")
 });
 
 /// Regex pattern to detect email addresses
@@ -102,7 +101,11 @@ fn resolve_syntax(lang: &str) -> Option<&'static syntect::parsing::SyntaxReferen
 ///
 /// Mirrors `diff_viewer::highlight_code_line` but without the diff-color
 /// blending — code blocks use the syntect foreground colors verbatim.
-fn highlight_code_line_spans(line: &str, syntax: Option<&'static syntect::parsing::SyntaxReference>, base_style: Style) -> Vec<Span<'static>> {
+fn highlight_code_line_spans(
+    line: &str,
+    syntax: Option<&'static syntect::parsing::SyntaxReference>,
+    base_style: Style,
+) -> Vec<Span<'static>> {
     let Some(syntax) = syntax else {
         return vec![Span::styled(line.to_string(), base_style)];
     };
@@ -112,7 +115,12 @@ fn highlight_code_line_spans(line: &str, syntax: Option<&'static syntect::parsin
         .themes
         .get("base16-ocean.dark")
         .or_else(|| ts.themes.values().next())
-        .unwrap_or_else(|| ts.themes.values().next().expect("ThemeSet has at least one theme"));
+        .unwrap_or_else(|| {
+            ts.themes
+                .values()
+                .next()
+                .expect("ThemeSet has at least one theme")
+        });
 
     let ss = &*SYNTAX_SET;
     let mut h = HighlightLines::new(syntax, theme);
@@ -420,7 +428,10 @@ fn word_wrap(text: &str, width: usize) -> Vec<String> {
     let mut current_line = String::new();
     let mut current_width = 0usize;
 
-    let push_long_word = |word: &str, result: &mut Vec<String>, current_line: &mut String, current_width: &mut usize| {
+    let push_long_word = |word: &str,
+                          result: &mut Vec<String>,
+                          current_line: &mut String,
+                          current_width: &mut usize| {
         // Hard-break a word that on its own exceeds `width` (e.g. URLs).
         if !current_line.is_empty() {
             result.push(std::mem::take(current_line));

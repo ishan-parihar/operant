@@ -104,7 +104,9 @@ impl TuiEvent {
     /// Human-readable one-line summary for the debug overlay.
     pub fn summary(&self) -> String {
         match self {
-            Self::Key { code, modifiers, .. } => {
+            Self::Key {
+                code, modifiers, ..
+            } => {
                 let mods = if *modifiers != 0 {
                     format!("mod={modifiers} ")
                 } else {
@@ -115,32 +117,46 @@ impl TuiEvent {
             Self::Mouse { x, y, action, .. } => format!("Mouse({action} @{x},{y})"),
             Self::Resize { width, height, .. } => format!("Resize({width}x{height})"),
             Self::Paste { len, .. } => format!("Paste({len} chars)"),
-            Self::AgentEvent { variant, summary, .. } => {
+            Self::AgentEvent {
+                variant, summary, ..
+            } => {
                 format!("AgentEvent({variant}: {summary})")
             }
             Self::PermissionRequest { tool_name, .. } => {
                 format!("PermissionReq({tool_name})")
             }
-            Self::UserQuestion { question_preview, .. } => {
+            Self::UserQuestion {
+                question_preview, ..
+            } => {
                 format!("UserQuestion({question_preview})")
             }
             Self::ModelFetch { ok, count, .. } => {
                 format!("ModelFetch(ok={ok}, {count} models)")
             }
             Self::SessionList { count, .. } => format!("SessionList({count})"),
-            Self::SessionLoad { session_id, msg_count, .. } => {
+            Self::SessionLoad {
+                session_id,
+                msg_count,
+                ..
+            } => {
                 format!("SessionLoad({session_id}: {msg_count} msgs)")
             }
             Self::VoiceEvent { variant, .. } => format!("VoiceEvent({variant})"),
-            Self::SlashCommand { name, args_preview, .. } => {
+            Self::SlashCommand {
+                name, args_preview, ..
+            } => {
                 format!("Slash({name} {args_preview})")
             }
             Self::OverlayOpened { name, .. } => format!("OverlayOpen({name})"),
             Self::OverlayClosed { name, .. } => format!("OverlayClose({name})"),
-            Self::FrameRendered { frame, render_ms, .. } => {
+            Self::FrameRendered {
+                frame, render_ms, ..
+            } => {
                 format!("Frame(#{frame}, {render_ms:.1}ms)")
             }
-            Self::Error { source, message, .. } => format!("Error({source}: {message})"),
+            Self::Error {
+                source, message, ..
+            } => format!("Error({source}: {message})"),
         }
     }
 
@@ -197,10 +213,7 @@ impl TuiEventBus {
     /// Call this from every event handler — the AtomicBool check is
     /// branch-predicted to ~0 cost when disabled.
     pub fn publish(&self, event: TuiEvent) {
-        if !self
-            .enabled
-            .load(std::sync::atomic::Ordering::Relaxed)
-        {
+        if !self.enabled.load(std::sync::atomic::Ordering::Relaxed) {
             return;
         }
         let mut ring = match self.ring.lock() {
@@ -219,12 +232,7 @@ impl TuiEventBus {
             Ok(g) => g,
             Err(_) => return Vec::new(),
         };
-        ring.iter()
-            .rev()
-            .take(last_n)
-            .rev()
-            .cloned()
-            .collect()
+        ring.iter().rev().take(last_n).rev().cloned().collect()
     }
 
     /// Get the last N events as a formatted string (one per line).
@@ -255,10 +263,7 @@ impl TuiEventBus {
 
     /// Total events currently in the ring.
     pub fn len(&self) -> usize {
-        self.ring
-            .lock()
-            .map(|g| g.len())
-            .unwrap_or(0)
+        self.ring.lock().map(|g| g.len()).unwrap_or(0)
     }
 
     pub fn is_empty(&self) -> bool {

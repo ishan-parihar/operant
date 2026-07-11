@@ -82,7 +82,10 @@ async fn execute_python(
 
     // Create a temp file for the code
     let temp_dir = std::env::temp_dir();
-    let script_path = temp_dir.join(format!("operant_code_{}.py", uuid::Uuid::new_v4().to_string()));
+    let script_path = temp_dir.join(format!(
+        "operant_code_{}.py",
+        uuid::Uuid::new_v4().to_string()
+    ));
 
     std::fs::write(&script_path, code)
         .map_err(|e| format!("Failed to write temp script: {}", e))?;
@@ -152,7 +155,10 @@ async fn execute_javascript(
 
     // Create a temp file for the code
     let temp_dir = std::env::temp_dir();
-    let script_path = temp_dir.join(format!("operant_code_{}.js", uuid::Uuid::new_v4().to_string()));
+    let script_path = temp_dir.join(format!(
+        "operant_code_{}.js",
+        uuid::Uuid::new_v4().to_string()
+    ));
 
     std::fs::write(&script_path, code)
         .map_err(|e| format!("Failed to write temp script: {}", e))?;
@@ -397,7 +403,6 @@ path = "src/main.rs"
         "success": status.success()
     }))
 }
-
 
 #[cfg(test)]
 mod tests {

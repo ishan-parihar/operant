@@ -128,7 +128,14 @@ impl HookContext {
 
 /// A hook handler function. Receives the event type and context.
 /// Handlers are async and run sequentially (not concurrently).
-pub type HookHandler = Arc<dyn Fn(HookEvent, HookContext) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> + Send + Sync>;
+pub type HookHandler = Arc<
+    dyn Fn(
+            HookEvent,
+            HookContext,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>
+        + Send
+        + Sync,
+>;
 
 /// Registry of hook handlers. Thread-safe via RwLock.
 ///
@@ -180,9 +187,9 @@ impl HookRegistry {
             let event_clone = event.clone();
             let ctx_clone = ctx.clone();
             tokio::spawn(async move {
-                let result = std::panic::AssertUnwindSafe(
-                    handler_clone(event_clone, ctx_clone)
-                ).catch_unwind_safe().await;
+                let result = std::panic::AssertUnwindSafe(handler_clone(event_clone, ctx_clone))
+                    .catch_unwind_safe()
+                    .await;
                 if let Err(_) = result {
                     tracing::warn!("Hook handler panicked — caught and ignored");
                 }
@@ -260,19 +267,23 @@ mod tests {
         let counter = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let counter_clone = counter.clone();
 
-        registry.register(
-            HookEvent::AgentStart,
-            Arc::new(move |_event, _ctx| {
-                let c = counter_clone.clone();
-                Box::pin(async move {
-                    c.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                })
-            }),
-        ).await;
+        registry
+            .register(
+                HookEvent::AgentStart,
+                Arc::new(move |_event, _ctx| {
+                    let c = counter_clone.clone();
+                    Box::pin(async move {
+                        c.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    })
+                }),
+            )
+            .await;
 
         assert_eq!(registry.len(), 1);
 
-        registry.emit(HookEvent::AgentStart, HookContext::new()).await;
+        registry
+            .emit(HookEvent::AgentStart, HookContext::new())
+            .await;
         // Give the spawned task time to run
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
 
@@ -286,24 +297,30 @@ mod tests {
         let counter_clone = counter.clone();
 
         // Register wildcard handler
-        registry.register(
-            HookEvent::Command("*".to_string()),
-            Arc::new(move |_event, _ctx| {
-                let c = counter_clone.clone();
-                Box::pin(async move {
-                    c.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                })
-            }),
-        ).await;
+        registry
+            .register(
+                HookEvent::Command("*".to_string()),
+                Arc::new(move |_event, _ctx| {
+                    let c = counter_clone.clone();
+                    Box::pin(async move {
+                        c.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    })
+                }),
+            )
+            .await;
 
         // Emit specific command — should match wildcard
-        registry.emit(HookEvent::Command("reset".to_string()), HookContext::new()).await;
+        registry
+            .emit(HookEvent::Command("reset".to_string()), HookContext::new())
+            .await;
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
 
         assert_eq!(counter.load(std::sync::atomic::Ordering::SeqCst), 1);
 
         // Emit different command — should also match wildcard
-        registry.emit(HookEvent::Command("clear".to_string()), HookContext::new()).await;
+        registry
+            .emit(HookEvent::Command("clear".to_string()), HookContext::new())
+            .await;
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
 
         assert_eq!(counter.load(std::sync::atomic::Ordering::SeqCst), 2);

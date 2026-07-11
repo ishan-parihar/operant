@@ -73,10 +73,9 @@ impl OperantTool for ClarifyTool {
         // the ask_user_dialog, the user picks/types an answer, and the
         // reply flows back via the oneshot. The agent loop blocks here
         // until the user responds. (iter-97 — closes Bug #2.)
-        if let Some(reply_rx) = crate::user_question::try_send_user_question(
-            args.question.clone(),
-            choices.clone(),
-        ) {
+        if let Some(reply_rx) =
+            crate::user_question::try_send_user_question(args.question.clone(), choices.clone())
+        {
             match reply_rx.await {
                 Ok(answer) => {
                     // Return the user's answer as the tool result. The
@@ -86,10 +85,7 @@ impl OperantTool for ClarifyTool {
                 Err(_) => {
                     // The TUI dropped the reply_tx without sending —
                     // typically means the user pressed Esc (dismissed).
-                    return ToolResult::success(
-                        "clarify",
-                        "[user dismissed the question]",
-                    );
+                    return ToolResult::success("clarify", "[user dismissed the question]");
                 }
             }
         }

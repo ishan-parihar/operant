@@ -236,12 +236,18 @@ impl ProviderRegistry {
     }
 
     pub fn set_fallback_chain(&self, chain: Vec<String>) {
-        let mut chains = self.fallback_chains.write().unwrap_or_else(|e| e.into_inner());
+        let mut chains = self
+            .fallback_chains
+            .write()
+            .unwrap_or_else(|e| e.into_inner());
         chains.push(chain);
     }
 
     pub fn get_fallback_chain(&self, name: &str) -> Option<Vec<String>> {
-        let chains = self.fallback_chains.read().unwrap_or_else(|e| e.into_inner());
+        let chains = self
+            .fallback_chains
+            .read()
+            .unwrap_or_else(|e| e.into_inner());
         chains
             .iter()
             .find(|c| c.first().map(|s| s.as_str()) == Some(name))

@@ -43,7 +43,8 @@ fn save_store(store: &HashMap<String, MemoryEntry>) {
     );
 }
 
-static MEMORY_STORE: LazyLock<Arc<RwLock<HashMap<String, MemoryEntry>>>> = LazyLock::new(|| Arc::new(RwLock::new(load_store())));
+static MEMORY_STORE: LazyLock<Arc<RwLock<HashMap<String, MemoryEntry>>>> =
+    LazyLock::new(|| Arc::new(RwLock::new(load_store())));
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct MemoryEntry {

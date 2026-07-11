@@ -121,5 +121,4 @@ mod tests {
         assert_eq!(schema.description, "A test tool");
         assert!(schema.parameters.is_object());
     }
-
 }

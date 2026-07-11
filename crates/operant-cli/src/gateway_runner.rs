@@ -10,9 +10,9 @@ use operant_core::agent::{AgentEvent, OperantAgent};
 use operant_core::config::runtime_config;
 use operant_core::config::AppConfig;
 use operant_core::gateway::{
-    DiscordAdapter, Gateway, GatewayConfig, IncomingMessage, MessageHandler, OutgoingMessage,
-    PlatformAdapter, SlackAdapter, TelegramAdapter, WebhookAdapter,
-    WhatsAppAdapter, EmailAdapter, SmsAdapter,
+    DiscordAdapter, EmailAdapter, Gateway, GatewayConfig, IncomingMessage, MessageHandler,
+    OutgoingMessage, PlatformAdapter, SlackAdapter, SmsAdapter, TelegramAdapter, WebhookAdapter,
+    WhatsAppAdapter,
 };
 use operant_core::gateway_pipeline::{MessagePipeline, PipelineAction};
 use operant_core::memory_provider::{build_memory_provider, MemoryProvider};
@@ -29,13 +29,19 @@ use tokio::sync::mpsc;
 use tokio::sync::Mutex;
 
 /// Global store of pending permission requests, keyed by channel_id.
-pub static PENDING_PERMISSIONS: OnceLock<std::sync::Mutex<Option<Arc<Mutex<HashMap<String, operant_core::agent::ToolPermissionRequest>>>>>> = OnceLock::new();
+pub static PENDING_PERMISSIONS: OnceLock<
+    std::sync::Mutex<
+        Option<Arc<Mutex<HashMap<String, operant_core::agent::ToolPermissionRequest>>>>,
+    >,
+> = OnceLock::new();
 
 /// Global store of pending user-question replies, keyed by channel_id.
 /// When the clarify tool asks a question, we store the reply_tx here.
 /// The next incoming message from that channel is routed as the reply
 /// instead of being sent to the agent. (iter-161)
-pub static PENDING_USER_QUESTIONS: OnceLock<std::sync::Mutex<Option<Arc<Mutex<HashMap<String, tokio::sync::oneshot::Sender<String>>>>>>> = OnceLock::new();
+pub static PENDING_USER_QUESTIONS: OnceLock<
+    std::sync::Mutex<Option<Arc<Mutex<HashMap<String, tokio::sync::oneshot::Sender<String>>>>>>,
+> = OnceLock::new();
 
 /// Initialize the globals (call once at startup).
 fn init_pending_permissions() {
@@ -100,7 +106,8 @@ impl MessageHandler for GatewayMessageHandler {
                 return Ok(OutgoingMessage::new(
                     message.channel_id.clone(),
                     "✅ Reply received — resuming...",
-                ).no_markdown());
+                )
+                .no_markdown());
             }
             // No pending question — restore the map and continue to agent
             if let Some(g) = crate::gateway_runner::PENDING_USER_QUESTIONS.get() {
@@ -318,7 +325,10 @@ fn platform_registry() -> Vec<PlatformEntry> {
             emoji: "💼",
             factory: |config| {
                 if config.slack_enabled {
-                    Some(Arc::new(SlackAdapter::new(config.slack_token.clone(), None)))
+                    Some(Arc::new(SlackAdapter::new(
+                        config.slack_token.clone(),
+                        None,
+                    )))
                 } else {
                     None
                 }
@@ -345,13 +355,11 @@ fn platform_registry() -> Vec<PlatformEntry> {
             emoji: "📧",
             factory: |config| {
                 if config.email_enabled {
-                    Some(Arc::new(
-                        EmailAdapter::new(config.email_enabled).with_smtp(
-                            config.email_smtp_host.clone(),
-                            config.email_smtp_user.clone(),
-                            config.email_smtp_pass.clone(),
-                        ),
-                    ))
+                    Some(Arc::new(EmailAdapter::new(config.email_enabled).with_smtp(
+                        config.email_smtp_host.clone(),
+                        config.email_smtp_user.clone(),
+                        config.email_smtp_pass.clone(),
+                    )))
                 } else {
                     None
                 }
@@ -695,7 +703,11 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
             };
 
             match event {
-                AgentEvent::ToolStart { tool_call_id: _, name, arguments } => {
+                AgentEvent::ToolStart {
+                    tool_call_id: _,
+                    name,
+                    arguments,
+                } => {
                     let line = tool_preview_line(&name, &arguments);
                     let key = (platform.clone(), channel_id.clone());
 
@@ -773,7 +785,9 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                     // Reasoning/thinking tokens — don't surface to the user
                     // in gateway mode (the TUI shows them via /reasoning toggle,
                     // but gateway channels don't have that toggle). Just log.
-                    tracing::debug!("Reasoning/thinking token received (not surfaced in gateway mode)");
+                    tracing::debug!(
+                        "Reasoning/thinking token received (not surfaced in gateway mode)"
+                    );
                 }
                 AgentEvent::Done { .. } => {
                     // Final message — do a final edit with the complete text.
@@ -833,8 +847,9 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
     // 4. If no response within 60s, auto-deny (safety timeout).
     let gw_for_perm = gw.clone();
     let current_channel_for_perm = current_channel.clone();
-    let pending_permissions: Arc<Mutex<HashMap<String, operant_core::agent::ToolPermissionRequest>>> =
-        Arc::new(Mutex::new(HashMap::new()));
+    let pending_permissions: Arc<
+        Mutex<HashMap<String, operant_core::agent::ToolPermissionRequest>>,
+    > = Arc::new(Mutex::new(HashMap::new()));
     let pending_permissions_for_cmd = pending_permissions.clone();
     let pending_permissions_for_perm = pending_permissions.clone();
 
@@ -862,7 +877,10 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                 let _ = gw_for_perm.send_to_platform(platform, msg).await;
 
                 // Store the pending request keyed by channel_id
-                pending_permissions_for_perm.lock().await.insert(channel_id.clone(), req);
+                pending_permissions_for_perm
+                    .lock()
+                    .await
+                    .insert(channel_id.clone(), req);
 
                 // Spawn a timeout task — auto-deny after 60s
                 let pending_for_timeout = pending_permissions_for_perm.clone();
@@ -875,17 +893,17 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                             channel = %timeout_channel,
                             "Permission request timed out — auto-denying"
                         );
-                        let _ = req.response_tx.send(
-                            operant_core::agent::ToolPermissionResponse::Deny,
-                        );
+                        let _ = req
+                            .response_tx
+                            .send(operant_core::agent::ToolPermissionResponse::Deny);
                     }
                 });
             } else {
                 // No active channel — auto-approve (can't prompt)
                 tracing::warn!("No active channel for permission prompt — auto-approving");
-                let _ = req.response_tx.send(
-                    operant_core::agent::ToolPermissionResponse::AllowSession,
-                );
+                let _ = req
+                    .response_tx
+                    .send(operant_core::agent::ToolPermissionResponse::AllowSession);
             }
         }
         tracing::warn!("Permission request receiver exited (permission_rx closed)");
@@ -941,7 +959,10 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                 // Store the reply_tx so the next message from this channel
                 // is routed as the reply. (iter-161 — replaces the hardcoded
                 // placeholder string with real reply interception.)
-                pending_uq_for_task.lock().await.insert(channel_id.clone(), req.reply_tx);
+                pending_uq_for_task
+                    .lock()
+                    .await
+                    .insert(channel_id.clone(), req.reply_tx);
 
                 // Spawn a timeout — if no reply in 120s, send a timeout message
                 let pending_uq_for_timeout = pending_uq_for_task.clone();
@@ -954,12 +975,15 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                             channel = %timeout_channel,
                             "User question timed out — sending timeout reply"
                         );
-                        let _ = reply_tx.send("(no reply received within 120s — timeout)".to_string());
+                        let _ =
+                            reply_tx.send("(no reply received within 120s — timeout)".to_string());
                     }
                 });
             } else {
                 // No active channel — can't prompt
-                let _ = req.reply_tx.send("(no active channel for user question)".to_string());
+                let _ = req
+                    .reply_tx
+                    .send("(no active channel for user question)".to_string());
             }
         }
         tracing::warn!("User question receiver exited (uq_rx closed)");
@@ -1825,7 +1849,10 @@ mod turn_state_tests {
         // Defensive: a hostile platform sending "../../etc/passwd" as a
         // channel ID must not escape the .turn_state directory.
         assert_eq!(sanitize_channel_id("../../etc/passwd"), "______etc_passwd");
-        assert_eq!(sanitize_channel_id("normal-channel_123"), "normal-channel_123");
+        assert_eq!(
+            sanitize_channel_id("normal-channel_123"),
+            "normal-channel_123"
+        );
         assert_eq!(sanitize_channel_id(""), "");
     }
 }

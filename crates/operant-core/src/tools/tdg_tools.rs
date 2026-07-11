@@ -17,9 +17,9 @@ use serde::Deserialize;
 use serde_json::Value;
 use std::sync::Arc;
 
-use crate::schema::ToolSchema;
-use crate::tools::{OperantTool, ToolContext, ToolResult, ToolRegistry};
 use crate::error::Result;
+use crate::schema::ToolSchema;
+use crate::tools::{OperantTool, ToolContext, ToolRegistry, ToolResult};
 
 // ---------------------------------------------------------------------------
 // Registration
@@ -40,9 +40,15 @@ pub async fn register_tdg_tools(
     registry: &ToolRegistry,
     pool: Arc<tdg_rust::ConnectionPool>,
 ) -> Result<()> {
-    registry.register(TdgSearchTool { pool: pool.clone() }).await?;
-    registry.register(TdgCreateTool { pool: pool.clone() }).await?;
-    registry.register(TdgConnectTool { pool: pool.clone() }).await?;
+    registry
+        .register(TdgSearchTool { pool: pool.clone() })
+        .await?;
+    registry
+        .register(TdgCreateTool { pool: pool.clone() })
+        .await?;
+    registry
+        .register(TdgConnectTool { pool: pool.clone() })
+        .await?;
     registry.register(TdgGetRelatedTool { pool }).await?;
     Ok(())
 }
@@ -82,69 +88,70 @@ impl OperantTool for TdgSearchTool {
 
         let pool = self.pool.clone();
         let query = args.query.clone();
-        let result = tokio::task::spawn_blocking(move || -> std::result::Result<Vec<Value>, String> {
-            pool.with_connection(|conn| {
-                // Use FTS5 for search (previously used LIKE %query% — a
-                // sequential scan that ignored the FTS5 virtual table that
-                // init_fts() created and maintained on every write).
-                // The FTS table is named `nodes_fts` and mirrors the
-                // `name` + `description` columns of `nodes`.
-                let mut stmt = conn.prepare(
-                    "SELECT n.id, n.node_type, n.name, n.description
+        let result =
+            tokio::task::spawn_blocking(move || -> std::result::Result<Vec<Value>, String> {
+                pool.with_connection(|conn| {
+                    // Use FTS5 for search (previously used LIKE %query% — a
+                    // sequential scan that ignored the FTS5 virtual table that
+                    // init_fts() created and maintained on every write).
+                    // The FTS table is named `nodes_fts` and mirrors the
+                    // `name` + `description` columns of `nodes`.
+                    let mut stmt = conn.prepare(
+                        "SELECT n.id, n.node_type, n.name, n.description
                      FROM nodes_fts f
                      JOIN nodes n ON n.rowid = f.rowid
                      WHERE n.valid_to IS NULL AND nodes_fts MATCH ?1
                      ORDER BY rank
-                     LIMIT 10"
-                )?;
-                // FTS5 MATCH syntax: for multi-word queries, we want each
-                // word to be a prefix match (OR semantics). E.g. "hello world"
-                // should match nodes containing "hello" OR "world" as prefixes.
-                //
-                // FTS5 special characters (colon, asterisk, parens, quotes)
-                // must be stripped or they cause syntax errors. E.g. "C++"
-                // or "3:1" would error without sanitization. We strip any
-                // char that isn't alphanumeric, underscore, or hyphen, then
-                // wrap each token in double-quotes (FTS5 string literal) +
-                // append * for prefix matching.
-                let fts_query: String = query
-                    .split_whitespace()
-                    .filter_map(|token| {
-                        // Sanitize: keep only alnum + underscore + hyphen
-                        let clean: String = token
-                            .chars()
-                            .filter(|c| c.is_alphanumeric() || *c == '_' || *c == '-')
-                            .collect();
-                        if clean.is_empty() {
-                            None
-                        } else {
-                            // Wrap in double-quotes (FTS5 string literal) to
-                            // prevent any residual special chars from being
-                            // interpreted, then append * for prefix match.
-                            Some(format!("\"{}\"*", clean))
-                        }
-                    })
-                    .collect::<Vec<_>>()
-                    .join(" ");
-                if fts_query.is_empty() {
-                    return Ok(vec![]);
-                }
-                let rows: Vec<Value> = stmt
-                    .query_map(rusqlite::params![fts_query], |row| {
-                        Ok(serde_json::json!({
-                            "id": row.get::<_, String>(0)?,
-                            "node_type": row.get::<_, String>(1)?,
-                            "name": row.get::<_, String>(2)?,
-                            "description": row.get::<_, String>(3)?
-                        }))
-                    })?
-                    .filter_map(|r| r.ok())
-                    .collect();
-                Ok(rows)
+                     LIMIT 10",
+                    )?;
+                    // FTS5 MATCH syntax: for multi-word queries, we want each
+                    // word to be a prefix match (OR semantics). E.g. "hello world"
+                    // should match nodes containing "hello" OR "world" as prefixes.
+                    //
+                    // FTS5 special characters (colon, asterisk, parens, quotes)
+                    // must be stripped or they cause syntax errors. E.g. "C++"
+                    // or "3:1" would error without sanitization. We strip any
+                    // char that isn't alphanumeric, underscore, or hyphen, then
+                    // wrap each token in double-quotes (FTS5 string literal) +
+                    // append * for prefix matching.
+                    let fts_query: String = query
+                        .split_whitespace()
+                        .filter_map(|token| {
+                            // Sanitize: keep only alnum + underscore + hyphen
+                            let clean: String = token
+                                .chars()
+                                .filter(|c| c.is_alphanumeric() || *c == '_' || *c == '-')
+                                .collect();
+                            if clean.is_empty() {
+                                None
+                            } else {
+                                // Wrap in double-quotes (FTS5 string literal) to
+                                // prevent any residual special chars from being
+                                // interpreted, then append * for prefix match.
+                                Some(format!("\"{}\"*", clean))
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    if fts_query.is_empty() {
+                        return Ok(vec![]);
+                    }
+                    let rows: Vec<Value> = stmt
+                        .query_map(rusqlite::params![fts_query], |row| {
+                            Ok(serde_json::json!({
+                                "id": row.get::<_, String>(0)?,
+                                "node_type": row.get::<_, String>(1)?,
+                                "name": row.get::<_, String>(2)?,
+                                "description": row.get::<_, String>(3)?
+                            }))
+                        })?
+                        .filter_map(|r| r.ok())
+                        .collect();
+                    Ok(rows)
+                })
+                .map_err(|e| e.to_string())
             })
-            .map_err(|e| e.to_string())
-        })
-        .await;
+            .await;
 
         match result {
             Ok(Ok(rows)) => ToolResult::success(
@@ -413,7 +420,8 @@ mod tests {
             tdg_rust::init_schema(conn)?;
             tdg_rust::init_fts(conn)?;
             Ok(())
-        }).unwrap();
+        })
+        .unwrap();
         Arc::new(pool)
     }
 

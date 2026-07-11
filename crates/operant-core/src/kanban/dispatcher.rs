@@ -11,9 +11,7 @@ pub struct Dispatcher {
 
 impl Dispatcher {
     pub fn new(conn: Arc<Mutex<Connection>>) -> Self {
-        Self {
-            db: conn,
-        }
+        Self { db: conn }
     }
 
     pub fn pending_tasks(&self, limit: usize) -> Result<Vec<(String, String, Option<i32>)>, Error> {

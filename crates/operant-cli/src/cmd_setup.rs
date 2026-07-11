@@ -30,7 +30,6 @@ use crate::gateway_platforms::all_platforms;
 use crate::prompt_helpers::*;
 use crate::provider::{fetch_models_for_provider, provider_by_name, provider_from_url, PROVIDERS};
 
-
 // ---------------------------------------------------------------------------
 // Public entry point
 // ---------------------------------------------------------------------------
@@ -420,10 +419,7 @@ pub async fn run_setup_wizard(
 /// Step 1: Choose provider, model, and configure API key.
 ///
 /// Flow: provider → model → API key (K/R/C) → fallback keys → strategy → auxiliary models.
-pub(crate) async fn step_provider_and_model(
-    config: &mut AppConfig,
-    full: bool,
-) -> Result<()> {
+pub(crate) async fn step_provider_and_model(config: &mut AppConfig, full: bool) -> Result<()> {
     print_page_header("Provider & Model Configuration");
     print_info("Select your LLM provider, model, and authentication.");
     println!();
@@ -1283,7 +1279,6 @@ async fn step_agent_settings(config: &mut AppConfig, _reconfigure: bool) -> Resu
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
 
 /// Save the configuration to disk.
 ///

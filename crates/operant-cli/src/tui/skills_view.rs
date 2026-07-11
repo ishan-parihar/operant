@@ -14,9 +14,9 @@ use operant_core::skills::Skill;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use std::cell::Cell;
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use ratatui::Frame;
+use std::cell::Cell;
 use std::path::PathBuf;
 
 use crate::tui::overlays::centered_rect;
@@ -214,7 +214,9 @@ pub fn render_skills_view(frame: &mut Frame, state: &SkillsViewState, area: Rect
         let lines = vec![
             Line::from(Span::styled(
                 "No skills installed.",
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
             )),
             Line::from(""),
             Line::from("Skills are markdown files (SKILL.md) living in subdirectories"),
@@ -244,27 +246,27 @@ fn render_list_stage(frame: &mut Frame, state: &SkillsViewState, area: Rect) {
     let mut lines: Vec<Line> = Vec::new();
 
     // Header row.
-    lines.push(Line::from(vec![
-        Span::styled(
-            format!(
-                " {:<3}  {:<24} {:<14} {:<8} ",
-                "#", "Name", "Category", "Version"
-            ),
-            Style::default()
-                .fg(Color::DarkGray)
-                .add_modifier(Modifier::BOLD),
+    lines.push(Line::from(vec![Span::styled(
+        format!(
+            " {:<3}  {:<24} {:<14} {:<8} ",
+            "#", "Name", "Category", "Version"
         ),
-    ]));
+        Style::default()
+            .fg(Color::DarkGray)
+            .add_modifier(Modifier::BOLD),
+    )]));
     lines.push(Line::from(Span::styled(
         " ".repeat(area.width as usize),
         Style::default().fg(Color::DarkGray),
     )));
 
     let viewport = area.height.saturating_sub(6) as usize; // header + footer
-    // Record the viewport height so the key handler's scroll_down knows how
-    // many lines fit. (Bug #16 fix.)
+                                                           // Record the viewport height so the key handler's scroll_down knows how
+                                                           // many lines fit. (Bug #16 fix.)
     state.last_viewport_height.set(viewport);
-    let start = state.scroll.min(state.skills.len().saturating_sub(viewport));
+    let start = state
+        .scroll
+        .min(state.skills.len().saturating_sub(viewport));
     let end = (start + viewport).min(state.skills.len());
 
     for display_idx in start..end {
@@ -311,10 +313,7 @@ fn render_list_stage(frame: &mut Frame, state: &SkillsViewState, area: Rect) {
         Style::default().fg(Color::DarkGray),
     )));
 
-    frame.render_widget(
-        Paragraph::new(lines).wrap(Wrap { trim: false }),
-        area,
-    );
+    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), area);
 }
 
 fn render_detail_stage(frame: &mut Frame, state: &SkillsViewState, area: Rect) {
@@ -327,7 +326,9 @@ fn render_detail_stage(frame: &mut Frame, state: &SkillsViewState, area: Rect) {
         Span::styled("Name:        ", Style::default().fg(Color::DarkGray)),
         Span::styled(
             skill.name.clone(),
-            Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
         ),
     ]));
     lines.push(Line::from(vec![
@@ -347,7 +348,10 @@ fn render_detail_stage(frame: &mut Frame, state: &SkillsViewState, area: Rect) {
     if !skill.platforms.is_empty() {
         lines.push(Line::from(vec![
             Span::styled("Platforms:   ", Style::default().fg(Color::DarkGray)),
-            Span::styled(skill.platforms.join(", "), Style::default().fg(Color::White)),
+            Span::styled(
+                skill.platforms.join(", "),
+                Style::default().fg(Color::White),
+            ),
         ]));
     }
     if !skill.prerequisites_env.is_empty() {
@@ -382,7 +386,9 @@ fn render_detail_stage(frame: &mut Frame, state: &SkillsViewState, area: Rect) {
 
     let body_lines: Vec<&str> = skill.content.lines().collect();
     let viewport = area.height.saturating_sub(lines.len() as u16 + 2) as usize;
-    let start = state.detail_scroll.min(body_lines.len().saturating_sub(viewport));
+    let start = state
+        .detail_scroll
+        .min(body_lines.len().saturating_sub(viewport));
     let end = (start + viewport).min(body_lines.len());
     for line in &body_lines[start..end] {
         lines.push(Line::from(Span::styled(
@@ -397,10 +403,7 @@ fn render_detail_stage(frame: &mut Frame, state: &SkillsViewState, area: Rect) {
         Style::default().fg(Color::DarkGray),
     )));
 
-    frame.render_widget(
-        Paragraph::new(lines).wrap(Wrap { trim: false }),
-        area,
-    );
+    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), area);
 }
 
 /// Truncate `s` to `max` characters, appending `…` if truncated.

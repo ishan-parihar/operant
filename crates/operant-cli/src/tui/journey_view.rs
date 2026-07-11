@@ -82,7 +82,11 @@ impl JourneyViewState {
             Ok(map) => {
                 let mut blocks: Vec<MemoryBlock> = map.into_values().collect();
                 // Newest first by created_at, fall back to importance.
-                blocks.sort_by(|a, b| b.created_at.cmp(&a.created_at).then(b.importance.cmp(&a.importance)));
+                blocks.sort_by(|a, b| {
+                    b.created_at
+                        .cmp(&a.created_at)
+                        .then(b.importance.cmp(&a.importance))
+                });
                 self.memories = blocks;
             }
             Err(e) => {
@@ -234,7 +238,9 @@ pub fn render_journey_view(frame: &mut Frame, state: &JourneyViewState, area: Re
     };
     let hint = match state.active_pane {
         JourneyPane::Skills => "↑/↓ navigate · Tab switch pane · Esc close · [Skills pane active]",
-        JourneyPane::Memories => "↑/↓ navigate · Tab switch pane · Esc close · [Memories pane active]",
+        JourneyPane::Memories => {
+            "↑/↓ navigate · Tab switch pane · Esc close · [Memories pane active]"
+        }
     };
     frame.render_widget(
         Paragraph::new(vec![Line::from(Span::styled(
@@ -247,9 +253,15 @@ pub fn render_journey_view(frame: &mut Frame, state: &JourneyViewState, area: Re
 
 fn render_skills_pane(frame: &mut Frame, state: &JourneyViewState, area: Rect) {
     let is_active = state.active_pane == JourneyPane::Skills;
-    let border_color = if is_active { Color::Cyan } else { Color::DarkGray };
+    let border_color = if is_active {
+        Color::Cyan
+    } else {
+        Color::DarkGray
+    };
     let title_style = if is_active {
-        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(Color::DarkGray)
     };
@@ -286,12 +298,16 @@ fn render_skills_pane(frame: &mut Frame, state: &JourneyViewState, area: Rect) {
     let mut lines: Vec<Line> = Vec::new();
     lines.push(Line::from(vec![Span::styled(
         format!(" {:<24} {:<14} {:<6}", "Name", "Category", "Ver"),
-        Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD),
+        Style::default()
+            .fg(Color::DarkGray)
+            .add_modifier(Modifier::BOLD),
     )]));
     lines.push(Line::from(""));
 
     let viewport = inner.height.saturating_sub(4) as usize;
-    let start = state.skills_scroll.min(state.skills.len().saturating_sub(viewport));
+    let start = state
+        .skills_scroll
+        .min(state.skills.len().saturating_sub(viewport));
     let end = (start + viewport).min(state.skills.len());
 
     for i in start..end {
@@ -299,7 +315,10 @@ fn render_skills_pane(frame: &mut Frame, state: &JourneyViewState, area: Rect) {
         let is_sel = i == state.skills_cursor && is_active;
         let prefix = if is_sel { "›" } else { " " };
         let row_style = if is_sel {
-            Style::default().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Cyan)
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(Color::White)
         };
@@ -319,9 +338,15 @@ fn render_skills_pane(frame: &mut Frame, state: &JourneyViewState, area: Rect) {
 
 fn render_memories_pane(frame: &mut Frame, state: &JourneyViewState, area: Rect) {
     let is_active = state.active_pane == JourneyPane::Memories;
-    let border_color = if is_active { Color::Yellow } else { Color::DarkGray };
+    let border_color = if is_active {
+        Color::Yellow
+    } else {
+        Color::DarkGray
+    };
     let title_style = if is_active {
-        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(Color::DarkGray)
     };
@@ -362,12 +387,16 @@ fn render_memories_pane(frame: &mut Frame, state: &JourneyViewState, area: Rect)
     let mut lines: Vec<Line> = Vec::new();
     lines.push(Line::from(vec![Span::styled(
         format!(" {:<10} {:<3} {:<14} {}", "Type", "Imp", "ID", "Content"),
-        Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD),
+        Style::default()
+            .fg(Color::DarkGray)
+            .add_modifier(Modifier::BOLD),
     )]));
     lines.push(Line::from(""));
 
     let viewport = inner.height.saturating_sub(4) as usize;
-    let start = state.memories_scroll.min(state.memories.len().saturating_sub(viewport));
+    let start = state
+        .memories_scroll
+        .min(state.memories.len().saturating_sub(viewport));
     let end = (start + viewport).min(state.memories.len());
 
     let content_w = inner.width.saturating_sub(32) as usize;
@@ -377,12 +406,17 @@ fn render_memories_pane(frame: &mut Frame, state: &JourneyViewState, area: Rect)
         let is_sel = i == state.memories_cursor && is_active;
         let prefix = if is_sel { "›" } else { " " };
         let row_style = if is_sel {
-            Style::default().fg(Color::Black).bg(Color::Yellow).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Yellow)
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(Color::White)
         };
         let imp_style = if mem.importance >= 70 {
-            Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD)
         } else if mem.importance >= 40 {
             Style::default().fg(Color::Yellow)
         } else {

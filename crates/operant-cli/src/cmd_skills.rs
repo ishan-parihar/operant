@@ -136,14 +136,20 @@ pub enum TapCommand {
     },
 }
 
-pub async fn handle_skills_command(config: &AppConfig, cmd: SkillsSubcommand, json: bool) -> Result<()> {
+pub async fn handle_skills_command(
+    config: &AppConfig,
+    cmd: SkillsSubcommand,
+    json: bool,
+) -> Result<()> {
     match cmd {
         SkillsSubcommand::List => list_skills(config, json),
         SkillsSubcommand::Search { query } => search_skills(config, &query),
         SkillsSubcommand::Inspect { id } => inspect_skill(config, &id),
-        SkillsSubcommand::Install { source, name, force } => {
-            install_skill(config, &source, name.as_deref(), force).await
-        }
+        SkillsSubcommand::Install {
+            source,
+            name,
+            force,
+        } => install_skill(config, &source, name.as_deref(), force).await,
         SkillsSubcommand::Uninstall { name } => uninstall_skill(config, &name),
         SkillsSubcommand::Update { name } => update_skill(config, &name),
         SkillsSubcommand::Browse => browse_skills(config),
@@ -179,13 +185,23 @@ async fn handle_market_command(_config: &AppConfig, cmd: MarketCommand) -> Resul
             }
             println!("Found {} skill(s):\n", entries.len());
             for e in &entries {
-                println!("  {} v{} — {}", style(&e.name).green().bold(), style(&e.version).dim(), e.description);
+                println!(
+                    "  {} v{} — {}",
+                    style(&e.name).green().bold(),
+                    style(&e.version).dim(),
+                    e.description
+                );
             }
         }
         MarketCommand::Install { name, force } => {
             let skills_dir = operant_core::platform::operant_skills_dir();
             match marketplace.install(&name, &skills_dir, force).await {
-                Ok(path) => println!("{} Installed '{}' to {}", style("✓").green(), style(&name).bold(), path.display()),
+                Ok(path) => println!(
+                    "{} Installed '{}' to {}",
+                    style("✓").green(),
+                    style(&name).bold(),
+                    path.display()
+                ),
                 Err(e) => anyhow::bail!("Install failed: {e}"),
             }
         }
@@ -193,12 +209,21 @@ async fn handle_market_command(_config: &AppConfig, cmd: MarketCommand) -> Resul
             let entries = marketplace.fetch_index().await?;
             println!("{} skill(s) available:\n", entries.len());
             for e in &entries {
-                println!("  {} v{} — {}", style(&e.name).green().bold(), style(&e.version).dim(), e.description);
+                println!(
+                    "  {} v{} — {}",
+                    style(&e.name).green().bold(),
+                    style(&e.version).dim(),
+                    e.description
+                );
             }
         }
         MarketCommand::Refresh => {
             let entries = marketplace.refresh_index().await?;
-            println!("{} Refreshed — {} skill(s)", style("✓").green(), entries.len());
+            println!(
+                "{} Refreshed — {} skill(s)",
+                style("✓").green(),
+                entries.len()
+            );
         }
         MarketCommand::Updates => {
             let skills_dir = operant_core::platform::operant_skills_dir();
@@ -209,9 +234,21 @@ async fn handle_market_command(_config: &AppConfig, cmd: MarketCommand) -> Resul
                 return Ok(());
             }
             for skill in &installed {
-                match marketplace.check_for_update(&skill.name, &skill.version).await {
-                    Ok(Some(entry)) => println!("  {} v{} → v{}", style(&skill.name).green().bold(), skill.version, entry.version),
-                    Ok(None) => println!("  {} v{} (up to date)", style(&skill.name).dim(), skill.version),
+                match marketplace
+                    .check_for_update(&skill.name, &skill.version)
+                    .await
+                {
+                    Ok(Some(entry)) => println!(
+                        "  {} v{} → v{}",
+                        style(&skill.name).green().bold(),
+                        skill.version,
+                        entry.version
+                    ),
+                    Ok(None) => println!(
+                        "  {} v{} (up to date)",
+                        style(&skill.name).dim(),
+                        skill.version
+                    ),
                     Err(e) => println!("  {} (check failed: {e})", style(&skill.name).yellow()),
                 }
             }
@@ -359,7 +396,12 @@ fn inspect_skill(config: &AppConfig, id: &str) -> Result<()> {
 /// If the scan verdict is Block (high-severity findings), installation is
 /// refused unless `--force` is passed. If the verdict is Confirm (medium-
 /// severity findings), the user is prompted to confirm.
-async fn install_skill(config: &AppConfig, source: &str, name: Option<&str>, force: bool) -> Result<()> {
+async fn install_skill(
+    config: &AppConfig,
+    source: &str,
+    name: Option<&str>,
+    force: bool,
+) -> Result<()> {
     let (content, skill_name) = if source.starts_with("http://") || source.starts_with("https://") {
         let response = reqwest::get(source)
             .await
@@ -406,8 +448,7 @@ async fn install_skill(config: &AppConfig, source: &str, name: Option<&str>, for
         .with_context(|| "Failed to write skill content to temp file for scanning")?;
 
     let scan_result = operant_core::skills_guard::scan_skill(&temp_skill_path, source);
-    let (allow, reason) =
-        operant_core::skills_guard::should_allow_install(&scan_result, force);
+    let (allow, reason) = operant_core::skills_guard::should_allow_install(&scan_result, force);
 
     // Always print the scan summary so the user knows what was found.
     if !scan_result.findings.is_empty() {
@@ -449,7 +490,10 @@ async fn install_skill(config: &AppConfig, source: &str, name: Option<&str>, for
         }
         None => {
             // Confirm: prompt the user
-            println!("{}", style("⚠ Security scan requires confirmation:").yellow());
+            println!(
+                "{}",
+                style("⚠ Security scan requires confirmation:").yellow()
+            );
             println!("  {}", reason);
             if !Confirm::new()
                 .with_prompt(format!("Install skill '{}' anyway?", skill_name))

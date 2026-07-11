@@ -45,7 +45,8 @@ impl MarkdownConverter {
     /// sentinel-bounded placeholders. The optional language tag (e.g.
     /// `rust`) is discarded.
     fn extract_code_blocks(&mut self, text: &str) -> String {
-        static RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"```(\w*)\n([\s\S]*?)```").unwrap());
+        static RE: LazyLock<Regex> =
+            LazyLock::new(|| Regex::new(r"```(\w*)\n([\s\S]*?)```").unwrap());
         let mut result = String::with_capacity(text.len());
         let mut last = 0;
         for caps in RE.captures_iter(text) {
@@ -105,13 +106,15 @@ impl MarkdownConverter {
 // Markdown → Telegram HTML conversions (operates on already-extracted text)
 // ---------------------------------------------------------------------------
 
-static BOLD_ITALIC_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\*\*\*(.+?)\*\*\*").unwrap());
+static BOLD_ITALIC_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\*\*\*(.+?)\*\*\*").unwrap());
 static BOLD_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\*\*(.+?)\*\*").unwrap());
 static ITALIC_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\*(.+?)\*").unwrap());
 static STRIKETHROUGH_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"~~(.+?)~~").unwrap());
 static LINK_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\[(.+?)\]\((.+?)\)").unwrap());
 static HEADER_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?m)^#{1,6}\s+(.*?)$").unwrap());
-static BLOCKQUOTE_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?m)^&gt;\s?(.*?)$").unwrap());
+static BLOCKQUOTE_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?m)^&gt;\s?(.*?)$").unwrap());
 
 /// Escape `&`, `<`, `>`, `"`, and `'` to their HTML entity equivalents.
 fn escape_html(text: &str) -> String {

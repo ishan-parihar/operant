@@ -309,11 +309,13 @@ async fn cmd_list_boards(config: &AppConfig, json: bool) -> Result<()> {
     if json {
         let items: Vec<serde_json::Value> = boards
             .iter()
-            .map(|b| serde_json::json!({
-                "slug": b.slug,
-                "task_count": b.task_count,
-                "exists": b.exists,
-            }))
+            .map(|b| {
+                serde_json::json!({
+                    "slug": b.slug,
+                    "task_count": b.task_count,
+                    "exists": b.exists,
+                })
+            })
             .collect();
         println!("{}", serde_json::to_string_pretty(&items)?);
         return Ok(());
@@ -364,14 +366,16 @@ async fn cmd_list(config: &AppConfig, board_slug: &str, json: bool) -> Result<()
         let items: Vec<serde_json::Value> = tasks
             .iter()
             .enumerate()
-            .map(|(i, t)| serde_json::json!({
-                "index": i + 1,
-                "id": t.id,
-                "title": t.title,
-                "status": t.status.as_str(),
-                "priority": t.priority,
-                "created_at": t.created_at,
-            }))
+            .map(|(i, t)| {
+                serde_json::json!({
+                    "index": i + 1,
+                    "id": t.id,
+                    "title": t.title,
+                    "status": t.status.as_str(),
+                    "priority": t.priority,
+                    "created_at": t.created_at,
+                })
+            })
             .collect();
         println!("{}", serde_json::to_string_pretty(&items)?);
         return Ok(());

@@ -225,9 +225,10 @@ impl<T: VirtualItem> VirtualList<T> {
             }
         }
     }
-
 }
 
 impl<T: VirtualItem> Default for VirtualList<T> {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }

@@ -1398,7 +1398,8 @@ pub fn create_stt_engine(config: &VoiceConfig) -> Result<Box<dyn SttEngine>, Voi
 // ---------------------------------------------------------------------------
 
 /// Known Whisper hallucination phrases on silent/near-silent audio
-static WHISPER_HALLUCINATIONS: LazyLock<std::collections::HashSet<&'static str>> = LazyLock::new(|| {
+static WHISPER_HALLUCINATIONS: LazyLock<std::collections::HashSet<&'static str>> =
+    LazyLock::new(|| {
         let mut set = std::collections::HashSet::new();
         set.insert("thank you.");
         set.insert("thank you");
@@ -1425,12 +1426,13 @@ static WHISPER_HALLUCINATIONS: LazyLock<std::collections::HashSet<&'static str>>
         set.insert("www.mooji.org");
         set.insert("ご視聴ありがとうございました");
         set
-});
+    });
 
 /// Regex pattern for repetitive hallucinations
-static HALLUCINATION_REPEAT_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(
-    r"^(?:thank you|thanks|bye|you|ok|okay|the end|\.|\s|,|!)+$"
-).expect("Invalid hallucination regex"));
+static HALLUCINATION_REPEAT_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^(?:thank you|thanks|bye|you|ok|okay|the end|\.|\s|,|!)+$")
+        .expect("Invalid hallucination regex")
+});
 
 /// Check if a transcript is a known Whisper hallucination on silence
 pub fn is_whisper_hallucination(transcript: &str) -> bool {
@@ -1474,7 +1476,6 @@ pub async fn transcribe_recording(
     Ok(result)
 }
 
-
 // ---------------------------------------------------------------------------
 // TESTS
 // ---------------------------------------------------------------------------
@@ -1507,5 +1508,4 @@ mod tests {
         assert_eq!(SttProvider::from_str("local"), SttProvider::Local);
         assert_eq!(SttProvider::from_str("unknown"), SttProvider::Whisper);
     }
-
 }

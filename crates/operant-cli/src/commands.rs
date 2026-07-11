@@ -573,8 +573,16 @@ pub static COMMAND_REGISTRY: &[CommandDef] = &[
     CommandDef::new("init", "Initialize AGENTS.md for this project", "Session"),
     CommandDef::new("login", "Log in to Operant", "Session"),
     CommandDef::new("logout", "Log out of Operant", "Session"),
-    CommandDef::new("refresh", "Clear saved provider auth and model caches", "Session"),
-    CommandDef::new("providers", "List available AI providers and their status", "Info"),
+    CommandDef::new(
+        "refresh",
+        "Clear saved provider auth and model caches",
+        "Session",
+    ),
+    CommandDef::new(
+        "providers",
+        "List available AI providers and their status",
+        "Info",
+    ),
     // ── Exit ─────────────────────────────────────────────────────────────────
     CommandDef::new("exit", "Exit the CLI", "Exit")
         .cli_only()
@@ -1392,8 +1400,6 @@ mod tests {
         let deny = COMMAND_REGISTRY.iter().find(|c| c.name == "deny").unwrap();
         assert!(deny.gateway_only, "/deny must be gateway_only");
     }
-
-
 
     #[test]
     fn test_snapshot_alias_snap() {

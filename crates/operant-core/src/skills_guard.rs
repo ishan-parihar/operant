@@ -281,423 +281,882 @@ impl ThreatPattern {
 }
 
 static THREAT_PATTERNS: LazyLock<Vec<ThreatPattern>> = LazyLock::new(|| {
+    // Macro to shorten pattern construction
+    macro_rules! tp {
+        ($pat:expr, $id:expr, $sev:expr, $cat:expr, $desc:expr) => {
+            ThreatPattern::new($pat, $id, $sev, $cat, $desc)
+        };
+    }
 
-        // Macro to shorten pattern construction
-        macro_rules! tp {
-            ($pat:expr, $id:expr, $sev:expr, $cat:expr, $desc:expr) => {
-                ThreatPattern::new($pat, $id, $sev, $cat, $desc)
-            };
-        }
-
-        vec![
-            // ── Exfiltration: shell commands leaking secrets ──
-            tp!(r"curl\s+[^\n]*\$\{?\w*(KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|API)",
-                "env_exfil_curl", Severity::Critical, "exfiltration",
-                "curl command interpolating secret environment variable"),
-            tp!(r"wget\s+[^\n]*\$\{?\w*(KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|API)",
-                "env_exfil_wget", Severity::Critical, "exfiltration",
-                "wget command interpolating secret environment variable"),
-            tp!(r"fetch\s*\([^\n]*\$\{?\w*(KEY|TOKEN|SECRET|PASSWORD|API)",
-                "env_exfil_fetch", Severity::Critical, "exfiltration",
-                "fetch() call interpolating secret environment variable"),
-            tp!(r"httpx?\.(get|post|put|patch)\s*\([^\n]*(KEY|TOKEN|SECRET|PASSWORD)",
-                "env_exfil_httpx", Severity::Critical, "exfiltration",
-                "HTTP library call with secret variable"),
-            tp!(r"requests\.(get|post|put|patch)\s*\([^\n]*(KEY|TOKEN|SECRET|PASSWORD)",
-                "env_exfil_requests", Severity::Critical, "exfiltration",
-                "requests library call with secret variable"),
-
-            // ── Exfiltration: reading credential stores ──
-            tp!(r"base64[^\n]*env",
-                "encoded_exfil", Severity::High, "exfiltration",
-                "base64 encoding combined with environment access"),
-            tp!(r"\$HOME/\.ssh|\~/\.ssh",
-                "ssh_dir_access", Severity::High, "exfiltration",
-                "references user SSH directory"),
-            tp!(r"\$HOME/\.aws|\~/\.aws",
-                "aws_dir_access", Severity::High, "exfiltration",
-                "references user AWS credentials directory"),
-            tp!(r"\$HOME/\.gnupg|\~/\.gnupg",
-                "gpg_dir_access", Severity::High, "exfiltration",
-                "references user GPG keyring"),
-            tp!(r"\$HOME/\.kube|\~/\.kube",
-                "kube_dir_access", Severity::High, "exfiltration",
-                "references Kubernetes config directory"),
-            tp!(r"\$HOME/\.docker|\~/\.docker",
-                "docker_dir_access", Severity::High, "exfiltration",
-                "references Docker config (may contain registry creds)"),
-            tp!(r"\$HOME/\.operant/\.env|\~/\.operant/\.env",
-                "operant_env_access", Severity::Critical, "exfiltration",
-                "directly references Operant secrets file"),
-            tp!(r"cat\s+[^\n]*(\.env|credentials|\.netrc|\.pgpass|\.npmrc|\.pypirc)",
-                "read_secrets_file", Severity::Critical, "exfiltration",
-                "reads known secrets file"),
-
-            // ── Exfiltration: programmatic env access ──
-            tp!(r"printenv|env\s*\|",
-                "dump_all_env", Severity::High, "exfiltration",
-                "dumps all environment variables"),
-            // NOTE: The original Python pattern is: os\.environ\b(?!\s*\.get\s*\(\s*["\']PATH)
-            // which is a negative lookahead. Converted to use a more compatible approach.
-            // Rust regex crate doesn't support look-around (negative lookahead in Python original)
-            tp!(r"os\.environ\b",
-                "python_os_environ", Severity::High, "exfiltration",
-                "accesses os.environ (potential env dump)"),
-            tp!(r"os\.getenv\s*\(\s*[^\)]*(?:KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL)",
-                "python_getenv_secret", Severity::Critical, "exfiltration",
-                "reads secret via os.getenv()"),
-            tp!(r"process\.env\[",
-                "node_process_env", Severity::High, "exfiltration",
-                "accesses process.env (Node.js environment)"),
-            tp!(r"ENV\[.*(?:KEY|TOKEN|SECRET|PASSWORD)",
-                "ruby_env_secret", Severity::Critical, "exfiltration",
-                "reads secret via Ruby ENV[]"),
-
-            // ── Exfiltration: DNS and staging ──
-            tp!(r"\b(dig|nslookup|host)\s+[^\n]*\$",
-                "dns_exfil", Severity::Critical, "exfiltration",
-                "DNS lookup with variable interpolation (possible DNS exfiltration)"),
-            tp!(r">\s*/tmp/[^\s]*\s*&&\s*(curl|wget|nc|python)",
-                "tmp_staging", Severity::Critical, "exfiltration",
-                "writes to /tmp then exfiltrates"),
-
-            // ── Exfiltration: markdown/link based ──
-            tp!(r"!\[.*\]\(https?://[^\)]*\$\{?",
-                "md_image_exfil", Severity::High, "exfiltration",
-                "markdown image URL with variable interpolation (image-based exfil)"),
-            tp!(r"\[.*\]\(https?://[^\)]*\$\{?",
-                "md_link_exfil", Severity::High, "exfiltration",
-                "markdown link with variable interpolation"),
-
-            // ── Prompt injection ──
-            tp!(r"ignore\s+(?:\w+\s+)*(previous|all|above|prior)\s+instructions",
-                "prompt_injection_ignore", Severity::Critical, "injection",
-                "prompt injection: ignore previous instructions"),
-            tp!(r"you\s+are\s+(?:\w+\s+)*now\s+",
-                "role_hijack", Severity::High, "injection",
-                "attempts to override the agent's role"),
-            tp!(r"do\s+not\s+(?:\w+\s+)*tell\s+(?:\w+\s+)*the\s+user",
-                "deception_hide", Severity::Critical, "injection",
-                "instructs agent to hide information from user"),
-            tp!(r"system\s+prompt\s+override",
-                "sys_prompt_override", Severity::Critical, "injection",
-                "attempts to override the system prompt"),
-            tp!(r"pretend\s+(?:\w+\s+)*(you\s+are|to\s+be)\s+",
-                "role_pretend", Severity::High, "injection",
-                "attempts to make the agent assume a different identity"),
-            tp!(r"disregard\s+(?:\w+\s+)*(your|all|any)\s+(?:\w+\s+)*(instructions|rules|guidelines)",
-                "disregard_rules", Severity::Critical, "injection",
-                "instructs agent to disregard its rules"),
-            tp!(r"output\s+(?:\w+\s+)*(system|initial)\s+prompt",
-                "leak_system_prompt", Severity::High, "injection",
-                "attempts to extract the system prompt"),
-            tp!(r"(when|if)\s+no\s*one\s+is\s+(watching|looking)",
-                "conditional_deception", Severity::High, "injection",
-                "conditional instruction to behave differently when unobserved"),
-            tp!(r"act\s+as\s+(if|though)\s+(?:\w+\s+)*you\s+(?:\w+\s+)*(have\s+no|don't\s+have)\s+(?:\w+\s+)*(restrictions|limits|rules)",
-                "bypass_restrictions", Severity::Critical, "injection",
-                "instructs agent to act without restrictions"),
-            tp!(r"translate\s+.*\s+into\s+.*\s+and\s+(execute|run|eval)",
-                "translate_execute", Severity::Critical, "injection",
-                "translate-then-execute evasion technique"),
-            tp!(r"<!--[^>]*(?:ignore|override|system|secret|hidden)[^>]*-->",
-                "html_comment_injection", Severity::High, "injection",
-                "hidden instructions in HTML comments"),
-            tp!(r#"<\s*div\s+style\s*=\s*["'][\s\S]*?display\s*:\s*none"#,
-                "hidden_div", Severity::High, "injection",
-                "hidden HTML div (invisible instructions)"),
-
-            // ── Destructive operations ──
-            tp!(r"rm\s+-rf\s+/",
-                "destructive_root_rm", Severity::Critical, "destructive",
-                "recursive delete from root"),
-            tp!(r"rm\s+(-[^\s]*)?r.*\$HOME|\brmdir\s+.*\$HOME",
-                "destructive_home_rm", Severity::Critical, "destructive",
-                "recursive delete targeting home directory"),
-            tp!(r"chmod\s+777",
-                "insecure_perms", Severity::Medium, "destructive",
-                "sets world-writable permissions"),
-            tp!(r">\s*/etc/",
-                "system_overwrite", Severity::Critical, "destructive",
-                "overwrites system configuration file"),
-            tp!(r"\bmkfs\b",
-                "format_filesystem", Severity::Critical, "destructive",
-                "formats a filesystem"),
-            tp!(r"\bdd\s+.*if=.*of=/dev/",
-                "disk_overwrite", Severity::Critical, "destructive",
-                "raw disk write operation"),
-            tp!(r#"shutil\.rmtree\s*\(\s*["'/]"#,
-                "python_rmtree", Severity::High, "destructive",
-                "Python rmtree on absolute or root-relative path"),
-            tp!(r"truncate\s+-s\s*0\s+/",
-                "truncate_system", Severity::Critical, "destructive",
-                "truncates system file to zero bytes"),
-
-            // ── Persistence ──
-            tp!(r"\bcrontab\b",
-                "persistence_cron", Severity::Medium, "persistence",
-                "modifies cron jobs"),
-            tp!(r"\.(bashrc|zshrc|profile|bash_profile|bash_login|zprofile|zlogin)\b",
-                "shell_rc_mod", Severity::Medium, "persistence",
-                "references shell startup file"),
-            tp!(r"authorized_keys",
-                "ssh_backdoor", Severity::Critical, "persistence",
-                "modifies SSH authorized keys"),
-            tp!(r"ssh-keygen",
-                "ssh_keygen", Severity::Medium, "persistence",
-                "generates SSH keys"),
-            tp!(r"systemd.*\.service|systemctl\s+(enable|start)",
-                "systemd_service", Severity::Medium, "persistence",
-                "references or enables systemd service"),
-            tp!(r"/etc/init\.d/",
-                "init_script", Severity::Medium, "persistence",
-                "references init.d startup script"),
-            tp!(r"launchctl\s+load|LaunchAgents|LaunchDaemons",
-                "macos_launchd", Severity::Medium, "persistence",
-                "macOS launch agent/daemon persistence"),
-            tp!(r"/etc/sudoers|visudo",
-                "sudoers_mod", Severity::Critical, "persistence",
-                "modifies sudoers (privilege escalation)"),
-            tp!(r"git\s+config\s+--global\s+",
-                "git_config_global", Severity::Medium, "persistence",
-                "modifies global git configuration"),
-
-            // ── Agent config persistence ──
-            tp!(r"AGENTS\.md|CLAUDE\.md|\.cursorrules|\.clinerules",
-                "agent_config_mod", Severity::Critical, "persistence",
-                "references agent config files (could persist malicious instructions across sessions)"),
-            tp!(r"\.operant/config\.yaml|\.operant/SOUL\.md",
-                "operant_config_mod", Severity::Critical, "persistence",
-                "references Operant configuration files directly"),
-            tp!(r"\.claude/settings|\.codex/config",
-                "other_agent_config", Severity::High, "persistence",
-                "references other agent configuration files"),
-
-            // ── Network: reverse shells and tunnels ──
-            tp!(r"\bnc\s+-[lp]|ncat\s+-[lp]|\bsocat\b",
-                "reverse_shell", Severity::Critical, "network",
-                "potential reverse shell listener"),
-            tp!(r"\bngrok\b|\blocaltunnel\b|\bserveo\b|\bcloudflared\b",
-                "tunnel_service", Severity::High, "network",
-                "uses tunneling service for external access"),
-            tp!(r"\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}:\d{2,5}",
-                "hardcoded_ip_port", Severity::Medium, "network",
-                "hardcoded IP address with port"),
-            tp!(r"0\.0\.0\.0:\d+|INADDR_ANY",
-                "bind_all_interfaces", Severity::High, "network",
-                "binds to all network interfaces"),
-            tp!(r"/bin/(ba)?sh\s+-i\s+.*>/dev/tcp/",
-                "bash_reverse_shell", Severity::Critical, "network",
-                "bash interactive reverse shell via /dev/tcp"),
-            tp!(r#"python[23]?\s+-c\s+["']import\s+socket"#,
-                "python_socket_oneliner", Severity::Critical, "network",
-                "Python one-liner socket connection (likely reverse shell)"),
-            tp!(r"socket\.connect\s*\(\s*\(",
-                "python_socket_connect", Severity::High, "network",
-                "Python socket connect to arbitrary host"),
-            tp!(r"webhook\.site|requestbin\.com|pipedream\.net|hookbin\.com",
-                "exfil_service", Severity::High, "network",
-                "references known data exfiltration/webhook testing service"),
-            tp!(r"pastebin\.com|hastebin\.com|ghostbin\.",
-                "paste_service", Severity::Medium, "network",
-                "references paste service (possible data staging)"),
-
-            // ── Obfuscation: encoding and eval ──
-            tp!(r"base64\s+(-d|--decode)\s*\|",
-                "base64_decode_pipe", Severity::High, "obfuscation",
-                "base64 decodes and pipes to execution"),
-            tp!(r"\\x[0-9a-fA-F]{2}.*\\x[0-9a-fA-F]{2}.*\\x[0-9a-fA-F]{2}",
-                "hex_encoded_string", Severity::Medium, "obfuscation",
-                "hex-encoded string (possible obfuscation)"),
-            tp!(r#"\beval\s*\(\s*["']"#,
-                "eval_string", Severity::High, "obfuscation",
-                "eval() with string argument"),
-            tp!(r#"\bexec\s*\(\s*["']"#,
-                "exec_string", Severity::High, "obfuscation",
-                "exec() with string argument"),
-            tp!(r"echo\s+[^\n]*\|\s*(bash|sh|python|perl|ruby|node)",
-                "echo_pipe_exec", Severity::Critical, "obfuscation",
-                "echo piped to interpreter for execution"),
-            tp!(r#"compile\s*\(\s*[^\)]+,\s*["'].*["']\s*,\s*["']exec["']\s*\)"#,
-                "python_compile_exec", Severity::High, "obfuscation",
-                "Python compile() with exec mode"),
-            tp!(r"getattr\s*\(\s*__builtins__",
-                "python_getattr_builtins", Severity::High, "obfuscation",
-                "dynamic access to Python builtins (evasion technique)"),
-            tp!(r#"__import__\s*\(\s*["']os["']\s*\)"#,
-                "python_import_os", Severity::High, "obfuscation",
-                "dynamic import of os module"),
-            tp!(r#"codecs\.decode\s*\(\s*["']"#,
-                "python_codecs_decode", Severity::Medium, "obfuscation",
-                "codecs.decode (possible ROT13 or encoding obfuscation)"),
-            tp!(r"String\.fromCharCode|charCodeAt",
-                "js_char_code", Severity::Medium, "obfuscation",
-                "JavaScript character code construction (possible obfuscation)"),
-            tp!(r"atob\s*\(|btoa\s*\(",
-                "js_base64", Severity::Medium, "obfuscation",
-                "JavaScript base64 encode/decode"),
-            tp!(r"\[::-1\]",
-                "string_reversal", Severity::Low, "obfuscation",
-                "string reversal (possible obfuscated payload)"),
-            tp!(r"chr\s*\(\s*\d+\s*\)\s*\+\s*chr\s*\(\s*\d+",
-                "chr_building", Severity::High, "obfuscation",
-                "building string from chr() calls (obfuscation)"),
-            tp!(r"\\u[0-9a-fA-F]{4}.*\\u[0-9a-fA-F]{4}.*\\u[0-9a-fA-F]{4}",
-                "unicode_escape_chain", Severity::Medium, "obfuscation",
-                "chain of unicode escapes (possible obfuscation)"),
-
-            // ── Process execution in scripts ──
-            tp!(r"subprocess\.(run|call|Popen|check_output)\s*\(",
-                "python_subprocess", Severity::Medium, "execution",
-                "Python subprocess execution"),
-            tp!(r"os\.system\s*\(",
-                "python_os_system", Severity::High, "execution",
-                "os.system() — unguarded shell execution"),
-            tp!(r"os\.popen\s*\(",
-                "python_os_popen", Severity::High, "execution",
-                "os.popen() — shell pipe execution"),
-            tp!(r"child_process\.(exec|spawn|fork)\s*\(",
-                "node_child_process", Severity::High, "execution",
-                "Node.js child_process execution"),
-            tp!(r"Runtime\.getRuntime\(\)\.exec\(",
-                "java_runtime_exec", Severity::High, "execution",
-                "Java Runtime.exec() — shell execution"),
-            tp!(r"`[^`]*\$\([^)]+\)[^`]*`",
-                "backtick_subshell", Severity::Medium, "execution",
-                "backtick string with command substitution"),
-
-            // ── Path traversal ──
-            tp!(r"\.\./\.\./\.\.",
-                "path_traversal_deep", Severity::High, "traversal",
-                "deep relative path traversal (3+ levels up)"),
-            tp!(r"\.\./\.\.",
-                "path_traversal", Severity::Medium, "traversal",
-                "relative path traversal (2+ levels up)"),
-            tp!(r"/etc/passwd|/etc/shadow",
-                "system_passwd_access", Severity::Critical, "traversal",
-                "references system password files"),
-            tp!(r"/proc/self|/proc/\d+/",
-                "proc_access", Severity::High, "traversal",
-                "references /proc filesystem (process introspection)"),
-            tp!(r"/dev/shm/",
-                "dev_shm", Severity::Medium, "traversal",
-                "references shared memory (common staging area)"),
-
-            // ── Crypto mining ──
-            tp!(r"xmrig|stratum\+tcp|monero|coinhive|cryptonight",
-                "crypto_mining", Severity::Critical, "mining",
-                "cryptocurrency mining reference"),
-            tp!(r"hashrate|nonce.*difficulty",
-                "mining_indicators", Severity::Medium, "mining",
-                "possible cryptocurrency mining indicators"),
-
-            // ── Supply chain: curl/wget pipe to shell ──
-            tp!(r"curl\s+[^\n]*\|\s*(ba)?sh",
-                "curl_pipe_shell", Severity::Critical, "supply_chain",
-                "curl piped to shell (download-and-execute)"),
-            tp!(r"wget\s+[^\n]*-O\s*-\s*\|\s*(ba)?sh",
-                "wget_pipe_shell", Severity::Critical, "supply_chain",
-                "wget piped to shell (download-and-execute)"),
-            tp!(r"curl\s+[^\n]*\|\s*python",
-                "curl_pipe_python", Severity::Critical, "supply_chain",
-                "curl piped to Python interpreter"),
-
-            // ── Supply chain: unpinned/deferred dependencies ──
-            tp!(r"#\s*///\s*script.*dependencies",
-                "pep723_inline_deps", Severity::Medium, "supply_chain",
-                "PEP 723 inline script metadata with dependencies (verify pinning)"),
-            // Rust regex crate doesn't support look-around (negative lookahead in Python original)
-            tp!(r"pip\s+install\s+",
-                "unpinned_pip_install", Severity::Medium, "supply_chain",
-                "pip install without version pinning"),
-            // Rust regex crate doesn't support look-around (negative lookahead in Python original)
-            tp!(r"npm\s+install\s+",
-                "unpinned_npm_install", Severity::Medium, "supply_chain",
-                "npm install without version pinning"),
-            tp!(r"uv\s+run\s+",
-                "uv_run", Severity::Medium, "supply_chain",
-                "uv run (may auto-install unpinned dependencies)"),
-
-            // ── Supply chain: remote resource fetching ──
-            tp!(r#"(curl|wget|httpx?\.get|requests\.get|fetch)\s*[\(]?\s*["']https?://"#,
-                "remote_fetch", Severity::Medium, "supply_chain",
-                "fetches remote resource at runtime"),
-            tp!(r"git\s+clone\s+",
-                "git_clone", Severity::Medium, "supply_chain",
-                "clones a git repository at runtime"),
-            tp!(r"docker\s+pull\s+",
-                "docker_pull", Severity::Medium, "supply_chain",
-                "pulls a Docker image at runtime"),
-
-            // ── Privilege escalation ──
-            tp!(r"^allowed-tools\s*:",
-                "allowed_tools_field", Severity::High, "privilege_escalation",
-                "skill declares allowed-tools (pre-approves tool access)"),
-            tp!(r"\bsudo\b",
-                "sudo_usage", Severity::High, "privilege_escalation",
-                "uses sudo (privilege escalation)"),
-            tp!(r"setuid|setgid|cap_setuid",
-                "setuid_setgid", Severity::Critical, "privilege_escalation",
-                "setuid/setgid (privilege escalation mechanism)"),
-            tp!(r"NOPASSWD",
-                "nopasswd_sudo", Severity::Critical, "privilege_escalation",
-                "NOPASSWD sudoers entry (passwordless privilege escalation)"),
-            tp!(r"chmod\s+[u+]?s",
-                "suid_bit", Severity::Critical, "privilege_escalation",
-                "sets SUID/SGID bit on a file"),
-
-            // ── Hardcoded secrets (credentials embedded in the skill itself) ──
-            tp!(r#"(?:api[_-]?key|token|secret|password)\s*[=:]\s*["'][A-Za-z0-9+/=_-]{20,}"#,
-                "hardcoded_secret", Severity::Critical, "credential_exposure",
-                "possible hardcoded API key, token, or secret"),
-            tp!(r"-----BEGIN\s+(RSA\s+)?PRIVATE\s+KEY-----",
-                "embedded_private_key", Severity::Critical, "credential_exposure",
-                "embedded private key"),
-            tp!(r"ghp_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{80,}",
-                "github_token_leaked", Severity::Critical, "credential_exposure",
-                "GitHub personal access token in skill content"),
-            tp!(r"sk-[A-Za-z0-9]{20,}",
-                "openai_key_leaked", Severity::Critical, "credential_exposure",
-                "possible OpenAI API key in skill content"),
-            tp!(r"sk-ant-[A-Za-z0-9_-]{90,}",
-                "anthropic_key_leaked", Severity::Critical, "credential_exposure",
-                "possible Anthropic API key in skill content"),
-            tp!(r"AKIA[0-9A-Z]{16}",
-                "aws_access_key_leaked", Severity::Critical, "credential_exposure",
-                "AWS access key ID in skill content"),
-
-            // ── Additional prompt injection: jailbreak patterns ──
-            tp!(r"\bDAN\s+mode\b|Do\s+Anything\s+Now",
-                "jailbreak_dan", Severity::Critical, "injection",
-                "DAN (Do Anything Now) jailbreak attempt"),
-            tp!(r"\bdeveloper\s+mode\b.*\benabled?\b",
-                "jailbreak_dev_mode", Severity::Critical, "injection",
-                "developer mode jailbreak attempt"),
-            tp!(r"hypothetical\s+scenario.*(?:ignore|bypass|override)",
-                "hypothetical_bypass", Severity::High, "injection",
-                "hypothetical scenario used to bypass restrictions"),
-            tp!(r"for\s+educational\s+purposes?\s+only",
-                "educational_pretext", Severity::Medium, "injection",
-                "educational pretext often used to justify harmful content"),
-            tp!(r"(respond|answer|reply)\s+without\s+(?:\w+\s+)*(restrictions|limitations|filters|safety)",
-                "remove_filters", Severity::Critical, "injection",
-                "instructs agent to respond without safety filters"),
-            tp!(r"you\s+have\s+been\s+(?:\w+\s+)*(updated|upgraded|patched)\s+to",
-                "fake_update", Severity::High, "injection",
-                "fake update/patch announcement (social engineering)"),
-            tp!(r"new\s+policy|updated\s+guidelines|revised\s+instructions",
-                "fake_policy", Severity::Medium, "injection",
-                "claims new policy/guidelines (may be social engineering)"),
-
-            // ── Context window exfiltration ──
-            tp!(r"(include|output|print|send|share)\s+(?:\w+\s+)*(conversation|chat\s+history|previous\s+messages|context)",
-                "context_exfil", Severity::High, "exfiltration",
-                "instructs agent to output/share conversation history"),
-            tp!(r"(send|post|upload|transmit)\s+.*\s+(to|at)\s+https?://",
-                "send_to_url", Severity::High, "exfiltration",
-                "instructs agent to send data to a URL"),
-        ]
-    });
+    vec![
+        // ── Exfiltration: shell commands leaking secrets ──
+        tp!(
+            r"curl\s+[^\n]*\$\{?\w*(KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|API)",
+            "env_exfil_curl",
+            Severity::Critical,
+            "exfiltration",
+            "curl command interpolating secret environment variable"
+        ),
+        tp!(
+            r"wget\s+[^\n]*\$\{?\w*(KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|API)",
+            "env_exfil_wget",
+            Severity::Critical,
+            "exfiltration",
+            "wget command interpolating secret environment variable"
+        ),
+        tp!(
+            r"fetch\s*\([^\n]*\$\{?\w*(KEY|TOKEN|SECRET|PASSWORD|API)",
+            "env_exfil_fetch",
+            Severity::Critical,
+            "exfiltration",
+            "fetch() call interpolating secret environment variable"
+        ),
+        tp!(
+            r"httpx?\.(get|post|put|patch)\s*\([^\n]*(KEY|TOKEN|SECRET|PASSWORD)",
+            "env_exfil_httpx",
+            Severity::Critical,
+            "exfiltration",
+            "HTTP library call with secret variable"
+        ),
+        tp!(
+            r"requests\.(get|post|put|patch)\s*\([^\n]*(KEY|TOKEN|SECRET|PASSWORD)",
+            "env_exfil_requests",
+            Severity::Critical,
+            "exfiltration",
+            "requests library call with secret variable"
+        ),
+        // ── Exfiltration: reading credential stores ──
+        tp!(
+            r"base64[^\n]*env",
+            "encoded_exfil",
+            Severity::High,
+            "exfiltration",
+            "base64 encoding combined with environment access"
+        ),
+        tp!(
+            r"\$HOME/\.ssh|\~/\.ssh",
+            "ssh_dir_access",
+            Severity::High,
+            "exfiltration",
+            "references user SSH directory"
+        ),
+        tp!(
+            r"\$HOME/\.aws|\~/\.aws",
+            "aws_dir_access",
+            Severity::High,
+            "exfiltration",
+            "references user AWS credentials directory"
+        ),
+        tp!(
+            r"\$HOME/\.gnupg|\~/\.gnupg",
+            "gpg_dir_access",
+            Severity::High,
+            "exfiltration",
+            "references user GPG keyring"
+        ),
+        tp!(
+            r"\$HOME/\.kube|\~/\.kube",
+            "kube_dir_access",
+            Severity::High,
+            "exfiltration",
+            "references Kubernetes config directory"
+        ),
+        tp!(
+            r"\$HOME/\.docker|\~/\.docker",
+            "docker_dir_access",
+            Severity::High,
+            "exfiltration",
+            "references Docker config (may contain registry creds)"
+        ),
+        tp!(
+            r"\$HOME/\.operant/\.env|\~/\.operant/\.env",
+            "operant_env_access",
+            Severity::Critical,
+            "exfiltration",
+            "directly references Operant secrets file"
+        ),
+        tp!(
+            r"cat\s+[^\n]*(\.env|credentials|\.netrc|\.pgpass|\.npmrc|\.pypirc)",
+            "read_secrets_file",
+            Severity::Critical,
+            "exfiltration",
+            "reads known secrets file"
+        ),
+        // ── Exfiltration: programmatic env access ──
+        tp!(
+            r"printenv|env\s*\|",
+            "dump_all_env",
+            Severity::High,
+            "exfiltration",
+            "dumps all environment variables"
+        ),
+        // NOTE: The original Python pattern is: os\.environ\b(?!\s*\.get\s*\(\s*["\']PATH)
+        // which is a negative lookahead. Converted to use a more compatible approach.
+        // Rust regex crate doesn't support look-around (negative lookahead in Python original)
+        tp!(
+            r"os\.environ\b",
+            "python_os_environ",
+            Severity::High,
+            "exfiltration",
+            "accesses os.environ (potential env dump)"
+        ),
+        tp!(
+            r"os\.getenv\s*\(\s*[^\)]*(?:KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL)",
+            "python_getenv_secret",
+            Severity::Critical,
+            "exfiltration",
+            "reads secret via os.getenv()"
+        ),
+        tp!(
+            r"process\.env\[",
+            "node_process_env",
+            Severity::High,
+            "exfiltration",
+            "accesses process.env (Node.js environment)"
+        ),
+        tp!(
+            r"ENV\[.*(?:KEY|TOKEN|SECRET|PASSWORD)",
+            "ruby_env_secret",
+            Severity::Critical,
+            "exfiltration",
+            "reads secret via Ruby ENV[]"
+        ),
+        // ── Exfiltration: DNS and staging ──
+        tp!(
+            r"\b(dig|nslookup|host)\s+[^\n]*\$",
+            "dns_exfil",
+            Severity::Critical,
+            "exfiltration",
+            "DNS lookup with variable interpolation (possible DNS exfiltration)"
+        ),
+        tp!(
+            r">\s*/tmp/[^\s]*\s*&&\s*(curl|wget|nc|python)",
+            "tmp_staging",
+            Severity::Critical,
+            "exfiltration",
+            "writes to /tmp then exfiltrates"
+        ),
+        // ── Exfiltration: markdown/link based ──
+        tp!(
+            r"!\[.*\]\(https?://[^\)]*\$\{?",
+            "md_image_exfil",
+            Severity::High,
+            "exfiltration",
+            "markdown image URL with variable interpolation (image-based exfil)"
+        ),
+        tp!(
+            r"\[.*\]\(https?://[^\)]*\$\{?",
+            "md_link_exfil",
+            Severity::High,
+            "exfiltration",
+            "markdown link with variable interpolation"
+        ),
+        // ── Prompt injection ──
+        tp!(
+            r"ignore\s+(?:\w+\s+)*(previous|all|above|prior)\s+instructions",
+            "prompt_injection_ignore",
+            Severity::Critical,
+            "injection",
+            "prompt injection: ignore previous instructions"
+        ),
+        tp!(
+            r"you\s+are\s+(?:\w+\s+)*now\s+",
+            "role_hijack",
+            Severity::High,
+            "injection",
+            "attempts to override the agent's role"
+        ),
+        tp!(
+            r"do\s+not\s+(?:\w+\s+)*tell\s+(?:\w+\s+)*the\s+user",
+            "deception_hide",
+            Severity::Critical,
+            "injection",
+            "instructs agent to hide information from user"
+        ),
+        tp!(
+            r"system\s+prompt\s+override",
+            "sys_prompt_override",
+            Severity::Critical,
+            "injection",
+            "attempts to override the system prompt"
+        ),
+        tp!(
+            r"pretend\s+(?:\w+\s+)*(you\s+are|to\s+be)\s+",
+            "role_pretend",
+            Severity::High,
+            "injection",
+            "attempts to make the agent assume a different identity"
+        ),
+        tp!(
+            r"disregard\s+(?:\w+\s+)*(your|all|any)\s+(?:\w+\s+)*(instructions|rules|guidelines)",
+            "disregard_rules",
+            Severity::Critical,
+            "injection",
+            "instructs agent to disregard its rules"
+        ),
+        tp!(
+            r"output\s+(?:\w+\s+)*(system|initial)\s+prompt",
+            "leak_system_prompt",
+            Severity::High,
+            "injection",
+            "attempts to extract the system prompt"
+        ),
+        tp!(
+            r"(when|if)\s+no\s*one\s+is\s+(watching|looking)",
+            "conditional_deception",
+            Severity::High,
+            "injection",
+            "conditional instruction to behave differently when unobserved"
+        ),
+        tp!(
+            r"act\s+as\s+(if|though)\s+(?:\w+\s+)*you\s+(?:\w+\s+)*(have\s+no|don't\s+have)\s+(?:\w+\s+)*(restrictions|limits|rules)",
+            "bypass_restrictions",
+            Severity::Critical,
+            "injection",
+            "instructs agent to act without restrictions"
+        ),
+        tp!(
+            r"translate\s+.*\s+into\s+.*\s+and\s+(execute|run|eval)",
+            "translate_execute",
+            Severity::Critical,
+            "injection",
+            "translate-then-execute evasion technique"
+        ),
+        tp!(
+            r"<!--[^>]*(?:ignore|override|system|secret|hidden)[^>]*-->",
+            "html_comment_injection",
+            Severity::High,
+            "injection",
+            "hidden instructions in HTML comments"
+        ),
+        tp!(
+            r#"<\s*div\s+style\s*=\s*["'][\s\S]*?display\s*:\s*none"#,
+            "hidden_div",
+            Severity::High,
+            "injection",
+            "hidden HTML div (invisible instructions)"
+        ),
+        // ── Destructive operations ──
+        tp!(
+            r"rm\s+-rf\s+/",
+            "destructive_root_rm",
+            Severity::Critical,
+            "destructive",
+            "recursive delete from root"
+        ),
+        tp!(
+            r"rm\s+(-[^\s]*)?r.*\$HOME|\brmdir\s+.*\$HOME",
+            "destructive_home_rm",
+            Severity::Critical,
+            "destructive",
+            "recursive delete targeting home directory"
+        ),
+        tp!(
+            r"chmod\s+777",
+            "insecure_perms",
+            Severity::Medium,
+            "destructive",
+            "sets world-writable permissions"
+        ),
+        tp!(
+            r">\s*/etc/",
+            "system_overwrite",
+            Severity::Critical,
+            "destructive",
+            "overwrites system configuration file"
+        ),
+        tp!(
+            r"\bmkfs\b",
+            "format_filesystem",
+            Severity::Critical,
+            "destructive",
+            "formats a filesystem"
+        ),
+        tp!(
+            r"\bdd\s+.*if=.*of=/dev/",
+            "disk_overwrite",
+            Severity::Critical,
+            "destructive",
+            "raw disk write operation"
+        ),
+        tp!(
+            r#"shutil\.rmtree\s*\(\s*["'/]"#,
+            "python_rmtree",
+            Severity::High,
+            "destructive",
+            "Python rmtree on absolute or root-relative path"
+        ),
+        tp!(
+            r"truncate\s+-s\s*0\s+/",
+            "truncate_system",
+            Severity::Critical,
+            "destructive",
+            "truncates system file to zero bytes"
+        ),
+        // ── Persistence ──
+        tp!(
+            r"\bcrontab\b",
+            "persistence_cron",
+            Severity::Medium,
+            "persistence",
+            "modifies cron jobs"
+        ),
+        tp!(
+            r"\.(bashrc|zshrc|profile|bash_profile|bash_login|zprofile|zlogin)\b",
+            "shell_rc_mod",
+            Severity::Medium,
+            "persistence",
+            "references shell startup file"
+        ),
+        tp!(
+            r"authorized_keys",
+            "ssh_backdoor",
+            Severity::Critical,
+            "persistence",
+            "modifies SSH authorized keys"
+        ),
+        tp!(
+            r"ssh-keygen",
+            "ssh_keygen",
+            Severity::Medium,
+            "persistence",
+            "generates SSH keys"
+        ),
+        tp!(
+            r"systemd.*\.service|systemctl\s+(enable|start)",
+            "systemd_service",
+            Severity::Medium,
+            "persistence",
+            "references or enables systemd service"
+        ),
+        tp!(
+            r"/etc/init\.d/",
+            "init_script",
+            Severity::Medium,
+            "persistence",
+            "references init.d startup script"
+        ),
+        tp!(
+            r"launchctl\s+load|LaunchAgents|LaunchDaemons",
+            "macos_launchd",
+            Severity::Medium,
+            "persistence",
+            "macOS launch agent/daemon persistence"
+        ),
+        tp!(
+            r"/etc/sudoers|visudo",
+            "sudoers_mod",
+            Severity::Critical,
+            "persistence",
+            "modifies sudoers (privilege escalation)"
+        ),
+        tp!(
+            r"git\s+config\s+--global\s+",
+            "git_config_global",
+            Severity::Medium,
+            "persistence",
+            "modifies global git configuration"
+        ),
+        // ── Agent config persistence ──
+        tp!(
+            r"AGENTS\.md|CLAUDE\.md|\.cursorrules|\.clinerules",
+            "agent_config_mod",
+            Severity::Critical,
+            "persistence",
+            "references agent config files (could persist malicious instructions across sessions)"
+        ),
+        tp!(
+            r"\.operant/config\.yaml|\.operant/SOUL\.md",
+            "operant_config_mod",
+            Severity::Critical,
+            "persistence",
+            "references Operant configuration files directly"
+        ),
+        tp!(
+            r"\.claude/settings|\.codex/config",
+            "other_agent_config",
+            Severity::High,
+            "persistence",
+            "references other agent configuration files"
+        ),
+        // ── Network: reverse shells and tunnels ──
+        tp!(
+            r"\bnc\s+-[lp]|ncat\s+-[lp]|\bsocat\b",
+            "reverse_shell",
+            Severity::Critical,
+            "network",
+            "potential reverse shell listener"
+        ),
+        tp!(
+            r"\bngrok\b|\blocaltunnel\b|\bserveo\b|\bcloudflared\b",
+            "tunnel_service",
+            Severity::High,
+            "network",
+            "uses tunneling service for external access"
+        ),
+        tp!(
+            r"\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}:\d{2,5}",
+            "hardcoded_ip_port",
+            Severity::Medium,
+            "network",
+            "hardcoded IP address with port"
+        ),
+        tp!(
+            r"0\.0\.0\.0:\d+|INADDR_ANY",
+            "bind_all_interfaces",
+            Severity::High,
+            "network",
+            "binds to all network interfaces"
+        ),
+        tp!(
+            r"/bin/(ba)?sh\s+-i\s+.*>/dev/tcp/",
+            "bash_reverse_shell",
+            Severity::Critical,
+            "network",
+            "bash interactive reverse shell via /dev/tcp"
+        ),
+        tp!(
+            r#"python[23]?\s+-c\s+["']import\s+socket"#,
+            "python_socket_oneliner",
+            Severity::Critical,
+            "network",
+            "Python one-liner socket connection (likely reverse shell)"
+        ),
+        tp!(
+            r"socket\.connect\s*\(\s*\(",
+            "python_socket_connect",
+            Severity::High,
+            "network",
+            "Python socket connect to arbitrary host"
+        ),
+        tp!(
+            r"webhook\.site|requestbin\.com|pipedream\.net|hookbin\.com",
+            "exfil_service",
+            Severity::High,
+            "network",
+            "references known data exfiltration/webhook testing service"
+        ),
+        tp!(
+            r"pastebin\.com|hastebin\.com|ghostbin\.",
+            "paste_service",
+            Severity::Medium,
+            "network",
+            "references paste service (possible data staging)"
+        ),
+        // ── Obfuscation: encoding and eval ──
+        tp!(
+            r"base64\s+(-d|--decode)\s*\|",
+            "base64_decode_pipe",
+            Severity::High,
+            "obfuscation",
+            "base64 decodes and pipes to execution"
+        ),
+        tp!(
+            r"\\x[0-9a-fA-F]{2}.*\\x[0-9a-fA-F]{2}.*\\x[0-9a-fA-F]{2}",
+            "hex_encoded_string",
+            Severity::Medium,
+            "obfuscation",
+            "hex-encoded string (possible obfuscation)"
+        ),
+        tp!(
+            r#"\beval\s*\(\s*["']"#,
+            "eval_string",
+            Severity::High,
+            "obfuscation",
+            "eval() with string argument"
+        ),
+        tp!(
+            r#"\bexec\s*\(\s*["']"#,
+            "exec_string",
+            Severity::High,
+            "obfuscation",
+            "exec() with string argument"
+        ),
+        tp!(
+            r"echo\s+[^\n]*\|\s*(bash|sh|python|perl|ruby|node)",
+            "echo_pipe_exec",
+            Severity::Critical,
+            "obfuscation",
+            "echo piped to interpreter for execution"
+        ),
+        tp!(
+            r#"compile\s*\(\s*[^\)]+,\s*["'].*["']\s*,\s*["']exec["']\s*\)"#,
+            "python_compile_exec",
+            Severity::High,
+            "obfuscation",
+            "Python compile() with exec mode"
+        ),
+        tp!(
+            r"getattr\s*\(\s*__builtins__",
+            "python_getattr_builtins",
+            Severity::High,
+            "obfuscation",
+            "dynamic access to Python builtins (evasion technique)"
+        ),
+        tp!(
+            r#"__import__\s*\(\s*["']os["']\s*\)"#,
+            "python_import_os",
+            Severity::High,
+            "obfuscation",
+            "dynamic import of os module"
+        ),
+        tp!(
+            r#"codecs\.decode\s*\(\s*["']"#,
+            "python_codecs_decode",
+            Severity::Medium,
+            "obfuscation",
+            "codecs.decode (possible ROT13 or encoding obfuscation)"
+        ),
+        tp!(
+            r"String\.fromCharCode|charCodeAt",
+            "js_char_code",
+            Severity::Medium,
+            "obfuscation",
+            "JavaScript character code construction (possible obfuscation)"
+        ),
+        tp!(
+            r"atob\s*\(|btoa\s*\(",
+            "js_base64",
+            Severity::Medium,
+            "obfuscation",
+            "JavaScript base64 encode/decode"
+        ),
+        tp!(
+            r"\[::-1\]",
+            "string_reversal",
+            Severity::Low,
+            "obfuscation",
+            "string reversal (possible obfuscated payload)"
+        ),
+        tp!(
+            r"chr\s*\(\s*\d+\s*\)\s*\+\s*chr\s*\(\s*\d+",
+            "chr_building",
+            Severity::High,
+            "obfuscation",
+            "building string from chr() calls (obfuscation)"
+        ),
+        tp!(
+            r"\\u[0-9a-fA-F]{4}.*\\u[0-9a-fA-F]{4}.*\\u[0-9a-fA-F]{4}",
+            "unicode_escape_chain",
+            Severity::Medium,
+            "obfuscation",
+            "chain of unicode escapes (possible obfuscation)"
+        ),
+        // ── Process execution in scripts ──
+        tp!(
+            r"subprocess\.(run|call|Popen|check_output)\s*\(",
+            "python_subprocess",
+            Severity::Medium,
+            "execution",
+            "Python subprocess execution"
+        ),
+        tp!(
+            r"os\.system\s*\(",
+            "python_os_system",
+            Severity::High,
+            "execution",
+            "os.system() — unguarded shell execution"
+        ),
+        tp!(
+            r"os\.popen\s*\(",
+            "python_os_popen",
+            Severity::High,
+            "execution",
+            "os.popen() — shell pipe execution"
+        ),
+        tp!(
+            r"child_process\.(exec|spawn|fork)\s*\(",
+            "node_child_process",
+            Severity::High,
+            "execution",
+            "Node.js child_process execution"
+        ),
+        tp!(
+            r"Runtime\.getRuntime\(\)\.exec\(",
+            "java_runtime_exec",
+            Severity::High,
+            "execution",
+            "Java Runtime.exec() — shell execution"
+        ),
+        tp!(
+            r"`[^`]*\$\([^)]+\)[^`]*`",
+            "backtick_subshell",
+            Severity::Medium,
+            "execution",
+            "backtick string with command substitution"
+        ),
+        // ── Path traversal ──
+        tp!(
+            r"\.\./\.\./\.\.",
+            "path_traversal_deep",
+            Severity::High,
+            "traversal",
+            "deep relative path traversal (3+ levels up)"
+        ),
+        tp!(
+            r"\.\./\.\.",
+            "path_traversal",
+            Severity::Medium,
+            "traversal",
+            "relative path traversal (2+ levels up)"
+        ),
+        tp!(
+            r"/etc/passwd|/etc/shadow",
+            "system_passwd_access",
+            Severity::Critical,
+            "traversal",
+            "references system password files"
+        ),
+        tp!(
+            r"/proc/self|/proc/\d+/",
+            "proc_access",
+            Severity::High,
+            "traversal",
+            "references /proc filesystem (process introspection)"
+        ),
+        tp!(
+            r"/dev/shm/",
+            "dev_shm",
+            Severity::Medium,
+            "traversal",
+            "references shared memory (common staging area)"
+        ),
+        // ── Crypto mining ──
+        tp!(
+            r"xmrig|stratum\+tcp|monero|coinhive|cryptonight",
+            "crypto_mining",
+            Severity::Critical,
+            "mining",
+            "cryptocurrency mining reference"
+        ),
+        tp!(
+            r"hashrate|nonce.*difficulty",
+            "mining_indicators",
+            Severity::Medium,
+            "mining",
+            "possible cryptocurrency mining indicators"
+        ),
+        // ── Supply chain: curl/wget pipe to shell ──
+        tp!(
+            r"curl\s+[^\n]*\|\s*(ba)?sh",
+            "curl_pipe_shell",
+            Severity::Critical,
+            "supply_chain",
+            "curl piped to shell (download-and-execute)"
+        ),
+        tp!(
+            r"wget\s+[^\n]*-O\s*-\s*\|\s*(ba)?sh",
+            "wget_pipe_shell",
+            Severity::Critical,
+            "supply_chain",
+            "wget piped to shell (download-and-execute)"
+        ),
+        tp!(
+            r"curl\s+[^\n]*\|\s*python",
+            "curl_pipe_python",
+            Severity::Critical,
+            "supply_chain",
+            "curl piped to Python interpreter"
+        ),
+        // ── Supply chain: unpinned/deferred dependencies ──
+        tp!(
+            r"#\s*///\s*script.*dependencies",
+            "pep723_inline_deps",
+            Severity::Medium,
+            "supply_chain",
+            "PEP 723 inline script metadata with dependencies (verify pinning)"
+        ),
+        // Rust regex crate doesn't support look-around (negative lookahead in Python original)
+        tp!(
+            r"pip\s+install\s+",
+            "unpinned_pip_install",
+            Severity::Medium,
+            "supply_chain",
+            "pip install without version pinning"
+        ),
+        // Rust regex crate doesn't support look-around (negative lookahead in Python original)
+        tp!(
+            r"npm\s+install\s+",
+            "unpinned_npm_install",
+            Severity::Medium,
+            "supply_chain",
+            "npm install without version pinning"
+        ),
+        tp!(
+            r"uv\s+run\s+",
+            "uv_run",
+            Severity::Medium,
+            "supply_chain",
+            "uv run (may auto-install unpinned dependencies)"
+        ),
+        // ── Supply chain: remote resource fetching ──
+        tp!(
+            r#"(curl|wget|httpx?\.get|requests\.get|fetch)\s*[\(]?\s*["']https?://"#,
+            "remote_fetch",
+            Severity::Medium,
+            "supply_chain",
+            "fetches remote resource at runtime"
+        ),
+        tp!(
+            r"git\s+clone\s+",
+            "git_clone",
+            Severity::Medium,
+            "supply_chain",
+            "clones a git repository at runtime"
+        ),
+        tp!(
+            r"docker\s+pull\s+",
+            "docker_pull",
+            Severity::Medium,
+            "supply_chain",
+            "pulls a Docker image at runtime"
+        ),
+        // ── Privilege escalation ──
+        tp!(
+            r"^allowed-tools\s*:",
+            "allowed_tools_field",
+            Severity::High,
+            "privilege_escalation",
+            "skill declares allowed-tools (pre-approves tool access)"
+        ),
+        tp!(
+            r"\bsudo\b",
+            "sudo_usage",
+            Severity::High,
+            "privilege_escalation",
+            "uses sudo (privilege escalation)"
+        ),
+        tp!(
+            r"setuid|setgid|cap_setuid",
+            "setuid_setgid",
+            Severity::Critical,
+            "privilege_escalation",
+            "setuid/setgid (privilege escalation mechanism)"
+        ),
+        tp!(
+            r"NOPASSWD",
+            "nopasswd_sudo",
+            Severity::Critical,
+            "privilege_escalation",
+            "NOPASSWD sudoers entry (passwordless privilege escalation)"
+        ),
+        tp!(
+            r"chmod\s+[u+]?s",
+            "suid_bit",
+            Severity::Critical,
+            "privilege_escalation",
+            "sets SUID/SGID bit on a file"
+        ),
+        // ── Hardcoded secrets (credentials embedded in the skill itself) ──
+        tp!(
+            r#"(?:api[_-]?key|token|secret|password)\s*[=:]\s*["'][A-Za-z0-9+/=_-]{20,}"#,
+            "hardcoded_secret",
+            Severity::Critical,
+            "credential_exposure",
+            "possible hardcoded API key, token, or secret"
+        ),
+        tp!(
+            r"-----BEGIN\s+(RSA\s+)?PRIVATE\s+KEY-----",
+            "embedded_private_key",
+            Severity::Critical,
+            "credential_exposure",
+            "embedded private key"
+        ),
+        tp!(
+            r"ghp_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{80,}",
+            "github_token_leaked",
+            Severity::Critical,
+            "credential_exposure",
+            "GitHub personal access token in skill content"
+        ),
+        tp!(
+            r"sk-[A-Za-z0-9]{20,}",
+            "openai_key_leaked",
+            Severity::Critical,
+            "credential_exposure",
+            "possible OpenAI API key in skill content"
+        ),
+        tp!(
+            r"sk-ant-[A-Za-z0-9_-]{90,}",
+            "anthropic_key_leaked",
+            Severity::Critical,
+            "credential_exposure",
+            "possible Anthropic API key in skill content"
+        ),
+        tp!(
+            r"AKIA[0-9A-Z]{16}",
+            "aws_access_key_leaked",
+            Severity::Critical,
+            "credential_exposure",
+            "AWS access key ID in skill content"
+        ),
+        // ── Additional prompt injection: jailbreak patterns ──
+        tp!(
+            r"\bDAN\s+mode\b|Do\s+Anything\s+Now",
+            "jailbreak_dan",
+            Severity::Critical,
+            "injection",
+            "DAN (Do Anything Now) jailbreak attempt"
+        ),
+        tp!(
+            r"\bdeveloper\s+mode\b.*\benabled?\b",
+            "jailbreak_dev_mode",
+            Severity::Critical,
+            "injection",
+            "developer mode jailbreak attempt"
+        ),
+        tp!(
+            r"hypothetical\s+scenario.*(?:ignore|bypass|override)",
+            "hypothetical_bypass",
+            Severity::High,
+            "injection",
+            "hypothetical scenario used to bypass restrictions"
+        ),
+        tp!(
+            r"for\s+educational\s+purposes?\s+only",
+            "educational_pretext",
+            Severity::Medium,
+            "injection",
+            "educational pretext often used to justify harmful content"
+        ),
+        tp!(
+            r"(respond|answer|reply)\s+without\s+(?:\w+\s+)*(restrictions|limitations|filters|safety)",
+            "remove_filters",
+            Severity::Critical,
+            "injection",
+            "instructs agent to respond without safety filters"
+        ),
+        tp!(
+            r"you\s+have\s+been\s+(?:\w+\s+)*(updated|upgraded|patched)\s+to",
+            "fake_update",
+            Severity::High,
+            "injection",
+            "fake update/patch announcement (social engineering)"
+        ),
+        tp!(
+            r"new\s+policy|updated\s+guidelines|revised\s+instructions",
+            "fake_policy",
+            Severity::Medium,
+            "injection",
+            "claims new policy/guidelines (may be social engineering)"
+        ),
+        // ── Context window exfiltration ──
+        tp!(
+            r"(include|output|print|send|share)\s+(?:\w+\s+)*(conversation|chat\s+history|previous\s+messages|context)",
+            "context_exfil",
+            Severity::High,
+            "exfiltration",
+            "instructs agent to output/share conversation history"
+        ),
+        tp!(
+            r"(send|post|upload|transmit)\s+.*\s+(to|at)\s+https?://",
+            "send_to_url",
+            Severity::High,
+            "exfiltration",
+            "instructs agent to send data to a URL"
+        ),
+    ]
+});
 
 /// Set of invisible/zero-width unicode characters used for text injection.
 static INVISIBLE_CHARS: LazyLock<std::collections::HashSet<char>> = LazyLock::new(|| {
@@ -723,27 +1182,28 @@ static INVISIBLE_CHARS: LazyLock<std::collections::HashSet<char>> = LazyLock::ne
 });
 
 /// Map of invisible unicode characters to human-readable names.
-static INVISIBLE_CHAR_NAMES: LazyLock<std::collections::HashMap<char, &'static str>> = LazyLock::new(|| {
-    let mut m = std::collections::HashMap::new();
-    m.insert('\u{200b}', "zero-width space");
-    m.insert('\u{200c}', "zero-width non-joiner");
-    m.insert('\u{200d}', "zero-width joiner");
-    m.insert('\u{2060}', "word joiner");
-    m.insert('\u{2062}', "invisible times");
-    m.insert('\u{2063}', "invisible separator");
-    m.insert('\u{2064}', "invisible plus");
-    m.insert('\u{feff}', "BOM/zero-width no-break space");
-    m.insert('\u{202a}', "LTR embedding");
-    m.insert('\u{202b}', "RTL embedding");
-    m.insert('\u{202c}', "pop directional");
-    m.insert('\u{202d}', "LTR override");
-    m.insert('\u{202e}', "RTL override");
-    m.insert('\u{2066}', "LTR isolate");
-    m.insert('\u{2067}', "RTL isolate");
-    m.insert('\u{2068}', "first strong isolate");
-    m.insert('\u{2069}', "pop directional isolate");
-    m
-});
+static INVISIBLE_CHAR_NAMES: LazyLock<std::collections::HashMap<char, &'static str>> =
+    LazyLock::new(|| {
+        let mut m = std::collections::HashMap::new();
+        m.insert('\u{200b}', "zero-width space");
+        m.insert('\u{200c}', "zero-width non-joiner");
+        m.insert('\u{200d}', "zero-width joiner");
+        m.insert('\u{2060}', "word joiner");
+        m.insert('\u{2062}', "invisible times");
+        m.insert('\u{2063}', "invisible separator");
+        m.insert('\u{2064}', "invisible plus");
+        m.insert('\u{feff}', "BOM/zero-width no-break space");
+        m.insert('\u{202a}', "LTR embedding");
+        m.insert('\u{202b}', "RTL embedding");
+        m.insert('\u{202c}', "pop directional");
+        m.insert('\u{202d}', "LTR override");
+        m.insert('\u{202e}', "RTL override");
+        m.insert('\u{2066}', "LTR isolate");
+        m.insert('\u{2067}', "RTL isolate");
+        m.insert('\u{2068}', "first strong isolate");
+        m.insert('\u{2069}', "pop directional isolate");
+        m
+    });
 
 // ============================================================================
 // Scanning functions
