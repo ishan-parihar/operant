@@ -423,6 +423,13 @@ impl OpenAIClient {
             "stream": stream,
         });
 
+        // Ask OpenAI-compatible providers to include a final usage-only chunk
+        // when streaming, so streaming mode can report real token/cost data
+        // the same way non-streaming responses already do.
+        if stream {
+            request["stream_options"] = json!({"include_usage": true});
+        }
+
         // Pass through max_tokens / temperature if the caller set them.
         // Previously these fields were parsed from config into ChatRequest
         // but never sent to the provider — the OpenAI adapter dropped them,
@@ -740,6 +747,10 @@ pub struct ChatStreamEvent {
     pub created: u64,
     pub model: String,
     pub choices: Vec<StreamChoice>,
+    /// Present only on the final usage-only chunk when the request set
+    /// `stream_options.include_usage`.
+    #[serde(default)]
+    pub usage: Option<Usage>,
 }
 
 /// A streaming choice

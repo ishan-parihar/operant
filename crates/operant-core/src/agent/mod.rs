@@ -11,7 +11,7 @@ use tokio::sync::{mpsc, RwLock};
 use tokio::time::timeout;
 use tracing::{debug, error, info, instrument, warn};
 
-use crate::client::{ChatResponse, Message, Role, ToolCall};
+use crate::client::{ChatResponse, Message, Role, ToolCall, Usage};
 use crate::config::{runtime_config, BehaviorSettings};
 use crate::context_files::{load_default_context_files, load_workspace_context};
 use crate::database::Database;
@@ -1192,6 +1192,56 @@ impl OperantAgent {
         &self.client
     }
 
+    /// Emit `AgentEvent::Usage`/`AgentEvent::Cost` for a completed request
+    /// and accumulate the session-level cost total. Shared by
+    /// `process_response` (non-streaming) and `process_stream` (streaming,
+    /// iter-247) now that both paths can produce a `Usage`.
+    async fn emit_usage_and_cost(&self, usage: &Usage) {
+        self.emit(AgentEvent::Usage {
+            input_tokens: usage.prompt_tokens,
+            output_tokens: usage.completion_tokens,
+            total_tokens: usage.total_tokens,
+        })
+        .await;
+
+        // iter-132: emit a Cost event right after Usage. Look up the
+        // model in models_dev to get cost-per-million, then multiply by
+        // token counts. If the model isn't in the catalog, emit
+        // cost_usd=None so the caller can show "cost unknown".
+        //
+        // We split the model name on '/' (provider/model format) to get
+        // the provider and model parts. If there's no '/', we use the
+        // whole string as the model and "" as the provider.
+        let (provider, model_name) = match self.config.model.split_once('/') {
+            Some((p, m)) => (p.to_string(), m.to_string()),
+            None => (String::new(), self.config.model.clone()),
+        };
+        let cost_usd = crate::models_dev::get_model_capabilities(&provider, &model_name)
+            .await
+            .and_then(|caps| {
+                let input_cost = caps
+                    .cost_input_per_million
+                    .map(|c| (usage.prompt_tokens as f64 / 1_000_000.0) * c);
+                let output_cost = caps
+                    .cost_output_per_million
+                    .map(|c| (usage.completion_tokens as f64 / 1_000_000.0) * c);
+                input_cost.zip(output_cost).map(|(i, o)| i + o)
+            });
+        self.emit(AgentEvent::Cost {
+            cost_usd,
+            input_tokens: usage.prompt_tokens,
+            output_tokens: usage.completion_tokens,
+            model: self.config.model.clone(),
+        })
+        .await;
+
+        if let Some(cost) = cost_usd {
+            if let Ok(mut total) = self.session_cost_usd.write() {
+                *total += cost;
+            }
+        }
+    }
+
     /// Process streaming response with early tool detection
     async fn process_stream(
         &self,
@@ -1207,6 +1257,14 @@ impl OperantAgent {
         let mut accumulated_text = String::new();
         let mut accumulated_reasoning = String::new();
         let mut tool_calls: Vec<ToolCall> = Vec::new();
+        // Streaming usage arrives split across chunks (Anthropic reports
+        // input_tokens on message_start and output_tokens on message_delta;
+        // OpenAI-compatible providers report both together on one trailing
+        // chunk when stream_options.include_usage is set). Track whichever
+        // halves have arrived and only treat usage as complete once both
+        // are known.
+        let mut usage_prompt_tokens: Option<u32> = None;
+        let mut usage_completion_tokens: Option<u32> = None;
         // Capture the original stream error so we can surface it (instead of
         // the generic "Stream processing failed" string) and decide whether
         // to flush partials after the loop.
@@ -1215,6 +1273,15 @@ impl OperantAgent {
         while let Some(chunk_result) = stream.next().await {
             match chunk_result {
                 Ok(chunk) => {
+                    if let Some(u) = chunk.usage {
+                        if u.prompt_tokens > 0 {
+                            usage_prompt_tokens = Some(u.prompt_tokens);
+                        }
+                        if u.completion_tokens > 0 {
+                            usage_completion_tokens = Some(u.completion_tokens);
+                        }
+                    }
+
                     // Process reasoning from StreamChunk.
                     // If the provider sends reasoning natively (via
                     // reasoning_content), use that and DON'T also extract
@@ -1346,6 +1413,22 @@ impl OperantAgent {
             return Err(Error::Agent(format!("Stream processing failed: {err}")));
         }
 
+        // iter-247: emit Usage/Cost for streaming the same way
+        // process_response does for non-streaming, now that both usage
+        // halves are available. If the provider never sent usage data (or
+        // only sent one half), silently skip rather than reporting
+        // incomplete numbers.
+        if let (Some(prompt_tokens), Some(completion_tokens)) =
+            (usage_prompt_tokens, usage_completion_tokens)
+        {
+            let usage = Usage {
+                prompt_tokens,
+                completion_tokens,
+                total_tokens: prompt_tokens + completion_tokens,
+            };
+            self.emit_usage_and_cost(&usage).await;
+        }
+
         Ok((
             accumulated_text,
             accumulated_reasoning,
@@ -1392,49 +1475,7 @@ impl OperantAgent {
             .await;
         }
 
-        self.emit(AgentEvent::Usage {
-            input_tokens: response.usage.prompt_tokens,
-            output_tokens: response.usage.completion_tokens,
-            total_tokens: response.usage.total_tokens,
-        })
-        .await;
-
-        // iter-132: emit a Cost event right after Usage. Look up the
-        // model in models_dev to get cost-per-million, then multiply by
-        // token counts. If the model isn't in the catalog, emit
-        // cost_usd=None so the caller can show "cost unknown".
-        //
-        // We split the model name on '/' (provider/model format) to get
-        // the provider and model parts. If there's no '/', we use the
-        // whole string as the model and "" as the provider.
-        let (provider, model_name) = match self.config.model.split_once('/') {
-            Some((p, m)) => (p.to_string(), m.to_string()),
-            None => (String::new(), self.config.model.clone()),
-        };
-        let cost_usd = crate::models_dev::get_model_capabilities(&provider, &model_name)
-            .await
-            .and_then(|caps| {
-                let input_cost = caps
-                    .cost_input_per_million
-                    .map(|c| (response.usage.prompt_tokens as f64 / 1_000_000.0) * c);
-                let output_cost = caps
-                    .cost_output_per_million
-                    .map(|c| (response.usage.completion_tokens as f64 / 1_000_000.0) * c);
-                input_cost.zip(output_cost).map(|(i, o)| i + o)
-            });
-        self.emit(AgentEvent::Cost {
-            cost_usd,
-            input_tokens: response.usage.prompt_tokens,
-            output_tokens: response.usage.completion_tokens,
-            model: self.config.model.clone(),
-        })
-        .await;
-
-        if let Some(cost) = cost_usd {
-            if let Ok(mut total) = self.session_cost_usd.write() {
-                *total += cost;
-            }
-        }
+        self.emit_usage_and_cost(&response.usage).await;
 
         Ok((content, reasoning, tool_calls))
     }
@@ -2280,6 +2321,7 @@ mod tests {
                 },
                 finish_reason: None,
             }],
+            usage: None,
         };
 
         let text = extract_text_from_event(&event);
