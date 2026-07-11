@@ -6647,7 +6647,7 @@ impl App {
                 // R3: wire the model-aware per-request cost into the live
                 // tracker instead of discarding it. Falls back to a flat-rate
                 // estimate only when the model isn't in the models_dev catalog.
-                let cost = cost_usd.unwrap_or_else(|| {
+                let cost = cost_usd.unwrap_or({
                     input_tokens as f64 * 0.000003 + output_tokens as f64 * 0.000015
                 });
                 if let Some(tracker) = Arc::get_mut(&mut self.cost_tracker) {

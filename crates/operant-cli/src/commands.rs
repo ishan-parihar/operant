@@ -1090,7 +1090,6 @@ mod tests {
     fn test_registry_new_is_not_empty() {
         let registry = CommandRegistry::new();
         assert!(!registry.is_empty());
-        assert!(registry.len() > 0);
     }
 
     #[test]
