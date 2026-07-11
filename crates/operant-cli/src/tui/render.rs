@@ -1262,7 +1262,6 @@ fn append_turn_items(
             message,
             &RenderContext {
                 width,
-                highlight: true,
                 show_thinking: show_reasoning,
                 tool_names: tool_names.clone(),
                 expanded_thinking: expanded_thinking.clone(),
@@ -1438,7 +1437,6 @@ fn render_message_items(app: &App, width: u16) -> Vec<RenderedLineItem> {
                 message,
                 &RenderContext {
                     width,
-                    highlight: true,
                     show_thinking: app.show_reasoning,
                     tool_names: tool_names.clone(),
                     expanded_thinking: app.thinking_expanded.clone(),

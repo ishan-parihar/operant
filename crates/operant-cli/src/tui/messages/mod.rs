@@ -23,8 +23,6 @@ mod markdown_enhanced;
 pub struct RenderContext {
     /// Current terminal width (for word-wrap decisions).
     pub width: u16,
-    /// Whether syntax highlighting is enabled.
-    pub highlight: bool,
     /// Whether to show thinking blocks.
     pub show_thinking: bool,
     /// Maps `tool_use_id` → `tool_name` so ToolResult blocks can dispatch to
@@ -38,7 +36,6 @@ impl Default for RenderContext {
     fn default() -> Self {
         Self {
             width: 80,
-            highlight: true,
             show_thinking: false,
             tool_names: HashMap::new(),
             expanded_thinking: std::collections::HashSet::new(),
