@@ -86,7 +86,7 @@ async fn list_plugins(config: &AppConfig) -> Result<()> {
     let mut entries: Vec<_> = std::fs::read_dir(&dir)
         .with_context(|| format!("Failed to read plugins directory '{}'", dir.display()))?
         .filter_map(|e| e.ok())
-        .filter(|e| e.file_type().map_or(false, |t| t.is_dir()))
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
         .collect();
 
     entries.sort_by_key(|e| e.file_name());

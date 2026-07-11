@@ -335,30 +335,26 @@ pub fn run_config_checks(config: &AppConfig, issues: &mut Vec<String>) {
 
     let wal_path = hh.join("state.db-wal");
     if wal_path.exists() {
-        match std::fs::metadata(&wal_path) {
-            Ok(meta) => {
-                let wal_size = meta.len();
-                if wal_size > 50 * 1024 * 1024 {
-                    check_warn(
-                        &format!("WAL file is large ({} MB)", wal_size / (1024 * 1024)),
-                        "(may indicate missed checkpoints)",
-                    );
-                    issues.push(
-                        "Large WAL file — run 'operant doctor --fix' to checkpoint".to_string(),
-                    );
-                } else if wal_size > 10 * 1024 * 1024 {
-                    check_info(&format!(
-                        "WAL file is {} MB (normal for active sessions)",
-                        wal_size / (1024 * 1024)
-                    ));
-                } else if wal_size > 0 {
-                    check_ok(
-                        "WAL file size is normal",
-                        &format!("({} KB)", wal_size / 1024),
-                    );
-                }
+        if let Ok(meta) = std::fs::metadata(&wal_path) {
+            let wal_size = meta.len();
+            if wal_size > 50 * 1024 * 1024 {
+                check_warn(
+                    &format!("WAL file is large ({} MB)", wal_size / (1024 * 1024)),
+                    "(may indicate missed checkpoints)",
+                );
+                issues
+                    .push("Large WAL file — run 'operant doctor --fix' to checkpoint".to_string());
+            } else if wal_size > 10 * 1024 * 1024 {
+                check_info(&format!(
+                    "WAL file is {} MB (normal for active sessions)",
+                    wal_size / (1024 * 1024)
+                ));
+            } else if wal_size > 0 {
+                check_ok(
+                    "WAL file size is normal",
+                    &format!("({} KB)", wal_size / 1024),
+                );
             }
-            Err(_) => {}
         }
     } else {
         check_info("WAL file not present (no recent write-ahead logging activity)");

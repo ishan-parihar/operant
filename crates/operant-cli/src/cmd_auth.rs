@@ -465,7 +465,7 @@ pub async fn handle_login(config: &AppConfig) -> Result<()> {
 
     let hint = key_hint(&key, 4);
     println!();
-    println!("✓ Logged in to {}  (key: {}...{})", provider, hint, "✓");
+    println!("✓ Logged in to {}  (key: {}...✓)", provider, hint);
     println!("  Environment variable set: {}", env_var);
     println!("─────────────────────────────────────────────────────");
     Ok(())
@@ -516,11 +516,7 @@ pub async fn handle_logout(config: &AppConfig) -> Result<()> {
 fn key_hint(key: &str, n: usize) -> String {
     let chars: Vec<char> = key.chars().collect();
     let prefix: String = chars.iter().take(n).collect();
-    if chars.len() <= n {
-        format!("{}...", prefix)
-    } else {
-        format!("{}...", prefix)
-    }
+    format!("{}...", prefix)
 }
 
 /// Resolve the canonical environment variable name for a provider.

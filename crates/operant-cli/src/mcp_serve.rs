@@ -322,10 +322,7 @@ fn handle_ping(request: &JsonRpcRequest) -> JsonRpcResponse {
 /// Handle `tools/list` — return all registered tools as MCP tool definitions.
 async fn handle_tools_list(request: &JsonRpcRequest, registry: &ToolRegistry) -> JsonRpcResponse {
     let schemas = registry.get_schemas().await;
-    let tools: Vec<Value> = schemas
-        .iter()
-        .map(|schema| mcp_tool_definition(schema))
-        .collect();
+    let tools: Vec<Value> = schemas.iter().map(mcp_tool_definition).collect();
 
     make_response(
         request.id.clone(),

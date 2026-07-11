@@ -217,11 +217,11 @@ impl MessageHandler for GatewayMessageHandler {
                             reasoning.clone()
                         } else {
                             tracing::warn!("Agent returned empty response, no reasoning available");
-                            format!("I've completed the tool calls you requested.")
+                            "I've completed the tool calls you requested.".to_string()
                         }
                     } else {
                         tracing::warn!("Agent returned empty response, no reasoning available");
-                        format!("I've completed the tool calls you requested.")
+                        "I've completed the tool calls you requested.".to_string()
                     }
                 } else {
                     response.content
@@ -954,7 +954,7 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                     format!("❓ {}", req.question)
                 };
                 let msg = OutgoingMessage::new(channel_id, &body).no_markdown();
-                let _ = gw_for_uq.send_to_platform(&platform, msg).await;
+                let _ = gw_for_uq.send_to_platform(platform, msg).await;
 
                 // Store the reply_tx so the next message from this channel
                 // is routed as the reply. (iter-161 — replaces the hardcoded

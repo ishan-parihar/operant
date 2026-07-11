@@ -398,10 +398,7 @@ async fn cmd_search(config: &AppConfig, query: &str, limit: usize) -> Result<()>
 
     println!("Found {} match(es) for '{}':", results.len(), query);
     println!();
-    println!(
-        "{:<3}  {:<36} {:<28} {}",
-        "#", "Session ID", "Title", "Snippet"
-    );
+    println!("{:<3}  {:<36} {:<28} Snippet", "#", "Session ID", "Title");
     println!("{}", "-".repeat(110));
 
     for (i, r) in results.iter().enumerate() {

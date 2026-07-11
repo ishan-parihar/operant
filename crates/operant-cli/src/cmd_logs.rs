@@ -65,8 +65,8 @@ async fn cmd_show(
     let slice: Vec<&String> = all_lines
         .iter()
         .filter(|l| {
-            let level_ok = level.map_or(true, |lv| l.contains(lv));
-            let comp_ok = component.map_or(true, |c| l.contains(c));
+            let level_ok = level.is_none_or(|lv| l.contains(lv));
+            let comp_ok = component.is_none_or(|c| l.contains(c));
             level_ok && comp_ok
         })
         .collect();
@@ -96,7 +96,7 @@ async fn cmd_follow(config: &AppConfig, level: Option<&str>) -> Result<()> {
             file2.seek(SeekFrom::Start(last_size))?;
             let reader2 = BufReader::new(file2);
             for line in reader2.lines().filter_map(|l| l.ok()) {
-                if level.map_or(true, |lv| line.contains(lv)) {
+                if level.is_none_or(|lv| line.contains(lv)) {
                     println!("{}", line);
                 }
             }

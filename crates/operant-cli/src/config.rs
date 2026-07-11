@@ -762,6 +762,7 @@ impl Default for PrivacyConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
+#[derive(Default)]
 pub struct TtsProviderConfig {
     pub voice: Option<String>,
     pub model: Option<String>,
@@ -773,23 +774,6 @@ pub struct TtsProviderConfig {
     pub ref_audio: Option<String>,
     pub ref_text: Option<String>,
     pub device: Option<String>,
-}
-
-impl Default for TtsProviderConfig {
-    fn default() -> Self {
-        Self {
-            voice: None,
-            model: None,
-            model_id: None,
-            voice_id: None,
-            language: None,
-            sample_rate: None,
-            bit_rate: None,
-            ref_audio: None,
-            ref_text: None,
-            device: None,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1342,6 +1326,7 @@ impl Default for ToolsConfigV2 {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
+#[derive(Default)]
 pub struct GatewaysConfig {
     pub telegram: GatewayPlatformConfig,
     pub discord: DiscordGatewayConfig,
@@ -1350,20 +1335,6 @@ pub struct GatewaysConfig {
     pub matrix: MatrixGatewayConfig,
     pub whatsapp: HashMap<String, Value>,
     pub webhooks: HashMap<String, Value>,
-}
-
-impl Default for GatewaysConfig {
-    fn default() -> Self {
-        Self {
-            telegram: GatewayPlatformConfig::default(),
-            discord: DiscordGatewayConfig::default(),
-            slack: SlackGatewayConfig::default(),
-            mattermost: MattermostGatewayConfig::default(),
-            matrix: MatrixGatewayConfig::default(),
-            whatsapp: HashMap::new(),
-            webhooks: HashMap::new(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1529,6 +1500,7 @@ pub struct EnvironmentsConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
+#[derive(Default)]
 pub struct DockerEnvConfig {
     pub image: Option<String>,
     pub network: Option<String>,
@@ -1538,51 +1510,21 @@ pub struct DockerEnvConfig {
     pub env: HashMap<String, String>,
 }
 
-impl Default for DockerEnvConfig {
-    fn default() -> Self {
-        Self {
-            image: None,
-            network: None,
-            extra_hosts: Vec::new(),
-            volumes: Vec::new(),
-            working_dir: None,
-            env: HashMap::new(),
-        }
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
+#[derive(Default)]
 pub struct IntegrationsConfig {
     pub enabled: Vec<String>,
     pub configs: HashMap<String, HashMap<String, Value>>,
 }
 
-impl Default for IntegrationsConfig {
-    fn default() -> Self {
-        Self {
-            enabled: Vec::new(),
-            configs: HashMap::new(),
-        }
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
+#[derive(Default)]
 pub struct PluginsConfig {
     pub enabled: Vec<String>,
     pub configs: HashMap<String, HashMap<String, Value>>,
     pub dirs: Vec<PathBuf>,
-}
-
-impl Default for PluginsConfig {
-    fn default() -> Self {
-        Self {
-            enabled: Vec::new(),
-            configs: HashMap::new(),
-            dirs: Vec::new(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1627,16 +1569,9 @@ pub struct HookScriptConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
+#[derive(Default)]
 pub struct OnboardingConfig {
     pub seen: HashMap<String, bool>,
-}
-
-impl Default for OnboardingConfig {
-    fn default() -> Self {
-        Self {
-            seen: HashMap::new(),
-        }
-    }
 }
 
 /// Errors specific to CLI configuration loading.
@@ -1908,7 +1843,7 @@ fn expand_env_vars_in_value(value: &Value) -> Value {
             Value::Mapping(new_map)
         }
         Value::Sequence(seq) => {
-            let new_seq: Vec<Value> = seq.iter().map(|v| expand_env_vars_in_value(v)).collect();
+            let new_seq: Vec<Value> = seq.iter().map(expand_env_vars_in_value).collect();
             Value::Sequence(new_seq)
         }
         other => other.clone(),

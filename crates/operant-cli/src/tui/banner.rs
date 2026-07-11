@@ -125,7 +125,7 @@ pub fn banner_with_subtitle(width: u16, version: &str) -> Vec<Line<'static>> {
     let mut lines = banner_lines(width);
     if width >= 40 {
         // Underline the wordmark with a dim rule + version tag.
-        let rule_width = (width as usize).min(56).max(20);
+        let rule_width = (width as usize).clamp(20, 56);
         let version_label = format!(" v{} ", version);
         let rule_total = rule_width.saturating_sub(version_label.len());
         let left_rule = "─".repeat(rule_total / 2);

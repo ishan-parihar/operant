@@ -326,7 +326,7 @@ fn render_skills_pane(frame: &mut Frame, state: &JourneyViewState, area: Rect) {
         let cat = truncate(&skill.category, 14);
         let ver = truncate(&skill.version, 6);
         lines.push(Line::from(vec![
-            Span::styled(format!("{}", prefix), row_style),
+            Span::styled(prefix.to_string(), row_style),
             Span::styled(format!("{:<24} ", name), row_style),
             Span::styled(format!("{:<14} ", cat), row_style),
             Span::styled(format!("{:<6}", ver), row_style),

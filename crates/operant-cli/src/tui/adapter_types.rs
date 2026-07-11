@@ -4,50 +4,35 @@ pub mod config {
 
     // ---------- Theme (enum, not struct) ----------
 
-    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
     pub enum Theme {
         Dark,
         Light,
+        #[default]
         Default,
         Deuteranopia,
         Custom(String),
     }
 
-    impl Default for Theme {
-        fn default() -> Self {
-            Self::Default
-        }
-    }
-
     // ---------- PermissionMode ----------
 
-    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
     pub enum PermissionMode {
         AcceptEdits,
+        #[default]
         Default,
         BypassPermissions,
         Plan,
     }
 
-    impl Default for PermissionMode {
-        fn default() -> Self {
-            Self::Default
-        }
-    }
-
     // ---------- OutputFormat ----------
 
-    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
     pub enum OutputFormat {
+        #[default]
         Text,
         Json,
         StreamJson,
-    }
-
-    impl Default for OutputFormat {
-        fn default() -> Self {
-            Self::Text
-        }
     }
 
     // ---------- InnerConfig (Settings.config) ----------
@@ -1711,7 +1696,7 @@ impl TuiApp {
             _ => None,
         };
         let mut app_config = config;
-        let mut settings = Settings::load_sync().unwrap_or_default();
+        let settings = Settings::load_sync().unwrap_or_default();
 
         // Layer in the user's saved settings.json (written by App::persist_provider_and_model).
         // provider+model are now exclusively stored in operant.toml (config.agent.model /
@@ -2739,7 +2724,7 @@ impl TuiApp {
         // draw, so the last key's effect (and, with zero keys, the landing
         // screen) is never painted. Do one final render of the terminal state
         // so the captured screen reflects the final App state after all keys.
-        let _ = terminal.draw(|f| crate::tui::render::render_app(f, &mut self.app));
+        let _ = terminal.draw(|f| crate::tui::render::render_app(f, &self.app));
 
         // Capture the final rendered screen as trimmed text rows. The
         // TestBackend buffer is row-major; chunk the flat cell slice by width.

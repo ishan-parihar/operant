@@ -29,7 +29,7 @@ pub async fn handle_dump_command(config: &AppConfig, all: bool, json: bool) -> R
         .client
         .api_key
         .as_ref()
-        .map_or(false, |k| !k.is_empty());
+        .is_some_and(|k| !k.is_empty());
     let gateway = &config.gateway;
     let mut gateways = Vec::new();
     if gateway.telegram_enabled {

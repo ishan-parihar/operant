@@ -272,9 +272,9 @@ pub fn load_git_diff(project_root: &std::path::Path) -> Vec<FileDiffStats> {
     parse_unified_diff(&text)
 }
 
-/// (iter-209: build_turn_diff deleted — took a &FileHistory stub that
-/// always returned empty snapshots. /changes now uses the git-diff path.
-/// To re-implement per-turn diffs, wire to a real snapshot store in core.)
+// (iter-209: build_turn_diff deleted — took a &FileHistory stub that
+// always returned empty snapshots. /changes now uses the git-diff path.
+// To re-implement per-turn diffs, wire to a real snapshot store in core.)
 
 fn relative_diff_path(path: &std::path::Path, project_root: &std::path::Path) -> String {
     path.strip_prefix(project_root)
@@ -455,10 +455,10 @@ pub fn parse_unified_diff(text: &str) -> Vec<FileDiffStats> {
                 if let Some(f) = current_file.as_mut() {
                     f.removed += 1;
                 }
-            } else if raw_line.starts_with(' ') {
+            } else if let Some(rest) = raw_line.strip_prefix(' ') {
                 hunk.lines.push(DiffLine {
                     kind: DiffLineKind::Context,
-                    content: raw_line[1..].to_string(),
+                    content: rest.to_string(),
                     old_line_no: Some(old_line),
                     new_line_no: Some(new_line),
                 });
@@ -807,7 +807,7 @@ fn render_diff_detail(state: &DiffViewerState, area: Rect, buf: &mut Buffer) {
                 '\u{25b2}' // ▲
             } else if row == bar_h - 1 {
                 '\u{25bc}' // ▼
-            } else if row >= thumb_top + 1 && row < thumb_top + thumb_size + 1 {
+            } else if row > thumb_top && row < thumb_top + thumb_size + 1 {
                 '\u{2588}' // █ (thumb)
             } else {
                 '\u{2502}' // │ (track)

@@ -89,15 +89,13 @@ pub fn render_bypass_permissions_dialog(
     let inner = block.inner(dialog_area);
     frame.render_widget(block, dialog_area);
 
-    let mut lines: Vec<Line<'static>> = Vec::new();
-
     // Body text (matches TS dialog copy)
-    lines.push(Line::from(vec![Span::styled(
+    let mut lines: Vec<Line<'static>> = vec![Line::from(vec![Span::styled(
         "Operant running in Bypass Permissions mode",
         Style::default()
             .fg(Color::Yellow)
             .add_modifier(Modifier::BOLD),
-    )]));
+    )])];
     lines.push(Line::from(""));
     lines.push(Line::from(vec![Span::styled(
         "In Bypass Permissions mode, Operant will NOT ask for your",

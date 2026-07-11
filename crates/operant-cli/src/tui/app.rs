@@ -1,6 +1,6 @@
 // app.rs — App state struct and main event loop.
 
-use crate::tui::adapter_types::config::{PermissionMode, Settings, Theme};
+use crate::tui::adapter_types::config::{Settings, Theme};
 use crate::tui::adapter_types::cost::CostTracker;
 use crate::tui::context_viz::ContextVizState;
 use crate::tui::dialog_select::{DialogSelectState, SelectItem};
@@ -33,11 +33,9 @@ use crate::tui::adapter_types::types::{ContentBlock, Message, Role};
 use crate::tui::adapter_types::{sample_completion_verb, sample_spinner_verb};
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
 use operant_core::agent::AgentEvent;
-use ratatui::backend::CrosstermBackend;
 use ratatui::style::Color;
 use ratatui::Terminal;
 use std::cell::{Cell, RefCell};
-use std::io::Stdout;
 use std::sync::{Arc, Mutex};
 use tracing::debug;
 
@@ -1836,7 +1834,7 @@ impl App {
         // Fetch models from provider's API in background
         let settings = crate::tui::adapter_types::Settings::load_sync().unwrap_or_default();
         let api_key = self.auth_store.api_key_for(
-            &provider_id
+            provider_id
                 .parse::<crate::tui::adapter_types::ProviderId>()
                 .unwrap_or(crate::tui::adapter_types::ProviderId::Other(
                     provider_id.to_string(),
@@ -5376,7 +5374,6 @@ impl App {
                     if let Some(idx) = matched_idx {
                         pr.selected_option = idx;
                         self.resolve_permission_dialog();
-                        return;
                     }
                 }
             }
@@ -5700,6 +5697,7 @@ impl App {
     /// If the pasted text resolves to an existing filesystem path:
     ///   - image files (png/jpg/gif/webp/bmp) → added as an image attachment pill
     ///   - other files → inserted as `@path` mention text
+    ///
     /// Otherwise the text goes through the normal `prompt_input.paste()` path
     /// which applies the multi-line summary placeholder for large pastes.
     fn handle_paste_data(&mut self, data: String) {
