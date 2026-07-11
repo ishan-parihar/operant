@@ -2664,12 +2664,27 @@ impl App {
                 true
             }
 
-            // /background — surface that operant runs synchronously; this is
-            // a polite no-op rather than silently falling through.
+            // /background <prompt> — operant's TUI runs a single agent
+            // synchronously: App holds no agent handle and there is exactly one
+            // event channel + run_complete_rx, so spawning a second agent.run()
+            // in-session would interleave into (and corrupt) the live
+            // transcript. Rather than a bare no-op, echo the exact working
+            // detached command with the user's prompt filled in.
+            // (ponytail: in-session background turn needs a second isolated
+            // agent via create_runtime_agent with its own session id + event
+            // channel, threaded through the run loop — invasive and not
+            // headless-testable, so we point at `operant run --query ... &`.)
             "background" => {
-                self.status_message = Some(
-                    "Operant runs synchronously. Use `operant run --query ... &` to background a session.".to_string()
-                );
+                let trimmed = args.trim();
+                self.status_message = Some(if trimmed.is_empty() {
+                    "Usage: /background <prompt> — operant runs one agent synchronously; this prints the command to run it detached.".to_string()
+                } else {
+                    let escaped = trimmed.replace('"', "\\\"");
+                    format!(
+                        "Operant runs synchronously in-session. Background it with: operant run --query \"{}\" &",
+                        escaped
+                    )
+                });
                 true
             }
 
