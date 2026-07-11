@@ -1218,6 +1218,7 @@ mod tests {
         assert!(schema.parameters["properties"]["action"].is_object());
     }
 
+    #[serial_test::serial]
     #[tokio::test]
     async fn test_discord_no_token_returns_error() {
         let saved = std::env::var("DISCORD_BOT_TOKEN").ok();
