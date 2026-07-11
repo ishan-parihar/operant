@@ -170,7 +170,8 @@ impl OpenAIClient {
         max_tokens: Option<u32>,
         temperature: Option<f32>,
     ) -> Result<ChatResponse> {
-        let request = self.build_chat_request(model, messages, tools, false, max_tokens, temperature)?;
+        let request =
+            self.build_chat_request(model, messages, tools, false, max_tokens, temperature)?;
 
         let url = self.build_url("")?;
         let headers = self.build_headers()?;
@@ -201,7 +202,8 @@ impl OpenAIClient {
         max_tokens: Option<u32>,
         temperature: Option<f32>,
     ) -> Result<ChatStreamResponse> {
-        let request = self.build_chat_request(model, messages, tools, true, max_tokens, temperature)?;
+        let request =
+            self.build_chat_request(model, messages, tools, true, max_tokens, temperature)?;
 
         let url = self.build_url("")?;
         let headers = self.build_headers()?;
@@ -922,7 +924,6 @@ fn normalize_sse_buffer(buffer: &mut String) {
         *buffer = buffer.replace("\r\n", "\n").replace('\r', "\n");
     }
 }
-
 
 #[cfg(test)]
 mod tests {

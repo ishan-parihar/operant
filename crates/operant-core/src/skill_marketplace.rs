@@ -139,9 +139,7 @@ impl SkillMarketplace {
     pub async fn fetch_index(&self) -> anyhow::Result<Vec<SkillRegistryEntry>> {
         // Try the cache first.
         if let Some(cached) = self.load_cache() {
-            if cached.source_url == self.registry_url
-                && !is_expired(cached.fetched_at, CACHE_TTL)
-            {
+            if cached.source_url == self.registry_url && !is_expired(cached.fetched_at, CACHE_TTL) {
                 tracing::debug!(
                     entries = cached.entries.len(),
                     "Skill registry: using cached index"
@@ -169,7 +167,10 @@ impl SkillMarketplace {
             .json()
             .await
             .map_err(|e| anyhow::anyhow!("Registry parse failed: {e}"))?;
-        tracing::info!(entries = entries.len(), "Skill registry: fetched fresh index");
+        tracing::info!(
+            entries = entries.len(),
+            "Skill registry: fetched fresh index"
+        );
 
         // Save to cache.
         let cached = CachedRegistry {
@@ -362,9 +363,7 @@ fn verify_checksum(content: &str, expected: &str) -> anyhow::Result<()> {
     hasher.update(content.as_bytes());
     let actual = hex::encode(hasher.finalize());
     if actual != expected {
-        anyhow::bail!(
-            "Checksum mismatch: expected sha256:{expected}, got sha256:{actual}"
-        );
+        anyhow::bail!("Checksum mismatch: expected sha256:{expected}, got sha256:{actual}");
     }
     Ok(())
 }
@@ -511,8 +510,7 @@ mod tests {
     #[test]
     fn test_verify_checksum_valid() {
         let content = "hello world";
-        let checksum =
-            "sha256:b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9";
+        let checksum = "sha256:b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9";
         assert!(verify_checksum(content, checksum).is_ok());
     }
 

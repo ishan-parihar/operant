@@ -60,8 +60,12 @@ pub async fn handle_status_command(config: &AppConfig, deep: bool, json: bool) -
         if let Some(node) = operant_core::platform::find_node() {
             status["node"] = json!(node.display().to_string());
         }
-        status["config_dir"] = json!(operant_core::platform::operant_config_dir().display().to_string());
-        status["skills_dir"] = json!(operant_core::platform::operant_skills_dir().display().to_string());
+        status["config_dir"] = json!(operant_core::platform::operant_config_dir()
+            .display()
+            .to_string());
+        status["skills_dir"] = json!(operant_core::platform::operant_skills_dir()
+            .display()
+            .to_string());
         status["mcp_servers"] = json!(config.mcp.servers.len());
     }
 

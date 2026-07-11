@@ -189,9 +189,11 @@ pub async fn handle_tui_debug_command(config: &AppConfig, cmd: TuiDebugSubcomman
         TuiDebugSubcommand::SlashCommands => debug_slash_commands(config).await,
         TuiDebugSubcommand::State => debug_state(config).await,
         TuiDebugSubcommand::Cost => debug_cost(config).await,
-        TuiDebugSubcommand::Simulate { keys, output, assert } => {
-            debug_simulate(config, keys, output, assert).await
-        }
+        TuiDebugSubcommand::Simulate {
+            keys,
+            output,
+            assert,
+        } => debug_simulate(config, keys, output, assert).await,
     }
 }
 
@@ -1049,18 +1051,26 @@ fn evaluate_assertions(app: &crate::tui::app::App, assertions_str: &str) -> Resu
         } else if assertion.contains("!=") {
             assertion.split("!=").map(|s| s.trim()).collect()
         } else {
-            anyhow::bail!("Invalid assertion format: '{}'. Must use '==' or '!='.", assertion);
+            anyhow::bail!(
+                "Invalid assertion format: '{}'. Must use '==' or '!='.",
+                assertion
+            );
         };
 
         if parts.len() != 2 {
-            anyhow::bail!("Invalid assertion format: '{}'. Must be key == value or key != value.", assertion);
+            anyhow::bail!(
+                "Invalid assertion format: '{}'. Must be key == value or key != value.",
+                assertion
+            );
         }
 
         let key = parts[0];
         let mut val_str = parts[1];
 
         // Strip outer quotes if any
-        if (val_str.starts_with('"') && val_str.ends_with('"')) || (val_str.starts_with('\'') && val_str.ends_with('\'')) {
+        if (val_str.starts_with('"') && val_str.ends_with('"'))
+            || (val_str.starts_with('\'') && val_str.ends_with('\''))
+        {
             val_str = &val_str[1..val_str.len() - 1];
         }
 
@@ -1083,7 +1093,10 @@ fn evaluate_assertions(app: &crate::tui::app::App, assertions_str: &str) -> Resu
         let expected_val = match val_str {
             "true" => true,
             "false" => false,
-            _ => anyhow::bail!("Unsupported assertion value: '{}'. Must be 'true' or 'false'.", val_str),
+            _ => anyhow::bail!(
+                "Unsupported assertion value: '{}'. Must be 'true' or 'false'.",
+                val_str
+            ),
         };
 
         let condition = if is_eq {
@@ -1094,7 +1107,13 @@ fn evaluate_assertions(app: &crate::tui::app::App, assertions_str: &str) -> Resu
 
         if !condition {
             let op = if is_eq { "==" } else { "!=" };
-            anyhow::bail!("Assertion failed: {} {} {} (actual value is {})", key, op, expected_val, actual_val);
+            anyhow::bail!(
+                "Assertion failed: {} {} {} (actual value is {})",
+                key,
+                op,
+                expected_val,
+                actual_val
+            );
         }
     }
     Ok(())

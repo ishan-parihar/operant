@@ -1639,8 +1639,6 @@ impl Default for OnboardingConfig {
     }
 }
 
-
-
 /// Errors specific to CLI configuration loading.
 #[derive(Debug)]
 pub enum ConfigError {
@@ -1737,7 +1735,6 @@ impl CliConfig {
 
         Ok(config)
     }
-
 
     /// Apply HERMES_* environment variable overrides to the config.
     fn apply_operant_env_overrides(&mut self) {

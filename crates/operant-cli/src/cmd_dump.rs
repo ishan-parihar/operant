@@ -10,7 +10,8 @@ pub async fn handle_dump_command(config: &AppConfig, all: bool, json: bool) -> R
             let val = serde_json::to_value(config).context("Failed to serialize config")?;
             println!("{}", serde_json::to_string_pretty(&val)?);
         } else {
-            let yaml = serde_yaml::to_string(config).context("Failed to serialize config as YAML")?;
+            let yaml =
+                serde_yaml::to_string(config).context("Failed to serialize config as YAML")?;
             println!("{}", yaml);
         }
         return Ok(());

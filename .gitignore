@@ -47,6 +47,9 @@ node_modules/
 # Do NOT ignore crates/operant-cli/src/dashboard/ — that is the embedded dashboard bundle.
 crates/operant-cli/web/dist/
 
+# graphify structural index (regenerate with `graphify build .`)
+graphify-out/
+
 # Autonomous-mode runtime state
 autonomous-status.toml
 telegram_offset.txt

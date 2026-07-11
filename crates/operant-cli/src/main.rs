@@ -73,8 +73,8 @@ use std::time::Duration;
 use crate::config::CliConfig;
 use anyhow::{Context, Result};
 use clap::{ArgAction, Parser, Subcommand};
-use operant_core::agent::clients::openai::OpenAIModelClient;
 use operant_core::agent::clients::anthropic::AnthropicModelClient;
+use operant_core::agent::clients::openai::OpenAIModelClient;
 use operant_core::agent::{AgentConfig, AgentEvent, OperantAgent};
 use operant_core::client::{ClientConfig, OpenAIClient};
 use operant_core::config::{
@@ -539,14 +539,14 @@ fn create_model_client(
     match provider {
         "anthropic" => {
             let api_key = std::env::var("ANTHROPIC_API_KEY")
-                .unwrap_or_else(|_| {
-                    config.client.api_key.clone().unwrap_or_default()
-                });
+                .unwrap_or_else(|_| config.client.api_key.clone().unwrap_or_default());
             Box::new(AnthropicModelClient::new(api_key))
         }
         _ => {
             // Default to OpenAI-compatible client for openai, deepseek, and others
-            Box::new(OpenAIModelClient::new(OpenAIClient::new(client_config(config))))
+            Box::new(OpenAIModelClient::new(OpenAIClient::new(client_config(
+                config,
+            ))))
         }
     }
 }
@@ -640,7 +640,14 @@ pub(crate) async fn build_registry(
                 //   aft_bash → replaces terminal
                 //   aft_search → replaces file_search
                 //   aft_glob → replaces file_list
-                for tool in &["file_read", "file_write", "patch", "terminal", "file_search", "file_list"] {
+                for tool in &[
+                    "file_read",
+                    "file_write",
+                    "patch",
+                    "terminal",
+                    "file_search",
+                    "file_list",
+                ] {
                     registry.disable_tool(tool).await;
                 }
                 tracing::info!("Basic file/terminal tools disabled (replaced by AFT)");
@@ -693,11 +700,7 @@ async fn connect_mcp_server(mcp_manager: &McpManager, server: &McpServerConfig) 
                 .clone()
                 .context("Configured streamable-HTTP MCP server is missing a URL")?;
             mcp_manager
-                .add_server(
-                    server.name.clone(),
-                    url,
-                    server.auth_token.clone(),
-                )
+                .add_server(server.name.clone(), url, server.auth_token.clone())
                 .await?;
         }
         McpTransportKind::Stdio => {
@@ -953,7 +956,11 @@ async fn chat_non_tui(config: &AppConfig, system_prompt: Option<&str>) -> Result
     tokio::spawn(async move {
         while let Some(event) = event_rx.recv().await {
             match event {
-                AgentEvent::ToolStart { tool_call_id: _, name, arguments } => {
+                AgentEvent::ToolStart {
+                    tool_call_id: _,
+                    name,
+                    arguments,
+                } => {
                     let preview = preview_tool_args(&arguments)
                         .map(|a| format!("{}: {}", name, a))
                         .unwrap_or_else(|| name);
@@ -962,7 +969,11 @@ async fn chat_non_tui(config: &AppConfig, system_prompt: Option<&str>) -> Result
                 AgentEvent::ToolComplete { result: _ } => {
                     println!("  Tool: Done.");
                 }
-                AgentEvent::ToolError { tool_call_id: _, name, error } => {
+                AgentEvent::ToolError {
+                    tool_call_id: _,
+                    name,
+                    error,
+                } => {
                     eprintln!("  Tool Error {}: {}", name, error);
                 }
                 _ => {}
@@ -1027,7 +1038,10 @@ async fn chat_non_tui(config: &AppConfig, system_prompt: Option<&str>) -> Result
                     println!("History not yet available in non-TUI mode.");
                 }
                 _ => {
-                    println!("Unknown command: /{}. Type /help for available commands.", cmd);
+                    println!(
+                        "Unknown command: /{}. Type /help for available commands.",
+                        cmd
+                    );
                 }
             }
             continue;
@@ -1107,7 +1121,6 @@ async fn test_tool(config: &AppConfig, tool_name: &str, args: Option<&str>) -> R
 
     Ok(())
 }
-
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -1213,10 +1226,15 @@ async fn main() -> Result<()> {
         }
         Some(Commands::Chat { system }) => {
             if loaded.config.tui.rich_output {
-                TuiApp::enter(loaded.config.clone(), system.clone(), LaunchMode::Landing, cli.no_mouse)
-                    .await?
-                    .run()
-                    .await?;
+                TuiApp::enter(
+                    loaded.config.clone(),
+                    system.clone(),
+                    LaunchMode::Landing,
+                    cli.no_mouse,
+                )
+                .await?
+                .run()
+                .await?;
             } else {
                 chat_non_tui(&loaded.config, system.as_deref()).await?;
             }
@@ -1353,10 +1371,15 @@ async fn main() -> Result<()> {
         None => {
             // No command provided - launch TUI in interactive mode
             if loaded.config.tui.rich_output {
-                TuiApp::enter(loaded.config.clone(), None, LaunchMode::Landing, cli.no_mouse)
-                    .await?
-                    .run()
-                    .await?;
+                TuiApp::enter(
+                    loaded.config.clone(),
+                    None,
+                    LaunchMode::Landing,
+                    cli.no_mouse,
+                )
+                .await?
+                .run()
+                .await?;
             } else {
                 chat_non_tui(&loaded.config, None).await?;
             }

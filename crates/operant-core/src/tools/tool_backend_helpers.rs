@@ -8,14 +8,18 @@ use std::sync::LazyLock;
 use crate::schema::ToolSchema;
 use crate::tools::{OperantTool, ToolContext, ToolResult};
 
-static BACKEND_MAP: LazyLock<HashMap<&'static str, (&'static [&'static str], &'static str)>> = LazyLock::new(|| {
-    let mut m = HashMap::new();
-    m.insert("web_search", (&["tavily", "exa", "searxng", "ddg"][..], "tavily"));
-    m.insert("code_execution", (&["local", "docker"][..], "local"));
-    m.insert("terminal", (&["local", "docker", "ssh"][..], "local"));
-    m.insert("vision", (&["openai", "anthropic"][..], "openai"));
-    m
-});
+static BACKEND_MAP: LazyLock<HashMap<&'static str, (&'static [&'static str], &'static str)>> =
+    LazyLock::new(|| {
+        let mut m = HashMap::new();
+        m.insert(
+            "web_search",
+            (&["tavily", "exa", "searxng", "ddg"][..], "tavily"),
+        );
+        m.insert("code_execution", (&["local", "docker"][..], "local"));
+        m.insert("terminal", (&["local", "docker", "ssh"][..], "local"));
+        m.insert("vision", (&["openai", "anthropic"][..], "openai"));
+        m
+    });
 
 pub struct ToolBackendTool;
 

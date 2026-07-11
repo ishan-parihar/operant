@@ -842,17 +842,20 @@ impl McpStdioClient {
             let read_result2 = tokio::time::timeout(
                 std::time::Duration::from_secs(60),
                 io.stdout.read_line(&mut response_line),
-            ).await;
+            )
+            .await;
             match read_result2 {
                 Ok(Ok(_)) => {}
                 Ok(Err(e)) => {
                     return Err(crate::error::Error::Agent(format!(
-                        "Failed to read MCP stdout after server request: {}", e
+                        "Failed to read MCP stdout after server request: {}",
+                        e
                     )));
                 }
                 Err(_) => {
                     return Err(crate::error::Error::Agent(
-                        "MCP stdio server did not respond within 60s after server request".to_string(),
+                        "MCP stdio server did not respond within 60s after server request"
+                            .to_string(),
                     ));
                 }
             }
@@ -1039,7 +1042,9 @@ impl McpSseClient {
                                     if let Some(id) = parsed.get("id").and_then(|v| v.as_u64()) {
                                         let mut pending = pending_clone.lock().await;
                                         if let Some(tx) = pending.remove(&id) {
-                                            let result = parsed.get("result").cloned()
+                                            let result = parsed
+                                                .get("result")
+                                                .cloned()
                                                 .or_else(|| parsed.get("error").cloned())
                                                 .unwrap_or(Value::Null);
                                             let _ = tx.send(result);
@@ -1199,15 +1204,10 @@ impl McpSseClient {
             .send()
             .await?
             .error_for_status()
-            .map_err(|e| {
-                crate::error::Error::Agent(format!("MCP SSE POST failed: {}", e))
-            })?;
+            .map_err(|e| crate::error::Error::Agent(format!("MCP SSE POST failed: {}", e)))?;
 
         // Wait for the response via the SSE stream (with 60s timeout)
-        match tokio::time::timeout(
-            std::time::Duration::from_secs(60),
-            rx,
-        ).await {
+        match tokio::time::timeout(std::time::Duration::from_secs(60), rx).await {
             Ok(Ok(result)) => Ok(result),
             Ok(Err(_)) => Err(crate::error::Error::Agent(
                 "MCP SSE: response channel closed".to_string(),
@@ -1263,7 +1263,6 @@ pub enum McpTransport {
     Stdio(McpStdioClient),
     /// SSE-based MCP client (Server-Sent Events, legacy)
     Sse(McpSseClient),
-
 }
 
 impl McpTransport {
@@ -1273,7 +1272,6 @@ impl McpTransport {
             McpTransport::Http(c) => c.is_connected().await,
             McpTransport::Stdio(c) => c.is_connected().await,
             McpTransport::Sse(c) => c.is_connected().await,
-
         }
     }
 
@@ -1283,7 +1281,6 @@ impl McpTransport {
             McpTransport::Http(c) => c.get_tools().await,
             McpTransport::Stdio(c) => c.get_tools().await,
             McpTransport::Sse(c) => c.get_tools().await,
-
         }
     }
 
@@ -1293,7 +1290,6 @@ impl McpTransport {
             McpTransport::Http(c) => c.disconnect().await,
             McpTransport::Stdio(c) => c.disconnect().await,
             McpTransport::Sse(c) => c.disconnect().await,
-
         }
     }
 
@@ -1303,7 +1299,6 @@ impl McpTransport {
             McpTransport::Http(c) => c.call_tool(name, arguments).await,
             McpTransport::Stdio(c) => c.call_tool(name, arguments).await,
             McpTransport::Sse(c) => c.call_tool(name, arguments).await,
-
         }
     }
 }
@@ -1339,8 +1334,6 @@ impl McpTool {
             definition: Arc::new(definition),
         }
     }
-
-
 
     /// Get the tool name
     pub fn name(&self) -> &str {

@@ -511,7 +511,9 @@ mod tests {
     async fn test_skill_view_execute_missing_name() {
         let (_dir, skills_dir) = setup_test_env();
         let tool = SkillViewTool::new(skills_dir);
-        let result = tool.execute(serde_json::json!({}), ToolContext::default()).await;
+        let result = tool
+            .execute(serde_json::json!({}), ToolContext::default())
+            .await;
         assert!(!result.success);
         assert!(result
             .error
@@ -527,5 +529,3 @@ mod tests {
         assert_eq!(schema.name, "skills_list");
     }
 }
-
-

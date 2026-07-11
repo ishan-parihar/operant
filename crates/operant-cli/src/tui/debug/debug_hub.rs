@@ -3,8 +3,8 @@
 //! Holds the event bus plus aggregate debug counters. Published to from the
 //! run loop and event handlers; read from the F12 debug overlay.
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::Instant;
 
 use parking_lot::Mutex;
@@ -72,11 +72,7 @@ impl TuiDebugHub {
     /// Called from the run loop after each `terminal.draw`. Records frame
     /// count, render time, and publishes a FrameRendered event.
     pub fn record_frame(&self, render_ms: f64) {
-        let frame = self
-            .inner
-            .frame_count
-            .fetch_add(1, Ordering::Relaxed)
-            + 1;
+        let frame = self.inner.frame_count.fetch_add(1, Ordering::Relaxed) + 1;
         self.inner
             .last_render_ms
             .store(render_ms as u64, Ordering::Relaxed);
@@ -118,13 +114,8 @@ impl TuiDebugHub {
     // ── Overlay toggle ───────────────────────────────────────────────
 
     pub fn toggle_overlay(&self) {
-        let was = self
-            .inner
-            .overlay_visible
-            .load(Ordering::Relaxed);
-        self.inner
-            .overlay_visible
-            .store(!was, Ordering::Relaxed);
+        let was = self.inner.overlay_visible.load(Ordering::Relaxed);
+        self.inner.overlay_visible.store(!was, Ordering::Relaxed);
     }
 
     pub fn overlay_visible(&self) -> bool {

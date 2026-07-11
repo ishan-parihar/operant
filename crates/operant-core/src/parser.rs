@@ -420,12 +420,14 @@ impl ToolCallParser {
         use std::sync::OnceLock;
         static NAME_RE: OnceLock<Option<Regex>> = OnceLock::new();
         static ARGS_RE: OnceLock<Option<Regex>> = OnceLock::new();
-        let name_re = NAME_RE.get_or_init(|| {
-            Regex::new(r#""(?:name|function)":\s*"([^"]+)""#).ok()
-        }).as_ref()?;
-        let args_re = ARGS_RE.get_or_init(|| {
-            Regex::new(r#""(?:arguments|parameters)":\s*"?(\{[^}]*\}|"[^"]*")"?"#).ok()
-        }).as_ref()?;
+        let name_re = NAME_RE
+            .get_or_init(|| Regex::new(r#""(?:name|function)":\s*"([^"]+)""#).ok())
+            .as_ref()?;
+        let args_re = ARGS_RE
+            .get_or_init(|| {
+                Regex::new(r#""(?:arguments|parameters)":\s*"?(\{[^}]*\}|"[^"]*")"?"#).ok()
+            })
+            .as_ref()?;
 
         let name = name_re
             .captures(content)

@@ -20,7 +20,8 @@ struct FileSnapshot {
     permissions: String,
 }
 
-static FILE_STATES: LazyLock<Mutex<HashMap<String, FileSnapshot>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+static FILE_STATES: LazyLock<Mutex<HashMap<String, FileSnapshot>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
 
 pub struct FileStateTool;
 

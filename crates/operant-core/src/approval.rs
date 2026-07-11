@@ -30,7 +30,6 @@
 //! assert!(matches!(verdict, ApprovalVerdict::Blocked { .. }));
 //! ```
 
-
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -252,7 +251,8 @@ const HARDLINE_BLOCKLIST: &[HardlineEntry] = &[
 // Dangerous Pattern Detection (Layer 2)
 // ============================================================================
 
-static FILE_OPS_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| vec![
+static FILE_OPS_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
+    vec![
         Regex::new(r"rm\s+-[rR]f\s+").unwrap(),
         Regex::new(r"rm\s+-f\s+/").unwrap(),
         Regex::new(r">\s*/dev/sda").unwrap(),
@@ -260,17 +260,21 @@ static FILE_OPS_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| vec![
         Regex::new(r"mv\s+/etc/").unwrap(),
         Regex::new(r"cp\s+/etc/").unwrap(),
         Regex::new(r"ln\s+-sf\s+/").unwrap(),
-    ]);
+    ]
+});
 
-static NETWORK_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| vec![
+static NETWORK_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
+    vec![
         Regex::new(r"(?:^|;|&&|\||`)\s*(masscan|zmap)\s+").unwrap(),
         Regex::new(r"dig\s+.*axfr").unwrap(),
         Regex::new(r"host\s+-[lt]").unwrap(),
         Regex::new(r"dnsrecon|dnsenum|fierce").unwrap(),
         Regex::new(r"subfinder|amass|sublist3r").unwrap(),
-    ]);
+    ]
+});
 
-static EXECUTION_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| vec![
+static EXECUTION_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
+    vec![
         Regex::new(r"\beval\b").unwrap(),
         Regex::new(r"\bexec\b").unwrap(),
         Regex::new(r"`[^`]+`").unwrap(),
@@ -279,89 +283,111 @@ static EXECUTION_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| vec![
         Regex::new(r#"perl\s+-e\s+["']"#).unwrap(),
         Regex::new(r#"ruby\s+-e\s+["']"#).unwrap(),
         Regex::new(r#"node\s+-e\s+["']"#).unwrap(),
-    ]);
+    ]
+});
 
-static PERMISSION_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| vec![
+static PERMISSION_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
+    vec![
         Regex::new(r"chmod\s+[0-7]{3,4}\s+/").unwrap(),
         Regex::new(r"chown\s+.*root").unwrap(),
         Regex::new(r"chmod\s+u[+-]s").unwrap(),
         Regex::new(r"chmod\s+g[+-]s").unwrap(),
         Regex::new(r"setcap\s+").unwrap(),
-    ]);
+    ]
+});
 
-static PROCESS_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| vec![
+static PROCESS_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
+    vec![
         Regex::new(r"kill\s+-9\s+").unwrap(),
         Regex::new(r"killall\s+").unwrap(),
         Regex::new(r"pkill\s+-[f9]").unwrap(),
         Regex::new(r"systemctl\s+(restart|stop|kill)\s+").unwrap(),
-    ]);
+    ]
+});
 
-static DATA_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| vec![
+static DATA_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
+    vec![
         Regex::new(r"pg_dump|mysqldump|sqlite3\s+.*\.dump").unwrap(),
         Regex::new(r"cp\s+-[rR]?\s+/\w+\s+").unwrap(),
         Regex::new(r"tar\s+-[czf]+\s+[./]").unwrap(),
         Regex::new(r"gzip|bzip2|xz\s+-[0-9]\s+/").unwrap(),
-    ]);
+    ]
+});
 
-static CRYPTO_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| vec![
+static CRYPTO_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
+    vec![
         Regex::new(r"gpg\s+-(?:e|d|s|--encrypt|--decrypt|--sign)\s+").unwrap(),
         Regex::new(r"openssl\s+(enc|rsautl|pkeyutl)\s+").unwrap(),
         Regex::new(r"age\s+-(?:e|d)\s+").unwrap(),
-    ]);
+    ]
+});
 
-static ENV_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| vec![
+static ENV_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
+    vec![
         Regex::new(r"export\s+(?:PATH|LD_PRELOAD|LD_LIBRARY_PATH)=").unwrap(),
         Regex::new(r"unset\s+(?:PATH|LD_PRELOAD|LD_LIBRARY_PATH)").unwrap(),
         Regex::new(r"alias\s+").unwrap(),
-    ]);
+    ]
+});
 
-static SSH_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| vec![
+static SSH_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
+    vec![
         Regex::new(r"authorized_keys").unwrap(),
         Regex::new(r"ssh-keygen").unwrap(),
         Regex::new(r"ssh-copy-id").unwrap(),
         Regex::new(r"sshd_config").unwrap(),
         Regex::new(r"~/.ssh/").unwrap(),
-    ]);
+    ]
+});
 
-static CONFIG_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| vec![
+static CONFIG_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
+    vec![
         Regex::new(r"/etc/hosts").unwrap(),
         Regex::new(r"/etc/resolv\.conf").unwrap(),
         Regex::new(r"/etc/network/").unwrap(),
         Regex::new(r"/etc/sysctl\.(conf|d/)").unwrap(),
         Regex::new(r"iptables\s+").unwrap(),
-    ]);
+    ]
+});
 
-static PACKAGE_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| vec![
+static PACKAGE_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
+    vec![
         Regex::new(r"apt-get\s+(install|remove|purge)").unwrap(),
         Regex::new(r"dpkg\s+-[iPrR]").unwrap(),
         Regex::new(r"yum\s+(install|remove|erase)").unwrap(),
         Regex::new(r"pacman\s+-S").unwrap(),
         Regex::new(r"npm\s+(install|uninstall|publish)\s+-g").unwrap(),
         Regex::new(r"pip\s+(install|uninstall)\s+").unwrap(),
-    ]);
+    ]
+});
 
-static DOCKER_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| vec![
+static DOCKER_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
+    vec![
         Regex::new(r"docker\s+exec\s+-[it].*--privileged").unwrap(),
         Regex::new(r"docker\s+run\s+.*--privileged").unwrap(),
         Regex::new(r"docker\s+run\s+.*-v\s+/").unwrap(),
         Regex::new(r"docker\s+run\s+.*--pid=host").unwrap(),
         Regex::new(r"docker\s+run\s+.*--net=host").unwrap(),
-    ]);
+    ]
+});
 
-static ALL_DANGEROUS_PATTERNS: LazyLock<Vec<(&'static str, &'static LazyLock<Vec<Regex>>)>> = LazyLock::new(|| vec![
-        ("FILE_OPERATIONS", &FILE_OPS_PATTERNS),
-        ("NETWORK", &NETWORK_PATTERNS),
-        ("EXECUTION", &EXECUTION_PATTERNS),
-        ("PERMISSION", &PERMISSION_PATTERNS),
-        ("PROCESS", &PROCESS_PATTERNS),
-        ("DATA", &DATA_PATTERNS),
-        ("CRYPTO", &CRYPTO_PATTERNS),
-        ("ENV", &ENV_PATTERNS),
-        ("SSH", &SSH_PATTERNS),
-        ("CONFIG", &CONFIG_PATTERNS),
-        ("PACKAGE", &PACKAGE_PATTERNS),
-        ("DOCKER", &DOCKER_PATTERNS),
-    ]);
+static ALL_DANGEROUS_PATTERNS: LazyLock<Vec<(&'static str, &'static LazyLock<Vec<Regex>>)>> =
+    LazyLock::new(|| {
+        vec![
+            ("FILE_OPERATIONS", &FILE_OPS_PATTERNS),
+            ("NETWORK", &NETWORK_PATTERNS),
+            ("EXECUTION", &EXECUTION_PATTERNS),
+            ("PERMISSION", &PERMISSION_PATTERNS),
+            ("PROCESS", &PROCESS_PATTERNS),
+            ("DATA", &DATA_PATTERNS),
+            ("CRYPTO", &CRYPTO_PATTERNS),
+            ("ENV", &ENV_PATTERNS),
+            ("SSH", &SSH_PATTERNS),
+            ("CONFIG", &CONFIG_PATTERNS),
+            ("PACKAGE", &PACKAGE_PATTERNS),
+            ("DOCKER", &DOCKER_PATTERNS),
+        ]
+    });
 
 // ============================================================================
 // ApprovalGuard
@@ -402,12 +428,10 @@ impl ApprovalGuard {
     pub fn check(&self, command: &str, _context: &ApprovalContext) -> ApprovalVerdict {
         match self.mode {
             ApprovalMode::Off => ApprovalVerdict::Allowed,
-            ApprovalMode::Manual => {
-                ApprovalVerdict::RequiresApproval {
-                    risk_level: RiskLevel::High,
-                    reason: "Manual approval mode requires approval for all operations".into(),
-                }
-            }
+            ApprovalMode::Manual => ApprovalVerdict::RequiresApproval {
+                risk_level: RiskLevel::High,
+                reason: "Manual approval mode requires approval for all operations".into(),
+            },
             ApprovalMode::Smart => {
                 // Layer 1: Hardline blocklist check
                 if let Some(category) = check_hardline_blocklist(command) {
@@ -637,7 +661,6 @@ fn extract_command_from_args(tool_name: &str, args: &Value) -> String {
 // ============================================================================
 // Interactive Approval Prompt
 // ============================================================================
-
 
 // ============================================================================
 // Helper Functions

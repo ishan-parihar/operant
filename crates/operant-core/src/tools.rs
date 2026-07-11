@@ -441,8 +441,6 @@ impl ToolRegistry {
             }
         }
     }
-
-
 }
 
 #[cfg(test)]

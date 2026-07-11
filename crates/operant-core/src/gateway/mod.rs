@@ -19,10 +19,8 @@ use uuid::Uuid;
 
 use crate::config::runtime_config;
 use crate::error::{Error, Result};
-use crate::gateway_markdown::{markdown_to_telegram_html, markdown_to_slack_mrkdwn};
+use crate::gateway_markdown::{markdown_to_slack_mrkdwn, markdown_to_telegram_html};
 use crate::gateway_session::{PersistentSessionStore, SessionSource};
-
-
 
 /// Configuration for the gateway
 #[derive(Debug, Clone)]
@@ -874,7 +872,6 @@ impl Gateway {
     pub fn get_channel_directory(&self) -> &ChannelDirectory {
         &self.channel_directory
     }
-
 }
 
 /// Telegram adapter
@@ -1677,9 +1674,10 @@ impl PlatformAdapter for DiscordAdapter {
         // previously this panicked if `token` was None despite `is_enabled`
         // returning true (race during config reload). (iter-125 — closes
         // the ponytail-audit security bug "token unwrap panics".)
-        let token = self.token.as_ref().ok_or_else(|| {
-            Error::Config("Discord token not configured".to_string())
-        })?;
+        let token = self
+            .token
+            .as_ref()
+            .ok_or_else(|| Error::Config("Discord token not configured".to_string()))?;
         let client = shared_http_client().clone();
         let response = client
             .get(format!("{}/users/@me", self.api_url()))
@@ -1706,9 +1704,10 @@ impl PlatformAdapter for DiscordAdapter {
     /// POST /channels/{id}/typing (5s TTL). (Bug #13 from iter-98 audit —
     /// previously Discord used the default no-op, so users saw no indicator.)
     fn send_typing(&self, channel_id: &str) -> Result<()> {
-        let token = self.token.as_ref().ok_or_else(|| {
-            Error::Config("Discord token not configured".to_string())
-        })?;
+        let token = self
+            .token
+            .as_ref()
+            .ok_or_else(|| Error::Config("Discord token not configured".to_string()))?;
         let url = format!("{}/channels/{}/typing", self.api_url(), channel_id);
         // Fire and forget — we don't await the response since send_typing
         // is synchronous. The next typing call in 4s will refresh it.
@@ -1729,9 +1728,10 @@ impl PlatformAdapter for DiscordAdapter {
         let client = shared_http_client().clone();
         // Propagate missing token via `?` instead of `.unwrap()` (iter-125 —
         // closes the ponytail-audit "token unwrap panics" security bug).
-        let token = self.token.as_ref().ok_or_else(|| {
-            Error::Config("Discord token not configured".to_string())
-        })?;
+        let token = self
+            .token
+            .as_ref()
+            .ok_or_else(|| Error::Config("Discord token not configured".to_string()))?;
 
         // Discord's message limit is 2000 chars. Messages exceeding this
         // are silently rejected by the API (400 Bad Request) — the user
@@ -1832,9 +1832,10 @@ impl PlatformAdapter for DiscordAdapter {
         //   receive OPCODE 0 READY → listen for OPCODE 0 MESSAGE_CREATE
         // - Heartbeat: send OPCODE 1 every `heartbeat_interval` ms
         // - Reconnect: on disconnect, sleep with exponential backoff
-        let token = self.token.as_ref().ok_or_else(|| {
-            Error::Config("Discord token not configured".to_string())
-        })?;
+        let token = self
+            .token
+            .as_ref()
+            .ok_or_else(|| Error::Config("Discord token not configured".to_string()))?;
         let token = token.clone();
         let api_url = self.api_url();
 
@@ -1847,22 +1848,14 @@ impl PlatformAdapter for DiscordAdapter {
 
             loop {
                 info!(url = %gateway_url, "Discord gateway: connecting");
-                match connect_discord_gateway(
-                    gateway_url,
-                    &token,
-                    &api_url,
-                    &message_tx,
-                )
-                .await
-                {
+                match connect_discord_gateway(gateway_url, &token, &api_url, &message_tx).await {
                     Ok(()) => {
                         info!("Discord gateway: connection closed cleanly");
                         reconnect_delay = std::time::Duration::from_secs(1);
                     }
                     Err(e) => {
                         warn!(error = %e, "Discord gateway: connection error");
-                        reconnect_delay = (reconnect_delay * 2)
-                            .min(max_reconnect_delay);
+                        reconnect_delay = (reconnect_delay * 2).min(max_reconnect_delay);
                     }
                 }
 
@@ -1907,7 +1900,10 @@ async fn connect_discord_gateway(
     // Connect with the Discord-recommended User-Agent.
     let request = tokio_tungstenite::tungstenite::http::Request::builder()
         .uri(url)
-        .header("User-Agent", "Operant-DiscordBot (https://operant.dev, 0.1.3)")
+        .header(
+            "User-Agent",
+            "Operant-DiscordBot (https://operant.dev, 0.1.3)",
+        )
         .header("Host", "gateway.discord.gg")
         .header("Connection", "Upgrade")
         .header("Upgrade", "websocket")
@@ -1927,13 +1923,19 @@ async fn connect_discord_gateway(
     let (mut write, mut read) = ws_stream.split();
 
     // Step 1: receive HELLO (opcode 10) with heartbeat_interval.
-    let hello = read.next().await
+    let hello = read
+        .next()
+        .await
         .ok_or_else(|| Error::Agent("Discord WS closed before HELLO".to_string()))?
         .map_err(|e| Error::Agent(format!("Discord WS HELLO read failed: {e}")))?;
     let hello_text = match hello {
         Message::Text(t) => t,
         Message::Binary(b) => String::from_utf8_lossy(&b).to_string(),
-        other => return Err(Error::Agent(format!("Discord WS HELLO unexpected frame: {other:?}"))),
+        other => {
+            return Err(Error::Agent(format!(
+                "Discord WS HELLO unexpected frame: {other:?}"
+            )))
+        }
     };
     let hello_json: serde_json::Value = serde_json::from_str(&hello_text)
         .map_err(|e| Error::Agent(format!("Discord WS HELLO parse failed: {e}")))?;
@@ -1961,7 +1963,9 @@ async fn connect_discord_gateway(
             }
         }
     });
-    write.send(Message::Text(identify.to_string())).await
+    write
+        .send(Message::Text(identify.to_string()))
+        .await
         .map_err(|e| Error::Agent(format!("Discord WS IDENTIFY send failed: {e}")))?;
 
     // Step 3: spawn a heartbeat task.
@@ -2090,11 +2094,11 @@ fn parse_discord_message(json: &serde_json::Value, _api_url: &str) -> Option<Inc
     let author = d.get("author")?;
     let is_bot = author.get("bot").and_then(|v| v.as_bool()).unwrap_or(false);
     if is_bot {
-        return None;  // Ignore bot messages (prevents loops).
+        return None; // Ignore bot messages (prevents loops).
     }
     let content = d.get("content")?.as_str()?.to_string();
     if content.is_empty() {
-        return None;  // Embed-only message — skip.
+        return None; // Embed-only message — skip.
     }
     let channel_id = d.get("channel_id")?.as_str()?.to_string();
     let user_id = author.get("id")?.as_str()?.to_string();
@@ -2168,9 +2172,10 @@ impl PlatformAdapter for SlackAdapter {
         let client = shared_http_client().clone();
         // Propagate missing token via `?` instead of `.unwrap()` (iter-125 —
         // closes the ponytail-audit "token unwrap panics" security bug).
-        let token = self.token.as_ref().ok_or_else(|| {
-            Error::Config("Slack token not configured".to_string())
-        })?;
+        let token = self
+            .token
+            .as_ref()
+            .ok_or_else(|| Error::Config("Slack token not configured".to_string()))?;
 
         // Slack uses mrkdwn format, NOT standard Markdown. Raw **bold**
         // renders as literal asterisks. Convert before sending.
@@ -2761,8 +2766,12 @@ impl WhatsAppAdapter {
 
 #[async_trait]
 impl PlatformAdapter for WhatsAppAdapter {
-    fn name(&self) -> &str { "whatsapp" }
-    fn is_enabled(&self) -> bool { self.enabled }
+    fn name(&self) -> &str {
+        "whatsapp"
+    }
+    fn is_enabled(&self) -> bool {
+        self.enabled
+    }
 
     async fn start(&self) -> Result<()> {
         info!("WhatsApp adapter started");
@@ -2775,9 +2784,10 @@ impl PlatformAdapter for WhatsAppAdapter {
     }
 
     async fn send_message(&self, message: OutgoingMessage) -> Result<()> {
-        let token = self.token.as_ref().ok_or_else(|| {
-            Error::Config("WhatsApp token not configured".to_string())
-        })?;
+        let token = self
+            .token
+            .as_ref()
+            .ok_or_else(|| Error::Config("WhatsApp token not configured".to_string()))?;
         let phone = message.channel_id.clone();
 
         let client = shared_http_client().clone();
@@ -2820,7 +2830,10 @@ impl PlatformAdapter for WhatsAppAdapter {
         // Parse WhatsApp webhook payload
         if let Some(entry) = update["entry"].as_array().and_then(|e| e.first()) {
             if let Some(change) = entry["changes"].as_array().and_then(|c| c.first()) {
-                if let Some(msg) = change["value"]["messages"].as_array().and_then(|m| m.first()) {
+                if let Some(msg) = change["value"]["messages"]
+                    .as_array()
+                    .and_then(|m| m.first())
+                {
                     let from = msg["from"].as_str().unwrap_or("");
                     let text = msg["text"]["body"].as_str().unwrap_or("");
                     let name = change["value"]["contacts"][0]["profile"]["name"]
@@ -2834,9 +2847,9 @@ impl PlatformAdapter for WhatsAppAdapter {
                         username: name.to_string(),
                         content: text.to_string(),
                         is_group_chat: false,
-            timestamp: chrono::Utc::now().timestamp(),
-            thread_id: None,
-                        
+                        timestamp: chrono::Utc::now().timestamp(),
+                        thread_id: None,
+
                         raw: update,
                     }));
                 }
@@ -2910,8 +2923,12 @@ impl EmailAdapter {
 
 #[async_trait]
 impl PlatformAdapter for EmailAdapter {
-    fn name(&self) -> &str { "email" }
-    fn is_enabled(&self) -> bool { self.enabled }
+    fn name(&self) -> &str {
+        "email"
+    }
+    fn is_enabled(&self) -> bool {
+        self.enabled
+    }
 
     async fn start(&self) -> Result<()> {
         info!("Email adapter started");
@@ -2925,9 +2942,10 @@ impl PlatformAdapter for EmailAdapter {
 
     async fn send_message(&self, message: OutgoingMessage) -> Result<()> {
         // Email sending uses SMTP which is blocking — spawn_blocking.
-        let host = self.smtp_host.clone().ok_or_else(|| {
-            Error::Config("SMTP host not configured".to_string())
-        })?;
+        let host = self
+            .smtp_host
+            .clone()
+            .ok_or_else(|| Error::Config("SMTP host not configured".to_string()))?;
         let user = self.smtp_user.clone().unwrap_or_default();
         let pass = self.smtp_pass.clone().unwrap_or_default();
         let to = message.channel_id.clone();
@@ -3077,9 +3095,15 @@ impl PlatformAdapter for EmailAdapter {
 
     async fn handle_update(&self, update: serde_json::Value) -> Result<Option<IncomingMessage>> {
         // Parse email webhook payload (format depends on the email forwarding service)
-        let from = update["from"].as_str().or_else(|| update["sender"].as_str()).unwrap_or("");
+        let from = update["from"]
+            .as_str()
+            .or_else(|| update["sender"].as_str())
+            .unwrap_or("");
         let subject = update["subject"].as_str().unwrap_or("(no subject)");
-        let body = update["body"].as_str().or_else(|| update["text"].as_str()).unwrap_or("");
+        let body = update["body"]
+            .as_str()
+            .or_else(|| update["text"].as_str())
+            .unwrap_or("");
 
         if from.is_empty() && body.is_empty() {
             return Ok(None);
@@ -3094,7 +3118,7 @@ impl PlatformAdapter for EmailAdapter {
             is_group_chat: false,
             timestamp: chrono::Utc::now().timestamp(),
             thread_id: None,
-            
+
             raw: update,
         }))
     }
@@ -3153,8 +3177,12 @@ impl SmsAdapter {
 
 #[async_trait]
 impl PlatformAdapter for SmsAdapter {
-    fn name(&self) -> &str { "sms" }
-    fn is_enabled(&self) -> bool { self.enabled }
+    fn name(&self) -> &str {
+        "sms"
+    }
+    fn is_enabled(&self) -> bool {
+        self.enabled
+    }
 
     async fn start(&self) -> Result<()> {
         info!("SMS adapter started");
@@ -3167,17 +3195,23 @@ impl PlatformAdapter for SmsAdapter {
     }
 
     async fn send_message(&self, message: OutgoingMessage) -> Result<()> {
-        let sid = self.account_sid.as_ref().ok_or_else(|| {
-            Error::Config("TWILIO_ACCOUNT_SID not set".to_string())
-        })?;
-        let token = self.auth_token.as_ref().ok_or_else(|| {
-            Error::Config("TWILIO_AUTH_TOKEN not set".to_string())
-        })?;
-        let from = self.from_number.as_ref().ok_or_else(|| {
-            Error::Config("TWILIO_FROM_NUMBER not set".to_string())
-        })?;
+        let sid = self
+            .account_sid
+            .as_ref()
+            .ok_or_else(|| Error::Config("TWILIO_ACCOUNT_SID not set".to_string()))?;
+        let token = self
+            .auth_token
+            .as_ref()
+            .ok_or_else(|| Error::Config("TWILIO_AUTH_TOKEN not set".to_string()))?;
+        let from = self
+            .from_number
+            .as_ref()
+            .ok_or_else(|| Error::Config("TWILIO_FROM_NUMBER not set".to_string()))?;
 
-        let url = format!("https://api.twilio.com/2010-04-01/Accounts/{}/Messages.json", sid);
+        let url = format!(
+            "https://api.twilio.com/2010-04-01/Accounts/{}/Messages.json",
+            sid
+        );
         let client = shared_http_client().clone();
 
         let resp = client
@@ -3193,10 +3227,7 @@ impl PlatformAdapter for SmsAdapter {
             .map_err(|e| Error::Network(e))?;
 
         if !resp.status().is_success() {
-            return Err(Error::Agent(format!(
-                "Twilio API error: {}",
-                resp.status()
-            )));
+            return Err(Error::Agent(format!("Twilio API error: {}", resp.status())));
         }
 
         Ok(())
@@ -3204,8 +3235,14 @@ impl PlatformAdapter for SmsAdapter {
 
     async fn handle_update(&self, update: serde_json::Value) -> Result<Option<IncomingMessage>> {
         // Parse Twilio webhook payload
-        let from = update["From"].as_str().or_else(|| update["from"].as_str()).unwrap_or("");
-        let body = update["Body"].as_str().or_else(|| update["body"].as_str()).unwrap_or("");
+        let from = update["From"]
+            .as_str()
+            .or_else(|| update["from"].as_str())
+            .unwrap_or("");
+        let body = update["Body"]
+            .as_str()
+            .or_else(|| update["body"].as_str())
+            .unwrap_or("");
 
         if from.is_empty() && body.is_empty() {
             return Ok(None);
@@ -3220,7 +3257,7 @@ impl PlatformAdapter for SmsAdapter {
             is_group_chat: false,
             timestamp: chrono::Utc::now().timestamp(),
             thread_id: None,
-            
+
             raw: update,
         }))
     }
