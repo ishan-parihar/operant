@@ -168,6 +168,13 @@ pub enum TuiDebugSubcommand {
         /// full rendered screen text. Fails the run on mismatch.
         #[arg(long)]
         assert_screen: Option<String>,
+
+        /// Optional path to a JSON file of mock agent events to inject
+        /// instead of spawning a real network agent. Deterministic, offline.
+        /// Format: a JSON array of tagged objects, e.g.
+        /// [{"type":"content","text":"hi"},{"type":"done","text":"hi"}].
+        #[arg(long)]
+        agent_script: Option<std::path::PathBuf>,
     },
 }
 
@@ -205,7 +212,19 @@ pub async fn handle_tui_debug_command(config: &AppConfig, cmd: TuiDebugSubcomman
             assert,
             dump_screen,
             assert_screen,
-        } => debug_simulate(config, keys, output, assert, dump_screen, assert_screen).await,
+            agent_script,
+        } => {
+            debug_simulate(
+                config,
+                keys,
+                output,
+                assert,
+                dump_screen,
+                assert_screen,
+                agent_script,
+            )
+            .await
+        }
     }
 }
 
@@ -1131,6 +1150,104 @@ fn evaluate_assertions(app: &crate::tui::app::App, assertions_str: &str) -> Resu
     Ok(())
 }
 
+/// A serde-friendly mock agent event for the headless simulator. Maps to a
+/// subset of `operant_core::agent::AgentEvent` — enough to drive the TUI's
+/// streaming/tool/done/error rendering deterministically offline, without
+/// adding serde derives to the core event type.
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum MockAgentEvent {
+    Thinking {
+        content: String,
+    },
+    Reasoning {
+        text: String,
+    },
+    Content {
+        text: String,
+    },
+    ToolStart {
+        id: String,
+        name: String,
+        #[serde(default)]
+        arguments: String,
+    },
+    ToolComplete {
+        id: String,
+        #[serde(default)]
+        name: String,
+        #[serde(default)]
+        output: String,
+    },
+    ToolError {
+        id: String,
+        #[serde(default)]
+        name: String,
+        error: String,
+    },
+    Usage {
+        input_tokens: u32,
+        output_tokens: u32,
+    },
+    Done {
+        #[serde(default)]
+        text: String,
+        #[serde(default)]
+        reasoning: Option<String>,
+    },
+    Error {
+        error: String,
+    },
+}
+
+impl MockAgentEvent {
+    fn into_agent_event(self) -> operant_core::agent::AgentEvent {
+        use operant_core::agent::AgentEvent as AE;
+        match self {
+            MockAgentEvent::Thinking { content } => AE::Thinking { content },
+            MockAgentEvent::Reasoning { text } => AE::Reasoning { text },
+            MockAgentEvent::Content { text } => AE::Content { text },
+            MockAgentEvent::ToolStart {
+                id,
+                name,
+                arguments,
+            } => AE::ToolStart {
+                tool_call_id: id,
+                name,
+                arguments,
+            },
+            MockAgentEvent::ToolComplete { id, name, output } => AE::ToolComplete {
+                result: operant_core::tools::ToolResult {
+                    tool_call_id: id,
+                    name,
+                    success: true,
+                    content: output,
+                    error: None,
+                },
+            },
+            MockAgentEvent::ToolError { id, name, error } => AE::ToolError {
+                tool_call_id: id,
+                name,
+                error,
+            },
+            MockAgentEvent::Usage {
+                input_tokens,
+                output_tokens,
+            } => AE::Usage {
+                input_tokens,
+                output_tokens,
+                total_tokens: input_tokens + output_tokens,
+            },
+            MockAgentEvent::Done { text, reasoning } => {
+                let mut msg = operant_core::client::Message::assistant(text);
+                msg.reasoning = reasoning;
+                AE::Done { message: msg }
+            }
+            MockAgentEvent::Error { error } => AE::Error { error },
+        }
+    }
+}
+
 async fn debug_simulate(
     config: &AppConfig,
     keys: String,
@@ -1138,6 +1255,7 @@ async fn debug_simulate(
     assert_str: Option<String>,
     dump_screen: Option<std::path::PathBuf>,
     assert_screen: Option<String>,
+    agent_script: Option<std::path::PathBuf>,
 ) -> Result<()> {
     use crate::tui::adapter_types::{LaunchMode, TuiApp};
     use crate::tui::debug::TuiEvent;
@@ -1146,8 +1264,22 @@ async fn debug_simulate(
     let parsed_keys = parse_key_sequence(&keys);
     println!("Parsed {} key events.", parsed_keys.len());
 
+    let script = if let Some(ref path) = agent_script {
+        let raw = std::fs::read_to_string(path)?;
+        let mock: Vec<MockAgentEvent> = serde_json::from_str(&raw)
+            .map_err(|e| anyhow::anyhow!("Failed to parse agent script {:?}: {}", path, e))?;
+        println!("Injecting {} mock agent events.", mock.len());
+        Some(
+            mock.into_iter()
+                .map(MockAgentEvent::into_agent_event)
+                .collect(),
+        )
+    } else {
+        None
+    };
+
     let tui_app = TuiApp::enter(config.clone(), None, LaunchMode::Landing, true).await?;
-    let (events, app, screen) = tui_app.run_headless(parsed_keys).await?;
+    let (events, app, screen) = tui_app.run_headless(parsed_keys, script).await?;
 
     println!("Simulation completed. Analyzing events...");
     let mut has_errors = false;

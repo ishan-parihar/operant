@@ -2566,6 +2566,7 @@ impl TuiApp {
     pub async fn run_headless(
         mut self,
         keys: Vec<crossterm::event::KeyEvent>,
+        agent_script: Option<Vec<operant_core::agent::AgentEvent>>,
     ) -> anyhow::Result<(
         Vec<crate::tui::debug::TuiEvent>,
         crate::tui::app::App,
@@ -2583,21 +2584,40 @@ impl TuiApp {
         let mcp_manager = operant_core::mcp::McpManager::new();
         let skills_dir = config.skills.root_dir.clone();
 
+        let is_mock = agent_script.is_some();
         let agent: Option<std::sync::Arc<operant_core::agent::OperantAgent>> =
-            match crate::create_runtime_agent(
-                &config,
-                &config.agent,
-                None,
-                agent_tx,
-                &mcp_manager,
-                &skills_dir,
-            )
-            .await
-            {
-                Ok(agent) => Some(std::sync::Arc::new(agent.with_permissions(permission_tx))),
-                Err(e) => {
-                    self.app.status_message = Some(format!("Agent init failed: {}", e));
-                    None
+            if let Some(script) = agent_script {
+                // Mock path: inject scripted AgentEvents through the real
+                // agent_event_rx channel instead of spawning a network agent.
+                // Events are buffered; is_streaming keeps the run loop alive to
+                // process them; a pre-resolved run_complete oneshot guarantees
+                // the loop terminates (is_streaming flips false) even if the
+                // script omits a Done event. No network calls on this path.
+                for ev in script {
+                    let _ = agent_tx.try_send(ev);
+                }
+                drop(agent_tx);
+                self.app.is_streaming = true;
+                let (done_tx, done_rx) = tokio::sync::oneshot::channel();
+                let _ = done_tx.send(Ok(()));
+                self.app.run_complete_rx = Some(done_rx);
+                None
+            } else {
+                match crate::create_runtime_agent(
+                    &config,
+                    &config.agent,
+                    None,
+                    agent_tx,
+                    &mcp_manager,
+                    &skills_dir,
+                )
+                .await
+                {
+                    Ok(agent) => Some(std::sync::Arc::new(agent.with_permissions(permission_tx))),
+                    Err(e) => {
+                        self.app.status_message = Some(format!("Agent init failed: {}", e));
+                        None
+                    }
                 }
             };
 
@@ -2613,7 +2633,10 @@ impl TuiApp {
         self.app.user_question_rx = Some(uq_rx);
 
         self.app.refresh_context_window_size();
-        self.app.model_registry.load_models_dev().await;
+        // Skip the network models.dev fetch on the deterministic mock path.
+        if !is_mock {
+            self.app.model_registry.load_models_dev().await;
+        }
 
         if let Some(query) = self.initial_query.take() {
             if let Some(ref agent) = agent {
