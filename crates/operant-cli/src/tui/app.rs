@@ -2932,6 +2932,7 @@ impl App {
             || self.device_auth_dialog.visible
             || self.command_palette.visible
             || self.model_picker.visible
+            || self.effort_picker.visible
             || self.session_browser.visible
             || self.session_branching.visible
             || self.export_dialog.visible
@@ -7939,5 +7940,135 @@ mod tests {
 
         // 7. Assert app wants to exit
         assert!(app.should_exit);
+    }
+
+    // ---- Phase A5: dialog open/close scenario regression pack -------------
+    // Drives simulated keys through the real run loop (with the same slash
+    // interception the interactive/headless loops use), then asserts state
+    // via App::debug_snapshot(). This is the safety net that gates the
+    // dialog-unification refactor (Phase B): every listed overlay must open
+    // via its slash command and close on Esc.
+
+    fn drive_keys<B: ratatui::backend::Backend>(
+        app: &mut App,
+        terminal: &mut ratatui::Terminal<B>,
+    ) {
+        let mut guard = 0;
+        while !app.simulated_keys.is_empty() && !app.should_exit && guard < 5000 {
+            guard += 1;
+            if let Ok(Some(input)) = app.run(terminal) {
+                if crate::input::is_slash_command(&input) {
+                    let (cmd, args) = crate::input::parse_slash_command(&input);
+                    app.handle_tui_command(cmd, args);
+                }
+            }
+        }
+    }
+
+    fn slash_keys(cmd: &str) -> Vec<KeyEvent> {
+        let mut keys = vec![press_key(KeyCode::Char('/'), KeyModifiers::NONE)];
+        for ch in cmd.chars() {
+            keys.push(press_key(KeyCode::Char(ch), KeyModifiers::NONE));
+        }
+        keys.push(press_key(KeyCode::Enter, KeyModifiers::NONE));
+        keys
+    }
+
+    #[test]
+    fn test_dialog_open_close_scenarios() {
+        use ratatui::backend::TestBackend;
+        use ratatui::Terminal;
+
+        // (slash command, snapshot overlay key). Each must open via
+        // `/<cmd><enter>` and close on Esc.
+        let scenarios: &[(&str, &str)] = &[
+            ("help", "help_overlay"),
+            ("settings", "settings_screen"),
+            ("theme", "theme_screen"),
+            ("stats", "stats_dialog"),
+            ("skills", "skills_view"),
+            ("journey", "journey_view"),
+            ("plugins", "plugins_hub"),
+            ("model", "model_picker"),
+            ("effort", "effort_picker"),
+            ("context", "context_viz"),
+            ("agents", "agents_menu"),
+            ("export", "export_dialog"),
+            ("mcp", "mcp_view"),
+        ];
+
+        for (cmd, overlay) in scenarios {
+            let mut app = make_app();
+            app.is_simulating = true;
+            let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+
+            app.simulated_keys = slash_keys(cmd);
+            drive_keys(&mut app, &mut terminal);
+
+            let snap = app.debug_snapshot();
+            assert_eq!(
+                snap["overlays"][overlay],
+                serde_json::Value::Bool(true),
+                "/{cmd} should open overlay '{overlay}'"
+            );
+            assert_eq!(
+                snap["any_modal_open"],
+                serde_json::Value::Bool(true),
+                "/{cmd} should register a modal as open"
+            );
+
+            // Esc must close it.
+            app.simulated_keys = vec![press_key(KeyCode::Esc, KeyModifiers::NONE)];
+            drive_keys(&mut app, &mut terminal);
+            let snap = app.debug_snapshot();
+            assert_eq!(
+                snap["overlays"][overlay],
+                serde_json::Value::Bool(false),
+                "Esc should close overlay '{overlay}' opened by /{cmd}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_streaming_agent_events_commit_message() {
+        use operant_core::agent::AgentEvent;
+
+        let mut app = make_app();
+        app.is_streaming = true;
+        app.handle_agent_event(AgentEvent::Content {
+            text: "Hello ".into(),
+        });
+        app.handle_agent_event(AgentEvent::Content {
+            text: "world".into(),
+        });
+        app.handle_agent_event(AgentEvent::Done {
+            message: operant_core::client::Message::assistant("Hello world"),
+        });
+
+        let snap = app.debug_snapshot();
+        assert!(
+            snap["messages"].as_u64().unwrap_or(0) >= 1,
+            "Done should commit at least one assistant message"
+        );
+    }
+
+    #[test]
+    fn test_command_palette_opens_via_ctrl_k() {
+        use ratatui::backend::TestBackend;
+        use ratatui::Terminal;
+
+        let mut app = make_app();
+        app.is_simulating = true;
+        let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+
+        app.simulated_keys = vec![press_key(KeyCode::Char('k'), KeyModifiers::CONTROL)];
+        drive_keys(&mut app, &mut terminal);
+
+        let snap = app.debug_snapshot();
+        assert_eq!(
+            snap["overlays"]["command_palette"],
+            serde_json::Value::Bool(true),
+            "Ctrl+K should open the command palette"
+        );
     }
 }
