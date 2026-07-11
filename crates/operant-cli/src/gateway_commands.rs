@@ -1577,7 +1577,7 @@ pub fn handle_command(cmd_name: &str, _args: &str, ctx: &CommandContext<'_>) -> 
             let a = _args.trim();
             match a {
                 "" | "status" => {
-                    "🔧 Curator: **idle**.\nThe curator manages skill lifecycle (auto-archiving stale skills).\nUse `/curator run` to trigger maintenance.\nConfigure in `config.yaml` under `curator` section.".into()
+                    "🔧 Curator: **idle**.\nThe curator manages skill lifecycle (auto-archiving stale skills).\nUse `/curator run` to trigger maintenance.".into()
                 }
                 "run" => "🔧 Curator maintenance **triggered**.\nThe curator will scan skills and archive stale ones.".into(),
                 "pin" | "unpin" | "archive" | "list-archived" | "pause" | "resume" | "restore" => {
