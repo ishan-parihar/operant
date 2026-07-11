@@ -18,9 +18,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Async state distillation that extracts durable session facts into repo-local `MEMORY.md` after completed agent runs
 - Workspace context-file auto-loading for `AGENTS.md`, `CLAUDE.md`, `.operant.md`, `HERMES.md`, and `.cursorrules` with prompt-injection scanning and truncation
 - `delegate_to_sub_agent` tool for opt-in isolated child-agent delegation from the parent ReAct loop
+- Headless TUI simulator (`operant tui debug simulate`) that drives the real TUI loop against a test backend, with `--dump-screen`/`--assert-screen` (rendered-screen assertions), `--agent-script` (deterministic offline mock agent events), dot-path state assertions over the App debug snapshot, and `--size`/`--max-frames` guards; documented in `docs/tui-debugging.md`
+- `--dangerously-skip-permissions` flag that shows a confirmation dialog at startup and, on accept, runs the session in permission-bypass mode
 
 ### Changed
 
+- TUI slash commands `/steer`, `/queue`, `/reload-mcp`, `/reload`, `/reload-skills`, and `/mouse` now perform their real actions instead of printing placeholder status (steer injects mid-turn guidance, `/reload-mcp` reconnects MCP servers live, `/reload-skills` rescans the skills directory, `/mouse` reports live capture state)
 - README, `AGENTS.md`, and `CLAUDE.md` now document the autonomous workflow, the role of `TODO.md` as the workspace task source of truth, and the disposable operator workflow for validating autonomous mode safely
 - Repeated autonomous failure pauses now persist across process restarts until `TODO.md` or git state changes, using `autonomous-status.toml` as the durable state store
 - CLI, TUI, and autonomous sessions now reload persisted long-term memory from the current workspace before constructing agents
@@ -32,6 +35,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Autonomous command execution now runs in blocking isolation with strict exit-status checks so failed validation cannot fall through to git push
 - Autonomous status tracking no longer dirties workspace fingerprints or staged commits with the runtime status file itself
 - TUI layout rows now preserve the primary conversation area in cramped terminals instead of letting fixed chrome starve the workspace body
+- The effort picker now registers as an open modal, so background keys no longer leak through while it is visible
+- `/resume` session browser now shows real last-activity timestamps and message counts instead of placeholder "just now" / 0 values
+- CJK/emoji text in the ask-user dialog, status row, and new-messages indicator now wraps and sizes by display width instead of byte length
+
+### Removed
+
+- Dead TUI code with no reachable callers: the legacy `ToolPermissionDialog` cluster, the `render_message` renderer family, the `RenderContext.highlight` field, and five unused `App` fields (~1,400 lines total)
 
 ## [0.1.3] - 2026-04-20
 
