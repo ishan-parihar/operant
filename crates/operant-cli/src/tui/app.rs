@@ -2130,10 +2130,14 @@ impl App {
     /// `--assert` engine. Dot-path keys (e.g. `overlays.model_picker`,
     /// `messages`, `model`) are navigated by `evaluate_assertions`. This is
     /// the generic replacement for the old hardcoded boolean whitelist.
-    pub fn debug_snapshot(&self) -> serde_json::Value {
-        // Build the overlays map from a flat tuple array rather than a giant
-        // json! literal (which overflows the macro recursion limit).
-        let overlays: serde_json::Map<String, serde_json::Value> = [
+    /// Single source of truth for the set of dialog/overlay visibilities.
+    /// Both `any_modal_open()` and `debug_snapshot()` derive from this one
+    /// list so the two can't drift out of sync (the drift that dropped
+    /// `effort_picker` from `any_modal_open` in iter-227). Each entry is
+    /// `(snapshot_key, is_visible)`. `permission_request` is tracked via
+    /// `.is_some()` rather than a `.visible` flag.
+    fn overlay_flags(&self) -> [(&'static str, bool); 35] {
+        [
             ("help_overlay", self.help_overlay.visible),
             (
                 "history_search_overlay",
@@ -2179,9 +2183,18 @@ impl App {
             ("ask_user_dialog", self.ask_user_dialog.visible),
             ("permission_request", self.permission_request.is_some()),
         ]
-        .into_iter()
-        .map(|(k, v)| (k.to_string(), serde_json::Value::Bool(v)))
-        .collect();
+    }
+
+    pub fn debug_snapshot(&self) -> serde_json::Value {
+        // Overlays map is derived from `overlay_flags()` (single source of
+        // truth), so it can't drift from `any_modal_open()`. Built from a
+        // flat tuple array rather than a giant json! literal (which would
+        // overflow the macro recursion limit).
+        let overlays: serde_json::Map<String, serde_json::Value> = self
+            .overlay_flags()
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), serde_json::Value::Bool(v)))
+            .collect();
 
         serde_json::json!({
             "should_exit": self.should_exit,
@@ -2832,6 +2845,15 @@ impl App {
         }
     }
 
+    // NOTE (iter-237 / Phase B1): intentionally NOT derived from
+    // `overlay_flags()`. This is a deliberate *subset* of the overlay set
+    // (it omits permission_request, rewind_flow, help_overlay,
+    // history_search_overlay, global_search, voice_mode_notice,
+    // effort_picker, mcp_approval, bypass_permissions_dialog, ask_user_dialog)
+    // and uses `.dismiss()` for export_dialog rather than `.close()`. Unifying
+    // it with a loop would change behavior, so it's left explicit; migrate it
+    // to the overlay registry in a later iteration once close semantics are
+    // normalized.
     fn close_secondary_views(&mut self) {
         self.stats_dialog.close();
         self.mcp_view.close();
@@ -2862,42 +2884,13 @@ impl App {
     }
 
     pub fn any_modal_open(&self) -> bool {
-        self.permission_request.is_some()
-            || self.rewind_flow.visible
-            || self.tasks_overlay.visible
-            || self.help_overlay.visible
+        // Derived from `overlay_flags()` (single source of truth) so this
+        // can't drift from `debug_snapshot()`. The two extras below are not
+        // overlays with a `.visible` flag: `show_help` is a legacy boolean
+        // and `context_menu_state` is a popup, both of which still count as
+        // "a modal is open" for input gating.
+        self.overlay_flags().iter().any(|(_, v)| *v)
             || self.show_help
-            || self.history_search_overlay.visible
-            || self.settings_screen.visible
-            || self.theme_screen.visible
-            || self.stats_dialog.visible
-            || self.mcp_view.visible
-            || self.agents_menu.visible
-            || self.diff_viewer.visible
-            || self.global_search.visible
-            || self.memory_file_selector.visible
-            || self.skills_view.visible
-            || self.plugins_hub.visible
-            || self.journey_view.visible
-            || self.hooks_config_menu.visible
-            || self.voice_mode_notice.visible
-            || self.import_config_dialog.visible
-            || self.bypass_permissions_dialog.visible
-            || self.ask_user_dialog.visible
-            || self.import_config_picker.visible
-            || self.connect_dialog.visible
-            || self.key_input_dialog.visible
-            || self.custom_provider_dialog.visible
-            || self.free_mode_dialog.visible
-            || self.device_auth_dialog.visible
-            || self.command_palette.visible
-            || self.model_picker.visible
-            || self.effort_picker.visible
-            || self.session_browser.visible
-            || self.session_branching.visible
-            || self.export_dialog.visible
-            || self.context_viz.visible
-            || self.mcp_approval.visible
             || self.context_menu_state.is_some()
     }
 
@@ -7984,6 +7977,36 @@ mod tests {
                 "Esc should close overlay '{overlay}' opened by /{cmd}"
             );
         }
+    }
+
+    // Consistency guard (iter-237 / Phase B1): `overlay_flags()` is the single
+    // source of truth for the overlay set. `debug_snapshot()`'s overlays map is
+    // built from it, so their key sets must be identical. This is what prevents
+    // the parallel-list drift that dropped `effort_picker` in iter-227.
+    #[test]
+    fn test_overlay_flags_matches_debug_snapshot_keys() {
+        let app = make_app();
+
+        let mut flag_keys: Vec<String> = app
+            .overlay_flags()
+            .iter()
+            .map(|(k, _)| k.to_string())
+            .collect();
+        flag_keys.sort();
+
+        let snap = app.debug_snapshot();
+        let mut snap_keys: Vec<String> = snap["overlays"]
+            .as_object()
+            .expect("overlays should be a JSON object")
+            .keys()
+            .cloned()
+            .collect();
+        snap_keys.sort();
+
+        assert_eq!(
+            flag_keys, snap_keys,
+            "overlay_flags() and debug_snapshot() overlays must have identical keys"
+        );
     }
 
     #[test]
