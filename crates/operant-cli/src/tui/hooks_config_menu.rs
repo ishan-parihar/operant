@@ -16,8 +16,8 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget, Wrap};
 
 use crate::tui::overlays::{
-    begin_modal_buf, modal_header_line_area, render_modal_title_buf, OPERANT_ACCENT, OPERANT_MUTED,
-    OPERANT_PANEL_BG, OPERANT_TEXT,
+    begin_modal_buf, cycle_next, cycle_prev, modal_header_line_area, render_modal_title_buf,
+    OPERANT_ACCENT, OPERANT_MUTED, OPERANT_PANEL_BG, OPERANT_TEXT,
 };
 
 // ---------------------------------------------------------------------------
@@ -195,14 +195,7 @@ impl HooksConfigMenuState {
             HooksMenuMode::SelectHook => self.hooks_for_selection().len(),
             HooksMenuMode::ViewHook => 0,
         };
-        if count == 0 {
-            return;
-        }
-        if self.selected == 0 {
-            self.selected = count - 1;
-        } else {
-            self.selected -= 1;
-        }
+        cycle_prev(&mut self.selected, count);
     }
 
     pub fn select_next(&mut self) {
@@ -212,10 +205,7 @@ impl HooksConfigMenuState {
             HooksMenuMode::SelectHook => self.hooks_for_selection().len(),
             HooksMenuMode::ViewHook => 0,
         };
-        if count == 0 {
-            return;
-        }
-        self.selected = (self.selected + 1) % count;
+        cycle_next(&mut self.selected, count);
     }
 
     // ---- Private helpers --------------------------------------------------

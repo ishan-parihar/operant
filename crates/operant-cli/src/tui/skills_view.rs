@@ -19,7 +19,7 @@ use ratatui::Frame;
 use std::cell::Cell;
 use std::path::PathBuf;
 
-use crate::tui::overlays::centered_rect;
+use crate::tui::overlays::{centered_rect, cycle_next, cycle_prev};
 
 /// What view stage the overlay is in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -92,14 +92,7 @@ impl SkillsViewState {
     }
 
     pub fn select_prev(&mut self) {
-        if self.skills.is_empty() {
-            return;
-        }
-        self.selected = if self.selected == 0 {
-            self.skills.len() - 1
-        } else {
-            self.selected - 1
-        };
+        cycle_prev(&mut self.selected, self.skills.len());
         // Snap scroll up if the cursor went above the viewport.
         if self.selected < self.scroll {
             self.scroll = self.selected;
@@ -107,10 +100,7 @@ impl SkillsViewState {
     }
 
     pub fn select_next(&mut self) {
-        if self.skills.is_empty() {
-            return;
-        }
-        self.selected = (self.selected + 1) % self.skills.len();
+        cycle_next(&mut self.selected, self.skills.len());
         // Snap scroll down if the cursor went below the viewport.
         // The viewport height isn't known here, so we just bump by 1 —
         // render() clamps to the actual visible area.

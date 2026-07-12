@@ -10,8 +10,8 @@ use ratatui::{
 };
 
 use crate::tui::overlays::{
-    centered_rect, render_dark_overlay_buf, render_dialog_bg_buf, OPERANT_ACCENT, OPERANT_MUTED,
-    OPERANT_PANEL_BG, OPERANT_PANEL_BORDER, OPERANT_TEXT,
+    centered_rect, cycle_next, cycle_prev, render_dark_overlay_buf, render_dialog_bg_buf,
+    OPERANT_ACCENT, OPERANT_MUTED, OPERANT_PANEL_BG, OPERANT_PANEL_BORDER, OPERANT_TEXT,
 };
 
 // ---------------------------------------------------------------------------
@@ -141,44 +141,20 @@ impl McpViewState {
 
     pub fn select_prev(&mut self) {
         match self.active_pane {
-            McpViewPane::ServerList => {
-                let count = self.servers.len();
-                if count == 0 {
-                    return;
-                }
-                if self.selected_server == 0 {
-                    self.selected_server = count - 1;
-                } else {
-                    self.selected_server -= 1;
-                }
-            }
+            McpViewPane::ServerList => cycle_prev(&mut self.selected_server, self.servers.len()),
             McpViewPane::ToolList | McpViewPane::ToolDetail => {
                 let count = self.filtered_tools().len();
-                if count == 0 {
-                    return;
-                }
-                if self.selected_tool == 0 {
-                    self.selected_tool = count - 1;
-                } else {
-                    self.selected_tool -= 1;
-                }
+                cycle_prev(&mut self.selected_tool, count)
             }
         }
     }
 
     pub fn select_next(&mut self) {
         match self.active_pane {
-            McpViewPane::ServerList => {
-                let count = self.servers.len();
-                if count > 0 {
-                    self.selected_server = (self.selected_server + 1) % count;
-                }
-            }
+            McpViewPane::ServerList => cycle_next(&mut self.selected_server, self.servers.len()),
             McpViewPane::ToolList | McpViewPane::ToolDetail => {
                 let count = self.filtered_tools().len();
-                if count > 0 {
-                    self.selected_tool = (self.selected_tool + 1) % count;
-                }
+                cycle_next(&mut self.selected_tool, count)
             }
         }
     }

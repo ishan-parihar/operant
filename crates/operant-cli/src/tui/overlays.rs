@@ -35,6 +35,26 @@ pub fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
     }
 }
 
+/// Move `selected` back by one, wrapping to `count - 1` at zero. No-op if `count == 0`.
+pub fn cycle_prev(selected: &mut usize, count: usize) {
+    if count == 0 {
+        return;
+    }
+    *selected = if *selected == 0 {
+        count - 1
+    } else {
+        *selected - 1
+    };
+}
+
+/// Move `selected` forward by one, wrapping to `0` past `count - 1`. No-op if `count == 0`.
+pub fn cycle_next(selected: &mut usize, count: usize) {
+    if count == 0 {
+        return;
+    }
+    *selected = (*selected + 1) % count;
+}
+
 // ---------------------------------------------------------------------------
 // Reusable overlay helpers (shared by all dialog renderers)
 // ---------------------------------------------------------------------------

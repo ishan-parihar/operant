@@ -10,8 +10,8 @@ use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 
 use crate::tui::overlays::{
-    begin_modal_frame, modal_header_line_area, render_modal_title_frame, OPERANT_ACCENT,
-    OPERANT_MUTED, OPERANT_PANEL_BG, OPERANT_TEXT,
+    begin_modal_frame, cycle_next, cycle_prev, modal_header_line_area, render_modal_title_frame,
+    OPERANT_ACCENT, OPERANT_MUTED, OPERANT_PANEL_BG, OPERANT_TEXT,
 };
 
 // ---------------------------------------------------------------------------
@@ -58,23 +58,11 @@ impl ThemeScreen {
     }
 
     pub fn select_prev(&mut self) {
-        let count = self.themes.len();
-        if count == 0 {
-            return;
-        }
-        if self.selected_idx == 0 {
-            self.selected_idx = count - 1;
-        } else {
-            self.selected_idx -= 1;
-        }
+        cycle_prev(&mut self.selected_idx, self.themes.len());
     }
 
     pub fn select_next(&mut self) {
-        let count = self.themes.len();
-        if count == 0 {
-            return;
-        }
-        self.selected_idx = (self.selected_idx + 1) % count;
+        cycle_next(&mut self.selected_idx, self.themes.len());
     }
 
     /// Return the name of the currently selected theme.

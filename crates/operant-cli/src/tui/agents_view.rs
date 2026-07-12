@@ -11,8 +11,8 @@ use ratatui::{
 use std::path::{Path, PathBuf};
 
 use crate::tui::overlays::{
-    begin_modal_buf, modal_header_line_area, render_modal_title_buf, OPERANT_ACCENT, OPERANT_MUTED,
-    OPERANT_PANEL_BG, OPERANT_TEXT,
+    begin_modal_buf, cycle_next, cycle_prev, modal_header_line_area, render_modal_title_buf,
+    OPERANT_ACCENT, OPERANT_MUTED, OPERANT_PANEL_BG, OPERANT_TEXT,
 };
 
 // ---------------------------------------------------------------------------
@@ -236,23 +236,11 @@ impl AgentsMenuState {
     }
 
     pub fn select_prev(&mut self) {
-        let row_count = self.definitions.len() + 1;
-        if row_count == 0 {
-            return;
-        }
-        if self.selected_row == 0 {
-            self.selected_row = row_count - 1;
-        } else {
-            self.selected_row -= 1;
-        }
+        cycle_prev(&mut self.selected_row, self.definitions.len() + 1);
     }
 
     pub fn select_next(&mut self) {
-        let row_count = self.definitions.len() + 1;
-        if row_count == 0 {
-            return;
-        }
-        self.selected_row = (self.selected_row + 1) % row_count;
+        cycle_next(&mut self.selected_row, self.definitions.len() + 1);
     }
 
     pub fn confirm_selection(&mut self) {

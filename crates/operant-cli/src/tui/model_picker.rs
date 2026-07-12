@@ -8,7 +8,9 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
-use crate::tui::overlays::{centered_rect, modal_search_line, OPERANT_PANEL_BG};
+use crate::tui::overlays::{
+    centered_rect, cycle_next, cycle_prev, modal_search_line, OPERANT_PANEL_BG,
+};
 
 // ---------------------------------------------------------------------------
 // Effort level
@@ -360,23 +362,13 @@ impl ModelPickerState {
     /// Move selection up one row (wraps to last if at top).
     pub fn select_prev(&mut self) {
         let count = self.filtered_models().len();
-        if count == 0 {
-            return;
-        }
-        if self.selected_idx == 0 {
-            self.selected_idx = count - 1;
-        } else {
-            self.selected_idx -= 1;
-        }
+        cycle_prev(&mut self.selected_idx, count);
     }
 
     /// Move selection down one row (wraps to first if at bottom).
     pub fn select_next(&mut self) {
         let count = self.filtered_models().len();
-        if count == 0 {
-            return;
-        }
-        self.selected_idx = (self.selected_idx + 1) % count;
+        cycle_next(&mut self.selected_idx, count);
     }
 
     pub fn select_first(&mut self) {

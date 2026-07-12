@@ -7,8 +7,8 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
 use crate::tui::overlays::{
-    centered_rect, render_dark_overlay_buf, render_dialog_bg_buf, OPERANT_ACCENT, OPERANT_MUTED,
-    OPERANT_PANEL_BG, OPERANT_TEXT,
+    centered_rect, cycle_next, cycle_prev, render_dark_overlay_buf, render_dialog_bg_buf,
+    OPERANT_ACCENT, OPERANT_MUTED, OPERANT_PANEL_BG, OPERANT_TEXT,
 };
 
 // ---------------------------------------------------------------------------
@@ -101,23 +101,11 @@ impl MemoryFileSelectorState {
     }
 
     pub fn select_prev(&mut self) {
-        let count = self.files.len();
-        if count == 0 {
-            return;
-        }
-        if self.selected == 0 {
-            self.selected = count - 1;
-        } else {
-            self.selected -= 1;
-        }
+        cycle_prev(&mut self.selected, self.files.len());
     }
 
     pub fn select_next(&mut self) {
-        let count = self.files.len();
-        if count == 0 {
-            return;
-        }
-        self.selected = (self.selected + 1) % count;
+        cycle_next(&mut self.selected, self.files.len());
     }
 }
 
