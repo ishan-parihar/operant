@@ -22,20 +22,20 @@ jobs:
           - name: Linux x86_64
             os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            artifact: hermes-linux-x86_64
-            bin: hermes
+            artifact: operant-linux-x86_64
+            bin: operant
             archive: tar.gz
           - name: macOS ARM64
             os: macos-latest
             target: aarch64-apple-darwin
-            artifact: hermes-macos-arm64
-            bin: hermes
+            artifact: operant-macos-arm64
+            bin: operant
             archive: tar.gz
           - name: Windows x86_64
             os: windows-latest
             target: x86_64-pc-windows-msvc
-            artifact: hermes-windows-x86_64
-            bin: hermes.exe
+            artifact: operant-windows-x86_64
+            bin: operant.exe
             archive: zip
 
     steps:
@@ -85,22 +85,22 @@ jobs:
         include:
           - name: Linux x86_64 musl
             target: x86_64-unknown-linux-musl
-            artifact: hermes-linux-x86_64-musl
+            artifact: operant-linux-x86_64-musl
           - name: Linux ARM64 musl
             target: aarch64-unknown-linux-musl
-            artifact: hermes-linux-arm64-musl
+            artifact: operant-linux-arm64-musl
           - name: Linux ARM64
             target: aarch64-unknown-linux-gnu
-            artifact: hermes-linux-arm64
+            artifact: operant-linux-arm64
           - name: Linux ARMv7
             target: armv7-unknown-linux-gnueabihf
-            artifact: hermes-linux-armv7
+            artifact: operant-linux-armv7
           - name: Android ARM64
             target: aarch64-linux-android
-            artifact: hermes-android-arm64
+            artifact: operant-android-arm64
           - name: FreeBSD x86_64
             target: x86_64-unknown-freebsd
-            artifact: hermes-freebsd-x86_64
+            artifact: operant-freebsd-x86_64
 
     steps:
       - uses: actions/checkout@v4
@@ -123,9 +123,9 @@ jobs:
         shell: bash
         run: |
           mkdir -p dist
-          cp "target/${{ matrix.target }}/release/hermes" "dist/hermes"
-          tar -C dist -czf "dist/${{ matrix.artifact }}.tar.gz" hermes
-          rm "dist/hermes"
+          cp "target/${{ matrix.target }}/release/operant" "dist/operant"
+          tar -C dist -czf "dist/${{ matrix.artifact }}.tar.gz" operant
+          rm "dist/operant"
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
