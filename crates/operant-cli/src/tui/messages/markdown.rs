@@ -164,8 +164,36 @@ pub fn render_markdown(text: &str, width: u16) -> Vec<Line<'static>> {
     // NOTE: This destroys markdown paragraph breaks (double \n), but the
     // garbled mid-word fragmentation is worse. The word_wrap function
     // handles line-breaking at the correct width.
-    let text = text.replace('\r', "").replace('\n', " ");
+    // DEBUG: trace what text reaches render_markdown
+    {
+        let has_n = text.contains('\n');
+        let has_r = text.contains('\r');
+        if has_n || has_r {
+            let preview = if text.len() > 300 { &text[..300] } else { text };
+            let _ = std::fs::write(
+                "/tmp/render_markdown_debug.log",
+                format!(
+                    "DEBUG render_markdown: len={}, has_n={}, has_r={}, preview={:?}\n",
+                    text.len(),
+                    has_n,
+                    has_r,
+                    preview
+                ),
+            );
+        }
+    }
+    let text = normalize_markdown_newlines(text).replace('\r', "");
     let all_lines: Vec<&str> = text.lines().collect();
+    // DEBUG: trace after sanitization
+    {
+        let has_n = text.contains('\n');
+        if has_n {
+            let _ = std::fs::write(
+                "/tmp/render_markdown_after_debug.log",
+                format!("AFTER sanitize: still has \\n! len={}\n", text.len()),
+            );
+        }
+    }
     let mut lines: Vec<Line<'static>> = Vec::new();
     let mut in_code_block = false;
     let mut code_lang = String::new();
@@ -264,10 +292,10 @@ pub fn render_markdown(text: &str, width: u16) -> Vec<Line<'static>> {
             continue;
         }
 
-        let padded = format!("  {}", raw);
         let effective_width = width.saturating_sub(4) as usize;
-        for wrapped_line in word_wrap(&padded, effective_width) {
-            let spans = parse_inline_spans(wrapped_line);
+        for wrapped_line in word_wrap(raw, effective_width) {
+            let padded = format!("  {}", wrapped_line);
+            let spans = parse_inline_spans(padded);
             lines.push(Line::from(spans));
         }
 
@@ -486,6 +514,70 @@ fn word_wrap(text: &str, width: usize) -> Vec<String> {
     }
     if result.is_empty() {
         result.push(text.to_string());
+    }
+    result
+}
+
+/// Normalizes soft breaks (single newlines) to spaces or empty strings (if mid-word),
+/// while preserving hard breaks (double newlines, lists, headings, code blocks, blockquotes).
+pub fn normalize_markdown_newlines(text: &str) -> String {
+    let mut result = String::with_capacity(text.len());
+    let lines: Vec<&str> = text.lines().collect();
+
+    let mut in_code_block = false;
+    let mut i = 0;
+
+    while i < lines.len() {
+        let current_line = lines[i];
+        let trimmed = current_line.trim_start();
+
+        if trimmed.starts_with("```") {
+            in_code_block = !in_code_block;
+        }
+
+        result.push_str(current_line);
+
+        if i + 1 < lines.len() {
+            let next_line = lines[i + 1];
+            let next_trimmed = next_line.trim_start();
+
+            let is_list_item = next_trimmed.starts_with("- ")
+                || next_trimmed.starts_with("* ")
+                || next_trimmed.starts_with("+ ")
+                || (next_trimmed.contains(". ")
+                    && next_trimmed
+                        .chars()
+                        .next()
+                        .map_or(false, |c| c.is_ascii_digit()));
+            let is_heading = next_trimmed.starts_with("#");
+            let is_blockquote = next_trimmed.starts_with("> ");
+            let is_code_fence = next_trimmed.starts_with("```");
+
+            if in_code_block
+                || current_line.is_empty()
+                || next_line.is_empty()
+                || is_list_item
+                || is_heading
+                || is_blockquote
+                || is_code_fence
+            {
+                result.push('\n');
+            } else {
+                let char_a = current_line.chars().last();
+                let char_b = next_line.chars().next();
+                let is_mid_word = match (char_a, char_b) {
+                    (Some(a), Some(b)) => a.is_ascii_alphabetic() && b.is_ascii_alphabetic(),
+                    _ => false,
+                };
+
+                if is_mid_word {
+                    // Mid-word newline: join the word directly (no space/newline)
+                } else if !current_line.ends_with(' ') && !next_line.starts_with(' ') {
+                    result.push(' ');
+                }
+            }
+        }
+        i += 1;
     }
     result
 }

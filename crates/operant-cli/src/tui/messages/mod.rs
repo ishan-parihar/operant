@@ -188,12 +188,9 @@ pub fn render_transcript_assistant_meta(
 }
 
 pub fn render_transcript_live_text(text: &str, width: u16) -> Vec<Line<'static>> {
-    // Sanitize \r and \n as a last line of defense before render_markdown.
-    // Providers like mimo send \n within JSON content at mid-word positions,
-    // which causes text.lines() in render_markdown to fragment words.
-    // \r corrupts terminal display by moving the cursor to column 0.
-    let text: std::borrow::Cow<str> = if text.contains('\r') || text.contains('\n') {
-        text.replace('\r', " ").replace('\n', " ").into()
+    // Strip \r carriage returns as a safety net before render_markdown.
+    let text: std::borrow::Cow<str> = if text.contains('\r') {
+        text.replace('\r', "").into()
     } else {
         text.into()
     };
@@ -1692,6 +1689,21 @@ mod tests {
             !combined.contains("desc line 5"),
             "should truncate desc at 5 lines"
         );
+    }
+
+    #[test]
+    fn test_tui_render_bug_reproduce() {
+        let text = "Hello!\n\n👋  I'm Operant, your\n\n AI assistant. How\n can I help you today?";
+        let result = render_transcript_live_text(text, 24);
+        assert_eq!(result.len(), 8);
+        assert_eq!(line_text(&result[0]), "     Hello!");
+        assert_eq!(line_text(&result[1]), "     ");
+        assert_eq!(line_text(&result[2]), "     👋 I'm Operant,");
+        assert_eq!(line_text(&result[3]), "     your");
+        assert_eq!(line_text(&result[4]), "     ");
+        assert_eq!(line_text(&result[5]), "     AI assistant.");
+        assert_eq!(line_text(&result[6]), "     How can I help");
+        assert_eq!(line_text(&result[7]), "     you today?");
     }
 
     // (iter-213: 18 broken test functions deleted — they referenced
