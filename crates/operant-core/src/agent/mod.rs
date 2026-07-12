@@ -1628,9 +1628,12 @@ impl OperantAgent {
                 let schema = tool.schema();
                 if let Err(e) = schema.validate_args(&args) {
                     warn!(tool = %name, error = %e, "Tool argument validation failed");
+                    // Use the schema validation error message directly — it
+                    // already includes the field name (e.g. "Missing required
+                    // field: query"). Avoid duplicating the tool name.
                     early_results[idx] = Some(ToolResult::error(
                         &tool_call.id,
-                        format!("Tool '{}' received invalid arguments: {}", name, e),
+                        e.to_string(),
                     ));
                     continue;
                 }
