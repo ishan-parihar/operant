@@ -6215,6 +6215,11 @@ impl App {
             }
 
             AgentEvent::Content { text } => {
+                // Sanitize streaming text: replace \r and \n with spaces.
+                // Providers like mimo send \n within JSON content at mid-word
+                // positions, which causes text.lines() to fragment words.
+                // \r corrupts terminal display by moving cursor to column 0.
+                let text = text.replace('\r', " ").replace('\n', " ");
                 if !self.is_streaming {
                     let seed = self.frame_count as usize ^ (self.messages.len() * 17);
                     self.spinner_verb = Some(sample_spinner_verb(seed as u64).to_string());
