@@ -29,7 +29,7 @@ use crate::tui::mcp_view::render_mcp_view;
 use crate::tui::memory_file_selector::render_memory_file_selector;
 use crate::tui::messages::{
     render_markdown, render_thinking_live_content, render_transcript_assistant_message_tagged,
-    render_transcript_assistant_meta, render_transcript_live_text, render_transcript_user_message,
+    render_transcript_assistant_meta, render_transcript_user_message,
     RenderContext,
 };
 use crate::tui::notifications::{render_notification_banner, Notification, NotificationKind};
@@ -1225,27 +1225,7 @@ fn push_blank_item(items: &mut Vec<RenderedLineItem>) {
     push_rendered_items(items, vec![Line::from("")], None, false);
 }
 
-fn render_live_thinking_lines(
-    turn: &TranscriptTurn<'_>,
-    frame_count: u64,
-    width: u16,
-) -> Vec<Line<'static>> {
-    let mut header_spans = vec![Span::raw("  ▼ ")];
-    header_spans.extend(shimmer_spans("Thinking", frame_count));
-    if let Some(heading) = turn.reasoning_heading() {
-        header_spans.push(Span::styled(
-            format!(": {}", heading),
-            Style::default()
-                .fg(Color::DarkGray)
-                .add_modifier(Modifier::ITALIC),
-        ));
-    }
-    let mut lines = vec![Line::from(header_spans)];
-    if let Some(text) = turn.live_thinking {
-        lines.extend(render_thinking_live_content(text, width));
-    }
-    lines
-}
+
 
 fn append_turn_items(
     items: &mut Vec<RenderedLineItem>,
@@ -1296,41 +1276,9 @@ fn append_turn_items(
         }
     }
 
-    if turn.active && turn.live_thinking.is_some() {
-        sections.push((
-            SectionContent::Plain(render_live_thinking_lines(turn, frame_count, width)),
-            Some(turn.primary_message_index()),
-        ));
-    }
-
-    // Show a "Thinking" shimmer when the turn is active but no text or
-    // thinking content has arrived yet — gives visual feedback that the
-    // model is working (especially for providers without thinking support).
-    if turn.active
-        && turn.live_text.is_none()
-        && turn.live_thinking.is_none()
-        && turn
-            .tool_blocks
-            .iter()
-            .all(|b| b.status != ToolStatus::Running)
-    {
-        let mut spans = vec![Span::raw("  ")];
-        spans.extend(shimmer_spans("Thinking", frame_count));
-        sections.push((
-            SectionContent::Plain(vec![Line::from(spans)]),
-            Some(turn.primary_message_index()),
-        ));
-    }
-
-    if let Some(text) = turn.live_text {
-        let lines = render_transcript_live_text(text, width);
-        if !lines.is_empty() {
-            sections.push((
-                SectionContent::Plain(lines),
-                Some(turn.primary_message_index()),
-            ));
-        }
-    }
+    // NOTE: Live thinking, thinking shimmer, and live text are rendered by
+    // append_live_content (not here) to avoid duplicating streaming content.
+    // This was causing visible duplication/glitching during streaming.
 
     if !turn.active {
         if let Some(meta_line) = render_transcript_assistant_meta(turn.metadata, accent) {
@@ -1519,26 +1467,37 @@ fn append_live_content(
     width: u16,
 ) -> Vec<RenderedLineItem> {
     // 1. Live thinking (appears FIRST — model thinks before acting).
+    //    Includes a "▼ Thinking" header with shimmer so the user sees visual
+    //    feedback that the model is working.
     if !app.streaming_thinking.is_empty() {
-        let thinking_lines = render_thinking_live_content(&app.streaming_thinking, width);
+        let mut header_spans = vec![Span::raw("  ▼ ")];
+        header_spans.extend(shimmer_spans("Thinking", app.frame_count));
+        let mut thinking_lines = vec![Line::from(header_spans)];
+        thinking_lines.extend(render_thinking_live_content(&app.streaming_thinking, width));
         push_rendered_items(&mut items, thinking_lines, None, false);
         push_blank_item(&mut items);
     }
 
-    // 2. ALL tool blocks for this turn (both running and completed).
-    //    Tool calls happen in order: think → call tool → get result → think
-    //    again → call another tool → etc. We show ALL of them so the user
-    //    sees the full causation chain, not just the currently-running one.
-    //    (iter-121 — was only showing Running blocks, so completed tool
-    //    calls disappeared from the live view, breaking the causation chain.)
-    for block in &app.tool_use_blocks {
-        let mut lines = Vec::new();
-        render_tool_block_lines(&mut lines, block, app.frame_count);
-        push_rendered_items(&mut items, lines, None, false);
-        push_blank_item(&mut items);
+    // Tool blocks are rendered by append_turn_items (not here) — they belong
+    // within their respective turns for correct per-turn ordering.
+
+    // 3. "Thinking" shimmer when the turn is active but no text or
+    //    thinking content has arrived yet — gives visual feedback that the
+    //    model is working (especially for providers without thinking support).
+    if app.is_streaming
+        && app.streaming_text.is_empty()
+        && app.streaming_thinking.is_empty()
+        && app
+            .tool_use_blocks
+            .iter()
+            .all(|b| b.status != ToolStatus::Running)
+    {
+        let mut spans = vec![Span::raw("  ")];
+        spans.extend(shimmer_spans("Thinking", app.frame_count));
+        push_rendered_items(&mut items, vec![Line::from(spans)], None, false);
     }
 
-    // 3. Live streaming text (the model's final response — appears LAST).
+    // 4. Live streaming text (the model's final response — appears LAST).
     //    Reuse the cached render when the buffer is unchanged since the last
     //    frame so syntect doesn't re-highlight the whole growing text every
     //    redraw. (C1: eliminates the per-frame render_markdown hog.)

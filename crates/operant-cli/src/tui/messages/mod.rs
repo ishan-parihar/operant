@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 
-use crate::tui::adapter_types::types::{ContentBlock, Message, ToolResultContent};
+use crate::tui::adapter_types::types::{ContentBlock, Message, MessageContent, ToolResultContent};
 use crate::tui::app::TurnMetadata;
 use crate::tui::transcript_turn::reasoning_heading;
 use ratatui::{
@@ -314,6 +314,16 @@ pub fn render_transcript_user_message(
     let inner_width = width.saturating_sub(4).max(10);
     let mut lines = Vec::new();
     let mut pending_text = String::new();
+
+    // Handle MessageContent::Text (simple text messages) — these don't have
+    // content_blocks(), so we extract the text directly.  This fixes the bug
+    // where user input text was invisible because content_blocks() returned
+    // empty for MessageContent::Text messages.
+    if let MessageContent::Text(ref text) = msg.content {
+        if !text.is_empty() {
+            pending_text.push_str(text);
+        }
+    }
 
     // Collect the absolute paths of every injected file so we can strip the
     // corresponding @token references from the user's original text block.
