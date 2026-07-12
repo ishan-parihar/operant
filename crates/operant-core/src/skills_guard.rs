@@ -1714,13 +1714,29 @@ fn resolve_trust_level(source: &str) -> TrustLevel {
 ///
 /// Note: `ScanVerdict` only has 3 tiers (Safe/Caution/Dangerous), so any
 /// non-empty, non-Critical finding list — regardless of whether it contains
-/// High, Medium, or Low severity findings — currently maps to `Caution`.
-/// This was previously written as a redundant `if has_high {...} else {...}`
-/// with both branches returning the same value; simplified here since the
-/// `has_high` check had no effect on the outcome. Flagging as a possible
-/// product-policy gap: if High severity findings should be distinguished
-/// from Medium/Low (e.g. a stricter verdict), that needs a new `ScanVerdict`
-/// tier, not just restoring the dead branch.
+/// High, Medium, or Low severity findings — maps to `Caution`. This was
+/// previously written as a redundant `if has_high {...} else {...}` with
+/// both branches returning the same value; simplified since the `has_high`
+/// check had no effect on the outcome.
+///
+/// iter-251 flagged this as a possible product-policy gap (should High be
+/// distinguished from Medium/Low?). Investigated in iter-256 and confirmed
+/// intentional, not a gap: `ScanVerdict`'s own doc comments already define
+/// `Caution` as covering High/Medium/Low uniformly, `evaluate_install_policy`
+/// below is an explicit port of an established Python reference
+/// implementation's policy matrix, and the highest-risk trust level
+/// (`Community`, the default for arbitrary third-party skills) already
+/// blocks on ANY non-Safe verdict regardless of severity — so the two trust
+/// levels where `Caution` allows install (`Trusted`: exactly 2 named
+/// first-party orgs; `AgentCreated`: code from the same already-authorized
+/// agent session) are both narrow, deliberately-curated categories where
+/// treating High the same as Medium/Low is a reasonable, low-friction
+/// default rather than an oversight. Adding a stricter High-severity tier
+/// remains a legitimate future feature request, not a bug fix — it would
+/// need a new `ScanVerdict` variant and updates to every exhaustive match
+/// on it (`evaluate_install_policy`, `build_summary`, and the public
+/// `GuardScanner::evaluate` API's contract), so it should come from an
+/// explicit ask, not be inferred.
 fn determine_verdict(findings: &[SecurityFinding]) -> ScanVerdict {
     if findings.is_empty() {
         return ScanVerdict::Safe;
