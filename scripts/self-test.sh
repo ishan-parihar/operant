@@ -1,5 +1,5 @@
 #!/bin/bash
-# Self-test script for hermes-rs
+# Self-test script for operant
 # Usage: ./scripts/self-test.sh
 set -e
 
@@ -32,34 +32,34 @@ run_test() {
 }
 
 # 1. Build
-run_test "Build release binary" "cargo build --release 2>&1"
+run_test "Build release binary" "./scripts/check.sh build --release 2>&1"
 
 # 2. Tests
-run_test "Run workspace tests" "cargo test --workspace 2>&1"
+run_test "Run workspace tests" "./scripts/check.sh test --workspace 2>&1"
 
 # 3. Clippy
-run_test "Run clippy" "cargo clippy --workspace --all-targets --all-features 2>&1 | grep -v '^warning' | grep -v '^\s' | grep -v '^$'"
+run_test "Run clippy" "./scripts/check.sh clippy --workspace --all-targets --all-features 2>&1 | grep -v '^warning' | grep -v '^\s' | grep -v '^$'"
 
 # 4. Formatting
-run_test "Check formatting" "cargo fmt --all 2>&1"
+run_test "Check formatting" "./scripts/check.sh fmt --all 2>&1"
 
 # 5. CLI version
-run_test "CLI version" "./target/release/hermes --version 2>&1"
+run_test "CLI version" "./target/release/operant --version 2>&1"
 
 # 6. CLI help
-run_test "CLI help" "./target/release/hermes --help 2>&1"
+run_test "CLI help" "./target/release/operant --help 2>&1"
 
 # 7. CLI chat help
-run_test "CLI chat help" "./target/release/hermes chat --help 2>&1"
+run_test "CLI chat help" "./target/release/operant chat --help 2>&1"
 
 # 8. CLI run help
-run_test "CLI run help" "./target/release/hermes run --help 2>&1"
+run_test "CLI run help" "./target/release/operant run --help 2>&1"
 
 # 9. CLI dashboard help
-run_test "CLI dashboard help" "./target/release/hermes dashboard --help 2>&1"
+run_test "CLI dashboard help" "./target/release/operant dashboard --help 2>&1"
 
 # 10. Quick run test
-run_test "Quick run test" "./target/release/hermes run --query 'Hello' --max-iterations 1 2>&1"
+run_test "Quick run test" "./target/release/operant run --query 'Hello' --max-iterations 1 2>&1"
 
 # Summary
 echo ""
