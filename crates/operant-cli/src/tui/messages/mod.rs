@@ -305,7 +305,15 @@ pub fn render_transcript_user_message(
     // own `/goal <objective>` typing — replace it with the yellow GOAL ACTIVE
     // badge so the raw slash command doesn't sit next to the `[Goal started]`
     // event the machinery injects right after.
-    if let Some(ContentBlock::Text { text }) = msg.content_blocks().into_iter().next() {
+    // Check for /goal slash command in both MessageContent::Text and Blocks variants.
+    let goal_text = match &msg.content {
+        MessageContent::Text(text) => Some(text.as_str()),
+        MessageContent::Blocks(blocks) => blocks.iter().find_map(|b| match b {
+            ContentBlock::Text { text } => Some(text.as_str()),
+            _ => None,
+        }),
+    };
+    if let Some(text) = goal_text {
         if let Some(objective) = extract_goal_slash_objective(text) {
             return render_goal_active_block(&objective);
         }
@@ -583,6 +591,17 @@ pub fn render_transcript_assistant_message_tagged(
 ) -> Vec<(Line<'static>, Option<u64>)> {
     let mut out: Vec<(Line<'static>, Option<u64>)> = Vec::new();
     let mut pending_text = String::new();
+
+    // Handle MessageContent::Text (simple text messages) — these don't have
+    // content_blocks(), so we extract the text directly.  This fixes the bug
+    // where committed assistant messages were invisible because content_blocks()
+    // returned empty for MessageContent::Text messages created by
+    // flush_streamed_assistant_message.
+    if let MessageContent::Text(ref text) = msg.content {
+        if !text.is_empty() {
+            pending_text.push_str(text);
+        }
+    }
 
     let flush_text =
         |buffer: &mut String, target: &mut Vec<(Line<'static>, Option<u64>)>, width: u16| {
