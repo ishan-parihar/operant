@@ -10,7 +10,7 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
 
 use crate::tui::model_picker::EffortLevel;
-use crate::tui::overlays::centered_rect;
+use crate::tui::overlays::{centered_rect, cycle_next, cycle_prev};
 
 #[derive(Debug, Default, Clone)]
 pub struct EffortPickerState {
@@ -38,15 +38,11 @@ impl EffortPickerState {
     }
 
     pub fn select_prev(&mut self) {
-        self.selected = if self.selected == 0 {
-            3
-        } else {
-            self.selected - 1
-        };
+        cycle_prev(&mut self.selected, 4);
     }
 
     pub fn select_next(&mut self) {
-        self.selected = (self.selected + 1) % 4;
+        cycle_next(&mut self.selected, 4);
     }
 
     pub fn current(&self) -> EffortLevel {

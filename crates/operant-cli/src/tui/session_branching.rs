@@ -7,7 +7,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Widget, Wrap};
 
-use crate::tui::overlays::centered_rect;
+use crate::tui::overlays::{centered_rect, cycle_next, cycle_prev};
 
 // ---------------------------------------------------------------------------
 // Types
@@ -90,24 +90,12 @@ impl SessionBranchingState {
 
     /// Move selection up one row, wrapping to the end.
     pub fn select_prev(&mut self) {
-        let count = self.branches.len();
-        if count == 0 {
-            return;
-        }
-        if self.selected_idx == 0 {
-            self.selected_idx = count - 1;
-        } else {
-            self.selected_idx -= 1;
-        }
+        cycle_prev(&mut self.selected_idx, self.branches.len());
     }
 
     /// Move selection down one row, wrapping to the start.
     pub fn select_next(&mut self) {
-        let count = self.branches.len();
-        if count == 0 {
-            return;
-        }
-        self.selected_idx = (self.selected_idx + 1) % count;
+        cycle_next(&mut self.selected_idx, self.branches.len());
     }
 
     /// Get a reference to the currently selected branch, if any.

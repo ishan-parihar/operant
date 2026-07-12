@@ -17,7 +17,7 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
 
 use crate::tui::adapter_types::tools::TaskStatus;
-use crate::tui::overlays::centered_rect;
+use crate::tui::overlays::{centered_rect, cycle_next, cycle_prev};
 
 // ---------------------------------------------------------------------------
 // Helper functions for TaskStatus (defined in cc_tools)
@@ -100,11 +100,7 @@ impl TasksOverlay {
     /// Navigate to previous task in the list.
     pub fn select_prev(&mut self) {
         if !self.tasks.is_empty() {
-            if self.selected_idx == 0 {
-                self.selected_idx = self.tasks.len() - 1;
-            } else {
-                self.selected_idx -= 1;
-            }
+            cycle_prev(&mut self.selected_idx, self.tasks.len());
             self.ensure_visible();
         }
     }
@@ -112,7 +108,7 @@ impl TasksOverlay {
     /// Navigate to next task in the list.
     pub fn select_next(&mut self) {
         if !self.tasks.is_empty() {
-            self.selected_idx = (self.selected_idx + 1) % self.tasks.len();
+            cycle_next(&mut self.selected_idx, self.tasks.len());
             self.ensure_visible();
         }
     }

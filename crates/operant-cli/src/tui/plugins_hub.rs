@@ -21,7 +21,7 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use ratatui::Frame;
 use std::path::{Path, PathBuf};
 
-use crate::tui::overlays::centered_rect;
+use crate::tui::overlays::{centered_rect, cycle_next, cycle_prev};
 
 /// One row in the plugins list.
 #[derive(Debug, Clone)]
@@ -101,24 +101,14 @@ impl PluginsHubState {
     }
 
     pub fn select_prev(&mut self) {
-        if self.plugins.is_empty() {
-            return;
-        }
-        self.selected = if self.selected == 0 {
-            self.plugins.len() - 1
-        } else {
-            self.selected - 1
-        };
+        cycle_prev(&mut self.selected, self.plugins.len());
         if self.selected < self.scroll {
             self.scroll = self.selected;
         }
     }
 
     pub fn select_next(&mut self) {
-        if self.plugins.is_empty() {
-            return;
-        }
-        self.selected = (self.selected + 1) % self.plugins.len();
+        cycle_next(&mut self.selected, self.plugins.len());
         if self.selected > self.scroll + 12 {
             self.scroll = self.selected.saturating_sub(12);
         }
