@@ -7,6 +7,57 @@ use thiserror::Error;
 /// Result type alias for operant-core operations
 pub type Result<T> = std::result::Result<T, Error>;
 
+/// Try to extract a human-readable message from a provider error body.
+///
+/// Provider error bodies are typically JSON like:
+///   {"error":{"message":"Internal server error"}}
+///   {"type":"error","error":{"type":"error","message":"..."}}
+///   {"error":{"message":"Error from provider (Console): ...","type":"invalid_request_error"}}
+///
+/// Falls back to the raw body if JSON parsing fails or no message field is found.
+fn extract_provider_message(body: &str) -> String {
+    // Quick check: if the body doesn't look like JSON, return as-is.
+    let trimmed = body.trim();
+    if !trimmed.starts_with('{') {
+        return body.to_string();
+    }
+
+    if let Ok(val) = serde_json::from_str::<serde_json::Value>(trimmed) {
+        // Try common JSON structures:
+        // 1. {"error":{"message":"..."}}
+        // 2. {"type":"error","error":{"message":"..."}}
+        // 3. {"message":"..."}
+        if let Some(msg) = val
+            .get("error")
+            .and_then(|e| e.get("message"))
+            .and_then(|m| m.as_str())
+        {
+            // Also try to extract the error type for context
+            let error_type = val
+                .get("error")
+                .and_then(|e| e.get("type"))
+                .and_then(|t| t.as_str())
+                .unwrap_or("");
+            if error_type.is_empty() || error_type == "error" {
+                return msg.to_string();
+            }
+            return format!("{} ({})", msg, error_type);
+        }
+        // 3. {"message":"..."}
+        if let Some(msg) = val.get("message").and_then(|m| m.as_str()) {
+            return msg.to_string();
+        }
+    }
+
+    // Fallback: strip newlines and truncate.
+    let clean = body.split_whitespace().collect::<Vec<_>>().join(" ");
+    if clean.len() > 200 {
+        format!("{}...", &clean[..200])
+    } else {
+        clean
+    }
+}
+
 /// Domain-specific errors for Operant-RS
 #[derive(Error, Debug)]
 pub enum Error {
@@ -67,8 +118,7 @@ pub enum Error {
     #[error("Provider API error: HTTP {status} - {body}")]
     Provider {
         status: u16,
-        /// Sanitized body — stripped of newlines/carriage returns and
-        /// truncated to 500 chars so Display output is readable.
+        /// Raw body from the provider API response.
         body: String,
         retry_after: Option<std::time::Duration>,
     },
@@ -137,14 +187,8 @@ impl Error {
                 format!("Tool '{}' received invalid arguments: {}", name, details)
             }
             Error::Provider { status, body, .. } => {
-                // Strip newlines/whitespace and truncate the body for display
-                let clean_body = body.split_whitespace().collect::<Vec<_>>().join(" ");
-                let preview = if clean_body.len() > 200 {
-                    format!("{}...", &clean_body[..200])
-                } else {
-                    clean_body
-                };
-                format!("The AI provider returned an error (HTTP {}). {}. Please try again or modify your approach.", status, preview)
+                let msg = extract_provider_message(body);
+                format!("The AI provider returned an error (HTTP {}). {}", status, msg)
             }
             Error::RateLimited { .. } => {
                 "Rate limit exceeded. Waiting before retrying.".to_string()
@@ -208,18 +252,66 @@ mod tests {
             !err.is_self_healing(),
             "RateLimited should not be self-healing"
         );
+    }    #[test]
+    fn test_authentication_not_transient_not_self_healing() {
+        let err = Error::Authentication("invalid key".to_string());
+        assert!(!
+            err.is_transient(),
+            "Authentication should not be transient"
+        );
+        assert!(!
+            err.is_self_healing(),
+            "Authentication should not be self-healing"
+        );
     }
 
     #[test]
-    fn test_authentication_not_transient_not_self_healing() {
-        let err = Error::Authentication("invalid key".to_string());
-        assert!(
-            !err.is_transient(),
-            "Authentication should not be transient"
-        );
-        assert!(
-            !err.is_self_healing(),
-            "Authentication should not be self-healing"
-        );
+    fn test_extract_provider_message_nested_error() {
+        // Anthropic-style: {"error":{"message":"...","type":"error"}}
+        let body = r#"{"type":"error","error":{"type":"error","message":"Internal server error"}}"#;
+        let msg = super::extract_provider_message(body);
+        assert_eq!(msg, "Internal server error");
+    }
+
+    #[test]
+    fn test_extract_provider_message_with_type() {
+        // OpenAI-style: {"error":{"message":"...","type":"invalid_request_error"}}
+        let body = r#"{"error":{"message":"Error from provider (Console): Upstream request failed","type":"invalid_request_error","param":null,"code":"invalid_request_error"}}"#;
+        let msg = super::extract_provider_message(body);
+        assert_eq!(msg, "Error from provider (Console): Upstream request failed (invalid_request_error)");
+    }
+
+    #[test]
+    fn test_extract_provider_message_simple() {
+        let body = r#"{"message":"Bad Request"}"#;
+        let msg = super::extract_provider_message(body);
+        assert_eq!(msg, "Bad Request");
+    }
+
+    #[test]
+    fn test_extract_provider_message_non_json() {
+        let body = "Internal Server Error";
+        let msg = super::extract_provider_message(body);
+        assert_eq!(msg, "Internal Server Error");
+    }
+
+    #[test]
+    fn test_extract_provider_message_fallback() {
+        // Malformed JSON that can't be parsed
+        let body = "{not valid json";
+        let msg = super::extract_provider_message(body);
+        assert!(msg.contains("not valid json"));
+    }
+
+    #[test]
+    fn test_provider_user_message_extracted() {
+        let err = Error::Provider {
+            status: 400,
+            body: r#"{"error":{"message":"Invalid request","type":"invalid_request_error"}}"#.to_string(),
+            retry_after: None,
+        };
+        let user_msg = err.user_message();
+        assert!(user_msg.contains("Invalid request"), "user_message should extract the message field: {}", user_msg);
+        assert!(user_msg.contains("400"), "user_message should include HTTP status: {}", user_msg);
     }
 }

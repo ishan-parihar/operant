@@ -927,7 +927,7 @@ impl OperantAgent {
                 Err(e) => {
                     error!(error = %e, "Error processing stream");
                     self.emit(AgentEvent::Error {
-                        error: e.to_string(),
+                        error: e.user_message(),
                     })
                     .await;
                     if self.record_trajectories {
