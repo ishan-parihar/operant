@@ -802,8 +802,12 @@ pub struct StreamingToolCallDelta {
 ///
 /// Uses the HTTP status code and response body to produce the most specific
 /// error variant, extracting retry timing from the body when available.
+///
+/// The body is sanitized at construction time (newlines/carriage returns
+/// stripped, truncated to 500 chars) so the Display output is readable.
 pub(crate) fn classify_http_error(status: u16, body: &str) -> Error {
     let retry_after = parse_retry_after_from_body(body);
+    let clean_body = sanitize_error_body(body);
     match status {
         401 | 403 => Error::Authentication(body.to_string()),
         429 => Error::RateLimited {
@@ -811,14 +815,32 @@ pub(crate) fn classify_http_error(status: u16, body: &str) -> Error {
         },
         s if s >= 500 => Error::Provider {
             status,
-            body: body.to_string(),
+            body: clean_body,
             retry_after,
         },
         _ => Error::Provider {
             status,
-            body: body.to_string(),
+            body: clean_body,
             retry_after: None,
         },
+    }
+}
+
+/// Sanitize a provider error body for display — strip newlines, carriage
+/// returns, collapse whitespace, truncate to 500 chars. Without this,
+/// raw provider JSON responses with `\r\r\r...` padding produce unreadable
+/// error messages in the TUI/CLI.
+fn sanitize_error_body(body: &str) -> String {
+    // Strip CR/LF and collapse whitespace
+    let clean = body
+        .replace("\r\n", " ")
+        .replace('\r', " ")
+        .replace('\n', " ");
+    let clean = clean.split_whitespace().collect::<Vec<_>>().join(" ");
+    if clean.len() > 500 {
+        format!("{}...", &clean[..500])
+    } else {
+        clean
     }
 }
 

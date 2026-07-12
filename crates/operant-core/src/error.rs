@@ -67,6 +67,8 @@ pub enum Error {
     #[error("Provider API error: HTTP {status} - {body}")]
     Provider {
         status: u16,
+        /// Sanitized body — stripped of newlines/carriage returns and
+        /// truncated to 500 chars so Display output is readable.
         body: String,
         retry_after: Option<std::time::Duration>,
     },
@@ -132,10 +134,17 @@ impl Error {
                 format!("Tool '{}' timed out.", name)
             }
             Error::InvalidToolArgs { name, details } => {
-                format!("Invalid arguments for tool '{}': {}", name, details)
+                format!("Tool '{}' received invalid arguments: {}", name, details)
             }
-            Error::Provider { status, .. } => {
-                format!("The AI provider returned an error (HTTP {}). Please try again or modify your approach.", status)
+            Error::Provider { status, body, .. } => {
+                // Strip newlines/whitespace and truncate the body for display
+                let clean_body = body.split_whitespace().collect::<Vec<_>>().join(" ");
+                let preview = if clean_body.len() > 200 {
+                    format!("{}...", &clean_body[..200])
+                } else {
+                    clean_body
+                };
+                format!("The AI provider returned an error (HTTP {}). {}. Please try again or modify your approach.", status, preview)
             }
             Error::RateLimited { .. } => {
                 "Rate limit exceeded. Waiting before retrying.".to_string()
