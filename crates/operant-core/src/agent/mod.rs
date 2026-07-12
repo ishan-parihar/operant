@@ -1290,6 +1290,7 @@ impl OperantAgent {
                     // thinking bug.)
                     let has_native_reasoning = chunk.reasoning.is_some();
                     if let Some(reasoning) = chunk.reasoning {
+                        let reasoning = reasoning.replace('\r', "");
                         let reasoning = strip_reasoning_tags(&reasoning);
                         if !reasoning.is_empty() {
                             accumulated_reasoning.push_str(&reasoning);
@@ -1305,7 +1306,14 @@ impl OperantAgent {
                     }
 
                     // Process content from StreamChunk
+                    // Strip bare \r (carriage return) characters from streaming
+                    // text. Providers sometimes emit \r in SSE streams (e.g. from
+                    // Windows-originated APIs or HTTP chunked encoding artifacts).
+                    // Bare \r corrupts terminal display by moving the cursor back
+                    // to column 0, causing garbled text and mid-word breaks.
+                    // (iter-263 — fixes streaming render corruption.)
                     if let Some(text) = chunk.content {
+                        let text = text.replace('\r', "");
                         let (content_delta, reasoning_delta) = content_router.feed(&text);
 
                         if !content_delta.is_empty() {
@@ -1386,12 +1394,13 @@ impl OperantAgent {
                 text: remaining_reasoning,
             })
             .await;
-        }
-
-        // Also try to extract any remaining tool calls from accumulated text.
-        // On the error path we don't want a parser failure to mask the
-        // original stream error, so fall back to an empty vec.
-        let mut remaining_parser = ToolCallParser::new();
+        }                    // Also try to extract any remaining tool calls from accumulated text.
+                    // On the error path we don't want a parser failure to mask the
+                    // original stream error, so fall back to an empty vec.
+                    // Strip \r from accumulated text before final processing.
+                    accumulated_text = accumulated_text.replace('\r', "");
+                    accumulated_reasoning = accumulated_reasoning.replace('\r', "");
+                    let mut remaining_parser = ToolCallParser::new();
         let remaining_calls = if stream_error.is_some() {
             remaining_parser
                 .parse(&accumulated_text)
