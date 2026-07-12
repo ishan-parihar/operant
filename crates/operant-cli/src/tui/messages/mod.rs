@@ -188,8 +188,17 @@ pub fn render_transcript_assistant_meta(
 }
 
 pub fn render_transcript_live_text(text: &str, width: u16) -> Vec<Line<'static>> {
+    // Sanitize \r and \n as a last line of defense before render_markdown.
+    // Providers like mimo send \n within JSON content at mid-word positions,
+    // which causes text.lines() in render_markdown to fragment words.
+    // \r corrupts terminal display by moving the cursor to column 0.
+    let text: std::borrow::Cow<str> = if text.contains('\r') || text.contains('\n') {
+        text.replace('\r', " ").replace('\n', " ").into()
+    } else {
+        text.into()
+    };
     indent_lines(
-        render_markdown(text, width.saturating_sub(4)),
+        render_markdown(&text, width.saturating_sub(4)),
         "   ",
         Style::default(),
         TRANSCRIPT_TEXT,
