@@ -1405,6 +1405,44 @@ impl OperantAgent {
             merge_stream_tool_call(&mut tool_calls, tc);
         }
 
+        // ── Validate tool call arguments before returning (iter-261) ──
+        // Truncated streaming can leave tool_calls with incomplete JSON
+        // arguments (e.g. `{"query": "te` from a cut-off SSE stream).
+        // Repair what we can; discard tool calls whose arguments are
+        // irreparably broken so execute_tools doesn't surface a raw
+        // "Invalid JSON" error to the user.
+        tool_calls.retain(|tc| {
+            let args = tc.function.arguments.trim();
+            if args.is_empty() || args == "{}" {
+                return true; // Empty args are valid (tool uses defaults)
+            }
+            match serde_json::from_str::<serde_json::Value>(args) {
+                Ok(_) => true,
+                Err(_) => {
+                    let repaired = repair_json(args);
+                    match serde_json::from_str::<serde_json::Value>(&repaired) {
+                        Ok(_) => {
+                            debug!(
+                                tool = %tc.function.name,
+                                original_len = args.len(),
+                                "Tool arguments auto-repaired in process_stream"
+                            );
+                            true // repaired — keep it (repair happens again in execute_tools)
+                        }
+                        Err(e) => {
+                            warn!(
+                                tool = %tc.function.name,
+                                error = %e,
+                                args_preview = %safe_truncate_str(args, 80),
+                                "Discarding tool call with irreparable arguments"
+                            );
+                            false // irreparable — drop this tool call
+                        }
+                    }
+                }
+            }
+        });
+
         if let Some(err) = stream_error {
             // Surface the original stream error (not a generic "Stream
             // processing failed" string) so the caller can see what went
@@ -1548,10 +1586,22 @@ impl OperantAgent {
                         debug!(tool = %name, "Tool arguments auto-repaired");
                         a
                     } else {
-                        warn!(tool = %name, error = %e, args = %args_str, "Failed to parse tool arguments");
+                        let preview = safe_truncate_str(&args_str, 120);
+                        warn!(
+                            tool = %name,
+                            error = %e,
+                            args_preview = %preview,
+                            args_len = args_str.len(),
+                            "Failed to parse tool arguments (truncated by provider?)"
+                        );
                         early_results[idx] = Some(ToolResult::error(
                             &tool_call.id,
-                            format!("Invalid JSON: {}", e),
+                            format!(
+                                "Tool '{}' received truncated arguments from the model (length {}). \
+                                 The model's response was likely cut off — please retry your request.",
+                                name,
+                                args_str.len()
+                            ),
                         ));
                         continue;
                     }
@@ -1995,11 +2045,16 @@ fn extract_tool_calls_from_choice(
 
 /// Attempt to repair truncated JSON by balancing braces, brackets, and quotes.
 /// This handles common streaming truncation issues where the model's tool-call
-/// arguments are cut off mid-value. (iter-123)
+/// arguments are cut off mid-value. (iter-123, improved iter-261)
 fn repair_json(s: &str) -> String {
     let mut result = s.trim().to_string();
     if result.is_empty() {
         return "{}".to_string();
+    }
+
+    // If the JSON is structurally valid already, return as-is.
+    if serde_json::from_str::<serde_json::Value>(&result).is_ok() {
+        return result;
     }
 
     // Count unmatched braces, brackets, and quotes
@@ -2007,8 +2062,9 @@ fn repair_json(s: &str) -> String {
     let mut bracket_depth = 0i32;
     let mut in_string = false;
     let mut escape_next = false;
+    let mut first_brace_pos: Option<usize> = None; // position of first '{' or '['
 
-    for ch in result.chars() {
+    for (pos, ch) in result.char_indices() {
         if escape_next {
             escape_next = false;
             continue;
@@ -2023,9 +2079,19 @@ fn repair_json(s: &str) -> String {
         }
         if !in_string {
             match ch {
-                '{' => brace_depth += 1,
+                '{' => {
+                    brace_depth += 1;
+                    if first_brace_pos.is_none() {
+                        first_brace_pos = Some(pos);
+                    }
+                }
                 '}' => brace_depth -= 1,
-                '[' => bracket_depth += 1,
+                '[' => {
+                    bracket_depth += 1;
+                    if first_brace_pos.is_none() {
+                        first_brace_pos = Some(pos);
+                    }
+                }
                 ']' => bracket_depth -= 1,
                 _ => {}
             }
@@ -2037,20 +2103,98 @@ fn repair_json(s: &str) -> String {
         result.push('"');
     }
 
-    // Remove trailing comma if present
-    while result.ends_with(',') || result.ends_with(' ') {
-        result.pop();
+    // Clean up trailing incomplete key-value pairs.
+    // Truncation often cuts off after a colon (incomplete value) or
+    // after a comma (incomplete next key). Strip these before closing.
+    let mut trimmed = result.trim_end().to_string();
+    // Strip trailing comma: {"a": 1, "b": 2,  →  {"a": 1, "b": 2
+    while trimmed.ends_with(',') {
+        trimmed.pop();
+    }
+    // Strip trailing colon + incomplete key: {"a": 1, "b":  →  {"a": 1
+    // Heuristic: if it ends with ':', find the last ',' at the current
+    // nesting level and truncate there, keeping all complete pairs.
+    if trimmed.ends_with(':') {
+        // Find the last comma that's not inside a string at depth 1
+        // (just inside the outermost object). Truncate there.
+        let mut depth = 0i32;
+        let mut in_s = false;
+        let mut esc = false;
+        let mut last_comma_at_depth1: Option<usize> = None;
+        for (pos, ch) in trimmed.char_indices() {
+            if esc {
+                esc = false;
+                continue;
+            }
+            if ch == '\\' && in_s {
+                esc = true;
+                continue;
+            }
+            if ch == '"' {
+                in_s = !in_s;
+                continue;
+            }
+            if !in_s {
+                match ch {
+                    '{' | '[' => depth += 1,
+                    '}' | ']' => depth -= 1,
+                    ',' if depth == 1 => {
+                        last_comma_at_depth1 = Some(pos);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if let Some(comma_pos) = last_comma_at_depth1 {
+            trimmed.truncate(comma_pos);
+        } else {
+            // No comma at depth 1 — the only key is incomplete.
+            // Truncate to just after the opening brace.
+            let truncate_at = first_brace_pos.map(|p| p + 1).unwrap_or(0);
+            if truncate_at > 0 && truncate_at < trimmed.len() {
+                trimmed.truncate(truncate_at);
+            }
+        }
+    }
+
+    // Recount depth after trimming
+    let mut final_brace = 0i32;
+    let mut final_bracket = 0i32;
+    let mut in_s = false;
+    let mut esc = false;
+    for ch in trimmed.chars() {
+        if esc {
+            esc = false;
+            continue;
+        }
+        if ch == '\\' && in_s {
+            esc = true;
+            continue;
+        }
+        if ch == '"' {
+            in_s = !in_s;
+            continue;
+        }
+        if !in_s {
+            match ch {
+                '{' => final_brace += 1,
+                '}' => final_brace -= 1,
+                '[' => final_bracket += 1,
+                ']' => final_bracket -= 1,
+                _ => {}
+            }
+        }
     }
 
     // Close unmatched brackets and braces
-    for _ in 0..bracket_depth.max(0) {
-        result.push(']');
+    for _ in 0..final_bracket.max(0) {
+        trimmed.push(']');
     }
-    for _ in 0..brace_depth.max(0) {
-        result.push('}');
+    for _ in 0..final_brace.max(0) {
+        trimmed.push('}');
     }
 
-    result
+    trimmed
 }
 
 pub(crate) fn merge_stream_tool_call(tool_calls: &mut Vec<ToolCall>, tool_call: ToolCall) {
