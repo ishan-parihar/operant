@@ -157,6 +157,11 @@ fn highlight_code_line_spans(
 
 /// Render markdown text to styled ratatui lines.
 pub fn render_markdown(text: &str, width: u16) -> Vec<Line<'static>> {
+    // Strip bare \r (carriage return) characters as a safety net.
+    // These corrupt terminal display by moving the cursor to column 0.
+    // Primary stripping happens in process_stream, but this catches any
+    // \r that enters through other paths (e.g. committed messages).
+    let text = text.replace('\r', "");
     let all_lines: Vec<&str> = text.lines().collect();
     let mut lines: Vec<Line<'static>> = Vec::new();
     let mut in_code_block = false;
