@@ -157,13 +157,14 @@ fn highlight_code_line_spans(
 
 /// Render markdown text to styled ratatui lines.
 pub fn render_markdown(text: &str, width: u16) -> Vec<Line<'static>> {
-    // Strip bare \r (carriage return) characters as a safety net.
-    // These corrupt terminal display by moving the cursor to column 0.
-    // Primary sanitization happens in process_stream; this catches \r
-    // that enters through other paths (committed messages, reloaded sessions).
-    // NOTE: We do NOT strip \n here because it would break markdown
-    // rendering (code blocks, lists, headers all depend on \n).
-    let text = text.replace('\r', "");
+    // Strip \r and \n as a safety net.
+    // Providers like mimo send \n within JSON content at mid-word positions,
+    // which causes text.lines() to fragment words. \r corrupts terminal
+    // display by moving the cursor to column 0.
+    // NOTE: This destroys markdown paragraph breaks (double \n), but the
+    // garbled mid-word fragmentation is worse. The word_wrap function
+    // handles line-breaking at the correct width.
+    let text = text.replace('\r', "").replace('\n', " ");
     let all_lines: Vec<&str> = text.lines().collect();
     let mut lines: Vec<Line<'static>> = Vec::new();
     let mut in_code_block = false;
