@@ -6856,7 +6856,7 @@ impl App {
                         self.is_streaming = false;
                         if let Err(e) = result {
                             self.handle_agent_event(AgentEvent::Error {
-                                error: e.to_string(),
+                                error: e.user_message(),
                             });
                         }
                         self.run_complete_rx = None;
