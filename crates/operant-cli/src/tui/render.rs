@@ -29,7 +29,7 @@ use crate::tui::mcp_view::render_mcp_view;
 use crate::tui::memory_file_selector::render_memory_file_selector;
 use crate::tui::messages::{
     render_markdown, render_thinking_live_content, render_transcript_assistant_message_tagged,
-    render_transcript_assistant_meta, render_transcript_user_message,
+    render_transcript_assistant_meta, render_transcript_live_text, render_transcript_user_message,
     RenderContext,
 };
 use crate::tui::notifications::{render_notification_banner, Notification, NotificationKind};
@@ -1250,29 +1250,44 @@ fn append_turn_items(
     }
 
     let mut sections: Vec<(SectionContent, Option<usize>)> = Vec::new();
-    for (message_index, message) in &turn.assistant_messages {
-        let tagged = render_transcript_assistant_message_tagged(
-            message,
-            &RenderContext {
-                width,
-                show_thinking: show_reasoning,
-                tool_names: tool_names.clone(),
-                expanded_thinking: expanded_thinking.clone(),
-            },
-        );
-        if !tagged.is_empty() {
-            sections.push((SectionContent::Tagged(tagged), Some(*message_index)));
-        }
-    }
 
-    for block in &turn.tool_blocks {
-        let mut lines = Vec::new();
-        render_tool_block_lines(&mut lines, block, frame_count);
-        if !lines.is_empty() {
-            sections.push((
-                SectionContent::Plain(lines),
-                Some(turn.primary_message_index()),
-            ));
+    // Interleave assistant messages and tool blocks in the correct causal
+    // order. The agent loop produces: text → tool → text → tool → text.
+    // Rendering all messages first then all tools breaks the causation chain.
+    // (iter-260 — user-reported bug: tool call order was incorrect.)
+    let msg_count = turn.assistant_messages.len();
+    let tool_count = turn.tool_blocks.len();
+    let max_len = msg_count.max(tool_count);
+
+    for i in 0..max_len {
+        // Render assistant message at this position (if it exists)
+        if i < msg_count {
+            let (message_index, message) = &turn.assistant_messages[i];
+            let tagged = render_transcript_assistant_message_tagged(
+                message,
+                &RenderContext {
+                    width,
+                    show_thinking: show_reasoning,
+                    tool_names: tool_names.clone(),
+                    expanded_thinking: expanded_thinking.clone(),
+                },
+            );
+            if !tagged.is_empty() {
+                sections.push((SectionContent::Tagged(tagged), Some(*message_index)));
+            }
+        }
+
+        // Render tool block at this position (if it exists)
+        if i < tool_count {
+            let block = turn.tool_blocks[i];
+            let mut lines = Vec::new();
+            render_tool_block_lines(&mut lines, block, frame_count);
+            if !lines.is_empty() {
+                sections.push((
+                    SectionContent::Plain(lines),
+                    Some(turn.primary_message_index()),
+                ));
+            }
         }
     }
 
@@ -1498,9 +1513,12 @@ fn append_live_content(
     }
 
     // 4. Live streaming text (the model's final response — appears LAST).
-    //    Reuse the cached render when the buffer is unchanged since the last
-    //    frame so syntect doesn't re-highlight the whole growing text every
-    //    redraw. (C1: eliminates the per-frame render_markdown hog.)
+    //    Uses the same rendering path as committed text
+    //    (render_transcript_live_text) so the text width and indent are
+    //    consistent between streaming and committed states. Without this,
+    //    text jumps horizontally when streaming ends. (iter-260)
+    //    Reuses cached render when unchanged to avoid re-running syntect
+    //    every frame. (C1)
     if !app.streaming_text.is_empty() {
         let text_lines = STREAMING_TEXT_CACHE.with(|cache| {
             let mut slot = cache.borrow_mut();
@@ -1509,7 +1527,7 @@ fn append_live_content(
                     return cached.lines.clone();
                 }
             }
-            let lines = render_markdown(&app.streaming_text, width);
+            let lines = render_transcript_live_text(&app.streaming_text, width);
             *slot = Some(StreamingTextCache {
                 width,
                 text: app.streaming_text.clone(),
