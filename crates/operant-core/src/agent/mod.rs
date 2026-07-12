@@ -1618,6 +1618,27 @@ impl OperantAgent {
                 continue;
             }
 
+            // ── Centralized argument validation (iter-262) ───────────
+            // Validate required fields BEFORE calling tool.execute().
+            // Without this, each tool's serde_json::from_value() would fail
+            // independently with opaque "missing field 'query'" errors.
+            // Centralized validation gives a clear, consistent error message
+            // and prevents truncated tool calls from reaching the tool impl.
+            if let Some(tool) = self.registry.get(&name).await {
+                let schema = tool.schema();
+                if let Err(e) = schema.validate_args(&args) {
+                    warn!(tool = %name, error = %e, "Tool argument validation failed");
+                    // Use the schema validation error message directly — it
+                    // already includes the field name (e.g. "Missing required
+                    // field: query"). Avoid duplicating the tool name.
+                    early_results[idx] = Some(ToolResult::error(
+                        &tool_call.id,
+                        e.to_string(),
+                    ));
+                    continue;
+                }
+            }
+
             // Smart approval gate
             if self.config.approval_mode != "off" {
                 let approval_result = crate::approval::check_tool_approval(
