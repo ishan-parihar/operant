@@ -3124,6 +3124,13 @@ impl App {
         }
         let pct = (self.token_count as f64 / window as f64 * 100.0) as u8;
 
+        // Usage dropped back below the last-shown threshold (e.g. /clear or
+        // /compact shrank the context) — reset so warnings can re-fire on
+        // the way back up instead of being suppressed forever.
+        if pct < self.token_warning_threshold_shown {
+            self.token_warning_threshold_shown = 0;
+        }
+
         // Only escalate — never repeat a threshold already shown.
         if pct >= 100 && self.token_warning_threshold_shown < 100 {
             self.token_warning_threshold_shown = 100;
@@ -3145,6 +3152,26 @@ impl App {
                 NotificationKind::Warning,
                 "Context window 80% full. Consider /compact.".to_string(),
                 Some(30),
+            );
+        }
+    }
+
+    /// Drain any pasted images waiting to be attached and, if there were any,
+    /// warn that they weren't actually sent. Call this once a message has
+    /// been submitted. Images can't be attached yet because the core
+    /// client's request path has no multi-part content support — without
+    /// this, the thumbnail row would linger forever and look like the
+    /// image was sent when it silently wasn't.
+    pub fn drop_pending_images_with_notice(&mut self) {
+        let dropped = self.prompt_input.clear_images();
+        if !dropped.is_empty() {
+            self.push_notification(
+                NotificationKind::Warning,
+                format!(
+                    "Image attachments aren't sent to the model yet — {} image(s) dropped.",
+                    dropped.len()
+                ),
+                Some(6),
             );
         }
     }
@@ -6430,6 +6457,7 @@ impl App {
                 }
                 self.cost_usd = self.cost_tracker.total_cost;
                 self.token_count = turn_tokens;
+                self.check_token_warnings();
             }
 
             AgentEvent::Cost {
@@ -6943,6 +6971,7 @@ impl App {
                             self.dismiss_error_notifications();
                             let input = self.take_input();
                             if !input.is_empty() {
+                                self.drop_pending_images_with_notice();
                                 return Ok(Some(input));
                             }
                         }
@@ -7685,6 +7714,82 @@ mod tests {
             app.token_count, 200,
             "token_count should use authoritative total_tokens (200), not input+output (150)"
         );
+    }
+
+    #[test]
+    fn test_usage_event_pushes_token_warning_notification() {
+        // iter-255: check_token_warnings() was never called from the Usage
+        // handler despite its doc comment saying to call it after updating
+        // token_count — the whole warning subsystem was dead. context_window_for_model
+        // is a fixed 128000 stub, so 110_000 tokens crosses the 80% threshold.
+        let mut app = make_app();
+        app.handle_agent_event(AgentEvent::Usage {
+            input_tokens: 60_000,
+            output_tokens: 50_000,
+            total_tokens: 110_000,
+        });
+        assert_eq!(app.token_warning_threshold_shown, 80);
+        assert!(
+            app.notifications
+                .notifications
+                .iter()
+                .any(|n| n.message.contains("80% full")),
+            "expected an 80%-full context warning notification to be pushed"
+        );
+    }
+
+    #[test]
+    fn test_token_warning_threshold_resets_when_usage_drops() {
+        // Without a reset, an escalate-only gate would permanently suppress
+        // warnings after /clear or /compact shrinks the context back down.
+        let mut app = make_app();
+        app.handle_agent_event(AgentEvent::Usage {
+            input_tokens: 100_000,
+            output_tokens: 21_600,
+            total_tokens: 121_600, // 95% of the 128_000 stub window
+        });
+        assert_eq!(app.token_warning_threshold_shown, 95);
+
+        // Simulate /clear (or a successful /compact) shrinking usage back down.
+        app.handle_agent_event(AgentEvent::Usage {
+            input_tokens: 1_000,
+            output_tokens: 0,
+            total_tokens: 1_000,
+        });
+        assert_eq!(
+            app.token_warning_threshold_shown, 0,
+            "threshold tracker should reset once usage drops back below it"
+        );
+    }
+
+    #[test]
+    fn test_drop_pending_images_with_notice_warns_and_clears() {
+        // iter-255: pasted images were never attached to the outgoing message
+        // (no multi-part content support in the core client) nor cleared on
+        // send, so the thumbnail row lingered forever looking attached.
+        let mut app = make_app();
+        app.prompt_input.add_image(crate::image_paste::PastedImage {
+            path: std::path::PathBuf::from("/tmp/test.png"),
+            label: "test.png".to_string(),
+            dimensions: None,
+        });
+        app.drop_pending_images_with_notice();
+        assert!(app.prompt_input.pending_images.is_empty());
+        assert!(
+            app.notifications
+                .notifications
+                .iter()
+                .any(|n| n.message.contains("dropped")),
+            "expected a warning that the image wasn't sent"
+        );
+    }
+
+    #[test]
+    fn test_drop_pending_images_with_notice_noop_when_empty() {
+        let mut app = make_app();
+        let before = app.notifications.notifications.len();
+        app.drop_pending_images_with_notice();
+        assert_eq!(app.notifications.notifications.len(), before);
     }
 
     #[test]
