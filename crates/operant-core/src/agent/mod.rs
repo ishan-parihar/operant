@@ -1395,13 +1395,13 @@ impl OperantAgent {
                 text: remaining_reasoning,
             })
             .await;
-        }                    // Also try to extract any remaining tool calls from accumulated text.
-                    // On the error path we don't want a parser failure to mask the
-                    // original stream error, so fall back to an empty vec.
-                    // Strip \r/\n from accumulated text before final processing.
-                    accumulated_text = accumulated_text.replace('\r', " ").replace('\n', " ");
-                    accumulated_reasoning = accumulated_reasoning.replace('\r', " ").replace('\n', " ");
-                    let mut remaining_parser = ToolCallParser::new();
+        } // Also try to extract any remaining tool calls from accumulated text.
+          // On the error path we don't want a parser failure to mask the
+          // original stream error, so fall back to an empty vec.
+          // Strip \r/\n from accumulated text before final processing.
+        accumulated_text = accumulated_text.replace('\r', " ").replace('\n', " ");
+        accumulated_reasoning = accumulated_reasoning.replace('\r', " ").replace('\n', " ");
+        let mut remaining_parser = ToolCallParser::new();
         let remaining_calls = if stream_error.is_some() {
             remaining_parser
                 .parse(&accumulated_text)
@@ -1641,10 +1641,7 @@ impl OperantAgent {
                     // Use the schema validation error message directly — it
                     // already includes the field name (e.g. "Missing required
                     // field: query"). Avoid duplicating the tool name.
-                    early_results[idx] = Some(ToolResult::error(
-                        &tool_call.id,
-                        e.to_string(),
-                    ));
+                    early_results[idx] = Some(ToolResult::error(&tool_call.id, e.to_string()));
                     continue;
                 }
             }

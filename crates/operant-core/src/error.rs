@@ -188,7 +188,10 @@ impl Error {
             }
             Error::Provider { status, body, .. } => {
                 let msg = extract_provider_message(body);
-                format!("The AI provider returned an error (HTTP {}). {}", status, msg)
+                format!(
+                    "The AI provider returned an error (HTTP {}). {}",
+                    status, msg
+                )
             }
             Error::RateLimited { .. } => {
                 "Rate limit exceeded. Waiting before retrying.".to_string()
@@ -252,15 +255,16 @@ mod tests {
             !err.is_self_healing(),
             "RateLimited should not be self-healing"
         );
-    }    #[test]
+    }
+    #[test]
     fn test_authentication_not_transient_not_self_healing() {
         let err = Error::Authentication("invalid key".to_string());
-        assert!(!
-            err.is_transient(),
+        assert!(
+            !err.is_transient(),
             "Authentication should not be transient"
         );
-        assert!(!
-            err.is_self_healing(),
+        assert!(
+            !err.is_self_healing(),
             "Authentication should not be self-healing"
         );
     }
@@ -278,7 +282,10 @@ mod tests {
         // OpenAI-style: {"error":{"message":"...","type":"invalid_request_error"}}
         let body = r#"{"error":{"message":"Error from provider (Console): Upstream request failed","type":"invalid_request_error","param":null,"code":"invalid_request_error"}}"#;
         let msg = super::extract_provider_message(body);
-        assert_eq!(msg, "Error from provider (Console): Upstream request failed (invalid_request_error)");
+        assert_eq!(
+            msg,
+            "Error from provider (Console): Upstream request failed (invalid_request_error)"
+        );
     }
 
     #[test]
@@ -307,11 +314,20 @@ mod tests {
     fn test_provider_user_message_extracted() {
         let err = Error::Provider {
             status: 400,
-            body: r#"{"error":{"message":"Invalid request","type":"invalid_request_error"}}"#.to_string(),
+            body: r#"{"error":{"message":"Invalid request","type":"invalid_request_error"}}"#
+                .to_string(),
             retry_after: None,
         };
         let user_msg = err.user_message();
-        assert!(user_msg.contains("Invalid request"), "user_message should extract the message field: {}", user_msg);
-        assert!(user_msg.contains("400"), "user_message should include HTTP status: {}", user_msg);
+        assert!(
+            user_msg.contains("Invalid request"),
+            "user_message should extract the message field: {}",
+            user_msg
+        );
+        assert!(
+            user_msg.contains("400"),
+            "user_message should include HTTP status: {}",
+            user_msg
+        );
     }
 }

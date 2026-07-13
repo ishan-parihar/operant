@@ -114,8 +114,14 @@ const PROMPT_SLASH_COMMANDS: &[(&str, &str)] = &[
     ("whoami", "Show current user"),
     ("sessions", "List all sessions"),
     // iter-77+ backfilled commands (were hidden — now surfaced in /help)
-    ("save", "Save / export the current conversation (alias for /export)"),
-    ("subgoal", "Set an additional sub-goal for the session (alias for /goal)"),
+    (
+        "save",
+        "Save / export the current conversation (alias for /export)",
+    ),
+    (
+        "subgoal",
+        "Set an additional sub-goal for the session (alias for /goal)",
+    ),
     ("steer", "Queue a steer directive mid-stream"),
     ("journey", "Browse skills + memories timeline"),
     ("setup", "Re-run the setup wizard"),
