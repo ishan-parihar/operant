@@ -1225,8 +1225,6 @@ fn push_blank_item(items: &mut Vec<RenderedLineItem>) {
     push_rendered_items(items, vec![Line::from("")], None, false);
 }
 
-
-
 fn append_turn_items(
     items: &mut Vec<RenderedLineItem>,
     turn: &TranscriptTurn<'_>,

@@ -55,30 +55,53 @@ impl AnthropicModelClient {
         let mut system: Option<String> = None;
         let mut messages: Vec<Value> = Vec::new();
 
+        // Anthropic's API requires that ALL tool_result blocks from a single
+        // assistant turn be grouped into ONE user message. Emitting a separate
+        // user message per tool result causes HTTP 400 "invalid_request_error"
+        // ("messages must alternate between user and assistant roles").
+        //
+        // Strategy: iterate through all messages and whenever we encounter a
+        // run of consecutive Role::Tool messages, collect them all into a
+        // single `{"role":"user","content":[{tool_result},{tool_result},…]}`.
+        // A non-Tool message (or the end of the list) flushes the accumulator.
+        let mut pending_tool_results: Vec<Value> = Vec::new();
+
+        let flush_tool_results = |msgs: &mut Vec<Value>, pending: &mut Vec<Value>| {
+            if !pending.is_empty() {
+                msgs.push(json!({"role": "user", "content": pending.clone()}));
+                pending.clear();
+            }
+        };
+
         for msg in &request.messages {
             match msg.role {
                 Role::System => {
+                    flush_tool_results(&mut messages, &mut pending_tool_results);
                     system = Some(msg.content.clone());
                 }
                 Role::User => {
+                    flush_tool_results(&mut messages, &mut pending_tool_results);
                     messages.push(json!({"role": "user", "content": msg.content}));
                 }
                 Role::Assistant => {
+                    flush_tool_results(&mut messages, &mut pending_tool_results);
                     let content = self.build_assistant_content(msg);
                     messages.push(json!({"role": "assistant", "content": content}));
                 }
                 Role::Tool => {
-                    messages.push(json!({
-                        "role": "user",
-                        "content": [{
-                            "type": "tool_result",
-                            "tool_use_id": msg.tool_call_id.as_deref().unwrap_or(""),
-                            "content": msg.content
-                        }]
+                    // Accumulate into the pending batch — do NOT flush yet.
+                    // The next non-Tool message (or end of list) will flush
+                    // all accumulated results into a single user message.
+                    pending_tool_results.push(json!({
+                        "type": "tool_result",
+                        "tool_use_id": msg.tool_call_id.as_deref().unwrap_or(""),
+                        "content": msg.content
                     }));
                 }
             }
         }
+        // Flush any trailing tool results (e.g. at the very end of the list).
+        flush_tool_results(&mut messages, &mut pending_tool_results);
 
         let mut body = json!({
             "model": request.model,
@@ -669,5 +692,132 @@ mod tests {
             r#"{"type":"message_start","message":{"id":"msg_1"}}"#,
         );
         assert!(parse_sse_event(&block, &mut map).is_none());
+    }
+
+    // ── convert_request tool-result batching tests (iter-70) ─────────────────
+    //
+    // Anthropic's API requires that ALL tool_result blocks from a single
+    // assistant turn are grouped into ONE user message. Previously each
+    // Role::Tool message was emitted as a separate {"role":"user"} message,
+    // which caused HTTP 400 "invalid_request_error" when the agent ran
+    // multiple tools concurrently (iter-56 concurrent 8-worker pool).
+
+    fn make_client() -> AnthropicModelClient {
+        AnthropicModelClient::new("sk-test".to_string())
+    }
+
+    fn make_request(messages: Vec<crate::client::Message>) -> ChatRequest {
+        ChatRequest::new("claude-opus-4-5", messages)
+    }
+
+    /// Two consecutive Role::Tool messages (parallel tool results) must be
+    /// merged into a SINGLE user message with two tool_result content blocks.
+    /// Previously each Role::Tool produced a separate user message, which
+    /// violated Anthropic's role-alternation rule.
+    #[test]
+    fn convert_request_batches_consecutive_tool_results_into_one_user_message() {
+        use crate::client::Message;
+
+        let client = make_client();
+        let messages = vec![
+            Message::user("run two tools"),
+            // Simulated assistant with two tool_use blocks (content set by build_assistant_content)
+            Message::assistant(""),
+            Message::tool("call_1", r#"{"result":"search done"}"#),
+            Message::tool("call_2", r#"{"result":"memory stored"}"#),
+        ];
+        let body = client.convert_request(&make_request(messages));
+        let msgs = body["messages"].as_array().expect("messages must be array");
+
+        // Expected shape: user → assistant → user (with 2 tool_results)
+        // NOT: user → assistant → user → user
+        assert_eq!(
+            msgs.len(),
+            3,
+            "must be exactly 3 messages (user, assistant, batched-tool-user); got {}: {body}",
+            msgs.len()
+        );
+
+        assert_eq!(msgs[0]["role"].as_str(), Some("user"));
+        assert_eq!(msgs[1]["role"].as_str(), Some("assistant"));
+        assert_eq!(msgs[2]["role"].as_str(), Some("user"));
+
+        let content = msgs[2]["content"]
+            .as_array()
+            .expect("batched tool message must have array content");
+        assert_eq!(
+            content.len(),
+            2,
+            "batched tool message must contain exactly 2 tool_result blocks; got {}: {content:?}",
+            content.len()
+        );
+        assert_eq!(content[0]["type"].as_str(), Some("tool_result"));
+        assert_eq!(content[0]["tool_use_id"].as_str(), Some("call_1"));
+        assert_eq!(content[1]["type"].as_str(), Some("tool_result"));
+        assert_eq!(content[1]["tool_use_id"].as_str(), Some("call_2"));
+    }
+
+    /// A single Role::Tool message must still produce a valid user message
+    /// with a single tool_result block (regression guard — single-tool case).
+    #[test]
+    fn convert_request_single_tool_result_still_wrapped_correctly() {
+        use crate::client::Message;
+
+        let client = make_client();
+        let messages = vec![
+            Message::user("do one thing"),
+            Message::assistant(""),
+            Message::tool("call_only", r#"{"ok":true}"#),
+        ];
+        let body = client.convert_request(&make_request(messages));
+        let msgs = body["messages"].as_array().expect("messages must be array");
+
+        assert_eq!(msgs.len(), 3);
+        assert_eq!(msgs[2]["role"].as_str(), Some("user"));
+        let content = msgs[2]["content"]
+            .as_array()
+            .expect("tool message must have array content");
+        assert_eq!(content.len(), 1);
+        assert_eq!(content[0]["type"].as_str(), Some("tool_result"));
+        assert_eq!(content[0]["tool_use_id"].as_str(), Some("call_only"));
+    }
+
+    /// Tool results followed by another user turn must flush the batch
+    /// before emitting the next user message. Tests that the accumulator
+    /// resets correctly across turn boundaries.
+    #[test]
+    fn convert_request_tool_results_flushed_before_next_user_turn() {
+        use crate::client::Message;
+
+        let client = make_client();
+        let messages = vec![
+            Message::user("first user turn"),
+            Message::assistant(""),
+            Message::tool("call_a", "result a"),
+            Message::tool("call_b", "result b"),
+            Message::user("second user turn"),
+        ];
+        let body = client.convert_request(&make_request(messages));
+        let msgs = body["messages"].as_array().expect("messages must be array");
+
+        // user → assistant → batched-tool-user → user
+        assert_eq!(
+            msgs.len(),
+            4,
+            "must have 4 messages; got {}: {body}",
+            msgs.len()
+        );
+        assert_eq!(msgs[0]["role"].as_str(), Some("user"));
+        assert_eq!(msgs[0]["content"].as_str(), Some("first user turn"));
+        assert_eq!(msgs[1]["role"].as_str(), Some("assistant"));
+        // batched tool results
+        assert_eq!(msgs[2]["role"].as_str(), Some("user"));
+        assert_eq!(
+            msgs[2]["content"].as_array().expect("must be array").len(),
+            2
+        );
+        // second explicit user turn
+        assert_eq!(msgs[3]["role"].as_str(), Some("user"));
+        assert_eq!(msgs[3]["content"].as_str(), Some("second user turn"));
     }
 }
