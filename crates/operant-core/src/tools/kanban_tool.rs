@@ -49,6 +49,13 @@ impl KanbanTool {
         let action = args.action.to_lowercase();
 
         match action.as_str() {
+            "list" => {
+                let tasks = self.db.list_tasks()?;
+                let result = json!({
+                    "tasks": tasks,
+                });
+                Ok(serde_json::to_string_pretty(&result).unwrap())
+            }
             "show" => {
                 let tid = args
                     .task_id
