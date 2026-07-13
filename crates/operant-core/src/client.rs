@@ -575,6 +575,57 @@ impl Message {
         self
     }
 
+fn repair_json_simple(s: &str) -> String {
+    let mut result = s.to_string();
+    let mut brace_depth = 0i32;
+    let mut bracket_depth = 0i32;
+    let mut in_string = false;
+    let mut escape_next = false;
+
+    for ch in result.chars() {
+        if escape_next {
+            escape_next = false;
+            continue;
+        }
+        if ch == '\\' && in_string {
+            escape_next = true;
+            continue;
+        }
+        if ch == '"' {
+            in_string = !in_string;
+            continue;
+        }
+        if !in_string {
+            match ch {
+                '{' => brace_depth += 1,
+                '}' => brace_depth -= 1,
+                '[' => bracket_depth += 1,
+                ']' => bracket_depth -= 1,
+                _ => {}
+            }
+        }
+    }
+
+    if in_string {
+        result.push('"');
+    }
+    
+    let mut trimmed = result.trim_end().to_string();
+    while trimmed.ends_with(',') || trimmed.ends_with(':') {
+        trimmed.pop();
+        trimmed = trimmed.trim_end().to_string();
+    }
+
+    for _ in 0..bracket_depth.max(0) {
+        trimmed.push(']');
+    }
+    for _ in 0..brace_depth.max(0) {
+        trimmed.push('}');
+    }
+
+    trimmed
+}
+
     /// Convert to JSON value for API
     fn to_value(&self) -> Value {
         let mut map = serde_json::Map::new();
@@ -584,12 +635,30 @@ impl Message {
             let tc_array: Vec<Value> = tool_calls
                 .iter()
                 .map(|tc| {
+                    let cleaned_args = {
+                        let args = &tc.function.arguments;
+                        if serde_json::from_str::<Value>(args).is_ok() {
+                            args.clone()
+                        } else {
+                            let trimmed = args.trim();
+                            if trimmed.is_empty() {
+                                "{}".to_string()
+                            } else {
+                                let repaired = Self::repair_json_simple(trimmed);
+                                if serde_json::from_str::<Value>(&repaired).is_ok() {
+                                    repaired
+                                } else {
+                                    "{}".to_string()
+                                }
+                            }
+                        }
+                    };
                     json!({
                         "id": tc.id,
                         "type": "function",
                         "function": {
                             "name": tc.function.name,
-                            "arguments": tc.function.arguments
+                            "arguments": cleaned_args
                         }
                     })
                 })

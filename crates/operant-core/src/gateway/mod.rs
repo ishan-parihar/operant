@@ -2688,9 +2688,8 @@ impl PlatformAdapter for WebhookAdapter {
                             username: "Webhook".to_string(),
                             content,
                             is_group_chat: false,
-            timestamp: chrono::Utc::now().timestamp(),
-            thread_id: None,
-                            
+                            timestamp: chrono::Utc::now().timestamp(),
+                            thread_id: None,
                             raw: serde_json::from_slice(&body).unwrap_or(serde_json::json!({"route": route})),
                         };
 
