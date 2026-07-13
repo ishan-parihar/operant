@@ -875,12 +875,19 @@ impl OperantAgent {
                     // Execute tools and add results
                     let tool_results = self.execute_tools(tool_calls).await?;
 
-                    for result in &tool_results {
-                        // Persist tool result
+                    // Add tool results to messages and persist them (truncated)
+                    for result in tool_results {
+                        let content = if result.success {
+                            truncate_tool_result(&result.name, &result.content)
+                        } else {
+                            result.error.as_deref().unwrap_or("Error").to_string()
+                        };
+
+                        // Persist tool result (truncated)
                         let _ = self.database.save_message(
                             &session_id,
                             "tool",
-                            &result.content,
+                            &content,
                             &chrono::Utc::now().to_rfc3339(),
                         );
                         self.database
@@ -908,17 +915,7 @@ impl OperantAgent {
                             })
                             .await;
                         }
-                    }
 
-                    // Add tool results to messages
-                    for result in tool_results {
-                        // Truncate large tool results (e.g. TTS base64 audio) to prevent
-                        // context overflow. Keep a summary instead.
-                        let content = if result.success {
-                            truncate_tool_result(&result.name, &result.content)
-                        } else {
-                            result.error.as_deref().unwrap_or("Error").to_string()
-                        };
                         messages.push(Message::tool(&result.tool_call_id, &content));
                         self.add_message(Message::tool(&result.tool_call_id, &content))
                             .await;

@@ -37,14 +37,26 @@ impl OperantTool for EnvVarTool {
     }
 
     async fn execute(&self, args: Value, _context: ToolContext) -> ToolResult {
-        let _args: EnvVarArgs = match serde_json::from_value(args) {
-            Ok(a) => a,
-            Err(e) => return ToolResult::error("debug_env", format!("Invalid arguments: {}", e)),
-        };
+        let filter = args.get("filter").and_then(|v| {
+            if let Some(s) = v.as_str() {
+                Some(s.to_string())
+            } else if v.is_object() || v.is_array() || v.is_null() {
+                None
+            } else {
+                Some(v.to_string())
+            }
+        });
 
         let mut vars: Vec<serde_json::Value> = Vec::new();
+        let filter_lower = filter.as_ref().map(|f| f.to_lowercase());
 
         for (key, value) in std::env::vars() {
+            if let Some(ref f) = filter_lower {
+                if !key.to_lowercase().contains(f) && !value.to_lowercase().contains(f) {
+                    continue;
+                }
+            }
+
             let display_value = if is_sensitive_key(&key) {
                 "*** MASKED ***".to_string()
             } else {
