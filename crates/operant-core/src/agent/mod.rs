@@ -1581,7 +1581,7 @@ impl OperantAgent {
             // Parse arguments — with auto-repair for common truncation issues.
             // (iter-123 — fixes "Invalid JSON: EOF while parsing" errors
             // caused by streaming tool-call argument fragmentation.)
-            let args: serde_json::Value = match serde_json::from_str(&args_str) {
+            let mut args: serde_json::Value = match serde_json::from_str(&args_str) {
                 Ok(a) => a,
                 Err(e) => {
                     // Try to repair common truncation issues:
@@ -1633,6 +1633,7 @@ impl OperantAgent {
             // and prevents truncated tool calls from reaching the tool impl.
             if let Some(tool) = self.registry.get(&name).await {
                 let schema = tool.schema();
+                schema.sanitize_args(&mut args);
                 if let Err(e) = schema.validate_args(&args) {
                     warn!(tool = %name, error = %e, "Tool argument validation failed");
                     // Use the schema validation error message directly — it

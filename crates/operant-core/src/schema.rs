@@ -71,6 +71,169 @@ impl ToolSchema {
         }
     }
 
+    /// Sanitize and repair input arguments against the schema properties and required fields.
+    /// This fixes cases where the model or gateway proxy outputs type mismatches (e.g. empty objects
+    /// `{}` for optional fields like integer `num_results` or array `tags`) or misses/misnames required fields.
+    pub fn sanitize_args(&self, args: &mut Value) {
+        // 1. If args is a string but the schema expects an object, try to wrap it if there is exactly 1 required field.
+        if args.is_string() {
+            if let Some(required) = self.parameters.get("required").and_then(|r| r.as_array()) {
+                if required.len() == 1 {
+                    if let Some(req_key) = required[0].as_str() {
+                        let str_val = args.as_str().unwrap().to_string();
+                        *args = json!({ req_key: str_val });
+                    }
+                }
+            }
+        }
+
+        // 2. If args is an object, clean type mismatches and handle missing required fields via aliases.
+        if let Some(args_map) = args.as_object_mut() {
+            let properties = self
+                .parameters
+                .get("properties")
+                .and_then(|p| p.as_object());
+            let required_fields: std::collections::HashSet<&str> = self
+                .parameters
+                .get("required")
+                .and_then(|r| r.as_array())
+                .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect())
+                .unwrap_or_default();
+
+            // Helpers for case conversion
+            let to_snake_case = |s: &str| -> String {
+                let mut snake = String::new();
+                for ch in s.chars() {
+                    if ch.is_uppercase() {
+                        if !snake.is_empty() {
+                            snake.push('_');
+                        }
+                        snake.extend(ch.to_lowercase());
+                    } else {
+                        snake.push(ch);
+                    }
+                }
+                snake
+            };
+
+            let to_camel_case = |s: &str| -> String {
+                let mut camel = String::new();
+                let mut next_upper = false;
+                for ch in s.chars() {
+                    if ch == '_' {
+                        next_upper = true;
+                    } else if next_upper {
+                        camel.extend(ch.to_uppercase());
+                        next_upper = false;
+                    } else {
+                        camel.push(ch);
+                    }
+                }
+                camel
+            };
+
+            // 2a. Map aliases for missing required fields
+            for &req_key in &required_fields {
+                if !args_map.contains_key(req_key) {
+                    let mut found_val = None;
+                    let mut key_to_remove = None;
+
+                    let camel = to_camel_case(req_key);
+                    let snake = to_snake_case(req_key);
+
+                    if args_map.contains_key(&camel) {
+                        key_to_remove = Some(camel);
+                    } else if args_map.contains_key(&snake) {
+                        key_to_remove = Some(snake);
+                    } else {
+                        // Check common generic aliases
+                        let generic_aliases = match req_key {
+                            "query" => vec![
+                                "q",
+                                "search",
+                                "text",
+                                "question",
+                                "query_str",
+                                "topic",
+                                "payload",
+                            ],
+                            "key" => vec!["k", "name", "id", "search_key"],
+                            "content" => vec!["text", "body", "message", "data"],
+                            "action" => vec!["act", "command", "cmd", "operation", "op"],
+                            _ => vec![],
+                        };
+                        for alias in generic_aliases {
+                            if args_map.contains_key(alias) {
+                                key_to_remove = Some(alias.to_string());
+                                break;
+                            }
+                            let alias_camel = to_camel_case(alias);
+                            if args_map.contains_key(&alias_camel) {
+                                key_to_remove = Some(alias_camel);
+                                break;
+                            }
+                            let alias_snake = to_snake_case(alias);
+                            if args_map.contains_key(&alias_snake) {
+                                key_to_remove = Some(alias_snake);
+                                break;
+                            }
+                        }
+                    }
+
+                    if let Some(k) = key_to_remove {
+                        found_val = args_map.remove(&k);
+                    }
+
+                    if let Some(val) = found_val {
+                        args_map.insert(req_key.to_string(), val);
+                    }
+                }
+            }
+
+            // 2b. Clean type mismatches (e.g. optional fields initialized as empty objects `{}` by gateways)
+            if let Some(props) = properties {
+                let mut keys_to_remove = Vec::new();
+                for (key, val) in args_map.iter_mut() {
+                    let prop_schema = props
+                        .get(key)
+                        .or_else(|| props.get(&to_camel_case(key)))
+                        .or_else(|| props.get(&to_snake_case(key)));
+
+                    if let Some(prop_schema) = prop_schema {
+                        let mut expected_types = Vec::new();
+                        if let Some(t) = prop_schema.get("type") {
+                            if let Some(s) = t.as_str() {
+                                expected_types.push(s);
+                            } else if let Some(arr) = t.as_array() {
+                                for item in arr {
+                                    if let Some(s) = item.as_str() {
+                                        expected_types.push(s);
+                                    }
+                                }
+                            }
+                        }
+
+                        let expects_object =
+                            expected_types.contains(&"object") || expected_types.is_empty();
+                        if val.is_object() && !expects_object {
+                            // Mismatch! e.g. expected array or integer but got object.
+                            // Remove empty objects or non-required mismatched objects.
+                            if val.as_object().map_or(false, |o| o.is_empty())
+                                || !required_fields.contains(key.as_str())
+                            {
+                                keys_to_remove.push(key.clone());
+                            }
+                        }
+                    }
+                }
+
+                for key in keys_to_remove {
+                    args_map.remove(&key);
+                }
+            }
+        }
+    }
+
     /// Validate arguments against the schema
     pub fn validate_args(&self, args: &Value) -> Result<()> {
         // Basic validation - check if args is an object
@@ -120,5 +283,31 @@ mod tests {
         assert_eq!(schema.name, "test_tool");
         assert_eq!(schema.description, "A test tool");
         assert!(schema.parameters.is_object());
+    }
+
+    #[test]
+    fn test_sanitize_args() {
+        let schema = ToolSchema::from_type::<TestParams>("test_tool", "A test tool");
+
+        // 1. Primitive/object mismatch: optional limit field set to {} should be removed
+        let mut args1 = json!({
+            "query": "hello",
+            "limit": {}
+        });
+        schema.sanitize_args(&mut args1);
+        assert_eq!(args1, json!({ "query": "hello" }));
+
+        // 2. Alias mapping: 'q' should be mapped to 'query'
+        let mut args2 = json!({
+            "q": "search term",
+            "limit": 10
+        });
+        schema.sanitize_args(&mut args2);
+        assert_eq!(args2, json!({ "query": "search term", "limit": 10 }));
+
+        // 3. String wrapping: single string should be wrapped to {"query": "text"}
+        let mut args3 = json!("raw string");
+        schema.sanitize_args(&mut args3);
+        assert_eq!(args3, json!({ "query": "raw string" }));
     }
 }
