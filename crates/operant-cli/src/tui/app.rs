@@ -114,6 +114,8 @@ const PROMPT_SLASH_COMMANDS: &[(&str, &str)] = &[
     ("whoami", "Show current user"),
     ("sessions", "List all sessions"),
     // iter-77+ backfilled commands (were hidden — now surfaced in /help)
+    ("save", "Save / export the current conversation (alias for /export)"),
+    ("subgoal", "Set an additional sub-goal for the session (alias for /goal)"),
     ("steer", "Queue a steer directive mid-stream"),
     ("journey", "Browse skills + memories timeline"),
     ("setup", "Re-run the setup wizard"),
@@ -948,6 +950,14 @@ pub struct App {
     /// startup; saved back on every command invocation.
     /// (iter-125 — smart slash-command ordering.)
     pub slash_usage: crate::tui::slash_usage::UsageStore,
+    /// Standing session goal set via /goal. Injected as a system preamble
+    /// message whenever it is set and displayed in the status bar.
+    /// (iter-270 — wires /goal to real state.)
+    pub session_goal: Option<String>,
+    /// If set, the run loop will re-submit this query on the next iteration
+    /// as if the user typed it. Used by /retry to resubmit the last user msg.
+    /// (iter-270 — wires /retry to real state.)
+    pub pending_retry_query: Option<String>,
 
     // ---- Visual mode indicators -------------------------------------------
     /// Plan mode — input border turns blue, [PLAN] shown in status bar.
@@ -1329,6 +1339,8 @@ impl App {
             pending_mcp_panel_auth: None,
             // (iter-209: file_history + current_turn init deleted)
             slash_usage: crate::tui::slash_usage::UsageStore::load(),
+            session_goal: None,
+            pending_retry_query: None,
             plan_mode: false,
             stall_start: None,
             settings_screen: SettingsScreen::new(),
@@ -2235,6 +2247,152 @@ impl App {
                 });
                 true
             }
+            // /stop — cancel the live streaming turn, exactly as Esc does.
+            // (iter-270: wired to real streaming cancel path.)
+            "stop" => {
+                if self.is_streaming {
+                    self.is_streaming = false;
+                    self.spinner_verb = None;
+                    self.streaming_text.clear();
+                    self.streaming_thinking.clear();
+                    self.tool_use_blocks.clear();
+                    self.status_message = Some("Stopped.".to_string());
+                    self.complete_current_turn_snapshot(true);
+                } else {
+                    self.status_message = Some("Nothing to stop — no turn is running.".to_string());
+                }
+                true
+            }
+
+            // /new — start a completely fresh session (same as /clear but
+            // also resets cost and turn counter).
+            // (iter-270: wired to real state clear.)
+            "new" | "fresh" => {
+                self.messages.clear();
+                self.system_annotations.clear();
+                self.streaming_text.clear();
+                self.streaming_thinking.clear();
+                self.tool_use_blocks.clear();
+                self.turn_metadata.clear();
+                self.session_goal = None;
+                self.cost_usd = 0.0;
+                self.is_streaming = false;
+                self.scroll_offset = 0;
+                self.auto_scroll = true;
+                self.new_messages_while_scrolled = 0;
+                self.token_count = 0;
+                self.session_title = None;
+                self.invalidate_transcript();
+                self.status_message = Some("New session started.".to_string());
+                true
+            }
+
+            // /undo — remove the last user + assistant exchange from the
+            // transcript. Safe no-op if fewer than 2 messages.
+            // (iter-270: wired to real message state.)
+            "undo" => {
+                // Find last user message index from the end.
+                let last_user = self
+                    .messages
+                    .iter()
+                    .enumerate()
+                    .rev()
+                    .find(|(_, m)| m.role == Role::User)
+                    .map(|(i, _)| i);
+                if let Some(idx) = last_user {
+                    // Remove all messages from that user message to end.
+                    self.messages.truncate(idx);
+                    // Also discard the trailing assistant turn metadata entry.
+                    self.turn_metadata.pop();
+                    self.invalidate_transcript();
+                    self.status_message = Some("Last turn undone.".to_string());
+                } else {
+                    self.status_message = Some("Nothing to undo.".to_string());
+                }
+                true
+            }
+
+            // /retry — resubmit the last user message. Queues it via
+            // pending_retry_query so the adapter_types run loop can spawn
+            // the agent call (App::run is sync, agent.run is async).
+            // (iter-270: wired to real state.)
+            "retry" => {
+                if self.is_streaming {
+                    self.status_message =
+                        Some("Cannot retry while a turn is running. Stop first.".to_string());
+                    return true;
+                }
+                let last_user_text = self
+                    .messages
+                    .iter()
+                    .rev()
+                    .find(|m| m.role == Role::User)
+                    .map(|m| m.get_all_text());
+                if let Some(text) = last_user_text {
+                    // Remove all messages from the last user message onward
+                    // so the turn is truly retried (not duplicated).
+                    let last_user_idx = self
+                        .messages
+                        .iter()
+                        .enumerate()
+                        .rev()
+                        .find(|(_, m)| m.role == Role::User)
+                        .map(|(i, _)| i);
+                    if let Some(idx) = last_user_idx {
+                        self.messages.truncate(idx);
+                    }
+                    self.pending_retry_query = Some(text);
+                    self.invalidate_transcript();
+                    self.status_message = Some("Retrying last message…".to_string());
+                } else {
+                    self.status_message = Some("No previous message to retry.".to_string());
+                }
+                true
+            }
+
+            // /save — alias for /export (opens the export dialog).
+            // (iter-270: fixed broken stub.)
+            "save" => {
+                self.export_dialog.open();
+                true
+            }
+
+            // /goal <text> — set a standing session goal. Shown in the status
+            // bar and injected as a system annotation so the agent sees it.
+            // /goal with no args shows the current goal.
+            // (iter-270: wired to real state.)
+            "goal" | "subgoal" => {
+                let trimmed = args.trim();
+                if trimmed.is_empty() {
+                    // Show current goal.
+                    let cur = self
+                        .session_goal
+                        .clone()
+                        .unwrap_or_else(|| "(none)".to_string());
+                    self.status_message = Some(format!(
+                        "Session goal: {}. Use /goal <text> to change.",
+                        cur
+                    ));
+                } else {
+                    self.session_goal = Some(trimmed.to_string());
+                    // Inject as a system annotation so it appears in transcript.
+                    self.push_system_message(
+                        format!("🎯 Goal set: {}", trimmed),
+                        crate::tui::app::SystemMessageStyle::Info,
+                    );
+                    self.status_message = Some(format!("Goal set: {}", trimmed));
+                }
+                true
+            }
+
+            // /sessions — alias for /session / /resume (open session browser).
+            // (iter-270: fixed broken stub.)
+            "sessions" => {
+                self.session_browser.open(vec![]);
+                self.session_list_pending = true;
+                true
+            }
+
             "compact" => false,
             "copy" => {
                 // Copy last assistant message to clipboard. Attempt arboard; fall back to notification.

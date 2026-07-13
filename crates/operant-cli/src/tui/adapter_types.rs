@@ -1707,66 +1707,10 @@ impl TuiApp {
             .register_handler("debug", Box::new(DebugHandler))
             .ok();
 
-        struct NewHandler;
-        #[async_trait::async_trait]
-        impl CommandHandler for NewHandler {
-            async fn execute(&self, _ctx: &CommandContext<'_>) -> CommandResult {
-                Ok("Starting a new session. Type your message to begin.".to_string())
-            }
-        }
-        command_registry
-            .register_handler("new", Box::new(NewHandler))
-            .ok();
-
-        struct HistoryHandler;
-        #[async_trait::async_trait]
-        impl CommandHandler for HistoryHandler {
-            async fn execute(&self, _ctx: &CommandContext<'_>) -> CommandResult {
-                Ok(
-                    "Session history is displayed in the transcript above. Use ↑/↓ to scroll."
-                        .to_string(),
-                )
-            }
-        }
-        command_registry
-            .register_handler("history", Box::new(HistoryHandler))
-            .ok();
-
-        struct RetryHandler;
-        #[async_trait::async_trait]
-        impl CommandHandler for RetryHandler {
-            async fn execute(&self, _ctx: &CommandContext<'_>) -> CommandResult {
-                Ok(
-                    "Retry: resend the last message to the agent. (Implementation pending)"
-                        .to_string(),
-                )
-            }
-        }
-        command_registry
-            .register_handler("retry", Box::new(RetryHandler))
-            .ok();
-
-        struct UndoHandler;
-        #[async_trait::async_trait]
-        impl CommandHandler for UndoHandler {
-            async fn execute(&self, _ctx: &CommandContext<'_>) -> CommandResult {
-                Ok("Undo: back up the last turn. (Implementation pending)".to_string())
-            }
-        }
-        command_registry
-            .register_handler("undo", Box::new(UndoHandler))
-            .ok();
-
-        struct StopHandler;
-        #[async_trait::async_trait]
-        impl CommandHandler for StopHandler {
-            async fn execute(&self, _ctx: &CommandContext<'_>) -> CommandResult {
-                Ok("Stopping all running background processes.".to_string())
-            }
-        }
-        command_registry
-            .register_handler("stop", Box::new(StopHandler))
-            .ok();
+        // (iter-270: NewHandler, HistoryHandler, RetryHandler, UndoHandler,
+        // StopHandler removed — these commands are now intercepted in
+        // app.rs intercept_slash_command_with_args_impl and directly
+        // mutate App state. The registry fallback path is no longer reached.)
 
         struct CompressHandler;
         #[async_trait::async_trait]
@@ -1779,64 +1723,16 @@ impl TuiApp {
             .register_handler("compress", Box::new(CompressHandler))
             .ok();
 
-        struct RollbackHandler;
-        #[async_trait::async_trait]
-        impl CommandHandler for RollbackHandler {
-            async fn execute(&self, _ctx: &CommandContext<'_>) -> CommandResult {
-                Ok(
-                    "Rollback: restore filesystem checkpoints. (Implementation pending)"
-                        .to_string(),
-                )
-            }
-        }
-        command_registry
-            .register_handler("rollback", Box::new(RollbackHandler))
-            .ok();
-
-        struct TitleHandler;
-        #[async_trait::async_trait]
-        impl CommandHandler for TitleHandler {
-            async fn execute(&self, ctx: &CommandContext<'_>) -> CommandResult {
-                if ctx.args.is_empty() {
-                    Ok("Usage: /title <name> — set a title for the current session".to_string())
-                } else {
-                    Ok(format!("Session title set to: {}", ctx.args))
-                }
-            }
-        }
-        command_registry
-            .register_handler("title", Box::new(TitleHandler))
-            .ok();
-
-        struct BranchHandler;
-        #[async_trait::async_trait]
-        impl CommandHandler for BranchHandler {
-            async fn execute(&self, ctx: &CommandContext<'_>) -> CommandResult {
-                if ctx.args.is_empty() {
-                    Ok("Usage: /branch <name> — branch the current session".to_string())
-                } else {
-                    Ok(format!("Branching session: {}", ctx.args))
-                }
-            }
-        }
-        command_registry
-            .register_handler("branch", Box::new(BranchHandler))
-            .ok();
-
-        struct GoalHandler;
-        #[async_trait::async_trait]
-        impl CommandHandler for GoalHandler {
-            async fn execute(&self, ctx: &CommandContext<'_>) -> CommandResult {
-                if ctx.args.is_empty() {
-                    Ok("Usage: /goal <text> — set a standing goal for the session".to_string())
-                } else {
-                    Ok(format!("Goal set: {}", ctx.args))
-                }
-            }
-        }
-        command_registry
-            .register_handler("goal", Box::new(GoalHandler))
-            .ok();
+        // (iter-270: RollbackHandler removed — /rollback is intercepted in app.rs)
+        // (iter-270: BranchHandler removed — /branch falls through to /session browser)
+        // (iter-270: GoalHandler removed — /goal is intercepted in app.rs)
+        // (iter-270: YoloHandler removed — /yolo is intercepted in app.rs)
+        // (iter-270: PersonalityHandler removed — /personality is intercepted in app.rs)
+        // (iter-270: ReasoningHandler removed — /reasoning is intercepted in app.rs)
+        // (iter-270: SkillsHandler removed — /skills is intercepted in app.rs)
+        // (iter-270: CreditsHandler removed — /credits is intercepted in app.rs)
+        // (iter-270: BillingHandler removed — /billing is intercepted in app.rs)
+        // (iter-270: SessionsHandler removed — /sessions is intercepted in app.rs)
 
         struct ProviderHandler;
         #[async_trait::async_trait]
@@ -1853,46 +1749,6 @@ impl TuiApp {
             .register_handler("provider", Box::new(ProviderHandler))
             .ok();
 
-        struct YoloHandler;
-        #[async_trait::async_trait]
-        impl CommandHandler for YoloHandler {
-            async fn execute(&self, _ctx: &CommandContext<'_>) -> CommandResult {
-                Ok("YOLO mode: skip confirmations for dangerous operations. (Toggle not yet wired)".to_string())
-            }
-        }
-        command_registry
-            .register_handler("yolo", Box::new(YoloHandler))
-            .ok();
-
-        struct PersonalityHandler;
-        #[async_trait::async_trait]
-        impl CommandHandler for PersonalityHandler {
-            async fn execute(&self, ctx: &CommandContext<'_>) -> CommandResult {
-                if ctx.args.is_empty() {
-                    Ok("Usage: /personality <name> — set a predefined personality".to_string())
-                } else {
-                    Ok(format!("Personality set to: {}", ctx.args))
-                }
-            }
-        }
-        command_registry
-            .register_handler("personality", Box::new(PersonalityHandler))
-            .ok();
-
-        struct ReasoningHandler;
-        #[async_trait::async_trait]
-        impl CommandHandler for ReasoningHandler {
-            async fn execute(&self, _ctx: &CommandContext<'_>) -> CommandResult {
-                Ok(
-                    "Reasoning: toggle extended thinking for complex tasks. (Toggle not yet wired)"
-                        .to_string(),
-                )
-            }
-        }
-        command_registry
-            .register_handler("reasoning", Box::new(ReasoningHandler))
-            .ok();
-
         struct ToolsHandler;
         #[async_trait::async_trait]
         impl CommandHandler for ToolsHandler {
@@ -1902,20 +1758,6 @@ impl TuiApp {
         }
         command_registry
             .register_handler("tools", Box::new(ToolsHandler))
-            .ok();
-
-        struct SkillsHandler;
-        #[async_trait::async_trait]
-        impl CommandHandler for SkillsHandler {
-            async fn execute(&self, _ctx: &CommandContext<'_>) -> CommandResult {
-                Ok(
-                    "Skills are installed in ~/.operant/skills/. Use /reload-skills to rescan."
-                        .to_string(),
-                )
-            }
-        }
-        command_registry
-            .register_handler("skills", Box::new(SkillsHandler))
             .ok();
 
         struct BundlesHandler;
@@ -1938,28 +1780,6 @@ impl TuiApp {
         }
         command_registry
             .register_handler("usage", Box::new(UsageHandler))
-            .ok();
-
-        struct CreditsHandler;
-        #[async_trait::async_trait]
-        impl CommandHandler for CreditsHandler {
-            async fn execute(&self, _ctx: &CommandContext<'_>) -> CommandResult {
-                Ok("Credits: check your provider dashboard for balance information.".to_string())
-            }
-        }
-        command_registry
-            .register_handler("credits", Box::new(CreditsHandler))
-            .ok();
-
-        struct BillingHandler;
-        #[async_trait::async_trait]
-        impl CommandHandler for BillingHandler {
-            async fn execute(&self, _ctx: &CommandContext<'_>) -> CommandResult {
-                Ok("Billing: manage your subscription at your provider's dashboard.".to_string())
-            }
-        }
-        command_registry
-            .register_handler("billing", Box::new(BillingHandler))
             .ok();
 
         struct InsightsHandler;
@@ -1993,17 +1813,6 @@ impl TuiApp {
         }
         command_registry
             .register_handler("whoami", Box::new(WhoamiHandler))
-            .ok();
-
-        struct SessionsHandler;
-        #[async_trait::async_trait]
-        impl CommandHandler for SessionsHandler {
-            async fn execute(&self, _ctx: &CommandContext<'_>) -> CommandResult {
-                Ok("Use /session to browse and manage sessions.".to_string())
-            }
-        }
-        command_registry
-            .register_handler("sessions", Box::new(SessionsHandler))
             .ok();
 
         let mut app =
@@ -2323,6 +2132,32 @@ impl TuiApp {
                                 }
                             }
                             continue;
+                        }
+                    }
+                    // /retry: drain pending_retry_query set by intercept arm.
+                    // (iter-270 — real /retry wiring.)
+                    if let Some(retry_text) = self.app.pending_retry_query.take() {
+                        if let Some(ref agent) = agent {
+                            if !self.app.is_streaming {
+                                use crate::tui::adapter_types::types::{
+                                    Message, MessageContent, Role,
+                                };
+                                self.app.messages.push(Message {
+                                    role: Role::User,
+                                    content: MessageContent::Text(retry_text.clone()),
+                                });
+                                self.app.is_streaming = true;
+                                self.app.streaming_text.clear();
+                                self.app.streaming_thinking.clear();
+                                let agent_clone = std::sync::Arc::clone(agent);
+                                let (tx, rx) = tokio::sync::oneshot::channel();
+                                tokio::spawn(async move {
+                                    let result = agent_clone.run(retry_text).await.map(|_| ());
+                                    let _ = tx.send(result);
+                                });
+                                self.app.run_complete_rx = Some(rx);
+                                continue;
+                            }
                         }
                     }
                     if let Some(ref agent) = agent {
