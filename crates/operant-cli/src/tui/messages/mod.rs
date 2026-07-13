@@ -1706,6 +1706,14 @@ mod tests {
         assert_eq!(line_text(&result[7]), "     you today?");
     }
 
+    #[test]
+    fn test_normalize_markdown_newlines_specific() {
+        use super::markdown::normalize_markdown_newlines;
+        let input = "Hello! 👋  Ho\nw\n can I help you today?";
+        let output = normalize_markdown_newlines(input);
+        assert_eq!(output, "Hello! 👋  How can I help you today?");
+    }
+
     // (iter-213: 18 broken test functions deleted — they referenced
     // render functions that were deleted in prior iterations:
     // render_agent_notification, render_attachment_message,

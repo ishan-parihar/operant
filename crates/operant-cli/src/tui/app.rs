@@ -6229,15 +6229,8 @@ impl App {
                 }
                 self.is_streaming = true;
                 self.stall_start = None;
-                // If we already have streaming thinking, this is the model
-                // switching from thinking to producing text. Don't clear
-                // thinking — it should be shown above the text. But if we
-                // already have text (meaning this is a new iteration after
-                // a tool call), flush the old text first.
-                if !self.streaming_text.is_empty() {
-                    self.flush_streamed_assistant_message();
-                    self.streaming_thinking.clear();
-                }
+                // Accumulate streaming text. (Boundary flushes are handled by
+                // AgentEvent::Thinking and AgentEvent::ToolStart.)
                 self.streaming_text.push_str(&text);
                 self.invalidate_transcript();
             }
