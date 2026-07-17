@@ -16,6 +16,15 @@ path = "src/main.rs"
 # Core library
 operant-core = { path = "../operant-core", features = ["anthropic"] }
 
+# Optional subsystem crates — feature-gated like zeroclaw
+operant-channels = { workspace = true, optional = true }
+operant-tools = { workspace = true, optional = true }
+operant-runtime = { workspace = true, optional = true }
+operant-gateway = { workspace = true, optional = true }
+operant-plugins = { workspace = true, optional = true }
+operant-hardware = { workspace = true, optional = true }
+operant-memory = { workspace = true, optional = true }
+
 # Async runtime
 tokio = { workspace = true, features = ["full"] }
 async-trait = { workspace = true }
@@ -74,7 +83,83 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 tempfile = { workspace = true }
 
 [features]
-default = []
+default = [
+    "agent-runtime",
+    "gateway",
+]
+
+# The full agent runtime — agent loop, channels, tools, all subsystems.
+# Without this, you get the kernel: config + providers + memory + CLI chat.
+agent-runtime = [
+    "dep:operant-runtime",
+    "dep:operant-channels",
+    "dep:operant-tools",
+    "channel-telegram",
+    "channel-discord",
+    "channel-slack",
+    "channel-email",
+    "channel-signal",
+    "channel-mattermost",
+    "channel-irc",
+    "channel-imessage",
+    "channel-dingtalk",
+    "channel-qq",
+    "channel-bluesky",
+    "channel-twitter",
+    "channel-reddit",
+    "channel-notion",
+    "channel-linq",
+    "channel-wati",
+    "channel-nextcloud",
+    "channel-mochat",
+    "channel-wecom",
+    "channel-clawdtalk",
+    "channel-webhook",
+    "channel-acp-server",
+    "channel-whatsapp-cloud",
+]
+
+# Major subsystems
+gateway = ["dep:operant-gateway"]
+
+# Channels — each forwards directly to operant-channels (1 hop)
+channel-telegram = ["operant-channels/channel-telegram"]
+channel-discord = ["operant-channels/channel-discord"]
+channel-slack = ["operant-channels/channel-slack"]
+channel-email = ["operant-channels/channel-email"]
+channel-signal = ["operant-channels/channel-signal"]
+channel-mattermost = ["operant-channels/channel-mattermost"]
+channel-irc = ["operant-channels/channel-irc"]
+channel-imessage = ["operant-channels/channel-imessage"]
+channel-dingtalk = ["operant-channels/channel-dingtalk"]
+channel-qq = ["operant-channels/channel-qq"]
+channel-bluesky = ["operant-channels/channel-bluesky"]
+channel-twitter = ["operant-channels/channel-twitter"]
+channel-reddit = ["operant-channels/channel-reddit"]
+channel-notion = ["operant-channels/channel-notion"]
+channel-linq = ["operant-channels/channel-linq"]
+channel-wati = ["operant-channels/channel-wati"]
+channel-nextcloud = ["operant-channels/channel-nextcloud"]
+channel-mochat = ["operant-channels/channel-mochat"]
+channel-wecom = ["operant-channels/channel-wecom"]
+channel-clawdtalk = ["operant-channels/channel-clawdtalk"]
+channel-webhook = ["operant-channels/channel-webhook"]
+channel-acp-server = ["operant-channels/channel-acp-server"]
+channel-whatsapp-cloud = ["operant-channels/channel-whatsapp-cloud"]
+channel-mqtt = ["operant-channels/channel-mqtt"]
+
+# Backends and platform flags
+hardware = ["dep:operant-hardware", "operant-hardware/hardware"]
+browser-native = ["operant-tools/browser-native"]
+plugins-wasm = ["dep:operant-plugins"]
+memory-postgres = ["operant-memory/memory-postgres"]
+rag-pdf = ["operant-tools/rag-pdf"]
 tdg = ["operant-core/tdg"]
+
+# CI meta-feature
+ci-all = [
+    "agent-runtime", "hardware",
+    "browser-native", "plugins-wasm", "memory-postgres", "rag-pdf",
+]
 
 [dev-dependencies]
