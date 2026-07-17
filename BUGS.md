@@ -11,12 +11,12 @@
 - [ ] **Provider.rs lifetime mismatch** - `fetch_models` method has lifetime mismatch between trait and impl
 - [ ] **Skin.rs .cloned() error** - Cannot call `.cloned()` on MutexGuard
 - [ ] **Gateway test failure** - `test_gateway_start_stop_with_disabled_platforms` fails due to schema migration issue
-- [ ] **Config schema test failure** - `schema::tests::config_schema_export_contains_expected_contract_shape` fails: JSON Schema URL mismatch (draft-07 vs 2020-12). Pre-existing, not blocking.
 
 ---
 
 ## High (Affects Functionality)
 
+- [ ] **Config schema test failure** - `schema::tests::config_schema_export_contains_expected_contract_shape` fails: JSON Schema URL mismatch (draft-07 vs 2020-12). Pre-existing, not blocking.
 - [ ] **Memory provider defaults not set** - TDG memory provider exists but not set as default in config
 - [ ] **TTS provider defaults not set** - Kokoro TTS exists but not set as default in config
 - [ ] **Web dashboard not copied** - React frontend from operant-agent not ported yet
