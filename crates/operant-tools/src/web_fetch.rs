@@ -302,7 +302,7 @@ impl Tool for WebFetchTool {
         }
 
         // Rate limiting is applied by the RateLimitedTool wrapper at
-        // registration time (see zeroclaw-runtime::tools::mod).
+        // registration time (see operant-runtime::tools::mod).
 
         let url = match self.validate_url(url) {
             Ok(v) => v,
@@ -351,7 +351,7 @@ impl Tool for WebFetchTool {
             .timeout(Duration::from_secs(timeout_secs))
             .connect_timeout(Duration::from_secs(10))
             .redirect(redirect_policy)
-            .user_agent("ZeroClaw/0.1 (web_fetch)");
+            .user_agent("Operant/0.1 (web_fetch)");
         let builder =
             operant_config::schema::apply_runtime_proxy_to_builder(builder, "tool.web_fetch");
         let client = match builder.build() {

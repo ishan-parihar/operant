@@ -50,7 +50,7 @@ impl Tool for GlobSearchTool {
 
         // Rate limiting and path-allowlist checks are applied by the
         // RateLimitedTool + PathGuardedTool wrappers at registration time
-        // (see zeroclaw-runtime::tools::mod).
+        // (see operant-runtime::tools::mod).
 
         // Security: reject absolute paths unless under an explicit allowed root.
         if (pattern.starts_with('/') || pattern.starts_with('\\'))
@@ -347,7 +347,7 @@ mod tests {
     }
 
     // Rate-limit behavior is covered by RateLimitedTool's own tests in
-    // zeroclaw-tools::wrappers; this tool delegates the concern to the wrapper
+    // operant-tools::wrappers; this tool delegates the concern to the wrapper
     // at registration time.
 
     #[tokio::test]

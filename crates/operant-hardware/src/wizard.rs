@@ -1,6 +1,6 @@
 //! Interactive hardware onboarding wizard UI.
 //!
-//! Provides [`run_setup`] — the hardware step of the ZeroClaw onboarding
+//! Provides [`run_setup`] — the hardware step of the Operant onboarding
 //! wizard. The function is intended to be registered as
 //! `WizardCallbacks::hardware_setup` from the binary crate.
 
@@ -21,7 +21,7 @@ pub fn run_setup() -> Result<HardwareConfig> {
     println!(
         "  {} {}",
         style("ℹ").dim(),
-        style("ZeroClaw can talk to physical hardware (LEDs, sensors, motors).").dim()
+        style("Operant can talk to physical hardware (LEDs, sensors, motors).").dim()
     );
     println!(
         "  {} {}",
@@ -82,7 +82,7 @@ pub fn run_setup() -> Result<HardwareConfig> {
     let recommended = recommended_wizard_default(&devices);
 
     let choice = Select::new()
-        .with_prompt("  How should ZeroClaw interact with the physical world?")
+        .with_prompt("  How should Operant interact with the physical world?")
         .items(&options)
         .default(recommended)
         .interact()?;

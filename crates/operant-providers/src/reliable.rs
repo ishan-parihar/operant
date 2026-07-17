@@ -2191,7 +2191,7 @@ mod tests {
         );
     }
 
-    // Arc<ModelAwareMock> Provider impl provided by blanket impl in zeroclaw-types.
+    // Arc<ModelAwareMock> Provider impl provided by blanket impl in operant-types.
 
     /// Mock provider that implements `chat()` with native tool support.
     struct NativeToolMock {
@@ -2756,7 +2756,7 @@ mod tests {
         }
     }
 
-    // Arc<NativeModelAwareMock> Provider impl provided by blanket impl in zeroclaw-types.
+    // Arc<NativeModelAwareMock> Provider impl provided by blanket impl in operant-types.
 
     /// Gap 3: `chat()` tries fallback models on failure,
     /// matching behavior of `model_failover_tries_fallback_model`.
@@ -3122,7 +3122,7 @@ mod tests {
         }
     }
 
-    // Arc<StreamingToolEventMock> Provider impl provided by blanket impl in zeroclaw-types.
+    // Arc<StreamingToolEventMock> Provider impl provided by blanket impl in operant-types.
 
     #[tokio::test]
     async fn stream_chat_prefers_provider_with_tool_event_support() {

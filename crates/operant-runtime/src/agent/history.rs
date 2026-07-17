@@ -411,7 +411,7 @@ mod tests {
 
     #[test]
     fn canonicalize_tool_result_media_markers_ignores_missing_paths() {
-        let input = "File: /tmp/definitely-missing-zeroclaw-image.png";
+        let input = "File: /tmp/definitely-missing-operant-image.png";
         let output = canonicalize_tool_result_media_markers(input);
         assert_eq!(output, input);
     }

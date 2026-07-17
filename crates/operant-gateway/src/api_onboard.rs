@@ -3,7 +3,7 @@
 //! model-picker dropdown share the same source of truth as the CLI.
 //!
 //! No catalog data is hand-maintained at this layer. `list_providers()` lives
-//! in `zeroclaw-providers` and is the canonical list; `list_models()` per
+//! in `operant-providers` and is the canonical list; `list_models()` per
 //! provider fetches from models.dev (cached) or the provider's own /models
 //! endpoint. Same code paths as the CLI wizard.
 //!
@@ -140,7 +140,7 @@ fn error_response(err: ConfigApiError) -> Response {
 pub struct SectionInfo {
     /// Stable section key — `workspace`, `providers`, `channels`, `memory`,
     /// `hardware`, `tunnel`. Matches `Section::as_path_prefix` in
-    /// zeroclaw-runtime so CLI / web stay aligned.
+    /// operant-runtime so CLI / web stay aligned.
     pub key: String,
     /// Human-readable section name for headers / breadcrumbs.
     pub label: String,
@@ -347,14 +347,14 @@ fn section_group(key: &str) -> &'static str {
 fn section_help(key: &str) -> &'static str {
     match key {
         "workspace" => {
-            "Where ZeroClaw stores its config and runtime data. Defaults work for most setups."
+            "Where Operant stores its config and runtime data. Defaults work for most setups."
         }
         "providers" => {
             "Paste an API key (e.g. `sk-ant-...` for Anthropic, `sk-...` for OpenAI) when prompted. \
-                        For OAuth-based providers run: zeroclaw auth login --provider <name>"
+                        For OAuth-based providers run: operant auth login --provider <name>"
         }
         "channels" => {
-            "Pick which chat platforms ZeroClaw should listen on. You can configure multiple."
+            "Pick which chat platforms Operant should listen on. You can configure multiple."
         }
         "memory" => "Persistent memory backend. SQLite is recommended; pick `none` to disable.",
         "hardware" => {
@@ -661,7 +661,7 @@ pub async fn handle_section_select(
             // create the entry but the chat path keeps using the prior
             // fallback (or fails because none is set), and the user lands
             // on "OpenRouter API key not set" trying to chat with a model
-            // they thought they'd configured. Mirrors `zeroclaw onboard`'s
+            // they thought they'd configured. Mirrors `operant onboard`'s
             // post-pick semantics.
             if let Err(e) = working.set_prop("providers.fallback", &key) {
                 tracing::warn!(provider = %key, error = %e, "failed to set providers.fallback after pick");

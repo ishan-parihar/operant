@@ -1,6 +1,6 @@
 //! Runtime adapter trait for platform abstraction.
 //!
-//! Modeled after zeroclaw's `runtime_traits.rs`. Abstracts platform differences
+//! Modeled after operant's `runtime_traits.rs`. Abstracts platform differences
 //! (shell access, filesystem, long-running processes) so the agent can adapt
 //! its behavior to different execution environments (native, Docker, serverless,
 //! embedded, etc.).

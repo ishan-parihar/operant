@@ -222,7 +222,7 @@ impl Tool for HttpRequestTool {
         }
 
         // Rate limiting is applied by the RateLimitedTool wrapper at
-        // registration time (see zeroclaw-runtime::tools::mod).
+        // registration time (see operant-runtime::tools::mod).
 
         let url = match self.validate_url(url) {
             Ok(v) => v,

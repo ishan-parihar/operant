@@ -21,7 +21,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
 
-// Re-export TurnEvent from zeroclaw-types for backwards compatibility.
+// Re-export TurnEvent from operant-types for backwards compatibility.
 pub use operant_api::agent::TurnEvent;
 
 pub struct Agent {
@@ -563,7 +563,7 @@ impl Agent {
                 session_cwd.unwrap_or(&config.workspace_dir),
             );
             // When a per-session cwd overrides the sandbox root, ensure the
-            // ZeroClaw workspace (where skills, identity, and config data live)
+            // Operant workspace (where skills, identity, and config data live)
             // remains readable. Without this, file_read and search tools are
             // locked out of the workspace the moment the session cwd differs.
             if session_cwd.is_some() {
@@ -1853,7 +1853,7 @@ impl Agent {
     }
 
     pub async fn run_interactive(&mut self) -> Result<()> {
-        println!("🦀 ZeroClaw Interactive Mode");
+        println!("🦀 Operant Interactive Mode");
         println!("Type /quit to exit.\n");
 
         let (tx, mut rx) = tokio::sync::mpsc::channel(32);
@@ -2837,11 +2837,11 @@ mod tests {
             entry.model = Some("test-model".to_string());
             entry.extra_headers.insert(
                 "User-Agent".to_string(),
-                "zeroclaw-web-test/1.0".to_string(),
+                "operant-web-test/1.0".to_string(),
             );
             entry
                 .extra_headers
-                .insert("X-Title".to_string(), "zeroclaw-web".to_string());
+                .insert("X-Title".to_string(), "operant-web".to_string());
         }
         config.memory.backend = "none".to_string();
         config.memory.auto_save = false;
@@ -2860,11 +2860,11 @@ mod tests {
             .expect("captured headers");
         assert_eq!(
             headers.get("user-agent").map(String::as_str),
-            Some("zeroclaw-web-test/1.0")
+            Some("operant-web-test/1.0")
         );
         assert_eq!(
             headers.get("x-title").map(String::as_str),
-            Some("zeroclaw-web")
+            Some("operant-web")
         );
 
         server_handle.abort();
@@ -2939,8 +2939,8 @@ mod tests {
     /// `from_config_with_session_cwd` (issue #6516).
     #[test]
     fn session_cwd_keeps_workspace_in_allowed_roots() {
-        let workspace = std::env::temp_dir().join("zeroclaw_test_session_cwd_workspace");
-        let session = std::env::temp_dir().join("zeroclaw_test_session_cwd_session");
+        let workspace = std::env::temp_dir().join("operant_test_session_cwd_workspace");
+        let session = std::env::temp_dir().join("operant_test_session_cwd_session");
         let _ = std::fs::create_dir_all(&workspace);
         let _ = std::fs::create_dir_all(&session);
 

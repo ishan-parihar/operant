@@ -150,7 +150,7 @@ mod tests {
 
     fn setup_workspace(files: &[(&str, &str)]) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
-            "zeroclaw_personality_test_{}",
+            "operant_personality_test_{}",
             uuid::Uuid::new_v4()
         ));
         std::fs::create_dir_all(&dir).unwrap();

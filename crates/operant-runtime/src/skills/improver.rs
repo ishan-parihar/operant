@@ -292,7 +292,7 @@ version = "0.1.0"
 name = "test-skill"
 description = "Original description"
 version = "0.1.0"
-author = "zeroclaw-auto"
+author = "operant-auto"
 tags = ["auto-generated"]
 "#;
         tokio::fs::write(skill_dir.join("SKILL.toml"), original)
@@ -311,7 +311,7 @@ tags = ["auto-generated"]
 name = "test-skill"
 description = "Improved description with better steps"
 version = "0.1.1"
-author = "zeroclaw-auto"
+author = "operant-auto"
 tags = ["auto-generated", "improved"]
 "#;
 

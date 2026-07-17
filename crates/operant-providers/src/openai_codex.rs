@@ -18,10 +18,10 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 const DEFAULT_CODEX_RESPONSES_URL: &str = "https://chatgpt.com/backend-api/codex/responses";
-const CODEX_RESPONSES_URL_ENV: &str = "ZEROCLAW_CODEX_RESPONSES_URL";
-const CODEX_BASE_URL_ENV: &str = "ZEROCLAW_CODEX_BASE_URL";
+const CODEX_RESPONSES_URL_ENV: &str = "OPERANT_CODEX_RESPONSES_URL";
+const CODEX_BASE_URL_ENV: &str = "OPERANT_CODEX_BASE_URL";
 const DEFAULT_CODEX_INSTRUCTIONS: &str =
-    "You are ZeroClaw, a concise and helpful coding assistant.";
+    "You are Operant, a concise and helpful coding assistant.";
 /// OpenAI Codex speaks the "responses" wire protocol, not chat_completions.
 const WIRE_API: &str = "responses";
 const RESPONSES_HISTORY_PROVIDER: &str = "openai_codex";
@@ -117,9 +117,9 @@ impl OpenAiCodexProvider {
         gateway_api_key: Option<&str>,
     ) -> anyhow::Result<Self> {
         let state_dir = options
-            .zeroclaw_dir
+            .operant_dir
             .clone()
-            .unwrap_or_else(default_zeroclaw_dir);
+            .unwrap_or_else(default_operant_dir);
         let auth = AuthService::new(&state_dir, options.secrets_encrypt);
         let responses_url = resolve_responses_url(options)?;
 
@@ -139,10 +139,10 @@ impl OpenAiCodexProvider {
     }
 }
 
-fn default_zeroclaw_dir() -> PathBuf {
+fn default_operant_dir() -> PathBuf {
     directories::UserDirs::new().map_or_else(
-        || PathBuf::from(".zeroclaw"),
-        |dirs| dirs.home_dir().join(".zeroclaw"),
+        || PathBuf::from(".operant"),
+        |dirs| dirs.home_dir().join(".operant"),
     )
 }
 
@@ -493,7 +493,7 @@ fn clamp_reasoning_effort(model: &str, effort: &str) -> String {
 fn resolve_reasoning_effort(model_id: &str, configured: Option<&str>) -> String {
     let raw = configured
         .map(ToString::to_string)
-        .or_else(|| std::env::var("ZEROCLAW_CODEX_REASONING_EFFORT").ok())
+        .or_else(|| std::env::var("OPERANT_CODEX_REASONING_EFFORT").ok())
         .and_then(|value| first_nonempty(Some(&value)))
         .unwrap_or_else(|| "xhigh".to_string())
         .to_ascii_lowercase();
@@ -1163,7 +1163,7 @@ impl OpenAiCodexProvider {
         } else {
             Some(oauth_access_token.ok_or_else(|| {
                 anyhow::anyhow!(
-                    "OpenAI Codex auth profile not found. Run `zeroclaw auth login --provider openai-codex`."
+                    "OpenAI Codex auth profile not found. Run `operant auth login --provider openai-codex`."
                 )
             })?)
         };
@@ -1172,7 +1172,7 @@ impl OpenAiCodexProvider {
         } else {
             Some(account_id.ok_or_else(|| {
                 anyhow::anyhow!(
-                    "OpenAI Codex account id not found in auth profile/token. Run `zeroclaw auth login --provider openai-codex` again."
+                    "OpenAI Codex account id not found in auth profile/token. Run `operant auth login --provider openai-codex` again."
                 )
             })?)
         };
@@ -1497,7 +1497,7 @@ mod tests {
         let temp_dir = tempfile::tempdir().unwrap();
         let options = ProviderRuntimeOptions {
             provider_api_url: Some(format!("http://{addr}")),
-            zeroclaw_dir: Some(temp_dir.path().to_path_buf()),
+            operant_dir: Some(temp_dir.path().to_path_buf()),
             secrets_encrypt: false,
             ..ProviderRuntimeOptions::default()
         };
@@ -1535,7 +1535,7 @@ mod tests {
 
     #[test]
     fn default_state_dir_is_non_empty() {
-        let path = default_zeroclaw_dir();
+        let path = default_operant_dir();
         assert!(!path.as_os_str().is_empty());
     }
 
@@ -1807,7 +1807,7 @@ mod tests {
     #[test]
     fn resolve_reasoning_effort_prefers_configured_override() {
         let _lock = env_lock();
-        let _guard = EnvGuard::set("ZEROCLAW_CODEX_REASONING_EFFORT", Some("low"));
+        let _guard = EnvGuard::set("OPERANT_CODEX_REASONING_EFFORT", Some("low"));
         assert_eq!(
             resolve_reasoning_effort("gpt-5-codex", Some("high")),
             "high".to_string()
@@ -1817,7 +1817,7 @@ mod tests {
     #[test]
     fn resolve_reasoning_effort_uses_legacy_env_when_unconfigured() {
         let _lock = env_lock();
-        let _guard = EnvGuard::set("ZEROCLAW_CODEX_REASONING_EFFORT", Some("minimal"));
+        let _guard = EnvGuard::set("OPERANT_CODEX_REASONING_EFFORT", Some("minimal"));
         assert_eq!(
             resolve_reasoning_effort("gpt-5-codex", None),
             "low".to_string()
@@ -2194,7 +2194,7 @@ data: [DONE]
             native_tools: None,
             wire_api: None,
             provider_api_url: None,
-            zeroclaw_dir: None,
+            operant_dir: None,
             think: None,
             chat_template_kwargs: None,
             ollama_num_ctx: None,

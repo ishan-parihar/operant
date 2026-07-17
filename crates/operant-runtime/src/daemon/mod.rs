@@ -271,7 +271,7 @@ pub async fn run(
         tracing::info!("Cron disabled; scheduler supervisor not started");
     }
 
-    println!("🧠 ZeroClaw daemon started");
+    println!("🧠 Operant daemon started");
     println!("   Gateway:  http://{host}:{port}");
     println!("   Components: gateway, channels, heartbeat, scheduler");
     if config.gateway.require_pairing {
@@ -399,7 +399,7 @@ async fn run_heartbeat_worker(config: Config) -> Result<()> {
     // for the engine so HeartbeatTick/Error events reach the primary backend.
     // The agent::run() calls below pass None so loop_::run() calls create_observer()
     // internally, preserving the configured backend alongside the gateway's SSE hook.
-    // See: crates/zeroclaw-runtime/src/observability/mod.rs — set_scoped_broadcast_hook.
+    // See: crates/operant-runtime/src/observability/mod.rs — set_scoped_broadcast_hook.
     let engine = HeartbeatEngine::new(
         config.heartbeat.clone(),
         config.workspace_dir.clone(),
@@ -1062,7 +1062,7 @@ fn has_supervised_channels(config: &Config) -> bool {
     config.channels.channels().iter().any(|(_, ok)| *ok)
 }
 
-// run_mqtt_sop_listener has been moved to zeroclaw-channels::orchestrator::mqtt.
+// run_mqtt_sop_listener has been moved to operant-channels::orchestrator::mqtt.
 // The daemon now receives it as a callback via DaemonSubsystems::mqtt_start.
 
 #[cfg(test)]

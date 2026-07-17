@@ -82,7 +82,7 @@ pub async fn run(config: Config, event_tx: EventBroadcast) -> Result<()> {
     // Observer fan-out is handled by create_observer + the gateway's BROADCAST_HOOK
     // (TeeObserver). Passing None here lets loop_::run() call create_observer() so
     // the configured log/Prometheus/OTel backend is preserved alongside SSE output.
-    // See: crates/zeroclaw-runtime/src/observability/mod.rs — set_scoped_broadcast_hook.
+    // See: crates/operant-runtime/src/observability/mod.rs — set_scoped_broadcast_hook.
     if config.cron.catch_up_on_startup {
         catch_up_overdue_jobs(&config, &security, &event_tx, None).await;
     } else {
@@ -1441,7 +1441,7 @@ mod tests {
 
     #[tokio::test]
     async fn persist_job_result_delivery_stubbed_succeeds() {
-        // Delivery is stubbed (moved to zeroclaw-channels orchestrator).
+        // Delivery is stubbed (moved to operant-channels orchestrator).
         // This test verifies the stub returns Ok, so persist_job_result succeeds.
         let tmp = TempDir::new().unwrap();
         let config = test_config(&tmp).await;
@@ -1628,7 +1628,7 @@ mod tests {
         assert_eq!(overdue.len(), 3, "all_overdue_jobs must return all");
     }
 
-    // scan_and_redact_output tests moved to zeroclaw-channels orchestrator
+    // scan_and_redact_output tests moved to operant-channels orchestrator
 
     // ── Broadcast / EventBroadcast tests ─────────────────────────────
 

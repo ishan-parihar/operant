@@ -788,7 +788,7 @@ impl BrowserTool {
             },
             "metadata": {
                 "session_name": self.session_name,
-                "source": "zeroclaw.browser",
+                "source": "operant.browser",
                 "version": env!("CARGO_PKG_VERSION"),
             }
         });
@@ -1051,7 +1051,7 @@ impl Tool for BrowserTool {
         }
 
         // Rate limiting is applied by the RateLimitedTool wrapper at
-        // registration time (see zeroclaw-runtime::tools::mod).
+        // registration time (see operant-runtime::tools::mod).
 
         let backend = match self.resolve_backend().await {
             Ok(selected) => selected,

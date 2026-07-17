@@ -87,26 +87,26 @@ pub const REQUEST_TIMEOUT_SECS: u64 = 30;
 /// realistic workloads to finish.
 pub const LONG_RUNNING_REQUEST_TIMEOUT_SECS: u64 = 600;
 
-/// Read gateway request timeout from `ZEROCLAW_GATEWAY_TIMEOUT_SECS` env var
+/// Read gateway request timeout from `OPERANT_GATEWAY_TIMEOUT_SECS` env var
 /// at runtime, falling back to [`REQUEST_TIMEOUT_SECS`].
 ///
 /// Agentic workloads with tool use (web search, MCP tools, sub-agent
 /// delegation) regularly exceed 30 seconds. This allows operators to
 /// increase the timeout without recompiling.
 pub fn gateway_request_timeout_secs() -> u64 {
-    std::env::var("ZEROCLAW_GATEWAY_TIMEOUT_SECS")
+    std::env::var("OPERANT_GATEWAY_TIMEOUT_SECS")
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(REQUEST_TIMEOUT_SECS)
 }
 
 /// Read manual cron-run request timeout from
-/// `ZEROCLAW_GATEWAY_LONG_RUNNING_REQUEST_TIMEOUT_SECS` at runtime, falling back to
+/// `OPERANT_GATEWAY_LONG_RUNNING_REQUEST_TIMEOUT_SECS` at runtime, falling back to
 /// [`LONG_RUNNING_REQUEST_TIMEOUT_SECS`]. Long-running jobs (e.g. agent prompts that
 /// invoke tools) can comfortably exceed the 30s gateway-wide default, so the
 /// `/api/cron/{id}/run` route gets its own timeout layer.
 pub fn gateway_long_running_request_timeout_secs() -> u64 {
-    std::env::var("ZEROCLAW_GATEWAY_LONG_RUNNING_REQUEST_TIMEOUT_SECS")
+    std::env::var("OPERANT_GATEWAY_LONG_RUNNING_REQUEST_TIMEOUT_SECS")
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(LONG_RUNNING_REQUEST_TIMEOUT_SECS)
@@ -408,7 +408,7 @@ pub struct AppState {
     pub shutdown_tx: tokio::sync::watch::Sender<bool>,
     /// Reload signal sender owned by the daemon. /admin/reload writes `true`
     /// here; the daemon's wait loop reacts and re-instantiates every
-    /// subsystem in place. `None` when running standalone (`zeroclaw gateway start`)
+    /// subsystem in place. `None` when running standalone (`operant gateway start`)
     /// — reload then degrades to a 503 with a clear message.
     pub reload_tx: Option<tokio::sync::watch::Sender<bool>>,
     /// Registry of dynamically connected nodes
@@ -694,7 +694,7 @@ pub async fn run_gateway(
 
         tokio::spawn(async move {
             let _ = shutdown_rx.changed().await;
-            tracing::info!("🦀 ZeroClaw Gateway shutting down...");
+            tracing::info!("🦀 Operant Gateway shutting down...");
             shutdown_handle.graceful_shutdown(Some(std::time::Duration::from_secs(10)));
         });
 
@@ -714,7 +714,7 @@ pub async fn run_gateway(
         axum::serve(listener, make_service)
             .with_graceful_shutdown(async move {
                 let _ = shutdown_rx.changed().await;
-                tracing::info!("🦀 ZeroClaw Gateway shutting down...");
+                tracing::info!("🦀 Operant Gateway shutting down...");
             })
             .await?;
     }
@@ -725,7 +725,7 @@ pub async fn run_gateway(
 }
 
 fn format_paircode_recovery_command(host: &str, port: u16) -> String {
-    let mut cmd = format!("zeroclaw gateway get-paircode --new --port {port}");
+    let mut cmd = format!("operant gateway get-paircode --new --port {port}");
     if let Some(host_arg) = paircode_recovery_host_arg(host) {
         cmd.push_str(" --host ");
         cmd.push_str(host_arg);
@@ -1942,7 +1942,7 @@ async fn handle_admin_shutdown(
 ///
 /// Cross-platform — works identically on Linux, macOS, and Windows because
 /// the channel is in-process tokio, not an OS signal. The gateway-only
-/// `zeroclaw gateway start` (no daemon supervisor) returns 503 with a
+/// `operant gateway start` (no daemon supervisor) returns 503 with a
 /// clear message because there's nothing to signal.
 async fn handle_admin_reload(
     State(state): State<AppState>,
@@ -2112,7 +2112,7 @@ mod tests {
     fn paircode_recovery_command_includes_alternate_port() {
         assert_eq!(
             format_paircode_recovery_command("127.0.0.1", 42617),
-            "zeroclaw gateway get-paircode --new --port 42617"
+            "operant gateway get-paircode --new --port 42617"
         );
     }
 
@@ -2120,7 +2120,7 @@ mod tests {
     fn paircode_recovery_command_includes_specific_host_when_needed() {
         assert_eq!(
             format_paircode_recovery_command("192.168.1.20", 42617),
-            "zeroclaw gateway get-paircode --new --port 42617 --host 192.168.1.20"
+            "operant gateway get-paircode --new --port 42617 --host 192.168.1.20"
         );
     }
 
@@ -2144,7 +2144,7 @@ mod tests {
     fn gateway_timeout_falls_back_to_default() {
         // When env var is not set, should return the default constant
         // SAFETY: test-only, single-threaded test runner.
-        unsafe { std::env::remove_var("ZEROCLAW_GATEWAY_TIMEOUT_SECS") };
+        unsafe { std::env::remove_var("OPERANT_GATEWAY_TIMEOUT_SECS") };
         assert_eq!(gateway_request_timeout_secs(), 30);
     }
 
@@ -2156,7 +2156,7 @@ mod tests {
     #[test]
     fn long_running_request_timeout_falls_back_to_default() {
         // SAFETY: test-only, single-threaded test runner.
-        unsafe { std::env::remove_var("ZEROCLAW_GATEWAY_LONG_RUNNING_REQUEST_TIMEOUT_SECS") };
+        unsafe { std::env::remove_var("OPERANT_GATEWAY_LONG_RUNNING_REQUEST_TIMEOUT_SECS") };
         assert_eq!(gateway_long_running_request_timeout_secs(), 600);
     }
 
@@ -2307,7 +2307,7 @@ mod tests {
 
         let body = response.into_body().collect().await.unwrap().to_bytes();
         let text = String::from_utf8(body.to_vec()).unwrap();
-        assert!(text.contains("zeroclaw_heartbeat_ticks_total 1"));
+        assert!(text.contains("operant_heartbeat_ticks_total 1"));
     }
 
     #[test]

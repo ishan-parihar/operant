@@ -1,7 +1,7 @@
 // Encrypted secret store — defense-in-depth for API keys and tokens.
 //
 // Secrets are encrypted using ChaCha20-Poly1305 AEAD with a random key stored
-// in `~/.zeroclaw/.secret_key` with restrictive file permissions (0600). The
+// in `~/.operant/.secret_key` with restrictive file permissions (0600). The
 // config file stores only hex-encoded ciphertext, never plaintext keys.
 //
 // Each encryption generates a fresh random 12-byte nonce, prepended to the
@@ -36,7 +36,7 @@ const NONCE_LEN: usize = 12;
 /// Manages encrypted storage of secrets (API keys, tokens, etc.)
 #[derive(Debug, Clone)]
 pub struct SecretStore {
-    /// Path to the key file (`~/.zeroclaw/.secret_key`)
+    /// Path to the key file (`~/.operant/.secret_key`)
     key_path: PathBuf,
     /// Whether encryption is enabled
     enabled: bool,
@@ -44,9 +44,9 @@ pub struct SecretStore {
 
 impl SecretStore {
     /// Create a new secret store rooted at the given directory.
-    pub fn new(zeroclaw_dir: &Path, enabled: bool) -> Self {
+    pub fn new(operant_dir: &Path, enabled: bool) -> Self {
         Self {
-            key_path: zeroclaw_dir.join(".secret_key"),
+            key_path: operant_dir.join(".secret_key"),
             enabled,
         }
     }
@@ -147,7 +147,7 @@ impl SecretStore {
                     key_path = %self.key_path.display(),
                     "enc2: decryption failed. `.secret_key` is missing or does not match the key used to encrypt this value. \
                      Common cause: volume wipe, container migration, or backup-restore where `.secret_key` was not preserved alongside `config.toml`. \
-                     Restore the original `.secret_key` from backup, or re-encrypt the affected secrets via `zeroclaw onboard`."
+                     Restore the original `.secret_key` from backup, or re-encrypt the affected secrets via `operant onboard`."
                 );
                 anyhow::anyhow!("enc2: decryption failed (wrong `.secret_key` or tampered ciphertext)")
             })?;

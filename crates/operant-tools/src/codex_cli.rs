@@ -15,7 +15,7 @@ const SAFE_ENV_VARS: &[&str] = &[
 
 /// Delegates coding tasks to the Codex CLI (`codex -q`).
 ///
-/// This creates a two-tier agent architecture: ZeroClaw orchestrates high-level
+/// This creates a two-tier agent architecture: Operant orchestrates high-level
 /// tasks and delegates complex coding work to Codex, which has its own
 /// agent loop with file editing and shell tools.
 ///
@@ -61,7 +61,7 @@ impl Tool for CodexCliTool {
 
     async fn execute(&self, args: serde_json::Value) -> anyhow::Result<ToolResult> {
         // Rate limiting is applied by the RateLimitedTool wrapper at
-        // registration time (see zeroclaw-runtime::tools::mod).
+        // registration time (see operant-runtime::tools::mod).
 
         // Enforce act policy
         if let Err(error) = self

@@ -185,7 +185,7 @@ pub fn filter_by_allowed_tools(
     }
 }
 
-// Re-export from zeroclaw-types for backwards compatibility.
+// Re-export from operant-types for backwards compatibility.
 pub use operant_api::TOOL_LOOP_SESSION_KEY;
 pub use operant_api::TOOL_LOOP_THREAD_ID;
 
@@ -2495,7 +2495,7 @@ pub async fn run(
         ));
         tool_descs.push((
             "arduino_upload",
-            "Upload agent-generated Arduino sketch. Use when: user asks for 'make a heart', 'blink pattern', or custom LED behavior on Arduino. You write the full .ino code; ZeroClaw compiles and uploads it. Pin 13 = built-in LED on Uno.",
+            "Upload agent-generated Arduino sketch. Use when: user asks for 'make a heart', 'blink pattern', or custom LED behavior on Arduino. You write the full .ino code; Operant compiles and uploads it. Pin 13 = built-in LED on Uno.",
         ));
         tool_descs.push((
             "hardware_memory_map",
@@ -2781,7 +2781,7 @@ pub async fn run(
         println!("{response}");
         observer.record_event(&ObserverEvent::TurnComplete);
     } else {
-        println!("🦀 ZeroClaw Interactive Mode");
+        println!("🦀 Operant Interactive Mode");
         println!("Type /help for commands.\n");
         let cli = CLI_CHANNEL_FN
             .get()
@@ -3452,7 +3452,7 @@ pub async fn process_message(
         ));
         tool_descs.push((
             "arduino_upload",
-            "Upload Arduino sketch. Use for 'make a heart', custom patterns. You write full .ino code; ZeroClaw uploads it.",
+            "Upload Arduino sketch. Use for 'make a heart', custom patterns. You write full .ino code; Operant uploads it.",
         ));
         tool_descs.push((
             "hardware_memory_map",

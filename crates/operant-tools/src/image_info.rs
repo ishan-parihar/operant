@@ -164,7 +164,7 @@ impl Tool for ImageInfoTool {
         let path = Path::new(path_str);
 
         // Path-allowlist checks are applied by the PathGuardedTool wrapper at
-        // registration time (see zeroclaw-runtime::tools::mod). Rate limiting
+        // registration time (see operant-runtime::tools::mod). Rate limiting
         // for this tool is also wrapper-driven via RateLimitedTool.
 
         if !path.exists() {
@@ -256,7 +256,7 @@ mod tests {
 
     /// Wraps `ImageInfoTool` with the production `PathGuardedTool` +
     /// `RateLimitedTool` stack, mirroring the registration in
-    /// `zeroclaw-runtime::tools::mod`.  Use this in tests that exercise
+    /// `operant-runtime::tools::mod`.  Use this in tests that exercise
     /// path-allowlist or rate-limit behavior.
     fn wrapped_tool(workspace: std::path::PathBuf) -> Box<dyn Tool> {
         let security = workspace_security(workspace);
@@ -450,7 +450,7 @@ mod tests {
     #[tokio::test]
     async fn execute_real_file() {
         // Create a minimal valid PNG
-        let dir = std::env::temp_dir().join("zeroclaw_image_info_test");
+        let dir = std::env::temp_dir().join("operant_image_info_test");
         let _ = tokio::fs::create_dir_all(&dir).await;
         let png_path = dir.join("test.png");
 
@@ -492,7 +492,7 @@ mod tests {
         // Regression for the removed inline path check: when ImageInfoTool is
         // composed with PathGuardedTool (as it is in production), an external
         // absolute path must be blocked before the inner tool runs.
-        let workspace = std::env::temp_dir().join("zeroclaw_image_info_wrap");
+        let workspace = std::env::temp_dir().join("operant_image_info_wrap");
         let _ = std::fs::create_dir_all(&workspace);
         let tool = wrapped_tool(workspace);
 
@@ -521,7 +521,7 @@ mod tests {
     async fn wrapped_blocks_path_traversal() {
         // Path-traversal under workspace_only must be blocked by the wrapper,
         // not pass through to the inner tool.
-        let workspace = std::env::temp_dir().join("zeroclaw_image_info_trav");
+        let workspace = std::env::temp_dir().join("operant_image_info_trav");
         let _ = std::fs::create_dir_all(&workspace);
         let tool = wrapped_tool(workspace);
 
@@ -543,7 +543,7 @@ mod tests {
 
     #[tokio::test]
     async fn execute_with_base64() {
-        let dir = std::env::temp_dir().join("zeroclaw_image_info_b64");
+        let dir = std::env::temp_dir().join("operant_image_info_b64");
         let _ = tokio::fs::create_dir_all(&dir).await;
         let png_path = dir.join("test_b64.png");
 

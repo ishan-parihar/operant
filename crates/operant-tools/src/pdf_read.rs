@@ -77,7 +77,7 @@ impl Tool for PdfReadTool {
 
         // Cross-cutting rate limiting and path-allowlist checks live in the
         // RateLimitedTool + PathGuardedTool wrappers at registration time
-        // (see zeroclaw-runtime::tools::mod).  Successful reads consume one
+        // (see operant-runtime::tools::mod).  Successful reads consume one
         // budget slot via the outer RateLimitedTool.
         //
         // Read-tool exception: post-`PathGuardedTool` canonicalize failures
@@ -247,7 +247,7 @@ mod tests {
     }
 
     /// Wraps `PdfReadTool` with the production `PathGuardedTool` + `RateLimitedTool`
-    /// stack, mirroring the registration in `zeroclaw-runtime::tools::mod`. Use this
+    /// stack, mirroring the registration in `operant-runtime::tools::mod`. Use this
     /// in tests that exercise path-allowlist or rate-limit behavior.
     fn wrapped_tool(workspace: std::path::PathBuf) -> Box<dyn Tool> {
         let security = test_security(workspace);

@@ -103,7 +103,8 @@ struct ConnectParams {
 }
 
 /// The sub-protocol we support for the chat WebSocket.
-const WS_PROTOCOL: &str = "zeroclaw.v1";
+// TODO: migrate clients from zeroclaw.v1 to operant.v1
+const WS_PROTOCOL: &str = "operant.v1";
 
 /// Prefix used in `Sec-WebSocket-Protocol` to carry a bearer token.
 const BEARER_SUBPROTO_PREFIX: &str = "bearer.";
@@ -1012,7 +1013,7 @@ async fn process_chat_message(
                 let _ = backend.set_session_state(session_key, "idle", None);
             }
 
-            // Append a runtime-trace.jsonl record so a `zeroclaw doctor`
+            // Append a runtime-trace.jsonl record so a `operant doctor`
             // sweep sees gateway WS turns alongside channel and CLI turns.
             // Closes the gateway-side trace gap from #6001.
             operant_runtime::observability::runtime_trace::record_event(
@@ -1148,7 +1149,7 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert(
             "sec-websocket-protocol",
-            "zeroclaw.v1, bearer.zc_sub456".parse().unwrap(),
+            "operant.v1, bearer.zc_sub456".parse().unwrap(),
         );
         assert_eq!(extract_ws_token(&headers, None), Some("zc_sub456"));
     }
@@ -1207,7 +1208,7 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert(
             "sec-websocket-protocol",
-            "zeroclaw.v1, bearer.zc_tok, other".parse().unwrap(),
+            "operant.v1, bearer.zc_tok, other".parse().unwrap(),
         );
         assert_eq!(extract_ws_token(&headers, None), Some("zc_tok"));
     }

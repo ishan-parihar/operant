@@ -49,7 +49,7 @@ type PathExtractor = dyn Fn(&serde_json::Value) -> Option<String> + Send + Sync;
 ///
 /// ## Read-tool exception (anti-probing)
 ///
-/// `FileReadTool` (`zeroclaw-runtime::tools::file_read`) and `PdfReadTool` in
+/// `FileReadTool` (`operant-runtime::tools::file_read`) and `PdfReadTool` in
 /// this crate intentionally call `record_action()` *themselves* on the
 /// post-`PathGuardedTool` `resolve_candidate` / `canonicalize` failure paths.
 /// This prevents an attacker from probing path existence for free: each
@@ -151,7 +151,7 @@ impl<T: Tool> PathGuardedTool<T> {
         if let Some(ref f) = self.extractor {
             return f(args);
         }
-        // Default: check common argument names used across ZeroClaw tools.
+        // Default: check common argument names used across Operant tools.
         for field in &["path", "command", "pattern", "query", "file"] {
             if let Some(s) = args.get(field).and_then(|v| v.as_str()) {
                 return Some(s.to_string());

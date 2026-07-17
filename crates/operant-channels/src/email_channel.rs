@@ -1063,7 +1063,7 @@ mod tests {
         assert_eq!(config.smtp_port, 465); // default
         assert!(config.smtp_tls); // default
         assert_eq!(config.idle_timeout_secs, 1740); // default
-        assert_eq!(config.default_subject, "ZeroClaw Message"); // default
+        assert_eq!(config.default_subject, "Operant Message"); // default
     }
 
     #[test]

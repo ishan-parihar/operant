@@ -1155,7 +1155,7 @@ impl Memory for SqliteMemory {
     /// Step 2 fills in vectors for every row with `embedding IS NULL` using
     /// the configured embedder. If interrupted, re-running is safe — only
     /// rows still missing a vector are re-processed. Intended to be run
-    /// after bulk writes that didn't go through `store()` (e.g. `zeroclaw
+    /// after bulk writes that didn't go through `store()` (e.g. `operant
     /// migrate openclaw`, which uses `NoopEmbedding` for speed). Returns
     /// the number of rows that received a new embedding; returns 0 if the
     /// embedder has no dimensions (Noop) or if everything is already

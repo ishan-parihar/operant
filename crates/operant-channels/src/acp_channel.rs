@@ -1,6 +1,6 @@
 //! ACP (Agent Client Protocol) back-channel.
 //!
-//! Bridges ZeroClaw's [`Channel`] abstraction onto an active ACP session so
+//! Bridges Operant's [`Channel`] abstraction onto an active ACP session so
 //! tools like `ask_user`, `escalate_to_human`, and `reaction` can talk back
 //! to the IDE/CLI client (Toad, Zed, etc.) instead of returning
 //! "no channels available".

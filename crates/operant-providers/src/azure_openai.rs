@@ -595,7 +595,7 @@ mod tests {
     async fn chat_with_system_fails_without_key() {
         let p = AzureOpenAiProvider::new(None, "resource", "deployment", None);
         let result = p
-            .chat_with_system(Some("You are ZeroClaw"), "test", "gpt-4o", Some(0.5))
+            .chat_with_system(Some("You are Operant"), "test", "gpt-4o", Some(0.5))
             .await;
         assert!(result.is_err());
     }
@@ -606,7 +606,7 @@ mod tests {
             messages: vec![
                 Message {
                     role: "system".to_string(),
-                    content: "You are ZeroClaw".to_string(),
+                    content: "You are Operant".to_string(),
                 },
                 Message {
                     role: "user".to_string(),
