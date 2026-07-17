@@ -85,7 +85,10 @@ pub mod skills_guard;
 pub mod tools;
 pub mod trajectory;
 pub mod user_question;
+pub mod observer;
 pub mod voice;
+
+pub use observer::{Observer, ObserverEvent, ObserverMetric, ConsoleObserver};
 
 pub use acp::{AcpHandler, AgentState, RpcRequest, RpcResponse, server};
 pub use agent::{AgentConfig, AgentEvent, FallbackModelClient, OperantAgent};
