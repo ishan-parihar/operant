@@ -1,6 +1,6 @@
 cli-about = The fastest, smallest AI assistant.
 cli-no-command-provided = No command provided.
-cli-try-onboard = Try `zeroclaw onboard` to initialize your workspace.
+cli-try-onboard = Try `operant onboard` to initialize your workspace.
 
 cli-onboard-about = Initialize your workspace and configuration
 cli-agent-about = Start the AI agent loop
@@ -23,11 +23,11 @@ cli-auth-about = Manage provider subscription authentication profiles
 cli-hardware-about = Discover and introspect USB hardware
 cli-peripheral-about = Manage hardware peripherals
 cli-memory-about = Manage agent memory entries
-cli-config-about = Manage ZeroClaw configuration
-cli-update-about = Check for and apply ZeroClaw updates
+cli-config-about = Manage Operant configuration
+cli-update-about = Check for and apply Operant updates
 cli-self-test-about = Run diagnostic self-tests
 cli-completions-about = Generate shell completion scripts
-cli-desktop-about = Launch the ZeroClaw companion desktop app
+cli-desktop-about = Launch the Operant companion desktop app
 
 cli-config-schema-about = Dump the full configuration JSON Schema to stdout
 cli-config-list-about = List all config properties with current values
@@ -63,7 +63,7 @@ cli-wechat-scanned-confirm = 👀 Scanned! Confirm on your phone...
 cli-wechat-qr-expired-refreshing = ⏳ QR code expired, refreshing...
 cli-wechat-login-confirmed-missing-field = Login confirmed but {$field} missing.
 cli-wechat-connected = ✅ WeChat connected!
-cli-wechat-bound-success = ✅ WeChat account bound successfully. You can talk to ZeroClaw now.
+cli-wechat-bound-success = ✅ WeChat account bound successfully. You can talk to Operant now.
 cli-wechat-invalid-bind-code = ❌ Invalid bind code. Please try again.
 
 channel-runtime-current-route =
@@ -71,7 +71,7 @@ channel-runtime-current-route =
     Current model: `{$model}`
 channel-runtime-switch-model-help = Switch model with `/model <model-id>` or `/model <hint>`.
 channel-runtime-configured-model-routes = Configured model routes:
-channel-runtime-no-cached-models = No cached model list found for `{$provider}`. Ask the operator to run `zeroclaw models refresh --provider {$provider}`.
+channel-runtime-no-cached-models = No cached model list found for `{$provider}`. Ask the operator to run `operant models refresh --provider {$provider}`.
 channel-runtime-cached-models = Cached model IDs (top {$count}):
 channel-runtime-switch-provider-help = Switch provider with `/models <provider>`.
 channel-runtime-switch-model-command-help = Switch model with `/model <model-id>`.
@@ -122,11 +122,11 @@ cli-skills-install-start = Installing skill from: {$source}
 cli-skills-install-resolving-registry = { "  " }Resolving '{$source}' from skills registry...
 cli-skills-install-installed-audited = { "  " }{$status} Skill installed and audited: {$path} ({$files} files scanned)
 cli-skills-install-security-audit-completed = { "  " }Security audit completed successfully.
-cli-skills-install-tier-official = Installing {$name} v{$version} — Official (zeroclaw-labs maintained)
+cli-skills-install-tier-official = Installing {$name} v{$version} — Official (operant-labs maintained)
 cli-skills-install-tier-community =
     Installing {$name} v{$version} — Community submission
-    This skill is not audited by ZeroClaw. Review the skill content
-    and run `zeroclaw skills audit {$name}` before granting any
+    This skill is not audited by Operant. Review the skill content
+    and run `operant skills audit {$name}` before granting any
     permissions or running it in production.
 
 cli-cron-list-about = List all scheduled tasks
@@ -168,13 +168,13 @@ cli-hardware-info-about = Get chip info via USB using probe-rs over ST-Link
 
 cli-peripheral-list-about = List configured peripherals
 cli-peripheral-add-about = Add a peripheral by board type and transport path
-cli-peripheral-flash-about = Flash ZeroClaw firmware to an Arduino board
+cli-peripheral-flash-about = Flash Operant firmware to an Arduino board
 
 cli-sop-list-about = List loaded SOPs
 cli-sop-validate-about = Validate SOP definitions
 cli-sop-show-about = Show details of an SOP
 
-cli-migrate-openclaw-about = Import memory from an OpenClaw workspace into this ZeroClaw workspace
+cli-migrate-openclaw-about = Import memory from an OpenClaw workspace into this Operant workspace
 
 cli-agent-long-about =
     Start the AI agent loop.
@@ -182,10 +182,10 @@ cli-agent-long-about =
     Launches an interactive chat session with the configured AI provider. Use --message for single-shot queries without entering interactive mode.
 
     Examples:
-      zeroclaw agent                              # interactive session
-      zeroclaw agent -m "Summarize today's logs"  # single message
-      zeroclaw agent -p anthropic --model claude-sonnet-4-20250514
-      zeroclaw agent --peripheral nucleo-f401re:/dev/ttyACM0
+      operant agent                              # interactive session
+      operant agent -m "Summarize today's logs"  # single message
+      operant agent -p anthropic --model claude-sonnet-4-20250514
+      operant agent --peripheral nucleo-f401re:/dev/ttyACM0
 
 cli-gateway-long-about =
     Manage the gateway server (webhooks, websockets).
@@ -193,9 +193,9 @@ cli-gateway-long-about =
     Start, restart, or inspect the HTTP/WebSocket gateway that accepts incoming webhook events and WebSocket connections.
 
     Examples:
-      zeroclaw gateway start              # start gateway
-      zeroclaw gateway restart            # restart gateway
-      zeroclaw gateway get-paircode       # show pairing code
+      operant gateway start              # start gateway
+      operant gateway restart            # restart gateway
+      operant gateway get-paircode       # show pairing code
 
 cli-acp-long-about =
     Start the ACP server (JSON-RPC 2.0 over stdio).
@@ -205,20 +205,20 @@ cli-acp-long-about =
     Methods: initialize, session/new, session/prompt, session/stop.
 
     Examples:
-      zeroclaw acp                        # start ACP server
-      zeroclaw acp --max-sessions 5       # limit concurrent sessions
+      operant acp                        # start ACP server
+      operant acp --max-sessions 5       # limit concurrent sessions
 
 cli-daemon-long-about =
     Start the long-running autonomous daemon.
 
-    Launches the full ZeroClaw runtime: gateway server, all configured channels (Telegram, Discord, Slack, etc.), heartbeat monitor, and the cron scheduler. This is the recommended way to run ZeroClaw in production or as an always-on assistant.
+    Launches the full Operant runtime: gateway server, all configured channels (Telegram, Discord, Slack, etc.), heartbeat monitor, and the cron scheduler. This is the recommended way to run Operant in production or as an always-on assistant.
 
-    Use 'zeroclaw service install' to register the daemon as an OS service (systemd/launchd) for auto-start on boot.
+    Use 'operant service install' to register the daemon as an OS service (systemd/launchd) for auto-start on boot.
 
     Examples:
-      zeroclaw daemon                   # use config defaults
-      zeroclaw daemon -p 9090           # gateway on port 9090
-      zeroclaw daemon --host 127.0.0.1  # localhost only
+      operant daemon                   # use config defaults
+      operant daemon -p 9090           # gateway on port 9090
+      operant daemon --host 127.0.0.1  # localhost only
 
 cli-cron-long-about =
     Configure and manage scheduled tasks.
@@ -228,28 +228,28 @@ cli-cron-long-about =
     Cron expressions use the standard 5-field format: 'min hour day month weekday'. Timezones default to UTC; override with --tz and an IANA timezone name.
 
     Examples:
-      zeroclaw cron list
-      zeroclaw cron add '0 9 * * 1-5' 'Good morning' --tz America/New_York --agent
-      zeroclaw cron add '*/30 * * * *' 'Check system health' --agent
-      zeroclaw cron add '*/5 * * * *' 'echo ok'
-      zeroclaw cron add-at 2025-01-15T14:00:00Z 'Send reminder' --agent
-      zeroclaw cron add-every 60000 'Ping heartbeat'
-      zeroclaw cron once 30m 'Run backup in 30 minutes' --agent
-      zeroclaw cron pause TASK_ID
-      zeroclaw cron update TASK_ID --expression '0 8 * * *' --tz Europe/London
+      operant cron list
+      operant cron add '0 9 * * 1-5' 'Good morning' --tz America/New_York --agent
+      operant cron add '*/30 * * * *' 'Check system health' --agent
+      operant cron add '*/5 * * * *' 'echo ok'
+      operant cron add-at 2025-01-15T14:00:00Z 'Send reminder' --agent
+      operant cron add-every 60000 'Ping heartbeat'
+      operant cron once 30m 'Run backup in 30 minutes' --agent
+      operant cron pause TASK_ID
+      operant cron update TASK_ID --expression '0 8 * * *' --tz Europe/London
 
 cli-channel-long-about =
     Manage communication channels.
 
-    Add, remove, list, send, and health-check channels that connect ZeroClaw to messaging platforms. Supported channel types: telegram, discord, slack, whatsapp, matrix, imessage, email.
+    Add, remove, list, send, and health-check channels that connect Operant to messaging platforms. Supported channel types: telegram, discord, slack, whatsapp, matrix, imessage, email.
 
     Examples:
-      zeroclaw channel list
-      zeroclaw channel doctor
-      zeroclaw channel add telegram '{ "{" }"bot_token":"...","name":"my-bot"{ "}" }'
-      zeroclaw channel remove my-bot
-      zeroclaw channel bind-telegram zeroclaw_user
-      zeroclaw channel send 'Alert!' --channel-id telegram --recipient 123456789
+      operant channel list
+      operant channel doctor
+      operant channel add telegram '{ "{" }"bot_token":"...","name":"my-bot"{ "}" }'
+      operant channel remove my-bot
+      operant channel bind-telegram operant_user
+      operant channel send 'Alert!' --channel-id telegram --recipient 123456789
 
 cli-hardware-long-about =
     Discover and introspect USB hardware.
@@ -257,9 +257,9 @@ cli-hardware-long-about =
     Enumerate connected USB devices, identify known development boards (STM32 Nucleo, Arduino, ESP32), and retrieve chip information via probe-rs / ST-Link.
 
     Examples:
-      zeroclaw hardware discover
-      zeroclaw hardware introspect /dev/ttyACM0
-      zeroclaw hardware info --chip STM32F401RETx
+      operant hardware discover
+      operant hardware introspect /dev/ttyACM0
+      operant hardware info --chip STM32F401RETx
 
 cli-peripheral-long-about =
     Manage hardware peripherals.
@@ -267,11 +267,11 @@ cli-peripheral-long-about =
     Add, list, flash, and configure hardware boards that expose tools to the agent (GPIO, sensors, actuators). Supported boards: nucleo-f401re, rpi-gpio, esp32, arduino-uno.
 
     Examples:
-      zeroclaw peripheral list
-      zeroclaw peripheral add nucleo-f401re /dev/ttyACM0
-      zeroclaw peripheral add rpi-gpio native
-      zeroclaw peripheral flash --port /dev/cu.usbmodem12345
-      zeroclaw peripheral flash-nucleo
+      operant peripheral list
+      operant peripheral add nucleo-f401re /dev/ttyACM0
+      operant peripheral add rpi-gpio native
+      operant peripheral flash --port /dev/cu.usbmodem12345
+      operant peripheral flash-nucleo
 
 cli-memory-long-about =
     Manage agent memory entries.
@@ -279,14 +279,14 @@ cli-memory-long-about =
     List, inspect, and clear memory entries stored by the agent. Supports filtering by category and session, pagination, and batch clearing with confirmation.
 
     Examples:
-      zeroclaw memory stats
-      zeroclaw memory list
-      zeroclaw memory list --category core --limit 10
-      zeroclaw memory get KEY
-      zeroclaw memory clear --category conversation --yes
+      operant memory stats
+      operant memory list
+      operant memory list --category core --limit 10
+      operant memory get KEY
+      operant memory clear --category conversation --yes
 
 cli-config-long-about =
-    Manage ZeroClaw configuration.
+    Manage Operant configuration.
 
     View, set, or initialize config properties by dotted path. Use 'schema' to dump the full JSON Schema for the config file.
 
@@ -295,21 +295,21 @@ cli-config-long-about =
     Enum fields offer interactive selection when value is omitted.
 
     Examples:
-      zeroclaw config list                                  # list all properties
-      zeroclaw config list --secrets                        # list only secrets
-      zeroclaw config list --filter channels.matrix         # filter by prefix
-      zeroclaw config get channels.matrix.mention-only      # get a value
-      zeroclaw config set channels.matrix.mention-only true # set a value
-      zeroclaw config set channels.matrix.access-token      # secret: masked input
-      zeroclaw config set channels.matrix.stream-mode       # enum: interactive select
-      zeroclaw config init channels.matrix                  # init section with defaults
-      zeroclaw config schema                                # print JSON Schema to stdout
-      zeroclaw config schema > schema.json
+      operant config list                                  # list all properties
+      operant config list --secrets                        # list only secrets
+      operant config list --filter channels.matrix         # filter by prefix
+      operant config get channels.matrix.mention-only      # get a value
+      operant config set channels.matrix.mention-only true # set a value
+      operant config set channels.matrix.access-token      # secret: masked input
+      operant config set channels.matrix.stream-mode       # enum: interactive select
+      operant config init channels.matrix                  # init section with defaults
+      operant config schema                                # print JSON Schema to stdout
+      operant config schema > schema.json
 
-    Property path tab completion is included automatically in `zeroclaw completions <shell>`.
+    Property path tab completion is included automatically in `operant completions <shell>`.
 
 cli-update-long-about =
-    Check for and apply ZeroClaw updates.
+    Check for and apply Operant updates.
 
     By default, downloads and installs the latest release with a 6-phase pipeline: preflight, download, backup, validate, swap, and smoke test. Automatic rollback on failure.
 
@@ -318,19 +318,19 @@ cli-update-long-about =
     Use --version to target a specific release instead of latest.
 
     Examples:
-      zeroclaw update                      # download and install latest
-      zeroclaw update --check              # check only, don't install
-      zeroclaw update --force              # install without confirmation
-      zeroclaw update --version 0.6.0      # install specific version
+      operant update                      # download and install latest
+      operant update --check              # check only, don't install
+      operant update --force              # install without confirmation
+      operant update --version 0.6.0      # install specific version
 
 cli-self-test-long-about =
-    Run diagnostic self-tests to verify the ZeroClaw installation.
+    Run diagnostic self-tests to verify the Operant installation.
 
     By default, runs the full test suite including network checks (gateway health, memory round-trip). Use --quick to skip network checks for faster offline validation.
 
     Examples:
-      zeroclaw self-test             # full suite
-      zeroclaw self-test --quick     # quick checks only (no network)
+      operant self-test             # full suite
+      operant self-test --quick     # quick checks only (no network)
 
 cli-skills-install-suggestion =
     It looks like this request needs the `{$name}` skill, but it is not installed.
@@ -339,25 +339,25 @@ cli-skills-install-suggestion =
     Next: Run `{$install_command}` to install it.
 
 cli-completions-long-about =
-    Generate shell completion scripts for `zeroclaw`.
+    Generate shell completion scripts for `operant`.
 
     The script is printed to stdout so it can be sourced directly:
 
     Examples:
-      source <(zeroclaw completions bash)
-      zeroclaw completions zsh > ~/.zfunc/_zeroclaw
-      zeroclaw completions fish > ~/.config/fish/completions/zeroclaw.fish
+      source <(operant completions bash)
+      operant completions zsh > ~/.zfunc/_operant
+      operant completions fish > ~/.config/fish/completions/operant.fish
 
 cli-desktop-long-about =
-    Launch the ZeroClaw companion desktop app.
+    Launch the Operant companion desktop app.
 
     The companion app is a lightweight menu bar / system tray application that connects to the same gateway as the CLI. It provides quick access to the dashboard, status monitoring, and device pairing.
 
     Use --install to download the pre-built companion app for your platform.
 
     Examples:
-      zeroclaw desktop              # launch the companion app
-      zeroclaw desktop --install    # download and install it
+      operant desktop              # launch the companion app
+      operant desktop --install    # download and install it
 
 # Channel-side reply emitted when chat dispatch refuses because the
 # gateway has no model configured. Used by the gateway crate channel
