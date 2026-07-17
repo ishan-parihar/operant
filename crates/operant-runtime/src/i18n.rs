@@ -208,8 +208,8 @@ pub fn detect_locale() -> String {
 fn read_config_table() -> Option<toml::Table> {
     let base = directories::BaseDirs::new()?;
     let candidates = [
-        base.home_dir().join(".zeroclaw/config.toml"),
-        base.config_dir().join("zeroclaw/config.toml"),
+        base.home_dir().join(".operant/config.toml"),
+        base.config_dir().join("operant/config.toml"),
     ];
     for path in &candidates {
         if let Ok(contents) = std::fs::read_to_string(path) {
@@ -239,7 +239,7 @@ fn workspace_dir_from_config() -> Option<std::path::PathBuf> {
     Some(
         directories::BaseDirs::new()?
             .home_dir()
-            .join(".zeroclaw/workspace"),
+            .join(".operant/workspace"),
     )
 }
 
