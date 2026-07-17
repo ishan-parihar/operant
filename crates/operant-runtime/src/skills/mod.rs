@@ -31,6 +31,7 @@ const CLAWHUB_DOWNLOAD_API: &str = "https://clawhub.ai/api/v1/download";
 const MAX_CLAWHUB_ZIP_BYTES: u64 = 50 * 1024 * 1024; // 50 MiB
 
 // ─── Skills registry (zeroclaw-skills) ────────────────────────────────────────
+// TODO: update to operant-labs repo when the registry is rebranded
 const SKILLS_REGISTRY_REPO_URL: &str = "https://github.com/zeroclaw-labs/zeroclaw-skills";
 const SKILLS_REGISTRY_DIR_NAME: &str = "skills-registry";
 const SKILLS_REGISTRY_SYNC_MARKER: &str = ".operant-skills-registry-sync";
@@ -104,8 +105,7 @@ struct SkillMeta {
     prompts: Vec<String>,
 }
 
-/// Provenance metadata emitted by the SkillForge integrator (see
-/// `crates/zeroclaw-runtime/src/skillforge/integrate.rs`). Lives at the
+/// Provenance metadata emitted by the SkillForge integrator. Lives at the
 /// top level of SKILL.toml under `[forge]`, kept separate from
 /// `[skill]` so the canonical skill identity stays decoupled from the
 /// integrator's emit format. Strict by design: a typo here is just as

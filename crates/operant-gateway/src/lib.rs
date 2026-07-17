@@ -940,7 +940,10 @@ fn needs_onboarding_channel_reply() -> String {
     let reply = operant_runtime::i18n::get_cli_string("channel-needs-onboarding-reply");
     match reply {
         Some(text) if !text.starts_with('{') => text,
-        _ => "This agent isn't fully set up yet. The operator needs to complete onboarding before I can reply.".to_string(),
+        _ => {
+            tracing::warn!("Fluent i18n key 'channel-needs-onboarding-reply' not resolved; using hardcoded fallback. Ensure i18n::init() is called at startup.");
+            "This agent isn't fully set up yet. The operator needs to complete onboarding before I can reply.".to_string()
+        }
     }
 }
 
