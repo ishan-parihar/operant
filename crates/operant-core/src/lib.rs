@@ -86,9 +86,11 @@ pub mod tools;
 pub mod trajectory;
 pub mod user_question;
 pub mod observer;
+pub mod runtime_adapter;
 pub mod voice;
 
 pub use observer::{Observer, ObserverEvent, ObserverMetric, ConsoleObserver};
+pub use runtime_adapter::{RuntimeAdapter, NativeRuntime};
 
 pub use acp::{AcpHandler, AgentState, RpcRequest, RpcResponse, server};
 pub use agent::{AgentConfig, AgentEvent, FallbackModelClient, OperantAgent};
