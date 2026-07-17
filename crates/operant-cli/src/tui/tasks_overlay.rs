@@ -10,11 +10,11 @@
 //! - Enter: toggle status (pending→in_progress→completed→pending)
 //! - Escape/Q: close overlay
 
+use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
-use ratatui::Frame;
 
 use crate::tui::adapter_types::tools::TaskStatus;
 use crate::tui::overlays::{centered_rect, cycle_next, cycle_prev};

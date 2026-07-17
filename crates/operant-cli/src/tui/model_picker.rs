@@ -9,7 +9,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
 use crate::tui::overlays::{
-    centered_rect, cycle_next, cycle_prev, modal_search_line, OPERANT_PANEL_BG,
+    OPERANT_PANEL_BG, centered_rect, cycle_next, cycle_prev, modal_search_line,
 };
 
 // ---------------------------------------------------------------------------

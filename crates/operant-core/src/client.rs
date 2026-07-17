@@ -11,17 +11,17 @@ use std::time::Duration;
 use bytes::Bytes;
 use futures::Stream;
 use reqwest::{
-    header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE},
     Client,
+    header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue},
 };
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tracing::{debug, error, info, instrument, warn};
 
-use crate::config::{runtime_config, ClientSettings};
+use crate::config::{ClientSettings, runtime_config};
 use crate::error::{Error, Result};
 use crate::rate_limiter::{
-    exponential_backoff_secs, parse_retry_after_header, RateLimitError, RateLimiter,
+    RateLimitError, RateLimiter, exponential_backoff_secs, parse_retry_after_header,
 };
 use crate::schema::ToolSchema;
 

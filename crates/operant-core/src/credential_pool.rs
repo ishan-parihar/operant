@@ -34,7 +34,7 @@ pub const STATUS_EXHAUSTED: &str = "exhausted";
 // ---------------------------------------------------------------------------
 
 /// The authentication type for a pooled credential.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 #[derive(Default)]
 pub enum AuthType {
@@ -69,7 +69,7 @@ impl AuthType {
 // ---------------------------------------------------------------------------
 
 /// Selection strategy for choosing a credential from the pool.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 #[derive(Default)]
 pub enum PoolStrategy {
@@ -105,7 +105,7 @@ impl PoolStrategy {
 ///
 /// Each entry holds an encrypted credential value along with metadata
 /// about usage, source, and error status for failover decisions.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct PooledCredential {
     /// Unique identifier for this credential entry.
     pub id: String,
@@ -118,14 +118,17 @@ pub struct PooledCredential {
     /// Where this credential was sourced from (e.g., "env:OPENAI_API_KEY", "config", "manual").
     pub source: String,
     /// When this credential was created/added to the pool.
+    #[schemars(with = "String")]
     pub created_at: DateTime<Utc>,
     /// Optional expiration timestamp.
+    #[schemars(with = "Option<String>")]
     pub expires_at: Option<DateTime<Utc>>,
     /// Arbitrary key-value metadata attached to this credential.
     pub metadata: HashMap<String, String>,
     /// Number of times this credential has been selected/used.
     pub usage_count: u64,
     /// Timestamp of the most recent usage.
+    #[schemars(with = "Option<String>")]
     pub last_used_at: Option<DateTime<Utc>>,
     /// Current status string (None = ok, Some("exhausted") = exhausted).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -140,6 +143,7 @@ pub struct PooledCredential {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_error_message: Option<String>,
     /// When the current exhaustion cooldown expires.
+    #[schemars(with = "Option<String>")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error_reset_at: Option<DateTime<Utc>>,
 
@@ -154,6 +158,7 @@ pub struct PooledCredential {
     pub inference_base_url: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_key: Option<String>,
+    #[schemars(with = "Option<String>")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_key_expires_at: Option<DateTime<Utc>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -747,72 +752,6 @@ impl std::fmt::Debug for CredentialPool {
             .field("strategy", &self.strategy)
             .field("credential_count", &self.len())
             .finish()
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Schema support (manual JsonSchema for tool integration)
-// ---------------------------------------------------------------------------
-
-/// Manual `schemars::JsonSchema` implementation for `AuthType`.
-impl schemars::JsonSchema for AuthType {
-    fn schema_name() -> String {
-        "AuthType".to_string()
-    }
-
-    fn json_schema(_gen: &mut schemars::gen::SchemaGenerator) -> schemars::schema::Schema {
-        schemars::schema::SchemaObject {
-            instance_type: Some(schemars::schema::InstanceType::String.into()),
-            enum_values: Some(vec![
-                serde_json::Value::String("api_key".to_string()),
-                serde_json::Value::String("oauth".to_string()),
-                serde_json::Value::String("basic".to_string()),
-                serde_json::Value::String("token".to_string()),
-                serde_json::Value::String("custom".to_string()),
-            ]),
-            ..Default::default()
-        }
-        .into()
-    }
-}
-
-/// Manual `schemars::JsonSchema` implementation for `PoolStrategy`.
-impl schemars::JsonSchema for PoolStrategy {
-    fn schema_name() -> String {
-        "PoolStrategy".to_string()
-    }
-
-    fn json_schema(_gen: &mut schemars::gen::SchemaGenerator) -> schemars::schema::Schema {
-        schemars::schema::SchemaObject {
-            instance_type: Some(schemars::schema::InstanceType::String.into()),
-            enum_values: Some(vec![
-                serde_json::Value::String("fill_first".to_string()),
-                serde_json::Value::String("round_robin".to_string()),
-                serde_json::Value::String("random".to_string()),
-                serde_json::Value::String("least_used".to_string()),
-            ]),
-            ..Default::default()
-        }
-        .into()
-    }
-}
-
-/// Manual `schemars::JsonSchema` implementation for `PooledCredential`.
-impl schemars::JsonSchema for PooledCredential {
-    fn schema_name() -> String {
-        "PooledCredential".to_string()
-    }
-
-    fn json_schema(_gen: &mut schemars::gen::SchemaGenerator) -> schemars::schema::Schema {
-        schemars::schema::SchemaObject {
-            instance_type: Some(schemars::schema::InstanceType::Object.into()),
-            metadata: Some(Box::new(schemars::schema::Metadata {
-                description: Some("A single pooled credential entry.".to_string()),
-                ..Default::default()
-            })),
-            ..Default::default()
-        }
-        .into()
     }
 }
 

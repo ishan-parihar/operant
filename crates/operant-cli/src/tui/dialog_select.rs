@@ -3,16 +3,16 @@
 // Used for the /connect provider picker and potentially for future
 // selection dialogs (models, commands, sessions).
 
+use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::prelude::Stylize;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
-use ratatui::Frame;
 use std::cell::{Cell, RefCell};
 
 use crate::tui::overlays::{
-    centered_rect, modal_search_line, render_dark_overlay, render_dialog_bg, OPERANT_PANEL_BG,
+    OPERANT_PANEL_BG, centered_rect, modal_search_line, render_dark_overlay, render_dialog_bg,
 };
 
 // ---------------------------------------------------------------------------
@@ -422,8 +422,8 @@ pub fn render_dialog_select(frame: &mut Frame, state: &DialogSelectState, area: 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ratatui::backend::TestBackend;
     use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
 
     fn sample_items() -> Vec<SelectItem> {
         vec![

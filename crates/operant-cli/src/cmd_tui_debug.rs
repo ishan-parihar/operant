@@ -1157,11 +1157,7 @@ fn evaluate_assertions(app: &crate::tui::app::App, assertions_str: &str) -> Resu
                     serde_json::Value::Null => val_str == "null",
                     _ => actual_display == val_str,
                 };
-                if op == "==" {
-                    eq
-                } else {
-                    !eq
-                }
+                if op == "==" { eq } else { !eq }
             }
             _ => unreachable!(),
         };

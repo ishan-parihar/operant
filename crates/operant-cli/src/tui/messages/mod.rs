@@ -919,7 +919,7 @@ fn render_tool_use_inner(tool_name: &str, input: &serde_json::Value) -> Vec<Line
                     ]));
                 }
                 task_lines
-            }
+            };
         }
         _ => tool_name,
     };

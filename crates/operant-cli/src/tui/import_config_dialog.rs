@@ -1,13 +1,13 @@
 use crate::tui::adapter_types::import_config::{ImportPreview, ImportSelection};
+use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Wrap};
-use ratatui::Frame;
 
 use crate::tui::overlays::{
-    begin_modal_frame, modal_header_line_area, render_modal_title_frame, OPERANT_ACCENT,
-    OPERANT_MUTED, OPERANT_PANEL_BG, OPERANT_TEXT,
+    OPERANT_ACCENT, OPERANT_MUTED, OPERANT_PANEL_BG, OPERANT_TEXT, begin_modal_frame,
+    modal_header_line_area, render_modal_title_frame,
 };
 
 #[derive(Debug, Clone, Default)]

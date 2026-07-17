@@ -49,7 +49,7 @@ use std::process::Stdio;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, Command};
-use tokio::sync::{oneshot, Mutex};
+use tokio::sync::{Mutex, oneshot};
 use uuid::Uuid;
 
 use crate::error::{Error, Result};
@@ -317,7 +317,7 @@ fn get_target_triple() -> Result<String> {
             return Err(Error::Agent(format!(
                 "aft: unsupported platform {}-{}; set AFT_BINARY to use a custom binary",
                 os, arch
-            )))
+            )));
         }
     };
     Ok(triple.to_string())

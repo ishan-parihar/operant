@@ -3,11 +3,11 @@
 // Replaces the prior text-only `/effort` status message with an interactive
 // 4-row select dialog (issue #149 follow-up).
 
+use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
-use ratatui::Frame;
 
 use crate::tui::model_picker::EffortLevel;
 use crate::tui::overlays::{centered_rect, cycle_next, cycle_prev};

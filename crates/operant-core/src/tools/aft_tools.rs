@@ -11,7 +11,7 @@
 use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::sync::Arc;
 
 use crate::aft_bridge::AftBridgePool;
@@ -315,7 +315,7 @@ impl OperantTool for AftCallgraphTool {
         let args: AftCallgraphArgs = match serde_json::from_value(args) {
             Ok(a) => a,
             Err(e) => {
-                return ToolResult::error("aft_callgraph", format!("Invalid arguments: {}", e))
+                return ToolResult::error("aft_callgraph", format!("Invalid arguments: {}", e));
             }
         };
         let mut params = serde_json::json!({ "symbol": args.symbol });
@@ -422,7 +422,7 @@ impl OperantTool for AftAstSearchTool {
         let args: AftAstSearchArgs = match serde_json::from_value(args) {
             Ok(a) => a,
             Err(e) => {
-                return ToolResult::error("aft_ast_search", format!("Invalid arguments: {}", e))
+                return ToolResult::error("aft_ast_search", format!("Invalid arguments: {}", e));
             }
         };
         let mut params = serde_json::json!({ "pattern": args.pattern });
@@ -534,7 +534,7 @@ impl OperantTool for AftApplyPatchTool {
         let args: AftApplyPatchArgs = match serde_json::from_value(args) {
             Ok(a) => a,
             Err(e) => {
-                return ToolResult::error("aft_apply_patch", format!("Invalid arguments: {}", e))
+                return ToolResult::error("aft_apply_patch", format!("Invalid arguments: {}", e));
             }
         };
         let params = serde_json::json!({ "filePath": args.file_path, "patch": args.patch });
@@ -576,7 +576,7 @@ impl OperantTool for AftAstReplaceTool {
         let args: AftAstReplaceArgs = match serde_json::from_value(args) {
             Ok(a) => a,
             Err(e) => {
-                return ToolResult::error("aft_ast_replace", format!("Invalid arguments: {}", e))
+                return ToolResult::error("aft_ast_replace", format!("Invalid arguments: {}", e));
             }
         };
         let mut params =

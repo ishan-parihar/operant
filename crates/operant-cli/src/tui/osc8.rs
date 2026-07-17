@@ -16,9 +16,9 @@
 use std::io::{self, Write};
 
 use crossterm::{
+    QueueableCommand,
     cursor::{MoveTo, RestorePosition, SavePosition},
     style::{Attribute, Color, Print, ResetColor, SetAttribute, SetForegroundColor},
-    QueueableCommand,
 };
 use ratatui::buffer::Buffer;
 use regex::Regex;

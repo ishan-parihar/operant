@@ -1,18 +1,46 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/operant-api",
+    "crates/operant-config",
     "crates/operant-core",
     "crates/operant-cli",
+    "crates/operant-providers",
+    "crates/operant-channels",
+    "crates/operant-memory",
+    "crates/operant-plugins",
+    "crates/operant-gateway",
+    "crates/operant-infra",
+    "crates/operant-macros",
+    "crates/operant-tools",
+    "crates/operant-runtime",
+    "crates/operant-hardware",
+    "crates/operant-tool-call-parser",
 ]
 
 [workspace.package]
 version = "0.1.3"
-edition = "2021"
+edition = "2024"
 authors = ["eikarna"]
 license = "MIT OR Apache-2.0"
-rust-version = "1.88"
+rust-version = "1.85"
 
 [workspace.dependencies]
+# Internal workspace crates
+operant-api = { path = "crates/operant-api" }
+operant-config = { path = "crates/operant-config" }
+operant-providers = { path = "crates/operant-providers" }
+operant-channels = { path = "crates/operant-channels" }
+operant-memory = { path = "crates/operant-memory" }
+operant-plugins = { path = "crates/operant-plugins" }
+operant-gateway = { path = "crates/operant-gateway" }
+operant-infra = { path = "crates/operant-infra" }
+operant-macros = { path = "crates/operant-macros" }
+operant-tools = { path = "crates/operant-tools" }
+operant-runtime = { path = "crates/operant-runtime" }
+operant-hardware = { path = "crates/operant-hardware" }
+operant-tool-call-parser = { path = "crates/operant-tool-call-parser" }
+
 # Async runtime
 tokio = { version = "1.36", features = ["full"] }
 async-trait = "0.1"
@@ -23,7 +51,7 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "str
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-schemars = { version = "0.8", features = ["derive"] }
+schemars = { version = "1.2", features = ["derive"] }
 
 # Error handling
 thiserror = "1.0"
@@ -45,10 +73,25 @@ bytes = "1.6"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
 futures-util = "0.3"
 url = "2.5"
-tokio-tungstenite = "0.24"
+tokio-tungstenite = "0.29"
+tokio-stream = "0.1"
+tokio-util = "0.7"
+tokio-rustls = { version = "0.26", features = ["ring", "logging", "tls12"] }
+uuid = { version = "1.7", features = ["v4", "std"] }
+chrono = { version = "0.4", features = ["clock", "std", "serde"] }
+parking_lot = "0.12"
+shellexpand = "3.1"
+directories = "6.0"
+ring = "0.17"
+base64 = "0.22"
+hmac = "0.12"
+sha2 = "0.10"
+hex = "0.4"
+regex = "1.10"
 
 # HTTP server
-axum = { version = "0.7", features = ["json"] }
+axum = { version = "0.8", default-features = false, features = ["json", "ws", "macros", "tokio", "query", "http1"] }
+tower = { version = "0.4", features = ["make"] }
 tower-http = { version = "0.5", features = ["cors", "fs"] }
 
 # Terminal UI

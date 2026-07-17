@@ -7,8 +7,8 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
 use crate::tui::overlays::{
-    centered_rect, cycle_next, cycle_prev, render_dark_overlay_buf, render_dialog_bg_buf,
-    OPERANT_ACCENT, OPERANT_MUTED, OPERANT_PANEL_BG, OPERANT_TEXT,
+    OPERANT_ACCENT, OPERANT_MUTED, OPERANT_PANEL_BG, OPERANT_TEXT, centered_rect, cycle_next,
+    cycle_prev, render_dark_overlay_buf, render_dialog_bg_buf,
 };
 
 // ---------------------------------------------------------------------------

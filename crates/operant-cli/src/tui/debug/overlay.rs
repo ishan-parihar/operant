@@ -7,11 +7,11 @@
 //!
 //! Toggle with F12. Non-blocking — renders on top of the existing layout.
 
+use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph};
-use ratatui::Frame;
 
 use super::debug_hub::TuiDebugHub;
 

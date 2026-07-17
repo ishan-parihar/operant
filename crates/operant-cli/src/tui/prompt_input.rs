@@ -2327,10 +2327,10 @@ impl PromptInputState {
                         // Simple case: text only grew (cursor at end of inserted span)
                         let from = before.len().min(self.cursor);
                         let _ = from; // use cursor-based diff below
-                                      // Find the diff between before/after texts at current cursor
-                                      // Inserted = text[insert_start..cursor] but we don't track start.
-                                      // Approximate: whole text minus before, substring at cursor.
-                                      // Better: store cursor-at-entry and extract.
+                        // Find the diff between before/after texts at current cursor
+                        // Inserted = text[insert_start..cursor] but we don't track start.
+                        // Approximate: whole text minus before, substring at cursor.
+                        // Better: store cursor-at-entry and extract.
                         self.text
                             [before.len().min(self.text.len())..self.cursor.min(self.text.len())]
                             .to_string()
@@ -4600,7 +4600,7 @@ mod tests {
         s.text = "hello".to_string();
         s.cursor = 5;
         s.vim_command("x"); // deletes 'o' (but cursor at 5 = past end)
-                            // let's set cursor to 4 and delete
+        // let's set cursor to 4 and delete
         s.cursor = 4;
         s.vim_command("x");
         assert_eq!(s.text, "hell");

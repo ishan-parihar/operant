@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use reqwest::Client;
 use schemars::JsonSchema;
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::schema::ToolSchema;
 use crate::tools::{OperantTool, ToolContext, ToolResult};
@@ -121,7 +121,7 @@ impl ImageGenerationTool {
         {
             Ok(r) => r,
             Err(e) => {
-                return ToolResult::error("image_generate", format!("API request failed: {}", e))
+                return ToolResult::error("image_generate", format!("API request failed: {}", e));
             }
         };
 
@@ -138,7 +138,7 @@ impl ImageGenerationTool {
                 return ToolResult::error(
                     "image_generate",
                     format!("Failed to parse response: {}", e),
-                )
+                );
             }
         };
 
@@ -235,7 +235,7 @@ impl OperantTool for ImageGenerationTool {
         let args: ImageGenerationArgs = match serde_json::from_value(args) {
             Ok(a) => a,
             Err(e) => {
-                return ToolResult::error("image_generate", format!("Invalid arguments: {}", e))
+                return ToolResult::error("image_generate", format!("Invalid arguments: {}", e));
             }
         };
         self.generate(args).await

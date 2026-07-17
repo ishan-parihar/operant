@@ -7,7 +7,7 @@
 
 use anyhow::Result;
 use clap::Subcommand;
-use operant_core::config::{install_runtime_config, runtime_config, AppConfig};
+use operant_core::config::{AppConfig, install_runtime_config, runtime_config};
 use serde_json::Value;
 
 /// Manage the active model configuration.

@@ -1,5 +1,5 @@
 use crate::error::Error;
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use serde::Serialize;
 use std::sync::{Arc, Mutex};
 

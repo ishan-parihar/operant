@@ -3,13 +3,13 @@
 //! Holds the event bus plus aggregate debug counters. Published to from the
 //! run loop and event handlers; read from the F12 debug overlay.
 
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Instant;
 
 use parking_lot::Mutex;
 
-use super::event_bus::{now_secs, TuiEvent, TuiEventBus};
+use super::event_bus::{TuiEvent, TuiEventBus, now_secs};
 
 /// Centralized debug state for the TUI. Cheap to clone (inner is Arc).
 /// All fields are thread-safe (AtomicBool/AtomicU64/Mutex).

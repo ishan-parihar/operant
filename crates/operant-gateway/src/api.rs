@@ -1,0 +1,2663 @@
+//! REST API handlers for the web dashboard.
+//!
+//! All `/api/*` routes require bearer token authentication (PairingGuard).
+
+use super::AppState;
+use axum::{
+    Router,
+    extract::{Path, Query, State},
+    http::{HeaderMap, StatusCode, header},
+    response::{IntoResponse, Json},
+    routing::{delete, get, patch, post},
+};
+use operant_config::pairing::PairingGuard;
+use serde::Deserialize;
+use std::sync::Arc;
+use tokio::sync::broadcast;
+use tokio::sync::watch;
+
+// ── Bearer token auth extractor ─────────────────────────────────
+
+/// Extract and validate bearer token from Authorization header.
+fn extract_bearer_token(headers: &HeaderMap) -> Option<&str> {
+    headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|auth| auth.strip_prefix("Bearer "))
+}
+
+/// Verify bearer token against PairingGuard. Returns error response if unauthorized.
+pub(super) fn require_auth(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
+    if !state.pairing.require_pairing() {
+        return Ok(());
+    }
+
+    let token = extract_bearer_token(headers).unwrap_or("");
+    if state.pairing.is_authenticated(token) {
+        Ok(())
+    } else {
+        Err((
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({
+                "error": "Unauthorized — pair first via POST /pair, then send Authorization: Bearer <token>"
+            })),
+        ))
+    }
+}
+
+// ── Query parameters ─────────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct MemoryQuery {
+    pub query: Option<String>,
+    pub category: Option<String>,
+    /// Filter memories created at or after (RFC 3339 / ISO 8601)
+    pub since: Option<String>,
+    /// Filter memories created at or before (RFC 3339 / ISO 8601)
+    pub until: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct MemoryStoreBody {
+    pub key: String,
+    pub content: String,
+    pub category: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct CronRunsQuery {
+    pub limit: Option<u32>,
+}
+
+#[derive(Deserialize)]
+pub struct CronAddBody {
+    pub name: Option<String>,
+    pub schedule: String,
+    pub tz: Option<String>,
+    pub command: Option<String>,
+    pub job_type: Option<String>,
+    pub prompt: Option<String>,
+    pub delivery: Option<operant_runtime::cron::DeliveryConfig>,
+    pub session_target: Option<String>,
+    pub model: Option<String>,
+    pub allowed_tools: Option<Vec<String>>,
+    pub delete_after_run: Option<bool>,
+}
+
+#[derive(Deserialize)]
+pub struct CronPatchBody {
+    pub name: Option<String>,
+    pub schedule: Option<String>,
+    pub tz: Option<String>,
+    pub clear_tz: Option<bool>,
+    pub command: Option<String>,
+    pub prompt: Option<String>,
+}
+
+enum CronTimezonePatch {
+    Preserve,
+    Set(String),
+    Clear,
+}
+
+fn bad_request(message: impl Into<String>) -> (StatusCode, Json<serde_json::Value>) {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(serde_json::json!({ "error": message.into() })),
+    )
+}
+
+fn normalize_optional_timezone(
+    tz: Option<String>,
+) -> Result<Option<String>, (StatusCode, Json<serde_json::Value>)> {
+    match tz {
+        Some(raw) => {
+            let trimmed = raw.trim();
+            if trimmed.is_empty() {
+                Err(bad_request(
+                    "tz must be a non-empty IANA timezone; use clear_tz=true to clear it",
+                ))
+            } else {
+                Ok(Some(trimmed.to_string()))
+            }
+        }
+        None => Ok(None),
+    }
+}
+
+fn parse_timezone_patch(
+    tz: Option<String>,
+    clear_tz: Option<bool>,
+) -> Result<CronTimezonePatch, (StatusCode, Json<serde_json::Value>)> {
+    let tz = normalize_optional_timezone(tz)?;
+    let clear_tz = clear_tz.unwrap_or(false);
+
+    if clear_tz && tz.is_some() {
+        return Err(bad_request("Provide either tz or clear_tz=true, not both"));
+    }
+
+    if clear_tz {
+        Ok(CronTimezonePatch::Clear)
+    } else if let Some(tz) = tz {
+        Ok(CronTimezonePatch::Set(tz))
+    } else {
+        Ok(CronTimezonePatch::Preserve)
+    }
+}
+
+fn cron_schedule_from_api(
+    expr: String,
+    tz: Option<String>,
+) -> Result<operant_runtime::cron::Schedule, (StatusCode, Json<serde_json::Value>)> {
+    let schedule = operant_runtime::cron::Schedule::Cron { expr, tz };
+    operant_runtime::cron::validate_schedule(&schedule, chrono::Utc::now())
+        .map_err(|e| bad_request(format!("Invalid cron schedule: {e}")))?;
+    Ok(schedule)
+}
+
+#[derive(Deserialize)]
+pub struct SessionMessagePostBody {
+    pub content: String,
+}
+
+// ── Handlers ────────────────────────────────────────────────────
+
+/// GET /api/status — system status overview
+pub async fn handle_api_status(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    if let Err(e) = require_auth(&state, &headers) {
+        return e.into_response();
+    }
+
+    let config = state.config.lock().clone();
+    let health = operant_runtime::health::snapshot();
+
+    let mut channels = serde_json::Map::new();
+
+    for (channel, present) in config.channels.channels() {
+        channels.insert(channel.name().to_string(), serde_json::Value::Bool(present));
+    }
+
+    let locale = config
+        .locale
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .map(String::from)
+        .unwrap_or_else(operant_runtime::i18n::detect_locale);
+
+    // Build a version string that is useful whether running a release or a
+    // local source build. The git vars are captured at compile time by
+    // build.rs; they fall back to "unknown"/"false" when git is unavailable
+    // (Docker layer without .git, tarball builds, crates.io installs).
+    let pkg_version = env!("CARGO_PKG_VERSION");
+    let git_sha = option_env!("GIT_COMMIT_SHA").unwrap_or("unknown");
+    let git_dirty = option_env!("GIT_DIRTY").unwrap_or("false") == "true";
+    let version = match (git_sha, git_dirty) {
+        ("unknown", _) => pkg_version.to_string(),
+        (sha, false) => format!("{pkg_version} ({sha})"),
+        (sha, true) => format!("{pkg_version} ({sha}, dirty)"),
+    };
+
+    let body = serde_json::json!({
+        "version": version,
+        "provider": config.providers.fallback,
+        "model": state.model,
+        "temperature": state.temperature,
+        "uptime_seconds": health.uptime_seconds,
+        "gateway_port": config.gateway.port,
+        "locale": locale,
+        "memory_backend": state.mem.name(),
+        "paired": state.pairing.is_paired(),
+        "channels": channels,
+        "health": health,
+    });
+
+    Json(body).into_response()
+}
+
+/// GET /api/tools — list registered tool specs
+pub async fn handle_api_tools(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    if let Err(e) = require_auth(&state, &headers) {
+        return e.into_response();
+    }
+
+    let tools: Vec<serde_json::Value> = state
+        .tools_registry
+        .iter()
+        .map(|spec| {
+            serde_json::json!({
+                "name": spec.name,
+                "description": spec.description,
+                "parameters": spec.parameters,
+            })
+        })
+        .collect();
+
+    Json(serde_json::json!({"tools": tools})).into_response()
+}
+
+/// GET /api/cron — list cron jobs
+pub async fn handle_api_cron_list(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    if let Err(e) = require_auth(&state, &headers) {
+        return e.into_response();
+    }
+
+    let config = state.config.lock().clone();
+    match operant_runtime::cron::list_jobs(&config) {
+        Ok(jobs) => Json(serde_json::json!({"jobs": jobs})).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("Failed to list cron jobs: {e}")})),
+        )
+            .into_response(),
+    }
+}
+
+/// GET /api/cron/:id — get a single cron job
+pub async fn handle_api_cron_get(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    if let Err(e) = require_auth(&state, &headers) {
+        return e.into_response();
+    }
+
+    let config = state.config.lock().clone();
+    match operant_runtime::cron::get_job(&config, &id) {
+        Ok(job) => Json(serde_json::json!({"job": job})).into_response(),
+        Err(e) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": format!("Cron job not found: {e}")})),
+        )
+            .into_response(),
+    }
+}
+
+/// POST /api/cron — add a new cron job
+pub async fn handle_api_cron_add(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<CronAddBody>,
+) -> impl IntoResponse {
+    if let Err(e) = require_auth(&state, &headers) {
+        return e.into_response();
+    }
+
+    let CronAddBody {
+        name,
+        schedule,
+        tz,
+        command,
+        job_type,
+        prompt,
+        delivery,
+        session_target,
+        model,
+        allowed_tools,
+        delete_after_run,
+    } = body;
+
+    let config = state.config.lock().clone();
+    let tz = match normalize_optional_timezone(tz) {
+        Ok(tz) => tz,
+        Err(e) => return e.into_response(),
+    };
+    let schedule = match cron_schedule_from_api(schedule, tz) {
+        Ok(schedule) => schedule,
+        Err(e) => return e.into_response(),
+    };
+    if let Err(e) = operant_runtime::cron::validate_delivery_config(delivery.as_ref()) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": format!("Failed to add cron job: {e}")})),
+        )
+            .into_response();
+    }
+
+    // Determine job type: explicit field, or infer "agent" when prompt is provided.
+    let is_agent =
+        matches!(job_type.as_deref(), Some("agent")) || (job_type.is_none() && prompt.is_some());
+
+    let result = if is_agent {
+        let prompt = match prompt.as_deref() {
+            Some(p) if !p.trim().is_empty() => p,
+            _ => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({"error": "Missing 'prompt' for agent job"})),
+                )
+                    .into_response();
+            }
+        };
+
+        let session_target = session_target
+            .as_deref()
+            .map(operant_runtime::cron::SessionTarget::parse)
+            .unwrap_or_default();
+
+        let default_delete = matches!(schedule, operant_runtime::cron::Schedule::At { .. });
+        let delete_after_run = delete_after_run.unwrap_or(default_delete);
+
+        operant_runtime::cron::add_agent_job(
+            &config,
+            name,
+            schedule,
+            prompt,
+            session_target,
+            model,
+            delivery,
+            delete_after_run,
+            allowed_tools,
+        )
+    } else {
+        let command = match command.as_deref() {
+            Some(c) if !c.trim().is_empty() => c,
+            _ => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({"error": "Missing 'command' for shell job"})),
+                )
+                    .into_response();
+            }
+        };
+
+        operant_runtime::cron::add_shell_job_with_approval(
+            &config, name, schedule, command, delivery, false,
+        )
+    };
+
+    match result {
+        Ok(job) => Json(serde_json::json!({"status": "ok", "job": job})).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("Failed to add cron job: {e}")})),
+        )
+            .into_response(),
+    }
+}
+
+/// GET /api/cron/:id/runs — list recent runs for a cron job
+pub async fn handle_api_cron_runs(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Query(params): Query<CronRunsQuery>,
+) -> impl IntoResponse {
+    if let Err(e) = require_auth(&state, &headers) {
+        return e.into_response();
+    }
+
+    let limit = params.limit.unwrap_or(20).clamp(1, 100) as usize;
+    let config = state.config.lock().clone();
+
+    // Verify the job exists before listing runs.
+    if let Err(e) = operant_runtime::cron::get_job(&config, &id) {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": format!("Cron job not found: {e}")})),
+        )
+            .into_response();
+    }
+
+    match operant_runtime::cron::list_runs(&config, &id, limit) {
+        Ok(runs) => {
+            let runs_json: Vec<serde_json::Value> = runs
+                .iter()
+                .map(|r| {
+                    serde_json::json!({
+                        "id": r.id,
+                        "job_id": r.job_id,
+                        "started_at": r.started_at.to_rfc3339(),
+                        "finished_at": r.finished_at.to_rfc3339(),
+                        "status": r.status,
+                        "output": r.output,
+                        "duration_ms": r.duration_ms,
+                    })
+                })
+                .collect();
+            Json(serde_json::json!({"runs": runs_json})).into_response()
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("Failed to list cron runs: {e}")})),
+        )
+            .into_response(),
+    }
+}
+
+/// POST /api/cron/:id/run — trigger a cron job manually
+pub async fn handle_api_cron_run(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    if let Err(e) = require_auth(&state, &headers) {
+        return e.into_response();
+    }
+
+    let config = state.config.lock().clone();
+
+    let job = match operant_runtime::cron::get_job(&config, &id) {
+        Ok(job) => job,
+        Err(e) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({"error": format!("Cron job not found: {e}")})),
+            )
+                .into_response();
+        }
+    };
+
+    let started_at = chrono::Utc::now();
+    let (mut success, output) = operant_runtime::cron::scheduler::execute_job_now(
+        &config,
+        &job,
+        Some(state.observer.clone()),
+    )
+    .await;
+    let finished_at = chrono::Utc::now();
+    let duration_ms = (finished_at - started_at).num_milliseconds();
+
+    if job.delivery.mode.eq_ignore_ascii_case("announce")
+        && let (Some(channel), Some(target)) =
+            (job.delivery.channel.as_deref(), job.delivery.to.as_deref())
+        && let Err(e) = operant_runtime::cron::scheduler::deliver_announcement(
+            &config,
+            channel,
+            target,
+            job.delivery.thread_id.as_deref(),
+            &output,
+        )
+        .await
+    {
+        if job.delivery.best_effort {
+            tracing::warn!(
+                job_id = %job.id,
+                error = %e,
+                "manual cron trigger delivery failed (best_effort)"
+            );
+        } else {
+            tracing::warn!(
+                job_id = %job.id,
+                error = %e,
+                "manual cron trigger delivery failed"
+            );
+            success = false;
+        }
+    }
+
+    let status = if success { "ok" } else { "error" };
+    if let Err(e) = operant_runtime::cron::record_run(
+        &config,
+        &job.id,
+        started_at,
+        finished_at,
+        status,
+        Some(&output),
+        duration_ms,
+    ) {
+        tracing::warn!(
+            job_id = %job.id,
+            error = %e,
+            "manual cron trigger: failed to persist run history",
+        );
+    }
+    if let Err(e) =
+        operant_runtime::cron::record_last_run(&config, &job.id, finished_at, success, &output)
+    {
+        tracing::warn!(
+            job_id = %job.id,
+            error = %e,
+            "manual cron trigger: failed to update last_run state",
+        );
+    }
+
+    // Broadcast the result so dashboard/SSE clients refresh in real time,
+    // matching the scheduler's automatic-execution behavior.
+    let _ = state.event_tx.send(serde_json::json!({
+        "type": "cron_result",
+        "job_id": job.id,
+        "success": success,
+        "output": output,
+        "manual": true,
+        "timestamp": finished_at.to_rfc3339(),
+    }));
+
+    Json(serde_json::json!({
+        "status": status,
+        "job_id": job.id,
+        "success": success,
+        "output": output,
+        "duration_ms": duration_ms,
+        "started_at": started_at.to_rfc3339(),
+        "finished_at": finished_at.to_rfc3339(),
+    }))
+    .into_response()
+}
+
+/// PATCH /api/cron/:id — update an existing cron job
+pub async fn handle_api_cron_patch(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(body): Json<CronPatchBody>,
+) -> impl IntoResponse {
+    if let Err(e) = require_auth(&state, &headers) {
+        return e.into_response();
+    }
+
+    let config = state.config.lock().clone();
+    let CronPatchBody {
+        name,
+        schedule: schedule_expr,
+        tz,
+        clear_tz,
+        command,
+        prompt,
+    } = body;
+    let timezone_patch = match parse_timezone_patch(tz, clear_tz) {
+        Ok(patch) => patch,
+        Err(e) => return e.into_response(),
+    };
+
+    // Route the edited text to the correct field based on the job's stored type.
+    // The frontend sends a single textarea value; for agent jobs it is the prompt,
+    // for shell jobs it is the command.
+    let existing = match operant_runtime::cron::get_job(&config, &id) {
+        Ok(j) => j,
+        Err(e) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({"error": format!("Cron job not found: {e}")})),
+            )
+                .into_response();
+        }
+    };
+    let new_expr = schedule_expr
+        .as_deref()
+        .map(str::trim)
+        .filter(|expr| !expr.is_empty())
+        .map(str::to_string);
+    let timezone_changed = !matches!(timezone_patch, CronTimezonePatch::Preserve);
+    let schedule = if new_expr.is_some() || timezone_changed {
+        let (expr, existing_tz) = match (&existing.schedule, new_expr) {
+            (_, Some(expr)) => {
+                let existing_tz = match &existing.schedule {
+                    operant_runtime::cron::Schedule::Cron { tz, .. } => tz.clone(),
+                    _ => None,
+                };
+                (expr, existing_tz)
+            }
+            (operant_runtime::cron::Schedule::Cron { expr, tz }, None) => {
+                (expr.clone(), tz.clone())
+            }
+            (_, None) => {
+                return bad_request("tz can only be updated on cron schedules").into_response();
+            }
+        };
+        let tz = match timezone_patch {
+            CronTimezonePatch::Preserve => existing_tz,
+            CronTimezonePatch::Set(tz) => Some(tz),
+            CronTimezonePatch::Clear => None,
+        };
+        match cron_schedule_from_api(expr, tz) {
+            Ok(schedule) => Some(schedule),
+            Err(e) => return e.into_response(),
+        }
+    } else {
+        None
+    };
+    let is_agent = matches!(existing.job_type, operant_runtime::cron::JobType::Agent);
+    let (patch_command, patch_prompt) = if is_agent {
+        (None, command.or(prompt))
+    } else {
+        (command.or(prompt), None)
+    };
+
+    let patch = operant_runtime::cron::CronJobPatch {
+        name,
+        schedule,
+        command: patch_command,
+        prompt: patch_prompt,
+        ..operant_runtime::cron::CronJobPatch::default()
+    };
+
+    match operant_runtime::cron::update_shell_job_with_approval(&config, &id, patch, false) {
+        Ok(job) => Json(serde_json::json!({"status": "ok", "job": job})).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("Failed to update cron job: {e}")})),
+        )
+            .into_response(),
+    }
+}
+
+/// DELETE /api/cron/:id — remove a cron job
+pub async fn handle_api_cron_delete(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    if let Err(e) = require_auth(&state, &headers) {
+        return e.into_response();
+    }
+
+    let config = state.config.lock().clone();
+    match operant_runtime::cron::remove_job(&config, &id) {
+        Ok(()) => Json(serde_json::json!({"status": "ok"})).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("Failed to remove cron job: {e}")})),
+        )
+            .into_response(),
+    }
+}
+
+/// GET /api/cron/settings — return cron subsystem settings
+pub async fn handle_api_cron_settings_get(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    if let Err(e) = require_auth(&state, &headers) {
+        return e.into_response();
+    }
+
+    let config = state.config.lock().clone();
+    Json(serde_json::json!({
+        "enabled": config.cron.enabled,
+        "catch_up_on_startup": config.cron.catch_up_on_startup,
+        "max_run_history": config.cron.max_run_history,
+    }))
+    .into_response()
+}
+
+/// PATCH /api/cron/settings — update cron subsystem settings
+pub async fn handle_api_cron_settings_patch(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    if let Err(e) = require_auth(&state, &headers) {
+        return e.into_response();
+    }
+
+    let mut config = state.config.lock().clone();
+
+    if let Some(v) = body.get("enabled").and_then(|v| v.as_bool()) {
+        config.cron.enabled = v;
+    }
+    if let Some(v) = body.get("catch_up_on_startup").and_then(|v| v.as_bool()) {
+        config.cron.catch_up_on_startup = v;
+    }
+    if let Some(v) = body.get("max_run_history").and_then(|v| v.as_u64()) {
+        config.cron.max_run_history = u32::try_from(v).unwrap_or(u32::MAX);
+    }
+
+    if let Err(e) = config.save().await {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("Failed to save config: {e}")})),
+        )
+            .into_response();
+    }
+
+    *state.config.lock() = config.clone();
+
+    Json(serde_json::json!({
+        "status": "ok",
+        "enabled": config.cron.enabled,
+        "catch_up_on_startup": config.cron.catch_up_on_startup,
+        "max_run_history": config.cron.max_run_history,
+    }))
+    .into_response()
+}
+
+/// GET /api/integrations — list all integrations with status
+pub async fn handle_api_integrations(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    if let Err(e) = require_auth(&state, &headers) {
+        return e.into_response();
+    }
+
+    let config = state.config.lock().clone();
+    let entries = operant_runtime::integrations::registry::all_integrations(&config);
+
+    let integrations: Vec<serde_json::Value> = entries
+        .iter()
+        .map(|entry| {
+            serde_json::json!({
+                "name": entry.name,
+                "description": entry.description,
+                "category": entry.category,
+                "status": entry.status,
+            })
+        })
+        .collect();
+
+    Json(serde_json::json!({"integrations": integrations})).into_response()
+}
+
+/// GET /api/integrations/settings — return per-integration settings (enabled + category)
+pub async fn handle_api_integrations_settings(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    if let Err(e) = require_auth(&state, &headers) {
+        return e.into_response();
+    }
+
+    let config = state.config.lock().clone();
+    let entries = operant_runtime::integrations::registry::all_integrations(&config);
+
+    let mut settings = serde_json::Map::new();
+    for entry in &entries {
+        let enabled = matches!(
+            entry.status,
+            operant_runtime::integrations::IntegrationStatus::Active
+        );
+        settings.insert(
+            entry.name.clone(),
+            serde_json::json!({
+                "enabled": enabled,
+                "category": entry.category,
+                "status": entry.status,
+            }),
+        );
+    }
+
+    Json(serde_json::json!({"settings": settings})).into_response()
+}
+
+/// POST /api/doctor — run diagnostics
+pub async fn handle_api_doctor(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    if let Err(e) = require_auth(&state, &headers) {
+        return e.into_response();
+    }
+
+    let config = state.config.lock().clone();
+    let results = operant_runtime::doctor::diagnose(&config);
+
+    let ok_count = results
+        .iter()
+        .filter(|r| r.severity == operant_runtime::doctor::Severity::Ok)
+        .count();
+    let warn_count = results
+        .iter()
+        .filter(|r| r.severity == operant_runtime::doctor::Severity::Warn)
+        .count();
+    let error_count = results
+        .iter()
+        .filter(|r| r.severity == operant_runtime::doctor::Severity::Error)
+        .count();
+
+    Json(serde_json::json!({
+        "results": results,
+        "summary": {
+            "ok": ok_count,
+            "warnings": warn_count,
+            "errors": error_count,
+        }
+    }))
+    .into_response()
+}
+
+/// GET /api/memory — list or search memory entries
+pub async fn handle_api_memory_list(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(params): Query<MemoryQuery>,
+) -> impl IntoResponse {
+    if let Err(e) = require_auth(&state, &headers) {
+        return e.into_response();
+    }
+
+    // Use recall when query or time range is provided
+    if params.query.is_some() || params.since.is_some() || params.until.is_some() {
+        let query = params.query.as_deref().unwrap_or("");
+        let since = params.since.as_deref();
+        let until = params.until.as_deref();
+        match state.mem.recall(query, 50, None, since, until).await {
+            Ok(entries) => Json(serde_json::json!({"entries": entries})).into_response(),
+            Err(e) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": format!("Memory recall failed: {e}")})),
+            )
+                .into_response(),
+        }
+    } else {
+        // List mode
+        let category = params.category.as_deref().map(|cat| match cat {
+            "core" => operant_memory::MemoryCategory::Core,
+            "daily" => operant_memory::MemoryCategory::Daily,
+            "conversation" => operant_memory::MemoryCategory::Conversation,
+            other => operant_memory::MemoryCategory::Custom(other.to_string()),
+        });
+
+        match state.mem.list(category.as_ref(), None).await {
+            Ok(entries) => Json(serde_json::json!({"entries": entries})).into_response(),
+            Err(e) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": format!("Memory list failed: {e}")})),
+            )
+                .into_response(),
+        }
+    }
+}
+
+/// POST /api/memory — store a memory entry
+pub async fn handle_api_memory_store(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<MemoryStoreBody>,
+) -> impl IntoResponse {
+    if let Err(e) = require_auth(&state, &headers) {
+        return e.into_response();
+    }
+
+    let category = body
+        .category
+        .as_deref()
+        .map(|cat| match cat {
+            "core" => operant_memory::MemoryCategory::Core,
+            "daily" => operant_memory::MemoryCategory::Daily,
+            "conversation" => operant_memory::MemoryCategory::Conversation,
+            other => operant_memory::MemoryCategory::Custom(other.to_string()),
+        })
+        .unwrap_or(operant_memory::MemoryCategory::Core);
+
+    match state
+        .mem
+        .store(&body.key, &body.content, category, None)
+        .await
+    {
+        Ok(()) => Json(serde_json::json!({"status": "ok"})).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("Memory store failed: {e}")})),
+        )
+            .into_response(),
+    }
+}
+
+/// DELETE /api/memory/:key — delete a memory entry
+pub async fn handle_api_memory_delete(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(key): Path<String>,
+) -> impl IntoResponse {
+    if let Err(e) = require_auth(&state, &headers) {
+        return e.into_response();
+    }
+
+    match state.mem.forget(&key).await {
+        Ok(deleted) => {
+            Json(serde_json::json!({"status": "ok", "deleted": deleted})).into_response()
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("Memory forget failed: {e}")})),
+        )
+            .into_response(),
+    }
+}
+
+/// GET /api/cost — cost summary
+pub async fn handle_api_cost(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    if let Err(e) = require_auth(&state, &headers) {
+        return e.into_response();
+    }
+
+    if let Some(ref tracker) = state.cost_tracker {
+        match tracker.get_summary() {
+            Ok(summary) => Json(serde_json::json!({"cost": summary})).into_response(),
+            Err(e) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": format!("Cost summary failed: {e}")})),
+            )
+                .into_response(),
+        }
+    } else {
+        Json(serde_json::json!({
+            "cost": {
+                "session_cost_usd": 0.0,
+                "daily_cost_usd": 0.0,
+                "monthly_cost_usd": 0.0,
+                "total_tokens": 0,
+                "request_count": 0,
+                "by_model": {},
+            }
+        }))
+        .into_response()
+    }
+}
+
+/// GET /api/cli-tools — discovered CLI tools
+pub async fn handle_api_cli_tools(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    if let Err(e) = require_auth(&state, &headers) {
+        return e.into_response();
+    }
+
+    let tools = operant_tools::cli_discovery::discover_cli_tools(&[], &[]);
+
+    Json(serde_json::json!({"cli_tools": tools})).into_response()
+}
+
+/// GET /api/channels — list configured channels with status
+pub async fn handle_api_channels(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    if let Err(e) = require_auth(&state, &headers) {
+        return e.into_response();
+    }
+
+    let config = state.config.lock().clone();
+    let channels: Vec<serde_json::Value> = config
+        .channels
+        .channels()
+        .into_iter()
+        .filter(|(_, present)| *present)
+        .map(|(ch, _)| {
+            serde_json::json!({
+                "name": ch.name(),
+                "type": ch.name(),
+                "enabled": true,
+                "status": "active",
+                "message_count": 0,
+                "last_message_at": null,
+                "health": "healthy",
+            })
+        })
+        .collect();
+
+    Json(serde_json::json!({ "channels": channels })).into_response()
+}
+
+/// GET /api/health — component health snapshot
+pub async fn handle_api_health(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    if let Err(e) = require_auth(&state, &headers) {
+        return e.into_response();
+    }
+
+    let snapshot = operant_runtime::health::snapshot();
+    Json(serde_json::json!({"health": snapshot})).into_response()
+}
+
+// ── Helpers ─────────────────────────────────────────────────────
+
+// ── Session API handlers ─────────────────────────────────────────
+
+/// GET /api/sessions — list gateway sessions
+pub async fn handle_api_sessions_list(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    if let Err(e) = require_auth(&state, &headers) {
+        return e.into_response();
+    }
+
+    let Some(ref backend) = state.session_backend else {
+        return Json(serde_json::json!({
+            "sessions": [],
+            "message": "Session persistence is disabled"
+        }))
+        .into_response();
+    };
+
+    let all_metadata = backend.list_sessions_with_metadata();
+    let gw_sessions: Vec<serde_json::Value> = all_metadata
+        .into_iter()
+        .filter_map(|meta| {
+            let session_id = meta.key.strip_prefix("gw_")?;
+            let mut entry = serde_json::json!({
+                "session_id": session_id,
+                "created_at": meta.created_at.to_rfc3339(),
+                "last_activity": meta.last_activity.to_rfc3339(),
+                "message_count": meta.message_count,
+            });
+            if let Some(name) = meta.name {
+                entry["name"] = serde_json::Value::String(name);
+            }
+            Some(entry)
+        })
+        .collect();
+
+    Json(serde_json::json!({ "sessions": gw_sessions })).into_response()
+}
+
+/// GET /api/sessions/{id}/messages — load persisted gateway WebSocket chat transcript
+pub async fn handle_api_session_messages(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    if let Err(e) = require_auth(&state, &headers) {
+        return e.into_response();
+    }
+
+    let Some(ref backend) = state.session_backend else {
+        return Json(serde_json::json!({
+            "session_id": id,
+            "messages": [],
+            "session_persistence": false,
+        }))
+        .into_response();
+    };
+
+    let session_key = format!("gw_{id}");
+    let msgs = backend.load(&session_key);
+    let messages: Vec<serde_json::Value> = msgs
+        .into_iter()
+        .map(|m| serde_json::json!({ "role": m.role, "content": m.content }))
+        .collect();
+
+    Json(serde_json::json!({
+        "session_id": id,
+        "messages": messages,
+        "session_persistence": true,
+    }))
+    .into_response()
+}
+
+/// POST /api/sessions/{id}/messages — push a visible notification into a gateway session
+pub async fn handle_api_session_message_post(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(body): Json<SessionMessagePostBody>,
+) -> impl IntoResponse {
+    if let Err(e) = require_auth(&state, &headers) {
+        return e.into_response();
+    }
+
+    if body.content.trim().is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "content is required"})),
+        )
+            .into_response();
+    }
+
+    let Some(ref backend) = state.session_backend else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({"error": "Session persistence is disabled"})),
+        )
+            .into_response();
+    };
+
+    let session_key = format!("gw_{id}");
+    if !backend
+        .list_sessions()
+        .iter()
+        .any(|key| key == &session_key)
+    {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Session not found"})),
+        )
+            .into_response();
+    }
+
+    let _session_guard = match state.session_queue.acquire(&session_key).await {
+        Ok(guard) => guard,
+        Err(crate::session_queue::SessionQueueError::QueueFull { .. }) => {
+            return (
+                StatusCode::TOO_MANY_REQUESTS,
+                Json(serde_json::json!({"error": "Session queue is full"})),
+            )
+                .into_response();
+        }
+        Err(crate::session_queue::SessionQueueError::Timeout { .. }) => {
+            return (
+                StatusCode::REQUEST_TIMEOUT,
+                Json(serde_json::json!({"error": "Timed out waiting for session queue"})),
+            )
+                .into_response();
+        }
+    };
+
+    let message = operant_providers::ChatMessage::assistant(&body.content);
+    if let Err(e) = backend.append(&session_key, &message) {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("Failed to append session message: {e}")})),
+        )
+            .into_response();
+    }
+
+    // Use the raw dashboard session ID here to match the WS `?session_id=`
+    // query parameter; the `gw_` storage key is only for persistence.
+    let event = serde_json::json!({
+        "type": "message",
+        "session_id": id.clone(),
+        "role": "assistant",
+        "content": body.content.clone(),
+        "source": "api",
+        "timestamp": chrono::Utc::now().to_rfc3339(),
+    });
+    let _ = state.event_tx.send(event);
+
+    Json(serde_json::json!({
+        "status": "ok",
+        "session_id": id,
+        "message": {
+            "role": "assistant",
+            "content": message.content,
+        },
+        "session_persistence": true,
+    }))
+    .into_response()
+}
+
+/// DELETE /api/sessions/{id} — delete a gateway session
+pub async fn handle_api_session_delete(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    if let Err(e) = require_auth(&state, &headers) {
+        return e.into_response();
+    }
+
+    let Some(ref backend) = state.session_backend else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Session persistence is disabled"})),
+        )
+            .into_response();
+    };
+
+    let session_key = format!("gw_{id}");
+
+    // If a turn is in flight for this session, cancel it and evict the entry
+    // from `cancel_tokens` here rather than leaving the WebSocket handler's
+    // post-`tokio::join!` cleanup (`ws.rs:535`) as the only path. Without
+    // this, deleting a session mid-turn leaks the map entry until the
+    // streaming task happens to wake up — and on a process crash the
+    // entry is lost entirely (#5835).
+    let token = state
+        .cancel_tokens
+        .lock()
+        .expect("cancel_tokens lock poisoned")
+        .remove(&session_key);
+    if let Some(token) = token {
+        token.cancel();
+        tracing::info!(session_key, "cancelled in-flight turn for deleted session");
+    }
+
+    match backend.delete_session(&session_key) {
+        Ok(true) => Json(serde_json::json!({"deleted": true, "session_id": id})).into_response(),
+        Ok(false) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Session not found"})),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("Failed to delete session: {e}")})),
+        )
+            .into_response(),
+    }
+}
+
+/// PUT /api/sessions/{id} — rename a gateway session
+pub async fn handle_api_session_rename(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(body): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    if let Err(e) = require_auth(&state, &headers) {
+        return e.into_response();
+    }
+
+    let Some(ref backend) = state.session_backend else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Session persistence is disabled"})),
+        )
+            .into_response();
+    };
+
+    let name = body["name"].as_str().unwrap_or("").trim();
+    if name.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "name is required"})),
+        )
+            .into_response();
+    }
+
+    let session_key = format!("gw_{id}");
+
+    // Verify the session exists before renaming
+    let sessions = backend.list_sessions();
+    if !sessions.contains(&session_key) {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Session not found"})),
+        )
+            .into_response();
+    }
+
+    match backend.set_session_name(&session_key, name) {
+        Ok(()) => Json(serde_json::json!({"session_id": id, "name": name})).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("Failed to rename session: {e}")})),
+        )
+            .into_response(),
+    }
+}
+
+/// GET /api/sessions/running — list sessions currently in "running" state
+pub async fn handle_api_sessions_running(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    if let Err(e) = require_auth(&state, &headers) {
+        return e.into_response();
+    }
+
+    let Some(ref backend) = state.session_backend else {
+        return Json(serde_json::json!({
+            "sessions": [],
+            "message": "Session persistence is disabled"
+        }))
+        .into_response();
+    };
+
+    let running = backend.list_running_sessions();
+    let sessions: Vec<serde_json::Value> = running
+        .into_iter()
+        .filter_map(|meta| {
+            let session_id = meta.key.strip_prefix("gw_")?;
+            Some(serde_json::json!({
+                "session_id": session_id,
+                "created_at": meta.created_at.to_rfc3339(),
+                "last_activity": meta.last_activity.to_rfc3339(),
+                "message_count": meta.message_count,
+            }))
+        })
+        .collect();
+
+    Json(serde_json::json!({ "sessions": sessions })).into_response()
+}
+
+/// GET /api/sessions/{id}/state — get session state
+pub async fn handle_api_session_state(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    if let Err(e) = require_auth(&state, &headers) {
+        return e.into_response();
+    }
+
+    let Some(ref backend) = state.session_backend else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Session persistence is disabled"})),
+        )
+            .into_response();
+    };
+
+    let session_key = format!("gw_{id}");
+    match backend.get_session_state(&session_key) {
+        Ok(Some(ss)) => {
+            let mut resp = serde_json::json!({
+                "session_id": id,
+                "state": ss.state,
+            });
+            if let Some(turn_id) = ss.turn_id {
+                resp["turn_id"] = serde_json::Value::String(turn_id);
+            }
+            if let Some(started) = ss.turn_started_at {
+                resp["turn_started_at"] = serde_json::Value::String(started.to_rfc3339());
+            }
+            Json(resp).into_response()
+        }
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Session not found"})),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("Failed to get session state: {e}")})),
+        )
+            .into_response(),
+    }
+}
+
+// ── Session abort endpoint ────────────────────────────────────────
+
+/// POST /api/sessions/{id}/abort — cancel an in-flight agent response.
+///
+/// Looks up the cancellation token for the given session. If a turn is
+/// currently running the token is cancelled, which causes the agent's
+/// streaming loop and tool-call loop to exit early. The WebSocket handler
+/// is responsible for cleaning up partial state and sending the abort
+/// frame to the client.
+///
+/// Returns 200 with `{"status": "aborted"}` if a running turn was found,
+/// or `{"status": "no_active_response"}` if the session was idle (no
+/// token present). Both are success — abort is idempotent.
+pub async fn handle_api_session_abort(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    if let Err(e) = require_auth(&state, &headers) {
+        return e.into_response();
+    }
+
+    let session_key = format!("gw_{id}");
+
+    // Look up and cancel the token. Hold the lock only long enough to
+    // clone the token — cancellation itself does not need the lock.
+    let token = state
+        .cancel_tokens
+        .lock()
+        .expect("cancel_tokens lock poisoned")
+        .get(&session_key)
+        .cloned();
+
+    if let Some(token) = token {
+        token.cancel();
+        tracing::info!(session_key, "session abort requested");
+        Json(serde_json::json!({ "status": "aborted" })).into_response()
+    } else {
+        Json(serde_json::json!({ "status": "no_active_response" })).into_response()
+    }
+}
+
+// ── Claude Code hook endpoint ────────────────────────────────────
+
+/// POST /hooks/claude-code — receives HTTP hook events from Claude Code
+/// sessions spawned by `ClaudeCodeRunnerTool`.
+///
+/// Claude Code posts structured JSON describing tool executions, completions,
+/// and errors. This handler logs the event and (when a Slack channel is
+/// configured) could be wired to update a Slack message in-place.
+pub async fn handle_claude_code_hook(
+    State(state): State<AppState>,
+    Json(payload): Json<operant_tools::claude_code_runner::ClaudeCodeHookEvent>,
+) -> impl IntoResponse {
+    // Do not require bearer-token auth: Claude Code subprocesses cannot easily
+    // obtain a pairing token, and the hook carries a session_id that ties it
+    // back to a session we spawned.
+    let _ = &state; // retained for future Slack update wiring
+
+    tracing::info!(
+        session_id = %payload.session_id,
+        event_type = %payload.event_type,
+        tool_name = ?payload.tool_name,
+        summary = ?payload.summary,
+        "Claude Code hook event received"
+    );
+
+    Json(serde_json::json!({ "ok": true }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{AppState, GatewayRateLimiter, IdempotencyStore, nodes};
+    use async_trait::async_trait;
+    use axum::response::IntoResponse;
+    use http_body_util::BodyExt;
+    use operant_infra::session_backend::SessionBackend;
+    use operant_infra::session_store::SessionStore;
+    use operant_memory::{Memory, MemoryCategory, MemoryEntry};
+    use operant_providers::Provider;
+    use operant_runtime::security::pairing::PairingGuard;
+    use parking_lot::Mutex;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    struct MockMemory;
+
+    #[async_trait]
+    impl Memory for MockMemory {
+        fn name(&self) -> &str {
+            "mock"
+        }
+
+        async fn store(
+            &self,
+            _key: &str,
+            _content: &str,
+            _category: MemoryCategory,
+            _session_id: Option<&str>,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn recall(
+            &self,
+            _query: &str,
+            _limit: usize,
+            _session_id: Option<&str>,
+            _since: Option<&str>,
+            _until: Option<&str>,
+        ) -> anyhow::Result<Vec<MemoryEntry>> {
+            Ok(Vec::new())
+        }
+
+        async fn get(&self, _key: &str) -> anyhow::Result<Option<MemoryEntry>> {
+            Ok(None)
+        }
+
+        async fn list(
+            &self,
+            _category: Option<&MemoryCategory>,
+            _session_id: Option<&str>,
+        ) -> anyhow::Result<Vec<MemoryEntry>> {
+            Ok(Vec::new())
+        }
+
+        async fn forget(&self, _key: &str) -> anyhow::Result<bool> {
+            Ok(false)
+        }
+
+        async fn count(&self) -> anyhow::Result<usize> {
+            Ok(0)
+        }
+
+        async fn health_check(&self) -> bool {
+            true
+        }
+    }
+
+    struct MockProvider;
+
+    #[async_trait]
+    impl Provider for MockProvider {
+        async fn chat_with_system(
+            &self,
+            _system_prompt: Option<&str>,
+            _message: &str,
+            _model: &str,
+            _temperature: Option<f64>,
+        ) -> anyhow::Result<String> {
+            Ok("ok".to_string())
+        }
+    }
+
+    fn test_state(config: operant_config::schema::Config) -> AppState {
+        use crate::{
+            GatewayRateLimiter, IdempotencyStore, auth_rate_limit::AuthRateLimiter,
+            nodes::NodeRegistry, session_queue::SessionActorQueue, sse::EventBuffer,
+        };
+        use operant_runtime::observability::NoopObserver;
+        use parking_lot::Mutex as ParkingMutex;
+        use std::{
+            collections::HashMap,
+            sync::{Arc, Mutex},
+            time::Duration,
+        };
+        use tokio::sync::broadcast;
+
+        AppState {
+            config: Arc::new(ParkingMutex::new(config)),
+            provider: Arc::new(MockProvider),
+            model: "test-model".into(),
+            temperature: 0.0,
+            mem: Arc::new(MockMemory),
+            auto_save: false,
+            webhook_secret_hash: None,
+            pairing: Arc::new(PairingGuard::new(false, &[])),
+            trust_forwarded_headers: false,
+            rate_limiter: Arc::new(GatewayRateLimiter::new(100, 100, 100)),
+            auth_limiter: Arc::new(AuthRateLimiter::new()),
+            idempotency_store: Arc::new(IdempotencyStore::new(Duration::from_secs(300), 1000)),
+            whatsapp: None,
+            whatsapp_app_secret: None,
+            linq: None,
+            linq_signing_secret: None,
+            nextcloud_talk: None,
+            nextcloud_talk_webhook_secret: None,
+            wati: None,
+            gmail_push: None,
+            observer: Arc::new(NoopObserver),
+            tools_registry: Arc::new(Vec::new()),
+            cost_tracker: None,
+            event_tx: broadcast::channel(16).0,
+            event_buffer: Arc::new(EventBuffer::new(16)),
+            shutdown_tx: tokio::sync::watch::channel(false).0,
+            node_registry: Arc::new(NodeRegistry::new(16)),
+            session_backend: None,
+            session_queue: Arc::new(SessionActorQueue::new(8, 30, 600)),
+            device_registry: None,
+            pending_pairings: None,
+            path_prefix: String::new(),
+            web_dist_dir: None,
+            canvas_store: operant_runtime::tools::CanvasStore::new(),
+            cancel_tokens: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            reload_tx: None,
+            #[cfg(feature = "webauthn")]
+            webauthn: None,
+        }
+    }
+
+    async fn response_json(response: axum::response::Response) -> serde_json::Value {
+        let body = response
+            .into_body()
+            .collect()
+            .await
+            .expect("response body")
+            .to_bytes();
+        serde_json::from_slice(&body).expect("valid json response")
+    }
+
+    fn test_state_with_session_backend(
+        config: operant_config::schema::Config,
+        backend: Arc<dyn SessionBackend>,
+    ) -> AppState {
+        let mut state = test_state(config);
+        state.session_backend = Some(backend);
+        state
+    }
+
+    #[tokio::test]
+    async fn session_message_post_persists_and_broadcasts_to_session() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let config = operant_config::schema::Config {
+            workspace_dir: tmp.path().join("workspace"),
+            config_path: tmp.path().join("config.toml"),
+            ..operant_config::schema::Config::default()
+        };
+        std::fs::create_dir_all(&config.workspace_dir).unwrap();
+        let backend: Arc<dyn SessionBackend> = Arc::new(SessionStore::new(tmp.path()).unwrap());
+        backend
+            .append(
+                "gw_operator-1",
+                &operant_providers::ChatMessage::assistant("existing"),
+            )
+            .unwrap();
+        let state = test_state_with_session_backend(config, backend.clone());
+        let mut rx = state.event_tx.subscribe();
+
+        let response = handle_api_session_message_post(
+            State(state.clone()),
+            HeaderMap::new(),
+            Path("operator-1".to_string()),
+            Json(
+                serde_json::from_value::<SessionMessagePostBody>(serde_json::json!({
+                    "content": "deploy finished"
+                }))
+                .expect("body should deserialize"),
+            ),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let json = response_json(response).await;
+        assert_eq!(json["status"], "ok");
+        assert_eq!(json["session_id"], "operator-1");
+        assert_eq!(json["message"]["role"], "assistant");
+        assert_eq!(json["message"]["content"], "deploy finished");
+        assert!(json.get("message_count").is_none());
+
+        let messages = backend.load("gw_operator-1");
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[1].role, "assistant");
+        assert_eq!(messages[1].content, "deploy finished");
+
+        let event = tokio::time::timeout(Duration::from_secs(1), rx.recv())
+            .await
+            .expect("broadcast event")
+            .expect("broadcast value");
+        assert_eq!(event["type"], "message");
+        assert_eq!(event["session_id"], "operator-1");
+        assert_eq!(event["role"], "assistant");
+        assert_eq!(event["content"], "deploy finished");
+
+        let history = state.event_buffer.snapshot();
+        assert!(
+            history.is_empty(),
+            "session-scoped chat messages stay out of global event history"
+        );
+    }
+
+    #[tokio::test]
+    async fn session_message_post_rejects_empty_content() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let config = operant_config::schema::Config {
+            workspace_dir: tmp.path().join("workspace"),
+            config_path: tmp.path().join("config.toml"),
+            ..operant_config::schema::Config::default()
+        };
+        std::fs::create_dir_all(&config.workspace_dir).unwrap();
+        let backend: Arc<dyn SessionBackend> = Arc::new(SessionStore::new(tmp.path()).unwrap());
+        let state = test_state_with_session_backend(config, backend);
+
+        let response = handle_api_session_message_post(
+            State(state),
+            HeaderMap::new(),
+            Path("operator-1".to_string()),
+            Json(
+                serde_json::from_value::<SessionMessagePostBody>(serde_json::json!({
+                    "content": "   "
+                }))
+                .expect("body should deserialize"),
+            ),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let json = response_json(response).await;
+        assert_eq!(json["error"], "content is required");
+    }
+
+    #[tokio::test]
+    async fn session_message_post_rejects_unknown_session_without_creating_it() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let config = operant_config::schema::Config {
+            workspace_dir: tmp.path().join("workspace"),
+            config_path: tmp.path().join("config.toml"),
+            ..operant_config::schema::Config::default()
+        };
+        std::fs::create_dir_all(&config.workspace_dir).unwrap();
+        let backend: Arc<dyn SessionBackend> = Arc::new(SessionStore::new(tmp.path()).unwrap());
+        let state = test_state_with_session_backend(config, backend.clone());
+
+        let response = handle_api_session_message_post(
+            State(state),
+            HeaderMap::new(),
+            Path("operator-1".to_string()),
+            Json(
+                serde_json::from_value::<SessionMessagePostBody>(serde_json::json!({
+                    "content": "deploy finished"
+                }))
+                .expect("body should deserialize"),
+            ),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        let json = response_json(response).await;
+        assert_eq!(json["error"], "Session not found");
+        assert!(backend.load("gw_operator-1").is_empty());
+    }
+
+    #[tokio::test]
+    async fn session_message_post_waits_for_session_queue_before_append() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let config = operant_config::schema::Config {
+            workspace_dir: tmp.path().join("workspace"),
+            config_path: tmp.path().join("config.toml"),
+            ..operant_config::schema::Config::default()
+        };
+        std::fs::create_dir_all(&config.workspace_dir).unwrap();
+        let backend: Arc<dyn SessionBackend> = Arc::new(SessionStore::new(tmp.path()).unwrap());
+        backend
+            .append(
+                "gw_operator-1",
+                &operant_providers::ChatMessage::assistant("existing"),
+            )
+            .unwrap();
+        let state = test_state_with_session_backend(config, backend.clone());
+        let session_guard = state.session_queue.acquire("gw_operator-1").await.unwrap();
+
+        let response_fut = handle_api_session_message_post(
+            State(state),
+            HeaderMap::new(),
+            Path("operator-1".to_string()),
+            Json(
+                serde_json::from_value::<SessionMessagePostBody>(serde_json::json!({
+                    "content": "queued notification"
+                }))
+                .expect("body should deserialize"),
+            ),
+        );
+        tokio::pin!(response_fut);
+
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), &mut response_fut)
+                .await
+                .is_err(),
+            "POST should wait behind the active session queue guard"
+        );
+        assert_eq!(backend.load("gw_operator-1").len(), 1);
+
+        drop(session_guard);
+        let response = tokio::time::timeout(Duration::from_secs(1), response_fut)
+            .await
+            .expect("queued POST should complete")
+            .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let messages = backend.load("gw_operator-1");
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[1].content, "queued notification");
+    }
+
+    #[tokio::test]
+    async fn cron_api_shell_roundtrip_includes_delivery() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let config = operant_config::schema::Config {
+            workspace_dir: tmp.path().join("workspace"),
+            config_path: tmp.path().join("config.toml"),
+            ..operant_config::schema::Config::default()
+        };
+        std::fs::create_dir_all(&config.workspace_dir).unwrap();
+        let state = test_state(config);
+
+        let add_response = handle_api_cron_add(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(
+                serde_json::from_value::<CronAddBody>(serde_json::json!({
+                    "name": "test-job",
+                    "schedule": "*/5 * * * *",
+                    "command": "echo hello",
+                    "delivery": {
+                        "mode": "announce",
+                        "channel": "discord",
+                        "to": "1234567890",
+                        "best_effort": true
+                    }
+                }))
+                .expect("body should deserialize"),
+            ),
+        )
+        .await
+        .into_response();
+
+        let add_json = response_json(add_response).await;
+        assert_eq!(add_json["status"], "ok");
+        assert_eq!(add_json["job"]["delivery"]["mode"], "announce");
+        assert_eq!(add_json["job"]["delivery"]["channel"], "discord");
+        assert_eq!(add_json["job"]["delivery"]["to"], "1234567890");
+
+        let list_response = handle_api_cron_list(State(state), HeaderMap::new())
+            .await
+            .into_response();
+        let list_json = response_json(list_response).await;
+        let jobs = list_json["jobs"].as_array().expect("jobs array");
+        assert_eq!(jobs.len(), 1);
+        assert_eq!(jobs[0]["delivery"]["mode"], "announce");
+        assert_eq!(jobs[0]["delivery"]["channel"], "discord");
+        assert_eq!(jobs[0]["delivery"]["to"], "1234567890");
+    }
+
+    #[tokio::test]
+    async fn cron_api_accepts_agent_jobs() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let config = operant_config::schema::Config {
+            workspace_dir: tmp.path().join("workspace"),
+            config_path: tmp.path().join("config.toml"),
+            ..operant_config::schema::Config::default()
+        };
+        std::fs::create_dir_all(&config.workspace_dir).unwrap();
+        let state = test_state(config);
+
+        let response = handle_api_cron_add(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(
+                serde_json::from_value::<CronAddBody>(serde_json::json!({
+                    "name": "agent-job",
+                    "schedule": "*/5 * * * *",
+                    "job_type": "agent",
+                    "command": "ignored shell command",
+                    "prompt": "summarize the latest logs"
+                }))
+                .expect("body should deserialize"),
+            ),
+        )
+        .await
+        .into_response();
+
+        let json = response_json(response).await;
+        assert_eq!(json["status"], "ok");
+
+        let config = state.config.lock().clone();
+        let jobs = operant_runtime::cron::list_jobs(&config).unwrap();
+        assert_eq!(jobs.len(), 1);
+        assert_eq!(jobs[0].job_type, operant_runtime::cron::JobType::Agent);
+        assert_eq!(jobs[0].prompt.as_deref(), Some("summarize the latest logs"));
+    }
+
+    #[tokio::test]
+    async fn cron_api_timezone_add_persists_explicit_timezone() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let config = operant_config::schema::Config {
+            workspace_dir: tmp.path().join("workspace"),
+            config_path: tmp.path().join("config.toml"),
+            ..operant_config::schema::Config::default()
+        };
+        std::fs::create_dir_all(&config.workspace_dir).unwrap();
+        let state = test_state(config);
+
+        let response = handle_api_cron_add(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(
+                serde_json::from_value::<CronAddBody>(serde_json::json!({
+                    "name": "localized-job",
+                    "schedule": "0 9 * * *",
+                    "tz": "America/New_York",
+                    "command": "echo hello"
+                }))
+                .expect("body should deserialize"),
+            ),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let config = state.config.lock().clone();
+        let jobs = operant_runtime::cron::list_jobs(&config).unwrap();
+        assert_eq!(
+            jobs[0].schedule,
+            operant_runtime::cron::Schedule::Cron {
+                expr: "0 9 * * *".to_string(),
+                tz: Some("America/New_York".to_string()),
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn cron_api_timezone_add_rejects_invalid_timezone_as_bad_request() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let config = operant_config::schema::Config {
+            workspace_dir: tmp.path().join("workspace"),
+            config_path: tmp.path().join("config.toml"),
+            ..operant_config::schema::Config::default()
+        };
+        std::fs::create_dir_all(&config.workspace_dir).unwrap();
+        let state = test_state(config);
+
+        let response = handle_api_cron_add(
+            State(state),
+            HeaderMap::new(),
+            Json(
+                serde_json::from_value::<CronAddBody>(serde_json::json!({
+                    "name": "invalid-timezone-job",
+                    "schedule": "0 9 * * *",
+                    "tz": "Invalid/Zone",
+                    "command": "echo hello"
+                }))
+                .expect("body should deserialize"),
+            ),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let json = response_json(response).await;
+        assert!(
+            json["error"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("Invalid IANA timezone")
+        );
+    }
+
+    #[tokio::test]
+    async fn cron_api_timezone_patch_schedule_preserves_existing_timezone() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let config = operant_config::schema::Config {
+            workspace_dir: tmp.path().join("workspace"),
+            config_path: tmp.path().join("config.toml"),
+            ..operant_config::schema::Config::default()
+        };
+        std::fs::create_dir_all(&config.workspace_dir).unwrap();
+        let state = test_state(config);
+        let job = operant_runtime::cron::add_shell_job_with_approval(
+            &state.config.lock().clone(),
+            Some("localized-job".to_string()),
+            operant_runtime::cron::Schedule::Cron {
+                expr: "0 9 * * *".to_string(),
+                tz: Some("Europe/Berlin".to_string()),
+            },
+            "echo hello",
+            None,
+            true,
+        )
+        .expect("job added");
+
+        let response = handle_api_cron_patch(
+            State(state.clone()),
+            HeaderMap::new(),
+            Path(job.id.clone()),
+            Json(
+                serde_json::from_value::<CronPatchBody>(serde_json::json!({
+                    "schedule": "30 9 * * *"
+                }))
+                .expect("body should deserialize"),
+            ),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let updated = operant_runtime::cron::get_job(&state.config.lock().clone(), &job.id)
+            .expect("updated job");
+        assert_eq!(
+            updated.schedule,
+            operant_runtime::cron::Schedule::Cron {
+                expr: "30 9 * * *".to_string(),
+                tz: Some("Europe/Berlin".to_string()),
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn cron_api_timezone_patch_replaces_timezone_when_provided() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let config = operant_config::schema::Config {
+            workspace_dir: tmp.path().join("workspace"),
+            config_path: tmp.path().join("config.toml"),
+            ..operant_config::schema::Config::default()
+        };
+        std::fs::create_dir_all(&config.workspace_dir).unwrap();
+        let state = test_state(config);
+        let job = operant_runtime::cron::add_shell_job_with_approval(
+            &state.config.lock().clone(),
+            Some("localized-job".to_string()),
+            operant_runtime::cron::Schedule::Cron {
+                expr: "0 9 * * *".to_string(),
+                tz: Some("America/New_York".to_string()),
+            },
+            "echo hello",
+            None,
+            true,
+        )
+        .expect("job added");
+
+        let response = handle_api_cron_patch(
+            State(state.clone()),
+            HeaderMap::new(),
+            Path(job.id.clone()),
+            Json(
+                serde_json::from_value::<CronPatchBody>(serde_json::json!({
+                    "schedule": "30 9 * * *",
+                    "tz": "Asia/Tokyo"
+                }))
+                .expect("body should deserialize"),
+            ),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let updated = operant_runtime::cron::get_job(&state.config.lock().clone(), &job.id)
+            .expect("updated job");
+        assert_eq!(
+            updated.schedule,
+            operant_runtime::cron::Schedule::Cron {
+                expr: "30 9 * * *".to_string(),
+                tz: Some("Asia/Tokyo".to_string()),
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn cron_api_timezone_patch_sets_timezone_without_schedule_change() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let config = operant_config::schema::Config {
+            workspace_dir: tmp.path().join("workspace"),
+            config_path: tmp.path().join("config.toml"),
+            ..operant_config::schema::Config::default()
+        };
+        std::fs::create_dir_all(&config.workspace_dir).unwrap();
+        let state = test_state(config);
+        let job = operant_runtime::cron::add_shell_job_with_approval(
+            &state.config.lock().clone(),
+            Some("runtime-local-job".to_string()),
+            operant_runtime::cron::Schedule::Cron {
+                expr: "0 9 * * *".to_string(),
+                tz: None,
+            },
+            "echo hello",
+            None,
+            true,
+        )
+        .expect("job added");
+
+        let response = handle_api_cron_patch(
+            State(state.clone()),
+            HeaderMap::new(),
+            Path(job.id.clone()),
+            Json(
+                serde_json::from_value::<CronPatchBody>(serde_json::json!({
+                    "tz": "America/Chicago"
+                }))
+                .expect("body should deserialize"),
+            ),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let updated = operant_runtime::cron::get_job(&state.config.lock().clone(), &job.id)
+            .expect("updated job");
+        assert_eq!(
+            updated.schedule,
+            operant_runtime::cron::Schedule::Cron {
+                expr: "0 9 * * *".to_string(),
+                tz: Some("America/Chicago".to_string()),
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn cron_api_timezone_patch_rejects_invalid_timezone_as_bad_request() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let config = operant_config::schema::Config {
+            workspace_dir: tmp.path().join("workspace"),
+            config_path: tmp.path().join("config.toml"),
+            ..operant_config::schema::Config::default()
+        };
+        std::fs::create_dir_all(&config.workspace_dir).unwrap();
+        let state = test_state(config);
+        let job = operant_runtime::cron::add_shell_job_with_approval(
+            &state.config.lock().clone(),
+            Some("localized-job".to_string()),
+            operant_runtime::cron::Schedule::Cron {
+                expr: "0 9 * * *".to_string(),
+                tz: Some("America/New_York".to_string()),
+            },
+            "echo hello",
+            None,
+            true,
+        )
+        .expect("job added");
+
+        let response = handle_api_cron_patch(
+            State(state),
+            HeaderMap::new(),
+            Path(job.id),
+            Json(
+                serde_json::from_value::<CronPatchBody>(serde_json::json!({
+                    "tz": "Invalid/Zone"
+                }))
+                .expect("body should deserialize"),
+            ),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let json = response_json(response).await;
+        assert!(
+            json["error"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("Invalid IANA timezone")
+        );
+    }
+
+    #[tokio::test]
+    async fn cron_api_timezone_patch_clears_timezone_with_explicit_signal() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let config = operant_config::schema::Config {
+            workspace_dir: tmp.path().join("workspace"),
+            config_path: tmp.path().join("config.toml"),
+            ..operant_config::schema::Config::default()
+        };
+        std::fs::create_dir_all(&config.workspace_dir).unwrap();
+        let state = test_state(config);
+        let job = operant_runtime::cron::add_shell_job_with_approval(
+            &state.config.lock().clone(),
+            Some("localized-job".to_string()),
+            operant_runtime::cron::Schedule::Cron {
+                expr: "0 9 * * *".to_string(),
+                tz: Some("America/New_York".to_string()),
+            },
+            "echo hello",
+            None,
+            true,
+        )
+        .expect("job added");
+
+        let response = handle_api_cron_patch(
+            State(state.clone()),
+            HeaderMap::new(),
+            Path(job.id.clone()),
+            Json(
+                serde_json::from_value::<CronPatchBody>(serde_json::json!({
+                    "clear_tz": true
+                }))
+                .expect("body should deserialize"),
+            ),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let updated = operant_runtime::cron::get_job(&state.config.lock().clone(), &job.id)
+            .expect("updated job");
+        assert_eq!(
+            updated.schedule,
+            operant_runtime::cron::Schedule::Cron {
+                expr: "0 9 * * *".to_string(),
+                tz: None,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn cron_api_rejects_announce_delivery_without_target() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let config = operant_config::schema::Config {
+            workspace_dir: tmp.path().join("workspace"),
+            config_path: tmp.path().join("config.toml"),
+            ..operant_config::schema::Config::default()
+        };
+        std::fs::create_dir_all(&config.workspace_dir).unwrap();
+        let state = test_state(config);
+
+        let response = handle_api_cron_add(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(
+                serde_json::from_value::<CronAddBody>(serde_json::json!({
+                    "name": "invalid-delivery-job",
+                    "schedule": "*/5 * * * *",
+                    "command": "echo hello",
+                    "delivery": {
+                        "mode": "announce",
+                        "channel": "discord"
+                    }
+                }))
+                .expect("body should deserialize"),
+            ),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let json = response_json(response).await;
+        assert!(
+            json["error"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("delivery.to is required")
+        );
+
+        let config = state.config.lock().clone();
+        assert!(
+            operant_runtime::cron::list_jobs(&config)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn cron_api_rejects_announce_delivery_with_unsupported_channel() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let config = operant_config::schema::Config {
+            workspace_dir: tmp.path().join("workspace"),
+            config_path: tmp.path().join("config.toml"),
+            ..operant_config::schema::Config::default()
+        };
+        std::fs::create_dir_all(&config.workspace_dir).unwrap();
+        let state = test_state(config);
+
+        let response = handle_api_cron_add(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(
+                serde_json::from_value::<CronAddBody>(serde_json::json!({
+                    "name": "invalid-delivery-job",
+                    "schedule": "*/5 * * * *",
+                    "command": "echo hello",
+                    "delivery": {
+                        "mode": "announce",
+                        "channel": "email",
+                        "to": "alerts@example.com"
+                    }
+                }))
+                .expect("body should deserialize"),
+            ),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let json = response_json(response).await;
+        assert!(
+            json["error"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("unsupported delivery channel")
+        );
+
+        let config = state.config.lock().clone();
+        assert!(
+            operant_runtime::cron::list_jobs(&config)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn cron_api_run_executes_shell_job_and_records_run() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let config = operant_config::schema::Config {
+            workspace_dir: tmp.path().join("workspace"),
+            config_path: tmp.path().join("config.toml"),
+            ..operant_config::schema::Config::default()
+        };
+        std::fs::create_dir_all(&config.workspace_dir).unwrap();
+        let state = test_state(config);
+
+        let job = operant_runtime::cron::add_shell_job_with_approval(
+            &state.config.lock().clone(),
+            None,
+            operant_runtime::cron::Schedule::Cron {
+                expr: "*/5 * * * *".to_string(),
+                tz: None,
+            },
+            "echo hello-from-manual-trigger",
+            None,
+            true,
+        )
+        .expect("job added");
+
+        let response =
+            handle_api_cron_run(State(state.clone()), HeaderMap::new(), Path(job.id.clone()))
+                .await
+                .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let json = response_json(response).await;
+        assert_eq!(json["status"], "ok");
+        assert_eq!(json["success"], true);
+        assert_eq!(json["job_id"], job.id);
+        assert!(
+            json["output"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("hello-from-manual-trigger")
+        );
+
+        let runs = operant_runtime::cron::list_runs(&state.config.lock().clone(), &job.id, 10)
+            .expect("runs listed");
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].status, "ok");
+    }
+
+    #[tokio::test]
+    async fn cron_api_run_returns_not_found_for_unknown_job() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let config = operant_config::schema::Config {
+            workspace_dir: tmp.path().join("workspace"),
+            config_path: tmp.path().join("config.toml"),
+            ..operant_config::schema::Config::default()
+        };
+        std::fs::create_dir_all(&config.workspace_dir).unwrap();
+        let state = test_state(config);
+
+        let response = handle_api_cron_run(
+            State(state),
+            HeaderMap::new(),
+            Path("does-not-exist".to_string()),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+}
+
+/// Build the main API router with all routes.
+pub fn router(
+    config: operant_config::schema::Config,
+    pairing: std::sync::Arc<operant_config::pairing::PairingGuard>,
+    shutdown_rx: tokio::sync::watch::Receiver<bool>,
+    event_tx: tokio::sync::broadcast::Sender<serde_json::Value>,
+    external_event_tx: Option<tokio::sync::broadcast::Sender<serde_json::Value>>,
+    reload_tx: Option<tokio::sync::watch::Sender<bool>>,
+    canvas_store: Option<crate::tools::CanvasStore>,
+) -> axum::Router<super::AppState> {
+    use crate::{
+        auth_rate_limit::AuthRateLimiter, session_queue::SessionActorQueue, sse::EventBuffer,
+        tools::CanvasStore,
+    };
+    use axum::{
+        Router,
+        routing::{delete, get, patch, post},
+    };
+    use operant_memory::Memory;
+    use operant_providers::Provider;
+    use operant_runtime::cron::CronJob;
+    use std::{
+        collections::HashMap,
+        sync::{Arc, Mutex},
+        time::Duration,
+    };
+
+    // Build the AppState from the config
+    let state = super::AppState::new(
+        config.clone(),
+        pairing,
+        shutdown_rx,
+        event_tx,
+        external_event_tx,
+        reload_tx,
+        canvas_store,
+    );
+
+    let app = Router::new()
+        .nest("/api", build_api_routes())
+        .with_state(state);
+
+    app
+}
+
+fn build_api_routes() -> axum::Router<super::AppState> {
+    use axum::{
+        Router,
+        routing::{delete, get, patch, post},
+    };
+
+    Router::new()
+        // Health
+        .route("/health", get(handle_api_health))
+        // Status
+        .route("/status", get(handle_api_status))
+        // Tools
+        .route("/tools", get(handle_api_tools))
+        // Cron
+        .route("/cron", get(handle_api_cron_list))
+        .route("/cron", post(handle_api_cron_add))
+        .route("/cron/:id", get(handle_api_cron_get))
+        .route("/cron/:id", patch(handle_api_cron_patch))
+        .route("/cron/:id", delete(handle_api_cron_delete))
+        .route("/cron/:id/run", post(handle_api_cron_run))
+        .route("/cron/:id/runs", get(handle_api_cron_runs))
+        .route("/cron/settings", get(handle_api_cron_settings_get))
+        .route("/cron/settings", patch(handle_api_cron_settings_patch))
+        // Integrations
+        .route("/integrations", get(handle_api_integrations))
+        .route(
+            "/integrations/settings",
+            get(handle_api_integrations_settings),
+        )
+        .route(
+            "/integrations/settings",
+            patch(handle_api_integrations_settings),
+        )
+        // Doctor
+        .route("/doctor", get(handle_api_doctor))
+        // Memory
+        .route("/memory", get(handle_api_memory_list))
+        .route("/memory", post(handle_api_memory_store))
+        .route("/memory/:key", delete(handle_api_memory_delete))
+        // Cost
+        .route("/cost", get(handle_api_cost))
+        // CLI tools
+        .route("/cli/tools", get(handle_api_cli_tools))
+        // Channels
+        .route("/channels", get(handle_api_channels))
+        // Webhooks
+        .route("/webhooks/github", post(handle_api_github_webhook))
+        .route("/webhooks/gmail", post(handle_api_gmail_webhook))
+        .route("/webhooks/gmail/push", post(handle_api_gmail_push))
+        .route("/webhooks/linq", post(handle_api_linq_webhook))
+        .route(
+            "/webhooks/nextcloud-talk",
+            post(handle_api_nextcloud_talk_webhook),
+        )
+        .route("/webhooks/wati", post(handle_api_wati_webhook))
+        // Pairing
+        .route("/pair", post(handle_api_pair))
+        .route("/pair", get(handle_api_pair_status))
+        .route("/pair/code", post(handle_api_pair_generate_code))
+        // Hardware
+        .route("/hardware", get(handle_api_hardware))
+        // OpenAPI
+        .route("/openapi.json", get(handle_api_openapi))
+        // Prometheus metrics
+        .route("/metrics", get(handle_metrics))
+}
+
+pub fn cron_router(config: operant_config::schema::Config) -> axum::Router {
+    use crate::{
+        GatewayRateLimiter, IdempotencyStore, auth_rate_limit::AuthRateLimiter,
+        nodes::NodeRegistry, session_queue::SessionActorQueue, sse::EventBuffer,
+    };
+    use axum::{Router, routing::post};
+    use operant_runtime::observability::NoopObserver;
+    use parking_lot::Mutex as ParkingMutex;
+    use std::{
+        collections::HashMap,
+        sync::{Arc, Mutex},
+        time::Duration,
+    };
+    use tokio::sync::broadcast;
+
+    // Build minimal state using mock provider/memory
+    let pairing = std::sync::Arc::new(operant_config::pairing::PairingGuard::new(
+        config.gateway.require_pairing,
+        &config.gateway.paired_tokens,
+    ));
+
+    // Define local mock types
+    struct MockProvider;
+    #[async_trait::async_trait]
+    impl operant_providers::Provider for MockProvider {
+        async fn chat_with_system(
+            &self,
+            _system_prompt: Option<&str>,
+            _message: &str,
+            _model: &str,
+            _temperature: Option<f64>,
+        ) -> anyhow::Result<String> {
+            Ok("ok".to_string())
+        }
+    }
+
+    struct MockMemory;
+    #[async_trait::async_trait]
+    impl operant_memory::Memory for MockMemory {
+        fn name(&self) -> &str {
+            "mock"
+        }
+        async fn store(
+            &self,
+            _key: &str,
+            _content: &str,
+            _category: operant_memory::MemoryCategory,
+            _session_id: Option<&str>,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+        async fn recall(
+            &self,
+            _query: &str,
+            _limit: usize,
+            _session_id: Option<&str>,
+            _since: Option<&str>,
+            _until: Option<&str>,
+        ) -> anyhow::Result<Vec<operant_memory::MemoryEntry>> {
+            Ok(Vec::new())
+        }
+        async fn get(&self, _key: &str) -> anyhow::Result<Option<operant_memory::MemoryEntry>> {
+            Ok(None)
+        }
+        async fn list(
+            &self,
+            _category: Option<&operant_memory::MemoryCategory>,
+            _session_id: Option<&str>,
+        ) -> anyhow::Result<Vec<operant_memory::MemoryEntry>> {
+            Ok(Vec::new())
+        }
+        async fn forget(&self, _key: &str) -> anyhow::Result<bool> {
+            Ok(false)
+        }
+        async fn count(&self) -> anyhow::Result<usize> {
+            Ok(0)
+        }
+        async fn health_check(&self) -> bool {
+            true
+        }
+    }
+
+    let state = AppState {
+        config: Arc::new(ParkingMutex::new(config)),
+        provider: Arc::new(MockProvider),
+        model: String::new(),
+        temperature: 0.0,
+        mem: Arc::new(MockMemory),
+        auto_save: false,
+        webhook_secret_hash: None,
+        pairing,
+        trust_forwarded_headers: false,
+        rate_limiter: Arc::new(GatewayRateLimiter::new(100, 100, 100)),
+        auth_limiter: Arc::new(AuthRateLimiter::new()),
+        idempotency_store: Arc::new(IdempotencyStore::new(Duration::from_secs(300), 1000)),
+        whatsapp: None,
+        whatsapp_app_secret: None,
+        linq: None,
+        linq_signing_secret: None,
+        nextcloud_talk: None,
+        nextcloud_talk_webhook_secret: None,
+        wati: None,
+        gmail_push: None,
+        observer: Arc::new(NoopObserver),
+        tools_registry: Arc::new(Vec::new()),
+        cost_tracker: None,
+        event_tx: broadcast::channel(16).0,
+        event_buffer: Arc::new(EventBuffer::new(16)),
+        shutdown_tx: tokio::sync::watch::channel(false).0,
+        node_registry: Arc::new(NodeRegistry::new(16)),
+        session_backend: None,
+        session_queue: Arc::new(SessionActorQueue::new(8, 30, 600)),
+        device_registry: None,
+        pending_pairings: None,
+        path_prefix: String::new(),
+        web_dist_dir: None,
+        canvas_store: operant_runtime::tools::CanvasStore::new(),
+        cancel_tokens: Arc::new(std::sync::Mutex::new(HashMap::new())),
+        reload_tx: None,
+        #[cfg(feature = "webauthn")]
+        webauthn: None,
+    };
+
+    Router::new()
+        .route("/api/cron", post(handle_api_cron_add))
+        .route("/api/cron/:id/run", post(handle_api_cron_run))
+        .with_state(state)
+}
+
+// Stubs for missing handlers - to be implemented
+async fn handle_api_github_webhook() -> impl axum::response::IntoResponse {
+    (
+        axum::http::StatusCode::NOT_IMPLEMENTED,
+        "GitHub webhook not implemented",
+    )
+}
+
+async fn handle_api_gmail_webhook() -> impl axum::response::IntoResponse {
+    (
+        axum::http::StatusCode::NOT_IMPLEMENTED,
+        "Gmail webhook not implemented",
+    )
+}
+
+async fn handle_api_gmail_push() -> impl axum::response::IntoResponse {
+    (
+        axum::http::StatusCode::NOT_IMPLEMENTED,
+        "Gmail push not implemented",
+    )
+}
+
+async fn handle_api_linq_webhook() -> impl axum::response::IntoResponse {
+    (
+        axum::http::StatusCode::NOT_IMPLEMENTED,
+        "Linq webhook not implemented",
+    )
+}
+
+async fn handle_api_nextcloud_talk_webhook() -> impl axum::response::IntoResponse {
+    (
+        axum::http::StatusCode::NOT_IMPLEMENTED,
+        "Nextcloud Talk webhook not implemented",
+    )
+}
+
+async fn handle_api_wati_webhook() -> impl axum::response::IntoResponse {
+    (
+        axum::http::StatusCode::NOT_IMPLEMENTED,
+        "Wati webhook not implemented",
+    )
+}
+
+async fn handle_api_pair() -> impl axum::response::IntoResponse {
+    (
+        axum::http::StatusCode::NOT_IMPLEMENTED,
+        "Pair endpoint not implemented",
+    )
+}
+
+async fn handle_api_pair_status() -> impl axum::response::IntoResponse {
+    (
+        axum::http::StatusCode::NOT_IMPLEMENTED,
+        "Pair status not implemented",
+    )
+}
+
+async fn handle_api_pair_generate_code() -> impl axum::response::IntoResponse {
+    (
+        axum::http::StatusCode::NOT_IMPLEMENTED,
+        "Generate pair code not implemented",
+    )
+}
+
+async fn handle_api_hardware() -> impl axum::response::IntoResponse {
+    (
+        axum::http::StatusCode::NOT_IMPLEMENTED,
+        "Hardware info not implemented",
+    )
+}
+
+async fn handle_api_openapi() -> impl axum::response::IntoResponse {
+    (
+        axum::http::StatusCode::NOT_IMPLEMENTED,
+        "OpenAPI spec not implemented",
+    )
+}
+
+async fn handle_metrics() -> impl axum::response::IntoResponse {
+    (
+        axum::http::StatusCode::NOT_IMPLEMENTED,
+        "Metrics not implemented",
+    )
+}

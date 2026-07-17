@@ -10,7 +10,7 @@
 use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
@@ -1222,7 +1222,7 @@ mod tests {
     #[tokio::test]
     async fn test_discord_no_token_returns_error() {
         let saved = std::env::var("DISCORD_BOT_TOKEN").ok();
-        std::env::remove_var("DISCORD_BOT_TOKEN");
+        unsafe { std::env::remove_var("DISCORD_BOT_TOKEN") };
         let tool = DiscordTool;
         let result = tool
             .execute(
@@ -1231,7 +1231,7 @@ mod tests {
             )
             .await;
         if let Some(token) = saved {
-            std::env::set_var("DISCORD_BOT_TOKEN", token);
+            unsafe { std::env::set_var("DISCORD_BOT_TOKEN", token) };
         }
         assert!(!result.success);
         assert!(result.error.unwrap().contains("DISCORD_BOT_TOKEN"));
@@ -1241,7 +1241,8 @@ mod tests {
     #[tokio::test]
     async fn test_discord_unknown_action() {
         // Set a fake token so we get past the token check
-        std::env::set_var("DISCORD_BOT_TOKEN", "test_token");
+        // SAFETY: test-only env mutation under exclusive lock
+        unsafe { std::env::set_var("DISCORD_BOT_TOKEN", "test_token") };
         let tool = DiscordTool;
         let result = tool
             .execute(json!({ "action": "nonexistent" }), ToolContext::default())
@@ -1250,13 +1251,15 @@ mod tests {
         let err = result.error.unwrap();
         assert!(err.contains("Unknown action"));
         assert!(err.contains("fetch_messages"));
-        std::env::remove_var("DISCORD_BOT_TOKEN");
+        // SAFETY: test-only env mutation under exclusive lock
+        unsafe { std::env::remove_var("DISCORD_BOT_TOKEN") };
     }
 
     #[serial_test::serial]
     #[tokio::test]
     async fn test_discord_missing_params() {
-        std::env::set_var("DISCORD_BOT_TOKEN", "test_token");
+        // SAFETY: test-only env mutation under exclusive lock
+        unsafe { std::env::set_var("DISCORD_BOT_TOKEN", "test_token") };
         let tool = DiscordTool;
         let result = tool
             .execute(
@@ -1268,13 +1271,15 @@ mod tests {
         let err = result.error.unwrap();
         assert!(err.contains("Missing required parameters"));
         assert!(err.contains("channel_id"));
-        std::env::remove_var("DISCORD_BOT_TOKEN");
+        // SAFETY: test-only env mutation under exclusive lock
+        unsafe { std::env::remove_var("DISCORD_BOT_TOKEN") };
     }
 
     #[serial_test::serial]
     #[tokio::test]
     async fn test_discord_admin_unknown_action_from_core() {
-        std::env::set_var("DISCORD_BOT_TOKEN", "test_token");
+        // SAFETY: test-only env mutation under exclusive lock
+        unsafe { std::env::set_var("DISCORD_BOT_TOKEN", "test_token") };
         // DiscordTool should reject an admin action
         let tool = DiscordTool;
         let result = tool
@@ -1283,13 +1288,15 @@ mod tests {
         assert!(!result.success);
         let err = result.error.unwrap();
         assert!(err.contains("Unknown action"));
-        std::env::remove_var("DISCORD_BOT_TOKEN");
+        // SAFETY: test-only env mutation under exclusive lock
+        unsafe { std::env::remove_var("DISCORD_BOT_TOKEN") };
     }
 
     #[serial_test::serial]
     #[tokio::test]
     async fn test_discord_admin_rejects_core_action() {
-        std::env::set_var("DISCORD_BOT_TOKEN", "test_token");
+        // SAFETY: test-only env mutation under exclusive lock
+        unsafe { std::env::set_var("DISCORD_BOT_TOKEN", "test_token") };
         // DiscordAdminTool should reject a core action
         let tool = DiscordAdminTool;
         let result = tool
@@ -1301,7 +1308,8 @@ mod tests {
         assert!(!result.success);
         let err = result.error.unwrap();
         assert!(err.contains("Unknown action"));
-        std::env::remove_var("DISCORD_BOT_TOKEN");
+        // SAFETY: test-only env mutation under exclusive lock
+        unsafe { std::env::remove_var("DISCORD_BOT_TOKEN") };
     }
 
     #[tokio::test]

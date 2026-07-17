@@ -52,7 +52,7 @@ impl OperantTool for ToolBackendTool {
         let args: ToolBackendArgs = match serde_json::from_value(args) {
             Ok(a) => a,
             Err(e) => {
-                return ToolResult::error("tool_backend", format!("Invalid arguments: {}", e))
+                return ToolResult::error("tool_backend", format!("Invalid arguments: {}", e));
             }
         };
 

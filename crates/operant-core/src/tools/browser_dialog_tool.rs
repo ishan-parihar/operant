@@ -96,7 +96,7 @@ mod tests {
     #[tokio::test]
     async fn test_browser_dialog_missing_env() {
         let saved = std::env::var("BROWSER_CDP_URL").ok();
-        std::env::remove_var("BROWSER_CDP_URL");
+        unsafe { std::env::remove_var("BROWSER_CDP_URL") };
 
         let tool = BrowserDialogTool;
         let result = tool
@@ -104,7 +104,7 @@ mod tests {
             .await;
 
         if let Some(url) = saved {
-            std::env::set_var("BROWSER_CDP_URL", url);
+            unsafe { std::env::set_var("BROWSER_CDP_URL", url) };
         }
         assert!(!result.success);
     }

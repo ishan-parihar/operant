@@ -1,0 +1,117 @@
+[package]
+name = "operant-gateway"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "HTTP/WebSocket gateway for Operant — REST API, webhooks, SSE."
+publish = false
+
+[dependencies]
+operant-api.workspace = true
+operant-config.workspace = true
+operant-memory.workspace = true
+operant-providers.workspace = true
+operant-channels = { workspace = true, features = [
+    "channel-signal", "channel-acp-server", "channel-email",
+    "channel-mattermost", "channel-imessage", "channel-irc",
+    "channel-dingtalk", "channel-qq", "channel-twitter", "channel-mochat",
+    "channel-wecom", "channel-clawdtalk", "channel-notion", "channel-reddit",
+    "channel-bluesky", "channel-linq", "channel-wati", "channel-nextcloud",
+    "channel-whatsapp-cloud", "channel-telegram", "channel-webhook",
+] }
+operant-runtime.workspace = true
+operant-tools.workspace = true
+operant-infra.workspace = true
+operant-hardware.workspace = true
+
+# HTTP server
+axum = { version = "0.8", default-features = false, features = ["json", "ws", "macros", "tokio", "query", "http1"] }
+axum-server = { version = "0.7", features = ["tls-rustls-no-provider"] }
+tower = { version = "0.5", default-features = false, features = ["util", "make"] }
+tower-http = { version = "0.5", default-features = false, features = ["cors", "fs", "limit", "timeout"] }
+hyper = { version = "1.0", default-features = false }
+hyper-util = { version = "0.1", default-features = false, features = ["tokio", "server-auto"] }
+mime_guess = "2.0"
+
+# TLS
+rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"] }
+rustls-pemfile = "2"
+tokio-rustls = { version = "0.26", default-features = false, features = ["logging", "tls12", "ring"] }
+
+# Async runtime
+tokio = { version = "1.36", default-features = false, features = ["rt-multi-thread", "macros", "time", "net", "io-util", "sync", "signal"] }
+tokio-stream = { version = "0.1", default-features = false, features = ["sync"] }
+tokio-util = { version = "0.7", default-features = false }
+futures-util = { version = "0.3", default-features = false, features = ["sink"] }
+
+# Serialization
+serde = { version = "1.0", default-features = false, features = ["derive"] }
+serde_json = { version = "1.0", default-features = false, features = ["std"] }
+
+# Error handling
+anyhow = "1.0"
+async-trait = "0.1"
+directories = "6.0"
+
+# Crypto
+hmac = "0.12"
+sha2 = "0.10"
+hex = "0.4"
+
+# Database (session queue)
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+# Misc
+chrono = { version = "0.4", default-features = false, features = ["clock", "std", "serde"] }
+parking_lot = "0.12"
+toml = "0.8"
+tracing = { version = "0.1", default-features = false }
+uuid = { version = "1.7", default-features = false, features = ["v4", "std"] }
+
+# Optional dependencies for features
+include_dir = { version = "0.7", optional = true }
+schemars = { version = "0.8", features = ["derive"], optional = true }
+operant-plugins = { workspace = true, optional = true }
+
+[dev-dependencies]
+tempfile = "3.10"
+tokio = { version = "1.36", features = ["rt-multi-thread", "macros"] }
+wiremock = "0.6"
+rcgen = "0.13"
+http-body-util = "0.1"
+rand = "0.8"
+
+[features]
+default = []
+gateway-voice-duplex = []
+tls = []
+# Forward channel features to operant-channels so gateway can use channel types
+channel-email = ["operant-channels/channel-email"]
+channel-linq = ["operant-channels/channel-linq"]
+channel-nextcloud = ["operant-channels/channel-nextcloud"]
+channel-wati = ["operant-channels/channel-wati"]
+channel-whatsapp-cloud = ["operant-channels/channel-whatsapp-cloud"]
+channel-acp-server = ["operant-channels/channel-acp-server"]
+channel-telegram = ["operant-channels/channel-telegram"]
+channel-signal = ["operant-channels/channel-signal"]
+channel-mattermost = ["operant-channels/channel-mattermost"]
+channel-imessage = ["operant-channels/channel-imessage"]
+channel-irc = ["operant-channels/channel-irc"]
+channel-dingtalk = ["operant-channels/channel-dingtalk"]
+channel-qq = ["operant-channels/channel-qq"]
+channel-twitter = ["operant-channels/channel-twitter"]
+channel-mochat = ["operant-channels/channel-mochat"]
+channel-wecom = ["operant-channels/channel-wecom"]
+channel-clawdtalk = ["operant-channels/channel-clawdtalk"]
+channel-notion = ["operant-channels/channel-notion"]
+channel-reddit = ["operant-channels/channel-reddit"]
+channel-bluesky = ["operant-channels/channel-bluesky"]
+channel-discord = ["operant-channels/channel-discord"]
+channel-slack = ["operant-channels/channel-slack"]
+channel-webhook = ["operant-channels/channel-webhook"]
+channel-mqtt = ["operant-channels/channel-mqtt"]
+webauthn = []
+plugins-wasm = ["dep:operant-plugins"]
+observability-prometheus = []
+embedded-web = ["dep:include_dir"]
+schema-export = ["operant-config/schema-export", "dep:schemars"]

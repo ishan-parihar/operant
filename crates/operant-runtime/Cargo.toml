@@ -1,0 +1,84 @@
+[package]
+name = "operant-runtime"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Operant subsystems: security, observability, gateway, cron, SOP, skills, and more."
+publish = false
+
+[dependencies]
+operant-api.workspace = true
+operant-infra.workspace = true
+operant-config.workspace = true
+operant-providers.workspace = true
+operant-memory.workspace = true
+operant-tools.workspace = true
+operant-macros.workspace = true
+operant-tool-call-parser.workspace = true
+anyhow = "1.0"
+async-trait = "0.1"
+base64 = "0.22"
+chacha20poly1305 = "0.10"
+chrono = { workspace = true }
+console = "0.16"
+cron = "0.12"
+directories = { workspace = true }
+flate2 = "1"
+futures-util = { workspace = true }
+glob = "0.3"
+hex = { workspace = true }
+hmac = { workspace = true }
+hostname = "0.4"
+image = { workspace = true }
+indicatif = "0.18"
+lru = "0.16"
+nanohtml2text = "0.2"
+parking_lot = { workspace = true }
+portable-atomic = "1"
+rand = { workspace = true }
+regex = { workspace = true }
+reqwest = { workspace = true, features = ["blocking", "stream"] }
+ring = { workspace = true }
+rusqlite = { version = "0.32", features = ["bundled"] }
+rustls = "0.23"
+rustls-pemfile = "2"
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+shellexpand = { workspace = true }
+tar = { workspace = true }
+tempfile = { workspace = true }
+thiserror = "2.0"
+tokio = { workspace = true }
+tokio-rustls = { workspace = true }
+tokio-stream = { workspace = true }
+tokio-tungstenite = { workspace = true }
+tokio-util = { workspace = true }
+toml = { workspace = true }
+tracing = { workspace = true }
+urlencoding = "2.1"
+uuid = { workspace = true }
+which = "6.0"
+chrono-tz = "0.10"
+schemars = { workspace = true }
+libc = "0.2"
+zip = "2"
+fluent = "0.16"
+fluent-bundle = "0.16"
+fluent-syntax = "0.12"
+dialoguer = { version = "0.11", features = ["fuzzy-select"] }
+unic-langid = "0.9"
+
+[features]
+default = ["schema-export"]
+schema-export = ["operant-config/schema-export"]
+browser-native = []
+rag-pdf = []
+
+[dev-dependencies]
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+wiremock = "0.6"
+rcgen = "0.13"
+scopeguard = "1.2"
+axum = "0.8"

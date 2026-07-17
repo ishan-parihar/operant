@@ -354,7 +354,7 @@ impl OperantTool for TdgGetRelatedTool {
         let args: TdgGetRelatedArgs = match serde_json::from_value(args) {
             Ok(a) => a,
             Err(e) => {
-                return ToolResult::error("tdg_get_related", format!("Invalid arguments: {}", e))
+                return ToolResult::error("tdg_get_related", format!("Invalid arguments: {}", e));
             }
         };
 

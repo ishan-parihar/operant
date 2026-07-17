@@ -78,7 +78,10 @@ impl OperantTool for ProcessTool {
                 let command = match parsed.command {
                     Some(c) => c,
                     None => {
-                        return ToolResult::error(self.name(), "Missing 'command' for spawn action")
+                        return ToolResult::error(
+                            self.name(),
+                            "Missing 'command' for spawn action",
+                        );
                     }
                 };
                 match self.registry.spawn(command, parsed.cwd).await {
@@ -94,7 +97,7 @@ impl OperantTool for ProcessTool {
                         return ToolResult::error(
                             self.name(),
                             "Missing 'sessionId' for poll action",
-                        )
+                        );
                     }
                 };
                 match self.registry.poll(&sid).await {
@@ -110,7 +113,7 @@ impl OperantTool for ProcessTool {
                         return ToolResult::error(
                             self.name(),
                             "Missing 'sessionId' for wait action",
-                        )
+                        );
                     }
                 };
                 match self.registry.wait(&sid, parsed.timeout_secs).await {
@@ -126,7 +129,7 @@ impl OperantTool for ProcessTool {
                         return ToolResult::error(
                             self.name(),
                             "Missing 'sessionId' for kill action",
-                        )
+                        );
                     }
                 };
                 match self.registry.kill(&sid).await {
@@ -142,7 +145,7 @@ impl OperantTool for ProcessTool {
                         return ToolResult::error(
                             self.name(),
                             "Missing 'sessionId' for get_output action",
-                        )
+                        );
                     }
                 };
                 match self.registry.poll(&sid).await {

@@ -10,8 +10,8 @@ use ratatui::{
 };
 
 use crate::tui::overlays::{
-    centered_rect, cycle_next, cycle_prev, render_dark_overlay_buf, render_dialog_bg_buf,
     OPERANT_ACCENT, OPERANT_MUTED, OPERANT_PANEL_BG, OPERANT_PANEL_BORDER, OPERANT_TEXT,
+    centered_rect, cycle_next, cycle_prev, render_dark_overlay_buf, render_dialog_bg_buf,
 };
 
 // ---------------------------------------------------------------------------
@@ -747,8 +747,8 @@ fn pad_line(text: &str, width: u16) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ratatui::backend::TestBackend;
     use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
 
     fn make_server(name: &str, status: McpViewStatus, error: Option<&str>) -> McpServerView {
         McpServerView {

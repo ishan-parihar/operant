@@ -255,7 +255,9 @@ fn handle_auth_add(provider: &str, key: &str, label: Option<&str>) -> Result<()>
     if let Err(e) = crate::env_store::save_env_value(&env_var, key) {
         println!("  Warning: could not persist key to ~/.operant/.env: {}", e);
     } else {
-        std::env::set_var(&env_var, key);
+        unsafe {
+            std::env::set_var(&env_var, key);
+        }
     }
 
     let hint = key_hint(key, 8);
@@ -438,7 +440,9 @@ pub async fn handle_login(config: &AppConfig) -> Result<()> {
     }
 
     // Store in process environment (for current process)
-    std::env::set_var(env_var, &key);
+    unsafe {
+        std::env::set_var(env_var, &key);
+    }
 
     // Persist to ~/.operant/.env so the key survives across CLI invocations.
     // Without this, `operant login` sets the key in-process only — the next

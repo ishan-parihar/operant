@@ -542,7 +542,8 @@ mod tests {
         let dir = temp_dir("list_profiles");
         let original = env::var("HERMES_HOME").ok();
 
-        env::set_var("HERMES_HOME", &dir);
+        // SAFETY: test-only env mutation under exclusive lock
+        unsafe { env::set_var("HERMES_HOME", &dir) };
 
         fs::create_dir_all(&dir).unwrap();
 
@@ -551,8 +552,8 @@ mod tests {
 
         let _ = fs::remove_dir_all(dir);
         match original {
-            Some(val) => env::set_var("HERMES_HOME", val),
-            None => env::remove_var("HERMES_HOME"),
+            Some(val) => unsafe { env::set_var("HERMES_HOME", val) },
+            None => unsafe { env::remove_var("HERMES_HOME") },
         }
     }
 
@@ -562,7 +563,8 @@ mod tests {
         let dir = temp_dir("create_delete");
         let original = env::var("HERMES_HOME").ok();
 
-        env::set_var("HERMES_HOME", &dir);
+        // SAFETY: test-only env mutation under exclusive lock
+        unsafe { env::set_var("HERMES_HOME", &dir) };
 
         // Create profile
         let profile_dir = create_profile("testprofile", None).unwrap();
@@ -583,8 +585,8 @@ mod tests {
         // Cleanup
         let _ = fs::remove_dir_all(dir);
         match original {
-            Some(val) => env::set_var("HERMES_HOME", val),
-            None => env::remove_var("HERMES_HOME"),
+            Some(val) => unsafe { env::set_var("HERMES_HOME", val) },
+            None => unsafe { env::remove_var("HERMES_HOME") },
         }
     }
 
@@ -594,7 +596,8 @@ mod tests {
         let dir = temp_dir("clone");
         let original = env::var("HERMES_HOME").ok();
 
-        env::set_var("HERMES_HOME", &dir);
+        // SAFETY: test-only env mutation under exclusive lock
+        unsafe { env::set_var("HERMES_HOME", &dir) };
 
         // Create source profile
         let source_dir = create_profile("source", None).unwrap();
@@ -613,8 +616,8 @@ mod tests {
         // Cleanup
         let _ = fs::remove_dir_all(dir);
         match original {
-            Some(val) => env::set_var("HERMES_HOME", val),
-            None => env::remove_var("HERMES_HOME"),
+            Some(val) => unsafe { env::set_var("HERMES_HOME", val) },
+            None => unsafe { env::remove_var("HERMES_HOME") },
         }
     }
 
@@ -624,7 +627,8 @@ mod tests {
         let dir = temp_dir("use_profile");
         let original = env::var("HERMES_HOME").ok();
 
-        env::set_var("HERMES_HOME", &dir);
+        // SAFETY: test-only env mutation under exclusive lock
+        unsafe { env::set_var("HERMES_HOME", &dir) };
 
         // Create profile
         create_profile("switchto", None).unwrap();
@@ -640,8 +644,8 @@ mod tests {
         // Cleanup
         let _ = fs::remove_dir_all(dir);
         match original {
-            Some(val) => env::set_var("HERMES_HOME", val),
-            None => env::remove_var("HERMES_HOME"),
+            Some(val) => unsafe { env::set_var("HERMES_HOME", val) },
+            None => unsafe { env::remove_var("HERMES_HOME") },
         }
     }
 
@@ -656,12 +660,13 @@ mod tests {
 
         reset_operant_home_override(token);
         // Should fall back to env var or default
-        env::set_var("HERMES_HOME", "/tmp/test_env");
+        // SAFETY: test-only env mutation under exclusive lock
+        unsafe { env::set_var("HERMES_HOME", "/tmp/test_env") };
         assert_eq!(get_operant_home(), PathBuf::from("/tmp/test_env"));
 
         match original {
-            Some(val) => env::set_var("HERMES_HOME", val),
-            None => env::remove_var("HERMES_HOME"),
+            Some(val) => unsafe { env::set_var("HERMES_HOME", val) },
+            None => unsafe { env::remove_var("HERMES_HOME") },
         }
     }
 

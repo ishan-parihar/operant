@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use reqwest::Client;
 use schemars::JsonSchema;
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::schema::ToolSchema;
 use crate::tools::{OperantTool, ToolContext, ToolResult};
@@ -75,7 +75,7 @@ impl VideoAnalysisTool {
                 return ToolResult::error(
                     "video_analyze",
                     format!("Failed to parse response: {}", e),
-                )
+                );
             }
         };
 
@@ -113,7 +113,7 @@ impl OperantTool for VideoAnalysisTool {
         let args: VideoAnalysisArgs = match serde_json::from_value(args) {
             Ok(a) => a,
             Err(e) => {
-                return ToolResult::error("video_analyze", format!("Invalid arguments: {}", e))
+                return ToolResult::error("video_analyze", format!("Invalid arguments: {}", e));
             }
         };
         self.analyze_video(&args).await

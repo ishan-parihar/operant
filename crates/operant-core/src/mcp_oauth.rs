@@ -26,7 +26,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener as TokioTcpListener;
-use tokio::sync::{oneshot, Mutex as AsyncMutex, RwLock};
+use tokio::sync::{Mutex as AsyncMutex, RwLock, oneshot};
 use tracing::{debug, info, warn};
 use url::Url;
 
@@ -143,11 +143,7 @@ impl OAuthToken {
                 .duration_since(UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_secs_f64();
-            if exp > now {
-                (exp - now) as u64
-            } else {
-                0
-            }
+            if exp > now { (exp - now) as u64 } else { 0 }
         })
     }
 }
@@ -1756,7 +1752,8 @@ mod tests {
         let _ = std::fs::create_dir_all(&dir);
 
         let _old = std::env::var("HERMES_HOME").ok();
-        std::env::set_var("HERMES_HOME", dir.to_str().unwrap());
+        // SAFETY: test-only env mutation under exclusive lock
+        unsafe { std::env::set_var("HERMES_HOME", dir.to_str().unwrap()) };
 
         let storage = TokenStorage::new("https://test-server.example.com/mcp");
 
@@ -1778,9 +1775,11 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&dir);
         if let Some(old) = _old {
-            std::env::set_var("HERMES_HOME", &old);
+            // SAFETY: test-only env mutation under exclusive lock
+            unsafe { std::env::set_var("HERMES_HOME", &old) };
         } else {
-            std::env::remove_var("HERMES_HOME");
+            // SAFETY: test-only env mutation under exclusive lock
+            unsafe { std::env::remove_var("HERMES_HOME") };
         }
     }
 

@@ -33,11 +33,7 @@ fn cmd_check_version(cmd: &str, arg: &str) -> Option<String> {
         .filter(|o| o.status.success())
         .and_then(|o| {
             let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
-            if s.is_empty() {
-                None
-            } else {
-                Some(s)
-            }
+            if s.is_empty() { None } else { Some(s) }
         })
 }
 

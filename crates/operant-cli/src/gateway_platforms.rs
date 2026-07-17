@@ -8,7 +8,7 @@ use anyhow::Result;
 use console::style;
 use operant_core::config::AppConfig;
 
-use crate::prompt_helpers::{prompt_key_action, prompt_password, KeyAction};
+use crate::prompt_helpers::{KeyAction, prompt_key_action, prompt_password};
 
 /// A gateway platform definition.
 pub struct GatewayPlatform {

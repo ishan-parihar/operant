@@ -3,10 +3,10 @@
 //! Activated by the `anthropic` feature flag.
 
 use async_trait::async_trait;
-use futures::stream::BoxStream;
 use futures::StreamExt;
+use futures::stream::BoxStream;
 use reqwest::Client;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::HashMap;
 
 use super::super::model_client::{ChatRequest, ModelClient, StreamChunk};
@@ -126,15 +126,17 @@ impl AnthropicModelClient {
             body["temperature"] = json!(temp);
         }
         if !request.tools.is_empty() {
-            body["tools"] = json!(request
-                .tools
-                .iter()
-                .map(|t| json!({
-                    "name": t.name,
-                    "description": t.description,
-                    "input_schema": t.parameters
-                }))
-                .collect::<Vec<_>>());
+            body["tools"] = json!(
+                request
+                    .tools
+                    .iter()
+                    .map(|t| json!({
+                        "name": t.name,
+                        "description": t.description,
+                        "input_schema": t.parameters
+                    }))
+                    .collect::<Vec<_>>()
+            );
         }
         if request.stream {
             body["stream"] = json!(true);

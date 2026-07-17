@@ -4,7 +4,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use clap::Subcommand;
 use operant_core::config::AppConfig;
-use operant_core::curator::{archiver, backup, CuratorEngine};
+use operant_core::curator::{CuratorEngine, archiver, backup};
 use operant_core::skill_usage::{LifecycleState, SkillUsageTracker};
 
 #[derive(Debug, Clone, Subcommand)]

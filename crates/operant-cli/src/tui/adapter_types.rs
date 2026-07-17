@@ -967,7 +967,7 @@ impl AuthStore {
 }
 
 pub use import_config::{
-    build_import_preview, execute_import, summarize_import_result, ImportPaths, ImportSelection,
+    ImportPaths, ImportSelection, build_import_preview, execute_import, summarize_import_result,
 };
 
 // (iter-223: pub mod file_injection { AtFileRef, AtFileIssue, parse_at_refs }
@@ -1797,7 +1797,10 @@ impl TuiApp {
         #[async_trait::async_trait]
         impl CommandHandler for UpdateHandler {
             async fn execute(&self, _ctx: &CommandContext<'_>) -> CommandResult {
-                Ok(format!("Current version: {}. Check https://github.com/operant-ai/operant-rs for updates.", env!("CARGO_PKG_VERSION")))
+                Ok(format!(
+                    "Current version: {}. Check https://github.com/operant-ai/operant-rs for updates.",
+                    env!("CARGO_PKG_VERSION")
+                ))
             }
         }
         command_registry
@@ -1862,10 +1865,10 @@ impl TuiApp {
 
         use crossterm::execute;
         use crossterm::terminal::{
-            disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
+            EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
         };
-        use ratatui::backend::CrosstermBackend;
         use ratatui::Terminal;
+        use ratatui::backend::CrosstermBackend;
 
         enable_raw_mode()?;
 
@@ -2313,8 +2316,8 @@ impl TuiApp {
             }
         }
 
-        use ratatui::backend::TestBackend;
         use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
         let (width, height) = size;
         let backend = TestBackend::new(width.max(20), height.max(5));
         let mut terminal = Terminal::new(backend)?;
@@ -2423,7 +2426,7 @@ fn run_suspended_shell_command(
 ) -> anyhow::Result<std::process::ExitStatus> {
     use crossterm::execute;
     use crossterm::terminal::{
-        disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
+        EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
     };
     use std::io::Write;
 

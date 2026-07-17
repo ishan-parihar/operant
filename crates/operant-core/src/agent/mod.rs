@@ -5,14 +5,14 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use futures::stream::BoxStream;
 use futures::StreamExt;
-use tokio::sync::{mpsc, RwLock};
+use futures::stream::BoxStream;
+use tokio::sync::{RwLock, mpsc};
 use tokio::time::timeout;
 use tracing::{debug, error, info, instrument, warn};
 
 use crate::client::{ChatResponse, Message, Role, ToolCall, Usage};
-use crate::config::{runtime_config, BehaviorSettings};
+use crate::config::{BehaviorSettings, runtime_config};
 use crate::context_files::{load_default_context_files, load_workspace_context};
 use crate::database::Database;
 use crate::distillation::distill_session_to_memory;
@@ -1393,9 +1393,9 @@ impl OperantAgent {
             })
             .await;
         } // Also try to extract any remaining tool calls from accumulated text.
-          // On the error path we don't want a parser failure to mask the
-          // original stream error, so fall back to an empty vec.
-          // Strip \r/\n from accumulated text before final processing.
+        // On the error path we don't want a parser failure to mask the
+        // original stream error, so fall back to an empty vec.
+        // Strip \r/\n from accumulated text before final processing.
         accumulated_text = accumulated_text.replace('\r', " ").replace('\n', " ");
         accumulated_reasoning = accumulated_reasoning.replace('\r', " ").replace('\n', " ");
         let mut remaining_parser = ToolCallParser::new();
@@ -2366,11 +2366,7 @@ mod tests {
             }
         }
 
-        if text.is_empty() {
-            None
-        } else {
-            Some(text)
-        }
+        if text.is_empty() { None } else { Some(text) }
     }
 
     #[allow(dead_code)]

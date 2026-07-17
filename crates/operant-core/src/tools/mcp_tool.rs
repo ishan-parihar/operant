@@ -94,7 +94,7 @@ impl OperantTool for McpManagementTool {
                         return ToolResult::error(
                             self.name(),
                             "server_name is required for call_tool".to_string(),
-                        )
+                        );
                     }
                 };
                 let tool_name = match parsed.tool_name {
@@ -103,7 +103,7 @@ impl OperantTool for McpManagementTool {
                         return ToolResult::error(
                             self.name(),
                             "tool_name is required for call_tool".to_string(),
-                        )
+                        );
                     }
                 };
                 let transport = self.mcp_manager.get(&server_name).await;
@@ -135,7 +135,7 @@ impl OperantTool for McpManagementTool {
                         return ToolResult::error(
                             self.name(),
                             "server_name is required for add_server".to_string(),
-                        )
+                        );
                     }
                 };
                 let server_url = match parsed.server_url {
@@ -144,7 +144,7 @@ impl OperantTool for McpManagementTool {
                         return ToolResult::error(
                             self.name(),
                             "server_url is required for add_server".to_string(),
-                        )
+                        );
                     }
                 };
                 match self
@@ -163,7 +163,7 @@ impl OperantTool for McpManagementTool {
                         return ToolResult::error(
                             self.name(),
                             "server_name is required for remove_server".to_string(),
-                        )
+                        );
                     }
                 };
                 match self.mcp_manager.remove_server(&server_name).await {

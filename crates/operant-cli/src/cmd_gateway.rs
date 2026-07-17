@@ -9,7 +9,7 @@
 use anyhow::{Context, Result};
 use clap::Subcommand;
 use operant_core::config::AppConfig;
-use tokio::signal::unix::{signal, SignalKind};
+use tokio::signal::unix::{SignalKind, signal};
 
 // ── Sub-subcommand enums ────────────────────────────────────────────────
 
@@ -705,7 +705,9 @@ fn cmd_channels(config: &AppConfig) -> Result<()> {
         || gw.webhooks_enabled;
     if !any_platform {
         println!("No gateway platforms are enabled in config.");
-        println!("Enable a platform (telegram, discord, slack, whatsapp, email, sms, webhooks) in your config file first.");
+        println!(
+            "Enable a platform (telegram, discord, slack, whatsapp, email, sms, webhooks) in your config file first."
+        );
         return Ok(());
     }
 

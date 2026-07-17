@@ -9,11 +9,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
-use tokio::sync::mpsc;
 use tokio::sync::RwLock;
+use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
@@ -1465,7 +1465,11 @@ impl PlatformAdapter for TelegramAdapter {
                                         if let Ok(Some(msg)) =
                                             TelegramAdapter::parse_update(update.clone())
                                         {
-                                            tracing::info!("Sent message to gateway handler (chat: {}, content: {:.50})", msg.channel_id, msg.content);
+                                            tracing::info!(
+                                                "Sent message to gateway handler (chat: {}, content: {:.50})",
+                                                msg.channel_id,
+                                                msg.content
+                                            );
                                             if let Err(e) = message_tx.send(msg) {
                                                 tracing::error!(
                                                     "Failed to send message to gateway handler: {}",
@@ -1941,12 +1945,12 @@ async fn connect_discord_gateway(
         .ok_or_else(|| Error::Agent("Discord WS closed before HELLO".to_string()))?
         .map_err(|e| Error::Agent(format!("Discord WS HELLO read failed: {e}")))?;
     let hello_text = match hello {
-        Message::Text(t) => t,
+        Message::Text(t) => t.to_string(),
         Message::Binary(b) => String::from_utf8_lossy(&b).to_string(),
         other => {
             return Err(Error::Agent(format!(
                 "Discord WS HELLO unexpected frame: {other:?}"
-            )))
+            )));
         }
     };
     let hello_json: serde_json::Value = serde_json::from_str(&hello_text)
@@ -1976,7 +1980,7 @@ async fn connect_discord_gateway(
         }
     });
     write
-        .send(Message::Text(identify.to_string()))
+        .send(Message::Text(identify.to_string().into()))
         .await
         .map_err(|e| Error::Agent(format!("Discord WS IDENTIFY send failed: {e}")))?;
 
@@ -2012,14 +2016,14 @@ async fn connect_discord_gateway(
                     "op": 1,
                     "d": last_seq
                 });
-                if let Err(e) = write.send(Message::Text(heartbeat.to_string())).await {
+                if let Err(e) = write.send(Message::Text(heartbeat.to_string().into())).await {
                     return Err(Error::Agent(format!("Discord WS heartbeat send failed: {e}")));
                 }
             }
             // Incoming message.
             msg = read.next() => {
                 let msg = match msg {
-                    Some(Ok(Message::Text(t))) => t,
+                    Some(Ok(Message::Text(t))) => t.to_string(),
                     Some(Ok(Message::Binary(b))) => String::from_utf8_lossy(&b).to_string(),
                     Some(Ok(Message::Ping(p))) => {
                         let _ = write.send(Message::Pong(p)).await;
@@ -2367,11 +2371,11 @@ impl PlatformAdapter for WebhookAdapter {
         &self,
         message_tx: mpsc::UnboundedSender<IncomingMessage>,
     ) -> Result<()> {
+        use axum::Router;
         use axum::extract::{Path, State};
         use axum::http::HeaderMap;
         use axum::response::IntoResponse;
         use axum::routing::get;
-        use axum::Router;
 
         let addr: std::net::SocketAddr = self
             .listen_addr

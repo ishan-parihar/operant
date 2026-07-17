@@ -313,7 +313,7 @@ impl OperantTool for FileSearchTool {
         {
             Ok(re) => re,
             Err(e) => {
-                return ToolResult::error("file_search", format!("Invalid regex pattern: {}", e))
+                return ToolResult::error("file_search", format!("Invalid regex pattern: {}", e));
             }
         };
 

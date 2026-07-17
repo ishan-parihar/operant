@@ -5,8 +5,8 @@
 //! (parallel) modes with role-based tool restrictions and spawn depth limits.
 
 use std::error::Error as StdError;
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -501,7 +501,7 @@ impl OperantTool for SubAgentTool {
                     return ToolResult::error(
                         TOOL_NAME,
                         "Either 'goal' or 'tasks' must be provided".to_string(),
-                    )
+                    );
                 }
             };
 

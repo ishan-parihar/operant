@@ -28,30 +28,30 @@ use crate::tui::key_input_dialog::render_key_input_dialog;
 use crate::tui::mcp_view::render_mcp_view;
 use crate::tui::memory_file_selector::render_memory_file_selector;
 use crate::tui::messages::{
-    render_markdown, render_thinking_live_content, render_transcript_assistant_message_tagged,
-    render_transcript_assistant_meta, render_transcript_live_text, render_transcript_user_message,
-    RenderContext,
+    RenderContext, render_markdown, render_thinking_live_content,
+    render_transcript_assistant_message_tagged, render_transcript_assistant_meta,
+    render_transcript_live_text, render_transcript_user_message,
 };
-use crate::tui::notifications::{render_notification_banner, Notification, NotificationKind};
+use crate::tui::notifications::{Notification, NotificationKind, render_notification_banner};
 use crate::tui::overlays::{
-    render_global_search, render_help_overlay, render_history_search_overlay, render_rewind_flow,
-    OPERANT_ACCENT,
+    OPERANT_ACCENT, render_global_search, render_help_overlay, render_history_search_overlay,
+    render_rewind_flow,
 };
 use crate::tui::prompt_input::{
-    input_height, render_prompt_input, InputMode, TypeaheadSource, VimMode,
+    InputMode, TypeaheadSource, VimMode, input_height, render_prompt_input,
 };
 use crate::tui::settings_screen::render_settings_screen;
 use crate::tui::stats_dialog::render_stats_dialog;
 use crate::tui::theme_screen::render_theme_screen;
-use crate::tui::transcript_turn::{build_transcript_turns, TranscriptTurn};
+use crate::tui::transcript_turn::{TranscriptTurn, build_transcript_turns};
 use crate::tui::virtual_list::{VirtualItem, VirtualList};
 use crate::tui::voice_mode_notice::render_voice_mode_notice;
+use ratatui::Frame;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph, Widget, Wrap};
-use ratatui::Frame;
 use unicode_width::UnicodeWidthStr;
 
 // Spinner frames matching the TypeScript SpinnerGlyph: platform-specific base

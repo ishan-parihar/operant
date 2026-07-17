@@ -19,8 +19,8 @@ use syntect::highlighting::ThemeSet;
 use syntect::parsing::SyntaxSet;
 
 use crate::tui::overlays::{
-    begin_modal_buf, modal_header_line_area, render_modal_title_buf, OPERANT_ACCENT, OPERANT_MUTED,
-    OPERANT_PANEL_BG, OPERANT_TEXT,
+    OPERANT_ACCENT, OPERANT_MUTED, OPERANT_PANEL_BG, OPERANT_TEXT, begin_modal_buf,
+    modal_header_line_area, render_modal_title_buf,
 };
 
 static SYNTAX_SET: LazyLock<SyntaxSet> = LazyLock::new(SyntaxSet::load_defaults_newlines);
@@ -1237,8 +1237,8 @@ mod tests {
 
     #[test]
     fn diff_viewer_collapse_renders_without_panic() {
-        use ratatui::backend::TestBackend;
         use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
         let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
         let mut state = DiffViewerState::new();
         state.visible = true;

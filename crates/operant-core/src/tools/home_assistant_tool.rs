@@ -15,10 +15,10 @@
 
 use async_trait::async_trait;
 use regex::Regex;
-use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
+use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue};
 use schemars::JsonSchema;
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::sync::LazyLock;
 use std::time::Duration;
 
@@ -1468,25 +1468,27 @@ mod tests {
     fn test_get_config_defaults_when_env_unset() {
         let prev_url = std::env::var("HASS_URL").ok();
         let prev_token = std::env::var("HASS_TOKEN").ok();
-        std::env::remove_var("HASS_URL");
-        std::env::remove_var("HASS_TOKEN");
+        // SAFETY: test-only env mutation under exclusive lock
+        unsafe { std::env::remove_var("HASS_URL") };
+        // SAFETY: test-only env mutation under exclusive lock
+        unsafe { std::env::remove_var("HASS_TOKEN") };
 
         let (url, token) = get_config();
         assert_eq!(url, "http://homeassistant.local:8123");
         assert_eq!(token, "");
 
         if let Some(u) = prev_url {
-            std::env::set_var("HASS_URL", u);
+            unsafe { std::env::set_var("HASS_URL", u) };
         }
         if let Some(t) = prev_token {
-            std::env::set_var("HASS_TOKEN", t);
+            unsafe { std::env::set_var("HASS_TOKEN", t) };
         }
     }
 
     #[test]
     fn test_get_config_strips_trailing_slash() {
         let prev_url = std::env::var("HASS_URL").ok();
-        std::env::set_var("HASS_URL", "http://homeassistant.local:8123/");
+        unsafe { std::env::set_var("HASS_URL", "http://homeassistant.local:8123/") };
 
         let (url, _) = get_config();
         assert!(
@@ -1496,9 +1498,9 @@ mod tests {
         );
 
         if let Some(u) = prev_url {
-            std::env::set_var("HASS_URL", u);
+            unsafe { std::env::set_var("HASS_URL", u) };
         } else {
-            std::env::remove_var("HASS_URL");
+            unsafe { std::env::remove_var("HASS_URL") };
         }
     }
 

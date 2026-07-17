@@ -4,8 +4,8 @@
 //! can be shared across threads and tasks.  Useful for signalling tool
 //! execution or agent loop cancellation without needing a full channel.
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use tokio::time::sleep;
