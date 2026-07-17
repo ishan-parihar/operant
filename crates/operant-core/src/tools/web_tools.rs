@@ -149,7 +149,7 @@ impl OperantTool for WebFetchTool {
                 return ToolResult::error(
                     "web_fetch",
                     format!("Failed to create HTTP client: {}", e),
-                )
+                );
             }
         };
 
@@ -165,7 +165,7 @@ impl OperantTool for WebFetchTool {
                 return ToolResult::error(
                     "web_fetch",
                     format!("Unsupported HTTP method: {}", method),
-                )
+                );
             }
         };
 

@@ -56,11 +56,7 @@ impl VoiceModeNoticeState {
 
     /// Height the notice occupies (0 if not visible).
     pub fn height(&self) -> u16 {
-        if self.visible {
-            2
-        } else {
-            0
-        }
+        if self.visible { 2 } else { 0 }
     }
 }
 

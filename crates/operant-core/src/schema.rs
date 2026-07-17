@@ -3,8 +3,8 @@
 //! Automatically generates OpenAI-compatible JSON Schema definitions from Rust structs
 //! using the `schemars` crate.
 
-use schemars::{schema_for, JsonSchema};
-use serde_json::{json, Value};
+use schemars::{JsonSchema, schema_for};
+use serde_json::{Value, json};
 
 use crate::error::{Error, Result};
 

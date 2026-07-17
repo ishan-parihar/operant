@@ -41,7 +41,7 @@ impl OperantTool for XaiHttpTool {
         let args: XaiHttpArgs = match serde_json::from_value(args) {
             Ok(a) => a,
             Err(e) => {
-                return ToolResult::error("xai_http_request", format!("Invalid arguments: {}", e))
+                return ToolResult::error("xai_http_request", format!("Invalid arguments: {}", e));
             }
         };
 
@@ -69,7 +69,7 @@ impl OperantTool for XaiHttpTool {
                 return ToolResult::error(
                     "xai_http_request",
                     format!("Failed to create HTTP client: {}", e),
-                )
+                );
             }
         };
 
@@ -83,7 +83,7 @@ impl OperantTool for XaiHttpTool {
                 return ToolResult::error(
                     "xai_http_request",
                     format!("Unsupported HTTP method: {}", method),
-                )
+                );
             }
         };
 
@@ -150,7 +150,8 @@ mod tests {
         // Test that relative URLs get the base prepended
         // We can't actually make network calls, but we can verify args parsing
         // Set base URL to an invalid address so connection always fails
-        std::env::set_var("XAI_BASE_URL", "http://0.0.0.0:1");
+        // SAFETY: test-only env mutation under exclusive lock
+        unsafe { std::env::set_var("XAI_BASE_URL", "http://0.0.0.0:1") };
         let tool = XaiHttpTool;
         let args = serde_json::json!({
             "url": "v1/chat/completions",

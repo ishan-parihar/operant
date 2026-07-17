@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::schema::ToolSchema;
 use crate::tools::{OperantTool, ToolContext, ToolResult};
@@ -55,7 +55,7 @@ impl OperantTool for BrowserCdpTool {
                     return ToolResult::error(
                         self.name(),
                         format!("Target resolution failed: {}", e),
-                    )
+                    );
                 }
             }
         } else {
@@ -128,7 +128,7 @@ mod tests {
     #[tokio::test]
     async fn test_browser_cdp_missing_env() {
         let saved = std::env::var("BROWSER_CDP_URL").ok();
-        std::env::remove_var("BROWSER_CDP_URL");
+        unsafe { std::env::remove_var("BROWSER_CDP_URL") };
 
         let tool = BrowserCdpTool;
         let result = tool
@@ -139,7 +139,7 @@ mod tests {
             .await;
 
         if let Some(url) = saved {
-            std::env::set_var("BROWSER_CDP_URL", url);
+            unsafe { std::env::set_var("BROWSER_CDP_URL", url) };
         }
         assert!(!result.success);
     }

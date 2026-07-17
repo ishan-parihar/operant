@@ -222,10 +222,12 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let result = validate_plugin(dir.path());
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("No plugin.yaml or __init__.py"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("No plugin.yaml or __init__.py")
+        );
     }
 
     #[test]
@@ -238,10 +240,12 @@ mod tests {
         .unwrap();
         let result = validate_plugin(dir.path());
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("missing a 'name' field"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("missing a 'name' field")
+        );
     }
 
     #[test]

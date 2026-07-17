@@ -10,7 +10,7 @@ use operant_core::config::AppConfig;
 use operant_core::platform::operant_home;
 
 use super::check_result::{check_fail, check_info, check_ok, check_warn, section_header};
-use crate::provider::{provider_by_name, provider_from_url, PROVIDERS};
+use crate::provider::{PROVIDERS, provider_by_name, provider_from_url};
 
 // ---------------------------------------------------------------------------
 // Helpers

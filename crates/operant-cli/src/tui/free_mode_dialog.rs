@@ -28,17 +28,17 @@
 //   │  ↑/↓ next   enter confirm (1+ keys)                  │
 //   └──────────────────────────────────────────────────────┘
 
+use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::prelude::Stylize;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
-use ratatui::Frame;
 
-use crate::tui::adapter_types::{FreeUpstream, FREE_CATALOG};
+use crate::tui::adapter_types::{FREE_CATALOG, FreeUpstream};
 
 use crate::tui::overlays::{
-    centered_rect, render_dark_overlay, render_dialog_bg, OPERANT_PANEL_BG,
+    OPERANT_PANEL_BG, centered_rect, render_dark_overlay, render_dialog_bg,
 };
 
 /// One row in the dialog — one provider's name, URL, and the user's

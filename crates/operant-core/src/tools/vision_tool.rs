@@ -10,8 +10,8 @@
 //! - SSRF protection: block private/internal IPs in image URLs
 
 use async_trait::async_trait;
-use image::codecs::jpeg::JpegEncoder;
 use image::DynamicImage;
+use image::codecs::jpeg::JpegEncoder;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::Value;
@@ -449,7 +449,7 @@ impl OperantTool for VisionTool {
         let args: VisionAnalyzeArgs = match serde_json::from_value(args) {
             Ok(a) => a,
             Err(e) => {
-                return ToolResult::error("vision_analyze", format!("Invalid arguments: {}", e))
+                return ToolResult::error("vision_analyze", format!("Invalid arguments: {}", e));
             }
         };
 
@@ -498,7 +498,7 @@ impl OperantTool for VisionTool {
                                     return ToolResult::error(
                                         "vision_analyze",
                                         format!("Failed to resize image: {}", e),
-                                    )
+                                    );
                                 }
                             }
                         } else {
@@ -555,7 +555,7 @@ impl OperantTool for VisionTool {
                     return ToolResult::error(
                         "vision_analyze",
                         format!("Failed to read local file: {}", e),
-                    )
+                    );
                 }
             }
         }
@@ -629,7 +629,7 @@ impl OperantTool for VisionTool {
                                 return ToolResult::error(
                                     "vision_analyze",
                                     format!("Failed to resize image: {}", e),
-                                )
+                                );
                             }
                         }
                     } else {

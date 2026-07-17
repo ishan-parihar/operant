@@ -1,0 +1,99 @@
+[package]
+name = "operant-channels"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Channel implementations for messaging platform integrations."
+publish = false
+
+[dependencies]
+operant-api.workspace = true
+operant-config = { workspace = true, default-features = true }
+operant-runtime.workspace = true
+operant-providers.workspace = true
+operant-infra.workspace = true
+operant-memory.workspace = true
+anyhow = "1.0"
+lru = "0.16"
+axum = { workspace = true, features = ["json", "ws", "macros", "tokio"] }
+async-trait = "0.1"
+base64 = "0.22"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std", "serde"] }
+async-imap = { version = "0.11", optional = true, features = ["tokio"] }
+directories = "6.0"
+futures-util = { version = "0.3", default-features = false, features = ["sink"] }
+hmac = "0.12"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"], optional = true }
+lettre = { version = "0.11", default-features = false, features = ["builder", "smtp-transport", "rustls-tls"], optional = true }
+mail-parser = { version = "0.11", optional = true }
+nanohtml2text = "0.2"
+parking_lot = "0.12"
+portable-atomic = "1"
+rand = "0.8"
+regex = "1.10"
+reqwest = { workspace = true, features = ["stream"] }
+rumqttc = { version = "0.24", optional = true }
+rusqlite = { version = "0.32", features = ["bundled"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"] }
+rustls-pki-types = "1.0"
+serde = { version = "1.0", default-features = false, features = ["derive"] }
+serde_json = { version = "1.0", default-features = false, features = ["std"] }
+sha2 = "0.10"
+shellexpand = "3.1"
+webpki-roots = "1.0.6"
+tokio = { version = "1.36", default-features = false, features = ["rt-multi-thread", "macros", "time", "net", "io-util", "sync", "process", "fs", "signal"] }
+tokio-rustls = { workspace = true }
+tokio-tungstenite = { workspace = true }
+tokio-util = { version = "0.7", default-features = false, features = ["compat"] }
+tower = { version = "0.4", default-features = false, features = ["limit", "util"] }
+hyper-util = { version = "0.1", default-features = false, features = ["tokio", "server-auto"] }
+toml = "0.8"
+tracing = { version = "0.1", default-features = false }
+urlencoding = "2.1"
+uuid = { version = "1.7", default-features = false, features = ["v4", "std"] }
+hex = "0.4"
+
+[dev-dependencies]
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "ansi", "env-filter"] }
+tempfile = "3.10"
+toml = "0.8"
+tokio = { version = "1.36", features = ["rt-multi-thread", "macros"] }
+wiremock = "0.6"
+http-body-util = "0.1"
+
+[features]
+default = [
+    "channel-discord", "channel-slack", "channel-signal", "channel-mattermost",
+    "channel-irc", "channel-imessage", "channel-dingtalk", "channel-qq",
+    "channel-bluesky", "channel-twitter", "channel-reddit", "channel-notion",
+    "channel-linq", "channel-wati", "channel-nextcloud", "channel-mochat",
+    "channel-wecom", "channel-clawdtalk", "channel-webhook",
+    "channel-whatsapp-cloud", "channel-email",
+]
+# Channels with optional deps
+channel-email = ["dep:lettre", "dep:mail-parser", "dep:async-imap"]
+channel-telegram = ["dep:image"]
+# Channels with no optional deps (cfg gate only)
+channel-discord = []
+channel-slack = []
+channel-signal = []
+channel-mattermost = []
+channel-irc = []
+channel-imessage = []
+channel-dingtalk = []
+channel-qq = []
+channel-bluesky = []
+channel-twitter = []
+channel-reddit = []
+channel-notion = []
+channel-linq = []
+channel-wati = []
+channel-nextcloud = []
+channel-mochat = []
+channel-wecom = []
+channel-clawdtalk = []
+channel-webhook = []
+channel-whatsapp-cloud = []
+channel-acp-server = []
+channel-mqtt = ["dep:rumqttc"]
+channel-full = []

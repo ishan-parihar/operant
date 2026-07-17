@@ -7,26 +7,26 @@
 use anyhow::{Context, Result};
 use base64::Engine;
 use operant_core::agent::{AgentEvent, OperantAgent};
-use operant_core::config::runtime_config;
 use operant_core::config::AppConfig;
+use operant_core::config::runtime_config;
 use operant_core::gateway::{
     DiscordAdapter, EmailAdapter, Gateway, GatewayConfig, IncomingMessage, MessageHandler,
     OutgoingMessage, PlatformAdapter, SlackAdapter, SmsAdapter, TelegramAdapter, WebhookAdapter,
     WhatsAppAdapter,
 };
 use operant_core::gateway_pipeline::{MessagePipeline, PipelineAction};
-use operant_core::memory_provider::{build_memory_provider, MemoryProvider};
+use operant_core::memory_provider::{MemoryProvider, build_memory_provider};
 
 use crate::gateway_commands::{
-    handle_command, resolve_command, telegram_bot_commands, CommandContext,
+    CommandContext, handle_command, resolve_command, telegram_bot_commands,
 };
 use operant_core::mcp::McpManager;
 use operant_core::tools::{OperantTool, ToolContext, TranscriptionTool};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::OnceLock;
-use tokio::sync::mpsc;
 use tokio::sync::Mutex;
+use tokio::sync::mpsc;
 
 /// Global store of pending permission requests, keyed by channel_id.
 pub static PENDING_PERMISSIONS: OnceLock<
@@ -846,8 +846,7 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                 // Send the permission prompt
                 let prompt = format!(
                     "🔧 Permission required: {} — {}\nReply /approve to allow, /deny to cancel (60s timeout)",
-                    req.tool_name,
-                    req.description
+                    req.tool_name, req.description
                 );
                 let msg = OutgoingMessage::new(channel_id, &prompt).no_markdown();
                 let _ = gw_for_perm.send_to_platform(platform, msg).await;

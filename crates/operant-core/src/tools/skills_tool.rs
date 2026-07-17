@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::fs;
 use std::path::PathBuf;
 
@@ -378,7 +378,7 @@ impl OperantTool for SkillManageTool {
                 let content = match &parsed.content {
                     Some(c) => c.as_str(),
                     None => {
-                        return ToolResult::error("skill_manage", "content is required for create")
+                        return ToolResult::error("skill_manage", "content is required for create");
                     }
                 };
                 let mut mgr = crate::skills::SkillManager::new(self.root_dir.clone());
@@ -394,7 +394,7 @@ impl OperantTool for SkillManageTool {
                 let content = match &parsed.content {
                     Some(c) => c.as_str(),
                     None => {
-                        return ToolResult::error("skill_manage", "content is required for patch")
+                        return ToolResult::error("skill_manage", "content is required for patch");
                     }
                 };
                 let skill_md = self.root_dir.join(&parsed.name).join("SKILL.md");
@@ -515,10 +515,12 @@ mod tests {
             .execute(serde_json::json!({}), ToolContext::default())
             .await;
         assert!(!result.success);
-        assert!(result
-            .error
-            .unwrap_or_default()
-            .contains("name is required"));
+        assert!(
+            result
+                .error
+                .unwrap_or_default()
+                .contains("name is required")
+        );
     }
 
     #[test]

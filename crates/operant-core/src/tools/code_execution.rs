@@ -42,7 +42,7 @@ impl OperantTool for CodeExecutionTool {
         let args: CodeExecutionArgs = match serde_json::from_value(args) {
             Ok(a) => a,
             Err(e) => {
-                return ToolResult::error("code_execution", format!("Invalid arguments: {}", e))
+                return ToolResult::error("code_execution", format!("Invalid arguments: {}", e));
             }
         };
         let settings = runtime_config().tools.code_execution;
@@ -62,7 +62,7 @@ impl OperantTool for CodeExecutionTool {
                 return ToolResult::error(
                     "code_execution",
                     format!("Unsupported language: {}", args.language),
-                )
+                );
             }
         };
 

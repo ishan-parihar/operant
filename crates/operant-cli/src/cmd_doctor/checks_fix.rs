@@ -185,67 +185,70 @@ You are Operant, a helpful AI assistant.
     let config_yaml = home.join("config.yaml");
     if config_yaml.exists() {
         match std::fs::read_to_string(&config_yaml) {
-            Ok(raw) => {
-                match serde_yaml::from_str::<serde_yaml::Value>(&raw) {
-                    Ok(mut value) => {
-                        if let Some(map) = value.as_mapping() {
-                            let stale = ["provider", "base_url"];
-                            let has_stale = stale.iter().any(|k| {
-                                map.get(serde_yaml::Value::String(k.to_string()))
-                                    .and_then(|v| v.as_str())
-                                    .is_some()
-                            });
-                            if has_stale {
-                                let model_key = serde_yaml::Value::String("model".to_string());
-                                let mut model = value
-                                    .get(&model_key)
-                                    .and_then(|v| v.as_mapping().cloned())
-                                    .unwrap_or_else(serde_yaml::Mapping::new);
+            Ok(raw) => match serde_yaml::from_str::<serde_yaml::Value>(&raw) {
+                Ok(mut value) => {
+                    if let Some(map) = value.as_mapping() {
+                        let stale = ["provider", "base_url"];
+                        let has_stale = stale.iter().any(|k| {
+                            map.get(serde_yaml::Value::String(k.to_string()))
+                                .and_then(|v| v.as_str())
+                                .is_some()
+                        });
+                        if has_stale {
+                            let model_key = serde_yaml::Value::String("model".to_string());
+                            let mut model = value
+                                .get(&model_key)
+                                .and_then(|v| v.as_mapping().cloned())
+                                .unwrap_or_else(serde_yaml::Mapping::new);
 
-                                for key_str in &stale {
-                                    let key = serde_yaml::Value::String(key_str.to_string());
-                                    if let Some(val) = value.get(&key) {
-                                        if val.is_string() && !model.contains_key(&key) {
-                                            model.insert(key.clone(), val.clone());
-                                        }
-                                        if let Some(map) = value.as_mapping_mut() {
-                                            map.remove(&key);
-                                        }
+                            for key_str in &stale {
+                                let key = serde_yaml::Value::String(key_str.to_string());
+                                if let Some(val) = value.get(&key) {
+                                    if val.is_string() && !model.contains_key(&key) {
+                                        model.insert(key.clone(), val.clone());
+                                    }
+                                    if let Some(map) = value.as_mapping_mut() {
+                                        map.remove(&key);
                                     }
                                 }
+                            }
 
-                                value.as_mapping_mut().map(|m| {
-                                    m.insert(model_key, serde_yaml::Value::Mapping(model))
-                                });
+                            value
+                                .as_mapping_mut()
+                                .map(|m| m.insert(model_key, serde_yaml::Value::Mapping(model)));
 
-                                match serde_yaml::to_string(&value) {
-                                    Ok(updated) => match std::fs::write(&config_yaml, &updated) {
-                                        Ok(()) => {
-                                            println!("  \u{2713} Migrated stale root-level keys into model section");
-                                            fixed += 1;
-                                        }
-                                        Err(e) => {
-                                            eprintln!("  \u{2717} Failed to write updated config.yaml: {}", e);
-                                            errors += 1;
-                                        }
-                                    },
+                            match serde_yaml::to_string(&value) {
+                                Ok(updated) => match std::fs::write(&config_yaml, &updated) {
+                                    Ok(()) => {
+                                        println!(
+                                            "  \u{2713} Migrated stale root-level keys into model section"
+                                        );
+                                        fixed += 1;
+                                    }
                                     Err(e) => {
                                         eprintln!(
-                                            "  \u{2717} Failed to serialize updated config: {}",
+                                            "  \u{2717} Failed to write updated config.yaml: {}",
                                             e
                                         );
                                         errors += 1;
                                     }
+                                },
+                                Err(e) => {
+                                    eprintln!(
+                                        "  \u{2717} Failed to serialize updated config: {}",
+                                        e
+                                    );
+                                    errors += 1;
                                 }
                             }
                         }
                     }
-                    Err(e) => {
-                        eprintln!("  \u{2717} Failed to parse config.yaml: {}", e);
-                        errors += 1;
-                    }
                 }
-            }
+                Err(e) => {
+                    eprintln!("  \u{2717} Failed to parse config.yaml: {}", e);
+                    errors += 1;
+                }
+            },
             Err(e) => {
                 eprintln!("  \u{2717} Failed to read config.yaml: {}", e);
                 errors += 1;

@@ -16,8 +16,8 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget, Wrap};
 
 use crate::tui::overlays::{
-    begin_modal_buf, cycle_next, cycle_prev, modal_header_line_area, render_modal_title_buf,
-    OPERANT_ACCENT, OPERANT_MUTED, OPERANT_PANEL_BG, OPERANT_TEXT,
+    OPERANT_ACCENT, OPERANT_MUTED, OPERANT_PANEL_BG, OPERANT_TEXT, begin_modal_buf, cycle_next,
+    cycle_prev, modal_header_line_area, render_modal_title_buf,
 };
 
 // ---------------------------------------------------------------------------

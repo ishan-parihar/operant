@@ -1656,9 +1656,11 @@ mod tests {
             std::fs::read_to_string(repo_root.join("notes.txt")).unwrap(),
             "autonomous change applied\n"
         );
-        assert!(std::fs::read_to_string(repo_root.join("TODO.md"))
-            .unwrap()
-            .contains("- automate sample task"));
+        assert!(
+            std::fs::read_to_string(repo_root.join("TODO.md"))
+                .unwrap()
+                .contains("- automate sample task")
+        );
 
         let status = read_status(&repo_root);
         assert_eq!(status.state, AutonomousState::Succeeded);
@@ -1670,10 +1672,12 @@ mod tests {
                 .map(|publish| publish.branch.as_str()),
             Some("agent-dev")
         );
-        assert!(status
-            .last_validation
-            .as_ref()
-            .is_some_and(|validation| validation.success));
+        assert!(
+            status
+                .last_validation
+                .as_ref()
+                .is_some_and(|validation| validation.success)
+        );
 
         let local_head = git_stdout(&repo_root, &["rev-parse", "HEAD"]);
         let remote_head = git_stdout(&repo_root, &["ls-remote", "origin", "refs/heads/agent-dev"])

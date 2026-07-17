@@ -7,7 +7,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use operant_core::curator::{archiver, backup, CuratorEngine, CuratorState};
+use operant_core::curator::{CuratorEngine, CuratorState, archiver, backup};
 use operant_core::skill_usage::SkillUsageTracker;
 
 // ---------------------------------------------------------------------------
@@ -168,11 +168,13 @@ fn test_create_backup_and_list() {
     // Create backup
     let backup_path = backup::create_backup(&skills_dir, &backup_dir, Some("test")).unwrap();
     assert!(backup_path.exists());
-    assert!(backup_path
-        .file_name()
-        .unwrap()
-        .to_string_lossy()
-        .ends_with(".tar.gz"));
+    assert!(
+        backup_path
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .ends_with(".tar.gz")
+    );
 
     // List backups
     let backups = backup::list_backups(&backup_dir).unwrap();
@@ -211,14 +213,18 @@ fn test_backup_restore_roundtrip() {
     let _rollback_path = backup::restore_backup(&backup_path, &restore_dir).unwrap();
 
     // Verify restored content
-    assert!(restore_dir
-        .join("roundtrip-skill")
-        .join("SKILL.md")
-        .exists());
-    assert!(restore_dir
-        .join("roundtrip-skill")
-        .join("script.py")
-        .exists());
+    assert!(
+        restore_dir
+            .join("roundtrip-skill")
+            .join("SKILL.md")
+            .exists()
+    );
+    assert!(
+        restore_dir
+            .join("roundtrip-skill")
+            .join("script.py")
+            .exists()
+    );
     let content = fs::read_to_string(restore_dir.join("roundtrip-skill").join("SKILL.md")).unwrap();
     assert!(content.contains("# Roundtrip Skill"));
 

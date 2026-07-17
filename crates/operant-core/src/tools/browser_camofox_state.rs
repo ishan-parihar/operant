@@ -78,7 +78,7 @@ impl OperantTool for CamofoxStateTool {
                 return ToolResult::error(
                     "browser_camofox_state",
                     format!("Invalid arguments: {}", e),
-                )
+                );
             }
         };
 
@@ -127,7 +127,7 @@ fn handle_save_state(profile: &str) -> ToolResult {
             return ToolResult::error(
                 "browser_camofox_state",
                 format!("Failed to serialize state: {}", e),
-            )
+            );
         }
     };
 
@@ -170,7 +170,7 @@ fn handle_load_state(profile: &str) -> ToolResult {
             return ToolResult::error(
                 "browser_camofox_state",
                 format!("Failed to read state file: {}", e),
-            )
+            );
         }
     };
 
@@ -180,7 +180,7 @@ fn handle_load_state(profile: &str) -> ToolResult {
             return ToolResult::error(
                 "browser_camofox_state",
                 format!("Failed to parse state file: {}", e),
-            )
+            );
         }
     };
 

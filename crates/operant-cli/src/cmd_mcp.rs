@@ -5,9 +5,9 @@
 
 use anyhow::{Context, Result};
 use clap::Subcommand;
-use operant_core::config::{install_runtime_config, runtime_config, AppConfig, McpTransportKind};
+use operant_core::config::{AppConfig, McpTransportKind, install_runtime_config, runtime_config};
 use operant_core::mcp::McpManager;
-use operant_core::mcp_oauth::{get_manager, McpOAuthConfig};
+use operant_core::mcp_oauth::{McpOAuthConfig, get_manager};
 use serde_json::Value;
 
 /// Manage MCP (Model Context Protocol) servers
@@ -252,10 +252,14 @@ async fn handle_add(
 
     match (url.as_ref(), command.as_ref()) {
         (Some(_), Some(_)) => {
-            anyhow::bail!("Provide either --url (for HTTP transport) or --command (for stdio transport), not both.");
+            anyhow::bail!(
+                "Provide either --url (for HTTP transport) or --command (for stdio transport), not both."
+            );
         }
         (None, None) => {
-            anyhow::bail!("Provide either --url <URL> (for HTTP transport) or --command <CMD> (for stdio transport).");
+            anyhow::bail!(
+                "Provide either --url <URL> (for HTTP transport) or --command <CMD> (for stdio transport)."
+            );
         }
         (Some(url_val), None) => {
             println!(
@@ -644,7 +648,10 @@ fn handle_mcp_configure(
 
     if changed.is_empty() {
         println!("No settings were provided to update.");
-        println!("  Usage: operant mcp configure {} --auth-token <token> --url <url> --command <cmd> --args <args>", name);
+        println!(
+            "  Usage: operant mcp configure {} --auth-token <token> --url <url> --command <cmd> --args <args>",
+            name
+        );
     } else {
         println!(
             "Updated MCP server '{}' configuration for this session:",

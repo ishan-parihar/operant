@@ -14,7 +14,7 @@
 use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 

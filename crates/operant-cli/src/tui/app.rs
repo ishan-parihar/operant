@@ -33,8 +33,8 @@ use crate::tui::adapter_types::types::{ContentBlock, Message, Role};
 use crate::tui::adapter_types::{sample_completion_verb, sample_spinner_verb};
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
 use operant_core::agent::AgentEvent;
-use ratatui::style::Color;
 use ratatui::Terminal;
+use ratatui::style::Color;
 use std::cell::{Cell, RefCell};
 use std::sync::{Arc, Mutex};
 use tracing::debug;
@@ -6142,7 +6142,7 @@ impl App {
                     let menu_width =
                         (item_labels.iter().map(|l| l.len()).max().unwrap_or(4) + 4) as u16;
                     let menu_height = items.len() as u16 + 2; // +2 for border
-                                                              // Clamp to screen bounds (same as render_context_menu)
+                    // Clamp to screen bounds (same as render_context_menu)
                     let screen = self.last_msg_area.get();
                     let menu_x = menu.x.min(
                         screen
@@ -8031,8 +8031,8 @@ mod tests {
 
     #[test]
     fn test_interactive_multi_step_simulation() {
-        use ratatui::backend::TestBackend;
         use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
 
         let backend = TestBackend::new(120, 40);
         let mut terminal = Terminal::new(backend).unwrap();
@@ -8137,8 +8137,8 @@ mod tests {
 
     #[test]
     fn test_dialog_open_close_scenarios() {
-        use ratatui::backend::TestBackend;
         use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
 
         // (slash command, snapshot overlay key). Each must open via
         // `/<cmd><enter>` and close on Esc.
@@ -8245,8 +8245,8 @@ mod tests {
 
     #[test]
     fn test_command_palette_opens_via_ctrl_k() {
-        use ratatui::backend::TestBackend;
         use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
 
         let mut app = make_app();
         app.is_simulating = true;

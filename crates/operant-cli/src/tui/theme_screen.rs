@@ -3,15 +3,15 @@
 // Shows a list of available themes with colour swatches. Arrow keys navigate,
 // Enter selects, Esc cancels.
 
+use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
-use ratatui::Frame;
 
 use crate::tui::overlays::{
-    begin_modal_frame, cycle_next, cycle_prev, modal_header_line_area, render_modal_title_frame,
-    OPERANT_ACCENT, OPERANT_MUTED, OPERANT_PANEL_BG, OPERANT_TEXT,
+    OPERANT_ACCENT, OPERANT_MUTED, OPERANT_PANEL_BG, OPERANT_TEXT, begin_modal_frame, cycle_next,
+    cycle_prev, modal_header_line_area, render_modal_title_frame,
 };
 
 // ---------------------------------------------------------------------------
@@ -291,7 +291,7 @@ pub fn handle_theme_key(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ratatui::{backend::TestBackend, Terminal};
+    use ratatui::{Terminal, backend::TestBackend};
 
     #[test]
     fn theme_screen_renders_current_theme() {

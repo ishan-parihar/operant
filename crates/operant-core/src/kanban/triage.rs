@@ -1,5 +1,5 @@
 use crate::error::Error;
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use std::sync::{Arc, Mutex};
 
 /// Context about a task for triage decisions

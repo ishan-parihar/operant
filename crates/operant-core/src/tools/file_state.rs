@@ -158,7 +158,7 @@ fn handle_diff(path: &str) -> ToolResult {
                     "watched": false,
                     "message": "No stored state found for this file. Use 'watch' first."
                 }),
-            )
+            );
         }
     };
     drop(states);

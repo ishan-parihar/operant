@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use clap::Subcommand;
-use operant_core::config::{install_runtime_config, runtime_config, AppConfig};
+use operant_core::config::{AppConfig, install_runtime_config, runtime_config};
 use serde_json::Value;
 
 /// Config subcommand variants.

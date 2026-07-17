@@ -17,7 +17,7 @@ use kokoro_tiny::TtsEngine;
 use reqwest::Client;
 use schemars::JsonSchema;
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::process::Command;
 use std::sync::Arc;
@@ -136,7 +136,7 @@ impl TtsTool {
                                 return ToolResult::error(
                                     "text_to_speech",
                                     format!("Failed to read output: {}", e),
-                                )
+                                );
                             }
                         };
                         let audio_base64 = base64::Engine::encode(
@@ -159,7 +159,7 @@ impl TtsTool {
                         return ToolResult::error(
                             "text_to_speech",
                             format!("Command provider failed: {}", e),
-                        )
+                        );
                     }
                 }
             }
@@ -188,7 +188,7 @@ impl TtsTool {
                                 return ToolResult::error(
                                     "text_to_speech",
                                     format!("Failed to read output: {}", e),
-                                )
+                                );
                             }
                         };
                         let audio_base64 = base64::Engine::encode(
@@ -211,7 +211,7 @@ impl TtsTool {
                         return ToolResult::error(
                             "text_to_speech",
                             format!("Plugin provider failed: {}", e),
-                        )
+                        );
                     }
                 }
             }
@@ -230,7 +230,13 @@ impl TtsTool {
             "kittentts" => self.kittentts_local(args).await,
             "piper" => self.piper_local(args).await,
             "kokoro" => self.kokoro_local(args).await,
-            _ => ToolResult::error("text_to_speech", format!("Unknown provider: {}. Available: edge, elevenlabs, openai, minimax, mistral, gemini, xai, neutts, kittentts, piper, kokoro, or registered command/plugin providers", args.provider)),
+            _ => ToolResult::error(
+                "text_to_speech",
+                format!(
+                    "Unknown provider: {}. Available: edge, elevenlabs, openai, minimax, mistral, gemini, xai, neutts, kittentts, piper, kokoro, or registered command/plugin providers",
+                    args.provider
+                ),
+            ),
         }
     }
 
@@ -291,7 +297,7 @@ impl TtsTool {
         {
             Ok(r) => r,
             Err(e) => {
-                return ToolResult::error("text_to_speech", format!("API request failed: {}", e))
+                return ToolResult::error("text_to_speech", format!("API request failed: {}", e));
             }
         };
 
@@ -305,7 +311,7 @@ impl TtsTool {
         let audio_bytes = match response.bytes().await {
             Ok(b) => b,
             Err(e) => {
-                return ToolResult::error("text_to_speech", format!("Failed to read audio: {}", e))
+                return ToolResult::error("text_to_speech", format!("Failed to read audio: {}", e));
             }
         };
 
@@ -355,7 +361,7 @@ impl TtsTool {
         {
             Ok(r) => r,
             Err(e) => {
-                return ToolResult::error("text_to_speech", format!("API request failed: {}", e))
+                return ToolResult::error("text_to_speech", format!("API request failed: {}", e));
             }
         };
 
@@ -369,7 +375,7 @@ impl TtsTool {
         let audio_bytes = match response.bytes().await {
             Ok(b) => b,
             Err(e) => {
-                return ToolResult::error("text_to_speech", format!("Failed to read audio: {}", e))
+                return ToolResult::error("text_to_speech", format!("Failed to read audio: {}", e));
             }
         };
 
@@ -420,7 +426,7 @@ impl TtsTool {
         {
             Ok(r) => r,
             Err(e) => {
-                return ToolResult::error("text_to_speech", format!("API request failed: {}", e))
+                return ToolResult::error("text_to_speech", format!("API request failed: {}", e));
             }
         };
 
@@ -437,7 +443,7 @@ impl TtsTool {
                 return ToolResult::error(
                     "text_to_speech",
                     format!("Failed to parse response: {}", e),
-                )
+                );
             }
         };
 
@@ -490,7 +496,7 @@ impl TtsTool {
         {
             Ok(r) => r,
             Err(e) => {
-                return ToolResult::error("text_to_speech", format!("API request failed: {}", e))
+                return ToolResult::error("text_to_speech", format!("API request failed: {}", e));
             }
         };
 
@@ -504,7 +510,7 @@ impl TtsTool {
         let audio_bytes = match response.bytes().await {
             Ok(b) => b,
             Err(e) => {
-                return ToolResult::error("text_to_speech", format!("Failed to read audio: {}", e))
+                return ToolResult::error("text_to_speech", format!("Failed to read audio: {}", e));
             }
         };
 
@@ -580,7 +586,7 @@ impl TtsTool {
                 return ToolResult::error(
                     "text_to_speech",
                     format!("Failed to parse response: {}", e),
-                )
+                );
             }
         };
 
@@ -640,7 +646,7 @@ impl TtsTool {
         {
             Ok(r) => r,
             Err(e) => {
-                return ToolResult::error("text_to_speech", format!("API request failed: {}", e))
+                return ToolResult::error("text_to_speech", format!("API request failed: {}", e));
             }
         };
 
@@ -654,7 +660,7 @@ impl TtsTool {
         let audio_bytes = match response.bytes().await {
             Ok(b) => b,
             Err(e) => {
-                return ToolResult::error("text_to_speech", format!("Failed to read audio: {}", e))
+                return ToolResult::error("text_to_speech", format!("Failed to read audio: {}", e));
             }
         };
 
@@ -908,7 +914,7 @@ except Exception as e:
                     return ToolResult::error(
                         "text_to_speech",
                         format!("Failed to initialize Kokoro engine: {}", e),
-                    )
+                    );
                 }
             }
         }
@@ -932,7 +938,7 @@ except Exception as e:
                             return ToolResult::error(
                                 "text_to_speech",
                                 format!("Failed to create WAV writer: {}", e),
-                            )
+                            );
                         }
                     };
 
@@ -997,7 +1003,7 @@ impl OperantTool for TtsTool {
         let mut args: TtsArgs = match serde_json::from_value(args) {
             Ok(a) => a,
             Err(e) => {
-                return ToolResult::error("text_to_speech", format!("Invalid arguments: {}", e))
+                return ToolResult::error("text_to_speech", format!("Invalid arguments: {}", e));
             }
         };
 

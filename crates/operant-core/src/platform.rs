@@ -318,13 +318,14 @@ mod tests {
         let key = "HERMES_HOME";
         let original = env::var(key).ok();
 
-        env::set_var(key, "/tmp/operant_test_home");
+        // SAFETY: test-only env mutation under #[serial_test::serial]
+        unsafe { env::set_var(key, "/tmp/operant_test_home") };
         assert_eq!(operant_home(), PathBuf::from("/tmp/operant_test_home"));
 
         // Restore original value.
         match original {
-            Some(val) => env::set_var(key, val),
-            None => env::remove_var(key),
+            Some(val) => unsafe { env::set_var(key, val) },
+            None => unsafe { env::remove_var(key) },
         }
     }
 
@@ -334,12 +335,13 @@ mod tests {
         let key = "HERMES_HOME";
         let original = env::var(key).ok();
 
-        env::remove_var(key);
+        // SAFETY: test-only env mutation under #[serial_test::serial]
+        unsafe { env::remove_var(key) };
         let home = operant_home();
         assert!(!home.as_os_str().is_empty());
 
         if let Some(val) = original {
-            env::set_var(key, val);
+            unsafe { env::set_var(key, val) };
         }
     }
 

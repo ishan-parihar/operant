@@ -11,11 +11,11 @@
 // primitive cmd_skills.rs uses for `operant skills list`.
 
 use operant_core::skills::Skill;
+use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
-use ratatui::Frame;
 use std::cell::Cell;
 use std::path::PathBuf;
 
@@ -251,8 +251,8 @@ fn render_list_stage(frame: &mut Frame, state: &SkillsViewState, area: Rect) {
     )));
 
     let viewport = area.height.saturating_sub(6) as usize; // header + footer
-                                                           // Record the viewport height so the key handler's scroll_down knows how
-                                                           // many lines fit. (Bug #16 fix.)
+    // Record the viewport height so the key handler's scroll_down knows how
+    // many lines fit. (Bug #16 fix.)
     state.last_viewport_height.set(viewport);
     let start = state
         .scroll

@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
 use async_trait::async_trait;
-use futures::stream::BoxStream;
 use futures::StreamExt;
+use futures::stream::BoxStream;
 
 use super::super::model_client::{ChatRequest, ModelClient, StreamChunk};
 use crate::client::{ChatStreamEvent, OpenAIClient, ToolCall, ToolCallFunction};
@@ -193,11 +193,7 @@ fn extract_tool_calls_from_stream_event(
         }
     }
 
-    if calls.is_empty() {
-        None
-    } else {
-        Some(calls)
-    }
+    if calls.is_empty() { None } else { Some(calls) }
 }
 
 #[cfg(test)]

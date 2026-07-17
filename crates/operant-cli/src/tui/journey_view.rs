@@ -19,11 +19,11 @@
 
 use operant_core::memory::{MemoryBlock, MemoryStore};
 use operant_core::skills::Skill;
+use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
-use ratatui::Frame;
 use std::path::PathBuf;
 
 use crate::tui::overlays::centered_rect;

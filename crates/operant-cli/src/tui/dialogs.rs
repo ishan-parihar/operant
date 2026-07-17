@@ -1,12 +1,12 @@
 // dialogs.rs — Permission dialogs and confirmation dialogs.
 
 use crossterm::event::{KeyCode, KeyEvent};
+use ratatui::Frame;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Widget, Wrap};
-use ratatui::Frame;
 
 // ---------------------------------------------------------------------------
 // Permission dialog kinds

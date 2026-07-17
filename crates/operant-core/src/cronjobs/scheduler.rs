@@ -3,7 +3,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use tokio::process::Command;
 use tokio::sync::mpsc;
-use tokio::time::{sleep, Duration};
+use tokio::time::{Duration, sleep};
 use tracing::{debug, error, info};
 
 use crate::agent::OperantAgent;

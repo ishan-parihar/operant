@@ -52,7 +52,7 @@ impl OperantTool for NeuttsSynthTool {
         let args: NeuttsSynthArgs = match serde_json::from_value(args) {
             Ok(a) => a,
             Err(e) => {
-                return ToolResult::error("neutts_synthesize", format!("Invalid arguments: {}", e))
+                return ToolResult::error("neutts_synthesize", format!("Invalid arguments: {}", e));
             }
         };
 
@@ -81,7 +81,7 @@ impl OperantTool for NeuttsSynthTool {
                 return ToolResult::error(
                     "neutts_synthesize",
                     format!("Failed to create HTTP client: {}", e),
-                )
+                );
             }
         };
 

@@ -3,15 +3,15 @@
 // Provides a modal dialog that collects an API key from the user with
 // masked display (showing only the last 4 characters).
 
+use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::prelude::Stylize;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
-use ratatui::Frame;
 
 use crate::tui::overlays::{
-    centered_rect, render_dark_overlay, render_dialog_bg, OPERANT_PANEL_BG,
+    OPERANT_PANEL_BG, centered_rect, render_dark_overlay, render_dialog_bg,
 };
 
 // ---------------------------------------------------------------------------

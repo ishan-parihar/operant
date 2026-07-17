@@ -86,7 +86,7 @@ impl OperantTool for MemoryStoreTool {
         let args: MemoryStoreArgs = match serde_json::from_value(args) {
             Ok(a) => a,
             Err(e) => {
-                return ToolResult::error("memory_store", format!("Invalid arguments: {}", e))
+                return ToolResult::error("memory_store", format!("Invalid arguments: {}", e));
             }
         };
 
@@ -147,7 +147,7 @@ impl OperantTool for MemorySearchTool {
         let args: MemorySearchArgs = match serde_json::from_value(args) {
             Ok(a) => a,
             Err(e) => {
-                return ToolResult::error("memory_search", format!("Invalid arguments: {}", e))
+                return ToolResult::error("memory_search", format!("Invalid arguments: {}", e));
             }
         };
 
@@ -229,7 +229,7 @@ impl OperantTool for MemoryRecallTool {
         let args: MemoryRecallArgs = match serde_json::from_value(args) {
             Ok(a) => a,
             Err(e) => {
-                return ToolResult::error("memory_recall", format!("Invalid arguments: {}", e))
+                return ToolResult::error("memory_recall", format!("Invalid arguments: {}", e));
             }
         };
 

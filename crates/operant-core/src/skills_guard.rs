@@ -2298,9 +2298,11 @@ mod tests {
         let f = tmp.join("bad.sh");
         fs::write(&f, "rm -rf /\n").unwrap();
         let findings = scan_file_inner(&f);
-        assert!(findings
-            .iter()
-            .any(|fi| fi.pattern_id == "destructive_root_rm"));
+        assert!(
+            findings
+                .iter()
+                .any(|fi| fi.pattern_id == "destructive_root_rm")
+        );
         cleanup(&tmp);
     }
 
@@ -2320,9 +2322,11 @@ mod tests {
         let f = tmp.join("hidden.md");
         fs::write(&f, format!("normal text\u{200b} with zero-width space\n")).unwrap();
         let findings = scan_file_inner(&f);
-        assert!(findings
-            .iter()
-            .any(|fi| fi.pattern_id == "invisible_unicode"));
+        assert!(
+            findings
+                .iter()
+                .any(|fi| fi.pattern_id == "invisible_unicode")
+        );
         cleanup(&tmp);
     }
 
@@ -2346,9 +2350,11 @@ mod tests {
         )
         .unwrap();
         let findings = scan_file_inner(&f);
-        assert!(findings
-            .iter()
-            .any(|fi| fi.category == "credential_exposure"));
+        assert!(
+            findings
+                .iter()
+                .any(|fi| fi.category == "credential_exposure")
+        );
         cleanup(&tmp);
     }
 

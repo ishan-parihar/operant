@@ -17,7 +17,7 @@ use async_trait::async_trait;
 use serde_json::Value;
 use std::sync::Arc;
 
-use crate::error::Result;
+use crate::error::{Error, Result};
 
 // ---------------------------------------------------------------------------
 // Trait

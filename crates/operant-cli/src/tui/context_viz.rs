@@ -1,15 +1,15 @@
 // context_viz.rs — Context window and rate-limit visualization overlay.
 // Triggered by the /context command. Shows horizontal progress bars.
 
+use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget, Wrap};
-use ratatui::Frame;
 
 use crate::tui::overlays::{
-    begin_modal_frame, modal_header_line_area, render_modal_title_frame, OPERANT_ACCENT,
-    OPERANT_MUTED, OPERANT_PANEL_BG,
+    OPERANT_ACCENT, OPERANT_MUTED, OPERANT_PANEL_BG, begin_modal_frame, modal_header_line_area,
+    render_modal_title_frame,
 };
 
 // ---------------------------------------------------------------------------
@@ -194,8 +194,8 @@ fn format_tokens(n: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ratatui::backend::TestBackend;
     use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
 
     #[test]
     fn context_viz_defaults_hidden() {

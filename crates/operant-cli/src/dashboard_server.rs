@@ -8,11 +8,11 @@
 
 use anyhow::{Context, Result};
 use axum::{
+    Router,
     extract::{Path, State},
-    http::{header, HeaderMap, StatusCode},
+    http::{HeaderMap, StatusCode, header},
     response::{Html, IntoResponse, Json, Response},
     routing::get,
-    Router,
 };
 use operant_core::config::AppConfig;
 use operant_core::kanban::KanbanManager;

@@ -87,50 +87,50 @@ pub mod trajectory;
 pub mod user_question;
 pub mod voice;
 
-pub use acp::{server, AcpHandler, AgentState, RpcRequest, RpcResponse};
+pub use acp::{AcpHandler, AgentState, RpcRequest, RpcResponse, server};
 pub use agent::{AgentConfig, AgentEvent, FallbackModelClient, OperantAgent};
 pub use approval::{
-    check_tool_approval, ApprovalContext, ApprovalGuard, ApprovalMode, ApprovalVerdict, RiskLevel,
+    ApprovalContext, ApprovalGuard, ApprovalMode, ApprovalVerdict, RiskLevel, check_tool_approval,
 };
 pub use browser_provider::{
-    build_browser_provider, BrowserProvider, BrowserUseProvider, BrowserbaseProvider,
-    CamofoxProvider, FirecrawlProvider, LightpandaProvider,
+    BrowserProvider, BrowserUseProvider, BrowserbaseProvider, CamofoxProvider, FirecrawlProvider,
+    LightpandaProvider, build_browser_provider,
 };
 pub use client::{Message, OpenAIClient};
 pub use config::{
-    install_runtime_config, load_app_config, runtime_config, AppConfig, AutonomousSettings,
-    BehaviorSettings, ClientSettings, CodeExecutionSettings, GatewaySettings, HttpToolSettings,
-    LoadedConfig, LoggingSettings, McpServerConfig, McpSettings, MemorySettings, RateLimitSettings,
-    SkillsSettings, SttSettings, TerminalSettings, ToolSettings, TuiSettings, WebToolSettings,
+    AppConfig, AutonomousSettings, BehaviorSettings, ClientSettings, CodeExecutionSettings,
+    GatewaySettings, HttpToolSettings, LoadedConfig, LoggingSettings, McpServerConfig, McpSettings,
+    MemorySettings, RateLimitSettings, SkillsSettings, SttSettings, TerminalSettings, ToolSettings,
+    TuiSettings, WebToolSettings, install_runtime_config, load_app_config, runtime_config,
 };
 pub use context_files::{
     load_context_dir, load_default_context_files, load_workspace_context, scan_context_content,
 };
 pub use credential_pool::{AuthType, CredentialPool, PoolStrategy, PooledCredential};
-pub use curator::{archiver, backup, review, CuratorEngine, CuratorReport, CuratorState};
+pub use curator::{CuratorEngine, CuratorReport, CuratorState, archiver, backup, review};
 pub use distillation::distill_session_to_memory;
 pub use error::{Error, Result};
 pub use gateway::{
-    format_startup_message, handle_admin_command, ChannelDirectory, ChannelInfo, ChannelType,
-    EmailAdapter, Gateway, GatewayConfig, GatewayStats, IncomingMessage, OutgoingMessage,
-    PlatformAdapter, PlatformSession, SessionStore, SmsAdapter, TelegramAdapter, UserInfo,
-    WebhookAdapter, WhatsAppAdapter,
+    ChannelDirectory, ChannelInfo, ChannelType, EmailAdapter, Gateway, GatewayConfig, GatewayStats,
+    IncomingMessage, OutgoingMessage, PlatformAdapter, PlatformSession, SessionStore, SmsAdapter,
+    TelegramAdapter, UserInfo, WebhookAdapter, WhatsAppAdapter, format_startup_message,
+    handle_admin_command,
 };
 pub use gateway_session::{
-    build_session_key, hash_chat_id, hash_sender_id, is_shared_multi_user_session,
     PersistentSessionStore, ResetMode, SessionEntry, SessionResetPolicy, SessionSource,
-    SessionStoreConfig,
+    SessionStoreConfig, build_session_key, hash_chat_id, hash_sender_id,
+    is_shared_multi_user_session,
 };
 pub use mcp::{McpClient, McpNamespacedTool, McpStdioClient, McpTool, McpTransport};
 pub use memory::{MemoryBlock, MemoryManager, Session, UserProfile};
 #[cfg(feature = "tdg")]
 pub use memory_provider::TdgMemoryProvider;
-pub use memory_provider::{build_memory_provider, BuiltinProvider, MemoryProvider};
+pub use memory_provider::{BuiltinProvider, MemoryProvider, build_memory_provider};
 pub use parser::ToolCallParser;
 pub use platform::PlatformInfo;
 pub use plugins::{
-    discover_plugins, get_plugin_commands, handle_plugin_command, is_plugin_command,
-    register_plugin_command, resolve_plugin_command, PluginCommand, PluginHandler, PluginManifest,
+    PluginCommand, PluginHandler, PluginManifest, discover_plugins, get_plugin_commands,
+    handle_plugin_command, is_plugin_command, register_plugin_command, resolve_plugin_command,
 };
 pub use process_registry::{ProcessRegistry, ProcessSession, ProcessStatus};
 // (iter-159: profile re-exports deleted — only set_operant_home_override is
@@ -138,24 +138,24 @@ pub use process_registry::{ProcessRegistry, ProcessSession, ProcessStatus};
 pub use skill_usage::{LifecycleState, SkillUsageTracker, UsageRecord, UsageTelemetry};
 pub use skills::{Skill, SkillManager};
 pub use skills_guard::{
-    content_hash, format_scan_report, scan_skill, should_allow_install, GuardScanner, ScanResult,
-    ScanVerdict, SecurityFinding, Severity, TrustLevel, Verdict,
+    GuardScanner, ScanResult, ScanVerdict, SecurityFinding, Severity, TrustLevel, Verdict,
+    content_hash, format_scan_report, scan_skill, should_allow_install,
 };
 pub use tools::{
-    register_builtin_tools, register_builtin_tools_with_sub_agent, OperantTool, ToolRegistry,
-    ToolResult,
+    OperantTool, ToolRegistry, ToolResult, register_builtin_tools,
+    register_builtin_tools_with_sub_agent,
 };
 pub use trajectory::Trajectory;
 
 pub use models_dev::{
-    fetch_models_dev, get_model_capabilities, list_agentic_models, lookup_models_dev_context,
-    provider_to_models_dev, ModelCapabilities,
+    ModelCapabilities, fetch_models_dev, get_model_capabilities, list_agentic_models,
+    lookup_models_dev_context, provider_to_models_dev,
 };
 pub use oauth_refresh::{
-    auth_store_path, load_auth_store, save_auth_store, AuthStore, OAuthRefresher,
-    OAuthTokenResponse, ProviderState,
+    AuthStore, OAuthRefresher, OAuthTokenResponse, ProviderState, auth_store_path, load_auth_store,
+    save_auth_store,
 };
 pub use rate_limiter::{
-    exponential_backoff_secs, parse_retry_after_header, RateLimitError, RateLimitStatus,
-    RateLimiter, TokenBucket,
+    RateLimitError, RateLimitStatus, RateLimiter, TokenBucket, exponential_backoff_secs,
+    parse_retry_after_header,
 };

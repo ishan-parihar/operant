@@ -78,8 +78,8 @@ use operant_core::agent::clients::openai::OpenAIModelClient;
 use operant_core::agent::{AgentConfig, AgentEvent, OperantAgent};
 use operant_core::client::{ClientConfig, OpenAIClient};
 use operant_core::config::{
-    install_runtime_config, load_app_config, AppConfig, BehaviorSettings, LoggingSettings,
-    McpServerConfig, McpTransportKind,
+    AppConfig, BehaviorSettings, LoggingSettings, McpServerConfig, McpTransportKind,
+    install_runtime_config, load_app_config,
 };
 use operant_core::mcp::McpManager;
 use operant_core::memory::MemoryManager;
@@ -87,8 +87,8 @@ use operant_core::skills::SkillManager;
 use operant_core::tools::{ToolContext, ToolRegistry};
 use serde_json::Value;
 use tokio::sync::mpsc;
-use tracing::{warn, Level};
-use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+use tracing::{Level, warn};
+use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
 use crate::tui::{LaunchMode, TuiApp};
 use operant_core::cronjobs::CronDb;

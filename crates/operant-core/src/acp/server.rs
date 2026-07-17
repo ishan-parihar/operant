@@ -3,7 +3,7 @@
 //! Reads JSON-RPC requests from stdin (line-delimited) and writes responses
 //! to stdout using tokio's async I/O to avoid blocking the event loop.
 
-use super::{dispatch, parse_request, serialize_response, AcpHandler, RpcResponse};
+use super::{AcpHandler, RpcResponse, dispatch, parse_request, serialize_response};
 use anyhow::Result;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};

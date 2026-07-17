@@ -8,7 +8,7 @@
 //! reconcile_columns() diffs live columns against DESIRED_SCHEMA_SQL and ADDs
 //! any missing ones. This makes column additions a declarative operation.
 
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};

@@ -14,11 +14,11 @@
 // Data source: crates/operant-cli/src/cmd_plugins::plugins_dir() — same
 // primitive cmd_plugins.rs uses for `operant plugins list`.
 
+use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
-use ratatui::Frame;
 use std::path::{Path, PathBuf};
 
 use crate::tui::overlays::{centered_rect, cycle_next, cycle_prev};

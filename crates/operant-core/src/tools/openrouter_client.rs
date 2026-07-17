@@ -94,7 +94,7 @@ impl OperantTool for OpenRouterTool {
         let args: OpenRouterArgs = match serde_json::from_value(args) {
             Ok(a) => a,
             Err(e) => {
-                return ToolResult::error("openrouter_query", format!("Invalid arguments: {}", e))
+                return ToolResult::error("openrouter_query", format!("Invalid arguments: {}", e));
             }
         };
 
@@ -104,7 +104,7 @@ impl OperantTool for OpenRouterTool {
                 return ToolResult::error(
                     "openrouter_query",
                     "OPENROUTER_API_KEY environment variable not set",
-                )
+                );
             }
         };
 
@@ -127,7 +127,7 @@ impl OperantTool for OpenRouterTool {
                 return ToolResult::error(
                     "openrouter_query",
                     format!("Failed to create HTTP client: {}", e),
-                )
+                );
             }
         };
 
@@ -137,7 +137,7 @@ impl OperantTool for OpenRouterTool {
                 return ToolResult::error(
                     "openrouter_query",
                     format!("Failed to serialize request: {}", e),
-                )
+                );
             }
         };
 
@@ -153,7 +153,7 @@ impl OperantTool for OpenRouterTool {
         {
             Ok(r) => r,
             Err(e) => {
-                return ToolResult::error("openrouter_query", format!("Request failed: {}", e))
+                return ToolResult::error("openrouter_query", format!("Request failed: {}", e));
             }
         };
 
@@ -174,7 +174,7 @@ impl OperantTool for OpenRouterTool {
                 return ToolResult::error(
                     "openrouter_query",
                     format!("Failed to parse response: {}", e),
-                )
+                );
             }
         };
 
@@ -229,7 +229,8 @@ mod tests {
     #[tokio::test]
     async fn test_openrouter_missing_api_key() {
         let tool = OpenRouterTool;
-        std::env::remove_var("OPENROUTER_API_KEY");
+        // SAFETY: test-only env mutation under exclusive lock
+        unsafe { std::env::remove_var("OPENROUTER_API_KEY") };
         let args = serde_json::json!({
             "model": "gpt-4",
             "prompt": "Hello"

@@ -21,14 +21,14 @@ use anyhow::{Context, Result};
 use chrono::Local;
 use console::style;
 use operant_core::config::{
-    default_config_paths, install_runtime_config, AppConfig, AuxiliaryModelConfig, GatewaySettings,
-    SessionResetMode, TerminalBackend, ToolProgressMode,
+    AppConfig, AuxiliaryModelConfig, GatewaySettings, SessionResetMode, TerminalBackend,
+    ToolProgressMode, default_config_paths, install_runtime_config,
 };
 
 use crate::env_store::{remove_env_value, save_env_value};
 use crate::gateway_platforms::all_platforms;
 use crate::prompt_helpers::*;
-use crate::provider::{fetch_models_for_provider, provider_by_name, provider_from_url, PROVIDERS};
+use crate::provider::{PROVIDERS, fetch_models_for_provider, provider_by_name, provider_from_url};
 
 // ---------------------------------------------------------------------------
 // Public entry point
@@ -913,7 +913,9 @@ async fn step_gateway(config: &mut AppConfig, _reconfigure: bool) -> Result<bool
 
     let changed = pre_enabled != post_enabled;
     if changed {
-        print_warning("Gateway configuration changed. You may need to restart Operant for changes to take effect.");
+        print_warning(
+            "Gateway configuration changed. You may need to restart Operant for changes to take effect.",
+        );
     }
 
     print_page_footer();

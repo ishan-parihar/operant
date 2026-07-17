@@ -7,11 +7,11 @@
 // - Accepting arms PermissionMode::BypassPermissions; declining closes the
 //   dialog and stays in the current permission mode.
 
+use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Widget, Wrap};
-use ratatui::Frame;
 
 use crate::tui::overlays::centered_rect;
 
@@ -174,8 +174,8 @@ pub fn render_bypass_permissions_dialog(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ratatui::backend::TestBackend;
     use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
 
     #[test]
     fn bypass_dialog_defaults_hidden() {

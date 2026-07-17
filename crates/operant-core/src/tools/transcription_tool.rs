@@ -90,7 +90,7 @@ async fn transcribe_groq(file_path: &str, model: &str, api_key: &str) -> Transcr
                 provider: "groq".to_string(),
                 model: model.to_string(),
                 error: Some(format!("Failed to read file: {e}")),
-            }
+            };
         }
     };
 
@@ -163,7 +163,7 @@ async fn transcribe_openai(file_path: &str, model: &str, api_key: &str) -> Trans
                 provider: "openai".to_string(),
                 model: model.to_string(),
                 error: Some(format!("Failed to read file: {e}")),
-            }
+            };
         }
     };
 
@@ -292,7 +292,12 @@ impl OperantTool for TranscriptionTool {
             "groq" => {
                 let api_key = match get_groq_api_key(&self.config) {
                     Some(k) => k,
-                    None => return ToolResult::error(self.name(), "GROQ_API_KEY not set. Set groqApiKey in tool settings or GROQ_API_KEY env var"),
+                    None => {
+                        return ToolResult::error(
+                            self.name(),
+                            "GROQ_API_KEY not set. Set groqApiKey in tool settings or GROQ_API_KEY env var",
+                        );
+                    }
                 };
                 let model = if model.is_empty() {
                     "whisper-large-v3-turbo"
@@ -313,7 +318,7 @@ impl OperantTool for TranscriptionTool {
                 return ToolResult::error(
                     self.name(),
                     format!("Unknown provider: '{other}'. Use: groq, openai"),
-                )
+                );
             }
         };
 

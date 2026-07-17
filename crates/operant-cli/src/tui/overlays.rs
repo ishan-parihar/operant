@@ -4,12 +4,12 @@
 //   - MessageSelectorOverlay (/rewind step 1)
 //   - RewindFlowOverlay (/rewind full multi-step flow)
 
+use ratatui::Frame;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Widget};
-use ratatui::Frame;
 use unicode_width::UnicodeWidthStr;
 
 pub const OPERANT_ACCENT: Color = Color::Rgb(255, 191, 0);

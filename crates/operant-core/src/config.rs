@@ -1020,7 +1020,7 @@ fn apply_bool_override(name: &str, target: &mut bool) -> Result<()> {
                 return Err(Error::Config(format!(
                     "Environment variable '{}' must be a boolean.",
                     name
-                )))
+                )));
             }
         };
     }
@@ -1070,15 +1070,18 @@ mod tests {
 
     fn set_env(name: &str, value: &str) -> Option<OsString> {
         let previous = std::env::var_os(name);
-        std::env::set_var(name, value);
+        // SAFETY: test-only env mutation under exclusive lock
+        unsafe { std::env::set_var(name, value) };
         previous
     }
 
     fn restore_env(name: &str, previous: Option<OsString>) {
         if let Some(value) = previous {
-            std::env::set_var(name, value);
+            // SAFETY: test-only env mutation under exclusive lock
+            unsafe { std::env::set_var(name, value) };
         } else {
-            std::env::remove_var(name);
+            // SAFETY: test-only env mutation under exclusive lock
+            unsafe { std::env::remove_var(name) };
         }
     }
 

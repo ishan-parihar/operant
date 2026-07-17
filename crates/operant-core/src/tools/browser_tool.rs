@@ -118,20 +118,23 @@ impl OperantTool for BrowserTool {
                 return self.handle_accessibility_tree(&args).await;
             }
             "navigate" if args.url.is_none() => {
-                return ToolResult::error(self.name(), "Missing 'url' for navigate")
+                return ToolResult::error(self.name(), "Missing 'url' for navigate");
             }
             "click" if args.selector.is_none() => {
-                return ToolResult::error(self.name(), "Missing 'selector' for click")
+                return ToolResult::error(self.name(), "Missing 'selector' for click");
             }
             "type" if args.selector.is_none() => {
-                return ToolResult::error(self.name(), "Missing 'selector' for type")
+                return ToolResult::error(self.name(), "Missing 'selector' for type");
             }
             "type" if args.text.is_none() => {
-                return ToolResult::error(self.name(), "Missing 'text' for type")
+                return ToolResult::error(self.name(), "Missing 'text' for type");
             }
             "navigate" | "snapshot" | "click" | "type" | "scroll" => {}
             _ => {
-                return ToolResult::error(self.name(), format!("Unknown command: {}", args.command))
+                return ToolResult::error(
+                    self.name(),
+                    format!("Unknown command: {}", args.command),
+                );
             }
         }
 
@@ -202,10 +205,12 @@ mod tests {
             )
             .await;
         assert!(!result.success);
-        assert!(result
-            .error
-            .unwrap_or_default()
-            .contains("Missing 'selector'"));
+        assert!(
+            result
+                .error
+                .unwrap_or_default()
+                .contains("Missing 'selector'")
+        );
     }
 
     #[tokio::test]
@@ -218,10 +223,12 @@ mod tests {
             )
             .await;
         assert!(!result.success);
-        assert!(result
-            .error
-            .unwrap_or_default()
-            .contains("Missing 'selector'"));
+        assert!(
+            result
+                .error
+                .unwrap_or_default()
+                .contains("Missing 'selector'")
+        );
     }
 
     #[tokio::test]
@@ -261,7 +268,7 @@ mod tests {
     #[tokio::test]
     async fn test_browser_accessibility_tree_missing_cdp_url() {
         let saved = std::env::var("BROWSER_CDP_URL").ok();
-        std::env::remove_var("BROWSER_CDP_URL");
+        unsafe { std::env::remove_var("BROWSER_CDP_URL") };
 
         let tool = BrowserTool::new();
         let result = tool
@@ -272,7 +279,7 @@ mod tests {
             .await;
 
         if let Some(url) = saved {
-            std::env::set_var("BROWSER_CDP_URL", url);
+            unsafe { std::env::set_var("BROWSER_CDP_URL", url) };
         }
         assert!(!result.success);
         assert!(result.error.unwrap_or_default().contains("No CDP URL"));

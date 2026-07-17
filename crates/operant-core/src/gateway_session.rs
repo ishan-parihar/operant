@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
 use chrono::{DateTime, Timelike, Utc};
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -1283,7 +1283,8 @@ impl PersistentSessionStore {
             } else {
                 today_reset
             };
-            if updated_at < reset_time.into() {
+            let reset_system_time: SystemTime = reset_time.into();
+            if updated_at < reset_system_time {
                 return Some("daily".to_string());
             }
         }

@@ -1820,7 +1820,9 @@ pub fn load_dotenv_file(path: &Path) -> ConfigResult<()> {
             let expanded = expand_env_vars(value);
 
             if std::env::var(key).is_err() {
-                std::env::set_var(key, expanded);
+                unsafe {
+                    std::env::set_var(key, expanded);
+                }
             }
         }
     }
@@ -1928,14 +1930,15 @@ mod tests {
 
     fn set_env(name: &str, value: &str) -> Option<std::ffi::OsString> {
         let prev = std::env::var_os(name);
-        std::env::set_var(name, value);
+        // SAFETY: test-only env mutation
+        unsafe { std::env::set_var(name, value) };
         prev
     }
 
     fn restore_env(name: &str, prev: Option<std::ffi::OsString>) {
         match prev {
-            Some(val) => std::env::set_var(name, val),
-            None => std::env::remove_var(name),
+            Some(val) => unsafe { std::env::set_var(name, val) },
+            None => unsafe { std::env::remove_var(name) },
         }
     }
 
@@ -2029,8 +2032,10 @@ mod tests {
         std::fs::write(&env_path, "# Comment\nKEY=value\nNUMBER=42\nEMPTY=\n").unwrap();
 
         // Clear env vars first
-        std::env::remove_var("KEY");
-        std::env::remove_var("NUMBER");
+        // SAFETY: test-only env mutation
+        unsafe { std::env::remove_var("KEY") };
+        // SAFETY: test-only env mutation
+        unsafe { std::env::remove_var("NUMBER") };
 
         load_dotenv_file(&env_path).unwrap();
 
@@ -2053,8 +2058,10 @@ mod tests {
         )
         .unwrap();
 
-        std::env::remove_var("DOUBLE");
-        std::env::remove_var("SINGLE");
+        // SAFETY: test-only env mutation
+        unsafe { std::env::remove_var("DOUBLE") };
+        // SAFETY: test-only env mutation
+        unsafe { std::env::remove_var("SINGLE") };
 
         load_dotenv_file(&env_path).unwrap();
 

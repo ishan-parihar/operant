@@ -182,7 +182,8 @@ mod tests {
         let _lock = TEST_MUTEX.lock().unwrap();
         let path = tmp_env();
         let _ = fs::remove_file(&path);
-        std::env::set_var("HERMES_TEST_ENV_PATH", path.to_str().unwrap());
+        // SAFETY: test-only env mutation under Mutex guard
+        unsafe { std::env::set_var("HERMES_TEST_ENV_PATH", path.to_str().unwrap()) };
         f(&path);
         let _ = fs::remove_file(&path);
     }

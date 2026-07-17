@@ -345,7 +345,7 @@ mod tests {
     fn token_bucket_refill_adds_tokens() {
         let mut tb = TokenBucket::new(100, 1000.0); // very fast refill
         tb.try_consume(); // 99 remaining
-                          // Force last_refill into the past
+        // Force last_refill into the past
         tb.last_refill = Instant::now() - Duration::from_millis(100);
         tb.refill();
         // Should have added >= 100 tokens, but capped at capacity
@@ -403,7 +403,7 @@ mod tests {
     #[tokio::test]
     async fn rate_limiter_blocks_when_bucket_empty() {
         let limiter = RateLimiter::new(1, 0.01); // very slow refill
-                                                 // consume the single token
+        // consume the single token
         assert!(limiter.check_rate_limit("gpt-4").await.is_ok());
         // second call should fail
         let err = limiter.check_rate_limit("gpt-4").await.unwrap_err();

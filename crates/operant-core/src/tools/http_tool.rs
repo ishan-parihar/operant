@@ -43,7 +43,7 @@ impl OperantTool for HttpRequestTool {
         let args: HttpRequestArgs = match serde_json::from_value(args) {
             Ok(a) => a,
             Err(e) => {
-                return ToolResult::error("http_request", format!("Invalid arguments: {}", e))
+                return ToolResult::error("http_request", format!("Invalid arguments: {}", e));
             }
         };
 
@@ -65,7 +65,10 @@ impl OperantTool for HttpRequestTool {
         let client = match reqwest::Client::builder().timeout(timeout).build() {
             Ok(c) => c,
             Err(e) => {
-                return ToolResult::error("http_request", format!("Failed to create client: {}", e))
+                return ToolResult::error(
+                    "http_request",
+                    format!("Failed to create client: {}", e),
+                );
             }
         };
 
@@ -82,7 +85,7 @@ impl OperantTool for HttpRequestTool {
                 return ToolResult::error(
                     "http_request",
                     format!("Unsupported HTTP method: {}", method),
-                )
+                );
             }
         };
 

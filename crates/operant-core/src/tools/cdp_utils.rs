@@ -1,7 +1,7 @@
 use futures_util::{SinkExt, StreamExt};
 use serde_json::Value;
 use tokio::net::TcpStream;
-use tokio_tungstenite::{connect_async, tungstenite::Message, MaybeTlsStream, WebSocketStream};
+use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async, tungstenite::Message};
 
 use crate::error::{Error, Result};
 
@@ -23,7 +23,7 @@ pub async fn send_cdp_command(url: &str, command: &Value) -> Result<Value> {
     })?;
 
     write
-        .send(Message::Text(cmd_str))
+        .send(Message::Text(cmd_str.into()))
         .await
         .map_err(|e| Error::ToolExecution {
             name: "cdp".into(),
