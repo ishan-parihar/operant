@@ -11,6 +11,7 @@
 - [ ] **Provider.rs lifetime mismatch** - `fetch_models` method has lifetime mismatch between trait and impl
 - [ ] **Skin.rs .cloned() error** - Cannot call `.cloned()` on MutexGuard
 - [ ] **Gateway test failure** - `test_gateway_start_stop_with_disabled_platforms` fails due to schema migration issue
+- [ ] **Config schema test failure** - `schema::tests::config_schema_export_contains_expected_contract_shape` fails: JSON Schema URL mismatch (draft-07 vs 2020-12). Pre-existing, not blocking.
 
 ---
 

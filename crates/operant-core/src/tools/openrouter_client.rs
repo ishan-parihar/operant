@@ -229,7 +229,7 @@ mod tests {
     #[tokio::test]
     async fn test_openrouter_missing_api_key() {
         let tool = OpenRouterTool;
-        // SAFETY: test-only env mutation under exclusive lock
+        // SAFETY: test-only env mutation in #[cfg(test)]
         unsafe { std::env::remove_var("OPENROUTER_API_KEY") };
         let args = serde_json::json!({
             "model": "gpt-4",
