@@ -937,8 +937,11 @@ fn is_needs_onboarding_err(e: &anyhow::Error) -> bool {
 /// Reply text sent over a channel SDK when chat dispatch refuses
 /// because the gateway has no model configured.
 fn needs_onboarding_channel_reply() -> String {
-    "No model configured. Please run 'operant onboard' to set up your provider and model, then retry."
-        .to_string()
+    let reply = operant_runtime::i18n::get_cli_string("channel-needs-onboarding-reply");
+    match reply {
+        Some(text) if !text.starts_with('{') => text,
+        _ => "This agent isn't fully set up yet. The operator needs to complete onboarding before I can reply.".to_string(),
+    }
 }
 
 /// Full-featured chat with tools for channel and webhook handlers.

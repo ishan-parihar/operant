@@ -294,7 +294,7 @@ mod tests {
         let success = format_ftl_message(zh_cn, "zh-CN", "cli-wechat-bound-success", &[])
             .expect("zh-CN bind success should format");
         assert!(success.contains("WeChat"));
-        assert!(success.contains("ZeroClaw"));
+        assert!(success.contains("Operant"));
     }
 
     #[test]
@@ -390,7 +390,7 @@ mod tests {
             (
                 "cli-wechat-bound-success",
                 &[][..],
-                ["WeChat", "ZeroClaw"].as_slice(),
+                ["WeChat", "Operant"].as_slice(),
             ),
             ("cli-wechat-invalid-bind-code", &[][..], [].as_slice()),
         ];
@@ -449,7 +449,7 @@ mod tests {
                     "example-skill",
                     "1.2.3",
                     "Community submission",
-                    "zeroclaw skills audit example-skill",
+                    "operant skills audit example-skill",
                 ],
             ),
         ];
@@ -486,7 +486,7 @@ mod tests {
                     "example-skill",
                     "1.2.3",
                     "社区提交",
-                    "zeroclaw skills audit example-skill",
+                    "operant skills audit example-skill",
                 ],
             ),
         ];
@@ -533,7 +533,7 @@ mod tests {
             (
                 "channel-runtime-no-cached-models",
                 &[("provider", "openrouter")][..],
-                ["openrouter", "zeroclaw models refresh"].as_slice(),
+                ["openrouter", "operant models refresh"].as_slice(),
             ),
             (
                 "channel-runtime-cached-models",

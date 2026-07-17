@@ -155,6 +155,7 @@ plugins-wasm = ["dep:operant-plugins"]
 memory-postgres = ["operant-memory/memory-postgres"]
 rag-pdf = ["operant-tools/rag-pdf"]
 tdg = ["operant-core/tdg"]
+anthropic = []  # cfg-gate for AnthropicModelClient import in main.rs
 
 # CI meta-feature
 ci-all = [

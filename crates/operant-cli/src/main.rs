@@ -73,6 +73,7 @@ use std::time::Duration;
 use crate::config::CliConfig;
 use anyhow::{Context, Result};
 use clap::{ArgAction, Parser, Subcommand};
+#[cfg(feature = "anthropic")]
 use operant_core::agent::clients::anthropic::AnthropicModelClient;
 use operant_core::agent::clients::openai::OpenAIModelClient;
 use operant_core::agent::{AgentConfig, AgentEvent, OperantAgent};
@@ -541,6 +542,7 @@ fn create_model_client(
     config: &AppConfig,
 ) -> Box<dyn operant_core::agent::ModelClient> {
     match provider {
+        #[cfg(feature = "anthropic")]
         "anthropic" => {
             let api_key = std::env::var("ANTHROPIC_API_KEY")
                 .unwrap_or_else(|_| config.client.api_key.clone().unwrap_or_default());

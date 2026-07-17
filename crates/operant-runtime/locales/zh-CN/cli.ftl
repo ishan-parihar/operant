@@ -11,24 +11,24 @@ cli-wechat-scanned-confirm = 👀 已扫码！请在手机上确认...
 cli-wechat-qr-expired-refreshing = ⏳ 二维码已过期，正在刷新...
 cli-wechat-login-confirmed-missing-field = 登录已确认，但缺少 {$field}。
 cli-wechat-connected = ✅ WeChat 已连接！
-cli-wechat-bound-success = ✅ WeChat 账号绑定成功。现在可以和 ZeroClaw 对话了。
+cli-wechat-bound-success = ✅ WeChat 账号绑定成功。现在可以和 Operant 对话了。
 cli-wechat-invalid-bind-code = ❌ 绑定码无效。请重试。
 cli-skills-install-start = 正在安装技能来源：{$source}
 cli-skills-install-resolving-registry = { "  " }正在从技能注册表解析 '{$source}'...
 cli-skills-install-installed-audited = { "  " }{$status} 技能已安装并审计：{$path}（已扫描 {$files} 个文件）
 cli-skills-install-security-audit-completed = { "  " }安全审计已成功完成。
-cli-skills-install-tier-official = 正在安装 {$name} v{$version} — 官方（zeroclaw-labs 维护）
+cli-skills-install-tier-official = 正在安装 {$name} v{$version} — 官方（operant-labs 维护）
 cli-skills-install-tier-community =
     正在安装 {$name} v{$version} — 社区提交
-    此技能未经 ZeroClaw 审计。请检查技能内容，
-    并在授予任何权限或用于生产前运行 `zeroclaw skills audit {$name}`。
+    此技能未经 Operant 审计。请检查技能内容，
+    并在授予任何权限或用于生产前运行 `operant skills audit {$name}`。
 
 channel-runtime-current-route =
     当前提供商：`{$provider}`
     当前模型：`{$model}`
 channel-runtime-switch-model-help = 使用 `/model <model-id>` 或 `/model <hint>` 切换模型。
 channel-runtime-configured-model-routes = 已配置的模型路由：
-channel-runtime-no-cached-models = 未找到 `{$provider}` 的缓存模型列表。请让操作者运行 `zeroclaw models refresh --provider {$provider}`。
+channel-runtime-no-cached-models = 未找到 `{$provider}` 的缓存模型列表。请让操作者运行 `operant models refresh --provider {$provider}`。
 channel-runtime-cached-models = 缓存模型 ID（前 {$count} 个）：
 channel-runtime-switch-provider-help = 使用 `/models <provider>` 切换提供商。
 channel-runtime-switch-model-command-help = 使用 `/model <model-id>` 切换模型。

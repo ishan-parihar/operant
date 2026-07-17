@@ -21,7 +21,7 @@ pub mod testing;
 pub(crate) use suggestions::render_missing_skill_install_suggestion;
 
 const OPEN_SKILLS_REPO_URL: &str = "https://github.com/besoeasy/open-skills";
-const OPEN_SKILLS_SYNC_MARKER: &str = ".zeroclaw-open-skills-sync";
+const OPEN_SKILLS_SYNC_MARKER: &str = ".operant-open-skills-sync";
 const OPEN_SKILLS_SYNC_INTERVAL_SECS: u64 = 60 * 60 * 24 * 7;
 
 // ─── ClawhHub / OpenClaw registry installers ───────────────────────────────
@@ -33,11 +33,11 @@ const MAX_CLAWHUB_ZIP_BYTES: u64 = 50 * 1024 * 1024; // 50 MiB
 // ─── Skills registry (zeroclaw-skills) ────────────────────────────────────────
 const SKILLS_REGISTRY_REPO_URL: &str = "https://github.com/zeroclaw-labs/zeroclaw-skills";
 const SKILLS_REGISTRY_DIR_NAME: &str = "skills-registry";
-const SKILLS_REGISTRY_SYNC_MARKER: &str = ".zeroclaw-skills-registry-sync";
+const SKILLS_REGISTRY_SYNC_MARKER: &str = ".operant-skills-registry-sync";
 const SKILLS_REGISTRY_SYNC_INTERVAL_SECS: u64 = 60 * 60 * 24;
 
 /// A skill is a user-defined or community-built capability.
-/// Skills live in `~/.zeroclaw/workspace/skills/<name>/SKILL.md`
+/// Skills live in `~/.operant/workspace/skills/<name>/SKILL.md`
 /// and can include tool definitions, prompts, and automation scripts.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Skill {
@@ -262,7 +262,7 @@ fn warn_skipped_skill(path: &Path, summary: &str, allow_scripts: bool) {
         );
         eprintln!(
             "warning: skill '{}' was skipped because it contains script files. \
-             Set `skills.allow_scripts = true` in your zeroclaw config to enable it.",
+             Set `skills.allow_scripts = true` in your operant config to enable it.",
             path.file_name()
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_else(|| path.display().to_string()),
@@ -606,7 +606,7 @@ fn open_skills_enabled_from_sources(
         }
         if !raw.trim().is_empty() {
             tracing::warn!(
-                "Ignoring invalid ZEROCLAW_OPEN_SKILLS_ENABLED (valid: 1|0|true|false|yes|no|on|off)"
+                "Ignoring invalid OPERANT_OPEN_SKILLS_ENABLED (valid: 1|0|true|false|yes|no|on|off)"
             );
         }
     }
@@ -615,7 +615,9 @@ fn open_skills_enabled_from_sources(
 }
 
 fn open_skills_enabled(config_open_skills_enabled: Option<bool>) -> bool {
-    let env_override = std::env::var("ZEROCLAW_OPEN_SKILLS_ENABLED").ok();
+    let env_override = std::env::var("OPERANT_OPEN_SKILLS_ENABLED")
+        .or_else(|_| std::env::var("ZEROCLAW_OPEN_SKILLS_ENABLED"))
+        .ok();
     open_skills_enabled_from_sources(config_open_skills_enabled, env_override.as_deref())
 }
 
@@ -643,7 +645,9 @@ fn resolve_open_skills_dir_from_sources(
 }
 
 fn resolve_open_skills_dir(config_open_skills_dir: Option<&str>) -> Option<PathBuf> {
-    let env_dir = std::env::var("ZEROCLAW_OPEN_SKILLS_DIR").ok();
+    let env_dir = std::env::var("OPERANT_OPEN_SKILLS_DIR")
+        .or_else(|_| std::env::var("ZEROCLAW_OPEN_SKILLS_DIR"))
+        .ok();
     let home_dir = UserDirs::new().map(|dirs| dirs.home_dir().to_path_buf());
     resolve_open_skills_dir_from_sources(
         env_dir.as_deref(),
@@ -1199,7 +1203,7 @@ pub fn init_skills_dir(workspace_dir: &Path) -> Result<()> {
     if !readme.exists() {
         std::fs::write(
             &readme,
-            "# ZeroClaw Skills\n\n\
+            "# Operant Skills\n\n\
              Each subdirectory is a skill. Create a `SKILL.toml` or `SKILL.md` file inside.\n\n\
              ## SKILL.toml format\n\n\
              ```toml\n\
@@ -1221,8 +1225,8 @@ pub fn init_skills_dir(workspace_dir: &Path) -> Result<()> {
              The agent will read it and follow the instructions.\n\n\
              ## Installing community skills\n\n\
              ```bash\n\
-             zeroclaw skills install <source>\n\
-             zeroclaw skills list\n\
+             operant skills install <source>\n\
+             operant skills list\n\
              ```\n",
         )?;
     }
@@ -1889,7 +1893,7 @@ mod registry_tests {
         assert!(!is_registry_source("/abs/path"));
         assert!(!is_registry_source("skills/auto-coder"));
         assert!(!is_registry_source("some\\path"));
-        assert!(!is_registry_source("~/.zeroclaw/skills/foo"));
+        assert!(!is_registry_source("~/.operant/skills/foo"));
     }
 
     #[test]
@@ -1950,7 +1954,7 @@ mod registry_tests {
     #[test]
     fn build_install_tier_banner_official_is_single_line() {
         let banner = build_install_tier_banner("auto-coder", Some("0.3.0"), SkillTier::Official);
-        assert!(banner.contains("Official (zeroclaw-labs maintained)"));
+        assert!(banner.contains("Official (operant-labs maintained)"));
         assert!(banner.contains("Installing auto-coder v0.3.0"));
         assert!(!banner.contains("not audited"));
         // One trailing newline, no warn block.
@@ -1962,22 +1966,22 @@ mod registry_tests {
         let banner =
             build_install_tier_banner("discord-moderator", Some("0.1.2"), SkillTier::Community);
         assert!(banner.contains("Community submission"));
-        assert!(banner.contains("not audited by ZeroClaw"));
-        assert!(banner.contains("zeroclaw skills audit discord-moderator"));
+        assert!(banner.contains("not audited by Operant"));
+        assert!(banner.contains("operant skills audit discord-moderator"));
     }
 
     #[test]
     fn build_install_tier_banner_featured_uses_community_warning() {
         let banner = build_install_tier_banner("hand-picked", Some("1.0"), SkillTier::Featured);
         assert!(banner.contains("Community submission"));
-        assert!(banner.contains("not audited by ZeroClaw"));
+        assert!(banner.contains("not audited by Operant"));
     }
 
     #[test]
     fn build_install_tier_banner_unknown_falls_back_to_community() {
         let banner = build_install_tier_banner("legacy", None, SkillTier::Unknown);
         assert!(banner.contains("Community submission"));
-        assert!(banner.contains("not audited by ZeroClaw"));
+        assert!(banner.contains("not audited by Operant"));
         // Missing version is rendered as `v?` rather than panicking.
         assert!(banner.contains("v?"));
     }
