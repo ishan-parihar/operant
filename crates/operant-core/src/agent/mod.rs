@@ -18,6 +18,7 @@ use crate::database::Database;
 use crate::distillation::distill_session_to_memory;
 use crate::error::{Error, Result};
 use crate::memory::MemoryManager;
+use crate::observer::{Observer, ObserverEvent, ObserverMetric};
 use crate::parser::{ToolCallParser, ToolCallStreamParser};
 use crate::skills::SkillManager;
 use crate::tools::{ToolContext, ToolRegistry, ToolResult};
@@ -199,6 +200,10 @@ pub struct OperantAgent {
     /// in `process_response`. Persisted to `sessions.actual_cost_usd` via
     /// `Database::update_session_cost` (R3 — cost fidelity).
     session_cost_usd: Arc<std::sync::RwLock<f64>>,
+    /// Observer for structured telemetry. When set, the agent emits
+    /// ObserverEvent/ObserverMetric at key lifecycle points (agent start/end,
+    /// LLM request/response, tool call start/end, turn complete).
+    observer: Option<Arc<dyn Observer>>,
 }
 
 /// A pending permission request sent from the agent to the TUI
@@ -238,6 +243,7 @@ impl OperantAgent {
             interrupt_flag: crate::interrupt::InterruptFlag::new(),
             record_trajectories: false,
             session_cost_usd: Arc::new(std::sync::RwLock::new(0.0)),
+            observer: None,
         }
     }
 
@@ -267,7 +273,15 @@ impl OperantAgent {
             interrupt_flag: crate::interrupt::InterruptFlag::new(),
             record_trajectories: false,
             session_cost_usd: Arc::new(std::sync::RwLock::new(0.0)),
+            observer: None,
         }
+    }
+
+    /// Attach an observer for structured telemetry. When set, the agent
+    /// emits ObserverEvent/ObserverMetric at key lifecycle points.
+    pub fn with_observer(mut self, observer: Arc<dyn Observer>) -> Self {
+        self.observer = Some(observer);
+        self
     }
 
     /// Attach a memory manager for long-term memory injection and session distillation.
@@ -490,6 +504,14 @@ impl OperantAgent {
     pub async fn run(&self, user_query: String) -> Result<Message> {
         info!("Starting agent run");
 
+        // Emit AgentStart observer event
+        if let Some(ref obs) = self.observer {
+            obs.record_event(&ObserverEvent::AgentStart {
+                provider: self.config.model.clone(),
+                model: self.model(),
+            });
+        }
+
         // Emit AgentStart hook
         if let Some(ref hooks) = self.hook_registry {
             let ctx = crate::gateway_pipeline::HookContext::new()
@@ -626,7 +648,17 @@ impl OperantAgent {
                         self.emit(AgentEvent::Done {
                             message: result.clone(),
                         })
-                        .await;
+                        .await;                        // Emit AgentEnd observer event
+                        if let Some(ref obs) = self.observer {
+                            let cost = self.session_cost_usd.read().map(|c| *c).unwrap_or(0.0);
+                            obs.record_event(&ObserverEvent::AgentEnd {
+                                provider: self.config.model.clone(),
+                                model: self.model(),
+                                duration: std::time::Duration::from_secs(0),
+                                tokens_used: None,
+                                cost_usd: if cost > 0.0 { Some(cost) } else { None },
+                            });
+                        }
                         // Emit AgentEnd hook
                         if let Some(ref hooks) = self.hook_registry {
                             hooks
@@ -637,11 +669,34 @@ impl OperantAgent {
                                 )
                                 .await;
                         }
+
                         return Ok(result);
                     }
                     Err(e) => {
                         warn!(error = %e, "Grace call failed — returning hard error");
                     }
+                }
+
+                // Emit AgentEnd observer event for max-iterations failure
+                if let Some(ref obs) = self.observer {
+                    let cost = self.session_cost_usd.read().map(|c| *c).unwrap_or(0.0);
+                    obs.record_event(&ObserverEvent::AgentEnd {
+                        provider: self.config.model.clone(),
+                        model: self.model(),
+                        duration: std::time::Duration::from_secs(0),
+                        tokens_used: None,
+                        cost_usd: if cost > 0.0 { Some(cost) } else { None },
+                    });
+                }
+                // Emit AgentEnd hook for max-iterations
+                if let Some(ref hooks) = self.hook_registry {
+                    hooks
+                        .emit(
+                            crate::gateway_pipeline::HookEvent::AgentEnd,
+                            crate::gateway_pipeline::HookContext::new()
+                                .with_session(&session_id),
+                        )
+                        .await;
                 }
 
                 if self.record_trajectories {
@@ -677,6 +732,16 @@ impl OperantAgent {
                 .with_tools(tools)
                 .with_stream(self.config.stream);
 
+            // Emit LlmRequest observer event
+            if let Some(ref obs) = self.observer {
+                obs.record_event(&ObserverEvent::LlmRequest {
+                    provider: self.config.model.clone(),
+                    model: self.model(),
+                    messages_count: messages.len(),
+                });
+            }
+
+            let llm_start = std::time::Instant::now();
             let mut stream_extra_content = None;
             let response = if request.stream {
                 let stream = match self.client.chat_streaming(request).await {
@@ -731,6 +796,21 @@ impl OperantAgent {
                 };
                 self.process_response(response).await
             };
+
+            // Emit LlmResponse observer event with timing
+            let llm_duration = llm_start.elapsed();
+            if let Some(ref obs) = self.observer {
+                obs.record_event(&ObserverEvent::LlmResponse {
+                    provider: self.config.model.clone(),
+                    model: self.model(),
+                    duration: llm_duration,
+                    success: response.is_ok(),
+                    error_message: response.as_ref().err().map(|e| e.to_string()),
+                    input_tokens: None,
+                    output_tokens: None,
+                });
+                obs.record_metric(&ObserverMetric::RequestLatency(llm_duration));
+            }
 
             match response {
                 Ok((response_text, reasoning_text, tool_calls)) => {
@@ -902,6 +982,15 @@ impl OperantAgent {
                         if let Ok(total) = self.session_cost_usd.read() {
                             self.database.update_session_cost(&session_id, *total).ok();
                         }
+                        // Emit ToolCall observer event
+                        if let Some(ref obs) = self.observer {
+                            obs.record_event(&ObserverEvent::ToolCall {
+                                tool: result.name.clone(),
+                                duration: Duration::from_millis(0),
+                                success: result.success,
+                            });
+                        }
+
                         if result.success {
                             self.emit(AgentEvent::ToolComplete {
                                 result: result.clone(),
@@ -938,11 +1027,27 @@ impl OperantAgent {
                         )
                         .await;
                     }
+                    // Emit AgentEnd observer event on error
+                    if let Some(ref obs) = self.observer {
+                        let cost = self.session_cost_usd.read().map(|c| *c).unwrap_or(0.0);
+                        obs.record_event(&ObserverEvent::AgentEnd {
+                            provider: self.config.model.clone(),
+                            model: self.model(),
+                            duration: llm_duration,
+                            tokens_used: None,
+                            cost_usd: if cost > 0.0 { Some(cost) } else { None },
+                        });
+                    }
                     return Err(e);
                 }
             }
 
             self.emit(AgentEvent::IterationComplete { iteration }).await;
+
+            // Emit TurnComplete observer event
+            if let Some(ref obs) = self.observer {
+                obs.record_event(&ObserverEvent::TurnComplete);
+            }
 
             // ── /steer directive drain (iter-65) ──────────────────────────
             // Between iterations, check if the user queued any steer
@@ -1571,6 +1676,15 @@ impl OperantAgent {
             };
 
             debug!(tool = %name, args = %args_str, "Executing tool");
+
+            // Emit ToolCallStart observer event
+            if let Some(ref obs) = self.observer {
+                obs.record_event(&ObserverEvent::ToolCallStart {
+                    tool: name.clone(),
+                    arguments: Some(args_str.clone()),
+                });
+            }
+
             self.emit(AgentEvent::ToolStart {
                 tool_call_id: tool_call.id.clone(),
                 name: name.clone(),
