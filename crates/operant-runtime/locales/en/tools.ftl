@@ -83,7 +83,7 @@ tool-pdf-read = Extract plain text from a PDF file in the workspace. Returns all
 
 tool-project-intel = Project delivery intelligence: generate status reports, detect risks, draft client updates, summarize sprints, and estimate effort. Read-only analysis tool.
 
-tool-proxy-config = Manage ZeroClaw proxy settings (scope: environment | zeroclaw | services), including runtime and process env application
+tool-proxy-config = Manage Operant proxy settings (scope: environment | operant | services), including runtime and process env application
 
 tool-pushover = Send a Pushover notification to your device. Requires PUSHOVER_TOKEN and PUSHOVER_USER_KEY in .env file.
 

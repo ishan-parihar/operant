@@ -163,7 +163,7 @@ impl Tool for ContentSearchTool {
 
         // Rate limiting and path-allowlist checks are applied by the
         // RateLimitedTool + PathGuardedTool wrappers at registration time
-        // (see zeroclaw-runtime::tools::mod).
+        // (see operant-runtime::tools::mod).
 
         // --- Path security checks (tool-specific formatting) ---
         // Reject absolute paths unless they fall under an explicit allowed root.
@@ -875,7 +875,7 @@ mod tests {
     }
 
     // Rate-limit behavior is covered by RateLimitedTool's own tests in
-    // zeroclaw-tools::wrappers; this tool delegates the concern to the wrapper
+    // operant-tools::wrappers; this tool delegates the concern to the wrapper
     // at registration time.
 
     #[cfg(unix)]

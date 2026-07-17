@@ -1,4 +1,4 @@
-//! Integrator — generates ZeroClaw-standard SKILL.toml + SKILL.md from scout results.
+//! Integrator — generates Operant-standard SKILL.toml + SKILL.md from scout results.
 
 use std::fs;
 use std::path::PathBuf;
@@ -83,7 +83,7 @@ stars = {stars}
 updated_at = "{updated}"
 
 [forge.requirements]
-runtime = "zeroclaw >= 0.1"
+runtime = "operant >= 0.1"
 
 [forge.metadata]
 auto_integrated = true
@@ -123,7 +123,7 @@ forge_timestamp = "{now}"
 ## Usage
 
 ```toml
-# Add to your ZeroClaw config:
+# Add to your Operant config:
 [skills.{name}]
 enabled = true
 ```
@@ -201,7 +201,7 @@ mod tests {
 
     #[tokio::test]
     async fn integrate_creates_files() {
-        let tmp = std::env::temp_dir().join("zeroclaw-test-integrate");
+        let tmp = std::env::temp_dir().join("operant-test-integrate");
         let _ = fs::remove_dir_all(&tmp);
 
         let integrator = Integrator::new(tmp.to_string_lossy().into_owned());
@@ -239,7 +239,7 @@ mod tests {
     /// file at the swallow site (see #6210, FND-001 §4.2).
     #[tokio::test]
     async fn integrate_does_not_emit_provenance_inside_skill_block() {
-        let tmp = std::env::temp_dir().join("zeroclaw-test-integrate-shape");
+        let tmp = std::env::temp_dir().join("operant-test-integrate-shape");
         let _ = fs::remove_dir_all(&tmp);
 
         let integrator = Integrator::new(tmp.to_string_lossy().into_owned());

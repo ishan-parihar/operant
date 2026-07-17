@@ -14,7 +14,7 @@
 
 use operant_config::schema::{MediaPipelineConfig, TranscriptionConfig};
 
-// Re-export media types from zeroclaw-types for backwards compatibility.
+// Re-export media types from operant-types for backwards compatibility.
 pub use operant_api::media::{MediaAttachment, MediaKind};
 
 /// The media understanding pipeline.

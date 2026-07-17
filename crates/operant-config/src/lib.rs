@@ -1,4 +1,4 @@
-//! Configuration schema, secrets, and related types for ZeroClaw.
+//! Configuration schema, secrets, and related types for Operant.
 
 pub mod api_error;
 pub mod autonomy;

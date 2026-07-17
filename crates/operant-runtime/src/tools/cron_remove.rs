@@ -28,7 +28,7 @@ impl CronRemoveTool {
         }
 
         // Rate limiting is applied by the RateLimitedTool wrapper at
-        // registration time (see zeroclaw-runtime::tools::mod).
+        // registration time (see operant-runtime::tools::mod).
 
         None
     }

@@ -43,7 +43,7 @@ impl SeatbeltSandbox {
             ));
         }
 
-        let policy_dir = std::env::temp_dir().join("zeroclaw-seatbelt");
+        let policy_dir = std::env::temp_dir().join("operant-seatbelt");
         std::fs::create_dir_all(&policy_dir)?;
 
         let session_id = uuid::Uuid::new_v4();
@@ -279,15 +279,15 @@ mod tests {
 
     #[test]
     fn generate_policy_uses_provided_workspace_for_access_rules() {
-        let workspace = PathBuf::from("/tmp/zeroclaw-seatbelt-test-workspace");
+        let workspace = PathBuf::from("/tmp/operant-seatbelt-test-workspace");
         let policy = generate_policy(&workspace);
 
         assert!(
             policy.contains(
-                r#"(allow file-read* (subpath "/tmp/zeroclaw-seatbelt-test-workspace"))"#
+                r#"(allow file-read* (subpath "/tmp/operant-seatbelt-test-workspace"))"#
             )
         );
-        assert!(policy.contains(r#"(subpath "/tmp/zeroclaw-seatbelt-test-workspace")"#));
+        assert!(policy.contains(r#"(subpath "/tmp/operant-seatbelt-test-workspace")"#));
     }
 
     #[test]

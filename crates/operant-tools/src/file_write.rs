@@ -63,7 +63,7 @@ impl Tool for FileWriteTool {
 
         // Rate limiting and path-allowlist checks are applied by the
         // RateLimitedTool + PathGuardedTool wrappers at registration time
-        // (see zeroclaw-runtime::tools::mod).
+        // (see operant-runtime::tools::mod).
 
         let full_path = self.security.resolve_tool_path(path);
 
@@ -168,7 +168,7 @@ mod tests {
     }
 
     /// Wraps `FileWriteTool` with the production `PathGuardedTool` + `RateLimitedTool`
-    /// stack, mirroring the registration in `zeroclaw-runtime::tools::mod`. Use this
+    /// stack, mirroring the registration in `operant-runtime::tools::mod`. Use this
     /// in tests that exercise path-allowlist or rate-limit behavior.
     fn wrapped_tool(workspace: std::path::PathBuf) -> Box<dyn Tool> {
         let security = Arc::new(SecurityPolicy {
@@ -215,7 +215,7 @@ mod tests {
 
     #[tokio::test]
     async fn file_write_creates_file() {
-        let dir = std::env::temp_dir().join("zeroclaw_test_file_write");
+        let dir = std::env::temp_dir().join("operant_test_file_write");
         let _ = tokio::fs::remove_dir_all(&dir).await;
         tokio::fs::create_dir_all(&dir).await.unwrap();
 
@@ -237,7 +237,7 @@ mod tests {
 
     #[tokio::test]
     async fn file_write_creates_parent_dirs() {
-        let dir = std::env::temp_dir().join("zeroclaw_test_file_write_nested");
+        let dir = std::env::temp_dir().join("operant_test_file_write_nested");
         let _ = tokio::fs::remove_dir_all(&dir).await;
         tokio::fs::create_dir_all(&dir).await.unwrap();
 
@@ -258,7 +258,7 @@ mod tests {
 
     #[tokio::test]
     async fn file_write_normalizes_workspace_prefixed_relative_path() {
-        let root = std::env::temp_dir().join("zeroclaw_test_file_write_workspace_prefixed");
+        let root = std::env::temp_dir().join("operant_test_file_write_workspace_prefixed");
         let workspace = root.join("workspace");
         let _ = tokio::fs::remove_dir_all(&root).await;
         tokio::fs::create_dir_all(&workspace).await.unwrap();
@@ -288,7 +288,7 @@ mod tests {
 
     #[tokio::test]
     async fn file_write_overwrites_existing() {
-        let dir = std::env::temp_dir().join("zeroclaw_test_file_write_overwrite");
+        let dir = std::env::temp_dir().join("operant_test_file_write_overwrite");
         let _ = tokio::fs::remove_dir_all(&dir).await;
         tokio::fs::create_dir_all(&dir).await.unwrap();
         tokio::fs::write(dir.join("exist.txt"), "old")
@@ -312,7 +312,7 @@ mod tests {
 
     #[tokio::test]
     async fn file_write_blocks_path_traversal() {
-        let dir = std::env::temp_dir().join("zeroclaw_test_file_write_traversal");
+        let dir = std::env::temp_dir().join("operant_test_file_write_traversal");
         let _ = tokio::fs::remove_dir_all(&dir).await;
         tokio::fs::create_dir_all(&dir).await.unwrap();
 
@@ -362,7 +362,7 @@ mod tests {
 
     #[tokio::test]
     async fn file_write_empty_content() {
-        let dir = std::env::temp_dir().join("zeroclaw_test_file_write_empty");
+        let dir = std::env::temp_dir().join("operant_test_file_write_empty");
         let _ = tokio::fs::remove_dir_all(&dir).await;
         tokio::fs::create_dir_all(&dir).await.unwrap();
 
@@ -382,7 +382,7 @@ mod tests {
     async fn file_write_blocks_symlink_escape() {
         use std::os::unix::fs::symlink;
 
-        let root = std::env::temp_dir().join("zeroclaw_test_file_write_symlink_escape");
+        let root = std::env::temp_dir().join("operant_test_file_write_symlink_escape");
         let workspace = root.join("workspace");
         let outside = root.join("outside");
 
@@ -413,7 +413,7 @@ mod tests {
 
     #[tokio::test]
     async fn file_write_blocks_readonly_mode() {
-        let dir = std::env::temp_dir().join("zeroclaw_test_file_write_readonly");
+        let dir = std::env::temp_dir().join("operant_test_file_write_readonly");
         let _ = tokio::fs::remove_dir_all(&dir).await;
         tokio::fs::create_dir_all(&dir).await.unwrap();
 
@@ -435,7 +435,7 @@ mod tests {
     async fn file_write_blocks_symlink_target_file() {
         use std::os::unix::fs::symlink;
 
-        let root = std::env::temp_dir().join("zeroclaw_test_file_write_symlink_target");
+        let root = std::env::temp_dir().join("operant_test_file_write_symlink_target");
         let workspace = root.join("workspace");
         let outside = root.join("outside");
 
@@ -470,7 +470,7 @@ mod tests {
 
     #[tokio::test]
     async fn file_write_absolute_path_in_workspace() {
-        let dir = std::env::temp_dir().join("zeroclaw_test_file_write_abs_path");
+        let dir = std::env::temp_dir().join("operant_test_file_write_abs_path");
         let _ = tokio::fs::remove_dir_all(&dir).await;
         tokio::fs::create_dir_all(&dir).await.unwrap();
 
@@ -503,7 +503,7 @@ mod tests {
 
     #[tokio::test]
     async fn file_write_blocks_null_byte_in_path() {
-        let dir = std::env::temp_dir().join("zeroclaw_test_file_write_null");
+        let dir = std::env::temp_dir().join("operant_test_file_write_null");
         let _ = tokio::fs::remove_dir_all(&dir).await;
         tokio::fs::create_dir_all(&dir).await.unwrap();
 
@@ -519,7 +519,7 @@ mod tests {
 
     #[tokio::test]
     async fn file_write_blocks_path_outside_workspace() {
-        let root = std::env::temp_dir().join("zeroclaw_test_file_write_outside_workspace");
+        let root = std::env::temp_dir().join("operant_test_file_write_outside_workspace");
         let workspace = root.join("workspace");
         let outside_file = root.join("outside.txt");
         let _ = tokio::fs::remove_dir_all(&root).await;

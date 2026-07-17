@@ -90,7 +90,7 @@ fn has_serde_skip(field: &syn::Field) -> bool {
 /// ## Enum fields
 ///
 /// Enum types used as fields must implement `HasPropKind`. Add the type to the
-/// `impl_enum_prop_kind!` block in `crates/zeroclaw-config/src/schema.rs`, or
+/// `impl_enum_prop_kind!` block in `crates/operant-config/src/schema.rs`, or
 /// implement `HasPropKind` at the enum's definition site:
 ///
 /// ```ignore
@@ -100,7 +100,7 @@ fn has_serde_skip(field: &syn::Field) -> bool {
 /// ```
 ///
 /// Live examples: see `ChannelsConfig`, `ProvidersConfig`, and `MemoryConfig`
-/// in `crates/zeroclaw-config/src/schema.rs`.
+/// in `crates/operant-config/src/schema.rs`.
 #[proc_macro_derive(
     Configurable,
     attributes(

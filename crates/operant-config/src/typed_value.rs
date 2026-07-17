@@ -1,6 +1,6 @@
 //! Strictly-typed JSON-to-`Config::set_prop` value coercion.
 //!
-//! Both the gateway HTTP CRUD layer and the CLI (`zeroclaw config patch`)
+//! Both the gateway HTTP CRUD layer and the CLI (`operant config patch`)
 //! receive incoming values as `serde_json::Value` and need to hand them to
 //! `Config::set_prop`, which takes a `&str`. The naive coercion (just JSON
 //! stringify everything) loses type safety: a JSON array passed where a

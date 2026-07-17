@@ -25,7 +25,7 @@
 //!
 //! ## User-facing migration command
 //!
-//! `zeroclaw config migrate` rewrites the on-disk `config.toml` to the current
+//! `operant config migrate` rewrites the on-disk `config.toml` to the current
 //! schema version using `toml_edit` to preserve comments and formatting.
 
 use anyhow::{Context, Result};
@@ -109,7 +109,7 @@ impl V1Compat {
             from = from,
             to = CURRENT_SCHEMA_VERSION,
             "Config schema migrated in-memory from version {from} to {CURRENT_SCHEMA_VERSION}. \
-             Run `zeroclaw config migrate` to update the file on disk.",
+             Run `operant config migrate` to update the file on disk.",
         );
 
         self.config

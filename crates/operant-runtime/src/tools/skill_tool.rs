@@ -162,7 +162,7 @@ impl Tool for SkillShellTool {
         let command = self.substitute_args(&args);
 
         // Rate limiting is applied by the RateLimitedTool wrapper at
-        // registration time (see zeroclaw-runtime::tools::mod). The
+        // registration time (see operant-runtime::tools::mod). The
         // PathGuardedTool wrapper cannot inspect the substituted command
         // built by substitute_args, so the forbidden_path_argument check
         // below remains tool-local.
@@ -495,7 +495,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn skill_shell_tool_timeout_kills_process() {
-        let pid_file = std::env::temp_dir().join("zeroclaw_timeout_kills_test.pid");
+        let pid_file = std::env::temp_dir().join("operant_timeout_kills_test.pid");
         let _ = std::fs::remove_file(&pid_file);
         let pid_path = pid_file.display().to_string();
 

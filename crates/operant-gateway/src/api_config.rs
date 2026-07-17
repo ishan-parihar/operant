@@ -1,7 +1,7 @@
 //! Per-property CRUD endpoints for `/api/config/*`.
 //!
 //! These endpoints expose the same `Config::get_prop` / `set_prop` core that
-//! `zeroclaw config get/set/list/init/migrate` uses on the CLI. Both are thin
+//! `operant config get/set/list/init/migrate` uses on the CLI. Both are thin
 //! frontends over the same mutation primitive.
 //!
 //! Returns structured `ConfigApiError` responses with stable codes the
@@ -57,7 +57,7 @@ pub struct PropPutBody {
 /// rejected at apply time with `op_not_supported` because safe reference-
 /// graph rewriting isn't part of this PR.
 ///
-/// `comment` is a ZeroClaw extension — when provided it accompanies the
+/// `comment` is a Operant extension — when provided it accompanies the
 /// resulting TOML write so future maintainers can see why a value was set.
 /// Honored once the comment-preserving write path is wired through (step 7);
 /// accepted here so the API shape doesn't churn.
@@ -833,11 +833,11 @@ pub async fn handle_patch(
     // Drift guard: if the on-disk file diverges from in-memory state on any
     // path the PATCH would touch, refuse with 409 ConfigChangedExternally
     // unless the client explicitly opts in to overwrite via the
-    // `X-ZeroClaw-Override-Drift: true` header. The opt-in surface keeps
+    // `X-Operant-Override-Drift: true` header. The opt-in surface keeps
     // the contract loud: the only way to silently overwrite a hand-edit is
     // a deliberate header, never an accident.
     let override_drift = headers
-        .get("x-zeroclaw-override-drift")
+        .get("x-operant-override-drift")
         .and_then(|v| v.to_str().ok())
         .map(|v| v.eq_ignore_ascii_case("true"))
         .unwrap_or(false);
@@ -859,7 +859,7 @@ pub async fn handle_patch(
                     ConfigApiCode::ConfigChangedExternally,
                     format!(
                         "on-disk config has drifted from in-memory state on \
-                         {} path(s) being patched: {}. Send `X-ZeroClaw-Override-Drift: true` \
+                         {} path(s) being patched: {}. Send `X-Operant-Override-Drift: true` \
                          to overwrite, or GET /api/config/drift to inspect first.",
                         conflicts.len(),
                         conflict_paths.join(", "),
@@ -1079,7 +1079,7 @@ pub struct InitResponse {
 }
 
 /// POST /api/config/init?section=providers — instantiate `None` nested
-/// sections with defaults. Mirrors `zeroclaw config init`. When every
+/// sections with defaults. Mirrors `operant config init`. When every
 /// requested section is already configured, returns `{initialized: []}`.
 pub async fn handle_init(
     State(state): State<AppState>,
@@ -1123,7 +1123,7 @@ pub struct MigrateResponse {
 }
 
 /// POST /api/config/migrate — apply V1→V2 migration to the on-disk
-/// config file in place. Mirrors `zeroclaw config migrate`. Backs up the
+/// config file in place. Mirrors `operant config migrate`. Backs up the
 /// previous content alongside the original (`config.toml.bak`) before
 /// writing the migrated form. Returns `{migrated: false}` when the config
 /// is already at the current schema version.
@@ -1232,7 +1232,7 @@ pub async fn handle_options_config(headers: HeaderMap) -> Response {
 ///
 /// Per-path subtree extraction (walking the JSON Schema tree by JSON Pointer
 /// to return just the relevant subtree) is a follow-up; today we still return
-/// the full schema with a `x-zeroclaw-requested-path` + per-field metadata
+/// the full schema with a `x-operant-requested-path` + per-field metadata
 /// (kind, type_hint, is_secret) so the frontend has everything it needs to
 /// render the input without a separate round-trip.
 pub async fn handle_options_prop(
@@ -1266,11 +1266,11 @@ pub async fn handle_options_prop(
     let mut body = whole_body.clone();
     if let serde_json::Value::Object(ref mut map) = body {
         map.insert(
-            "x-zeroclaw-requested-path".into(),
+            "x-operant-requested-path".into(),
             serde_json::Value::String(q.path.clone()),
         );
         map.insert(
-            "x-zeroclaw-prop".into(),
+            "x-operant-prop".into(),
             serde_json::json!({
                 "path": q.path,
                 "kind": prop_kind_wire(info.kind),

@@ -27,7 +27,7 @@ struct InstallSuggestion {
 
 impl InstallSuggestion {
     pub fn render_user_message(&self) -> String {
-        let install_command = format!("zeroclaw skills install {}", self.source);
+        let install_command = format!("operant skills install {}", self.source);
         crate::i18n::get_required_cli_string_with_args(
             "cli-skills-install-suggestion",
             &[
@@ -332,7 +332,7 @@ mod tests {
         assert!(
             suggestion
                 .render_user_message()
-                .contains("zeroclaw skills install calendar")
+                .contains("operant skills install calendar")
         );
     }
 
@@ -404,7 +404,7 @@ tags = ["scheduling"]
         )
         .expect("cached registry metadata should render a suggestion");
         assert!(suggestion.contains("calendar"));
-        assert!(suggestion.contains("zeroclaw skills install calendar"));
+        assert!(suggestion.contains("operant skills install calendar"));
         assert!(!suggestion.contains("body-only secret phrase"));
         assert!(!dir.path().join("skills").exists());
     }

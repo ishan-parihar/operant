@@ -14,7 +14,7 @@
 //! 3. Agent config (`agent.thinking.default_level`)
 //! 4. Global default (`Medium`)
 
-// Re-exported from zeroclaw-config.
+// Re-exported from operant-config.
 pub use operant_config::scattered_types::{ThinkingConfig, ThinkingLevel};
 
 /// Parameters derived from a thinking level, applied to the LLM request.

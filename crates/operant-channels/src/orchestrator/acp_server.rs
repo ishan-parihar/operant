@@ -491,12 +491,12 @@ impl AcpServer {
             .fallback_provider()
             .and_then(|e| e.model.clone());
 
-        let mut zeroclaw_meta = serde_json::json!({
+        let mut operant_meta = serde_json::json!({
             "maxSessions": self.acp_config.max_sessions,
             "sessionTimeoutSecs": self.acp_config.session_timeout_secs,
         });
         if let Some(model) = default_model {
-            zeroclaw_meta["defaultModel"] = serde_json::json!(model);
+            operant_meta["defaultModel"] = serde_json::json!(model);
         }
 
         Ok(serde_json::json!({
@@ -515,13 +515,13 @@ impl AcpServer {
                 "sessionCapabilities": {},
             },
             "agentInfo": {
-                "name": "zeroclaw-acp",
-                "title": "ZeroClaw ACP",
+                "name": "operant-acp",
+                "title": "Operant ACP",
                 "version": env!("CARGO_PKG_VERSION"),
             },
             "authMethods": [],
             "_meta": {
-                "zeroclaw": zeroclaw_meta,
+                "operant": operant_meta,
             }
         }))
     }
@@ -993,7 +993,7 @@ fn map_tool_kind(name: &str) -> &'static str {
         "memory_forget" | "memory_purge" => "delete",
         // ACP clients often treat `read`/`search`/`fetch` calls as noisy
         // background context gathering and keep their content collapsed. These
-        // ZeroClaw tools return user-visible text, so use `other` to keep the
+        // Operant tools return user-visible text, so use `other` to keep the
         // result content surfaced consistently across clients.
         "content_search" | "discord_search" | "glob_search" | "knowledge" | "search"
         | "tool_search" | "web_search_tool" => "other",
@@ -1221,8 +1221,8 @@ mod tests {
             .unwrap();
 
         assert_eq!(result["protocolVersion"], 1);
-        assert_eq!(result["agentInfo"]["name"], "zeroclaw-acp");
-        assert_eq!(result["agentInfo"]["title"], "ZeroClaw ACP");
+        assert_eq!(result["agentInfo"]["name"], "operant-acp");
+        assert_eq!(result["agentInfo"]["title"], "Operant ACP");
         assert_eq!(result["agentInfo"]["version"], env!("CARGO_PKG_VERSION"));
         assert_eq!(result["authMethods"], serde_json::json!([]));
         assert_eq!(result["agentCapabilities"]["loadSession"], false);
@@ -1243,9 +1243,9 @@ mod tests {
         let server = AcpServer::new(Config::default(), AcpServerConfig::default());
         let result = server.handle_initialize(&serde_json::json!({})).unwrap();
         assert!(
-            result["_meta"]["zeroclaw"].get("defaultModel").is_none(),
+            result["_meta"]["operant"].get("defaultModel").is_none(),
             "defaultModel must be absent when no provider is configured, got: {}",
-            result["_meta"]["zeroclaw"]["defaultModel"]
+            result["_meta"]["operant"]["defaultModel"]
         );
     }
 
@@ -1263,7 +1263,7 @@ mod tests {
         );
         let server = AcpServer::new(config, AcpServerConfig::default());
         let result = server.handle_initialize(&serde_json::json!({})).unwrap();
-        assert_eq!(result["_meta"]["zeroclaw"]["defaultModel"], "llama3.2");
+        assert_eq!(result["_meta"]["operant"]["defaultModel"], "llama3.2");
     }
 
     #[test]

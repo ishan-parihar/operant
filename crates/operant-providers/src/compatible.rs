@@ -1514,7 +1514,7 @@ impl OpenAiCompatibleProvider {
     /// to base64 data URIs before any message reaches the upstream provider.
     ///
     /// OpenAI-compatible backends (vLLM, llama.cpp server, LM Studio, etc.) run
-    /// on a different host than zeroclaw in typical deployments, so a marker
+    /// on a different host than operant in typical deployments, so a marker
     /// containing a host-local file path (e.g. `[IMAGE:/home/u/.../photo.jpg]`)
     /// would otherwise reach `to_message_content`, be promoted to a
     /// `MessagePart::ImageUrl`, and arrive at the backend as
@@ -2792,7 +2792,7 @@ mod tests {
             messages: vec![
                 Message {
                     role: "system".to_string(),
-                    content: MessageContent::Text("You are ZeroClaw".to_string()),
+                    content: MessageContent::Text("You are Operant".to_string()),
                 },
                 Message {
                     role: "user".to_string(),
@@ -3714,12 +3714,12 @@ mod tests {
             "https://example.com",
             Some("k"),
             AuthStyle::Bearer,
-            "zeroclaw-test/1.0",
+            "operant-test/1.0",
         );
         let caps = <OpenAiCompatibleProvider as Provider>::capabilities(&p);
         assert!(caps.native_tool_calling);
         assert!(!caps.vision);
-        assert_eq!(p.user_agent.as_deref(), Some("zeroclaw-test/1.0"));
+        assert_eq!(p.user_agent.as_deref(), Some("operant-test/1.0"));
     }
 
     #[test]
@@ -3729,13 +3729,13 @@ mod tests {
             "https://example.com",
             Some("k"),
             AuthStyle::Bearer,
-            "zeroclaw-test/vision",
+            "operant-test/vision",
             true,
         );
         let caps = <OpenAiCompatibleProvider as Provider>::capabilities(&p);
         assert!(caps.native_tool_calling);
         assert!(caps.vision);
-        assert_eq!(p.user_agent.as_deref(), Some("zeroclaw-test/vision"));
+        assert_eq!(p.user_agent.as_deref(), Some("operant-test/vision"));
     }
 
     #[test]
@@ -4647,14 +4647,14 @@ mod tests {
     #[test]
     fn with_extra_headers_sets_headers() {
         let mut headers = std::collections::HashMap::new();
-        headers.insert("X-Title".to_string(), "zeroclaw".to_string());
+        headers.insert("X-Title".to_string(), "operant".to_string());
         headers.insert(
             "HTTP-Referer".to_string(),
             "https://example.com".to_string(),
         );
         let p = make_provider("test", "https://example.com", None).with_extra_headers(headers);
         assert_eq!(p.extra_headers.len(), 2);
-        assert_eq!(p.extra_headers.get("X-Title").unwrap(), "zeroclaw");
+        assert_eq!(p.extra_headers.get("X-Title").unwrap(), "operant");
         assert_eq!(
             p.extra_headers.get("HTTP-Referer").unwrap(),
             "https://example.com"
@@ -4664,7 +4664,7 @@ mod tests {
     #[test]
     fn http_client_with_extra_headers_builds_successfully() {
         let mut headers = std::collections::HashMap::new();
-        headers.insert("X-Title".to_string(), "zeroclaw".to_string());
+        headers.insert("X-Title".to_string(), "operant".to_string());
         headers.insert("User-Agent".to_string(), "TestAgent/1.0".to_string());
         let p = make_provider("test", "https://example.com", None).with_extra_headers(headers);
         // Should not panic
@@ -4681,7 +4681,7 @@ mod tests {
     #[test]
     fn extra_headers_combined_with_user_agent() {
         let mut headers = std::collections::HashMap::new();
-        headers.insert("X-Title".to_string(), "zeroclaw".to_string());
+        headers.insert("X-Title".to_string(), "operant".to_string());
         let p = OpenAiCompatibleProvider::new_with_user_agent(
             "test",
             "https://example.com",

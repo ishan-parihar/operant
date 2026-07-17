@@ -628,7 +628,7 @@ mod client {
         if recovery_attempts > 1 {
             bail!(
                 "matrix: corruption recovery looped — aborting to avoid an infinite restart cycle. \
-                 Wipe ~/.zeroclaw/state/matrix/ manually and restart."
+                 Wipe ~/.operant/state/matrix/ manually and restart."
             );
         }
 
@@ -826,7 +826,7 @@ mod client {
         let mut login = client
             .matrix_auth()
             .login_username(&user_id, password)
-            .initial_device_display_name("ZeroClaw");
+            .initial_device_display_name("Operant");
         if let Some(d) = config.device_id.as_deref()
             && !d.is_empty()
         {
@@ -1728,7 +1728,7 @@ mod inbound {
     ) -> anyhow::Result<Option<std::path::PathBuf>> {
         let Some(workspace) = workspace else {
             warn!(
-                "matrix: cannot persist {} — channels.matrix workspace_dir not configured. Set ZEROCLAW_DIR or run via the orchestrator.",
+                "matrix: cannot persist {} — channels.matrix workspace_dir not configured. Set OPERANT_DIR or run via the orchestrator.",
                 info.file_name
             );
             return Ok(None);
@@ -1966,7 +1966,7 @@ mod outbound {
     }
 
     /// 8 MiB cap on the body of an HTTP marker fetch. Matches WebFetchTool's
-    /// streaming-cap pattern in `crates/zeroclaw-tools/src/web_fetch.rs`.
+    /// streaming-cap pattern in `crates/operant-tools/src/web_fetch.rs`.
     const MAX_MARKER_BYTES: usize = 8 * 1024 * 1024;
     /// 30-second connect+request timeout for HTTP marker fetches. Bounds the
     /// agent-driven fetch path so a hung target cannot stall the channel.
@@ -2097,7 +2097,7 @@ mod outbound {
             reqwest::Client::builder()
                 .timeout(MARKER_HTTP_TIMEOUT)
                 .redirect(reqwest::redirect::Policy::limited(5))
-                .user_agent("zeroclaw-matrix/1.0")
+                .user_agent("operant-matrix/1.0")
                 .build()
                 .expect("default reqwest client config never fails to build")
         })
@@ -3325,7 +3325,7 @@ mod tests {
         #[test]
         fn body_fallback_display_name() {
             let bot = user_id!("@bot:example.org");
-            assert!(is_mentioned(bot, Some("ZeroClaw"), None, "hi zeroclaw!"));
+            assert!(is_mentioned(bot, Some("Operant"), None, "hi operant!"));
         }
 
         #[test]
@@ -3333,7 +3333,7 @@ mod tests {
             let bot = user_id!("@bot:example.org");
             assert!(!is_mentioned(
                 bot,
-                Some("ZeroClaw"),
+                Some("Operant"),
                 None,
                 "no mention here"
             ));
@@ -4254,7 +4254,7 @@ mod tests {
             // Build a file outside the workspace, then try to reach it via
             // `<workspace>/../<sibling-name>/file`.
             let parent = workspace.path().parent().unwrap();
-            let outside_dir = parent.join("zeroclaw-test-outside");
+            let outside_dir = parent.join("operant-test-outside");
             let _ = std::fs::create_dir(&outside_dir);
             let outside_file = outside_dir.join("secret");
             std::fs::write(&outside_file, b"x").unwrap();

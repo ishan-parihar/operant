@@ -5,7 +5,7 @@
 //! calling, and dispatch commands to physical devices via the
 //! `Transport` layer.
 //!
-//! Wire protocol (ZeroClaw serial JSON):
+//! Wire protocol (Operant serial JSON):
 //! ```text
 //! gpio_write:
 //!   Host → Device:  {"cmd":"gpio_write","params":{"pin":25,"value":1}}\n

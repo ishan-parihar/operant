@@ -30,9 +30,9 @@ const CLAWHUB_WWW_DOMAIN: &str = "www.clawhub.ai";
 const CLAWHUB_DOWNLOAD_API: &str = "https://clawhub.ai/api/v1/download";
 const MAX_CLAWHUB_ZIP_BYTES: u64 = 50 * 1024 * 1024; // 50 MiB
 
-// ─── Skills registry (zeroclaw-skills) ────────────────────────────────────────
+// ─── Skills registry (operant-skills) ────────────────────────────────────────
 // TODO: update to operant-labs repo when the registry is rebranded
-const SKILLS_REGISTRY_REPO_URL: &str = "https://github.com/zeroclaw-labs/zeroclaw-skills";
+const SKILLS_REGISTRY_REPO_URL: &str = "https://github.com/zeroclaw-labs/operant-skills";
 const SKILLS_REGISTRY_DIR_NAME: &str = "skills-registry";
 const SKILLS_REGISTRY_SYNC_MARKER: &str = ".operant-skills-registry-sync";
 const SKILLS_REGISTRY_SYNC_INTERVAL_SECS: u64 = 60 * 60 * 24;
@@ -158,7 +158,7 @@ fn default_version() -> String {
     "0.1.0".to_string()
 }
 
-/// Trust tier of a skill listed in the `zeroclaw-skills` registry.
+/// Trust tier of a skill listed in the `operant-skills` registry.
 ///
 /// Derived from the `tags` array in `registry.json`. `Unknown` is used as the
 /// "no recognized tier tag" fallback and is treated like `Community` for trust
@@ -166,9 +166,9 @@ fn default_version() -> String {
 ///
 /// `Featured` is intentionally kept as a distinct variant even though it
 /// renders identically to `Community` today: the registry's `Featured` tag is
-/// a separate curation signal (zeroclaw-labs hand-picked, but still authored
-/// outside zeroclaw-labs) and we expect to render it differently later — e.g.
-/// "Featured — community-curated by zeroclaw-labs but not maintained by us".
+/// a separate curation signal (operant-labs hand-picked, but still authored
+/// outside operant-labs) and we expect to render it differently later — e.g.
+/// "Featured — community-curated by operant-labs but not maintained by us".
 /// Keeping the variant now avoids a churn-y enum extension once that copy
 /// lands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -616,7 +616,7 @@ fn open_skills_enabled_from_sources(
 
 fn open_skills_enabled(config_open_skills_enabled: Option<bool>) -> bool {
     let env_override = std::env::var("OPERANT_OPEN_SKILLS_ENABLED")
-        .or_else(|_| std::env::var("ZEROCLAW_OPEN_SKILLS_ENABLED"))
+        .or_else(|_| std::env::var("OPERANT_OPEN_SKILLS_ENABLED"))
         .ok();
     open_skills_enabled_from_sources(config_open_skills_enabled, env_override.as_deref())
 }
@@ -646,7 +646,7 @@ fn resolve_open_skills_dir_from_sources(
 
 fn resolve_open_skills_dir(config_open_skills_dir: Option<&str>) -> Option<PathBuf> {
     let env_dir = std::env::var("OPERANT_OPEN_SKILLS_DIR")
-        .or_else(|_| std::env::var("ZEROCLAW_OPEN_SKILLS_DIR"))
+        .or_else(|_| std::env::var("OPERANT_OPEN_SKILLS_DIR"))
         .ok();
     let home_dir = UserDirs::new().map(|dirs| dirs.home_dir().to_path_buf());
     resolve_open_skills_dir_from_sources(
@@ -2213,7 +2213,7 @@ stars = 42
 updated_at = "2026-04-30"
 
 [forge.requirements]
-runtime = "zeroclaw >= 0.1"
+runtime = "operant >= 0.1"
 
 [forge.metadata]
 auto_integrated = true
@@ -2235,7 +2235,7 @@ forge_timestamp = "2026-04-30T12:00:00Z"
         assert_eq!(forge.updated_at.as_deref(), Some("2026-04-30"));
         assert_eq!(
             forge.requirements.get("runtime").and_then(|v| v.as_str()),
-            Some("zeroclaw >= 0.1"),
+            Some("operant >= 0.1"),
         );
         assert_eq!(
             forge

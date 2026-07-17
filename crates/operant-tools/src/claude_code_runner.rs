@@ -29,7 +29,7 @@ pub struct ClaudeCodeHookEvent {
 }
 
 /// Spawns Claude Code inside a tmux session with HTTP hooks that POST tool
-/// execution events back to ZeroClaw's gateway endpoint, enabling live Slack
+/// execution events back to Operant's gateway endpoint, enabling live Slack
 /// progress updates and SSH session handoff.
 ///
 /// Unlike [`ClaudeCodeTool`](super::claude_code::ClaudeCodeTool) which runs
@@ -42,7 +42,7 @@ pub struct ClaudeCodeHookEvent {
 pub struct ClaudeCodeRunnerTool {
     security: Arc<SecurityPolicy>,
     config: ClaudeCodeRunnerConfig,
-    /// Base URL of the ZeroClaw gateway (e.g. `"http://localhost:3000"`).
+    /// Base URL of the Operant gateway (e.g. `"http://localhost:3000"`).
     gateway_url: String,
 }
 
@@ -106,7 +106,7 @@ impl Tool for ClaudeCodeRunnerTool {
 
     async fn execute(&self, args: serde_json::Value) -> anyhow::Result<ToolResult> {
         // Rate limiting is applied by the RateLimitedTool wrapper at
-        // registration time (see zeroclaw-runtime::tools::mod).
+        // registration time (see operant-runtime::tools::mod).
 
         // Enforce act policy
         if let Err(error) = self

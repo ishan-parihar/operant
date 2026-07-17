@@ -38,7 +38,7 @@ pub mod sop_list;
 pub mod sop_status;
 pub mod verifiable_intent;
 
-// Tool types from zeroclaw-tools (direct imports, no shims)
+// Tool types from operant-tools (direct imports, no shims)
 pub use operant_tools::ask_user::AskUserTool;
 pub use operant_tools::ask_user::ChannelMapHandle;
 pub use operant_tools::backup_tool::BackupTool;
@@ -112,7 +112,7 @@ pub use operant_tools::web_search_tool::WebSearchTool;
 pub use operant_tools::workspace_tool::WorkspaceTool;
 pub use operant_tools::wrappers::{PathGuardedTool, RateLimitedTool};
 
-// Traits from zeroclaw-api
+// Traits from operant-api
 pub use operant_api::schema::{CleaningStrategy, SchemaCleanr};
 pub use operant_api::tool::{Tool, ToolResult, ToolSpec};
 

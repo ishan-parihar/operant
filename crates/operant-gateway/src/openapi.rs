@@ -55,7 +55,7 @@ pub async fn handle_openapi_json() -> Response {
 
 /// Build the OpenAPI 3.1 document. Pub so the `xtask gen-openapi` binary
 /// can render the same JSON the gateway serves and write it to the
-/// committed snapshot at `crates/zeroclaw-gateway/openapi.json`. CI
+/// committed snapshot at `crates/operant-gateway/openapi.json`. CI
 /// staleness check (`xtask gen-openapi --check`) diffs the rendered
 /// spec against the committed file so a handler change without a spec
 /// update fails the build.
@@ -200,9 +200,9 @@ pub fn build_spec() -> serde_json::Value {
             "patch": {
                 "tags": ["config"],
                 "summary": "Apply a JSON Patch (RFC 6902) document atomically",
-                "description": "Operations execute in order against an in-memory copy; `Config::validate()` runs once at the end; on success the snapshot persists and swaps. On failure, on-disk and in-memory state are unchanged. `move`/`copy` return `op_not_supported`. `test` against a secret path returns `secret_test_forbidden`.\n\n**Drift guard:** if the on-disk file has drifted from in-memory state on any path being patched, returns 409 `config_changed_externally` unless the request carries `X-ZeroClaw-Override-Drift: true`. GET /api/config/drift to inspect first.",
+                "description": "Operations execute in order against an in-memory copy; `Config::validate()` runs once at the end; on success the snapshot persists and swaps. On failure, on-disk and in-memory state are unchanged. `move`/`copy` return `op_not_supported`. `test` against a secret path returns `secret_test_forbidden`.\n\n**Drift guard:** if the on-disk file has drifted from in-memory state on any path being patched, returns 409 `config_changed_externally` unless the request carries `X-Operant-Override-Drift: true`. GET /api/config/drift to inspect first.",
                 "parameters": [{
-                    "name": "X-ZeroClaw-Override-Drift",
+                    "name": "X-Operant-Override-Drift",
                     "in": "header",
                     "required": false,
                     "schema": { "type": "string", "enum": ["true"] },
@@ -261,7 +261,7 @@ pub fn build_spec() -> serde_json::Value {
             "post": {
                 "tags": ["config"],
                 "summary": "Apply on-disk schema migration in place",
-                "description": "Mirrors `zeroclaw config migrate`. Backs up the previous file as `config.toml.bak` before writing.",
+                "description": "Mirrors `operant config migrate`. Backs up the previous file as `config.toml.bak` before writing.",
                 "responses": {
                     "200": {
                         "description": "Migration applied (or already at the current schema version).",
@@ -275,9 +275,9 @@ pub fn build_spec() -> serde_json::Value {
     let mut spec = serde_json::json!({
         "openapi": "3.1.0",
         "info": {
-            "title": "ZeroClaw Gateway — Config CRUD",
+            "title": "Operant Gateway — Config CRUD",
             "version": env!("CARGO_PKG_VERSION"),
-            "description": "Per-property CRUD endpoints over the same `Config` mutation core that `zeroclaw config get/set/list/init/migrate` uses on the CLI. See https://github.com/zeroclaw-labs/zeroclaw/issues/6175 for the full surface and acceptance checklist.",
+            "description": "Per-property CRUD endpoints over the same `Config` mutation core that `operant config get/set/list/init/migrate` uses on the CLI. See https://github.com/zeroclaw-labs/operant/issues/6175 for the full surface and acceptance checklist.",
         },
         "security": [{"bearerAuth": []}],
         "paths": paths,
@@ -386,7 +386,7 @@ pub fn build_spec() -> serde_json::Value {
     serde_json::json!({
         "openapi": "3.1.0",
         "info": {
-            "title": "ZeroClaw Gateway",
+            "title": "Operant Gateway",
             "version": env!("CARGO_PKG_VERSION"),
             "description": "OpenAPI generation requires the `schema-export` feature; this build was compiled without it.",
         },

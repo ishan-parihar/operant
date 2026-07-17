@@ -118,9 +118,9 @@ impl WebSearchTool {
 
         // Decrypt if necessary.
         if operant_config::secrets::SecretStore::is_encrypted(&raw_key) {
-            let zeroclaw_dir = self.config_path.parent().unwrap_or_else(|| Path::new("."));
+            let operant_dir = self.config_path.parent().unwrap_or_else(|| Path::new("."));
             let store =
-                operant_config::secrets::SecretStore::new(zeroclaw_dir, self.secrets_encrypt);
+                operant_config::secrets::SecretStore::new(operant_dir, self.secrets_encrypt);
             let plaintext = store.decrypt(&raw_key)?;
             if plaintext.is_empty() {
                 anyhow::bail!("Brave API key not configured (decrypted value is empty)");
@@ -288,9 +288,9 @@ impl WebSearchTool {
             .ok_or_else(|| anyhow::anyhow!("Tavily API key not configured"))?;
 
         if operant_config::secrets::SecretStore::is_encrypted(&raw_key) {
-            let zeroclaw_dir = self.config_path.parent().unwrap_or_else(|| Path::new("."));
+            let operant_dir = self.config_path.parent().unwrap_or_else(|| Path::new("."));
             let store =
-                operant_config::secrets::SecretStore::new(zeroclaw_dir, self.secrets_encrypt);
+                operant_config::secrets::SecretStore::new(operant_dir, self.secrets_encrypt);
             let plaintext = store.decrypt(&raw_key)?;
             if plaintext.is_empty() {
                 anyhow::bail!("Tavily API key not configured (decrypted value is empty)");
@@ -462,7 +462,7 @@ impl WebSearchTool {
 
         let builder = reqwest::Client::builder()
             .timeout(Duration::from_secs(self.timeout_secs))
-            .user_agent("ZeroClaw/1.0");
+            .user_agent("Operant/1.0");
         let builder =
             operant_config::schema::apply_runtime_proxy_to_builder(builder, "tool.web_search");
         let client = builder.build()?;

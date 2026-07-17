@@ -737,7 +737,7 @@ mod tests {
         // The non-vision summarizer branch must strip every inbound
         // attachment-kind alias the channel parsers can emit, not just
         // `[IMAGE:]`. Mirrors `ATTACHMENT_KINDS` in
-        // `crates/zeroclaw-channels/src/util.rs`. Regression: a `[PHOTO:]`
+        // `crates/operant-channels/src/util.rs`. Regression: a `[PHOTO:]`
         // or `[DOCUMENT:]` marker still leaking through would surface a
         // local filesystem path in the auxiliary `chat_with_system` payload
         // and the upstream API would reject it.

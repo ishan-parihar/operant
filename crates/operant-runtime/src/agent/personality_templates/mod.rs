@@ -1,7 +1,7 @@
 //! Default starter templates for the per-workspace personality files.
 //!
 //! Recovered verbatim from the pre-#5951 onboarding wizard's
-//! `scaffold_workspace()` (commit `0c622e607^:crates/zeroclaw-runtime/src/onboard/wizard.rs`).
+//! `scaffold_workspace()` (commit `0c622e607^:crates/operant-runtime/src/onboard/wizard.rs`).
 //! The wizard rewrite (#5960) shipped without a workspace-scaffolder, so
 //! these templates were dormant in git history. They are restored here
 //! for the dashboard's Personality onboarding step (#6175 follow-up) and
@@ -45,7 +45,7 @@ pub struct TemplateContext {
 impl Default for TemplateContext {
     fn default() -> Self {
         Self {
-            agent: "ZeroClaw".to_string(),
+            agent: "Operant".to_string(),
             user: "User".to_string(),
             timezone: "UTC".to_string(),
             communication_style:

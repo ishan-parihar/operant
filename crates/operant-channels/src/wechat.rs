@@ -1,7 +1,7 @@
 //! WeChat personal iLink Bot channel.
 //!
 //! Note: the iLink consent screen ("Connect X to Weixin") shows the bot name
-//! from the iLink developer portal, not from ZeroClaw config. Users who
+//! from the iLink developer portal, not from Operant config. Users who
 //! register their own iLink bot will see their own name there.
 
 use aes::cipher::{BlockDecryptMut, BlockEncryptMut, KeyInit, block_padding::Pkcs7};
@@ -594,8 +594,8 @@ impl WeChatChannel {
 
         let state_dir = state_dir.unwrap_or_else(|| {
             directories::UserDirs::new()
-                .map(|u| u.home_dir().join(".zeroclaw").join("wechat"))
-                .unwrap_or_else(|| PathBuf::from(".zeroclaw/wechat"))
+                .map(|u| u.home_dir().join(".operant").join("wechat"))
+                .unwrap_or_else(|| PathBuf::from(".operant/wechat"))
         });
 
         let mut channel = Self {
@@ -1471,7 +1471,7 @@ impl WeChatChannel {
             .get_token()
             .context("WeChat: not logged in, cannot send")?;
 
-        let client_id = format!("zeroclaw-{}", uuid::Uuid::new_v4());
+        let client_id = format!("operant-{}", uuid::Uuid::new_v4());
         let body = serde_json::json!({
             "msg": {
                 "from_user_id": "",

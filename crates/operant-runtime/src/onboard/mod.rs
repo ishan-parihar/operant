@@ -1,8 +1,8 @@
 //! Onboard orchestrator.
 //!
 //! Thin dispatcher above the `OnboardUi` trait (defined in
-//! `zeroclaw-config::traits`). Section-scoped entry points let callers run
-//! just one slice (`zeroclaw onboard channels`) or the whole flow.
+//! `operant-config::traits`). Section-scoped entry points let callers run
+//! just one slice (`operant onboard channels`) or the whole flow.
 //!
 //! Everything writes through `Config::set_prop` (or its helpers); direct
 //! struct-field assignment is off-limits per the DRY contract (#5951).
@@ -194,7 +194,7 @@ async fn run_all(cfg: &mut Config, ui: &mut dyn OnboardUi, flags: &Flags) -> Res
 /// Write a single property and immediately persist the whole config. This is
 /// the ONE path every section takes to mutate cfg, so users who Ctrl+C
 /// mid-flow find their prior answers already saved on disk — re-running
-/// `zeroclaw onboard` picks up where they left off.
+/// `operant onboard` picks up where they left off.
 async fn persist(cfg: &mut Config, path: &str, value: &str) -> Result<()> {
     cfg.set_prop(path, value)?;
     cfg.save().await?;
@@ -746,7 +746,7 @@ async fn providers(cfg: &mut Config, ui: &mut dyn OnboardUi, flags: &Flags) -> R
     ui.note(
         "Paste an API key (e.g. `sk-ant-…` for Anthropic, `sk-…` for OpenAI) \
          when prompted. For OAuth-based providers run: \
-         zeroclaw auth login --provider <name>",
+         operant auth login --provider <name>",
     );
 
     // Menu is driven by operant_providers::list_providers() — single source
@@ -974,7 +974,7 @@ fn provider_trait_defaults_for_prompts(provider: &str, prefix: &str) -> Vec<Fiel
 
 /// Prompt for the model field using the provider's live model catalog.
 ///
-/// Calls `Provider::list_models()` (no auth — see `zeroclaw-providers`
+/// Calls `Provider::list_models()` (no auth — see `operant-providers`
 /// models_dev + native public endpoints). Falls back to a manual string
 /// input when the provider doesn't expose a no-auth list or the fetch fails.
 async fn prompt_model(cfg: &mut Config, ui: &mut dyn OnboardUi, provider: &str) -> Result<Nav> {
@@ -1111,7 +1111,7 @@ async fn channels(cfg: &mut Config, ui: &mut dyn OnboardUi, flags: &Flags) -> Re
                 // wins when the block exists AND `<channel>.enabled = true`,
                 // otherwise `[configured]` for a present-but-disabled block.
                 // Web `/onboard` renders the same tiers via
-                // `schema_walk_picker` in `crates/zeroclaw-gateway/src/api_onboard.rs`.
+                // `schema_walk_picker` in `crates/operant-gateway/src/api_onboard.rs`.
                 let is_active = cfg
                     .get_prop(&format!("channels.{name}.enabled"))
                     .ok()

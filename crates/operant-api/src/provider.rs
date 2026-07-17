@@ -332,7 +332,7 @@ pub trait Provider: Send + Sync {
 
     // ── Provider-family defaults ────────────────────────────────────────────
     // Called by every chat/stream method's `temperature.unwrap_or(self.default_temperature())`
-    // and by `zeroclaw onboard` to prefill prompts with a visible default.
+    // and by `operant onboard` to prefill prompts with a visible default.
     // Baselines are the industry-neutral fallback; override per family where
     // the API docs disagree (Anthropic → 1.0, Ollama → 0.0 for deterministic
     // local inference).

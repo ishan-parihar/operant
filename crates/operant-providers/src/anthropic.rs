@@ -1426,7 +1426,7 @@ data: {\"type\":\"message_stop\"}\n\n";
         let p = AnthropicProvider::new(None);
         let result = p
             .chat_with_system(
-                Some("You are ZeroClaw"),
+                Some("You are Operant"),
                 "hello",
                 "claude-3-opus",
                 Some(0.7),
@@ -1461,7 +1461,7 @@ data: {\"type\":\"message_stop\"}\n\n";
         let req = ChatRequest {
             model: "claude-3-opus".to_string(),
             max_tokens: 4096,
-            system: Some("You are ZeroClaw".to_string()),
+            system: Some("You are Operant".to_string()),
             messages: vec![Message {
                 role: "user".to_string(),
                 content: "hello".to_string(),
@@ -1469,7 +1469,7 @@ data: {\"type\":\"message_stop\"}\n\n";
             temperature: 0.7,
         };
         let json = serde_json::to_string(&req).unwrap();
-        assert!(json.contains("\"system\":\"You are ZeroClaw\""));
+        assert!(json.contains("\"system\":\"You are Operant\""));
     }
 
     #[test]

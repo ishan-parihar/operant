@@ -2,7 +2,7 @@
 //!
 //! Every fallible operation against the new per-property endpoints (`/api/config/prop`,
 //! `/api/config/list`, `OPTIONS /api/config*`, `PATCH /api/config`) and the matching
-//! `zeroclaw config` CLI subcommands returns this error type. The `code` field is
+//! `operant config` CLI subcommands returns this error type. The `code` field is
 //! a stable string the dashboard / scripts can match programmatically; `message`
 //! is human-readable for terminal output and tooltip text. `path` carries the
 //! offending field (when applicable) so the dashboard can render the error
@@ -108,7 +108,7 @@ impl ConfigApiCode {
     }
 }
 
-/// Structured error returned by the new HTTP CRUD endpoints and the `zeroclaw config`
+/// Structured error returned by the new HTTP CRUD endpoints and the `operant config`
 /// subcommands they share infrastructure with.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema-export", derive(schemars::JsonSchema))]
@@ -170,7 +170,7 @@ impl ConfigApiError {
 
 /// Best-effort classify a `Config::validate()` error string into a stable
 /// code. Matches against the specific message text the validator emits today
-/// (`crates/zeroclaw-config/src/schema.rs:10151+`). Adding a new pattern here
+/// (`crates/operant-config/src/schema.rs:10151+`). Adding a new pattern here
 /// is the safe step until `validate()` itself is refactored to return
 /// structured errors per bail site.
 pub fn classify_validation_message(msg: &str) -> ConfigApiCode {

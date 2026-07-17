@@ -128,7 +128,7 @@ pub async fn run(config: &Config) -> Result<()> {
     let mut results = diagnose(config);
     results.extend(probe_models(config).await);
 
-    println!("🩺 ZeroClaw Doctor (enhanced)");
+    println!("🩺 Operant Doctor (enhanced)");
     println!();
 
     let mut current_cat = String::new();
@@ -162,7 +162,7 @@ pub async fn run(config: &Config) -> Result<()> {
     println!("  Summary: {oks} ok, {warns} warnings, {errors} errors");
 
     if errors > 0 {
-        println!("  💡 Fix the errors above, then run `zeroclaw doctor` again.");
+        println!("  💡 Fix the errors above, then run `operant doctor` again.");
     }
 
     Ok(())
@@ -230,10 +230,10 @@ pub async fn run_models(
     let targets = doctor_model_targets(config, provider_override);
 
     if targets.is_empty() {
-        anyhow::bail!("No configured providers to probe — run `zeroclaw onboard providers` first");
+        anyhow::bail!("No configured providers to probe — run `operant onboard providers` first");
     }
 
-    println!("🩺 ZeroClaw Doctor — Model Catalog Probe");
+    println!("🩺 Operant Doctor — Model Catalog Probe");
     println!("  Providers to probe: {}", targets.len());
     println!();
 
@@ -426,7 +426,7 @@ pub fn run_traces(
     }
 
     println!();
-    println!("Use `zeroclaw doctor traces --id <trace-id>` to inspect a full event payload.");
+    println!("Use `operant doctor traces --id <trace-id>` to inspect a full event payload.");
     Ok(())
 }
 
@@ -615,7 +615,7 @@ fn check_config_semantics(config: &Config, items: &mut Vec<DiagItem>) {
     } else {
         items.push(DiagItem::warn(
             cat,
-            "no channels configured — run `zeroclaw onboard` to set one up",
+            "no channels configured — run `operant onboard` to set one up",
         ));
     }
 
@@ -781,7 +781,7 @@ fn workspace_probe_path(workspace_dir: &Path) -> std::path::PathBuf {
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |duration| duration.as_nanos());
     workspace_dir.join(format!(
-        ".zeroclaw_doctor_probe_{}_{}",
+        ".operant_doctor_probe_{}_{}",
         std::process::id(),
         nanos
     ))
@@ -1280,7 +1280,7 @@ mod tests {
             first
                 .file_name()
                 .and_then(|name| name.to_str())
-                .is_some_and(|name| name.starts_with(".zeroclaw_doctor_probe_"))
+                .is_some_and(|name| name.starts_with(".operant_doctor_probe_"))
         );
     }
 

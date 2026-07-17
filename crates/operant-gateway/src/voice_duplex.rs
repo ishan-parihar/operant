@@ -85,7 +85,7 @@ pub fn handle_voice_event(event: VoiceEvent) -> Option<serde_json::Value> {
 mod tests {
     use super::*;
 
-    // ── Roundtrip serialization tests (moved from zeroclaw-api) ──
+    // ── Roundtrip serialization tests (moved from operant-api) ──
 
     #[test]
     fn voice_event_speech_start_roundtrip() {

@@ -2,7 +2,7 @@
 //
 // After the agent completes a multi-step tool-call sequence, this module
 // can persist the execution as a reusable skill definition (SKILL.toml)
-// under `~/.zeroclaw/workspace/skills/<slug>/`.
+// under `~/.operant/workspace/skills/<slug>/`.
 
 use anyhow::{Context, Result};
 use operant_config::schema::SkillCreationConfig;
@@ -142,7 +142,7 @@ impl SkillCreator {
             toml_escape(&format!("Auto-generated: {description}"))
         );
         toml.push_str("version = \"0.1.0\"\n");
-        toml.push_str("author = \"zeroclaw-auto\"\n");
+        toml.push_str("author = \"operant-auto\"\n");
         toml.push_str("tags = [\"auto-generated\"]\n");
 
         for call in tool_calls {
@@ -226,7 +226,7 @@ impl SkillCreator {
             }
 
             let content = tokio::fs::read_to_string(&toml_path).await?;
-            if content.contains("\"zeroclaw-auto\"") || content.contains("\"auto-generated\"") {
+            if content.contains("\"operant-auto\"") || content.contains("\"auto-generated\"") {
                 let modified = tokio::fs::metadata(&toml_path)
                     .await?
                     .modified()
@@ -479,7 +479,7 @@ mod tests {
         );
         assert_eq!(
             skill.get("author").and_then(toml::Value::as_str),
-            Some("zeroclaw-auto")
+            Some("operant-auto")
         );
         assert_eq!(
             skill.get("version").and_then(toml::Value::as_str),
@@ -614,7 +614,7 @@ version = "0.1.0"
 name = "existing-skill"
 description = "Auto-generated: Build the project"
 version = "0.1.0"
-author = "zeroclaw-auto"
+author = "operant-auto"
 tags = ["auto-generated"]
 "#,
         )
@@ -672,7 +672,7 @@ tags = ["auto-generated"]
 name = "{name}"
 description = "Auto-generated: Skill {i}"
 version = "0.1.0"
-author = "zeroclaw-auto"
+author = "operant-auto"
 tags = ["auto-generated"]
 "#
                 ),
@@ -772,7 +772,7 @@ tags = ["auto-generated"]
             .await
             .unwrap();
         assert!(toml_content.contains("build-and-test"));
-        assert!(toml_content.contains("zeroclaw-auto"));
+        assert!(toml_content.contains("operant-auto"));
     }
 
     #[tokio::test]
@@ -793,7 +793,7 @@ tags = ["auto-generated"]
 name = "existing"
 description = "Auto-generated: Build and test"
 version = "0.1.0"
-author = "zeroclaw-auto"
+author = "operant-auto"
 tags = ["auto-generated"]
 "#,
         )

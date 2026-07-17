@@ -412,7 +412,7 @@ mod tests {
         (router, mocks)
     }
 
-    // Arc<MockProvider> Provider impl provided by blanket impl in zeroclaw-types.
+    // Arc<MockProvider> Provider impl provided by blanket impl in operant-types.
 
     struct StreamingMockProvider {
         stream_calls: Arc<AtomicUsize>,
@@ -463,7 +463,7 @@ mod tests {
         }
     }
 
-    // Arc<StreamingMockProvider> Provider impl provided by blanket impl in zeroclaw-types.
+    // Arc<StreamingMockProvider> Provider impl provided by blanket impl in operant-types.
 
     struct ToolEventStreamingMockProvider {
         stream_calls: Arc<AtomicUsize>,
@@ -526,7 +526,7 @@ mod tests {
         }
     }
 
-    // Arc<ToolEventStreamingMockProvider> Provider impl provided by blanket impl in zeroclaw-types.
+    // Arc<ToolEventStreamingMockProvider> Provider impl provided by blanket impl in operant-types.
 
     #[tokio::test]
     async fn routes_hint_to_correct_provider() {

@@ -1,6 +1,6 @@
 //! Observer/Telemetry trait for structured agent runtime observability.
 //!
-//! Modeled after zeroclaw's `observability_traits.rs`. Provides structured
+//! Modeled after operant's `observability_traits.rs`. Provides structured
 //! events and metrics that observers can record, aggregate, or forward to
 //! external monitoring systems (structured logging, Prometheus, OpenTelemetry).
 

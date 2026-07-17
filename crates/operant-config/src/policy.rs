@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-// Re-export from zeroclaw-config.
+// Re-export from operant-config.
 pub use crate::autonomy::AutonomyLevel;
 
 /// Risk score for shell command execution.
@@ -1593,7 +1593,7 @@ impl SecurityPolicy {
 
     pub fn runtime_config_violation_message(&self, resolved: &Path) -> String {
         format!(
-            "Refusing to modify ZeroClaw runtime config/state file: {}. Use dedicated config tools or edit it manually outside the agent loop.",
+            "Refusing to modify Operant runtime config/state file: {}. Use dedicated config tools or edit it manually outside the agent loop.",
             resolved.display()
         )
     }
@@ -2249,13 +2249,13 @@ mod tests {
     #[test]
     fn absolute_path_inside_workspace_allowed_when_workspace_only() {
         let p = SecurityPolicy {
-            workspace_dir: PathBuf::from("/home/user/.zeroclaw/workspace"),
+            workspace_dir: PathBuf::from("/home/user/.operant/workspace"),
             workspace_only: true,
             ..SecurityPolicy::default()
         };
         // Absolute path inside workspace should be allowed
-        assert!(p.is_path_allowed("/home/user/.zeroclaw/workspace/images/example.png"));
-        assert!(p.is_path_allowed("/home/user/.zeroclaw/workspace/file.txt"));
+        assert!(p.is_path_allowed("/home/user/.operant/workspace/images/example.png"));
+        assert!(p.is_path_allowed("/home/user/.operant/workspace/file.txt"));
         // Absolute path outside workspace should still be blocked
         assert!(!p.is_path_allowed("/home/user/other/file.txt"));
         assert!(!p.is_path_allowed("/tmp/file.txt"));
@@ -2264,15 +2264,15 @@ mod tests {
     #[test]
     fn absolute_path_in_allowed_root_permitted_when_workspace_only() {
         let p = SecurityPolicy {
-            workspace_dir: PathBuf::from("/home/user/.zeroclaw/workspace"),
+            workspace_dir: PathBuf::from("/home/user/.operant/workspace"),
             workspace_only: true,
-            allowed_roots: vec![PathBuf::from("/home/user/.zeroclaw/shared")],
+            allowed_roots: vec![PathBuf::from("/home/user/.operant/shared")],
             ..SecurityPolicy::default()
         };
         // Path in allowed root should be permitted
-        assert!(p.is_path_allowed("/home/user/.zeroclaw/shared/data.txt"));
+        assert!(p.is_path_allowed("/home/user/.operant/shared/data.txt"));
         // Path in workspace should still be permitted
-        assert!(p.is_path_allowed("/home/user/.zeroclaw/workspace/file.txt"));
+        assert!(p.is_path_allowed("/home/user/.operant/workspace/file.txt"));
         // Path outside both should still be blocked
         assert!(!p.is_path_allowed("/home/user/other/file.txt"));
     }
@@ -3135,7 +3135,7 @@ mod tests {
 
     #[test]
     fn workspace_only_false_allows_resolved_outside_workspace() {
-        let workspace = std::env::temp_dir().join("zeroclaw_test_ws_only_false");
+        let workspace = std::env::temp_dir().join("operant_test_ws_only_false");
         let _ = std::fs::create_dir_all(&workspace);
         let canonical_workspace = workspace
             .canonicalize()
@@ -3152,7 +3152,7 @@ mod tests {
         let outside = std::env::var_os("HOME")
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("/home"))
-            .join("zeroclaw_outside_ws");
+            .join("operant_outside_ws");
         assert!(
             p.is_resolved_path_allowed(&outside),
             "workspace_only=false must allow resolved paths outside workspace"
@@ -3173,7 +3173,7 @@ mod tests {
 
     #[test]
     fn workspace_only_true_blocks_resolved_outside_workspace() {
-        let workspace = std::env::temp_dir().join("zeroclaw_test_ws_only_true");
+        let workspace = std::env::temp_dir().join("operant_test_ws_only_true");
         let _ = std::fs::create_dir_all(&workspace);
         let canonical_workspace = workspace
             .canonicalize()
@@ -3196,7 +3196,7 @@ mod tests {
         let outside = std::env::temp_dir()
             .canonicalize()
             .unwrap_or_else(|_| std::env::temp_dir())
-            .join("zeroclaw_outside_ws_true");
+            .join("operant_outside_ws_true");
         assert!(
             !p.is_resolved_path_allowed(&outside),
             "workspace_only=true must block resolved paths outside workspace"
@@ -3345,7 +3345,7 @@ mod tests {
 
     #[test]
     fn resolved_path_blocks_outside_workspace() {
-        let workspace = std::env::temp_dir().join("zeroclaw_test_resolved_path");
+        let workspace = std::env::temp_dir().join("operant_test_resolved_path");
         let _ = std::fs::create_dir_all(&workspace);
 
         // Use the canonicalized workspace so starts_with checks match
@@ -3369,7 +3369,7 @@ mod tests {
         let canonical_temp = std::env::temp_dir()
             .canonicalize()
             .unwrap_or_else(|_| std::env::temp_dir());
-        let outside = canonical_temp.join("outside_workspace_zeroclaw");
+        let outside = canonical_temp.join("outside_workspace_operant");
         assert!(
             !policy.is_resolved_path_allowed(&outside),
             "path outside workspace must be blocked"
@@ -3381,7 +3381,7 @@ mod tests {
     #[test]
     fn resolved_path_blocks_root_escape() {
         let policy = SecurityPolicy {
-            workspace_dir: PathBuf::from("/home/zeroclaw_user/project"),
+            workspace_dir: PathBuf::from("/home/operant_user/project"),
             ..SecurityPolicy::default()
         };
 
@@ -3400,7 +3400,7 @@ mod tests {
     fn resolved_path_blocks_symlink_escape() {
         use std::os::unix::fs::symlink;
 
-        let root = std::env::temp_dir().join("zeroclaw_test_symlink_escape");
+        let root = std::env::temp_dir().join("operant_test_symlink_escape");
         let workspace = root.join("workspace");
         let outside = root.join("outside_target");
 
@@ -3432,7 +3432,7 @@ mod tests {
     fn allowed_roots_permits_paths_outside_workspace() {
         use std::os::unix::fs::symlink;
 
-        let root = std::env::temp_dir().join("zeroclaw_test_allowed_roots");
+        let root = std::env::temp_dir().join("operant_test_allowed_roots");
         let workspace = root.join("workspace");
         let extra = root.join("extra_root");
         let extra_file = extra.join("data.txt");
@@ -3539,13 +3539,13 @@ mod tests {
     #[test]
     fn resolve_tool_path_normalizes_workspace_prefixed_relative_paths() {
         let p = SecurityPolicy {
-            workspace_dir: PathBuf::from("/zeroclaw-data/workspace"),
+            workspace_dir: PathBuf::from("/operant-data/workspace"),
             ..SecurityPolicy::default()
         };
-        let resolved = p.resolve_tool_path("zeroclaw-data/workspace/scripts/daily.py");
+        let resolved = p.resolve_tool_path("operant-data/workspace/scripts/daily.py");
         assert_eq!(
             resolved,
-            PathBuf::from("/zeroclaw-data/workspace/scripts/daily.py")
+            PathBuf::from("/operant-data/workspace/scripts/daily.py")
         );
     }
 
@@ -3576,7 +3576,7 @@ mod tests {
 
     #[test]
     fn runtime_config_paths_are_protected() {
-        let workspace = PathBuf::from("/tmp/zeroclaw-profile/workspace");
+        let workspace = PathBuf::from("/tmp/operant-profile/workspace");
         let policy = SecurityPolicy {
             workspace_dir: workspace.clone(),
             ..SecurityPolicy::default()
@@ -3592,7 +3592,7 @@ mod tests {
 
     #[test]
     fn workspace_files_are_not_runtime_config_paths() {
-        let workspace = PathBuf::from("/tmp/zeroclaw-profile/workspace");
+        let workspace = PathBuf::from("/tmp/operant-profile/workspace");
         let policy = SecurityPolicy {
             workspace_dir: workspace.clone(),
             ..SecurityPolicy::default()

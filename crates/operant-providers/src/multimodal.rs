@@ -158,7 +158,7 @@ pub fn contains_image_markers(messages: &[ChatMessage]) -> bool {
 /// `[FILE:...]`, `[VIDEO:...]`, `[VOICE:...]`, `[AUDIO:...]`) with
 /// `[media attachment]`. Match is case-insensitive to align with the channel
 /// attachment parsers, which all uppercase the kind before comparing
-/// (`crates/zeroclaw-channels/src/util.rs::ATTACHMENT_KINDS`,
+/// (`crates/operant-channels/src/util.rs::ATTACHMENT_KINDS`,
 /// `telegram.rs`, `discord.rs`, `qq.rs`, `whatsapp_web.rs`).
 ///
 /// Use before passing user-facing text to auxiliary `chat_with_system` calls
@@ -871,7 +871,7 @@ mod tests {
 
     #[test]
     fn strip_media_markers_replaces_image_local_path() {
-        let input = "Look at [IMAGE:/zeroclaw-data/workspace/telegram_files/photo_1.jpg]";
+        let input = "Look at [IMAGE:/operant-data/workspace/telegram_files/photo_1.jpg]";
         assert_eq!(strip_media_markers(input), "Look at [media attachment]");
     }
 
@@ -884,7 +884,7 @@ mod tests {
     #[test]
     fn strip_media_markers_replaces_all_supported_kinds() {
         // Mirrors `ATTACHMENT_KINDS` in
-        // `crates/zeroclaw-channels/src/util.rs`, which is the source of
+        // `crates/operant-channels/src/util.rs`, which is the source of
         // truth for which marker spellings inbound channels can produce.
         let input = "[IMAGE:/a.jpg] [PHOTO:/b.jpg] [DOCUMENT:/c.pdf] [FILE:/d.zip] [VIDEO:/e.mp4] [VOICE:/f.ogg] [AUDIO:/g.wav]";
         let expected = "[media attachment] [media attachment] [media attachment] [media attachment] [media attachment] [media attachment] [media attachment]";
@@ -933,12 +933,12 @@ mod tests {
     fn parse_image_markers_collapses_line_wrapped_path() {
         // Terminal-wrapped paste: a long path split across two rows with
         // leading indentation should be recovered into the original path.
-        let input = "from the logs whether the agent emits\n  [IMAGE:/home/zeroclaw_user/.zeroclaw/workspace/signal_i\n  nbound/attachment.jpg] (which the\n  channel resolves)";
+        let input = "from the logs whether the agent emits\n  [IMAGE:/home/operant_user/.operant/workspace/signal_i\n  nbound/attachment.jpg] (which the\n  channel resolves)";
         let (_, refs) = parse_image_markers(input);
         assert_eq!(refs.len(), 1);
         assert_eq!(
             refs[0],
-            "/home/zeroclaw_user/.zeroclaw/workspace/signal_inbound/attachment.jpg"
+            "/home/operant_user/.operant/workspace/signal_inbound/attachment.jpg"
         );
     }
 
