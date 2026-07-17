@@ -104,7 +104,8 @@ Added pre-existing config schema test failure to `BUGS.md`:
 | Rust source files | 11+ (unsafe blocks, safety comments, imports) |
 | Test fixtures | 1 (test_photo.jpg) |
 | Documentation | 1 (BUGS.md) |
-| **Total commits** | **3** |
+| **Total commits** | **4** (3 code + 1 docs) |
+| **This session's changes** | **~200 lines** across 15 files |
 
 ---
 
@@ -121,15 +122,19 @@ Added pre-existing config schema test failure to `BUGS.md`:
 
 ---
 
-## Known Remaining Issues
+## Known Remaining Issues (Actionable)
 
 1. **Missing `#[serial_test::serial]`** — Discord, browser, home_assistant, and xai tests mutate env vars without serialization, creating potential flaky test races under parallel execution.
+   - **Fix:** Add `serial_test` to dev-deps, annotate test functions with `#[serial_test::serial]`
 
-2. **`cargo fmt` not applied** — tdg-rust formatting errors prevented `cargo fmt --all` from completing. The `ToolResult::error` formatting issue flagged by `cargo fmt --check` remains unformatted.
+2. **`cargo fmt` not applied** — tdg-rust formatting errors prevented `cargo fmt --all` from completing.
+   - **Fix:** Add `tdg-rust` to `rustfmt.toml` ignore list, then run `cargo fmt --all`
 
 3. **44 warnings in operant-cli** — Unused methods `reasoning_heading` and `update_voice_enabled` remain unaddressed.
+   - **Fix:** Run `cargo fix --allow-dirty -p operant-cli`
 
 4. **test_photo.jpg is not a real JPEG** — 391-byte raw file works for current test (only copies file and checks string prefix) but would fail if image decoding is ever added.
+   - **Fix:** Replace with a proper minimal JPEG from a test fixture generator
 
 ---
 
@@ -149,3 +154,4 @@ Key porting decisions:
 ---
 
 *Session completed 2026-07-17. All code pushed to remote main.*
+*Last verified: 2026-07-17 — cargo check 0 errors, cargo clippy 0 errors, 2510 tests pass.*
