@@ -1241,7 +1241,7 @@ mod tests {
     #[tokio::test]
     async fn test_discord_unknown_action() {
         // Set a fake token so we get past the token check
-        // SAFETY: test-only env mutation under exclusive lock
+        // SAFETY: test-only env mutation in #[cfg(test)]
         unsafe { std::env::set_var("DISCORD_BOT_TOKEN", "test_token") };
         let tool = DiscordTool;
         let result = tool
@@ -1251,14 +1251,14 @@ mod tests {
         let err = result.error.unwrap();
         assert!(err.contains("Unknown action"));
         assert!(err.contains("fetch_messages"));
-        // SAFETY: test-only env mutation under exclusive lock
+        // SAFETY: test-only env mutation in #[cfg(test)]
         unsafe { std::env::remove_var("DISCORD_BOT_TOKEN") };
     }
 
     #[serial_test::serial]
     #[tokio::test]
     async fn test_discord_missing_params() {
-        // SAFETY: test-only env mutation under exclusive lock
+        // SAFETY: test-only env mutation in #[cfg(test)]
         unsafe { std::env::set_var("DISCORD_BOT_TOKEN", "test_token") };
         let tool = DiscordTool;
         let result = tool
@@ -1271,14 +1271,14 @@ mod tests {
         let err = result.error.unwrap();
         assert!(err.contains("Missing required parameters"));
         assert!(err.contains("channel_id"));
-        // SAFETY: test-only env mutation under exclusive lock
+        // SAFETY: test-only env mutation in #[cfg(test)]
         unsafe { std::env::remove_var("DISCORD_BOT_TOKEN") };
     }
 
     #[serial_test::serial]
     #[tokio::test]
     async fn test_discord_admin_unknown_action_from_core() {
-        // SAFETY: test-only env mutation under exclusive lock
+        // SAFETY: test-only env mutation in #[cfg(test)]
         unsafe { std::env::set_var("DISCORD_BOT_TOKEN", "test_token") };
         // DiscordTool should reject an admin action
         let tool = DiscordTool;
@@ -1288,14 +1288,14 @@ mod tests {
         assert!(!result.success);
         let err = result.error.unwrap();
         assert!(err.contains("Unknown action"));
-        // SAFETY: test-only env mutation under exclusive lock
+        // SAFETY: test-only env mutation in #[cfg(test)]
         unsafe { std::env::remove_var("DISCORD_BOT_TOKEN") };
     }
 
     #[serial_test::serial]
     #[tokio::test]
     async fn test_discord_admin_rejects_core_action() {
-        // SAFETY: test-only env mutation under exclusive lock
+        // SAFETY: test-only env mutation in #[cfg(test)]
         unsafe { std::env::set_var("DISCORD_BOT_TOKEN", "test_token") };
         // DiscordAdminTool should reject a core action
         let tool = DiscordAdminTool;
@@ -1308,7 +1308,7 @@ mod tests {
         assert!(!result.success);
         let err = result.error.unwrap();
         assert!(err.contains("Unknown action"));
-        // SAFETY: test-only env mutation under exclusive lock
+        // SAFETY: test-only env mutation in #[cfg(test)]
         unsafe { std::env::remove_var("DISCORD_BOT_TOKEN") };
     }
 

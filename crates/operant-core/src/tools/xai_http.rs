@@ -150,7 +150,7 @@ mod tests {
         // Test that relative URLs get the base prepended
         // We can't actually make network calls, but we can verify args parsing
         // Set base URL to an invalid address so connection always fails
-        // SAFETY: test-only env mutation under exclusive lock
+        // SAFETY: test-only env mutation in #[cfg(test)]
         unsafe { std::env::set_var("XAI_BASE_URL", "http://0.0.0.0:1") };
         let tool = XaiHttpTool;
         let args = serde_json::json!({

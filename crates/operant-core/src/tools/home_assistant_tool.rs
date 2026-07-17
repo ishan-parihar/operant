@@ -1468,9 +1468,9 @@ mod tests {
     fn test_get_config_defaults_when_env_unset() {
         let prev_url = std::env::var("HASS_URL").ok();
         let prev_token = std::env::var("HASS_TOKEN").ok();
-        // SAFETY: test-only env mutation under exclusive lock
+        // SAFETY: test-only env mutation in #[cfg(test)]
         unsafe { std::env::remove_var("HASS_URL") };
-        // SAFETY: test-only env mutation under exclusive lock
+        // SAFETY: test-only env mutation in #[cfg(test)]
         unsafe { std::env::remove_var("HASS_TOKEN") };
 
         let (url, token) = get_config();
