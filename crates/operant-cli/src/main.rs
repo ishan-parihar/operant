@@ -1394,7 +1394,7 @@ async fn main() -> Result<()> {
             cmd_migrate::handle_migrate_command(&loaded.config, cmd.clone(), *json).await?;
         }
         Some(Commands::Service { cmd, json }) => {
-            cmd_service::handle_service_command(&loaded.config, cmd.clone(), *json).await?;
+            cmd_service::handle_service_command(&loaded.config, cmd.clone(), *json)?;
         }
         Some(Commands::Setup {
             section,

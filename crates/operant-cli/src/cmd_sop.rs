@@ -119,14 +119,17 @@ fn discover_sops(sop_dir: &Path) -> Vec<(String, String)> {
                     .and_then(|s| s.to_str())
                     .unwrap_or("unknown")
                     .to_string();
-                // Try to read a "description" field from the TOML
+                // Use proper TOML parsing to extract the description field
                 let desc = std::fs::read_to_string(&path)
                     .ok()
                     .and_then(|c| {
-                        c.lines()
-                            .find(|l| l.starts_with("description"))
-                            .and_then(|l| l.splitn(2, '=').nth(1))
-                            .map(|v| v.trim().trim_matches('"').to_string())
+                        c.parse::<toml::Value>()
+                            .ok()
+                            .and_then(|v| v.get("description").cloned())
+                            .and_then(|v| match v {
+                                toml::Value::String(s) => Some(s),
+                                _ => Some(v.to_string()),
+                            })
                     })
                     .unwrap_or_else(|| "(no description)".to_string());
                 sops.push((name, desc));
