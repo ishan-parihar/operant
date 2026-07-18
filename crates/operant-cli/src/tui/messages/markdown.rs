@@ -548,7 +548,7 @@ pub fn normalize_markdown_newlines(text: &str) -> String {
                     && next_trimmed
                         .chars()
                         .next()
-                        .map_or(false, |c| c.is_ascii_digit()));
+                        .is_some_and(|c| c.is_ascii_digit()));
             let is_heading = next_trimmed.starts_with("#");
             let is_blockquote = next_trimmed.starts_with("> ");
             let is_code_fence = next_trimmed.starts_with("```");

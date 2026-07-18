@@ -218,7 +218,7 @@ impl ToolSchema {
                         if val.is_object() && !expects_object {
                             // Mismatch! e.g. expected array or integer but got object.
                             // Remove empty objects or non-required mismatched objects.
-                            if val.as_object().map_or(false, |o| o.is_empty())
+                            if val.as_object().is_some_and(|o| o.is_empty())
                                 || !required_fields.contains(key.as_str())
                             {
                                 keys_to_remove.push(key.clone());

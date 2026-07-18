@@ -351,6 +351,7 @@ impl KanbanDb {
         Ok(result)
     }
 
+#[allow(clippy::too_many_arguments)]
     pub fn create_task(
         &self,
         title: &str,

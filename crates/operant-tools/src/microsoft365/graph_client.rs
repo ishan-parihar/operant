@@ -188,6 +188,7 @@ pub async fn calendar_events_list(
 }
 
 /// Create a calendar event.
+#[allow(clippy::too_many_arguments)]
 pub async fn calendar_event_create(
     client: &reqwest::Client,
     token: &str,

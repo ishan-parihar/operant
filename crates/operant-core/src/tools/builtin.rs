@@ -153,6 +153,7 @@ pub async fn register_builtin_tools(
 }
 
 /// Register all built-in tools plus the sub-agent delegation tool.
+#[allow(clippy::too_many_arguments)]
 pub async fn register_builtin_tools_with_sub_agent(
     registry: &ToolRegistry,
     skills_dir: &Path,

@@ -103,6 +103,7 @@ impl CronDb {
         Ok(())
     }
 
+#[allow(clippy::too_many_arguments)]
     pub fn create_job(
         &self,
         name: String,

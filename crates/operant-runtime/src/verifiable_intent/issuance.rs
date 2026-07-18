@@ -29,6 +29,7 @@ pub struct ImmediateL2Result {
 ///
 /// The caller must provide the serialized L1 SD-JWT and the user's signing key
 /// (the private key corresponding to L1 `cnf.jwk`).
+#[allow(clippy::too_many_arguments)]
 pub fn create_layer2_immediate(
     serialized_l1: &str,
     checkout: &FinalCheckoutMandate,
@@ -105,6 +106,7 @@ pub struct AutonomousL2Result {
 }
 
 /// Create an L2 Autonomous-mode credential with constraints and agent key binding.
+#[allow(clippy::too_many_arguments)]
 pub fn create_layer2_autonomous(
     serialized_l1: &str,
     checkout: &OpenCheckoutMandate,
