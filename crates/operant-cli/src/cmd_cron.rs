@@ -182,28 +182,27 @@ async fn cmd_list(config: &AppConfig, json: bool) -> Result<()> {
 
 async fn cmd_create(config: &AppConfig, name: &str, schedule: &str, command: &str) -> Result<()> {
     let db = CronDb::init(config.database_path.clone()).context("Failed to open cron database")?;
-    let id = db
-        .create_job(
-            name.to_string(),
-            command.to_string(),
-            schedule.to_string(),
-            schedule.to_string(),
-            None,
-            "local".to_string(),
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            false,
-        )
+    let id = db.create_job(operant_core::cronjobs::db::CreateJobParams {
+            name: name.to_string(),
+            prompt: command.to_string(),
+            schedule: schedule.to_string(),
+            schedule_display: schedule.to_string(),
+            repeat_times: None,
+            deliver: "local".to_string(),
+            origin_platform: None,
+            origin_chat_id: None,
+            origin_thread_id: None,
+            skill: None,
+            skills: None,
+            model: None,
+            provider: None,
+            base_url: None,
+            script: None,
+            context_from: None,
+            enabled_toolsets: None,
+            workdir: None,
+            no_agent: false,
+        })
         .context("Failed to create cron job")?;
     println!("Cron job created successfully.");
     println!("ID: {}", id);
@@ -471,28 +470,27 @@ async fn cmd_blueprint(
     let schedule = schedule_override.unwrap_or_else(|| default_schedule.to_string());
 
     let db = CronDb::init(config.database_path.clone()).context("Failed to open cron database")?;
-    let id = db
-        .create_job(
-            display_name.to_string(),
+    let id = db.create_job(operant_core::cronjobs::db::CreateJobParams {
+            name: display_name.to_string(),
             prompt,
-            schedule.clone(),
-            schedule.clone(),
-            None,
-            "local".to_string(),
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            false,
-        )
+            schedule: schedule.clone(),
+            schedule_display: schedule.clone(),
+            repeat_times: None,
+            deliver: "local".to_string(),
+            origin_platform: None,
+            origin_chat_id: None,
+            origin_thread_id: None,
+            skill: None,
+            skills: None,
+            model: None,
+            provider: None,
+            base_url: None,
+            script: None,
+            context_from: None,
+            enabled_toolsets: None,
+            workdir: None,
+            no_agent: false,
+        })
         .context("Failed to create cron job")?;
 
     println!("Blueprint '{}' created successfully!", display_name);
