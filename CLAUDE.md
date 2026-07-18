@@ -2,7 +2,7 @@
 
 ## Operant Project Context
 
-- Current release line: `0.1.3`
+- Current release line: `0.1.4`
 - Runtime config is TOML-first and shared through `crates/operant-core/src/config.rs`
 - Rich CLI/TUI uses `ratatui` and lives under `crates/operant-cli/src/tui/`
 - Autonomous coding mode lives in `crates/operant-cli/src/autonomous.rs` and is launched through `operant autonomous` or `operant run --autonomous`
