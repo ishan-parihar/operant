@@ -31,7 +31,9 @@ impl<'a> TranscriptTurn<'a> {
             || self.live_thinking.is_some()
     }
 
+    #[allow(dead_code)] // Reasoning heading renderer
     pub fn reasoning_heading(&self) -> Option<String> {
+#[allow(dead_code)]
         if let Some(text) = self.live_thinking.and_then(reasoning_heading) {
             return Some(text);
         }
@@ -51,6 +53,7 @@ impl<'a> TranscriptTurn<'a> {
 }
 
 pub fn reasoning_heading(text: &str) -> Option<String> {
+#[allow(dead_code)]
     let first = text.lines().map(str::trim).find(|line| !line.is_empty())?;
 
     let cleaned = first

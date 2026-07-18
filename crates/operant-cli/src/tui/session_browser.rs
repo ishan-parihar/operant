@@ -88,7 +88,9 @@ impl SessionBrowserState {
     }
 
     /// Return a reference to the currently selected session, if any.
+    #[allow(dead_code)] // Session selection getter
     pub fn selected_session(&self) -> Option<&SessionEntry> {
+#[allow(dead_code)]
         self.sessions.get(self.selected_idx)
     }
 

@@ -226,6 +226,7 @@ pub mod types {
         },
         Thinking {
             thinking: String,
+            #[allow(dead_code)] // Signature field for thinking blocks
             signature: String,
         },
         RedactedThinking {
@@ -299,6 +300,7 @@ pub mod types {
     }
 
     impl Message {
+    #[allow(dead_code)] // User message constructor
         pub fn user(text: String) -> Self {
             Self {
                 role: Role::User,
@@ -1059,6 +1061,7 @@ impl ModelRegistry {
     pub fn load_cache(&mut self, _path: &std::path::Path) {}
 
     /// Add any missing providers from PROVIDERS without overwriting existing entries.
+    #[allow(dead_code)] // Provider defaults initialization
     pub fn ensure_provider_defaults(&mut self) {
         for provider in crate::provider::PROVIDERS {
             if !self.models.contains_key(provider.name) {
@@ -1476,6 +1479,7 @@ pub mod tools {
     }
 
     #[derive(Debug, Clone)]
+    #[allow(dead_code)] // Background task tracking
     pub struct Task {
         pub id: String,
         pub status: TaskStatus,

@@ -50,6 +50,7 @@ pub struct DeviceAuthDialogState {
     pub user_code: String,
     pub verification_uri: String,
     pub device_code: String,
+        #[allow(dead_code)] // Polling interval for device auth
     pub interval: u64,
     /// OAuth URL for browser-based flows (Codex). Shown in the dialog so the
     /// user can copy-paste it when automatic browser launch fails.
@@ -134,6 +135,7 @@ impl DeviceAuthDialogState {
 
 /// Messages sent from the background device-code / OAuth task back to the
 /// main event loop so it can update the dialog state.
+    #[allow(dead_code)] // Device auth event types
 pub enum DeviceAuthEvent {
     /// Device code received — show the user code and verification URI.
     GotCode {

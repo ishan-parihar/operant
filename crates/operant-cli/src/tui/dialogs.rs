@@ -51,6 +51,7 @@ pub struct PermissionOption {
 /// explanation, and a stable set of TS-compatible options.
 #[derive(Debug, Clone)]
 pub struct PermissionRequest {
+        #[allow(dead_code)] // Tool use ID for permission tracking
     pub tool_use_id: String,
     pub tool_name: String,
     /// Short summary line shown when present.
@@ -296,6 +297,7 @@ fn split_reason(reason: String) -> (String, String) {
     }
 }
 
+    #[allow(dead_code)] // Command reason formatting helper
 fn command_reason_body(reason: String, command: &str) -> String {
     let (_, danger_explanation) = split_reason(reason.clone());
     let candidate = if danger_explanation.is_empty() {
@@ -723,6 +725,7 @@ impl McpApprovalDialogState {
     }
 
     /// Populate and show the dialog.
+    #[allow(dead_code)] // MCP approval dialog setup
     pub fn show(
         &mut self,
         server_name: &str,
