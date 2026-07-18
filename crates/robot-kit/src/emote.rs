@@ -1,17 +1,15 @@
 use async_trait::async_trait;
 use serde_json::Value;
 
-use crate::config::RobotConfig;
 use crate::traits::{Tool, ToolResult, ToolSpec};
 
 /// Emote tool for LED expressions and sound effects
-pub struct EmoteTool {
-    config: RobotConfig,
-}
+#[derive(Default)]
+pub struct EmoteTool;
 
 impl EmoteTool {
-    pub fn new(config: RobotConfig) -> Self {
-        Self { config }
+    pub fn new() -> Self {
+        Self
     }
 }
 

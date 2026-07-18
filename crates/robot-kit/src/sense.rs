@@ -1,17 +1,15 @@
 use async_trait::async_trait;
 use serde_json::Value;
 
-use crate::config::RobotConfig;
 use crate::traits::{Tool, ToolResult, ToolSpec};
 
 /// Sense tool for LIDAR, ultrasonic, motion sensors
-pub struct SenseTool {
-    config: RobotConfig,
-}
+#[derive(Default)]
+pub struct SenseTool;
 
 impl SenseTool {
-    pub fn new(config: RobotConfig) -> Self {
-        Self { config }
+    pub fn new() -> Self {
+        Self
     }
 }
 
