@@ -42,6 +42,7 @@ which = "6.0"
 [features]
 default = []
 browser-native = []
+probe = []
 rag-pdf = []
 
 [dev-dependencies]
