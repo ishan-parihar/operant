@@ -9697,7 +9697,7 @@ struct ActiveWorkspaceState {
 }
 
 fn default_config_dir() -> Result<PathBuf> {
-    if let Ok(custom) = std::env::var("OPERANT_CONFIG_DIR").or_else(|_| std::env::var("ZEROCLAW_CONFIG_DIR")) {
+    if let Ok(custom) = std::env::var("OPERANT_CONFIG_DIR") {
         let custom = custom.trim();
         if !custom.is_empty() {
             return Ok(expand_tilde_path(custom));
@@ -9966,7 +9966,7 @@ async fn resolve_runtime_config_dirs(
     default_operant_dir: &Path,
     default_workspace_dir: &Path,
 ) -> Result<(PathBuf, PathBuf, ConfigResolutionSource)> {
-    if let Ok(custom_config_dir) = std::env::var("OPERANT_CONFIG_DIR").or_else(|_| std::env::var("ZEROCLAW_CONFIG_DIR")) {
+    if let Ok(custom_config_dir) = std::env::var("OPERANT_CONFIG_DIR") {
         let custom_config_dir = custom_config_dir.trim();
         if !custom_config_dir.is_empty() {
             let operant_dir = expand_tilde_path(custom_config_dir);
@@ -9978,7 +9978,7 @@ async fn resolve_runtime_config_dirs(
         }
     }
 
-    if let Ok(custom_workspace) = std::env::var("OPERANT_WORKSPACE").or_else(|_| std::env::var("ZEROCLAW_WORKSPACE"))
+    if let Ok(custom_workspace) = std::env::var("OPERANT_WORKSPACE")
         && !custom_workspace.is_empty()
     {
         let expanded = expand_tilde_path(&custom_workspace);
@@ -11354,7 +11354,7 @@ impl Config {
     /// Apply environment variable overrides to config
     pub fn apply_env_overrides(&mut self) {
         // API Key: OPERANT_API_KEY or API_KEY (generic)
-        if let Ok(key) = std::env::var("OPERANT_API_KEY").or_else(|_| std::env::var("ZEROCLAW_API_KEY")).or_else(|_| std::env::var("API_KEY"))
+        if let Ok(key) = std::env::var("OPERANT_API_KEY").or_else(|_| std::env::var("API_KEY"))
             && !key.is_empty()
         {
             self.ensure_fallback_provider().api_key = Some(key);
@@ -11428,7 +11428,7 @@ impl Config {
         self.apply_named_model_provider_profile();
 
         // Workspace directory: OPERANT_WORKSPACE
-        if let Ok(workspace) = std::env::var("OPERANT_WORKSPACE").or_else(|_| std::env::var("ZEROCLAW_WORKSPACE"))
+        if let Ok(workspace) = std::env::var("OPERANT_WORKSPACE")
             && !workspace.is_empty()
         {
             let expanded = expand_tilde_path(&workspace);

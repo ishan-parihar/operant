@@ -103,7 +103,7 @@ struct ConnectParams {
 }
 
 /// The sub-protocol we support for the chat WebSocket.
-// TODO: migrate clients from zeroclaw.v1 to operant.v1
+
 const WS_PROTOCOL: &str = "operant.v1";
 
 /// Prefix used in `Sec-WebSocket-Protocol` to carry a bearer token.
