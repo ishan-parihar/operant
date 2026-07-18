@@ -438,6 +438,9 @@ enum Commands {
     Curator {
         #[command(subcommand)]
         cmd: cmd_curator::CuratorSubcommand,
+        /// Output as JSON (for scripting/CI)
+        #[arg(long, global = true)]
+        json: bool,
     },
     /// Interactive setup wizard
     Setup {
@@ -451,6 +454,9 @@ enum Commands {
         reconfigure: bool,
         #[arg(long)]
         quick: bool,
+        /// Output as JSON (for scripting/CI)
+        #[arg(long, global = true)]
+        json: bool,
     },
     /// Run the ACP server
     Acp {
@@ -1369,8 +1375,8 @@ async fn main() -> Result<()> {
         Some(Commands::Plugins { cmd }) => {
             cmd_plugins::handle_plugins_command(&loaded.config, cmd.clone()).await?;
         }
-        Some(Commands::Curator { cmd }) => {
-            cmd_curator::handle_curator_command(&loaded.config, cmd.clone()).await?;
+        Some(Commands::Curator { cmd, json }) => {
+            cmd_curator::handle_curator_command(&loaded.config, cmd.clone(), *json).await?;
         }
         Some(Commands::Channel { cmd, json }) => {
             cmd_channel::handle_channel_command(&loaded.config, cmd.clone(), *json).await?;
@@ -1396,6 +1402,7 @@ async fn main() -> Result<()> {
             reset,
             reconfigure,
             quick,
+            json,
         }) => {
             cmd_setup::handle_setup_command(
                 &loaded.config,
@@ -1404,6 +1411,7 @@ async fn main() -> Result<()> {
                 *reset,
                 *reconfigure,
                 *quick,
+                *json,
             )
             .await?;
         }

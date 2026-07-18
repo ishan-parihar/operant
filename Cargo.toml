@@ -16,6 +16,7 @@ members = [
     "crates/operant-runtime",
     "crates/operant-hardware",
     "crates/operant-tool-call-parser",
+    "crates/robot-kit",
 ]
 
 [workspace.package]
@@ -40,6 +41,7 @@ operant-tools = { path = "crates/operant-tools" }
 operant-runtime = { path = "crates/operant-runtime" }
 operant-hardware = { path = "crates/operant-hardware" }
 operant-tool-call-parser = { path = "crates/operant-tool-call-parser" }
+operant-robot-kit = { path = "crates/robot-kit" }
 
 # Async runtime
 tokio = { version = "1.36", features = ["full"] }
