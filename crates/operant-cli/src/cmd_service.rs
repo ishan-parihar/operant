@@ -31,14 +31,14 @@ pub enum ServiceSubcommand {
 
 const SERVICE_NAME: &str = "operant";
 
-pub async fn handle_service_command(
+pub fn handle_service_command(
     _config: &AppConfig,
     cmd: ServiceSubcommand,
     json: bool,
 ) -> Result<()> {
     match cmd {
         ServiceSubcommand::Install => {
-            let result = install_service().await;
+            let result = install_service();
             if json {
                 println!(
                     "{}",
@@ -53,7 +53,7 @@ pub async fn handle_service_command(
             Ok(())
         }
         ServiceSubcommand::Start => {
-            let result = start_service().await;
+            let result = start_service();
             if json {
                 println!(
                     "{}",
@@ -68,7 +68,7 @@ pub async fn handle_service_command(
             Ok(())
         }
         ServiceSubcommand::Stop => {
-            let result = stop_service().await;
+            let result = stop_service();
             if json {
                 println!(
                     "{}",
@@ -83,8 +83,8 @@ pub async fn handle_service_command(
             Ok(())
         }
         ServiceSubcommand::Restart => {
-            let _ = stop_service().await;
-            let result = start_service().await;
+            let _ = stop_service();
+            let result = start_service();
             if json {
                 println!(
                     "{}",
@@ -99,7 +99,7 @@ pub async fn handle_service_command(
             Ok(())
         }
         ServiceSubcommand::Status => {
-            let status = check_service_status().await;
+            let status = check_service_status();
             if json {
                 println!(
                     "{}",
@@ -114,7 +114,7 @@ pub async fn handle_service_command(
             Ok(())
         }
         ServiceSubcommand::Uninstall => {
-            let result = uninstall_service().await;
+            let result = uninstall_service();
             if json {
                 println!(
                     "{}",
@@ -163,7 +163,7 @@ pub async fn handle_service_command(
 }
 
 /// Install systemd/launchd service
-async fn install_service() -> Result<String> {
+fn install_service() -> Result<String> {
     let exe = std::env::current_exe()?;
 
     #[cfg(target_os = "linux")]
@@ -244,7 +244,7 @@ WantedBy=default.target
     }
 }
 
-async fn start_service() -> Result<String> {
+fn start_service() -> Result<String> {
     #[cfg(target_os = "linux")]
     {
         let status = std::process::Command::new("systemctl")
@@ -277,7 +277,7 @@ async fn start_service() -> Result<String> {
     }
 }
 
-async fn stop_service() -> Result<String> {
+fn stop_service() -> Result<String> {
     #[cfg(target_os = "linux")]
     {
         let status = std::process::Command::new("systemctl")
@@ -308,7 +308,7 @@ async fn stop_service() -> Result<String> {
     }
 }
 
-async fn check_service_status() -> (String, Option<u32>) {
+fn check_service_status() -> (String, Option<u32>) {
     #[cfg(target_os = "linux")]
     {
         let output = std::process::Command::new("systemctl")
@@ -357,10 +357,10 @@ async fn check_service_status() -> (String, Option<u32>) {
     }
 }
 
-async fn uninstall_service() -> Result<String> {
+fn uninstall_service() -> Result<String> {
     #[cfg(target_os = "linux")]
     {
-        let _ = stop_service().await;
+        let _ = stop_service();
         let service_file = dirs::home_dir()
             .unwrap_or_default()
             .join(".config")
@@ -378,7 +378,7 @@ async fn uninstall_service() -> Result<String> {
 
     #[cfg(target_os = "macos")]
     {
-        let _ = stop_service().await;
+        let _ = stop_service();
         let plist_file = dirs::home_dir()
             .unwrap_or_default()
             .join("Library")
