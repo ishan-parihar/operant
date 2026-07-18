@@ -74,6 +74,10 @@ default = ["schema-export"]
 schema-export = ["operant-config/schema-export"]
 browser-native = []
 rag-pdf = []
+sandbox-landlock = []
+sandbox-bubblewrap = []
+observability-otel = []
+runtime-wasm = []
 
 [dev-dependencies]
 tempfile = { workspace = true }
