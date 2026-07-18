@@ -116,6 +116,7 @@ pub struct CommandDef {
     /// Argument hint shown in help (e.g. "<prompt>", "[key] [value]").
     pub args_hint: &'static str,
     /// Only available in interactive CLI (not in gateway/messaging).
+    #[allow(dead_code)] // cli_only is used for command filtering, not yet wired up
     pub cli_only: bool,
     /// Only available in messaging platforms (not in CLI).
     pub gateway_only: bool,
@@ -670,11 +671,13 @@ impl CommandRegistry {
     }
 
     /// Return the number of registered commands.
+    #[allow(dead_code)] // len is used for command count display, not yet wired up
     pub fn len(&self) -> usize {
         self.defs.len()
     }
 
     /// Return true if no commands are registered.
+    #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
         self.defs.is_empty()
     }
@@ -779,6 +782,7 @@ pub fn build_command_map() -> HashMap<&'static str, &'static CommandDef> {
 
 /// Resolve a user-provided command name (with or without leading `/`) to its
 /// canonical name. Returns `None` if no match.
+#[allow(dead_code)] // Command registry: items prepared for help text / gateway filtering
 pub fn resolve_command(input: &str) -> Option<&'static str> {
     let trimmed = input.trim().trim_start_matches('/');
     let map = build_command_map();
@@ -786,6 +790,7 @@ pub fn resolve_command(input: &str) -> Option<&'static str> {
 }
 
 /// Format full help text for all built-in commands.
+#[allow(dead_code)]
 pub fn format_help_text() -> String {
     let mut output = String::from("Available commands:\n\n");
     let categories = commands_by_category();
@@ -820,6 +825,7 @@ pub fn format_help_text() -> String {
 ///
 /// Dynamically builds category boundaries from the registry instead of
 /// relying on hardcoded index ranges.
+#[allow(dead_code)]
 pub fn commands_by_category() -> Vec<(&'static str, Vec<&'static CommandDef>)> {
     let mut categories: Vec<(&str, Vec<&CommandDef>)> = Vec::new();
     let mut seen_canonical = std::collections::HashSet::new();
