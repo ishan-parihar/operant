@@ -2,6 +2,8 @@
 //!
 //! Wraps the broadcast channel in AppState to deliver events to web dashboard clients.
 
+#[allow(dead_code)] // SSE module: BroadcastObserver and related items prepared for future use
+
 use super::AppState;
 use axum::{
     Json,

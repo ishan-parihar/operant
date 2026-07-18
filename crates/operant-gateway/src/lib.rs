@@ -1,3 +1,5 @@
+#![allow(dead_code)] // Gateway module: webhook handlers, admin functions, and structs prepared for future use
+
 //! Axum-based HTTP gateway with proper HTTP/1.1 compliance, body limits, and timeouts.
 //!
 //! This module replaces the raw TCP implementation with axum for:

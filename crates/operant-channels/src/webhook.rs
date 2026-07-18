@@ -10,6 +10,8 @@ use axum::{
 use operant_api::channel::{Channel, ChannelMessage, SendMessage};
 use portable_atomic::{AtomicU64, Ordering};
 use serde::{Deserialize, Serialize};
+#[allow(dead_code)] // Webhook module: handle_webhook and related items prepared for future use
+
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -117,6 +119,7 @@ impl WebhookChannel {
 
 // Webhook request handler - must be a standalone function for axum's post macro
 #[axum::debug_handler]
+#[allow(dead_code)] // handle_webhook is prepared for future webhook platform integrations
 async fn handle_webhook(
     State(state): State<Arc<WebhookState>>,
     headers: HeaderMap,
