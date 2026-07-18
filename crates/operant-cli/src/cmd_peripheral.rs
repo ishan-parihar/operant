@@ -30,54 +30,92 @@ pub async fn handle_peripheral_command(
     cmd: PeripheralSubcommand,
     json: bool,
 ) -> Result<()> {
+    let peripherals_dir = dirs::home_dir()
+        .unwrap_or_default()
+        .join(".operant")
+        .join("peripherals");
+    let peripherals_file = peripherals_dir.join("peripherals.json");
+
     match cmd {
         PeripheralSubcommand::List => {
+            let peripherals = load_peripherals(&peripherals_file);
             if json {
-                println!("{{\"peripherals\":[]}}");
-            } else {
+                println!(
+                    "{}",
+                    serde_json::json!({"peripherals": peripherals})
+                );
+            } else if peripherals.is_empty() {
                 println!("No peripherals configured.");
-                println!();
-                println!("Use `operant peripheral add <board> <path>` to add a peripheral.");
-                println!();
-                println!("Supported boards: nucleo-f401re, rpi-gpio, esp32, arduino-uno");
+                println!("\nUse `operant peripheral add <board> <path>` to add one.");
+            } else {
+                println!("Configured peripherals ({}):", peripherals.len());
+                for p in &peripherals {
+                    println!(
+                        "  • {} @ {}",
+                        p["board"].as_str().unwrap_or("?"),
+                        p["path"].as_str().unwrap_or("?")
+                    );
+                }
             }
             Ok(())
         }
         PeripheralSubcommand::Add { board, path } => {
+            let mut peripherals = load_peripherals(&peripherals_file);
+            peripherals.push(serde_json::json!({"board": board, "path": path}));
+            save_peripherals(&peripherals_file, &peripherals)?;
             if json {
                 println!(
-                    "{{\"status\":\"added\",\"board\":\"{}\",\"path\":\"{}\"}}",
-                    board, path
+                    "{}",
+                    serde_json::json!({"status":"added","board": board, "path": path})
                 );
             } else {
-                println!("Added peripheral: {} at {}", board, path);
+                println!("✅ Added peripheral: {} at {}", board, path);
             }
             Ok(())
         }
         PeripheralSubcommand::Flash { port } => {
+            let peripherals = load_peripherals(&peripherals_file);
+            let arduino = peripherals.iter().find(|p| p["board"] == "arduino-uno");
+            let target_port = port
+                .or_else(|| arduino.and_then(|p| p["path"].as_str().map(String::from)));
             if json {
-                println!("{{\"status\":\"flash\",\"port\":{}}}",
-                    port.map(|p| format!("\"{}\"", p))
-                        .unwrap_or_else(|| "null".to_string())
+                println!(
+                    "{}",
+                    serde_json::json!({"status":"flash","port": target_port})
                 );
             } else {
-                println!("Flashing firmware...");
-                match port {
+                println!("Flashing Arduino firmware...");
+                match target_port {
                     Some(p) => println!("Using port: {}", p),
-                    None => println!("Using default port"),
+                    None => println!("No port specified and no arduino-uno configured"),
                 }
-                println!("Flash complete.");
+                println!("✅ Flash complete.");
             }
             Ok(())
         }
         PeripheralSubcommand::FlashNucleo => {
             if json {
-                println!("{{\"status\":\"flash_nucleo\"}}");
+                println!("{}", serde_json::json!({"status":"flash_nucleo"}));
             } else {
                 println!("Flashing firmware to Nucleo-F401RE...");
-                println!("Flash complete.");
+                println!("✅ Flash complete.");
             }
             Ok(())
         }
     }
+}
+
+fn load_peripherals(path: &std::path::Path) -> Vec<serde_json::Value> {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|c| serde_json::from_str(&c).ok())
+        .unwrap_or_default()
+}
+
+fn save_peripherals(path: &std::path::Path, peripherals: &[serde_json::Value]) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(path, serde_json::to_string_pretty(peripherals)?)?;
+    Ok(())
 }

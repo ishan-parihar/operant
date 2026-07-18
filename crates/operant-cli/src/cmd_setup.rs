@@ -42,6 +42,7 @@ pub async fn handle_setup_command(
     reset: bool,
     reconfigure: bool,
     quick: bool,
+    _json: bool,
 ) -> Result<()> {
     // --non-interactive: show report only
     if non_interactive {
