@@ -18,8 +18,6 @@ use serde_json::Value;
 use std::sync::Arc;
 
 use crate::error::Result;
-#[allow(unused_imports)]
-use crate::error::Error;
 
 // ---------------------------------------------------------------------------
 // Trait
