@@ -30,3 +30,4 @@ reqwest = { workspace = true }
 default = []
 hardware = []
 probe = []
+peripheral-rpi = []
