@@ -507,14 +507,10 @@ async fn run_heartbeat_worker(config: Config) -> Result<()> {
             let phase1_fut = Box::pin(crate::agent::run(
                 config.clone(),
                 Some(decision_prompt),
-                None,
-                None,
-                0.0,
-                vec![],
-                false,
-                None,
-                None,
-                None,
+                crate::agent::RunOverrides {
+                    temperature: 0.0,
+                    ..Default::default()
+                },
             ));
             let phase1_result = if config.heartbeat.task_timeout_secs > 0 {
                 match tokio::time::timeout(
@@ -633,14 +629,10 @@ async fn run_heartbeat_worker(config: Config) -> Result<()> {
             let phase2_fut = Box::pin(crate::agent::run(
                 config.clone(),
                 Some(prompt),
-                None,
-                None,
-                temp,
-                vec![],
-                false,
-                None,
-                None,
-                None,
+                crate::agent::RunOverrides {
+                    temperature: temp,
+                    ..Default::default()
+                },
             ));
             let phase2_result = if config.heartbeat.task_timeout_secs > 0 {
                 match tokio::time::timeout(

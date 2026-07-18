@@ -362,18 +362,20 @@ async fn run_agent_job(
             Box::pin(crate::agent::run(
                 cron_config,
                 Some(prefixed_prompt),
-                None,
-                model_override,
-                config
-                    .providers
-                    .fallback_provider()
-                    .and_then(|e| e.temperature)
-                    .unwrap_or(0.7),
-                vec![],
-                false,
-                Some(session_path.clone()),
-                job.allowed_tools.clone(),
-                observer.clone(),
+                crate::agent::RunOverrides {
+                    provider_override: None,
+                    model_override,
+                    temperature: config
+                        .providers
+                        .fallback_provider()
+                        .and_then(|e| e.temperature)
+                        .unwrap_or(0.7),
+                    peripheral_overrides: vec![],
+                    interactive: false,
+                    session_state_file: Some(session_path.clone()),
+                    allowed_tools: job.allowed_tools.clone(),
+                    observer: observer.clone(),
+                },
             ))
             .await
         }
