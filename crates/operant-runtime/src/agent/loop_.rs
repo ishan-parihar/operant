@@ -2150,6 +2150,45 @@ fn retain_registered_tool_descriptions(
     tool_descs.retain(|(name, _)| registered_tool_names.contains(name));
 }
 
+/// Optional overrides for the agent `run` entry point.
+///
+/// Groups the 8 customization parameters that were previously passed
+/// individually, reducing `run`'s argument count from 10 to 3.
+#[derive(Clone, Default)]
+pub struct RunOverrides {
+    /// Override the LLM provider (e.g. "openrouter", "anthropic").
+    pub provider_override: Option<String>,
+    /// Override the model name (e.g. "anthropic/claude-sonnet-4").
+    pub model_override: Option<String>,
+    /// Sampling temperature (0.0–2.0).  Defaults to 0.7.
+    pub temperature: f64,
+    /// Extra peripheral tool names to register (hardware, robot-kit).
+    pub peripheral_overrides: Vec<String>,
+    /// Whether to enter interactive REPL mode after the first response.
+    pub interactive: bool,
+    /// Optional path for persisting session state across restarts.
+    pub session_state_file: Option<PathBuf>,
+    /// Whitelist of tool names the agent may call (None = all allowed).
+    pub allowed_tools: Option<Vec<String>>,
+    /// Optional observer for recording agent events (metrics, tracing).
+    pub observer: Option<Arc<dyn Observer>>,
+}
+
+impl std::fmt::Debug for RunOverrides {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RunOverrides")
+            .field("provider_override", &self.provider_override)
+            .field("model_override", &self.model_override)
+            .field("temperature", &self.temperature)
+            .field("peripheral_overrides", &self.peripheral_overrides)
+            .field("interactive", &self.interactive)
+            .field("session_state_file", &self.session_state_file)
+            .field("allowed_tools", &self.allowed_tools)
+            .field("observer", &self.observer.as_ref().map(|_| "<dyn Observer>"))
+            .finish()
+    }
+}
+
 // ── CLI Entrypoint ───────────────────────────────────────────────────────
 // Wires up all subsystems (observer, runtime, security, memory, tools,
 // provider, hardware RAG, peripherals) and enters either single-shot or
@@ -2157,19 +2196,21 @@ fn retain_registered_tool_descriptions(
 // and hard trimming to keep the context window bounded.
 
 #[allow(clippy::too_many_lines)]
-#[allow(clippy::too_many_arguments)]
 pub async fn run(
     config: Config,
     message: Option<String>,
-    provider_override: Option<String>,
-    model_override: Option<String>,
-    temperature: f64,
-    peripheral_overrides: Vec<String>,
-    interactive: bool,
-    session_state_file: Option<PathBuf>,
-    allowed_tools: Option<Vec<String>>,
-    observer: Option<Arc<dyn Observer>>,
+    overrides: RunOverrides,
 ) -> Result<String> {
+    let RunOverrides {
+        provider_override,
+        model_override,
+        temperature,
+        peripheral_overrides,
+        interactive,
+        session_state_file,
+        allowed_tools,
+        observer,
+    } = overrides;
     // ── Wire up agnostic subsystems ──────────────────────────────
     let observer: Arc<dyn Observer> = observer
         .unwrap_or_else(|| Arc::from(observability::create_observer(&config.observability)));
