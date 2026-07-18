@@ -1,3 +1,5 @@
+#![allow(dead_code)] // TUI module: many items prepared for future use in the evolving UI framework
+
 pub mod adapter_types;
 pub mod provider;
 

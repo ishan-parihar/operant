@@ -1578,6 +1578,7 @@ pub struct OnboardingConfig {
 #[derive(Debug)]
 pub enum ConfigError {
     Io(std::io::Error),
+    #[allow(dead_code)]
     Parse(String),
 }
 
