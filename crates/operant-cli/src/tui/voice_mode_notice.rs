@@ -39,6 +39,7 @@ impl VoiceModeNoticeState {
     }
 
     /// Update voice-enabled status (called when user toggles voice).
+    #[allow(dead_code)] // Called externally when user toggles voice mode
     pub fn update_voice_enabled(&mut self, enabled: bool) {
         self.voice_enabled = enabled;
         if enabled {
@@ -49,6 +50,7 @@ impl VoiceModeNoticeState {
     }
 
     /// Dismiss the notice for this session.
+    #[allow(dead_code)] // Called externally on Esc key
     pub fn dismiss(&mut self) {
         self.visible = false;
         self.dismissed = true;

@@ -202,6 +202,7 @@ impl DiffViewerState {
         self.detail_scroll = self.detail_scroll.saturating_add(3);
     }
 
+    #[allow(dead_code)] // Turn-specific diff files are set externally
     pub fn set_turn_diff(&mut self, files: Vec<FileDiffStats>) {
         self.turn_files = files;
         if self.diff_type == DiffType::TurnDiff {
