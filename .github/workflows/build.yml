@@ -49,6 +49,13 @@ jobs:
         with:
           key: ${{ matrix.target }}
 
+      # Path dependencies live outside this repo — clone them to the relative
+      # paths that Cargo.toml expects (../../tdg-rust from the workspace root).
+      - name: Clone path dependencies
+        shell: bash
+        run: |
+          git clone --depth 1 https://github.com/ishan-parihar/tdg-rust.git "$GITHUB_WORKSPACE/../tdg-rust"
+
       - name: Build
         run: cargo build --workspace --release --target ${{ matrix.target }}
 
@@ -112,6 +119,11 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: cross-${{ matrix.target }}
+
+      - name: Clone path dependencies
+        shell: bash
+        run: |
+          git clone --depth 1 https://github.com/ishan-parihar/tdg-rust.git "$GITHUB_WORKSPACE/../tdg-rust"
 
       - name: Install cross
         run: cargo install cross --git https://github.com/cross-rs/cross
