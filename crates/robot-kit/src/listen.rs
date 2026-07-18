@@ -1,17 +1,15 @@
 use async_trait::async_trait;
 use serde_json::Value;
 
-use crate::config::RobotConfig;
 use crate::traits::{Tool, ToolResult, ToolSpec};
 
 /// Listen tool for speech-to-text
-pub struct ListenTool {
-    config: RobotConfig,
-}
+#[derive(Default)]
+pub struct ListenTool;
 
 impl ListenTool {
-    pub fn new(config: RobotConfig) -> Self {
-        Self { config }
+    pub fn new() -> Self {
+        Self
     }
 }
 

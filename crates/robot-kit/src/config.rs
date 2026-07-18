@@ -96,19 +96,10 @@ impl Default for SpeakConfig {
 }
 
 /// Sensor configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SenseConfig {
     /// LIDAR device
     pub lidar_device: Option<String>,
     /// Ultrasonic GPIO pins
     pub ultrasonic_pins: Option<(u8, u8)>,
-}
-
-impl Default for SenseConfig {
-    fn default() -> Self {
-        Self {
-            lidar_device: None,
-            ultrasonic_pins: None,
-        }
-    }
 }

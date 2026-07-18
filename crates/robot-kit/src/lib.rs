@@ -39,9 +39,9 @@ pub fn create_tools(config: &RobotConfig) -> Vec<Box<dyn Tool>> {
     vec![
         Box::new(DriveTool::new(config.clone())),
         Box::new(LookTool::new(config.clone())),
-        Box::new(ListenTool::new(config.clone())),
+        Box::new(ListenTool::new()),
         Box::new(SpeakTool::new(config.clone())),
-        Box::new(SenseTool::new(config.clone())),
-        Box::new(EmoteTool::new(config.clone())),
+        Box::new(SenseTool::new()),
+        Box::new(EmoteTool::new()),
     ]
 }
