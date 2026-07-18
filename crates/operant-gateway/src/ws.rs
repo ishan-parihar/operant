@@ -646,6 +646,7 @@ fn event_matches_session(event: &serde_json::Value, session_id: &str) -> bool {
 ///
 /// Uses [`Agent::turn_streamed`] so that intermediate text chunks, tool calls,
 /// and tool results are forwarded to the WebSocket client in real time.
+#[allow(clippy::too_many_arguments)]
 async fn process_chat_message(
     state: &AppState,
     agent: &mut operant_runtime::agent::Agent,

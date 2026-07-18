@@ -193,6 +193,7 @@ pub fn init_from_config(config: &ObservabilityConfig, workspace_dir: &Path) {
 }
 
 /// Record a runtime trace event.
+#[allow(clippy::too_many_arguments)]
 pub fn record_event(
     event_type: &str,
     channel: Option<&str>,

@@ -25,6 +25,7 @@ pub struct HeartbeatRun {
 }
 
 /// Record a heartbeat task execution and prune old entries.
+#[allow(clippy::too_many_arguments)]
 pub fn record_run(
     workspace_dir: &Path,
     task_text: &str,

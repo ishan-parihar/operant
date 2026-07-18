@@ -2157,6 +2157,7 @@ fn retain_registered_tool_descriptions(
 // and hard trimming to keep the context window bounded.
 
 #[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_arguments)]
 pub async fn run(
     config: Config,
     message: Option<String>,

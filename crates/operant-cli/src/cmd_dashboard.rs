@@ -50,6 +50,7 @@ pub async fn handle_dashboard_command(config: &AppConfig, cmd: DashboardSubcomma
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn cmd_server(
     config: &AppConfig,
     port: u16,

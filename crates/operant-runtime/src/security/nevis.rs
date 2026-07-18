@@ -99,6 +99,7 @@ impl NevisAuthProvider {
     /// Create a new Nevis auth provider from config values.
     ///
     /// `client_secret` should already be decrypted by the config loader.
+#[allow(clippy::too_many_arguments)]
     pub fn new(
         instance_url: String,
         realm: String,

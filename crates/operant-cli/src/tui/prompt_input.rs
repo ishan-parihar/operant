@@ -586,6 +586,7 @@ fn vim_idle(
     vim_normal(mode, text, cursor, key, yank_buf, pending, last_find, 1)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn vim_count(
     mode: &mut VimMode,
     text: &mut String,

@@ -35,6 +35,7 @@ impl GoogleWorkspaceTool {
     /// Create a new `GoogleWorkspaceTool`.
     ///
     /// If `allowed_services` is empty, the default service set is used.
+#[allow(clippy::too_many_arguments)]
     pub fn new(
         security: Arc<SecurityPolicy>,
         allowed_services: Vec<String>,

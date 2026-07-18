@@ -1274,6 +1274,7 @@ impl MockAgentEvent {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn debug_simulate(
     config: &AppConfig,
     keys: String,

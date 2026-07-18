@@ -319,6 +319,7 @@ impl Tool for ContentSearchTool {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_rg_command(
     pattern: &str,
     search_path: &std::path::Path,

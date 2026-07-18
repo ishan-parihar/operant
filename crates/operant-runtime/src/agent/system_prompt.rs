@@ -72,6 +72,7 @@ pub fn build_system_prompt(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn build_system_prompt_with_mode(
     workspace_dir: &std::path::Path,
     model_name: &str,
