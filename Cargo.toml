@@ -111,6 +111,9 @@ tempfile = "3.10"
 # Graph memory infrastructure
 tdg-rust = { path = "../../tdg-rust" }
 
+[workspace.lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(operant_root_crate)'] }
+
 [profile.release]
 lto = true
 strip = true
