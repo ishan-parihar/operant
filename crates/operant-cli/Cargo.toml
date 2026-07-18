@@ -14,7 +14,7 @@ path = "src/main.rs"
 
 [dependencies]
 # Core library
-operant-core = { path = "../operant-core", features = ["anthropic"] }
+operant-core = { path = "../operant-core" }
 
 # Optional subsystem crates — feature-gated like operant
 operant-channels = { workspace = true, optional = true }
@@ -155,7 +155,7 @@ plugins-wasm = ["dep:operant-plugins"]
 memory-postgres = ["operant-memory/memory-postgres"]
 rag-pdf = ["operant-tools/rag-pdf"]
 tdg = ["operant-core/tdg"]
-anthropic = []  # cfg-gate for AnthropicModelClient import in main.rs
+anthropic = ["operant-core/anthropic"]  # cfg-gate for AnthropicModelClient import in main.rs
 
 # CI meta-feature
 ci-all = [

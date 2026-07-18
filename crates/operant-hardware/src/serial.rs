@@ -91,7 +91,7 @@ impl HardwareSerialTransport {
                         .data
                         .get("firmware")
                         .and_then(|v| v.as_str())
-                        .map(|s| s == "operant" || s == "zeroclaw")
+                        .map(|s| s == "operant")
                         .unwrap_or(false)
             }
             _ => false,
