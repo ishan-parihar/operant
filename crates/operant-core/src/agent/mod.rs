@@ -2198,8 +2198,8 @@ fn repair_json(s: &str) -> String {
     }
 
     // Count unmatched braces, brackets, and quotes
-    let mut brace_depth = 0i32;
-    let mut bracket_depth = 0i32;
+    let mut _brace_depth = 0i32;
+    let mut _bracket_depth = 0i32;
     let mut in_string = false;
     let mut escape_next = false;
     let mut first_brace_pos: Option<usize> = None; // position of first '{' or '['
@@ -2220,19 +2220,19 @@ fn repair_json(s: &str) -> String {
         if !in_string {
             match ch {
                 '{' => {
-                    brace_depth += 1;
+                    _brace_depth += 1;
                     if first_brace_pos.is_none() {
                         first_brace_pos = Some(pos);
                     }
                 }
-                '}' => brace_depth -= 1,
+                '}' => _brace_depth -= 1,
                 '[' => {
-                    bracket_depth += 1;
+                    _bracket_depth += 1;
                     if first_brace_pos.is_none() {
                         first_brace_pos = Some(pos);
                     }
                 }
-                ']' => bracket_depth -= 1,
+                ']' => _bracket_depth -= 1,
                 _ => {}
             }
         }
