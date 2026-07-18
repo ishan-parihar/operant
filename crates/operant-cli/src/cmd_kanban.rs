@@ -471,22 +471,22 @@ async fn cmd_create(
     let prio: i32 = priority.and_then(|p| p.parse().ok()).unwrap_or(0);
 
     let task_id = db
-        .create_task(
+        .create_task(operant_core::kanban::db::CreateTaskParams {
             title,
-            description,
-            None,        /* assignee */
-            Some("cli"), /* created_by */
-            "local",     /* workspace_kind */
-            None,        /* workspace_path */
-            None,        /* tenant */
-            prio,
-            &[],   /* parents */
-            false, /* triage */
-            None,  /* idempotency_key */
-            None,  /* max_runtime_seconds */
-            None,  /* skills */
-            None,  /* max_retries */
-        )
+            body: description,
+            assignee: None,
+            created_by: Some("cli"),
+            workspace_kind: "local",
+            workspace_path: None,
+            tenant: None,
+            priority: prio,
+            parents: &[],
+            triage: false,
+            idempotency_key: None,
+            max_runtime_seconds: None,
+            skills: None,
+            max_retries: None,
+        })
         .context("Failed to create task")?;
 
     println!("Created task: {}", task_id);

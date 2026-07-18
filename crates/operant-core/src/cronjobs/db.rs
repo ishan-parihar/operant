@@ -39,6 +39,29 @@ pub struct CronJob {
     pub last_delivery_error: Option<String>,
 }
 
+/// Parameters for creating a new cron job.
+pub struct CreateJobParams {
+    pub name: String,
+    pub prompt: String,
+    pub schedule: String,
+    pub schedule_display: String,
+    pub repeat_times: Option<i32>,
+    pub deliver: String,
+    pub origin_platform: Option<String>,
+    pub origin_chat_id: Option<String>,
+    pub origin_thread_id: Option<String>,
+    pub skill: Option<String>,
+    pub skills: Option<Vec<String>>,
+    pub model: Option<String>,
+    pub provider: Option<String>,
+    pub base_url: Option<String>,
+    pub script: Option<String>,
+    pub context_from: Option<Vec<String>>,
+    pub enabled_toolsets: Option<Vec<String>>,
+    pub workdir: Option<String>,
+    pub no_agent: bool,
+}
+
 pub struct CronDb {
     conn: Arc<Mutex<Connection>>,
 }
@@ -103,29 +126,7 @@ impl CronDb {
         Ok(())
     }
 
-#[allow(clippy::too_many_arguments)]
-    pub fn create_job(
-        &self,
-        name: String,
-        prompt: String,
-        schedule: String,
-        schedule_display: String,
-        repeat_times: Option<i32>,
-        deliver: String,
-        origin_platform: Option<String>,
-        origin_chat_id: Option<String>,
-        origin_thread_id: Option<String>,
-        skill: Option<String>,
-        skills: Option<Vec<String>>,
-        model: Option<String>,
-        provider: Option<String>,
-        base_url: Option<String>,
-        script: Option<String>,
-        context_from: Option<Vec<String>>,
-        enabled_toolsets: Option<Vec<String>>,
-        workdir: Option<String>,
-        no_agent: bool,
-    ) -> Result<String, Error> {
+    pub fn create_job(&self, p: CreateJobParams) -> Result<String, Error> {
         let conn = self.conn.lock().unwrap();
         let id = format!(
             "cron_{}",
@@ -133,9 +134,9 @@ impl CronDb {
         );
         let created_at = chrono::Utc::now().to_rfc3339();
 
-        let skills_json = skills.and_then(|s| serde_json::to_string(&s).ok());
-        let context_json = context_from.and_then(|c| serde_json::to_string(&c).ok());
-        let toolsets_json = enabled_toolsets.and_then(|t| serde_json::to_string(&t).ok());
+        let skills_json = p.skills.and_then(|s| serde_json::to_string(&s).ok());
+        let context_json = p.context_from.and_then(|c| serde_json::to_string(&c).ok());
+        let toolsets_json = p.enabled_toolsets.and_then(|t| serde_json::to_string(&t).ok());
 
         conn.execute(
             "INSERT INTO cron_jobs (
@@ -145,10 +146,10 @@ impl CronDb {
                 no_agent, enabled, state, created_at
             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, 1, 'scheduled', ?21)",
             params![
-                id, name, prompt, schedule, schedule_display, repeat_times, deliver,
-                origin_platform, origin_chat_id, origin_thread_id, skill, skills_json,
-                model, provider, base_url, script, context_json, toolsets_json, workdir,
-                no_agent, created_at
+                id, p.name, p.prompt, p.schedule, p.schedule_display, p.repeat_times, p.deliver,
+                p.origin_platform, p.origin_chat_id, p.origin_thread_id, p.skill, skills_json,
+                p.model, p.provider, p.base_url, p.script, context_json, toolsets_json, p.workdir,
+                p.no_agent, created_at
             ],
         ).map_err(|e| Error::Agent(format!("Failed to create cron job: {}", e)))?;
 

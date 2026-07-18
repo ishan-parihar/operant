@@ -113,6 +113,24 @@ pub struct Event {
     pub run_id: Option<i64>,
 }
 
+/// Parameters for creating a new kanban task.
+pub struct CreateTaskParams<'a> {
+    pub title: &'a str,
+    pub body: Option<&'a str>,
+    pub assignee: Option<&'a str>,
+    pub created_by: Option<&'a str>,
+    pub workspace_kind: &'a str,
+    pub workspace_path: Option<&'a str>,
+    pub tenant: Option<&'a str>,
+    pub priority: i32,
+    pub parents: &'a [String],
+    pub triage: bool,
+    pub idempotency_key: Option<&'a str>,
+    pub max_runtime_seconds: Option<i32>,
+    pub skills: Option<&'a [String]>,
+    pub max_retries: Option<i32>,
+}
+
 pub struct KanbanDb {
     conn: Arc<Mutex<Connection>>,
 }
@@ -351,27 +369,10 @@ impl KanbanDb {
         Ok(result)
     }
 
-#[allow(clippy::too_many_arguments)]
-    pub fn create_task(
-        &self,
-        title: &str,
-        body: Option<&str>,
-        assignee: Option<&str>,
-        created_by: Option<&str>,
-        workspace_kind: &str,
-        workspace_path: Option<&str>,
-        tenant: Option<&str>,
-        priority: i32,
-        parents: &[String],
-        triage: bool,
-        idempotency_key: Option<&str>,
-        max_runtime_seconds: Option<i32>,
-        skills: Option<&[String]>,
-        max_retries: Option<i32>,
-    ) -> Result<String, Error> {
+    pub fn create_task(&self, p: CreateTaskParams<'_>) -> Result<String, Error> {
         let conn = self.conn.lock().unwrap();
 
-        if let Some(key) = idempotency_key {
+        if let Some(key) = p.idempotency_key {
             let existing: Option<String> = conn
                 .query_row(
                     "SELECT id FROM tasks WHERE idempotency_key = ?1 AND status != 'archived'",
@@ -389,18 +390,18 @@ impl KanbanDb {
             uuid::Uuid::new_v4().to_string()[..8].replace('-', "")
         );
         let created_at = chrono::Utc::now().timestamp();
-        let status = if triage { "triage" } else { "todo" };
-        let skills_json = skills.and_then(|s| serde_json::to_string(s).ok());
+        let status = if p.triage { "triage" } else { "todo" };
+        let skills_json = p.skills.and_then(|s| serde_json::to_string(s).ok());
 
         conn.execute(
             "INSERT INTO tasks (id, title, body, assignee, status, priority, created_by, created_at, 
              workspace_kind, workspace_path, tenant, idempotency_key, max_runtime_seconds, skills, max_retries) 
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
-            params![id, title, body, assignee, status, priority, created_by, created_at,
-                    workspace_kind, workspace_path, tenant, idempotency_key, max_runtime_seconds, skills_json, max_retries],
+            params![id, p.title, p.body, p.assignee, status, p.priority, p.created_by, created_at,
+                    p.workspace_kind, p.workspace_path, p.tenant, p.idempotency_key, p.max_runtime_seconds, skills_json, p.max_retries],
         ).map_err(|e| Error::Agent(format!("Failed to create task: {}", e)))?;
 
-        for parent in parents {
+        for parent in p.parents {
             conn.execute(
                 "INSERT INTO task_links (parent_id, child_id) VALUES (?1, ?2)",
                 params![parent, id],

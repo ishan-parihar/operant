@@ -75,27 +75,27 @@ impl CronTool {
             details: "Missing 'prompt' for job creation".to_string(),
         })?;
 
-        let id = self.db.create_job(
-            name.clone(),
-            prompt.clone(),
-            schedule.clone(),
-            display.clone(),
-            None,
-            args.deliver.clone().unwrap_or_else(|| "local".to_string()),
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            args.script.clone(),
-            None,
-            None,
-            args.workdir.clone(),
-            args.no_agent.unwrap_or(false),
-        )?;
+        let id = self.db.create_job(crate::cronjobs::db::CreateJobParams {
+            name: name.clone(),
+            prompt: prompt.clone(),
+            schedule: schedule.clone(),
+            schedule_display: display.clone(),
+            repeat_times: None,
+            deliver: args.deliver.clone().unwrap_or_else(|| "local".to_string()),
+            origin_platform: None,
+            origin_chat_id: None,
+            origin_thread_id: None,
+            skill: None,
+            skills: None,
+            model: None,
+            provider: None,
+            base_url: None,
+            script: args.script.clone(),
+            context_from: None,
+            enabled_toolsets: None,
+            workdir: args.workdir.clone(),
+            no_agent: args.no_agent.unwrap_or(false),
+        })?;
 
         // Compute and set the first next_run_at
         let next_run = compute_first_run(schedule);
