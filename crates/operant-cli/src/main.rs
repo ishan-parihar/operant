@@ -4,6 +4,7 @@ mod autonomous;
 mod cmd_acp;
 mod cmd_auth;
 mod cmd_backup;
+mod cmd_channel;
 mod cmd_checkpoints;
 mod cmd_completion;
 mod cmd_config;
@@ -14,6 +15,7 @@ mod cmd_debug;
 mod cmd_doctor;
 mod cmd_dump;
 mod cmd_gateway;
+mod cmd_hardware;
 mod cmd_hooks;
 mod cmd_import;
 mod cmd_insights;
@@ -21,12 +23,16 @@ mod cmd_kanban;
 mod cmd_logs;
 mod cmd_mcp;
 mod cmd_memory;
+mod cmd_migrate;
 mod cmd_model;
+mod cmd_peripheral;
 mod cmd_plugins;
 mod cmd_profile;
+mod cmd_service;
 mod cmd_sessions;
 mod cmd_setup;
 mod cmd_skills;
+mod cmd_sop;
 mod cmd_status;
 mod cmd_tools;
 mod cmd_trajectory;
@@ -379,6 +385,54 @@ enum Commands {
     Plugins {
         #[command(subcommand)]
         cmd: cmd_plugins::PluginsSubcommand,
+    },
+    /// Manage communication channels (telegram, discord, slack, whatsapp)
+    Channel {
+        #[command(subcommand)]
+        cmd: cmd_channel::ChannelSubcommand,
+        /// Output as JSON (for scripting/CI)
+        #[arg(long, global = true)]
+        json: bool,
+    },
+    /// Manage standard operating procedures (SOPs)
+    Sop {
+        #[command(subcommand)]
+        cmd: cmd_sop::SopSubcommand,
+        /// Output as JSON (for scripting/CI)
+        #[arg(long, global = true)]
+        json: bool,
+    },
+    /// Discover and introspect USB hardware
+    Hardware {
+        #[command(subcommand)]
+        cmd: cmd_hardware::HardwareSubcommand,
+        /// Output as JSON (for scripting/CI)
+        #[arg(long, global = true)]
+        json: bool,
+    },
+    /// Manage hardware peripherals (STM32, RPi GPIO, etc.)
+    Peripheral {
+        #[command(subcommand)]
+        cmd: cmd_peripheral::PeripheralSubcommand,
+        /// Output as JSON (for scripting/CI)
+        #[arg(long, global = true)]
+        json: bool,
+    },
+    /// Migrate data from other agent runtimes
+    Migrate {
+        #[command(subcommand)]
+        cmd: cmd_migrate::MigrateSubcommand,
+        /// Output as JSON (for scripting/CI)
+        #[arg(long, global = true)]
+        json: bool,
+    },
+    /// Manage OS service lifecycle (systemd/launchd)
+    Service {
+        #[command(subcommand)]
+        cmd: cmd_service::ServiceSubcommand,
+        /// Output as JSON (for scripting/CI)
+        #[arg(long, global = true)]
+        json: bool,
     },
     /// Manage the skill curator
     Curator {
@@ -1317,6 +1371,24 @@ async fn main() -> Result<()> {
         }
         Some(Commands::Curator { cmd }) => {
             cmd_curator::handle_curator_command(&loaded.config, cmd.clone()).await?;
+        }
+        Some(Commands::Channel { cmd, json }) => {
+            cmd_channel::handle_channel_command(&loaded.config, cmd.clone(), *json).await?;
+        }
+        Some(Commands::Sop { cmd, json }) => {
+            cmd_sop::handle_sop_command(&loaded.config, cmd.clone(), *json).await?;
+        }
+        Some(Commands::Hardware { cmd, json }) => {
+            cmd_hardware::handle_hardware_command(&loaded.config, cmd.clone(), *json).await?;
+        }
+        Some(Commands::Peripheral { cmd, json }) => {
+            cmd_peripheral::handle_peripheral_command(&loaded.config, cmd.clone(), *json).await?;
+        }
+        Some(Commands::Migrate { cmd, json }) => {
+            cmd_migrate::handle_migrate_command(&loaded.config, cmd.clone(), *json).await?;
+        }
+        Some(Commands::Service { cmd, json }) => {
+            cmd_service::handle_service_command(&loaded.config, cmd.clone(), *json).await?;
         }
         Some(Commands::Setup {
             section,
