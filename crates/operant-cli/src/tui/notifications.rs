@@ -19,6 +19,7 @@ pub enum NotificationKind {
 #[derive(Debug, Clone)]
 pub struct Notification {
     /// Unique identifier (used for dismissal — currently only used in tests).
+        #[allow(dead_code)] // Unique notification ID
     pub id: String,
     pub kind: NotificationKind,
     pub message: String,
@@ -66,6 +67,7 @@ impl NotificationQueue {
     }
 
     /// Dismiss the notification with the given `id`.
+    #[allow(dead_code)] // Notification dismissal
     pub fn dismiss(&mut self, id: &str) {
         self.notifications.retain(|n| n.id != id);
     }

@@ -774,7 +774,9 @@ pub struct HistorySearchOverlay {
 /// Convenience accessor: the plain list of `snapshot_idx` values from
 /// `matches`, in order.  Kept for callers that only need indices.
 impl HistorySearchOverlay {
+    #[allow(dead_code)] // History search match indices
     pub fn match_indices(&self) -> Vec<usize> {
+#[allow(dead_code)]
         self.matches.iter().map(|m| m.snapshot_idx).collect()
     }
 }

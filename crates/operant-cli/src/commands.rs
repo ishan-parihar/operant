@@ -23,6 +23,7 @@ use anyhow::Result;
 ///
 /// Mirrors Python's `CommandDef.category` field with typed variants.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    #[allow(dead_code)] // Prepared for help text grouping
 pub enum CommandCategory {
     /// Session management (new, stop, history, etc.)
     Session,
@@ -38,6 +39,7 @@ pub enum CommandCategory {
 
 impl CommandCategory {
     /// Return the display string matching the Python convention.
+    #[allow(dead_code)] // Prepared for help text display
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Session => "Session",
