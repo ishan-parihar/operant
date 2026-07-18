@@ -158,6 +158,7 @@ fn render_attachment_chip_colored(
     ])
 }
 
+#[allow(dead_code)] // Reserved: user prompt metadata not shown in current layout
 fn user_metadata_line(_meta: Option<&TurnMetadata>) -> Option<Line<'static>> {
     // User prompt line has no metadata — mode/model/duration are shown on the
     // assistant footer instead (matching OpenCode's layout).
@@ -1055,6 +1056,7 @@ pub fn render_tool_result_error(error: &str) -> Vec<Line<'static>> {
 
 /// Render a bash command input line with a green `$ ` prefix.
 pub fn render_bash_input_line(command: &str) -> Vec<Line<'static>> {
+#[allow(dead_code)]
     vec![Line::from(vec![
         Span::styled(
             "  $ ".to_string(),
