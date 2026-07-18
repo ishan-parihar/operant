@@ -38,10 +38,11 @@ model, API key). Type `/help` in the TUI to see everything operant can do.
 
 - **Code** — write, review, debug, refactor across your entire project
 - **Research** — search the web, read pages, synthesize findings
-- **Automate** — schedule cron jobs, manage tasks, run autonomous loops
+- **Autonomous** — runs as a disciplined developer: plans, implements, validates, pushes
 - **Remember** — every conversation feeds a graph memory that grows smarter
 - **Connect** — talk to operant via Telegram, Discord, Slack, WhatsApp, Email
 - **Learn** — install skills (reusable prompt+tool bundles) or draft your own
+- **Debug** — headless TUI simulator for autonomous testing and CI regression
 
 ## Architecture
 
@@ -80,6 +81,15 @@ Built-in cron scheduling allows for high-reliability, unattended tasks. From dai
 ---
 
 ## Engineering Highlights
+
+### Autonomous Coding Mode
+Operant can work as a disciplined developer. `operant autonomous` reads a `TODO.md` task ledger, implements changes, runs validation tests, and only pushes to git when tests pass. State persists across restarts via `autonomous-status.toml`, so interrupted work resumes cleanly.
+
+### Long-Term Memory
+Every conversation feeds a graph memory (TDG) that self-organizes across sessions. Durable facts are extracted and injected into the agent's system prompt as `<long_term_memory>` context, so the agent remembers your patterns, preferences, and project conventions.
+
+### Context Management
+Tiered eviction (tool results → reasoning → conversation) with a decay curve keeps the context window healthy. Auto-compression kicks in when the window overflows, so long sessions don't crash.
 
 ### Zero-Cost Orchestration in Rust
 By leveraging `async-trait` and `Tokio`, I built a high-concurrency orchestration substrate with minimal runtime overhead. The system uses a decoupled `ToolRegistry` to dynamically generate JSON Schemas at runtime, ensuring compatibility with the Model Context Protocol (MCP). The final binary is LTO-optimized and stripped, providing a production-grade core that remains stable and performant under heavy agentic load.
@@ -134,6 +144,8 @@ operant autonomous
 - **Config**: TOML
 
 ---
+---
+
 Developed by [Ishan Parihar](https://github.com/ishan-parihar) as a high-performance port of the Hermes-Agent orchestration logic.
 
 If you find this project useful, [consider supporting its development](https://rzp.io/rzp/ishan-parihar) ☕
