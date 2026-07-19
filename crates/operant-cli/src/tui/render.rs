@@ -958,8 +958,19 @@ fn render_context_menu(frame: &mut Frame, app: &App) {
 fn render_messages(frame: &mut Frame, app: &App, area: Rect) {
     let content_area = area; // (iter-143: plugin_hints deleted — Vec was always empty)
 
-    // Welcome block and banner removed — always use the full content area for messages.
-    let msg_area = content_area;
+    // Render operant branding banner at top of message area.
+    let banner_height = 7u16.min(content_area.height);
+    let (banner_area, msg_area) = if banner_height > 0 {
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(banner_height), Constraint::Min(0)])
+            .split(content_area);
+        render_banner_block(frame, app, chunks[0]);
+        (chunks[0], chunks[1])
+    } else {
+        (content_area, content_area)
+    };
+    let _ = banner_area;
 
     // Store the actual message pane bounds for mouse event handling (text selection, scrolling).
     app.last_msg_area.set(msg_area);
