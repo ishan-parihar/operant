@@ -533,6 +533,74 @@ pub enum ContextMenuItem {
     Fork,
 }
 
+/// Key context for determining which key bindings apply.
+/// Mirrors claurst's KeyContext for cleaner key routing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyContext {
+    /// Normal prompt input mode
+    Prompt,
+    /// Vim normal mode in prompt
+    VimNormal,
+    /// Vim visual mode in prompt
+    VimVisual,
+    /// Vim visual line mode
+    VimVisualLine,
+    /// Vim visual block mode
+    VimVisualBlock,
+    /// Vim command mode
+    VimCommand,
+    /// Global context (always active)
+    Global,
+    /// Transcript/message pane
+    Transcript,
+    /// Diff viewer
+    DiffViewer,
+    /// Dialog overlay (any modal dialog)
+    Dialog,
+    /// Context menu open
+    ContextMenu,
+    /// Help overlay
+    Help,
+    /// Settings screen
+    Settings,
+    /// Model picker
+    ModelPicker,
+    /// Session browser
+    SessionBrowser,
+    /// Command palette
+    CommandPalette,
+    /// Global search
+    GlobalSearch,
+    /// History search overlay
+    HistorySearch,
+    /// MCP view
+    MCPView,
+    /// Agents menu
+    AgentsMenu,
+    /// Stats dialog
+    Stats,
+    /// Export dialog
+    Export,
+    /// Context visualization
+    ContextViz,
+    /// Session branching
+    SessionBranching,
+    /// Tasks overlay
+    Tasks,
+    /// Menu context (dialog pickers)
+    Menu,
+    /// Plugins hub
+    PluginsHub,
+    /// Skills view
+    SkillsView,
+    /// Journey view
+    JourneyView,
+    /// Hooks config menu
+    HooksConfig,
+    /// Voice mode notice
+    VoiceModeNotice,
+}
+
 /// Status of an active or completed tool call.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ToolStatus {
@@ -3503,6 +3571,54 @@ impl App {
         settings.permission_mode = PermissionMode::BypassPermissions;
         let _ = settings.save_sync();
         self.settings.permission_mode = PermissionMode::BypassPermissions;
+    }
+
+    /// Determine the current key context based on visible UI elements.
+    /// Higher-priority contexts are checked first. Mirrors claurst's system.
+    fn current_key_context(&self) -> KeyContext {
+        if self.context_menu_state.is_some() {
+            KeyContext::ContextMenu
+        } else if self.bypass_permissions_dialog.visible
+            || self.effort_picker.visible
+            || self.key_input_dialog.visible
+            || self.custom_provider_dialog.visible
+            || self.free_mode_dialog.visible
+            || self.device_auth_dialog.visible
+            || self.ask_user_dialog.visible
+            || self.import_config_dialog.visible
+            || self.mcp_approval.visible
+        {
+            KeyContext::Dialog
+        } else if self.connect_dialog.visible
+            || self.import_config_picker.visible
+            || self.command_palette.visible
+            || self.model_picker.visible
+            || self.settings_screen.visible
+            || self.export_dialog.visible
+            || self.stats_dialog.visible
+            || self.context_viz.visible
+            || self.session_browser.visible
+            || self.session_branching.visible
+            || self.tasks_overlay.visible
+        {
+            KeyContext::Menu
+        } else if self.global_search.visible {
+            KeyContext::GlobalSearch
+        } else if self.history_search_overlay.visible {
+            KeyContext::HistorySearch
+        } else if self.help_overlay.visible {
+            KeyContext::Help
+        } else if self.mcp_view.visible {
+            KeyContext::MCPView
+        } else if self.agents_menu.visible {
+            KeyContext::AgentsMenu
+        } else if self.diff_viewer.visible {
+            KeyContext::DiffViewer
+        } else if self.focus == FocusTarget::Input {
+            KeyContext::Prompt
+        } else {
+            KeyContext::Transcript
+        }
     }
 
     /// Process a keyboard event. Returns `true` when the input should be
