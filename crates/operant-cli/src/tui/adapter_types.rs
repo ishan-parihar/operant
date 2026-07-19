@@ -14,6 +14,19 @@ pub mod config {
         Custom(String),
     }
 
+    impl Theme {
+        /// Returns the theme name string for theme_colors::ColorPalette::for_theme()
+        pub fn as_str(&self) -> &str {
+            match self {
+                Theme::Dark => "dark",
+                Theme::Light => "light",
+                Theme::Default => "default",
+                Theme::Deuteranopia => "deuteranopia",
+                Theme::Custom(s) => s,
+            }
+        }
+    }
+
     // ---------- PermissionMode ----------
 
     #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
