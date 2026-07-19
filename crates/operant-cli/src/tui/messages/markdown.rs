@@ -562,10 +562,7 @@ pub fn normalize_markdown_newlines(text: &str) -> String {
                 || trimmed.starts_with("* ")
                 || trimmed.starts_with("+ ")
                 || (trimmed.contains(". ")
-                    && trimmed
-                        .chars()
-                        .next()
-                        .is_some_and(|c| c.is_ascii_digit()));
+                    && trimmed.chars().next().is_some_and(|c| c.is_ascii_digit()));
             let current_is_blockquote = trimmed.starts_with("> ");
 
             if in_code_block

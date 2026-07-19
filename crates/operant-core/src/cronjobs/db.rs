@@ -136,7 +136,9 @@ impl CronDb {
 
         let skills_json = p.skills.and_then(|s| serde_json::to_string(&s).ok());
         let context_json = p.context_from.and_then(|c| serde_json::to_string(&c).ok());
-        let toolsets_json = p.enabled_toolsets.and_then(|t| serde_json::to_string(&t).ok());
+        let toolsets_json = p
+            .enabled_toolsets
+            .and_then(|t| serde_json::to_string(&t).ok());
 
         conn.execute(
             "INSERT INTO cron_jobs (

@@ -17,9 +17,9 @@ use async_trait::async_trait;
 use serde_json::Value;
 use std::sync::Arc;
 
-use crate::error::Result;
 #[cfg(feature = "tdg")]
 use crate::error::Error;
+use crate::error::Result;
 
 // ---------------------------------------------------------------------------
 // Trait

@@ -2,7 +2,7 @@ pub mod db;
 pub mod dispatcher;
 pub mod notify;
 
-pub use db::{Comment, Event, KanbanDb, Run, Task, TaskStatus, CreateTaskParams};
+pub use db::{Comment, CreateTaskParams, Event, KanbanDb, Run, Task, TaskStatus};
 pub use dispatcher::Dispatcher;
 pub use notify::{NotifyManager, NotifySubscription};
 
@@ -242,23 +242,24 @@ mod tests {
         let db_a = mgr.open_board("board_a").unwrap();
         let db_b = mgr.open_board("board_b").unwrap();
 
-        let task_a_id =db_a.create_task(crate::kanban::db::CreateTaskParams {
-            title: "Task for A",
-            body: Some("Body A"),
-            assignee: None,
-            created_by: Some("test"),
-            workspace_kind: "test",
-            workspace_path: None,
-            tenant: None,
-            priority: 1,
-            parents: &[],
-            triage: false,
-            idempotency_key: None,
-            max_runtime_seconds: None,
-            skills: None,
-            max_retries: None,
-        })
-        .unwrap();
+        let task_a_id = db_a
+            .create_task(crate::kanban::db::CreateTaskParams {
+                title: "Task for A",
+                body: Some("Body A"),
+                assignee: None,
+                created_by: Some("test"),
+                workspace_kind: "test",
+                workspace_path: None,
+                tenant: None,
+                priority: 1,
+                parents: &[],
+                triage: false,
+                idempotency_key: None,
+                max_runtime_seconds: None,
+                skills: None,
+                max_retries: None,
+            })
+            .unwrap();
 
         let task_b_id = db_b
             .create_task(crate::kanban::db::CreateTaskParams {

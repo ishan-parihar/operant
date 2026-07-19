@@ -927,7 +927,7 @@ impl GeminiProvider {
     ///
     /// For OAuth, pass the resolved `oauth_token` and `project`.
     /// For API key, both are `None`.
-#[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
     fn build_generate_content_request(
         &self,
         auth: &GeminiAuth,

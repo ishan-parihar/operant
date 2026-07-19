@@ -1425,12 +1425,7 @@ data: {\"type\":\"message_stop\"}\n\n";
     async fn chat_with_system_fails_without_key() {
         let p = AnthropicProvider::new(None);
         let result = p
-            .chat_with_system(
-                Some("You are Operant"),
-                "hello",
-                "claude-3-opus",
-                Some(0.7),
-            )
+            .chat_with_system(Some("You are Operant"), "hello", "claude-3-opus", Some(0.7))
             .await;
         assert!(result.is_err());
     }

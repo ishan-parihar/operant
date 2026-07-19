@@ -81,7 +81,11 @@ pub enum CuratorSubcommand {
     },
 }
 
-pub async fn handle_curator_command(config: &AppConfig, cmd: CuratorSubcommand, _json: bool) -> Result<()> {
+pub async fn handle_curator_command(
+    config: &AppConfig,
+    cmd: CuratorSubcommand,
+    _json: bool,
+) -> Result<()> {
     let skills_dir = config.skills.root_dir.clone();
     let curator_dir = skills_dir.join(".curator");
     let state_path = curator_dir.join("state.json");

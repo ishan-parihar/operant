@@ -23,7 +23,7 @@ use anyhow::Result;
 ///
 /// Mirrors Python's `CommandDef.category` field with typed variants.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-    #[allow(dead_code)] // Prepared for help text grouping
+#[allow(dead_code)] // Prepared for help text grouping
 pub enum CommandCategory {
     /// Session management (new, stop, history, etc.)
     Session,

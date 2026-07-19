@@ -55,8 +55,22 @@ pub async fn handle_migrate_command(
                     );
                 } else {
                     println!("Migration preview from: {}", source_path.display());
-                    println!("  MEMORY.md: {}", if has_memory { "✅ found" } else { "❌ not found" });
-                    println!("  USER.md:   {}", if has_user { "✅ found" } else { "❌ not found" });
+                    println!(
+                        "  MEMORY.md: {}",
+                        if has_memory {
+                            "✅ found"
+                        } else {
+                            "❌ not found"
+                        }
+                    );
+                    println!(
+                        "  USER.md:   {}",
+                        if has_user {
+                            "✅ found"
+                        } else {
+                            "❌ not found"
+                        }
+                    );
                     if has_memory || has_user {
                         println!("\nRun without --dry-run to migrate.");
                     } else {
@@ -65,9 +79,7 @@ pub async fn handle_migrate_command(
                 }
             } else {
                 let mut migrated = 0u32;
-                let operant_dir = dirs::home_dir()
-                    .unwrap_or_default()
-                    .join(".operant");
+                let operant_dir = dirs::home_dir().unwrap_or_default().join(".operant");
 
                 if has_memory {
                     let dest = operant_dir.join("MEMORY.md");

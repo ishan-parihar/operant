@@ -2184,7 +2184,10 @@ impl std::fmt::Debug for RunOverrides {
             .field("interactive", &self.interactive)
             .field("session_state_file", &self.session_state_file)
             .field("allowed_tools", &self.allowed_tools)
-            .field("observer", &self.observer.as_ref().map(|_| "<dyn Observer>"))
+            .field(
+                "observer",
+                &self.observer.as_ref().map(|_| "<dyn Observer>"),
+            )
             .finish()
     }
 }

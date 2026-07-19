@@ -648,7 +648,7 @@ impl OperantAgent {
                         self.emit(AgentEvent::Done {
                             message: result.clone(),
                         })
-                        .await;                        // Emit AgentEnd observer event
+                        .await; // Emit AgentEnd observer event
                         if let Some(ref obs) = self.observer {
                             let cost = self.session_cost_usd.read().map(|c| *c).unwrap_or(0.0);
                             obs.record_event(&ObserverEvent::AgentEnd {
@@ -693,8 +693,7 @@ impl OperantAgent {
                     hooks
                         .emit(
                             crate::gateway_pipeline::HookEvent::AgentEnd,
-                            crate::gateway_pipeline::HookContext::new()
-                                .with_session(&session_id),
+                            crate::gateway_pipeline::HookContext::new().with_session(&session_id),
                         )
                         .await;
                 }

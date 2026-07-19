@@ -1485,7 +1485,6 @@ impl App {
             model_fetch_rx: None,
             user_question_rx: None,
             ask_user_dialog: crate::tui::ask_user_dialog::AskUserDialogState::new(),
-            bridge_state_rx: None,
             context_window_size: 0,
             context_used_tokens: 0,
             rate_limit_5h_pct: None,

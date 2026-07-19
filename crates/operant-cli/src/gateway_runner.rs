@@ -513,7 +513,7 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
         };
 
     // Create bridge state channel for TUI status updates
-    let (bridge_state_tx, bridge_state_rx) =
+    let (bridge_state_tx, _bridge_state_rx) =
         tokio::sync::mpsc::unbounded_channel::<crate::tui::bridge_state::BridgeConnectionState>();
 
     // Notify TUI that gateway is connecting

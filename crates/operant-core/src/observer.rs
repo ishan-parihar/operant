@@ -55,10 +55,7 @@ pub enum ObserverEvent {
     /// The agent produced a final answer for the current user message.
     TurnComplete,
     /// A message was sent or received through a channel.
-    ChannelMessage {
-        channel: String,
-        direction: String,
-    },
+    ChannelMessage { channel: String, direction: String },
     /// Periodic heartbeat tick from the runtime keep-alive loop.
     HeartbeatTick,
     /// Response cache hit — an LLM call was avoided.
@@ -69,10 +66,7 @@ pub enum ObserverEvent {
     /// Response cache miss — the prompt was not found in cache.
     CacheMiss { cache_type: String },
     /// An error occurred in a named component.
-    Error {
-        component: String,
-        message: String,
-    },
+    Error { component: String, message: String },
     /// A hand (sub-agent or specialized task) has started execution.
     HandStarted { hand_name: String },
     /// A hand has completed execution successfully.
@@ -303,18 +297,16 @@ impl Observer for ConsoleObserver {
                 hand_name,
                 duration,
             } => {
-                tracing::debug!(hand_name, duration_ms = duration.as_millis() as u64, "hand run duration");
+                tracing::debug!(
+                    hand_name,
+                    duration_ms = duration.as_millis() as u64,
+                    "hand run duration"
+                );
             }
-            ObserverMetric::HandFindingsCount {
-                hand_name,
-                count,
-            } => {
+            ObserverMetric::HandFindingsCount { hand_name, count } => {
                 tracing::debug!(hand_name, count, "hand findings count");
             }
-            ObserverMetric::HandSuccessRate {
-                hand_name,
-                success,
-            } => {
+            ObserverMetric::HandSuccessRate { hand_name, success } => {
                 tracing::debug!(hand_name, success, "hand success rate");
             }
         }
