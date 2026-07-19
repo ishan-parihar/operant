@@ -68,6 +68,9 @@ struct GatewayMessageHandler {
     /// but the runner never read it back.) Set after gateway construction
     /// via set_gateway() because the handler is created before the gateway.
     gateway: tokio::sync::Mutex<Option<Arc<Gateway>>>,
+    /// Sender for bridge connection state updates to the TUI.
+    bridge_state_tx:
+        tokio::sync::mpsc::UnboundedSender<crate::tui::bridge_state::BridgeConnectionState>,
 }
 
 #[async_trait::async_trait]
@@ -164,6 +167,13 @@ impl MessageHandler for GatewayMessageHandler {
             }
             let mut current = self.current_session_id.lock().await;
             *current = Some(session_id.clone());
+            // Update bridge state to Connected with session info
+            let _ = self.bridge_state_tx.send(
+                crate::tui::bridge_state::BridgeConnectionState::Connected {
+                    session_url: format!("gateway://{}/{}", message.platform, message.channel_id),
+                    peer_count: 1,
+                },
+            );
         }
 
         // Prefetch relevant memories from the configured provider
@@ -502,11 +512,19 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
             build_memory_provider("builtin", storage_dir)
         };
 
+    // Create bridge state channel for TUI status updates
+    let (bridge_state_tx, bridge_state_rx) =
+        tokio::sync::mpsc::unbounded_channel::<crate::tui::bridge_state::BridgeConnectionState>();
+
+    // Notify TUI that gateway is connecting
+    let _ = bridge_state_tx.send(crate::tui::bridge_state::BridgeConnectionState::Connecting);
+
     let handler = Arc::new(GatewayMessageHandler {
         agent,
         memory_provider,
         current_session_id: tokio::sync::Mutex::new(None),
         gateway: tokio::sync::Mutex::new(None),
+        bridge_state_tx,
     });
     gateway = gateway.with_handler(handler.clone());
 

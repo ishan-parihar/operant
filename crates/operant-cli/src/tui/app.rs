@@ -931,6 +931,8 @@ pub struct App {
     pub session_title: Option<String>,
     /// Remote session URL (set when bridge connects; readable by commands).
     pub remote_session_url: Option<String>,
+    /// Bridge/gateway connection state for status bar badge.
+    pub bridge_state: crate::tui::bridge_state::BridgeConnectionState,
     /// Live MCP manager snapshot source when available.
     /// (iter-208: stub mcp_manager field deleted — load_mcp_servers now reads
     /// from core_mcp_manager directly.)
@@ -1130,6 +1132,15 @@ pub struct App {
     /// State for the model-initiated ask-user question dialog.
     pub ask_user_dialog: crate::tui::ask_user_dialog::AskUserDialogState,
 
+    // ---- Bridge/gateway connection state -----------------------------------
+    /// Receiver for bridge connection state updates from gateway handler.
+    pub bridge_state_rx: Option<
+        tokio::sync::mpsc::UnboundedReceiver<crate::tui::bridge_state::BridgeConnectionState>,
+    >,
+    /// Sender for bridge connection state updates (given to gateway handler).
+    pub bridge_state_tx:
+        Option<tokio::sync::mpsc::UnboundedSender<crate::tui::bridge_state::BridgeConnectionState>>,
+
     // ---- Context window & rate limit info ----------------------------------
     /// Total context window size for the current model (tokens).
     pub context_window_size: u64,
@@ -1273,6 +1284,9 @@ impl App {
         };
         let initial_active_provider =
             super::provider::infer_provider_from_model(&config.agent.model);
+        let (bridge_state_tx, bridge_state_rx) = tokio::sync::mpsc::unbounded_channel::<
+            crate::tui::bridge_state::BridgeConnectionState,
+        >();
         Self {
             config,
             settings,
@@ -1342,6 +1356,9 @@ impl App {
             error_modal_scroll_offset: 0,
             session_title: None,
             remote_session_url: None,
+            bridge_state: crate::tui::bridge_state::BridgeConnectionState::Disconnected,
+            bridge_state_rx: Some(bridge_state_rx),
+            bridge_state_tx: Some(bridge_state_tx),
             core_mcp_manager: None,
             steer_queue_handle: None,
             pending_mcp_reconnect: false,
@@ -1468,6 +1485,7 @@ impl App {
             model_fetch_rx: None,
             user_question_rx: None,
             ask_user_dialog: crate::tui::ask_user_dialog::AskUserDialogState::new(),
+            bridge_state_rx: None,
             context_window_size: 0,
             context_used_tokens: 0,
             rate_limit_5h_pct: None,
@@ -2263,11 +2281,12 @@ impl App {
                 if self.is_streaming {
                     self.is_streaming = false;
                     self.spinner_verb = None;
-                    self.streaming_text.clear();
-                    self.streaming_thinking.clear();
-                    self.tool_use_blocks.clear();
+                    // Flush in-flight streaming text to messages BEFORE snapshot
+                    // so the response is preserved in the transcript.
+                    self.flush_streamed_assistant_message();
                     self.status_message = Some("Stopped.".to_string());
                     self.complete_current_turn_snapshot(true);
+                    self.tool_use_blocks.clear();
                 } else {
                     self.status_message = Some("Nothing to stop — no turn is running.".to_string());
                 }
@@ -4739,15 +4758,17 @@ impl App {
             KeyCode::Esc if self.is_streaming => {
                 self.is_streaming = false;
                 self.spinner_verb = None;
-                self.streaming_text.clear();
-                self.streaming_thinking.clear();
-                self.tool_use_blocks.clear();
+                // Flush in-flight streaming text to messages BEFORE snapshot
+                // so the response is preserved in the transcript.
+                self.flush_streamed_assistant_message();
                 self.status_message = Some("Cancelled.".to_string());
                 // Abort the background agent task so it actually stops.
                 if let Some(handle) = self.agent_task_handle.take() {
                     handle.abort();
                 }
+                // Snapshot AFTER flushing so tool trail is preserved.
                 self.complete_current_turn_snapshot(true);
+                self.tool_use_blocks.clear();
             }
 
             // ---- Quit / cancel ----------------------------------------
@@ -4775,11 +4796,12 @@ impl App {
                     // Cancel streaming.
                     self.is_streaming = false;
                     self.spinner_verb = None;
-                    self.streaming_text.clear();
-                    self.streaming_thinking.clear();
-                    self.tool_use_blocks.clear();
+                    // Flush in-flight streaming text to messages BEFORE snapshot
+                    // so the response is preserved in the transcript.
+                    self.flush_streamed_assistant_message();
                     self.status_message = Some("Cancelled.".to_string());
                     self.complete_current_turn_snapshot(true);
+                    self.tool_use_blocks.clear();
                 } else {
                     // No text selected and not streaming: handle exit confirmation sequence.
                     // Always clear the prompt input on Ctrl+C.
