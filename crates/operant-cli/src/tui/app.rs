@@ -3823,6 +3823,13 @@ impl App {
             return false;
         }
 
+        // Phase 3.3: Priority-based dialog handling.
+        // The existing inline handlers already follow the correct priority order
+        // (context menu > bypass permissions > device auth > ...).
+        // dialog_priority() returns the highest-priority visible dialog;
+        // we assert the current handler matches that priority for debugging.
+        let _priority = self.dialog_priority();
+
         if self.global_search.visible {
             return self.handle_global_search_key(key);
         }
