@@ -19,7 +19,7 @@ pub enum NotificationKind {
 #[derive(Debug, Clone)]
 pub struct Notification {
     /// Unique identifier (used for dismissal — currently only used in tests).
-        #[allow(dead_code)] // Unique notification ID
+    #[allow(dead_code)] // Unique notification ID
     pub id: String,
     pub kind: NotificationKind,
     pub message: String,

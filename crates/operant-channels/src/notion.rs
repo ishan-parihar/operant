@@ -46,7 +46,7 @@ pub struct NotionChannel {
 
 impl NotionChannel {
     /// Create a new Notion channel with the given configuration.
-#[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         api_key: String,
         database_id: String,

@@ -40,10 +40,7 @@ pub async fn handle_peripheral_command(
         PeripheralSubcommand::List => {
             let peripherals = load_peripherals(&peripherals_file);
             if json {
-                println!(
-                    "{}",
-                    serde_json::json!({"peripherals": peripherals})
-                );
+                println!("{}", serde_json::json!({"peripherals": peripherals}));
             } else if peripherals.is_empty() {
                 println!("No peripherals configured.");
                 println!("\nUse `operant peripheral add <board> <path>` to add one.");
@@ -76,8 +73,8 @@ pub async fn handle_peripheral_command(
         PeripheralSubcommand::Flash { port } => {
             let peripherals = load_peripherals(&peripherals_file);
             let arduino = peripherals.iter().find(|p| p["board"] == "arduino-uno");
-            let target_port = port
-                .or_else(|| arduino.and_then(|p| p["path"].as_str().map(String::from)));
+            let target_port =
+                port.or_else(|| arduino.and_then(|p| p["path"].as_str().map(String::from)));
             if json {
                 println!(
                     "{}",

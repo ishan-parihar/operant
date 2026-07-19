@@ -240,7 +240,10 @@ WantedBy=default.target
 
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
-        Ok("Service installation not supported on this platform. Run `operant daemon` directly.".to_string())
+        Ok(
+            "Service installation not supported on this platform. Run `operant daemon` directly."
+                .to_string(),
+        )
     }
 }
 
@@ -304,7 +307,9 @@ fn stop_service() -> Result<String> {
 
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
-        Err(anyhow::anyhow!("Service management not supported on this platform."))
+        Err(anyhow::anyhow!(
+            "Service management not supported on this platform."
+        ))
     }
 }
 

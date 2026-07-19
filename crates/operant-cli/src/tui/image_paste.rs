@@ -21,7 +21,7 @@ use std::process::Command;
 #[derive(Debug, Clone)]
 pub struct PastedImage {
     /// Path to the temporary PNG file on disk.
-        #[allow(dead_code)] // Path to temporary pasted image
+    #[allow(dead_code)] // Path to temporary pasted image
     pub path: PathBuf,
     /// Display label shown in the prompt (e.g. "clipboard.png" or "image.png").
     pub label: String,
@@ -442,7 +442,7 @@ fn png_dimensions(path: &PathBuf) -> Option<(u32, u32)> {
 }
 
 /// Read a file and base64-encode it for the Anthropic API.
-    #[allow(dead_code)] // Base64 encoding for API uploads
+#[allow(dead_code)] // Base64 encoding for API uploads
 pub fn encode_image_base64(path: &PathBuf) -> Option<String> {
     let data = std::fs::read(path).ok()?;
     Some(base64::Engine::encode(

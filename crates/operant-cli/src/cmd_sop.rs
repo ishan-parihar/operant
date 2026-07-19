@@ -21,11 +21,7 @@ pub enum SopSubcommand {
     },
 }
 
-pub async fn handle_sop_command(
-    _config: &AppConfig,
-    cmd: SopSubcommand,
-    json: bool,
-) -> Result<()> {
+pub async fn handle_sop_command(_config: &AppConfig, cmd: SopSubcommand, json: bool) -> Result<()> {
     let sop_dir = dirs::home_dir()
         .unwrap_or_default()
         .join(".operant")

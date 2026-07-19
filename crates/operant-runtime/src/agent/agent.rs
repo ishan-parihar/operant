@@ -2835,10 +2835,9 @@ mod tests {
             let entry = config.ensure_fallback_provider();
             entry.api_key = Some("test-key".to_string());
             entry.model = Some("test-model".to_string());
-            entry.extra_headers.insert(
-                "User-Agent".to_string(),
-                "operant-web-test/1.0".to_string(),
-            );
+            entry
+                .extra_headers
+                .insert("User-Agent".to_string(), "operant-web-test/1.0".to_string());
             entry
                 .extra_headers
                 .insert("X-Title".to_string(), "operant-web".to_string());

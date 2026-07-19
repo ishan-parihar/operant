@@ -8,8 +8,8 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Widget};
 
+use crate::tui::file_injection::{AtFileIssue, AtFileRef};
 use crate::tui::overlays::centered_rect;
-use crate::tui::file_injection::{AtFileRef, AtFileIssue};
 
 /// State for the file injection warning dialog.
 #[derive(Debug, Clone, Default)]
@@ -82,7 +82,9 @@ pub fn render_file_injection_dialog(
     // Warning message
     lines.push(Line::from(vec![Span::styled(
         " The following @file references exceed the size limit:",
-        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD),
     )]));
     lines.push(Line::from(""));
 
@@ -118,9 +120,20 @@ pub fn render_file_injection_dialog(
     )]));
     lines.push(Line::from(""));
     lines.push(Line::from(vec![
-        Span::styled("  [Enter] ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-        Span::styled("Proceed with injection  ", Style::default().fg(Color::White)),
-        Span::styled("[Esc] ", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "  [Enter] ",
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            "Proceed with injection  ",
+            Style::default().fg(Color::White),
+        ),
+        Span::styled(
+            "[Esc] ",
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+        ),
         Span::styled("Cancel", Style::default().fg(Color::White)),
     ]));
 
@@ -134,15 +147,17 @@ pub fn render_file_injection_dialog(
         ))
         .border_style(Style::default().fg(Color::Yellow));
 
-    let para = Paragraph::new(lines).block(block).wrap(ratatui::widgets::Wrap { trim: false });
+    let para = Paragraph::new(lines)
+        .block(block)
+        .wrap(ratatui::widgets::Wrap { trim: false });
     para.render(dialog_area, buf);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ratatui::backend::TestBackend;
     use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
 
     #[test]
     fn file_injection_dialog_defaults_hidden() {
@@ -195,8 +210,10 @@ mod tests {
             contents: None,
             issue: Some(crate::tui::file_injection::AtFileIssue::TooLarge(50)),
         }]);
-        terminal.draw(|frame| {
-            render_file_injection_dialog(&state, frame.area(), frame.buffer_mut());
-        }).unwrap();
+        terminal
+            .draw(|frame| {
+                render_file_injection_dialog(&state, frame.area(), frame.buffer_mut());
+            })
+            .unwrap();
     }
 }

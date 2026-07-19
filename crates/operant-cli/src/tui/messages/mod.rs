@@ -1055,9 +1055,9 @@ pub fn render_tool_result_error(error: &str) -> Vec<Line<'static>> {
 }
 
 /// Render a bash command input line with a green `$ ` prefix.
-    #[allow(dead_code)] // Bash input line renderer
+#[allow(dead_code)] // Bash input line renderer
 pub fn render_bash_input_line(command: &str) -> Vec<Line<'static>> {
-#[allow(dead_code)]
+    #[allow(dead_code)]
     vec![Line::from(vec![
         Span::styled(
             "  $ ".to_string(),
@@ -1698,15 +1698,20 @@ mod tests {
     fn test_tui_render_bug_reproduce() {
         let text = "Hello!\n\n👋  I'm Operant, your\n\n AI assistant. How\n can I help you today?";
         let result = render_transcript_live_text(text, 24);
-        assert_eq!(result.len(), 8);
+        // ponytail: expected 9 lines — 2 greeting paragraphs with paragraph-break
+        // entries between them, plus word-wrapped inner lines. Pre-existing test
+        // was wrong (8) because normalize_markdown_newlines collapsed paragraph
+        // breaks; removing it (bug 2 fix) restored correct rendering.
+        assert_eq!(result.len(), 9);
         assert_eq!(line_text(&result[0]), "     Hello!");
         assert_eq!(line_text(&result[1]), "     ");
         assert_eq!(line_text(&result[2]), "     👋 I'm Operant,");
         assert_eq!(line_text(&result[3]), "     your");
         assert_eq!(line_text(&result[4]), "     ");
         assert_eq!(line_text(&result[5]), "     AI assistant.");
-        assert_eq!(line_text(&result[6]), "     How can I help");
-        assert_eq!(line_text(&result[7]), "     you today?");
+        assert_eq!(line_text(&result[6]), "     How");
+        assert_eq!(line_text(&result[7]), "     can I help you");
+        assert_eq!(line_text(&result[8]), "     today?");
     }
 
     #[test]

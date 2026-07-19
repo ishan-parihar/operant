@@ -182,7 +182,8 @@ async fn cmd_list(config: &AppConfig, json: bool) -> Result<()> {
 
 async fn cmd_create(config: &AppConfig, name: &str, schedule: &str, command: &str) -> Result<()> {
     let db = CronDb::init(config.database_path.clone()).context("Failed to open cron database")?;
-    let id = db.create_job(operant_core::cronjobs::db::CreateJobParams {
+    let id = db
+        .create_job(operant_core::cronjobs::db::CreateJobParams {
             name: name.to_string(),
             prompt: command.to_string(),
             schedule: schedule.to_string(),
@@ -470,7 +471,8 @@ async fn cmd_blueprint(
     let schedule = schedule_override.unwrap_or_else(|| default_schedule.to_string());
 
     let db = CronDb::init(config.database_path.clone()).context("Failed to open cron database")?;
-    let id = db.create_job(operant_core::cronjobs::db::CreateJobParams {
+    let id = db
+        .create_job(operant_core::cronjobs::db::CreateJobParams {
             name: display_name.to_string(),
             prompt,
             schedule: schedule.clone(),

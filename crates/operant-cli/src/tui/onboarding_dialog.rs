@@ -2,15 +2,15 @@
 //
 // Mirrors upstream onboarding_dialog.rs with Operant-specific paths and branding.
 
+use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::prelude::Stylize;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Widget, Wrap};
-use ratatui::Frame;
 
 use crate::tui::overlays::centered_rect;
-use crate::tui::overlays::{render_dark_overlay, render_dialog_bg, OPERANT_PANEL_BG};
+use crate::tui::overlays::{OPERANT_PANEL_BG, render_dark_overlay, render_dialog_bg};
 
 // ---------------------------------------------------------------------------
 // State
@@ -87,11 +87,7 @@ impl OnboardingDialogState {
 // Rendering
 // ---------------------------------------------------------------------------
 
-pub fn render_onboarding_dialog(
-    frame: &mut Frame,
-    state: &OnboardingDialogState,
-    area: Rect,
-) {
+pub fn render_onboarding_dialog(frame: &mut Frame, state: &OnboardingDialogState, area: Rect) {
     if !state.visible {
         return;
     }
@@ -119,7 +115,10 @@ fn render_provider_setup_page(frame: &mut Frame, area: Rect) {
         .borders(Borders::ALL)
         .title(Line::from(vec![
             Span::styled("─── ", Style::default().fg(pink)),
-            Span::styled(" Connect a Provider ", Style::default().fg(pink).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                " Connect a Provider ",
+                Style::default().fg(pink).add_modifier(Modifier::BOLD),
+            ),
             Span::styled(" ───", Style::default().fg(pink)),
         ]))
         .border_style(Style::default().fg(pink));
@@ -132,72 +131,164 @@ fn render_provider_setup_page(frame: &mut Frame, area: Rect) {
     let lines: Vec<Line<'static>> = vec![
         Line::from(""),
         Line::from(vec![
-            Span::styled("  No credentials found. ", Style::default().fg(Color::White)),
-            Span::styled("Pick a provider below:", Style::default().fg(Color::Rgb(180, 180, 180))),
+            Span::styled(
+                "  No credentials found. ",
+                Style::default().fg(Color::White),
+            ),
+            Span::styled(
+                "Pick a provider below:",
+                Style::default().fg(Color::Rgb(180, 180, 180)),
+            ),
         ]),
         Line::from(""),
         // ── 1. Anthropic ──────────────────────────────────────
         Line::from(vec![
-            Span::styled("  1  ", Style::default().fg(pink).add_modifier(Modifier::BOLD)),
-            Span::styled("Anthropic", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "  1  ",
+                Style::default().fg(pink).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                "Anthropic",
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled("  Claude Opus · Sonnet · Haiku", Style::default().fg(dim)),
         ]),
         Line::from(vec![
             Span::styled("     › ", Style::default().fg(pink)),
-            Span::styled("operant auth login --provider anthropic", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "operant auth login --provider anthropic",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
         ]),
-        Line::from(Span::styled(sep, Style::default().fg(Color::Rgb(45, 45, 55)))),
+        Line::from(Span::styled(
+            sep,
+            Style::default().fg(Color::Rgb(45, 45, 55)),
+        )),
         // ── 2. OpenAI ─────────────────────────────────────────
         Line::from(vec![
-            Span::styled("  2  ", Style::default().fg(pink).add_modifier(Modifier::BOLD)),
-            Span::styled("OpenAI", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "  2  ",
+                Style::default().fg(pink).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                "OpenAI",
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled("  GPT-4o · o3 · o4-mini", Style::default().fg(dim)),
         ]),
         Line::from(vec![
             Span::styled("     › ", Style::default().fg(pink)),
-            Span::styled("set OPENAI_API_KEY=<key>", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "set OPENAI_API_KEY=<key>",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled("  then restart", Style::default().fg(dim)),
         ]),
-        Line::from(Span::styled(sep, Style::default().fg(Color::Rgb(45, 45, 55)))),
+        Line::from(Span::styled(
+            sep,
+            Style::default().fg(Color::Rgb(45, 45, 55)),
+        )),
         // ── 3. Google ─────────────────────────────────────────
         Line::from(vec![
-            Span::styled("  3  ", Style::default().fg(pink).add_modifier(Modifier::BOLD)),
-            Span::styled("Google", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "  3  ",
+                Style::default().fg(pink).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                "Google",
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled("  Gemini 2.5 Pro · Flash", Style::default().fg(dim)),
         ]),
         Line::from(vec![
             Span::styled("     › ", Style::default().fg(pink)),
-            Span::styled("set GOOGLE_API_KEY=<key>", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "set GOOGLE_API_KEY=<key>",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled("  then restart", Style::default().fg(dim)),
         ]),
-        Line::from(Span::styled(sep, Style::default().fg(Color::Rgb(45, 45, 55)))),
+        Line::from(Span::styled(
+            sep,
+            Style::default().fg(Color::Rgb(45, 45, 55)),
+        )),
         // ── 4. Groq ───────────────────────────────────────────
         Line::from(vec![
-            Span::styled("  4  ", Style::default().fg(pink).add_modifier(Modifier::BOLD)),
-            Span::styled("Groq", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-            Span::styled("  Fast inference · Free tier · groq.com/keys", Style::default().fg(dim)),
+            Span::styled(
+                "  4  ",
+                Style::default().fg(pink).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                "Groq",
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                "  Fast inference · Free tier · groq.com/keys",
+                Style::default().fg(dim),
+            ),
         ]),
         Line::from(vec![
             Span::styled("     › ", Style::default().fg(pink)),
-            Span::styled("set GROQ_API_KEY=<key>", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "set GROQ_API_KEY=<key>",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled("  then restart", Style::default().fg(dim)),
         ]),
-        Line::from(Span::styled(sep, Style::default().fg(Color::Rgb(45, 45, 55)))),
+        Line::from(Span::styled(
+            sep,
+            Style::default().fg(Color::Rgb(45, 45, 55)),
+        )),
         // ── 5. Ollama ─────────────────────────────────────────
         Line::from(vec![
-            Span::styled("  5  ", Style::default().fg(pink).add_modifier(Modifier::BOLD)),
-            Span::styled("Ollama", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "  5  ",
+                Style::default().fg(pink).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                "Ollama",
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled("  Local models · No key needed", Style::default().fg(dim)),
         ]),
         Line::from(vec![
             Span::styled("     › ", Style::default().fg(pink)),
-            Span::styled("operant --provider ollama", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "operant --provider ollama",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
         ]),
         Line::from(""),
         Line::from(vec![
             Span::styled("  + ", Style::default().fg(Color::Rgb(120, 120, 120))),
-            Span::styled("20+ more providers: ", Style::default().fg(Color::Rgb(120, 120, 120))),
-            Span::styled("operant --help", Style::default().fg(Color::Rgb(150, 150, 150))),
+            Span::styled(
+                "20+ more providers: ",
+                Style::default().fg(Color::Rgb(120, 120, 120)),
+            ),
+            Span::styled(
+                "operant --help",
+                Style::default().fg(Color::Rgb(150, 150, 150)),
+            ),
         ]),
         Line::from(""),
         Line::from(vec![
@@ -212,7 +303,9 @@ fn render_provider_setup_page(frame: &mut Frame, area: Rect) {
         Line::from(""),
         Line::from(vec![Span::styled(
             "  Esc: dismiss  (you can configure later with /providers)",
-            Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
+            Style::default()
+                .fg(Color::DarkGray)
+                .add_modifier(Modifier::ITALIC),
         )]),
     ];
 
@@ -222,7 +315,6 @@ fn render_provider_setup_page(frame: &mut Frame, area: Rect) {
 }
 
 fn render_welcome_page(frame: &mut Frame, area: Rect) {
-
     let pink = Color::Rgb(233, 30, 99);
     let dim = Color::Rgb(90, 90, 90);
     let text = Color::Rgb(210, 210, 215);
@@ -239,14 +331,8 @@ fn render_welcome_page(frame: &mut Frame, area: Rect) {
 
     let cmd_label = |slash: &str, desc: &str| -> Line<'static> {
         Line::from(vec![
-            Span::styled(
-                format!("  {:<12}", slash),
-                Style::default().fg(pink),
-            ),
-            Span::styled(
-                desc.to_string(),
-                Style::default().fg(text),
-            ),
+            Span::styled(format!("  {:<12}", slash), Style::default().fg(pink)),
+            Span::styled(desc.to_string(), Style::default().fg(text)),
         ])
     };
 
@@ -254,10 +340,16 @@ fn render_welcome_page(frame: &mut Frame, area: Rect) {
         Line::from(vec![
             Span::styled(
                 " Welcome to Operant",
-                Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
             ),
             Span::styled(
-                format!("{:>width$}", "1/2 ", width = inner.width.saturating_sub(21) as usize),
+                format!(
+                    "{:>width$}",
+                    "1/2 ",
+                    width = inner.width.saturating_sub(21) as usize
+                ),
                 Style::default().fg(dim),
             ),
         ]),
@@ -266,8 +358,14 @@ fn render_welcome_page(frame: &mut Frame, area: Rect) {
             "  Operant is an AI-powered coding assistant in your terminal.",
             Style::default().fg(text),
         )),
-        Line::from(Span::styled("  Operant can read, edit, and create files in your project.", Style::default().fg(text))),
-        Line::from(Span::styled("  Operant can run bash commands, search the web, and more.", Style::default().fg(text))),
+        Line::from(Span::styled(
+            "  Operant can read, edit, and create files in your project.",
+            Style::default().fg(text),
+        )),
+        Line::from(Span::styled(
+            "  Operant can run bash commands, search the web, and more.",
+            Style::default().fg(text),
+        )),
         Line::from(""),
         Line::from(Span::styled(
             "  Slash commands:",
@@ -288,11 +386,12 @@ fn render_welcome_page(frame: &mut Frame, area: Rect) {
         ]),
     ];
 
-    Paragraph::new(lines).bg(OPERANT_PANEL_BG).render(inner, frame.buffer_mut());
+    Paragraph::new(lines)
+        .bg(OPERANT_PANEL_BG)
+        .render(inner, frame.buffer_mut());
 }
 
 fn render_keybindings_page(frame: &mut Frame, area: Rect) {
-
     let pink = Color::Rgb(233, 30, 99);
     let dim = Color::Rgb(90, 90, 90);
     let text = Color::Rgb(210, 210, 215);
@@ -318,27 +417,42 @@ fn render_keybindings_page(frame: &mut Frame, area: Rect) {
         Line::from(vec![
             Span::styled(
                 " Keyboard Shortcuts",
-                Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
             ),
             Span::styled(
-                format!("{:>width$}", "2/2 ", width = inner.width.saturating_sub(21) as usize),
+                format!(
+                    "{:>width$}",
+                    "2/2 ",
+                    width = inner.width.saturating_sub(21) as usize
+                ),
                 Style::default().fg(dim),
             ),
         ]),
         Line::from(""),
-        Line::from(Span::styled("  Input", Style::default().fg(pink).add_modifier(Modifier::BOLD))),
+        Line::from(Span::styled(
+            "  Input",
+            Style::default().fg(pink).add_modifier(Modifier::BOLD),
+        )),
         kb("Enter", "send message"),
         kb("Shift+Enter", "newline"),
         kb("Ctrl+C", "interrupt / cancel"),
         kb("Tab", "cycle mode (build/plan)"),
         kb("↑↓", "history"),
         Line::from(""),
-        Line::from(Span::styled("  Navigation", Style::default().fg(pink).add_modifier(Modifier::BOLD))),
+        Line::from(Span::styled(
+            "  Navigation",
+            Style::default().fg(pink).add_modifier(Modifier::BOLD),
+        )),
         kb("PgUp/PgDn", "scroll transcript"),
         kb("Ctrl+K", "command palette"),
         kb("Ctrl+Shift+A", "model picker"),
         Line::from(""),
-        Line::from(Span::styled("  Permissions", Style::default().fg(pink).add_modifier(Modifier::BOLD))),
+        Line::from(Span::styled(
+            "  Permissions",
+            Style::default().fg(pink).add_modifier(Modifier::BOLD),
+        )),
         kb("y", "allow tool once"),
         kb("Y", "allow all this session"),
         kb("n", "deny tool"),
@@ -360,7 +474,9 @@ fn render_keybindings_page(frame: &mut Frame, area: Rect) {
         Span::styled("close", Style::default().fg(dim)),
     ]));
 
-    Paragraph::new(lines).bg(OPERANT_PANEL_BG).render(inner, frame.buffer_mut());
+    Paragraph::new(lines)
+        .bg(OPERANT_PANEL_BG)
+        .render(inner, frame.buffer_mut());
 }
 
 // ---------------------------------------------------------------------------
@@ -370,8 +486,8 @@ fn render_keybindings_page(frame: &mut Frame, area: Rect) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ratatui::backend::TestBackend;
     use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
 
     #[test]
     fn onboarding_defaults_hidden() {
@@ -416,10 +532,17 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
         let mut state = OnboardingDialogState::new();
         state.show();
-        terminal.draw(|frame| {
-            render_onboarding_dialog(frame, &state, frame.area());
-        }).unwrap();
-        let content: String = terminal.backend().buffer().clone().content().iter()
+        terminal
+            .draw(|frame| {
+                render_onboarding_dialog(frame, &state, frame.area());
+            })
+            .unwrap();
+        let content: String = terminal
+            .backend()
+            .buffer()
+            .clone()
+            .content()
+            .iter()
             .map(|c| c.symbol().chars().next().unwrap_or(' '))
             .collect();
         assert!(content.contains("Welcome") || content.contains("Operant"));
@@ -431,10 +554,17 @@ mod tests {
         let mut state = OnboardingDialogState::new();
         state.show();
         state.next_page();
-        terminal.draw(|frame| {
-            render_onboarding_dialog(frame, &state, frame.area());
-        }).unwrap();
-        let content: String = terminal.backend().buffer().clone().content().iter()
+        terminal
+            .draw(|frame| {
+                render_onboarding_dialog(frame, &state, frame.area());
+            })
+            .unwrap();
+        let content: String = terminal
+            .backend()
+            .buffer()
+            .clone()
+            .content()
+            .iter()
             .map(|c| c.symbol().chars().next().unwrap_or(' '))
             .collect();
         assert!(content.contains("Keyboard") || content.contains("Enter"));
@@ -445,9 +575,11 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
         let state = OnboardingDialogState::new(); // visible = false
         let before = terminal.backend().buffer().clone();
-        terminal.draw(|frame| {
-            render_onboarding_dialog(frame, &state, frame.area());
-        }).unwrap();
+        terminal
+            .draw(|frame| {
+                render_onboarding_dialog(frame, &state, frame.area());
+            })
+            .unwrap();
         assert_eq!(terminal.backend().buffer().content(), before.content());
     }
 }

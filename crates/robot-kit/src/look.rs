@@ -34,6 +34,9 @@ impl Tool for LookTool {
         let prompt = args["prompt"].as_str().unwrap_or("describe the scene");
         let device = &self.config.look.device;
         // TODO: implement actual camera capture + vision model
-        ToolResult::ok(format!("[mock] Looking at {} with prompt: {}", device, prompt))
+        ToolResult::ok(format!(
+            "[mock] Looking at {} with prompt: {}",
+            device, prompt
+        ))
     }
 }

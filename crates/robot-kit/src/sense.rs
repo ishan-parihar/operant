@@ -32,9 +32,15 @@ impl Tool for SenseTool {
     async fn execute(&self, args: Value) -> ToolResult {
         let sensor = args["sensor"].as_str().unwrap_or("distance");
         match sensor {
-            "distance" => ToolResult::ok(serde_json::json!({"distance_cm": 150.0, "sensor": "ultrasonic"}).to_string()),
-            "motion" => ToolResult::ok(serde_json::json!({"motion_detected": false, "sensor": "pir"}).to_string()),
-            "lidar" => ToolResult::ok(serde_json::json!({"points": [], "sensor": "lidar"}).to_string()),
+            "distance" => ToolResult::ok(
+                serde_json::json!({"distance_cm": 150.0, "sensor": "ultrasonic"}).to_string(),
+            ),
+            "motion" => ToolResult::ok(
+                serde_json::json!({"motion_detected": false, "sensor": "pir"}).to_string(),
+            ),
+            "lidar" => {
+                ToolResult::ok(serde_json::json!({"points": [], "sensor": "lidar"}).to_string())
+            }
             _ => ToolResult::err(format!("Unknown sensor: {}", sensor)),
         }
     }

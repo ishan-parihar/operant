@@ -53,19 +53,13 @@ pub async fn handle_channel_command(
             if json {
                 let items: Vec<serde_json::Value> = channels
                     .iter()
-                    .map(|(name, enabled)| {
-                        serde_json::json!({"name": name, "enabled": enabled})
-                    })
+                    .map(|(name, enabled)| serde_json::json!({"name": name, "enabled": enabled}))
                     .collect();
                 println!("{}", serde_json::json!({"channels": items}));
             } else {
                 println!("Channels:");
                 for (name, enabled) in &channels {
-                    println!(
-                        "  {} {}",
-                        if *enabled { "✅" } else { "❌" },
-                        name
-                    );
+                    println!("  {} {}", if *enabled { "✅" } else { "❌" }, name);
                 }
                 println!("\nTo start channels: `operant channel start`");
                 println!("To check health:   `operant channel doctor`");
@@ -74,7 +68,9 @@ pub async fn handle_channel_command(
         }
         ChannelSubcommand::Start => {
             if json {
-                println!(r#"{{"status":"error","message":"Use `operant daemon` to start channels"}}"#);
+                println!(
+                    r#"{{"status":"error","message":"Use `operant daemon` to start channels"}}"#
+                );
             } else {
                 println!("Use `operant daemon` to start channels in production mode.");
             }
@@ -99,11 +95,7 @@ pub async fn handle_channel_command(
                     channels.len()
                 );
                 for (name, enabled) in &channels {
-                    println!(
-                        "  {} {}",
-                        if *enabled { "✅" } else { "⏭️" },
-                        name
-                    );
+                    println!("  {} {}", if *enabled { "✅" } else { "⏭️" }, name);
                 }
             }
             Ok(())

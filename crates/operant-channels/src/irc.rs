@@ -397,11 +397,7 @@ impl Channel for IrcChannel {
 
         // --- Nick/User registration ---
         Self::send_raw(&mut writer, &format!("NICK {current_nick}")).await?;
-        Self::send_raw(
-            &mut writer,
-            &format!("USER {} 0 * :Operant", self.username),
-        )
-        .await?;
+        Self::send_raw(&mut writer, &format!("USER {} 0 * :Operant", self.username)).await?;
 
         // Store writer for send()
         {

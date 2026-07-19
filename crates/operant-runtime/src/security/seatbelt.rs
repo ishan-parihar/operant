@@ -283,9 +283,8 @@ mod tests {
         let policy = generate_policy(&workspace);
 
         assert!(
-            policy.contains(
-                r#"(allow file-read* (subpath "/tmp/operant-seatbelt-test-workspace"))"#
-            )
+            policy
+                .contains(r#"(allow file-read* (subpath "/tmp/operant-seatbelt-test-workspace"))"#)
         );
         assert!(policy.contains(r#"(subpath "/tmp/operant-seatbelt-test-workspace")"#));
     }
