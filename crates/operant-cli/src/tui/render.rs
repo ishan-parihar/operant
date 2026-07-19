@@ -957,84 +957,8 @@ fn render_context_menu(frame: &mut Frame, app: &App) {
 fn render_messages(frame: &mut Frame, app: &App, area: Rect) {
     let content_area = area; // (iter-143: plugin_hints deleted — Vec was always empty)
 
-    let notice_lines = startup_notice_lines(app, content_area.width);
-    // The banner sits above the welcome box. Height is responsive: 8 lines
-    // (7 art + 1 subtitle) at >=80 cols, 5 lines (4 art + 1 subtitle) at
-    // >=40 cols, 0 lines below 40 cols (the welcome box itself shows a
-    // styled text fallback).
-    let banner_height: u16 = if content_area.width >= 80 {
-        8
-    } else if content_area.width >= 40 {
-        5
-    } else {
-        0
-    };
-    let header_height = WELCOME_BOX_HEIGHT + notice_lines.len() as u16 + banner_height;
-    let show_logo_header = content_area.height >= header_height + 3 && content_area.width >= 60;
-    let (logo_area, notices_area, msg_area) = if show_logo_header {
-        let splits = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Length(header_height), Constraint::Min(1)])
-            .split(content_area);
-        // Within the header: optional banner (top), welcome box (middle), notices (bottom).
-        if banner_height > 0 {
-            let banner_area = Rect {
-                x: splits[0].x,
-                y: splits[0].y,
-                width: splits[0].width,
-                height: banner_height,
-            };
-            let beneath_banner = Rect {
-                x: splits[0].x,
-                y: splits[0].y + banner_height,
-                width: splits[0].width,
-                height: splits[0].height.saturating_sub(banner_height),
-            };
-            render_banner_block(frame, app, banner_area);
-            if notice_lines.is_empty() {
-                (Some(beneath_banner), None, splits[1])
-            } else {
-                let header_splits = Layout::default()
-                    .direction(Direction::Vertical)
-                    .constraints([
-                        Constraint::Length(WELCOME_BOX_HEIGHT),
-                        Constraint::Length(notice_lines.len() as u16),
-                    ])
-                    .split(beneath_banner);
-                (Some(header_splits[0]), Some(header_splits[1]), splits[1])
-            }
-        } else if notice_lines.is_empty() {
-            (Some(splits[0]), None, splits[1])
-        } else {
-            let header_splits = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([
-                    Constraint::Length(WELCOME_BOX_HEIGHT),
-                    Constraint::Length(notice_lines.len() as u16),
-                ])
-                .split(splits[0]);
-            (Some(header_splits[0]), Some(header_splits[1]), splits[1])
-        }
-    } else {
-        (None, None, content_area)
-    };
-
-    if let Some(la) = logo_area {
-        render_welcome_box(frame, app, la);
-        if let Some(na) = notices_area {
-            render_startup_notices(frame, app, na);
-        }
-    } else if app.messages.is_empty()
-        && app.streaming_text.is_empty()
-        && app.streaming_thinking.is_empty()
-        && app.tool_use_blocks.is_empty()
-    {
-        app.last_msg_area.set(Rect::default());
-        app.message_row_map.borrow_mut().clear();
-        app.thinking_row_map.borrow_mut().clear();
-        render_welcome_box(frame, app, content_area);
-        return;
-    }
+    // Welcome block and banner removed — always use the full content area for messages.
+    let msg_area = content_area;
 
     // Store the actual message pane bounds for mouse event handling (text selection, scrolling).
     app.last_msg_area.set(msg_area);
@@ -2610,16 +2534,14 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
             ));
         }
 
-        // 8. Bridge badge — bridge feature not yet wired (state is always
-        // Disconnected). When wired, restore status_badge() call here.
-        if app.pending_mcp_reconnect {
+        // 8. Bridge/gateway connection badge
+        if app.bridge_state.is_visible() {
             if !parts.is_empty() {
                 parts.push(Span::raw("  "));
             }
-            parts.push(Span::styled(
-                "MCP reconnecting",
-                Style::default().fg(Color::Yellow),
-            ));
+            if let Some(badge) = app.bridge_state.status_badge(app.frame_count) {
+                parts.push(badge);
+            }
         }
 
         parts
