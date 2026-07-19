@@ -1,6 +1,10 @@
 pub mod adapter_types;
 pub mod provider;
 
+pub mod bridge_state;
+pub mod file_injection;
+pub mod file_injection_dialog;
+pub mod elicitation_dialog;
 pub mod debug;
 
 pub mod agents_view;
