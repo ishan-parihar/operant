@@ -4920,32 +4920,14 @@ impl App {
                 self.refresh_prompt_input();
             }
             KeyCode::Enter if !self.is_streaming => {
-                if !self.prompt_input.suggestions.is_empty()
-                    && self.prompt_input.suggestion_index.is_some()
-                {
-                    let suggestion_source = self
-                        .prompt_input
-                        .suggestions
-                        .get(self.prompt_input.suggestion_index.unwrap_or(0))
-                        .map(|s| s.source.clone());
-                    self.prompt_input.accept_suggestion();
-                    match suggestion_source.as_ref() {
-                        Some(crate::prompt_input::TypeaheadSource::FileRef) => {
-                            self.prompt_input.insert_char(' ');
-                            self.refresh_prompt_input();
-                            return false;
-                        }
-                        Some(crate::prompt_input::TypeaheadSource::SlashCommand) => {
-                            self.prompt_input.suggestion_index = None;
-                            self.prompt_input.suggestions.clear();
-                            return true;
-                        }
-                        _ => {
-                            self.prompt_input.suggestion_index = None;
-                            self.prompt_input.suggestions.clear();
-                            return true;
-                        }
+                use crate::tui::prompt_input::AcceptForSubmitOutcome;
+                match self.prompt_input.accept_suggestion_for_submit() {
+                    AcceptForSubmitOutcome::ExtendInput => {
+                        self.refresh_prompt_input();
+                        return false;
                     }
+                    AcceptForSubmitOutcome::Submit => return true,
+                    AcceptForSubmitOutcome::NoSuggestion => {}
                 }
                 // Auto-dismiss all error notifications when user sends a message
                 self.dismiss_error_notifications();
