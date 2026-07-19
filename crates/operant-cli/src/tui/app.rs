@@ -3337,16 +3337,37 @@ impl App {
         self.cursor_pos = self.prompt_input.cursor;
     }
 
+    /// Check if any modal dialog is open that should block suggestion updates.
+    /// Mirrors claurst's file_injection_dialog guard for suggestion updates.
+    fn should_block_suggestions(&self) -> bool {
+        self.connect_dialog.visible
+            || self.import_config_picker.visible
+            || self.import_config_dialog.visible
+            || self.command_palette.visible
+            || self.model_picker.visible
+            || self.settings_screen.visible
+            || self.export_dialog.visible
+            || self.bypass_permissions_dialog.visible
+            || self.key_input_dialog.visible
+            || self.custom_provider_dialog.visible
+            || self.free_mode_dialog.visible
+            || self.device_auth_dialog.visible
+            || self.ask_user_dialog.visible
+    }
+
     pub fn refresh_prompt_input(&mut self) {
         self.prompt_input.mode = self.prompt_mode();
-        let file_autocomplete_limit = self.settings.config.file_autocomplete_limit;
-        let file_autocomplete_show_hidden =
-            self.settings.config.file_autocomplete_show_hidden_files;
-        self.prompt_input.update_suggestions(
-            &tui_slash_command_data(),
-            file_autocomplete_limit,
-            file_autocomplete_show_hidden,
-        );
+        // Skip suggestion updates when a modal dialog is open (Phase 1.4).
+        if !self.should_block_suggestions() {
+            let file_autocomplete_limit = self.settings.config.file_autocomplete_limit;
+            let file_autocomplete_show_hidden =
+                self.settings.config.file_autocomplete_show_hidden_files;
+            self.prompt_input.update_suggestions(
+                &tui_slash_command_data(),
+                file_autocomplete_limit,
+                file_autocomplete_show_hidden,
+            );
+        }
         self.sync_legacy_prompt_fields();
     }
 
