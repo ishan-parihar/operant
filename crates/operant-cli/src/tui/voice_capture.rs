@@ -8,15 +8,15 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use operant_core::voice::{
-    AudioEnvironment, VoiceConfig, VoiceError, create_recorder, create_stt_engine,
-    detect_audio_environment, AudioRecorder, SttEngine, SttResult,
+    AudioEnvironment, AudioRecorder, SttEngine, SttResult, VoiceConfig, VoiceError,
+    create_recorder, create_stt_engine, detect_audio_environment,
 };
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Widget};
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{Mutex, mpsc};
 
 /// Voice capture mode
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -132,7 +132,9 @@ impl VoiceCaptureState {
 
     /// Height of the voice indicator when visible
     pub fn indicator_height(&self) -> u16 {
-        if self.enabled && (self.recording || self.last_transcript.is_some() || self.last_error.is_some()) {
+        if self.enabled
+            && (self.recording || self.last_transcript.is_some() || self.last_error.is_some())
+        {
             3
         } else {
             0
@@ -230,7 +232,8 @@ impl VoiceCaptureHandle {
                             match rec.stop().await {
                                 Ok(Some(path)) => {
                                     drop(rec); // Release lock
-                                    let _ = event_tx.send(VoiceEvent::RecordingStopped(path.clone()));
+                                    let _ =
+                                        event_tx.send(VoiceEvent::RecordingStopped(path.clone()));
                                     // Transcribe in background
                                     if let Some(engine) = stt_engine {
                                         let event_tx = event_tx.clone();
@@ -239,14 +242,23 @@ impl VoiceCaptureHandle {
                                         tokio::spawn(async move {
                                             match engine.transcribe(&path_clone).await {
                                                 Ok(result) => {
-                                                    if result.success && !result.transcript.is_empty() {
-                                                        let _ = event_tx.send(VoiceEvent::TranscriptReady(result.transcript));
+                                                    if result.success
+                                                        && !result.transcript.is_empty()
+                                                    {
+                                                        let _ = event_tx.send(
+                                                            VoiceEvent::TranscriptReady(
+                                                                result.transcript,
+                                                            ),
+                                                        );
                                                     } else if let Some(err) = result.error {
-                                                        let _ = event_tx.send(VoiceEvent::TranscriptError(err));
+                                                        let _ = event_tx
+                                                            .send(VoiceEvent::TranscriptError(err));
                                                     }
                                                 }
                                                 Err(e) => {
-                                                    let _ = event_tx.send(VoiceEvent::TranscriptError(e.to_string()));
+                                                    let _ = event_tx.send(
+                                                        VoiceEvent::TranscriptError(e.to_string()),
+                                                    );
                                                 }
                                             }
                                             // Clean up temp file
@@ -258,7 +270,8 @@ impl VoiceCaptureHandle {
                                     let _ = event_tx.send(VoiceEvent::RecordingCancelled);
                                 }
                                 Err(e) => {
-                                    let _ = event_tx.send(VoiceEvent::TranscriptError(e.to_string()));
+                                    let _ =
+                                        event_tx.send(VoiceEvent::TranscriptError(e.to_string()));
                                 }
                             }
                         });
@@ -305,31 +318,36 @@ impl VoiceCaptureHandle {
 
     /// Start recording (PTT press)
     pub fn start_recording(&self) -> Result<(), VoiceError> {
-        self.command_tx.send(VoiceCommand::StartRecording)
+        self.command_tx
+            .send(VoiceCommand::StartRecording)
             .map_err(|_| VoiceError::Recording("Command channel closed".to_string()))
     }
 
     /// Stop recording (PTT release)
     pub fn stop_recording(&self) -> Result<(), VoiceError> {
-        self.command_tx.send(VoiceCommand::StopRecording)
+        self.command_tx
+            .send(VoiceCommand::StopRecording)
             .map_err(|_| VoiceError::Recording("Command channel closed".to_string()))
     }
 
     /// Cancel recording
     pub fn cancel_recording(&self) -> Result<(), VoiceError> {
-        self.command_tx.send(VoiceCommand::CancelRecording)
+        self.command_tx
+            .send(VoiceCommand::CancelRecording)
             .map_err(|_| VoiceError::Recording("Command channel closed".to_string()))
     }
 
     /// Enable/disable voice mode
     pub fn set_enabled(&self, enabled: bool) -> Result<(), VoiceError> {
-        self.command_tx.send(VoiceCommand::SetEnabled(enabled))
+        self.command_tx
+            .send(VoiceCommand::SetEnabled(enabled))
             .map_err(|_| VoiceError::Recording("Command channel closed".to_string()))
     }
 
     /// Set capture mode
     pub fn set_mode(&self, mode: VoiceCaptureMode) -> Result<(), VoiceError> {
-        self.command_tx.send(VoiceCommand::SetMode(mode))
+        self.command_tx
+            .send(VoiceCommand::SetMode(mode))
             .map_err(|_| VoiceError::Recording("Command channel closed".to_string()))
     }
 
@@ -399,7 +417,8 @@ pub fn render_voice_indicator(state: &VoiceCaptureState, area: Rect, buf: &mut B
     let mut lines = Vec::new();
 
     if state.recording {
-        let duration = state.recording_duration()
+        let duration = state
+            .recording_duration()
             .map(|d| format!("{:.1}s", d.as_secs_f64()))
             .unwrap_or_else(|| "0.0s".to_string());
 
@@ -410,27 +429,40 @@ pub fn render_voice_indicator(state: &VoiceCaptureState, area: Rect, buf: &mut B
         let bar = "█".repeat(filled) + &"░".repeat(bar_width - filled);
 
         lines.push(Line::from(vec![
-            Span::styled(" 🔴 REC ", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                " 🔴 REC ",
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            ),
             Span::styled("  ", Style::default()),
             Span::styled(duration, Style::default().fg(Color::Yellow)),
             Span::styled("  ", Style::default()),
             Span::styled(bar, Style::default().fg(Color::Green)),
-            Span::styled(format!("  {:.0}", state.current_rms), Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                format!("  {:.0}", state.current_rms),
+                Style::default().fg(Color::DarkGray),
+            ),
         ]));
 
-        lines.push(Line::from(vec![
-            Span::styled(format!("  Hold {} to record, release to send", state.ptt_key), Style::default().fg(Color::DarkGray)),
-        ]));
+        lines.push(Line::from(vec![Span::styled(
+            format!("  Hold {} to record, release to send", state.ptt_key),
+            Style::default().fg(Color::DarkGray),
+        )]));
     } else if let Some(transcript) = &state.last_transcript {
         lines.push(Line::from(vec![
             Span::styled(" ✅ ", Style::default().fg(Color::Green)),
             Span::styled("Transcribed: ", Style::default().fg(Color::White)),
-            Span::styled(transcript, Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                transcript,
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
         ]));
 
-        lines.push(Line::from(vec![
-            Span::styled("  Press Enter to send, Esc to discard", Style::default().fg(Color::DarkGray)),
-        ]));
+        lines.push(Line::from(vec![Span::styled(
+            "  Press Enter to send, Esc to discard",
+            Style::default().fg(Color::DarkGray),
+        )]));
     } else if let Some(error) = &state.last_error {
         lines.push(Line::from(vec![
             Span::styled(" ❌ ", Style::default().fg(Color::Red)),
@@ -438,25 +470,42 @@ pub fn render_voice_indicator(state: &VoiceCaptureState, area: Rect, buf: &mut B
             Span::styled(error, Style::default().fg(Color::Red)),
         ]));
 
-        lines.push(Line::from(vec![
-            Span::styled("  Press Esc to dismiss", Style::default().fg(Color::DarkGray)),
-        ]));
+        lines.push(Line::from(vec![Span::styled(
+            "  Press Esc to dismiss",
+            Style::default().fg(Color::DarkGray),
+        )]));
     } else {
         // Voice mode enabled but idle
-        let recorder = state.environment.as_ref().map(|e| e.recorder.as_str()).unwrap_or("none");
+        let recorder = state
+            .environment
+            .as_ref()
+            .map(|e| e.recorder.as_str())
+            .unwrap_or("none");
         lines.push(Line::from(vec![
             Span::styled(" 🎤 ", Style::default().fg(Color::Cyan)),
             Span::styled("Voice mode: ", Style::default().fg(Color::White)),
             Span::styled("Ready (", Style::default().fg(Color::DarkGray)),
-            Span::styled(state.ptt_key.clone(), Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                state.ptt_key.clone(),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled(") to record  ", Style::default().fg(Color::DarkGray)),
-            Span::styled(format!("[{}]", recorder), Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                format!("[{}]", recorder),
+                Style::default().fg(Color::DarkGray),
+            ),
         ]));
     }
 
     Paragraph::new(lines)
         .style(Style::default().bg(Color::Rgb(20, 25, 30)))
-        .block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(Color::DarkGray)))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::DarkGray)),
+        )
         .render(indicator_area, buf);
 }
 
@@ -467,7 +516,8 @@ pub fn render_voice_status(state: &VoiceCaptureState, area: Rect, buf: &mut Buff
     }
 
     let text = if state.recording {
-        let dur = state.recording_duration()
+        let dur = state
+            .recording_duration()
             .map(|d| format!("{:.1}s", d.as_secs_f64()))
             .unwrap_or_else(|| "0.0s".to_string());
         format!("🔴 REC {}", dur)

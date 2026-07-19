@@ -89,7 +89,18 @@ impl LightpandaProvider {
             Ok(String::from_utf8_lossy(&out.stdout).into_owned())
         } else {
             let stderr = String::from_utf8_lossy(&out.stderr);
-            Err(Error::Agent(format!("browser error: {}", stderr)))
+            // Check for permission denied errors
+            if stderr.contains("Permission denied") || stderr.contains("os error 13") {
+                Err(Error::Agent(
+                    "Lightpanda binary execution failed: Permission denied. \
+                     Ensure ~/.operant/bin/browser is executable (chmod +x) or \
+                     try setting BROWSER_PROVIDER=camofox in config.toml (requires Docker). \
+                     See https://github.com/lightpanda-io/browser/releases for manual installation."
+                        .into(),
+                ))
+            } else {
+                Err(Error::Agent(format!("browser error: {}", stderr)))
+            }
         }
     }
 }

@@ -224,6 +224,28 @@ impl ToolSchema {
                                 keys_to_remove.push(key.clone());
                             }
                         }
+
+                        // 2c. Type coercion for primitive types (string -> integer, string -> array)
+                        if val.is_string() {
+                            let s = val.as_str().unwrap();
+                            // Try to coerce string to integer if expected type is integer
+                            if expected_types.contains(&"integer")
+                                || expected_types.contains(&"number")
+                            {
+                                if let Ok(parsed) = s.parse::<serde_json::Number>() {
+                                    *val = Value::Number(parsed);
+                                }
+                            }
+                            // Try to coerce string to array if expected type is array
+                            else if expected_types.contains(&"array") {
+                                // Try to parse as JSON array first
+                                if let Ok(parsed) = serde_json::from_str::<Value>(s) {
+                                    if parsed.is_array() {
+                                        *val = parsed;
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
 
@@ -309,5 +331,55 @@ mod tests {
         let mut args3 = json!("raw string");
         schema.sanitize_args(&mut args3);
         assert_eq!(args3, json!({ "query": "raw string" }));
+    }
+
+    #[test]
+    fn test_sanitize_args_type_coercion() {
+        // Test with integer and array fields
+        #[derive(JsonSchema)]
+        #[serde(rename_all = "camelCase")]
+        #[allow(dead_code)]
+        struct CoercionParams {
+            query: String,
+            limit: Option<i32>,
+            tags: Option<Vec<String>>,
+        }
+
+        let schema = ToolSchema::from_type::<CoercionParams>("test_tool", "A test tool");
+
+        // 1. String -> integer coercion
+        let mut args1 = json!({
+            "query": "test",
+            "limit": "42"
+        });
+        schema.sanitize_args(&mut args1);
+        assert_eq!(args1["limit"], json!(42));
+        assert!(args1["limit"].is_number());
+
+        // 2. String -> array coercion (JSON array string)
+        let mut args2 = json!({
+            "query": "test",
+            "tags": "[\"rust\", \"web\"]"
+        });
+        schema.sanitize_args(&mut args2);
+        assert_eq!(args2["tags"], json!(["rust", "web"]));
+        assert!(args2["tags"].is_array());
+
+        // 3. String -> integer with "number" type (not just "integer")
+        #[derive(JsonSchema)]
+        #[serde(rename_all = "camelCase")]
+        #[allow(dead_code)]
+        struct NumberParams {
+            query: String,
+            threshold: Option<f64>,
+        }
+        let num_schema = ToolSchema::from_type::<NumberParams>("test_tool", "A test tool");
+        let mut args3 = json!({
+            "query": "test",
+            "threshold": "3.14"
+        });
+        num_schema.sanitize_args(&mut args3);
+        assert_eq!(args3["threshold"], json!(3.14));
+        assert!(args3["threshold"].is_number());
     }
 }

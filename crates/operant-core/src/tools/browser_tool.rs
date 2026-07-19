@@ -5,6 +5,13 @@
 //!
 //! On first use the tool auto-downloads the latest Lightpanda binary from GitHub Releases
 //! (https://github.com/lightpanda-io/browser) when no binary path is explicitly configured.
+//!
+//! ## Troubleshooting
+//! If you see "Permission denied (os error 13)" or "binary not found" errors:
+//! 1. Ensure you have internet access to download the binary from GitHub
+//! 2. The binary is downloaded to `~/.operant/bin/browser` - check if it exists and is executable
+//! 3. On Linux, you may need to install dependencies: `sudo apt-get install -y libnss3 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libgbm1 libasound2`
+//! 4. You can also set `BROWSER_PROVIDER=camofox` in config.toml to use Camofox instead (requires Docker)
 
 use async_trait::async_trait;
 use schemars::JsonSchema;
@@ -99,8 +106,10 @@ impl OperantTool for BrowserTool {
 
     fn description(&self) -> &str {
         "Browser automation tool for navigating and interacting with websites using Lightpanda. \
-         The binary is downloaded automatically on first use. Supports accessibility_tree \
-         command for CDP-based accessibility tree extraction with ref selectors."
+         The binary is downloaded automatically on first use to ~/.operant/bin/browser. \
+         If you encounter 'Permission denied' errors, ensure the binary is executable or try \
+         setting BROWSER_PROVIDER=camofox in config.toml (requires Docker). \
+         Supports accessibility_tree command for CDP-based accessibility tree extraction with ref selectors."
     }
 
     fn schema(&self) -> ToolSchema {

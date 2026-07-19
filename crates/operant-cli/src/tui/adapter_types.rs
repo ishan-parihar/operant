@@ -1,4 +1,3 @@
-
 // CommandResult enum from commands.rs
 use crate::commands::CommandResult;
 pub mod config {
@@ -1587,7 +1586,9 @@ impl TuiApp {
                 } else {
                     match std::fs::write(&agentic_dir, "# Project Agent Memory\n\n") {
                         Ok(_) => CommandResult::message("Created AGENTS.md in current directory."),
-                        Err(e) => CommandResult::message(format!("Failed to create AGENTS.md: {}", e)),
+                        Err(e) => {
+                            CommandResult::message(format!("Failed to create AGENTS.md: {}", e))
+                        }
                     }
                 }
             }
@@ -1600,7 +1601,9 @@ impl TuiApp {
         #[async_trait::async_trait]
         impl CommandHandler for LoginHandler {
             async fn execute(&self, _ctx: &CommandContext<'_>) -> CommandResult {
-                CommandResult::message("Set your API key: export ANTHROPIC_API_KEY=sk-... or export OPENAI_API_KEY=sk-...")
+                CommandResult::message(
+                    "Set your API key: export ANTHROPIC_API_KEY=sk-... or export OPENAI_API_KEY=sk-...",
+                )
             }
         }
         command_registry
@@ -1773,7 +1776,9 @@ impl TuiApp {
         #[async_trait::async_trait]
         impl CommandHandler for ToolsHandler {
             async fn execute(&self, _ctx: &CommandContext<'_>) -> CommandResult {
-                CommandResult::message("Available tools: memory, web_search, web_fetch, bash, and more. Use /toolsets for the full list.")
+                CommandResult::message(
+                    "Available tools: memory, web_search, web_fetch, bash, and more. Use /toolsets for the full list.",
+                )
             }
         }
         command_registry
@@ -1784,7 +1789,9 @@ impl TuiApp {
         #[async_trait::async_trait]
         impl CommandHandler for BundlesHandler {
             async fn execute(&self, _ctx: &CommandContext<'_>) -> CommandResult {
-                CommandResult::message("Skill bundles: curated sets of skills for specific workflows. (No bundles installed)")
+                CommandResult::message(
+                    "Skill bundles: curated sets of skills for specific workflows. (No bundles installed)",
+                )
             }
         }
         command_registry
@@ -1795,7 +1802,9 @@ impl TuiApp {
         #[async_trait::async_trait]
         impl CommandHandler for UsageHandler {
             async fn execute(&self, _ctx: &CommandContext<'_>) -> CommandResult {
-                CommandResult::message("Token usage and rate limits are displayed in the stats dialog. Use /stats to view.")
+                CommandResult::message(
+                    "Token usage and rate limits are displayed in the stats dialog. Use /stats to view.",
+                )
             }
         }
         command_registry
@@ -1806,7 +1815,9 @@ impl TuiApp {
         #[async_trait::async_trait]
         impl CommandHandler for InsightsHandler {
             async fn execute(&self, _ctx: &CommandContext<'_>) -> CommandResult {
-                CommandResult::message("Insights: session analysis and conversation statistics. Use /stats for details.")
+                CommandResult::message(
+                    "Insights: session analysis and conversation statistics. Use /stats for details.",
+                )
             }
         }
         command_registry
@@ -2167,10 +2178,7 @@ impl TuiApp {
                                 other => {
                                     // Other CommandResult intents (OpenHelp, Exit, etc.)
                                     // are handled by the TUI intercept in app.rs.
-                                    tracing::debug!(
-                                        "Deferred CommandResult variant: {:?}",
-                                        other
-                                    );
+                                    tracing::debug!("Deferred CommandResult variant: {:?}", other);
                                 }
                             }
                             continue;
