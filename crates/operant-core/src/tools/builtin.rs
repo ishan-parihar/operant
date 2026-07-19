@@ -21,7 +21,6 @@ pub use super::browser_tool::BrowserTool;
 pub use super::checkpoint_tool::CheckpointTool;
 pub use super::clarify_tool::ClarifyTool;
 pub use super::code_execution::CodeExecutionTool;
-pub use super::computer_use_tool::ComputerUseTool;
 pub use super::cron_tool::CronTool;
 pub use super::datetime_tool::{DateTimeTool, TimestampTool};
 pub use super::debug_helpers::{EchoTool, EnvVarTool, SystemInfoTool};
@@ -134,7 +133,6 @@ pub async fn register_builtin_tools(
     registry.register(HomeAssistantTool::new()).await?;
     registry.register(BrowserDialogTool).await?;
     registry.register(BrowserCdpTool).await?;
-    registry.register(ComputerUseTool).await?;
     registry.register(TranscriptionTool::new()).await?;
     registry.register(SpotifyPlaybackTool).await?;
     registry.register(SpotifyDevicesTool).await?;
@@ -243,7 +241,6 @@ pub fn builtin_tool_names() -> Vec<&'static str> {
         "delegate_task",
         "browser_dialog",
         "browser_cdp",
-        "computer_use",
         "spotify_playback",
         "spotify_devices",
         "spotify_queue",
