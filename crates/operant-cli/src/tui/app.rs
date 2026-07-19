@@ -601,6 +601,78 @@ pub enum KeyContext {
     VoiceModeNotice,
 }
 
+/// Dialog priority for key routing.
+/// Higher values = higher priority (handled first).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum DialogPriority {
+    /// No dialog active
+    None = 0,
+    /// Context menu
+    ContextMenu = 10,
+    /// Bypass permissions - must accept or session exits
+    BypassPermissions = 20,
+    /// MCP approval
+    McpApproval = 30,
+    /// Device auth (OAuth)
+    DeviceAuth = 40,
+    /// Ask user dialog
+    AskUser = 50,
+    /// Key input dialog
+    KeyInput = 60,
+    /// Custom provider dialog
+    CustomProvider = 70,
+    /// Free mode dialog
+    FreeMode = 80,
+    /// Import config dialog
+    ImportConfig = 90,
+    /// Effort picker
+    EffortPicker = 100,
+    /// Connect dialog
+    Connect = 110,
+    /// Import config picker
+    ImportConfigPicker = 120,
+    /// Command palette
+    CommandPalette = 130,
+    /// Model picker
+    ModelPicker = 140,
+    /// Settings screen
+    Settings = 150,
+    /// Export dialog
+    Export = 160,
+    /// Stats dialog
+    Stats = 170,
+    /// Context viz
+    ContextViz = 180,
+    /// Session browser
+    SessionBrowser = 190,
+    /// Session branching
+    SessionBranching = 200,
+    /// Tasks overlay
+    Tasks = 210,
+    /// Global search
+    GlobalSearch = 220,
+    /// History search overlay
+    HistorySearch = 230,
+    /// Help overlay
+    Help = 240,
+    /// MCP view
+    MCPView = 250,
+    /// Agents menu
+    AgentsMenu = 260,
+    /// Diff viewer
+    DiffViewer = 270,
+    /// Plugins hub
+    PluginsHub = 280,
+    /// Skills view
+    SkillsView = 290,
+    /// Journey view
+    JourneyView = 300,
+    /// Hooks config menu
+    HooksConfig = 310,
+    /// Voice mode notice
+    VoiceModeNotice = 320,
+}
+
 /// Status of an active or completed tool call.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ToolStatus {
@@ -3619,6 +3691,109 @@ impl App {
         } else {
             KeyContext::Transcript
         }
+    }
+
+    /// Get the highest-priority visible dialog for key routing.
+    /// Returns None if no dialog is visible.
+    fn dialog_priority(&self) -> Option<DialogPriority> {
+        // Check in priority order (highest first)
+        if self.context_menu_state.is_some() {
+            return Some(DialogPriority::ContextMenu);
+        }
+        if self.bypass_permissions_dialog.visible {
+            return Some(DialogPriority::BypassPermissions);
+        }
+        if self.mcp_approval.visible {
+            return Some(DialogPriority::McpApproval);
+        }
+        if self.device_auth_dialog.visible {
+            return Some(DialogPriority::DeviceAuth);
+        }
+        if self.ask_user_dialog.visible {
+            return Some(DialogPriority::AskUser);
+        }
+        if self.key_input_dialog.visible {
+            return Some(DialogPriority::KeyInput);
+        }
+        if self.custom_provider_dialog.visible {
+            return Some(DialogPriority::CustomProvider);
+        }
+        if self.free_mode_dialog.visible {
+            return Some(DialogPriority::FreeMode);
+        }
+        if self.import_config_dialog.visible {
+            return Some(DialogPriority::ImportConfig);
+        }
+        if self.effort_picker.visible {
+            return Some(DialogPriority::EffortPicker);
+        }
+        if self.connect_dialog.visible {
+            return Some(DialogPriority::Connect);
+        }
+        if self.import_config_picker.visible {
+            return Some(DialogPriority::ImportConfigPicker);
+        }
+        if self.command_palette.visible {
+            return Some(DialogPriority::CommandPalette);
+        }
+        if self.model_picker.visible {
+            return Some(DialogPriority::ModelPicker);
+        }
+        if self.settings_screen.visible {
+            return Some(DialogPriority::Settings);
+        }
+        if self.export_dialog.visible {
+            return Some(DialogPriority::Export);
+        }
+        if self.stats_dialog.visible {
+            return Some(DialogPriority::Stats);
+        }
+        if self.context_viz.visible {
+            return Some(DialogPriority::ContextViz);
+        }
+        if self.session_browser.visible {
+            return Some(DialogPriority::SessionBrowser);
+        }
+        if self.session_branching.visible {
+            return Some(DialogPriority::SessionBranching);
+        }
+        if self.tasks_overlay.visible {
+            return Some(DialogPriority::Tasks);
+        }
+        if self.global_search.visible {
+            return Some(DialogPriority::GlobalSearch);
+        }
+        if self.history_search_overlay.visible {
+            return Some(DialogPriority::HistorySearch);
+        }
+        if self.help_overlay.visible {
+            return Some(DialogPriority::Help);
+        }
+        if self.mcp_view.visible {
+            return Some(DialogPriority::MCPView);
+        }
+        if self.agents_menu.visible {
+            return Some(DialogPriority::AgentsMenu);
+        }
+        if self.diff_viewer.visible {
+            return Some(DialogPriority::DiffViewer);
+        }
+        if self.plugins_hub.visible {
+            return Some(DialogPriority::PluginsHub);
+        }
+        if self.skills_view.visible {
+            return Some(DialogPriority::SkillsView);
+        }
+        if self.journey_view.visible {
+            return Some(DialogPriority::JourneyView);
+        }
+        if self.hooks_config_menu.visible {
+            return Some(DialogPriority::HooksConfig);
+        }
+        if self.voice_mode_notice.visible {
+            return Some(DialogPriority::VoiceModeNotice);
+        }
+        None
     }
 
     /// Process a keyboard event. Returns `true` when the input should be
