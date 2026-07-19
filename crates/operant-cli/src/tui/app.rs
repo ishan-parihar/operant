@@ -2763,7 +2763,292 @@ impl App {
                 }
                 true
             }
-            _ => false,
+            _ => {
+                // Fallback: try the command registry for any unhandled command.
+                // This wires up the unified CommandRegistry so commands defined
+                // in commands.rs but not yet added to the intercept match arms
+                // can still be dispatched via their registered handlers.
+                let cmd_name = cmd.to_string();
+                let args_owned = args.to_string();
+                let result = tokio::task::block_in_place(|| {
+                    tokio::runtime::Handle::current().block_on(async {
+                        self.command_registry.execute(&cmd_name, &args_owned).await
+                    })
+                });
+                self.handle_command_result(result)
+            }
+        }
+    }
+
+    /// Interpret a [`CommandResult`] and apply the corresponding side effect
+    /// in the TUI. This is the single dispatch point for all slash commands
+    /// that go through the `CommandRegistry`.
+    ///
+    /// Returns `true` if the command was intercepted (even if it only showed
+    /// a message), `false` if it should fall through to the agent.
+    fn handle_command_result(&mut self, result: crate::commands::CommandResult) -> bool {
+        use crate::commands::CommandResult;
+        match result {
+            // ── Display ────────────────────────────────────────────────────
+            CommandResult::Message(text) => {
+                self.push_system_message(
+                    text,
+                    crate::tui::app::SystemMessageStyle::Info,
+                );
+                true
+            }
+            CommandResult::Error(text) => {
+                self.status_message = Some(text);
+                true
+            }
+            CommandResult::Silent => true,
+
+            // ── Conversation ───────────────────────────────────────────────
+            CommandResult::UserMessage(msg) => {
+                self.input = msg;
+                // Signal the caller that the user message should be submitted.
+                false
+            }
+            CommandResult::ClearConversation => {
+                self.messages.clear();
+                self.system_annotations.clear();
+                self.streaming_text.clear();
+                self.streaming_thinking.clear();
+                self.is_streaming = false;
+                self.tool_use_blocks.clear();
+                self.invalidate_transcript();
+                self.status_message = Some("Conversation cleared.".to_string());
+                true
+            }
+            CommandResult::NewSession => {
+                self.messages.clear();
+                self.system_annotations.clear();
+                self.streaming_text.clear();
+                self.streaming_thinking.clear();
+                self.is_streaming = false;
+                self.tool_use_blocks.clear();
+                self.invalidate_transcript();
+                self.status_message = Some("New session started.".to_string());
+                true
+            }
+            CommandResult::SetMessages(msgs) => {
+                self.messages.clear();
+                self.system_annotations.clear();
+                // Reconstruct messages alternating user/assistant roles.
+                for (i, text) in msgs.iter().enumerate() {
+                    let role = if i % 2 == 0 {
+                        crate::tui::adapter_types::types::Role::User
+                    } else {
+                        crate::tui::adapter_types::types::Role::Assistant
+                    };
+                    let message = crate::tui::adapter_types::types::Message {
+                        role,
+                        content: crate::tui::adapter_types::types::MessageContent::Text(text.clone()),
+                    };
+                    self.messages.push(message);
+                }
+                self.invalidate_transcript();
+                self.status_message = Some(format!("Restored {} messages.", msgs.len()));
+                true
+            }
+
+            // ── Configuration ──────────────────────────────────────────────
+            CommandResult::ToggleSetting { name, enabled } => {
+                self.status_message = Some(format!("{}: {}", name, if enabled { "on" } else { "off" }));
+                true
+            }
+            CommandResult::CycleSetting { name, current } => {
+                self.status_message = Some(format!("{}: {}", name, current));
+                true
+            }
+            CommandResult::SetGoal(goal) => {
+                self.session_goal = goal;
+                self.status_message = Some("Session goal updated.".to_string());
+                true
+            }
+
+            // ── Overlay / UI ───────────────────────────────────────────────
+            CommandResult::OpenHelp => {
+                self.show_help = true;
+                true
+            }
+            CommandResult::OpenModelPicker => {
+                let provider = self.active_provider.clone().unwrap_or_else(|| "anthropic".to_string());
+                self.open_model_picker_for_provider(
+                    &provider,
+                    None,
+                );
+                true
+            }
+            CommandResult::OpenThemePicker => {
+                let theme = self.settings.theme.as_str();
+                self.theme_screen.open(theme);
+                true
+            }
+            CommandResult::OpenSessionBrowser => {
+                self.session_list_pending = true;
+                true
+            }
+            CommandResult::OpenStats => {
+                self.stats_dialog.open();
+                true
+            }
+            CommandResult::OpenMcp => {
+                // TODO: populate with live MCP server data from core_mcp_manager.
+                self.mcp_view.open(vec![]);
+                true
+            }
+            CommandResult::OpenAgents => {
+                let root = self.project_dir.clone().unwrap_or_default();
+                self.agents_menu.open(&root);
+                true
+            }
+            CommandResult::OpenDiff => {
+                let root = self.project_dir.clone().unwrap_or_default();
+                self.diff_viewer.open(&root);
+                true
+            }
+            CommandResult::OpenMemory => {
+                let root = self.project_dir.clone().unwrap_or_default();
+                self.memory_file_selector.open(&root);
+                true
+            }
+            CommandResult::OpenSkills => {
+                self.skills_view.open(operant_core::platform::operant_skills_dir());
+                true
+            }
+            CommandResult::OpenPlugins => {
+                let dir = crate::cmd_plugins::plugins_dir(&self.config).unwrap_or_default();
+                self.plugins_hub.open(dir);
+                true
+            }
+            CommandResult::OpenHooks => {
+                self.hooks_config_menu.open();
+                true
+            }
+            CommandResult::OpenImportConfig => {
+                self.open_import_config_picker();
+                true
+            }
+            CommandResult::OpenExport => {
+                self.export_dialog.open();
+                true
+            }
+            CommandResult::OpenEffortPicker => {
+                self.effort_picker.open(self.effort_level);
+                true
+            }
+            CommandResult::OpenConnect => {
+                self.connect_dialog.open();
+                true
+            }
+            CommandResult::OpenSearch => {
+                self.global_search.open();
+                true
+            }
+            CommandResult::OpenSettings => {
+                self.settings_screen.open();
+                true
+            }
+            CommandResult::OpenContext => {
+                self.context_viz.toggle();
+                true
+            }
+            CommandResult::OpenJourney => {
+                let skills_dir = operant_core::platform::operant_skills_dir();
+                let memory_dir = skills_dir.join("../memory").canonicalize().unwrap_or_else(|_| skills_dir.join("../memory"));
+                self.journey_view.open(skills_dir, memory_dir);
+                true
+            }
+
+            // ── Session state ──────────────────────────────────────────────
+            CommandResult::StopStreaming => {
+                self.is_streaming = false;
+                self.flush_streamed_assistant_message();
+                true
+            }
+            CommandResult::Retry => {
+                // Set pending_retry_query so the run loop resubmits the last user msg.
+                if let Some(last_user) = self.messages.iter().rev().find(|m| {
+                    matches!(
+                        m.role,
+                        crate::tui::adapter_types::types::Role::User
+                    )
+                }) {
+                    let text = last_user.text_content();
+                    if !text.is_empty() {
+                        self.pending_retry_query = Some(text);
+                    }
+                }
+                true
+            }
+            CommandResult::Undo => {
+                // Remove the last user+assistant pair.
+                let mut removed = 0;
+                // Remove trailing assistant message
+                if self.messages.last().map(|m| {
+                    matches!(
+                        m.role,
+                        crate::tui::adapter_types::types::Role::Assistant
+                    )
+                }).unwrap_or(false) {
+                    self.messages.pop();
+                    removed += 1;
+                }
+                // Remove trailing user message
+                if self.messages.last().map(|m| {
+                    matches!(
+                        m.role,
+                        crate::tui::adapter_types::types::Role::User
+                    )
+                }).unwrap_or(false) {
+                    self.messages.pop();
+                    removed += 1;
+                }
+                self.invalidate_transcript();
+                self.status_message = Some(format!("Undid {} messages.", removed));
+                true
+            }
+
+            // ── Clipboard ──────────────────────────────────────────────────
+            CommandResult::CopyLastResponse => {
+                if let Some(last_assistant) = self.messages.iter().rev().find(|m| {
+                    matches!(
+                        m.role,
+                        crate::tui::adapter_types::types::Role::Assistant
+                    )
+                }) {
+                    // Filter out thinking blocks — only copy visible text.
+                    let text: String = last_assistant
+                        .content_blocks()
+                        .into_iter()
+                        .filter_map(|block| match block {
+                            crate::tui::adapter_types::types::ContentBlock::Text { text } => {
+                                Some(text.as_str())
+                            }
+                            _ => None,
+                        })
+                        .collect();
+                    if try_copy_to_clipboard(&text) {
+                        self.status_message = Some("Copied to clipboard.".to_string());
+                    } else {
+                        self.status_message = Some("Failed to copy to clipboard.".to_string());
+                    }
+                }
+                true
+            }
+
+            // ── Shell ──────────────────────────────────────────────────────
+            CommandResult::ShellCommand(cmds) => {
+                self.pending_shell_command = Some(cmds);
+                true
+            }
+
+            // ── Exit ───────────────────────────────────────────────────────
+            CommandResult::Exit => {
+                self.should_exit = true;
+                true
+            }
         }
     }
 
