@@ -5287,8 +5287,21 @@ impl App {
             // (issue #149 follow-up).
             // Also, if suggestions are visible (text starts with '/' or has file ref),
             // allow suggestion navigation with Up/Down.
+            // In vim Visual mode, Shift+Up/Shift+Down extend the selection.
             KeyCode::Up => {
-                if !self.prompt_input.suggestions.is_empty()
+                if key.modifiers.contains(KeyModifiers::SHIFT)
+                    && matches!(
+                        self.prompt_input.vim_mode,
+                        crate::prompt_input::VimMode::Visual
+                            | crate::prompt_input::VimMode::VisualLine
+                            | crate::prompt_input::VimMode::VisualBlock
+                    )
+                {
+                    // Shift+Up in visual mode: extend selection up
+                    let area = self.last_input_area.get();
+                    let width = area.width.saturating_sub(4) as usize;
+                    self.prompt_input.move_visual_up(width);
+                } else if !self.prompt_input.suggestions.is_empty()
                     && (self.prompt_input.text.starts_with('/')
                         || self.prompt_input.has_active_file_ref())
                 {
@@ -5310,7 +5323,19 @@ impl App {
                 self.refresh_prompt_input();
             }
             KeyCode::Down => {
-                if !self.prompt_input.suggestions.is_empty()
+                if key.modifiers.contains(KeyModifiers::SHIFT)
+                    && matches!(
+                        self.prompt_input.vim_mode,
+                        crate::prompt_input::VimMode::Visual
+                            | crate::prompt_input::VimMode::VisualLine
+                            | crate::prompt_input::VimMode::VisualBlock
+                    )
+                {
+                    // Shift+Down in visual mode: extend selection down
+                    let area = self.last_input_area.get();
+                    let width = area.width.saturating_sub(4) as usize;
+                    self.prompt_input.move_visual_down(width);
+                } else if !self.prompt_input.suggestions.is_empty()
                     && (self.prompt_input.text.starts_with('/')
                         || self.prompt_input.has_active_file_ref())
                 {
@@ -5982,10 +6007,10 @@ impl App {
     fn open_context_menu_at_cursor(&mut self) {
         let msg_area = self.last_msg_area.get();
         let has_selection = !self.selection_text.borrow().trim().is_empty();
-        
+
         // Calculate the row at the current scroll position (top of visible area)
         let visible_row = msg_area.y.saturating_add(self.scroll_offset as u16);
-        
+
         // Try to find message at the visible scroll position
         if let Some(message_index) = self.message_index_at_row(visible_row) {
             if message_index < self.messages.len() {
@@ -5995,7 +6020,7 @@ impl App {
                 return;
             }
         }
-        
+
         // Fall back to selection if any
         if has_selection {
             let x = msg_area.x.saturating_add(2);
@@ -6003,7 +6028,7 @@ impl App {
             self.show_context_menu(x, y, ContextMenuKind::Selection);
             return;
         }
-        
+
         // No message at scroll position and no selection - show at bottom of message area
         let x = msg_area.x.saturating_add(2);
         let y = msg_area.y.saturating_add(msg_area.height.saturating_sub(3));
