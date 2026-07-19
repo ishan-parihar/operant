@@ -102,6 +102,7 @@ pub enum KeyAction {
     TogglePlanMode,
     ShowHelp,
     ShowCommandPalette,
+    ShowContextMenu,
     
     // Custom user actions (extensible)
     Custom(u32),
@@ -284,6 +285,7 @@ impl KeyBindingRegistry {
             DefaultBinding { key: KeyCode::F(1), modifiers: KeyModifiers::NONE, action: KeyAction::ShowHelp, context: BindingContext::Global, description: "Show help" },
             DefaultBinding { key: KeyCode::Char('p'), modifiers: KeyModifiers::CONTROL, action: KeyAction::ShowCommandPalette, context: BindingContext::Global, description: "Command palette" },
             DefaultBinding { key: KeyCode::Char('v'), modifiers: KeyModifiers::ALT, action: KeyAction::ToggleVimMode, context: BindingContext::Global, description: "Toggle Vim mode" },
+            DefaultBinding { key: KeyCode::Char('m'), modifiers: KeyModifiers::CONTROL | KeyModifiers::SHIFT, action: KeyAction::ShowContextMenu, context: BindingContext::Global, description: "Show context menu" },
             
             // Prompt bindings
             DefaultBinding { key: KeyCode::Enter, modifiers: KeyModifiers::NONE, action: KeyAction::Submit, context: BindingContext::Prompt, description: "Submit prompt" },
