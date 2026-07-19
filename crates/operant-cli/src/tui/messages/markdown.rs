@@ -541,7 +541,8 @@ pub fn normalize_markdown_newlines(text: &str) -> String {
             let next_line = lines[i + 1];
             let next_trimmed = next_line.trim_start();
 
-            let is_list_item = next_trimmed.starts_with("- ")
+            // Check if the NEXT line is a structural element
+            let next_is_list_item = next_trimmed.starts_with("- ")
                 || next_trimmed.starts_with("* ")
                 || next_trimmed.starts_with("+ ")
                 || (next_trimmed.contains(". ")
@@ -549,17 +550,34 @@ pub fn normalize_markdown_newlines(text: &str) -> String {
                         .chars()
                         .next()
                         .is_some_and(|c| c.is_ascii_digit()));
-            let is_heading = next_trimmed.starts_with("#");
-            let is_blockquote = next_trimmed.starts_with("> ");
-            let is_code_fence = next_trimmed.starts_with("```");
+            let next_is_heading = next_trimmed.starts_with("#");
+            let next_is_blockquote = next_trimmed.starts_with("> ");
+            let next_is_code_fence = next_trimmed.starts_with("```");
+
+            // Check if the CURRENT line is a structural element — newline must
+            // be preserved after headings, list items, and blockquotes so they
+            // don't merge with the following line.
+            let current_is_heading = trimmed.starts_with("#");
+            let current_is_list_item = trimmed.starts_with("- ")
+                || trimmed.starts_with("* ")
+                || trimmed.starts_with("+ ")
+                || (trimmed.contains(". ")
+                    && trimmed
+                        .chars()
+                        .next()
+                        .is_some_and(|c| c.is_ascii_digit()));
+            let current_is_blockquote = trimmed.starts_with("> ");
 
             if in_code_block
                 || current_line.is_empty()
                 || next_line.is_empty()
-                || is_list_item
-                || is_heading
-                || is_blockquote
-                || is_code_fence
+                || next_is_list_item
+                || next_is_heading
+                || next_is_blockquote
+                || next_is_code_fence
+                || current_is_heading
+                || current_is_list_item
+                || current_is_blockquote
             {
                 result.push('\n');
             } else {

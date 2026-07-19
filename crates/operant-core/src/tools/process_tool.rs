@@ -48,7 +48,13 @@ impl OperantTool for ProcessTool {
     }
 
     fn description(&self) -> &str {
-        "Manage background processes: list, spawn, poll, wait, kill, and get output"
+        "Manage background processes. Actions:\n\
+         - list: list all processes (no extra params)\n\
+         - spawn: requires 'command' string (e.g. {\"action\":\"spawn\",\"command\":\"ls -la\"})\n\
+         - poll: requires 'sessionId'\n\
+         - wait: requires 'sessionId'\n\
+         - kill: requires 'sessionId'\n\
+         - get_output: requires 'sessionId'"
     }
 
     fn schema(&self) -> ToolSchema {

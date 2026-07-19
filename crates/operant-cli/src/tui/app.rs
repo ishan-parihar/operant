@@ -1107,6 +1107,9 @@ pub struct App {
     pub pending_permission_response_tx:
         Option<tokio::sync::oneshot::Sender<operant_core::agent::ToolPermissionResponse>>,
     pub run_complete_rx: Option<tokio::sync::oneshot::Receiver<operant_core::error::Result<()>>>,
+    /// Handle to the background agent task. Aborted on Escape so the task
+    /// actually stops instead of continuing to run in the background.
+    pub agent_task_handle: Option<tokio::task::JoinHandle<()>>,
     /// A single key event that was drained from the queue during paste-burst
     /// detection but wasn't part of the burst (e.g. a modifier key that stopped
     /// the burst). Replayed at the top of the next loop iteration.
@@ -1460,6 +1463,7 @@ impl App {
             permission_rx: None,
             pending_permission_response_tx: None,
             run_complete_rx: None,
+            agent_task_handle: None,
             pending_key: None,
             model_fetch_rx: None,
             user_question_rx: None,
@@ -4739,6 +4743,10 @@ impl App {
                 self.streaming_thinking.clear();
                 self.tool_use_blocks.clear();
                 self.status_message = Some("Cancelled.".to_string());
+                // Abort the background agent task so it actually stops.
+                if let Some(handle) = self.agent_task_handle.take() {
+                    handle.abort();
+                }
                 self.complete_current_turn_snapshot(true);
             }
 
@@ -6570,8 +6578,15 @@ impl App {
                 } else {
                     self.flush_streamed_assistant_message();
                 }
-                self.tool_use_blocks
-                    .retain(|b| b.status != ToolStatus::Running);
+                // Mark any remaining Running blocks as Done — they completed
+                // but the ToolComplete event either fired before the Done event
+                // or was never emitted (fast tool / race condition). Pruning
+                // them silently dropped the tool trail from the user's view.
+                for block in &mut self.tool_use_blocks {
+                    if block.status == ToolStatus::Running {
+                        block.status = ToolStatus::Done;
+                    }
+                }
                 self.complete_current_turn_snapshot(false);
                 self.invalidate_transcript();
                 // (iter-209: refresh_turn_diff_from_history removed)
@@ -7015,10 +7030,12 @@ impl App {
                             });
                         }
                         self.run_complete_rx = None;
+                        self.agent_task_handle.take(); // Clear completed handle.
                     }
                     Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
                         self.is_streaming = false;
                         self.run_complete_rx = None;
+                        self.agent_task_handle.take(); // Clear completed handle.
                     }
                     Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {}
                 }

@@ -1983,11 +1983,12 @@ impl TuiApp {
 
                 let agent_clone = std::sync::Arc::clone(agent);
                 let (tx, rx) = tokio::sync::oneshot::channel();
-                tokio::spawn(async move {
+                let handle = tokio::spawn(async move {
                     let result = agent_clone.run(query).await.map(|_| ());
                     let _ = tx.send(result);
                 });
                 self.app.run_complete_rx = Some(rx);
+                self.app.agent_task_handle = Some(handle);
             }
         }
 
@@ -2158,11 +2159,12 @@ impl TuiApp {
                                 self.app.streaming_thinking.clear();
                                 let agent_clone = std::sync::Arc::clone(agent);
                                 let (tx, rx) = tokio::sync::oneshot::channel();
-                                tokio::spawn(async move {
+                                let handle = tokio::spawn(async move {
                                     let result = agent_clone.run(retry_text).await.map(|_| ());
                                     let _ = tx.send(result);
                                 });
                                 self.app.run_complete_rx = Some(rx);
+                                self.app.agent_task_handle = Some(handle);
                                 continue;
                             }
                         }
@@ -2195,11 +2197,12 @@ impl TuiApp {
 
                         let agent_clone = std::sync::Arc::clone(agent);
                         let (tx, rx) = tokio::sync::oneshot::channel();
-                        tokio::spawn(async move {
+                        let handle = tokio::spawn(async move {
                             let result = agent_clone.run(input).await.map(|_| ());
                             let _ = tx.send(result);
                         });
                         self.app.run_complete_rx = Some(rx);
+                        self.app.agent_task_handle = Some(handle);
                     }
                 }
                 Ok(None) => break Ok(()),
@@ -2312,11 +2315,12 @@ impl TuiApp {
 
                 let agent_clone = std::sync::Arc::clone(agent);
                 let (tx, rx) = tokio::sync::oneshot::channel();
-                tokio::spawn(async move {
+                let handle = tokio::spawn(async move {
                     let result = agent_clone.run(query).await.map(|_| ());
                     let _ = tx.send(result);
                 });
                 self.app.run_complete_rx = Some(rx);
+                self.app.agent_task_handle = Some(handle);
             }
         }
 
@@ -2364,11 +2368,12 @@ impl TuiApp {
 
                         let agent_clone = std::sync::Arc::clone(agent);
                         let (tx, rx) = tokio::sync::oneshot::channel();
-                        tokio::spawn(async move {
+                        let handle = tokio::spawn(async move {
                             let result = agent_clone.run(input).await.map(|_| ());
                             let _ = tx.send(result);
                         });
                         self.app.run_complete_rx = Some(rx);
+                        self.app.agent_task_handle = Some(handle);
                     }
                 }
                 Ok(None) => break,
