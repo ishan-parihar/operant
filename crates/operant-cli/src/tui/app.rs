@@ -39,141 +39,32 @@ use std::cell::{Cell, RefCell};
 use std::sync::{Arc, Mutex};
 use tracing::debug;
 
-// ponytail: only commands that actually work in the TUI (intercepted or agent-handled)
-const PROMPT_SLASH_COMMANDS: &[(&str, &str)] = &[
-    // UI screens (intercepted)
-    ("agents", "Show active agents and running tasks"),
-    ("changes", "Inspect changes from the current session"),
-    ("config", "Show current configuration"),
-    ("connect", "Connect an AI provider"),
-    ("context", "Show context window and rate limit usage"),
-    ("cost", "Show cost breakdown"),
-    ("diff", "Inspect the current git diff"),
-    ("effort", "Pick effort level"),
-    ("export", "Export conversation"),
-    ("help", "Show help"),
-    ("hooks", "Configure hooks"),
-    ("import-config", "Import configuration"),
-    ("keybindings", "Edit keybindings"),
-    ("memory", "Browse and open memory files"),
-    ("mcp", "Browse configured MCP servers"),
-    ("model", "Switch model for this session"),
-    ("output-style", "Toggle output style (auto/stream/verbose)"),
-    ("plan", "Toggle plan mode"),
-    ("rename", "Set a title for the current session"),
-    ("resume", "Resume a previously-named session"),
-    ("rewind", "Rewind to an earlier turn"),
-    ("review", "Review changes (git diff)"),
-    ("search", "Search conversation"),
-    ("stats", "Open token and cost stats"),
-    // (iter-211: survey/feedback slash command deleted — no telemetry backend)
-    ("theme", "Open the theme picker"),
-    ("vim", "Toggle vim keybindings"),
-    ("voice", "Toggle voice mode"),
-    // TUI toggles (intercepted)
-    ("clear", "Clear screen and start a new session"),
-    ("copy", "Copy the last assistant response to clipboard"),
-    ("fast", "Toggle fast mode"),
-    ("exit", "Exit Operant"),
-    // Agent-handled (fall through)
-    ("compact", "Compress conversation context"),
-    ("doctor", "Run diagnostics"),
-    ("init", "Initialize AGENTS.md for this project"),
-    ("login", "Log in to Operant"),
-    ("logout", "Log out of Operant"),
-    // Agent-context commands (routed to backend)
-    ("refresh", "Refresh model list from providers"),
-    ("providers", "List available AI providers"),
-    ("status", "Show system status"),
-    ("version", "Show version"),
-    ("time", "Show current time"),
-    ("debug", "Toggle debug mode"),
-    ("new", "Start a new session"),
-    ("history", "Show conversation history"),
-    ("retry", "Retry last message"),
-    ("undo", "Undo last action"),
-    ("stop", "Stop current generation"),
-    ("compress", "Compress conversation context"),
-    ("rollback", "Rollback to previous state"),
-    ("title", "Set session title"),
-    ("branch", "Branch conversation"),
-    ("goal", "Set session goal"),
-    ("provider", "Switch provider"),
-    ("yolo", "Toggle auto-approve mode"),
-    ("personality", "Set agent personality"),
-    ("reasoning", "Toggle reasoning display"),
-    ("tools", "List available tools"),
-    ("skills", "Manage loaded skills"),
-    ("plugins", "Browse and toggle installed plugins"),
-    ("bundles", "Manage skill bundles"),
-    ("usage", "Show token usage"),
-    ("credits", "Show remaining credits"),
-    ("billing", "Show billing info"),
-    ("insights", "Show session insights"),
-    ("update", "Check for updates"),
-    ("whoami", "Show current user"),
-    ("sessions", "List all sessions"),
-    // iter-77+ backfilled commands (were hidden — now surfaced in /help)
-    (
-        "save",
-        "Save / export the current conversation (alias for /export)",
-    ),
-    (
-        "subgoal",
-        "Set an additional sub-goal for the session (alias for /goal)",
-    ),
-    ("steer", "Queue a steer directive mid-stream"),
-    ("journey", "Browse skills + memories timeline"),
-    ("setup", "Re-run the setup wizard"),
-    ("busy", "Toggle auto-compact"),
-    ("verbose", "Cycle output style"),
-    ("queue", "Show queued messages"),
-    ("background", "Show background task info"),
-    ("browser", "Show browser backend info"),
-    ("indicator", "Toggle status bar"),
-    ("statusbar", "Toggle status bar"),
-    ("mouse", "Show mouse capture info"),
-    ("terminal-setup", "Show terminal capability info"),
-    ("redraw", "Force a full screen redraw"),
-    ("heapdump", "Show debug snapshot"),
-    ("mem", "Show memory/heap summary"),
-    ("pet", "Pet the mascot"),
-    ("skin", "Alias for /theme"),
-    ("replay", "Replay spawn tree (planned)"),
-    ("replay-diff", "Diff replay (planned)"),
-    ("reload", "Re-read settings from disk"),
-    ("reload-mcp", "Reload MCP servers (restart required)"),
-    ("reload-skills", "Rescan the skills directory"),
-];
+// ---------------------------------------------------------------------------
+// Unified command data (single source of truth from COMMAND_REGISTRY)
+// ---------------------------------------------------------------------------
 
-fn help_command_category(name: &str) -> &'static str {
-    match name {
-        "connect" | "model" | "fast" | "effort" | "voice" | "provider" => "Model & Provider",
-        "changes" | "diff" | "review" | "rewind" | "export" | "copy" | "history" | "retry"
-        | "undo" | "rollback" | "stop" | "refresh" => "Review & History",
-        "stats" | "cost" | "context" | "doctor" | "status" | "version" | "time" | "debug"
-        | "whoami" | "credits" | "billing" | "insights" | "usage" => "Diagnostics",
-        "config" | "theme" | "keybindings" | "hooks" | "mcp" | "import-config" | "output-style" => {
-            "Workspace"
-        }
-        "agents" | "memory" | "survey" | "tools" | "skills" | "bundles" => "Tools",
-        "search" | "new" | "sessions" | "branches" => "Sessions",
-        "plan" | "vim" | "yolo" => "Preferences",
-        "goal" | "title" | "branch" | "personality" | "reasoning" => "Session",
-        "compact" | "compress" => "Context",
-        "login" | "logout" | "update" => "Account",
-        _ => "Other",
-    }
+/// All TUI-available slash commands as `(name, description)` pairs.
+/// Derived from the canonical `COMMAND_REGISTRY` — replaces the old hardcoded
+/// `PROMPT_SLASH_COMMANDS` constant. Used by typeahead and command palette.
+fn tui_slash_command_data() -> Vec<(&'static str, &'static str)> {
+    crate::commands::COMMAND_REGISTRY
+        .iter()
+        .filter(|cmd| !cmd.gateway_only)
+        .map(|cmd| (cmd.name, cmd.description))
+        .collect()
 }
 
+/// Generate help overlay entries from the unified command registry.
+/// Each entry includes aliases (e.g. "n, clear" for /new) and the
+/// TUI category for grouped display.
 fn help_overlay_entries() -> Vec<HelpEntry> {
-    PROMPT_SLASH_COMMANDS
-        .iter()
-        .map(|(name, description)| HelpEntry {
-            name: (*name).to_string(),
-            aliases: String::new(),
-            description: (*description).to_string(),
-            category: help_command_category(name).to_string(),
+    crate::commands::tui_slash_commands()
+        .into_iter()
+        .map(|cmd| HelpEntry {
+            name: cmd.name.to_string(),
+            aliases: cmd.aliases.join(", "),
+            description: cmd.description.to_string(),
+            category: cmd.category.to_string(),
         })
         .collect()
 }
@@ -1423,13 +1314,13 @@ impl App {
             ),
             import_config_dialog: ImportConfigDialogState::new(),
             command_palette: {
-                let items: Vec<SelectItem> = PROMPT_SLASH_COMMANDS
+                let items: Vec<SelectItem> = tui_slash_command_data()
                     .iter()
                     .map(|(name, desc)| SelectItem {
                         id: format!("/{}", name),
                         title: format!("/{}", name),
-                        description: desc.to_string(),
-                        category: "Commands".to_string(),
+                        description: (*desc).to_string(),
+                        category: crate::commands::tui_category(name).to_string(),
                         badge: None,
                     })
                     .collect();
@@ -3452,7 +3343,7 @@ impl App {
         let file_autocomplete_show_hidden =
             self.settings.config.file_autocomplete_show_hidden_files;
         self.prompt_input.update_suggestions(
-            PROMPT_SLASH_COMMANDS,
+            &tui_slash_command_data(),
             file_autocomplete_limit,
             file_autocomplete_show_hidden,
         );
@@ -5086,11 +4977,14 @@ impl App {
             // one visual row first, only falling through to history recall
             // when the cursor is already on the first/last visual row
             // (issue #149 follow-up).
+            // Also, if suggestions are visible (text starts with '/' or has file ref),
+            // allow suggestion navigation with Up/Down.
             KeyCode::Up => {
-                // Only navigate suggestions when user explicitly selected one (Tab pressed)
-                if self.prompt_input.suggestion_index.is_some()
-                    && !self.prompt_input.suggestions.is_empty()
+                if !self.prompt_input.suggestions.is_empty()
+                    && (self.prompt_input.text.starts_with('/')
+                        || self.prompt_input.has_active_file_ref())
                 {
+                    // Suggestions visible: navigate them
                     self.prompt_input.suggestion_prev();
                 } else if !self.prompt_input.text.contains('\n') {
                     // Single-line input: always navigate history (like hermes-agent).
@@ -5108,10 +5002,11 @@ impl App {
                 self.refresh_prompt_input();
             }
             KeyCode::Down => {
-                // Only navigate suggestions when user explicitly selected one (Tab pressed)
-                if self.prompt_input.suggestion_index.is_some()
-                    && !self.prompt_input.suggestions.is_empty()
+                if !self.prompt_input.suggestions.is_empty()
+                    && (self.prompt_input.text.starts_with('/')
+                        || self.prompt_input.has_active_file_ref())
                 {
+                    // Suggestions visible: navigate them
                     self.prompt_input.suggestion_next();
                 } else if !self.prompt_input.text.contains('\n') {
                     // Single-line input: always navigate history.
