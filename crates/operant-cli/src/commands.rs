@@ -114,15 +114,9 @@ pub enum CommandResult {
 
     // ── Configuration ──────────────────────────────────────────────────────
     /// Toggle a boolean setting and show the new state.
-    ToggleSetting {
-        name: &'static str,
-        enabled: bool,
-    },
+    ToggleSetting { name: &'static str, enabled: bool },
     /// Cycle a string setting through a list of values.
-    CycleSetting {
-        name: &'static str,
-        current: String,
-    },
+    CycleSetting { name: &'static str, current: String },
     /// Update the session goal.
     SetGoal(Option<String>),
 
@@ -266,8 +260,12 @@ impl fmt::Debug for CommandResult {
             Self::ClearConversation => write!(f, "ClearConversation"),
             Self::NewSession => write!(f, "NewSession"),
             Self::SetMessages(v) => write!(f, "SetMessages({} msgs)", v.len()),
-            Self::ToggleSetting { name, enabled } => write!(f, "ToggleSetting({:?}, {})", name, enabled),
-            Self::CycleSetting { name, current } => write!(f, "CycleSetting({:?}, {:?})", name, current),
+            Self::ToggleSetting { name, enabled } => {
+                write!(f, "ToggleSetting({:?}, {})", name, enabled)
+            }
+            Self::CycleSetting { name, current } => {
+                write!(f, "CycleSetting({:?}, {:?})", name, current)
+            }
             Self::SetGoal(g) => write!(f, "SetGoal({:?})", g),
             Self::OpenHelp => write!(f, "OpenHelp"),
             Self::OpenModelPicker => write!(f, "OpenModelPicker"),
@@ -295,6 +293,54 @@ impl fmt::Debug for CommandResult {
             Self::CopyLastResponse => write!(f, "CopyLastResponse"),
             Self::ShellCommand(cmds) => write!(f, "ShellCommand({:?})", cmds),
             Self::Exit => write!(f, "Exit"),
+        }
+    }
+}
+
+impl fmt::Display for CommandResult {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Message(s) => write!(f, "{}", s),
+            Self::Error(s) => write!(f, "Error: {}", s),
+            Self::Silent => Ok(()),
+            Self::UserMessage(s) => write!(f, "[user message: {}]", s),
+            Self::ClearConversation => write!(f, "[clear conversation]"),
+            Self::NewSession => write!(f, "[new session]"),
+            Self::SetMessages(v) => write!(f, "[restored {} messages]", v.len()),
+            Self::ToggleSetting { name, enabled } => {
+                write!(f, "[{}: {}]", name, if *enabled { "on" } else { "off" })
+            }
+            Self::CycleSetting { name, current } => {
+                write!(f, "[{}: {}]", name, current)
+            }
+            Self::SetGoal(None) => write!(f, "SetGoal(None)"),
+            Self::SetGoal(Some(g)) => write!(f, "SetGoal(Some({:?}))", g),
+            Self::OpenHelp => write!(f, "[open help]"),
+            Self::OpenModelPicker => write!(f, "[open model picker]"),
+            Self::OpenThemePicker => write!(f, "[open theme picker]"),
+            Self::OpenSessionBrowser => write!(f, "[open session browser]"),
+            Self::OpenStats => write!(f, "[open stats]"),
+            Self::OpenMcp => write!(f, "[open MCP]"),
+            Self::OpenAgents => write!(f, "[open agents]"),
+            Self::OpenDiff => write!(f, "[open diff]"),
+            Self::OpenMemory => write!(f, "[open memory]"),
+            Self::OpenSkills => write!(f, "[open skills]"),
+            Self::OpenPlugins => write!(f, "[open plugins]"),
+            Self::OpenHooks => write!(f, "[open hooks]"),
+            Self::OpenImportConfig => write!(f, "[open import config]"),
+            Self::OpenExport => write!(f, "[open export]"),
+            Self::OpenEffortPicker => write!(f, "[open effort picker]"),
+            Self::OpenConnect => write!(f, "[open connect]"),
+            Self::OpenSearch => write!(f, "[open search]"),
+            Self::OpenSettings => write!(f, "[open settings]"),
+            Self::OpenContext => write!(f, "[open context]"),
+            Self::OpenJourney => write!(f, "[open journey]"),
+            Self::StopStreaming => write!(f, "[stop streaming]"),
+            Self::Retry => write!(f, "[retry last message]"),
+            Self::Undo => write!(f, "[undo last exchange]"),
+            Self::CopyLastResponse => write!(f, "[copy last response]"),
+            Self::ShellCommand(cmds) => write!(f, "ShellCommand({:?})", cmds),
+            Self::Exit => write!(f, "[exit]"),
         }
     }
 }
@@ -828,22 +874,19 @@ pub static COMMAND_REGISTRY: &[CommandDef] = &[
     CommandDef::new("rename", "Set a title for the current session", "Session")
         .cli_only()
         .with_args("[name]"),
-    CommandDef::new("journey", "Browse skills + memories timeline", "Tools & Skills")
-        .cli_only(),
-    CommandDef::new("setup", "Re-run the setup wizard", "Configuration")
-        .cli_only(),
-    CommandDef::new("mouse", "Show mouse capture info", "Info")
-        .cli_only(),
-    CommandDef::new("terminal-setup", "Show terminal capability info", "Info")
-        .cli_only(),
-    CommandDef::new("heapdump", "Show debug snapshot", "Info")
-        .cli_only(),
-    CommandDef::new("pet", "Pet the mascot", "Info")
-        .cli_only(),
-    CommandDef::new("replay", "Replay spawn tree (planned)", "Session")
-        .cli_only(),
-    CommandDef::new("replay-diff", "Diff replay (planned)", "Session")
-        .cli_only(),
+    CommandDef::new(
+        "journey",
+        "Browse skills + memories timeline",
+        "Tools & Skills",
+    )
+    .cli_only(),
+    CommandDef::new("setup", "Re-run the setup wizard", "Configuration").cli_only(),
+    CommandDef::new("mouse", "Show mouse capture info", "Info").cli_only(),
+    CommandDef::new("terminal-setup", "Show terminal capability info", "Info").cli_only(),
+    CommandDef::new("heapdump", "Show debug snapshot", "Info").cli_only(),
+    CommandDef::new("pet", "Pet the mascot", "Info").cli_only(),
+    CommandDef::new("replay", "Replay spawn tree (planned)", "Session").cli_only(),
+    CommandDef::new("replay-diff", "Diff replay (planned)", "Session").cli_only(),
 ];
 
 // ---------------------------------------------------------------------------
@@ -1092,15 +1135,23 @@ impl TuiCategory {
 /// Return the TUI category for a given command name.
 pub fn tui_category(name: &str) -> &'static str {
     match name {
-        "connect" | "model" | "fast" | "effort" | "voice" | "provider" => TuiCategory::ModelAndProvider.as_str(),
+        "connect" | "model" | "fast" | "effort" | "voice" | "provider" => {
+            TuiCategory::ModelAndProvider.as_str()
+        }
         "changes" | "diff" | "review" | "rewind" | "export" | "copy" | "history" | "retry"
-        | "undo" | "rollback" | "stop" | "refresh" | "rename" | "replay" | "replay-diff" => TuiCategory::ReviewAndHistory.as_str(),
+        | "undo" | "rollback" | "stop" | "refresh" | "rename" | "replay" | "replay-diff" => {
+            TuiCategory::ReviewAndHistory.as_str()
+        }
         "stats" | "cost" | "context" | "doctor" | "status" | "version" | "time" | "debug"
         | "whoami" | "credits" | "billing" | "insights" | "usage" | "mouse" | "terminal-setup"
         | "heapdump" | "mem" | "pet" => TuiCategory::Diagnostics.as_str(),
         "config" | "theme" | "keybindings" | "hooks" | "mcp" | "import-config" | "output-style"
-        | "setup" | "indicator" | "statusbar" | "skin" | "busy" | "verbose" => TuiCategory::Workspace.as_str(),
-        "agents" | "memory" | "tools" | "skills" | "bundles" | "journey" => TuiCategory::Tools.as_str(),
+        | "setup" | "indicator" | "statusbar" | "skin" | "busy" | "verbose" => {
+            TuiCategory::Workspace.as_str()
+        }
+        "agents" | "memory" | "tools" | "skills" | "bundles" | "journey" => {
+            TuiCategory::Tools.as_str()
+        }
         "search" | "sessions" | "session" => TuiCategory::Sessions.as_str(),
         "plan" | "vim" | "yolo" => TuiCategory::Preferences.as_str(),
         "goal" | "title" | "branch" | "personality" | "reasoning" => TuiCategory::Session.as_str(),
@@ -1866,5 +1917,37 @@ mod tests {
             .find(|c| c.name == "skills")
             .unwrap();
         assert_eq!(skills.gateway_config_gate, Some("skills.write_approval"));
+    }
+
+    // --- Display variant tests (per reviewer suggestion) ---
+
+    #[test]
+    fn test_display_set_goal_none() {
+        let r = CommandResult::SetGoal(None);
+        assert_eq!(format!("{}", r), "SetGoal(None)");
+    }
+
+    #[test]
+    fn test_display_set_goal_some() {
+        let r = CommandResult::SetGoal(Some("my goal".to_string()));
+        assert_eq!(format!("{}", r), "SetGoal(Some(\"my goal\"))");
+    }
+
+    #[test]
+    fn test_display_shell_command() {
+        let r = CommandResult::ShellCommand(vec!["ls".to_string(), "-la".to_string()]);
+        assert_eq!(format!("{}", r), "ShellCommand([\"ls\", \"-la\"])");
+    }
+
+    #[test]
+    fn test_display_shell_command_single() {
+        let r = CommandResult::ShellCommand(vec!["echo hello".to_string()]);
+        assert_eq!(format!("{}", r), "ShellCommand([\"echo hello\"])");
+    }
+
+    #[test]
+    fn test_display_shell_command_empty() {
+        let r = CommandResult::ShellCommand(vec![]);
+        assert_eq!(format!("{}", r), "ShellCommand([])");
     }
 }
