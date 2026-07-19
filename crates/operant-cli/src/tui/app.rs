@@ -4764,6 +4764,14 @@ impl App {
                 self.session_branching.open(vec![], self.messages.len());
             }
 
+            // ---- Context menu (Ctrl+Shift+M) ----------------------------
+            KeyCode::Char('m')
+                if key.modifiers.contains(KeyModifiers::CONTROL)
+                    && key.modifiers.contains(KeyModifiers::SHIFT) =>
+            {
+                self.open_context_menu_at_cursor();
+            }
+
             // ---- Command palette (Ctrl+K) -------------------------------
             KeyCode::Char('k') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.command_palette.open();
@@ -5669,6 +5677,40 @@ impl App {
             }
         }
         self.dismiss_context_menu();
+    }
+
+    /// Open context menu at the current cursor/selection position via keyboard
+    /// (Ctrl+Shift+M). Uses the current scroll position to determine location,
+    /// or the current text selection if any.
+    fn open_context_menu_at_cursor(&mut self) {
+        let msg_area = self.last_msg_area.get();
+        let has_selection = !self.selection_text.borrow().trim().is_empty();
+        
+        // Calculate the row at the current scroll position (top of visible area)
+        let visible_row = msg_area.y.saturating_add(self.scroll_offset as u16);
+        
+        // Try to find message at the visible scroll position
+        if let Some(message_index) = self.message_index_at_row(visible_row) {
+            if message_index < self.messages.len() {
+                let x = msg_area.x.saturating_add(2);
+                let y = msg_area.y.saturating_add(2);
+                self.show_context_menu(x, y, ContextMenuKind::Message { message_index });
+                return;
+            }
+        }
+        
+        // Fall back to selection if any
+        if has_selection {
+            let x = msg_area.x.saturating_add(2);
+            let y = msg_area.y.saturating_add(2);
+            self.show_context_menu(x, y, ContextMenuKind::Selection);
+            return;
+        }
+        
+        // No message at scroll position and no selection - show at bottom of message area
+        let x = msg_area.x.saturating_add(2);
+        let y = msg_area.y.saturating_add(msg_area.height.saturating_sub(3));
+        self.show_context_menu(x, y, ContextMenuKind::Selection);
     }
 
     /// Handle a context menu action.
