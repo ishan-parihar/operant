@@ -5241,6 +5241,12 @@ impl App {
             }
             KeyCode::Enter if !self.is_streaming => {
                 use crate::tui::prompt_input::AcceptForSubmitOutcome;
+                // Phase 1.3: Auto-select first suggestion when visible but none selected.
+                if !self.prompt_input.suggestions.is_empty()
+                    && self.prompt_input.suggestion_index.is_none()
+                {
+                    self.prompt_input.suggestion_index = Some(0);
+                }
                 match self.prompt_input.accept_suggestion_for_submit() {
                     AcceptForSubmitOutcome::ExtendInput => {
                         self.refresh_prompt_input();
