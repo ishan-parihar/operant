@@ -12,6 +12,7 @@
 
 use std::collections::HashMap;
 use std::fmt;
+use std::sync::LazyLock;
 
 use anyhow::Result;
 
@@ -1162,12 +1163,107 @@ pub fn tui_category(name: &str) -> &'static str {
 }
 
 /// A single entry for TUI typeahead suggestions and help overlay.
+#[derive(Clone)]
 pub struct TuiSlashCommand {
     pub name: &'static str,
     pub description: &'static str,
     pub category: &'static str,
     pub aliases: &'static [&'static str],
 }
+
+// ---------------------------------------------------------------------------
+// Skill command discovery (cached via LazyLock)
+// ---------------------------------------------------------------------------
+
+/// Leaked string helper for converting dynamic strings to `&'static str`.
+///
+/// Used when building the cached skill command list. The leaked memory
+/// lives for the process lifetime, which is acceptable because skills are
+/// loaded once at startup and cached until exit.
+fn leak_str(s: String) -> &'static str {
+    Box::leak(s.into_boxed_str())
+}
+
+/// Load skill commands from disk. Called once by the `LazyLock` cache.
+///
+/// Each installed skill with a `SKILL.md` file becomes a TUI slash
+/// command discoverable in the typeahead and help overlay. Skills without
+/// a description are given a default placeholder.
+fn load_skill_commands_from_disk() -> Vec<TuiSlashCommand> {
+    use operant_core::platform::operant_skills_dir;
+    use operant_core::skills::SkillManager;
+
+    let skills_dir = operant_skills_dir();
+    if !skills_dir.exists() {
+        tracing::debug!("Skills directory does not exist: {}", skills_dir.display());
+        return Vec::new();
+    }
+
+    let mut mgr = SkillManager::new(skills_dir);
+    match mgr.load_all() {
+        Ok(skills) => {
+            tracing::debug!("Loaded {} skills for TUI slash commands", skills.len());
+            skills
+                .into_iter()
+                .map(|skill| {
+                    let description = if skill.description.is_empty() {
+                        format!("Skill: {}", skill.name)
+                    } else {
+                        skill.description
+                    };
+                    TuiSlashCommand {
+                        name: leak_str(skill.name),
+                        description: leak_str(description),
+                        category: "Skills",
+                        aliases: &[],
+                    }
+                })
+                .collect()
+        }
+        Err(e) => {
+            tracing::warn!("Failed to load skills for TUI slash commands: {}", e);
+            Vec::new()
+        }
+    }
+}
+
+/// Cached skill slash commands, loaded from disk once on first access.
+///
+/// This `LazyLock` ensures filesystem I/O happens only once, not on every
+/// typeahead keystroke. The cache is immutable for the process lifetime;
+/// use [`reload_skill_cache`] (when implemented) to invalidate.
+static CACHED_SKILL_COMMANDS: LazyLock<Vec<TuiSlashCommand>> =
+    LazyLock::new(load_skill_commands_from_disk);
+
+/// Return all installed skill commands as TUI slash commands.
+///
+/// Results are cached in a [`LazyLock`] — the first call triggers disk I/O;
+/// subsequent calls return the cached list with zero overhead.
+pub fn skill_slash_commands() -> &'static [TuiSlashCommand] {
+    &CACHED_SKILL_COMMANDS
+}
+
+/// Cached merged list of built-in + skill TUI slash commands.
+///
+/// Built-in commands are static data from `COMMAND_REGISTRY`; skill commands
+/// are cached in [`CACHED_SKILL_COMMANDS`]. Both are immutable for the
+/// process lifetime, so this `LazyLock` is the single cache point for the
+/// entire typeahead + help overlay pipeline.
+static CACHED_TUI_COMMANDS: LazyLock<Vec<TuiSlashCommand>> = LazyLock::new(|| {
+    let mut commands: Vec<TuiSlashCommand> = COMMAND_REGISTRY
+        .iter()
+        .filter(|cmd| !cmd.gateway_only)
+        .map(|cmd| TuiSlashCommand {
+            name: cmd.name,
+            description: cmd.description,
+            category: tui_category(cmd.name),
+            aliases: cmd.aliases,
+        })
+        .collect();
+    // Merge in installed skill commands (already cached in CACHED_SKILL_COMMANDS)
+    commands.extend(skill_slash_commands().iter().cloned());
+    commands
+});
 
 /// All slash commands available in the TUI, derived from `COMMAND_REGISTRY`.
 ///
@@ -1178,26 +1274,20 @@ pub struct TuiSlashCommand {
 ///
 /// Commands are filtered: `gateway_only` commands are excluded from TUI.
 /// Category labels use `tui_category()` for user-facing grouping.
-pub fn tui_slash_commands() -> Vec<TuiSlashCommand> {
-    COMMAND_REGISTRY
-        .iter()
-        .filter(|cmd| !cmd.gateway_only)
-        .map(|cmd| TuiSlashCommand {
-            name: cmd.name,
-            description: cmd.description,
-            category: tui_category(cmd.name),
-            aliases: cmd.aliases,
-        })
-        .collect()
+///
+/// Results are cached in a [`LazyLock`] — the first call builds the merged
+/// list; subsequent calls return a zero-allocation reference.
+pub fn tui_slash_commands() -> &'static [TuiSlashCommand] {
+    &CACHED_TUI_COMMANDS
 }
 
 /// Return commands grouped by TUI category for help overlay display.
 ///
 /// Returns `(category_name, commands)` pairs. Commands within each category
 /// are sorted by name for consistent display.
-pub fn tui_commands_by_category() -> Vec<(&'static str, Vec<TuiSlashCommand>)> {
+pub fn tui_commands_by_category() -> Vec<(&'static str, Vec<&'static TuiSlashCommand>)> {
     let commands = tui_slash_commands();
-    let mut categories: Vec<(&str, Vec<TuiSlashCommand>)> = Vec::new();
+    let mut categories: Vec<(&str, Vec<&TuiSlashCommand>)> = Vec::new();
     let mut seen_names = std::collections::HashSet::new();
 
     for cmd in commands {
