@@ -33,6 +33,7 @@ use crate::tui::messages::{
     render_transcript_live_text, render_transcript_user_message,
 };
 use crate::tui::notifications::{Notification, NotificationKind, render_notification_banner};
+use crate::tui::theme_colors::{ColorPalette, get_error_color, get_success_color, get_warning_color};
 use crate::tui::overlays::{
     OPERANT_ACCENT, render_global_search, render_help_overlay, render_history_search_overlay,
     render_rewind_flow,
@@ -46,6 +47,7 @@ use crate::tui::theme_screen::render_theme_screen;
 use crate::tui::transcript_turn::{TranscriptTurn, build_transcript_turns};
 use crate::tui::virtual_list::{VirtualItem, VirtualList};
 use crate::tui::voice_mode_notice::render_voice_mode_notice;
+use crate::tui::theme_colors::palette_for_theme;
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
@@ -92,9 +94,6 @@ fn is_modal_open(app: &App) -> bool {
 }
 
 // -----------------------------------------------------------------------
-// Error modal rendering
-// -----------------------------------------------------------------------
-
 /// Render an error modal dialog with wrapped content.
 fn render_error_modal(
     frame: &mut Frame,
