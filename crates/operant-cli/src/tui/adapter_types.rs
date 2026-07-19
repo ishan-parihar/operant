@@ -1,3 +1,6 @@
+
+// CommandResult enum from commands.rs
+use crate::commands::CommandResult;
 pub mod config {
     use serde::{Deserialize, Serialize};
     use std::collections::HashMap;
@@ -1546,7 +1549,7 @@ impl TuiApp {
         #[async_trait::async_trait]
         impl CommandHandler for CompactHandler {
             async fn execute(&self, _ctx: &CommandContext<'_>) -> CommandResult {
-                Ok("Context compaction is handled automatically by the agent.".to_string())
+                CommandResult::message("Context compaction is handled automatically by the agent.")
             }
         }
         command_registry
@@ -1567,7 +1570,7 @@ impl TuiApp {
                     || std::env::var("OPENAI_API_KEY").is_ok();
                 report.push_str(&format!("  API key configured: {}\n", api_key_set));
                 report.push_str("  Status: OK\n");
-                Ok(report)
+                CommandResult::message(report)
             }
         }
         command_registry
@@ -1580,11 +1583,11 @@ impl TuiApp {
             async fn execute(&self, _ctx: &CommandContext<'_>) -> CommandResult {
                 let agentic_dir = std::path::PathBuf::from("AGENTS.md");
                 if agentic_dir.exists() {
-                    Ok("AGENTS.md already exists in this project.".to_string())
+                    CommandResult::message("AGENTS.md already exists in this project.")
                 } else {
                     match std::fs::write(&agentic_dir, "# Project Agent Memory\n\n") {
-                        Ok(_) => Ok("Created AGENTS.md in current directory.".to_string()),
-                        Err(e) => Ok(format!("Failed to create AGENTS.md: {}", e)),
+                        Ok(_) => CommandResult::message("Created AGENTS.md in current directory."),
+                        Err(e) => CommandResult::message(format!("Failed to create AGENTS.md: {}", e)),
                     }
                 }
             }
@@ -1597,7 +1600,7 @@ impl TuiApp {
         #[async_trait::async_trait]
         impl CommandHandler for LoginHandler {
             async fn execute(&self, _ctx: &CommandContext<'_>) -> CommandResult {
-                Ok("Set your API key: export ANTHROPIC_API_KEY=sk-... or export OPENAI_API_KEY=sk-...".to_string())
+                CommandResult::message("Set your API key: export ANTHROPIC_API_KEY=sk-... or export OPENAI_API_KEY=sk-...")
             }
         }
         command_registry
@@ -1608,7 +1611,7 @@ impl TuiApp {
         #[async_trait::async_trait]
         impl CommandHandler for LogoutHandler {
             async fn execute(&self, _ctx: &CommandContext<'_>) -> CommandResult {
-                Ok("Clear your API key: unset ANTHROPIC_API_KEY OPENAI_API_KEY".to_string())
+                CommandResult::message("Clear your API key: unset ANTHROPIC_API_KEY OPENAI_API_KEY")
             }
         }
         command_registry
@@ -1619,7 +1622,7 @@ impl TuiApp {
         #[async_trait::async_trait]
         impl CommandHandler for RefreshHandler {
             async fn execute(&self, _ctx: &CommandContext<'_>) -> CommandResult {
-                Ok("Provider auth and model caches cleared.".to_string())
+                CommandResult::message("Provider auth and model caches cleared.")
             }
         }
         command_registry
@@ -1647,7 +1650,7 @@ impl TuiApp {
                     ));
                 }
                 report.push_str("\nUsage: /provider <name> — switch LLM provider");
-                Ok(report)
+                CommandResult::message(report)
             }
         }
         command_registry
@@ -1661,7 +1664,7 @@ impl TuiApp {
                 let model = std::env::var("OPERANT_MODEL").unwrap_or_else(|_| "gpt-4".to_string());
                 let anthropic = std::env::var("ANTHROPIC_API_KEY").is_ok();
                 let openai = std::env::var("OPENAI_API_KEY").is_ok();
-                Ok(format!(
+                CommandResult::message(format!(
                     "Session Status:\n  Model: {}\n  Anthropic: {}\n  OpenAI: {}",
                     model,
                     if anthropic {
@@ -1685,7 +1688,7 @@ impl TuiApp {
         #[async_trait::async_trait]
         impl CommandHandler for VersionHandler {
             async fn execute(&self, _ctx: &CommandContext<'_>) -> CommandResult {
-                Ok(format!("operant v{}", env!("CARGO_PKG_VERSION")))
+                CommandResult::message(format!("operant v{}", env!("CARGO_PKG_VERSION")))
             }
         }
         command_registry
@@ -1696,7 +1699,7 @@ impl TuiApp {
         #[async_trait::async_trait]
         impl CommandHandler for TimeHandler {
             async fn execute(&self, _ctx: &CommandContext<'_>) -> CommandResult {
-                Ok(chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string())
+                CommandResult::message(chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string())
             }
         }
         command_registry
@@ -1717,7 +1720,7 @@ impl TuiApp {
                     "  Rust version: {}\n",
                     env!("CARGO_PKG_RUST_VERSION")
                 ));
-                Ok(info)
+                CommandResult::message(info)
             }
         }
         command_registry
@@ -1733,7 +1736,7 @@ impl TuiApp {
         #[async_trait::async_trait]
         impl CommandHandler for CompressHandler {
             async fn execute(&self, _ctx: &CommandContext<'_>) -> CommandResult {
-                Ok("Context compaction is handled automatically by the agent.".to_string())
+                CommandResult::message("Context compaction is handled automatically by the agent.")
             }
         }
         command_registry
@@ -1756,9 +1759,9 @@ impl TuiApp {
         impl CommandHandler for ProviderHandler {
             async fn execute(&self, ctx: &CommandContext<'_>) -> CommandResult {
                 if ctx.args.is_empty() {
-                    Ok("Usage: /provider <name> — switch LLM provider".to_string())
+                    CommandResult::message("Usage: /provider <name> — switch LLM provider")
                 } else {
-                    Ok(format!("Provider switched to: {}", ctx.args))
+                    CommandResult::message(format!("Provider switched to: {}", ctx.args))
                 }
             }
         }
@@ -1770,7 +1773,7 @@ impl TuiApp {
         #[async_trait::async_trait]
         impl CommandHandler for ToolsHandler {
             async fn execute(&self, _ctx: &CommandContext<'_>) -> CommandResult {
-                Ok("Available tools: memory, web_search, web_fetch, bash, and more. Use /toolsets for the full list.".to_string())
+                CommandResult::message("Available tools: memory, web_search, web_fetch, bash, and more. Use /toolsets for the full list.")
             }
         }
         command_registry
@@ -1781,7 +1784,7 @@ impl TuiApp {
         #[async_trait::async_trait]
         impl CommandHandler for BundlesHandler {
             async fn execute(&self, _ctx: &CommandContext<'_>) -> CommandResult {
-                Ok("Skill bundles: curated sets of skills for specific workflows. (No bundles installed)".to_string())
+                CommandResult::message("Skill bundles: curated sets of skills for specific workflows. (No bundles installed)")
             }
         }
         command_registry
@@ -1792,7 +1795,7 @@ impl TuiApp {
         #[async_trait::async_trait]
         impl CommandHandler for UsageHandler {
             async fn execute(&self, _ctx: &CommandContext<'_>) -> CommandResult {
-                Ok("Token usage and rate limits are displayed in the stats dialog. Use /stats to view.".to_string())
+                CommandResult::message("Token usage and rate limits are displayed in the stats dialog. Use /stats to view.")
             }
         }
         command_registry
@@ -1803,7 +1806,7 @@ impl TuiApp {
         #[async_trait::async_trait]
         impl CommandHandler for InsightsHandler {
             async fn execute(&self, _ctx: &CommandContext<'_>) -> CommandResult {
-                Ok("Insights: session analysis and conversation statistics. Use /stats for details.".to_string())
+                CommandResult::message("Insights: session analysis and conversation statistics. Use /stats for details.")
             }
         }
         command_registry
@@ -1814,7 +1817,7 @@ impl TuiApp {
         #[async_trait::async_trait]
         impl CommandHandler for UpdateHandler {
             async fn execute(&self, _ctx: &CommandContext<'_>) -> CommandResult {
-                Ok(format!(
+                CommandResult::message(format!(
                     "Current version: {}. Check https://github.com/operant-ai/operant-rs for updates.",
                     env!("CARGO_PKG_VERSION")
                 ))
@@ -1828,7 +1831,7 @@ impl TuiApp {
         #[async_trait::async_trait]
         impl CommandHandler for WhoamiHandler {
             async fn execute(&self, _ctx: &CommandContext<'_>) -> CommandResult {
-                Ok("Access level: admin (local TUI session)".to_string())
+                CommandResult::message("Access level: admin (local TUI session)")
             }
         }
         command_registry
@@ -2152,14 +2155,18 @@ impl TuiApp {
                         }
                         if let Some(canonical) = self.app.command_registry.resolve(cmd) {
                             match self.app.command_registry.execute(canonical, args).await {
-                                Ok(output) => {
+                                CommandResult::Message(output) => {
                                     self.app.push_system_message(
                                         output,
                                         crate::tui::app::SystemMessageStyle::Info,
                                     );
                                 }
-                                Err(e) => {
+                                CommandResult::Error(e) => {
                                     self.app.status_message = Some(format!("Command error: {}", e));
+                                }
+                                _ => {
+                                    // Other CommandResult intents (OpenHelp, Exit, etc.)
+                                    // are handled by the TUI intercept in app.rs.
                                 }
                             }
                             continue;

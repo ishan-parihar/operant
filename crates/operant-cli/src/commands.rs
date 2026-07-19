@@ -83,8 +83,233 @@ pub struct CommandContext<'a> {
     pub args: &'a str,
 }
 
-/// Result type for slash command execution.
-pub type CommandResult = Result<String>;
+/// Rich result type for slash command execution.
+///
+/// Instead of just returning a string, commands express their *intent* as data.
+/// The TUI (or gateway) interprets the variant to perform the side effect.
+/// This decouples command logic from the runtime environment.
+///
+/// Ported from the Claurst `CommandResult` pattern, adapted for Operant's TUI.
+#[must_use]
+#[non_exhaustive]
+pub enum CommandResult {
+    // ── Display ────────────────────────────────────────────────────────────
+    /// Display a message to the user (does NOT go to the model).
+    Message(String),
+    /// Display an error message to the user.
+    Error(String),
+    /// No visible output (command was handled silently).
+    Silent,
+
+    // ── Conversation ───────────────────────────────────────────────────────
+    /// Inject a message into the conversation as though the user typed it.
+    /// The string is the prompt text sent to the agent.
+    UserMessage(String),
+    /// Clear the conversation history and reset streaming state.
+    ClearConversation,
+    /// Start a completely fresh session (clear + reset cost/title).
+    NewSession,
+    /// Replace the conversation with a specific message list (used by /rewind).
+    SetMessages(Vec<String>),
+
+    // ── Configuration ──────────────────────────────────────────────────────
+    /// Toggle a boolean setting and show the new state.
+    ToggleSetting {
+        name: &'static str,
+        enabled: bool,
+    },
+    /// Cycle a string setting through a list of values.
+    CycleSetting {
+        name: &'static str,
+        current: String,
+    },
+    /// Update the session goal.
+    SetGoal(Option<String>),
+
+    // ── Overlay / UI ───────────────────────────────────────────────────────
+    /// Open the help overlay.
+    OpenHelp,
+    /// Open the model picker overlay.
+    OpenModelPicker,
+    /// Open the theme picker.
+    OpenThemePicker,
+    /// Open the session browser.
+    OpenSessionBrowser,
+    /// Open the stats/cost dialog.
+    OpenStats,
+    /// Open the MCP server browser.
+    OpenMcp,
+    /// Open the agents/tasks overlay.
+    OpenAgents,
+    /// Open the diff viewer.
+    OpenDiff,
+    /// Open the memory file browser.
+    OpenMemory,
+    /// Open the skills browser.
+    OpenSkills,
+    /// Open the plugins browser.
+    OpenPlugins,
+    /// Open the hooks config browser.
+    OpenHooks,
+    /// Open the import-config picker.
+    OpenImportConfig,
+    /// Open the export dialog.
+    OpenExport,
+    /// Open the effort-level picker.
+    OpenEffortPicker,
+    /// Open the connect-a-provider dialog.
+    OpenConnect,
+    /// Open the global search dialog.
+    OpenSearch,
+    /// Open the settings screen.
+    OpenSettings,
+    /// Open the context visualization.
+    OpenContext,
+    /// Open the journey view.
+    OpenJourney,
+
+    // ── Session state ──────────────────────────────────────────────────────
+    /// Stop the current streaming turn.
+    StopStreaming,
+    /// Retry the last user message.
+    Retry,
+    /// Undo the last user+assistant exchange.
+    Undo,
+
+    // ── Clipboard ──────────────────────────────────────────────────────────
+    /// Copy the last assistant response to clipboard.
+    CopyLastResponse,
+
+    // ── Shell ──────────────────────────────────────────────────────────────
+    /// Run a shell command (e.g. /setup spawns an interactive subprocess).
+    ShellCommand(Vec<String>),
+
+    // ── Exit ───────────────────────────────────────────────────────────────
+    /// Exit the CLI.
+    Exit,
+}
+
+impl CommandResult {
+    /// Convenience: create a Message variant.
+    pub fn message(text: impl Into<String>) -> Self {
+        Self::Message(text.into())
+    }
+
+    /// Convenience: create an Error variant.
+    pub fn error(text: impl Into<String>) -> Self {
+        Self::Error(text.into())
+    }
+
+    /// Convenience: create a ToggleSetting variant.
+    pub fn toggle(name: &'static str, enabled: bool) -> Self {
+        Self::ToggleSetting { name, enabled }
+    }
+
+    /// Convenience: create a CycleSetting variant.
+    pub fn cycle(name: &'static str, current: impl Into<String>) -> Self {
+        Self::CycleSetting {
+            name,
+            current: current.into(),
+        }
+    }
+
+    /// Extract the message text if this is a Message variant.
+    /// Useful for testing and simple string-based dispatch.
+    pub fn message_text(&self) -> Option<&str> {
+        match self {
+            Self::Message(s) => Some(s.as_str()),
+            _ => None,
+        }
+    }
+
+    /// Return true if this is a Message variant.
+    pub fn is_message(&self) -> bool {
+        matches!(self, Self::Message(_))
+    }
+
+    /// Return true if this is a Silent variant.
+    pub fn is_silent(&self) -> bool {
+        matches!(self, Self::Silent)
+    }
+
+    /// Return true if this is an Error variant.
+    pub fn is_error(&self) -> bool {
+        matches!(self, Self::Error(_))
+    }
+
+    /// Return true if this is an Exit variant.
+    pub fn is_exit(&self) -> bool {
+        matches!(self, Self::Exit)
+    }
+
+    /// Return true if this variant is display-only (no TUI-side action needed).
+    pub fn is_display_only(&self) -> bool {
+        matches!(self, Self::Message(_) | Self::Error(_) | Self::Silent)
+    }
+
+    /// Return true if this variant requires TUI-side handling
+    /// (overlay opens, setting toggles, conversation control, etc).
+    /// Inverted from `is_display_only()` so it never goes stale when new
+    /// variants are added.
+    pub fn is_overlay_or_action(&self) -> bool {
+        !self.is_display_only()
+    }
+}
+
+impl fmt::Debug for CommandResult {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Message(s) => write!(f, "Message({:?})", s),
+            Self::Error(s) => write!(f, "Error({:?})", s),
+            Self::Silent => write!(f, "Silent"),
+            Self::UserMessage(s) => write!(f, "UserMessage({:?})", s),
+            Self::ClearConversation => write!(f, "ClearConversation"),
+            Self::NewSession => write!(f, "NewSession"),
+            Self::SetMessages(v) => write!(f, "SetMessages({} msgs)", v.len()),
+            Self::ToggleSetting { name, enabled } => write!(f, "ToggleSetting({:?}, {})", name, enabled),
+            Self::CycleSetting { name, current } => write!(f, "CycleSetting({:?}, {:?})", name, current),
+            Self::SetGoal(g) => write!(f, "SetGoal({:?})", g),
+            Self::OpenHelp => write!(f, "OpenHelp"),
+            Self::OpenModelPicker => write!(f, "OpenModelPicker"),
+            Self::OpenThemePicker => write!(f, "OpenThemePicker"),
+            Self::OpenSessionBrowser => write!(f, "OpenSessionBrowser"),
+            Self::OpenStats => write!(f, "OpenStats"),
+            Self::OpenMcp => write!(f, "OpenMcp"),
+            Self::OpenAgents => write!(f, "OpenAgents"),
+            Self::OpenDiff => write!(f, "OpenDiff"),
+            Self::OpenMemory => write!(f, "OpenMemory"),
+            Self::OpenSkills => write!(f, "OpenSkills"),
+            Self::OpenPlugins => write!(f, "OpenPlugins"),
+            Self::OpenHooks => write!(f, "OpenHooks"),
+            Self::OpenImportConfig => write!(f, "OpenImportConfig"),
+            Self::OpenExport => write!(f, "OpenExport"),
+            Self::OpenEffortPicker => write!(f, "OpenEffortPicker"),
+            Self::OpenConnect => write!(f, "OpenConnect"),
+            Self::OpenSearch => write!(f, "OpenSearch"),
+            Self::OpenSettings => write!(f, "OpenSettings"),
+            Self::OpenContext => write!(f, "OpenContext"),
+            Self::OpenJourney => write!(f, "OpenJourney"),
+            Self::StopStreaming => write!(f, "StopStreaming"),
+            Self::Retry => write!(f, "Retry"),
+            Self::Undo => write!(f, "Undo"),
+            Self::CopyLastResponse => write!(f, "CopyLastResponse"),
+            Self::ShellCommand(cmds) => write!(f, "ShellCommand({:?})", cmds),
+            Self::Exit => write!(f, "Exit"),
+        }
+    }
+}
+
+impl From<String> for CommandResult {
+    fn from(s: String) -> Self {
+        Self::Message(s)
+    }
+}
+
+impl From<&str> for CommandResult {
+    fn from(s: &str) -> Self {
+        Self::Message(s.to_string())
+    }
+}
 
 /// A slash command handler that can be registered in the [`CommandRegistry`].
 ///
@@ -93,6 +318,7 @@ pub type CommandResult = Result<String>;
 #[async_trait::async_trait]
 pub trait CommandHandler: Send + Sync {
     /// Execute this command with the given context.
+    /// Returns a [`CommandResult`] expressing the command's intent as data.
     async fn execute(&self, ctx: &CommandContext<'_>) -> CommandResult;
 }
 
@@ -634,7 +860,12 @@ pub static COMMAND_REGISTRY: &[CommandDef] = &[
 /// ```ignore
 /// let mut registry = CommandRegistry::new();
 /// registry.register_handler("status", Box::new(StatusHandler::new(config)));
-/// let result = registry.execute("status", "").await?;
+/// let result = registry.execute("status", "").await;
+/// match result {
+///     CommandResult::Message(text) => println!("{}", text),
+///     CommandResult::Error(e) => eprintln!("Error: {}", e),
+///     _ => { /* handle other intents */ }
+/// }
 /// ```
 pub struct CommandRegistry {
     /// Maps canonical names and aliases to command definitions.
@@ -678,8 +909,9 @@ impl CommandRegistry {
 
     /// Execute a slash command by its canonical name.
     ///
-    /// Returns the command's output as a string. If the command has no registered
-    /// handler, a fallback message is returned instead.
+    /// Returns a [`CommandResult`] expressing the command's intent as data.
+    /// If the command has no registered handler, a fallback `Message` variant
+    /// is returned with a helpful description.
     pub async fn execute(&self, name: &str, args: &str) -> CommandResult {
         let canonical = self.resolve(name).unwrap_or(name);
         let ctx = CommandContext { args };
@@ -687,14 +919,13 @@ impl CommandRegistry {
         match self.handlers.get(canonical) {
             Some(handler) => handler.execute(&ctx).await,
             None => {
-                // Look up metadata for a helpful message
                 if let Some(def) = self.defs.get(canonical) {
-                    Ok(format!(
+                    CommandResult::message(format!(
                         "Command /{} is not yet wired to a handler. Description: {}",
                         def.name, def.description
                     ))
                 } else {
-                    Ok(format!("Unknown command: /{}", name))
+                    CommandResult::message(format!("Unknown command: /{}", name))
                 }
             }
         }
@@ -1246,7 +1477,7 @@ mod tests {
         #[async_trait::async_trait]
         impl CommandHandler for DummyHandler {
             async fn execute(&self, _ctx: &CommandContext<'_>) -> CommandResult {
-                Ok("ok".to_string())
+                CommandResult::message("ok")
             }
         }
 
@@ -1262,7 +1493,7 @@ mod tests {
         #[async_trait::async_trait]
         impl CommandHandler for DummyHandler {
             async fn execute(&self, _ctx: &CommandContext<'_>) -> CommandResult {
-                Ok("ok".to_string())
+                CommandResult::message("ok")
             }
         }
 
@@ -1273,15 +1504,17 @@ mod tests {
     #[tokio::test]
     async fn test_registry_execute_unhandled_returns_fallback() {
         let registry = CommandRegistry::new();
-        let result = registry.execute("help", "").await.unwrap();
-        assert!(result.contains("not yet wired"));
+        let result = registry.execute("help", "").await;
+        let text = result.message_text().expect("expected Message variant");
+        assert!(text.contains("not yet wired"));
     }
 
     #[tokio::test]
     async fn test_registry_execute_unknown() {
         let registry = CommandRegistry::new();
-        let result = registry.execute("nonexistent", "").await.unwrap();
-        assert!(result.contains("Unknown command"));
+        let result = registry.execute("nonexistent", "").await;
+        let text = result.message_text().expect("expected Message variant");
+        assert!(text.contains("Unknown command"));
     }
 
     #[tokio::test]
@@ -1292,7 +1525,7 @@ mod tests {
         #[async_trait::async_trait]
         impl CommandHandler for EchoHandler {
             async fn execute(&self, ctx: &CommandContext<'_>) -> CommandResult {
-                Ok(format!("echo: {}", ctx.args))
+                CommandResult::message(format!("echo: {}", ctx.args))
             }
         }
 
@@ -1300,8 +1533,8 @@ mod tests {
             .register_handler("help", Box::new(EchoHandler))
             .unwrap();
 
-        let result = registry.execute("help", "hello").await.unwrap();
-        assert_eq!(result, "echo: hello");
+        let result = registry.execute("help", "hello").await;
+        assert_eq!(result.message_text(), Some("echo: hello"));
     }
 
     #[tokio::test]
@@ -1312,7 +1545,7 @@ mod tests {
         #[async_trait::async_trait]
         impl CommandHandler for EchoHandler {
             async fn execute(&self, ctx: &CommandContext<'_>) -> CommandResult {
-                Ok(format!("echo: {}", ctx.args))
+                CommandResult::message(format!("echo: {}", ctx.args))
             }
         }
 
@@ -1321,8 +1554,8 @@ mod tests {
             .unwrap();
 
         // Execute via alias "q"
-        let result = registry.execute("q", "bye").await.unwrap();
-        assert_eq!(result, "echo: bye");
+        let result = registry.execute("q", "bye").await;
+        assert_eq!(result.message_text(), Some("echo: bye"));
     }
 
     #[test]

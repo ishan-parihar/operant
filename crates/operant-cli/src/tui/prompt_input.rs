@@ -1373,6 +1373,19 @@ pub enum TypeaheadSource {
     FileRef,
 }
 
+/// Outcome of accepting a suggestion during an Enter (submit) keypress.
+///
+/// Differentiates between:
+/// - `ExtendInput`: keep editing (e.g. file-ref expansion that wants a trailing space)
+/// - `Submit`: the suggestion consumed the slash-command so Enter now submits
+/// - `NoSuggestion`: caller should fall back to the normal submit path
+#[derive(Debug, PartialEq, Eq)]
+pub enum AcceptForSubmitOutcome {
+    ExtendInput,
+    Submit,
+    NoSuggestion,
+}
+
 /// A single typeahead suggestion.
 #[derive(Debug, Clone)]
 pub struct TypeaheadSuggestion {
@@ -3111,6 +3124,38 @@ impl PromptInputState {
                 i - 1
             }
         }));
+    }
+
+    /// Accept the current suggestion during an Enter (submit) keypress.
+    ///
+    /// Unlike `accept_suggestion`, this is the state machine for the submit path:
+    /// it both fills the text with the chosen suggestion AND signals to the caller
+    /// whether the next step is to keep editing (e.g. trailing space after a
+    /// file-ref) or to submit the message/slash-command.
+    ///
+    /// Returns `NoSuggestion` when there is no suggestion to accept — callers
+    /// should then fall back to the normal submit path (queue the message).
+    pub fn accept_suggestion_for_submit(&mut self) -> AcceptForSubmitOutcome {
+        if self.suggestions.is_empty() || self.suggestion_index.is_none() {
+            return AcceptForSubmitOutcome::NoSuggestion;
+        }
+        let source = self
+            .suggestions
+            .get(self.suggestion_index.unwrap_or(0))
+            .map(|s| s.source.clone());
+        self.accept_suggestion();
+        match source {
+            Some(TypeaheadSource::FileRef) => {
+                // File refs end with a trailing space so the user can keep typing
+                // the instruction that follows the @file reference.
+                self.insert_char(' ');
+                AcceptForSubmitOutcome::ExtendInput
+            }
+            Some(TypeaheadSource::SlashCommand) | None => {
+                // Slash commands replace the whole input — Enter submits the command.
+                AcceptForSubmitOutcome::Submit
+            }
+        }
     }
 
     /// Accept the current suggestion.
