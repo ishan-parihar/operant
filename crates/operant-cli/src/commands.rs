@@ -117,6 +117,8 @@ pub struct CommandDef {
     pub aliases: &'static [&'static str],
     /// Argument hint shown in help (e.g. "<prompt>", "[key] [value]").
     pub args_hint: &'static str,
+    /// Detailed help text shown by `/help <command>`.
+    pub help: &'static str,
     /// Only available in interactive CLI (not in gateway/messaging).
     #[allow(dead_code)] // cli_only is used for command filtering, not yet wired up
     pub cli_only: bool,
@@ -141,10 +143,17 @@ impl CommandDef {
             category,
             aliases: &[],
             args_hint: "",
+            help: "",
             cli_only: false,
             gateway_only: false,
             gateway_config_gate: None,
         }
+    }
+
+    /// Set the detailed help text.
+    pub const fn with_help(mut self, help: &'static str) -> Self {
+        self.help = help;
+        self
     }
 
     /// Set aliases for this command.
@@ -280,7 +289,6 @@ pub static COMMAND_REGISTRY: &[CommandDef] = &[
         "Queue a prompt for the next turn (doesn't interrupt)",
         "Session",
     )
-    .with_aliases(&["q"])
     .with_args("<prompt>"),
     CommandDef::new(
         "steer",
@@ -590,6 +598,26 @@ pub static COMMAND_REGISTRY: &[CommandDef] = &[
     CommandDef::new("exit", "Exit the CLI", "Exit")
         .cli_only()
         .with_aliases(&["quit", "q"]),
+    // ── TUI-only commands (intercepted by the TUI, not in gateway) ────────
+    CommandDef::new("rename", "Set a title for the current session", "Session")
+        .cli_only()
+        .with_args("[name]"),
+    CommandDef::new("journey", "Browse skills + memories timeline", "Tools & Skills")
+        .cli_only(),
+    CommandDef::new("setup", "Re-run the setup wizard", "Configuration")
+        .cli_only(),
+    CommandDef::new("mouse", "Show mouse capture info", "Info")
+        .cli_only(),
+    CommandDef::new("terminal-setup", "Show terminal capability info", "Info")
+        .cli_only(),
+    CommandDef::new("heapdump", "Show debug snapshot", "Info")
+        .cli_only(),
+    CommandDef::new("pet", "Pet the mascot", "Info")
+        .cli_only(),
+    CommandDef::new("replay", "Replay spawn tree (planned)", "Session")
+        .cli_only(),
+    CommandDef::new("replay-diff", "Diff replay (planned)", "Session")
+        .cli_only(),
 ];
 
 // ---------------------------------------------------------------------------
@@ -789,6 +817,121 @@ pub fn resolve_command(input: &str) -> Option<&'static str> {
     let trimmed = input.trim().trim_start_matches('/');
     let map = build_command_map();
     map.get(trimmed).map(|cmd| cmd.name)
+}
+
+// ---------------------------------------------------------------------------
+// TUI command data (single source of truth for typeahead + help overlay)
+// ---------------------------------------------------------------------------
+
+/// TUI-specific category labels for grouping commands in the help overlay.
+/// These are separate from the registry's `category` field because the TUI
+/// groups commands by user-facing intent (e.g. "Model & Provider" vs. "Configuration").
+pub enum TuiCategory {
+    ModelAndProvider,
+    ReviewAndHistory,
+    Diagnostics,
+    Workspace,
+    Tools,
+    Sessions,
+    Preferences,
+    Session,
+    Context,
+    Account,
+    Other,
+}
+
+impl TuiCategory {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::ModelAndProvider => "Model & Provider",
+            Self::ReviewAndHistory => "Review & History",
+            Self::Diagnostics => "Diagnostics",
+            Self::Workspace => "Workspace",
+            Self::Tools => "Tools",
+            Self::Sessions => "Sessions",
+            Self::Preferences => "Preferences",
+            Self::Session => "Session",
+            Self::Context => "Context",
+            Self::Account => "Account",
+            Self::Other => "Other",
+        }
+    }
+}
+
+/// Return the TUI category for a given command name.
+pub fn tui_category(name: &str) -> &'static str {
+    match name {
+        "connect" | "model" | "fast" | "effort" | "voice" | "provider" => TuiCategory::ModelAndProvider.as_str(),
+        "changes" | "diff" | "review" | "rewind" | "export" | "copy" | "history" | "retry"
+        | "undo" | "rollback" | "stop" | "refresh" | "rename" | "replay" | "replay-diff" => TuiCategory::ReviewAndHistory.as_str(),
+        "stats" | "cost" | "context" | "doctor" | "status" | "version" | "time" | "debug"
+        | "whoami" | "credits" | "billing" | "insights" | "usage" | "mouse" | "terminal-setup"
+        | "heapdump" | "mem" | "pet" => TuiCategory::Diagnostics.as_str(),
+        "config" | "theme" | "keybindings" | "hooks" | "mcp" | "import-config" | "output-style"
+        | "setup" | "indicator" | "statusbar" | "skin" | "busy" | "verbose" => TuiCategory::Workspace.as_str(),
+        "agents" | "memory" | "tools" | "skills" | "bundles" | "journey" => TuiCategory::Tools.as_str(),
+        "search" | "sessions" | "session" => TuiCategory::Sessions.as_str(),
+        "plan" | "vim" | "yolo" => TuiCategory::Preferences.as_str(),
+        "goal" | "title" | "branch" | "personality" | "reasoning" => TuiCategory::Session.as_str(),
+        "compact" | "compress" => TuiCategory::Context.as_str(),
+        "login" | "logout" | "update" => TuiCategory::Account.as_str(),
+        _ => TuiCategory::Other.as_str(),
+    }
+}
+
+/// A single entry for TUI typeahead suggestions and help overlay.
+pub struct TuiSlashCommand {
+    pub name: &'static str,
+    pub description: &'static str,
+    pub category: &'static str,
+    pub aliases: &'static [&'static str],
+}
+
+/// All slash commands available in the TUI, derived from `COMMAND_REGISTRY`.
+///
+/// This is the **single source of truth** for:
+/// - Typeahead suggestions (when user types `/`)
+/// - Help overlay entries (? / F1 / /help)
+/// - Command palette (Ctrl+K)
+///
+/// Commands are filtered: `gateway_only` commands are excluded from TUI.
+/// Category labels use `tui_category()` for user-facing grouping.
+pub fn tui_slash_commands() -> Vec<TuiSlashCommand> {
+    COMMAND_REGISTRY
+        .iter()
+        .filter(|cmd| !cmd.gateway_only)
+        .map(|cmd| TuiSlashCommand {
+            name: cmd.name,
+            description: cmd.description,
+            category: tui_category(cmd.name),
+            aliases: cmd.aliases,
+        })
+        .collect()
+}
+
+/// Return commands grouped by TUI category for help overlay display.
+///
+/// Returns `(category_name, commands)` pairs. Commands within each category
+/// are sorted by name for consistent display.
+pub fn tui_commands_by_category() -> Vec<(&'static str, Vec<TuiSlashCommand>)> {
+    let commands = tui_slash_commands();
+    let mut categories: Vec<(&str, Vec<TuiSlashCommand>)> = Vec::new();
+    let mut seen_names = std::collections::HashSet::new();
+
+    for cmd in commands {
+        if seen_names.insert(cmd.name) {
+            let cat = cmd.category;
+            match categories.iter_mut().find(|(c, _)| *c == cat) {
+                Some((_, list)) => list.push(cmd),
+                None => categories.push((cat, vec![cmd])),
+            }
+        }
+    }
+    // Sort commands within each category by name for consistent display.
+    for (_, cmds) in &mut categories {
+        cmds.sort_by(|a, b| a.name.cmp(b.name));
+    }
+    categories
 }
 
 /// Format full help text for all built-in commands.
