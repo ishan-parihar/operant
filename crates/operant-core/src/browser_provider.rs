@@ -6,6 +6,7 @@
 //! | Value           | Backend                                         |
 //! |-----------------|-------------------------------------------------|
 //! | `"lightpanda"`  | Local Lightpanda binary (auto-downloaded)       |
+//! | `"obscura"`     | Local Obscura binary (auto-downloaded, CDP)     |
 //! | `"camofox"`     | Camofox REST API (`CAMOFOX_URL`)                |
 //! | `"browserbase"` | Browserbase cloud (`BROWSERBASE_API_KEY`)       |
 //! | `"browser-use"` | Browser Use cloud (`BROWSER_USE_API_KEY`)       |
@@ -16,6 +17,9 @@ use serde_json::Value;
 use std::time::Duration;
 
 use crate::error::{Error, Result};
+use dirs;
+use reqwest;
+use tokio::io::AsyncWriteExt;
 
 // ---------------------------------------------------------------------------
 // Trait
@@ -134,6 +138,198 @@ impl BrowserProvider for LightpandaProvider {
     async fn scroll(&self, _direction: &str) -> Result<String> {
         Err(Error::Agent(
             "Lightpanda fetch mode does not support scroll".into(),
+        ))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Obscura — local binary with CDP server, auto-downloaded from GitHub Releases
+// ---------------------------------------------------------------------------
+
+pub struct ObscuraProvider;
+
+impl ObscuraProvider {
+    /// Returns the default installation path for the Obscura binary
+    pub fn default_bin_path() -> std::path::PathBuf {
+        dirs::home_dir()
+            .unwrap_or_else(|| std::path::PathBuf::from("."))
+            .join(".operant")
+            .join("bin")
+            .join("obscura")
+    }
+
+    /// Downloads the latest Obscura browser binary for the current platform.
+    /// Checks GitHub Releases for the latest binary.
+    async fn download_binary() -> Result<std::path::PathBuf> {
+        let bin_path = Self::default_bin_path();
+
+        tracing::info!("Fetching latest Obscura browser binary from GitHub Releases…");
+
+        let release_url = "https://api.github.com/repos/h4ckf0r0day/obscura/releases/latest";
+        let client = reqwest::Client::builder()
+            .user_agent("Operant-RS-Downloader")
+            .build()?;
+
+        let release: serde_json::Value = client.get(release_url).send().await?.json().await?;
+
+        let assets = release["assets"].as_array().ok_or_else(|| {
+            Error::Agent("No assets found in Obscura release".into())
+        })?;
+
+        let asset = Self::find_matching_asset(assets)?;
+        tracing::info!("Downloading asset: {}", asset["name"].as_str().unwrap_or("unknown"));
+
+        let response = client.get(asset["browser_download_url"].as_str().unwrap_or("")).send().await?;
+
+        if !response.status().is_success() {
+            return Err(Error::Agent(format!(
+                "Failed to download binary: {}",
+                response.status()
+            )));
+        }
+
+        if let Some(parent) = bin_path.parent() {
+            tokio::fs::create_dir_all(parent).await?;
+        }
+
+        let mut file = tokio::fs::File::create(&bin_path).await?;
+        let content = response.bytes().await?;
+        file.write_all(&content).await?;
+        file.flush().await?;
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = tokio::fs::metadata(&bin_path).await?.permissions();
+            perms.set_mode(0o755);
+            tokio::fs::set_permissions(&bin_path, perms).await?;
+        }
+
+        if Self::verify_binary(&bin_path).await.is_err() {
+            return Err(Error::Agent(
+                "Downloaded binary failed verification".to_string(),
+            ));
+        }
+
+        tracing::info!(
+            "Obscura binary successfully installed to {}",
+            bin_path.display()
+        );
+        Ok(bin_path)
+    }
+
+    fn find_matching_asset(assets: &[serde_json::Value]) -> Result<serde_json::Value> {
+        let os = std::env::consts::OS;
+        let arch = std::env::consts::ARCH;
+
+        tracing::debug!("Matching asset for OS: {}, Arch: {}", os, arch);
+
+        // Obscura release naming: obscura-x86_64-linux.tar.gz, obscura-aarch64-linux.tar.gz, etc.
+        let (os_pattern, arch_pattern) = match (os, arch) {
+            ("linux", "x86_64") => ("linux", "x86_64"),
+            ("linux", "aarch64") => ("linux", "aarch64"),
+            ("macos", "x86_64") => ("macos", "x86_64"),
+            ("macos", "aarch64") => ("macos", "aarch64"),
+            ("windows", "x86_64") => ("windows", "x86_64"),
+            _ => return Err(Error::Agent(format!(
+                "Unsupported platform: {} on {}",
+                os, arch
+            ))),
+        };
+
+        assets
+            .iter()
+            .find(|a| {
+                let name = a["name"].as_str().unwrap_or("");
+                name.contains(os_pattern) && name.contains(arch_pattern) && name.ends_with(".tar.gz")
+            })
+            .cloned()
+            .ok_or_else(|| {
+                Error::Agent(format!(
+                    "Could not find matching binary for {} on {}",
+                    arch, os
+                ))
+            })
+    }
+
+    /// Verifies that the binary exists and can be executed
+    pub async fn verify_binary(path: &std::path::Path) -> Result<()> {
+        if !path.exists() {
+            return Err(Error::Config(format!(
+                "Binary not found at {}",
+                path.display()
+            )));
+        }
+
+        let output = tokio::process::Command::new(path)
+            .arg("--version")
+            .output()
+            .await
+            .map_err(|e| Error::Agent(format!("Failed to execute binary: {}", e)))?;
+
+        if output.status.success() {
+            Ok(())
+        } else {
+            Err(Error::Agent("Binary execution failed".to_string()))
+        }
+    }
+
+    async fn ensure_binary(&self) -> Result<std::path::PathBuf> {
+        let bin_path = Self::default_bin_path();
+        if bin_path.exists() {
+            return Ok(bin_path);
+        }
+        Self::download_binary().await
+    }
+
+    async fn run(&self, args: &[&str]) -> Result<String> {
+        let bin = self.ensure_binary().await?;
+        let out = tokio::time::timeout(
+            Duration::from_secs(60),
+            tokio::process::Command::new(&bin).args(args).output(),
+        )
+        .await
+        .map_err(|_| Error::Agent("browser timeout".into()))??;
+
+        if out.status.success() {
+            Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+        } else {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            Err(Error::Agent(format!("obscura error: {}", stderr)))
+        }
+    }
+}
+
+#[async_trait]
+impl BrowserProvider for ObscuraProvider {
+    fn name(&self) -> &str {
+        "obscura"
+    }
+    fn is_configured(&self) -> bool {
+        true // Auto-downloads on first use
+    }
+    async fn navigate(&self, url: &str) -> Result<String> {
+        // Use obscura fetch with markdown dump
+        self.run(&["fetch", "--dump", "markdown", url]).await
+    }
+    async fn snapshot(&self) -> Result<String> {
+        Err(Error::Agent(
+            "Obscura fetch mode: use navigate(url) to get page content".into(),
+        ))
+    }
+    async fn click(&self, _selector: &str) -> Result<String> {
+        Err(Error::Agent(
+            "Obscura fetch mode does not support click interactions. Use CDP mode for interactive automation.".into(),
+        ))
+    }
+    async fn type_text(&self, _selector: &str, _text: &str) -> Result<String> {
+        Err(Error::Agent(
+            "Obscura fetch mode does not support type interactions".into(),
+        ))
+    }
+    async fn scroll(&self, _direction: &str) -> Result<String> {
+        Err(Error::Agent(
+            "Obscura fetch mode does not support scroll".into(),
         ))
     }
 }
@@ -446,6 +642,7 @@ pub fn build_browser_provider(name: &str) -> std::sync::Arc<dyn BrowserProvider>
         "browserbase" => std::sync::Arc::new(BrowserbaseProvider::new()),
         "browser-use" | "browser_use" => std::sync::Arc::new(BrowserUseProvider::new()),
         "firecrawl" => std::sync::Arc::new(FirecrawlProvider::new()),
+        "obscura" => std::sync::Arc::new(ObscuraProvider),
         _ => std::sync::Arc::new(LightpandaProvider), // default: lightpanda
     }
 }
