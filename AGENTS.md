@@ -64,7 +64,21 @@ git push origin main
 
 # 6. Confirm the push landed.
 git log origin/main -1 --oneline    # must print your new commit
+
+# 7. Build release binary and deploy to global executable (R&D protocol).
+cargo build --release -p operant-cli
+sudo cp target/release/operant /usr/local/bin/operant
+operant --version   # confirm the deployed binary matches
 ```
+
+### R&D Protocol — Deploy After Every Push
+
+> **After EVERY iteration that touches code (not docs-only):**
+> Build the release binary and install it to `/usr/local/bin/operant` so the
+> user can immediately test the change. A commit that isn't deployable is not
+> done. If the build fails, fix it before moving on.
+>
+> Docs-only iterations (AGENTS.md, README, CHANGELOG) skip the build step.
 
 ### Iteration Numbering
 
@@ -666,8 +680,8 @@ cargo test -p operant-core --lib agent
 # AI agent development loop — one iteration = one cycle.
 while true; do
   # 1. Sync.
-  cd /home/z/my-project/operant
-  git pull --ff-only
+cd /home/ishanp/Documents/GitHub/MY-PROJECTS/HERMES/operant
+git pull --ff-only
 
   # 2. Apply dev env.
   source scripts/dev-env.sh
