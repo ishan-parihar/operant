@@ -5087,9 +5087,9 @@ impl App {
             // when the cursor is already on the first/last visual row
             // (issue #149 follow-up).
             KeyCode::Up => {
-                if !self.prompt_input.suggestions.is_empty()
-                    && (self.prompt_input.text.starts_with('/')
-                        || self.prompt_input.has_active_file_ref())
+                // Only navigate suggestions when user explicitly selected one (Tab pressed)
+                if self.prompt_input.suggestion_index.is_some()
+                    && !self.prompt_input.suggestions.is_empty()
                 {
                     self.prompt_input.suggestion_prev();
                 } else if !self.prompt_input.text.contains('\n') {
@@ -5108,9 +5108,9 @@ impl App {
                 self.refresh_prompt_input();
             }
             KeyCode::Down => {
-                if !self.prompt_input.suggestions.is_empty()
-                    && (self.prompt_input.text.starts_with('/')
-                        || self.prompt_input.has_active_file_ref())
+                // Only navigate suggestions when user explicitly selected one (Tab pressed)
+                if self.prompt_input.suggestion_index.is_some()
+                    && !self.prompt_input.suggestions.is_empty()
                 {
                     self.prompt_input.suggestion_next();
                 } else if !self.prompt_input.text.contains('\n') {
