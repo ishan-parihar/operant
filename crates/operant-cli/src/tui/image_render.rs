@@ -42,8 +42,21 @@ pub fn detect_graphics_protocol() -> GraphicsProtocol {
     // Many modern terminals (mintty, contour, foot, wezterm, etc.) support Sixel
     let term = std::env::var("TERM").unwrap_or_default();
     let sixel_terms = [
-        "foot", "wezterm", "contour", "mintty", "xterm", "vte", "alacritty",
-        "konsole", "gnome", "xfce", "mate", "rxvt", "mlterm", "st", "tmux",
+        "foot",
+        "wezterm",
+        "contour",
+        "mintty",
+        "xterm",
+        "vte",
+        "alacritty",
+        "konsole",
+        "gnome",
+        "xfce",
+        "mate",
+        "rxvt",
+        "mlterm",
+        "st",
+        "tmux",
     ];
     if sixel_terms.iter().any(|t| term.contains(t)) {
         // Heuristic: assume Sixel support for known terminals
@@ -128,28 +141,30 @@ fn render_kitty(path: &PathBuf, config: &ImageRenderConfig) -> RenderedImage {
     };
 
     let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &data);
-    
+
     // Get image dimensions (simplified - assumes PNG for now)
     let (img_w, img_h) = get_image_dimensions(&data).unwrap_or((800, 600));
-    
+
     // Calculate cell dimensions
     // Kitty uses character cells; we need to estimate based on font size
     // Typical terminal: ~8x16 pixels per cell
     let cell_w = 8.0;
     let cell_h = 16.0;
-    
+
     let max_w_px = config.max_width_cells as f32 * cell_w;
     let max_h_px = config.max_height_cells as f32 * cell_h;
-    
+
     let scale = if config.preserve_aspect {
-        (max_w_px / img_w as f32).min(max_h_px / img_h as f32).min(1.0)
+        (max_w_px / img_w as f32)
+            .min(max_h_px / img_h as f32)
+            .min(1.0)
     } else {
         1.0
     };
-    
+
     let disp_w = (img_w as f32 * scale / cell_w).round() as u16;
     let disp_h = (img_h as f32 * scale / cell_h).round() as u16;
-    
+
     let disp_w = disp_w.min(config.max_width_cells).max(1);
     let disp_h = disp_h.min(config.max_height_cells).max(1);
 
@@ -228,9 +243,11 @@ fn render_iterm2(path: &PathBuf, config: &ImageRenderConfig) -> RenderedImage {
     let cell_h = 16.0;
     let max_w_px = config.max_width_cells as f32 * cell_w;
     let max_h_px = config.max_height_cells as f32 * cell_h;
-    
+
     let scale = if config.preserve_aspect {
-        (max_w_px / img_w as f32).min(max_h_px / img_h as f32).min(1.0)
+        (max_w_px / img_w as f32)
+            .min(max_h_px / img_h as f32)
+            .min(1.0)
     } else {
         1.0
     };
@@ -244,7 +261,9 @@ fn render_iterm2(path: &PathBuf, config: &ImageRenderConfig) -> RenderedImage {
     // Params: width=auto,height=auto,preserveAspectRatio=1,inline=1
     let cmd = format!(
         "\x1b]1337;File=width={}px;height={}px;preserveAspectRatio=1;inline=1:{}\x1b\\",
-        disp_w as u32 * 8, disp_h as u32 * 16, b64
+        disp_w as u32 * 8,
+        disp_h as u32 * 16,
+        b64
     );
 
     RenderedImage {
@@ -267,7 +286,13 @@ fn get_image_dimensions(data: &[u8]) -> Option<(u32, u32)> {
     if data.len() >= 4 && &data[0..2] == b"\xff\xd8" {
         let mut i = 2;
         while i + 8 < data.len() {
-            if data[i] == 0xff && data[i + 1] >= 0xc0 && data[i + 1] <= 0xcf && data[i + 1] != 0xc4 && data[i + 1] != 0xc8 && data[i + 1] != 0xcc {
+            if data[i] == 0xff
+                && data[i + 1] >= 0xc0
+                && data[i + 1] <= 0xcf
+                && data[i + 1] != 0xc4
+                && data[i + 1] != 0xc8
+                && data[i + 1] != 0xcc
+            {
                 let h = u16::from_be_bytes([data[i + 5], data[i + 6]]) as u32;
                 let w = u16::from_be_bytes([data[i + 7], data[i + 8]]) as u32;
                 return Some((w, h));
