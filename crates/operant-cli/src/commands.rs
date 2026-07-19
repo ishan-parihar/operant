@@ -1111,14 +1111,18 @@ pub fn tui_category(name: &str) -> &'static str {
 }
 
 /// A single entry for TUI typeahead suggestions and help overlay.
+///
+/// Uses `String` for name/description so that dynamically discovered
+/// commands (plugins, skills) can contribute without `Box::leak`.
 pub struct TuiSlashCommand {
-    pub name: &'static str,
-    pub description: &'static str,
+    pub name: String,
+    pub description: String,
     pub category: &'static str,
-    pub aliases: &'static [&'static str],
+    pub aliases: Vec<String>,
 }
 
-/// All slash commands available in the TUI, derived from `COMMAND_REGISTRY`.
+/// All slash commands available in the TUI, derived from `COMMAND_REGISTRY`
+/// plus dynamically discovered plugin commands and installed skill commands.
 ///
 /// This is the **single source of truth** for:
 /// - Typeahead suggestions (when user types `/`)
@@ -1128,7 +1132,7 @@ pub struct TuiSlashCommand {
 /// Commands are filtered: `gateway_only` commands are excluded from TUI.
 /// Category labels use `tui_category()` for user-facing grouping.
 pub fn tui_slash_commands() -> Vec<TuiSlashCommand> {
-    COMMAND_REGISTRY
+    let mut commands: Vec<TuiSlashCommand> = COMMAND_REGISTRY
         .iter()
         .filter(|cmd| !cmd.gateway_only)
         .map(|cmd| TuiSlashCommand {
@@ -1137,7 +1141,57 @@ pub fn tui_slash_commands() -> Vec<TuiSlashCommand> {
             category: tui_category(cmd.name),
             aliases: cmd.aliases,
         })
+        .collect();
+
+    // Merge plugin commands (from operant_core::plugins).
+    commands.extend(plugin_slash_commands());
+
+    // Merge skill commands (from operant_core::skills).
+    commands.extend(skill_slash_commands());
+
+    commands
+}
+
+/// Plugin commands discovered at runtime, surfaced in TUI typeahead + help.
+///
+/// Each registered plugin command becomes a discoverable slash command
+/// under the "Plugins" category. These are read from the global plugin
+/// registry via `operant_core::plugins::get_plugin_commands()`.
+pub fn plugin_slash_commands() -> Vec<TuiSlashCommand> {
+    operant_core::plugins::get_plugin_commands()
+        .into_iter()
+        .map(|cmd| TuiSlashCommand {
+            name: Box::leak(cmd.name.into_boxed_str()),
+            description: Box::leak(cmd.description.into_boxed_str()),
+            category: TuiCategory::Tools.as_str(),
+            aliases: &[],
+        })
         .collect()
+}
+
+/// Installed skills surfaced as discoverable slash commands in TUI.
+///
+/// Skills are loaded from the skills directory (same source as
+/// `operant skills list`). Each skill becomes a `/skill:<name>` entry
+/// in the typeahead and help overlay under the "Skills" category.
+pub fn skill_slash_commands() -> Vec<TuiSlashCommand> {
+    let skills_dir = operant_core::platform::operant_skills_dir();
+    if !skills_dir.exists() {
+        return Vec::new();
+    }
+    let mut mgr = operant_core::skills::SkillManager::new(skills_dir);
+    match mgr.load_all() {
+        Ok(skills) => skills
+            .into_iter()
+            .map(|skill| TuiSlashCommand {
+                name: Box::leak(skill.name.into_boxed_str()),
+                description: Box::leak(skill.description.into_boxed_str()),
+                category: "Skills",
+                aliases: &[],
+            })
+            .collect(),
+        Err(_) => Vec::new(),
+    }
 }
 
 /// Return commands grouped by TUI category for help overlay display.
