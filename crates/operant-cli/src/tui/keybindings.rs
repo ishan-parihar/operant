@@ -375,11 +375,32 @@ impl KeyBindingRegistry {
             DefaultBinding { key: KeyCode::Char('v'), modifiers: KeyModifiers::NONE, action: KeyAction::VimEnterVisual, context: BindingContext::VimVisual, description: "Exit to Normal mode" },
             DefaultBinding { key: KeyCode::Char('V'), modifiers: KeyModifiers::SHIFT, action: KeyAction::VimEnterVisualLine, context: BindingContext::VimVisual, description: "Visual Line mode" },
             DefaultBinding { key: KeyCode::Char('v'), modifiers: KeyModifiers::CONTROL, action: KeyAction::VimEnterVisualBlock, context: BindingContext::VimVisual, description: "Visual Block mode" },
+            // Shift+arrows in Visual mode to extend selection
+            DefaultBinding { key: KeyCode::Up, modifiers: KeyModifiers::SHIFT, action: KeyAction::VimMotionUp, context: BindingContext::VimVisual, description: "Extend selection up" },
+            DefaultBinding { key: KeyCode::Down, modifiers: KeyModifiers::SHIFT, action: KeyAction::VimMotionDown, context: BindingContext::VimVisual, description: "Extend selection down" },
+            DefaultBinding { key: KeyCode::Left, modifiers: KeyModifiers::SHIFT, action: KeyAction::VimMotionLeft, context: BindingContext::VimVisual, description: "Extend selection left" },
+            DefaultBinding { key: KeyCode::Right, modifiers: KeyModifiers::SHIFT, action: KeyAction::VimMotionRight, context: BindingContext::VimVisual, description: "Extend selection right" },
             DefaultBinding { key: KeyCode::Char('y'), modifiers: KeyModifiers::NONE, action: KeyAction::VimYank, context: BindingContext::VimVisual, description: "Yank selection" },
             DefaultBinding { key: KeyCode::Char('d'), modifiers: KeyModifiers::NONE, action: KeyAction::VimDeleteChar, context: BindingContext::VimVisual, description: "Delete selection" },
             DefaultBinding { key: KeyCode::Char('c'), modifiers: KeyModifiers::NONE, action: KeyAction::VimChangeLine, context: BindingContext::VimVisual, description: "Change selection" },
             DefaultBinding { key: KeyCode::Char('>'), modifiers: KeyModifiers::NONE, action: KeyAction::VimIndent, context: BindingContext::VimVisual, description: "Indent selection" },
             DefaultBinding { key: KeyCode::Char('<'), modifiers: KeyModifiers::NONE, action: KeyAction::VimDedent, context: BindingContext::VimVisual, description: "Dedent selection" },
+            
+            // Vim Visual Line mode bindings
+            DefaultBinding { key: KeyCode::Esc, modifiers: KeyModifiers::NONE, action: KeyAction::VimEnterNormal, context: BindingContext::VimVisualLine, description: "Exit to Normal mode" },
+            DefaultBinding { key: KeyCode::Up, modifiers: KeyModifiers::SHIFT, action: KeyAction::VimMotionUp, context: BindingContext::VimVisualLine, description: "Extend line selection up" },
+            DefaultBinding { key: KeyCode::Down, modifiers: KeyModifiers::SHIFT, action: KeyAction::VimMotionDown, context: BindingContext::VimVisualLine, description: "Extend line selection down" },
+            DefaultBinding { key: KeyCode::Char('y'), modifiers: KeyModifiers::NONE, action: KeyAction::VimYank, context: BindingContext::VimVisualLine, description: "Yank lines" },
+            DefaultBinding { key: KeyCode::Char('d'), modifiers: KeyModifiers::NONE, action: KeyAction::VimDeleteChar, context: BindingContext::VimVisualLine, description: "Delete lines" },
+            
+            // Vim Visual Block mode bindings
+            DefaultBinding { key: KeyCode::Esc, modifiers: KeyModifiers::NONE, action: KeyAction::VimEnterNormal, context: BindingContext::VimVisualBlock, description: "Exit to Normal mode" },
+            DefaultBinding { key: KeyCode::Up, modifiers: KeyModifiers::SHIFT, action: KeyAction::VimMotionUp, context: BindingContext::VimVisualBlock, description: "Extend block up" },
+            DefaultBinding { key: KeyCode::Down, modifiers: KeyModifiers::SHIFT, action: KeyAction::VimMotionDown, context: BindingContext::VimVisualBlock, description: "Extend block down" },
+            DefaultBinding { key: KeyCode::Left, modifiers: KeyModifiers::SHIFT, action: KeyAction::VimMotionLeft, context: BindingContext::VimVisualBlock, description: "Extend block left" },
+            DefaultBinding { key: KeyCode::Right, modifiers: KeyModifiers::SHIFT, action: KeyAction::VimMotionRight, context: BindingContext::VimVisualBlock, description: "Extend block right" },
+            DefaultBinding { key: KeyCode::Char('y'), modifiers: KeyModifiers::NONE, action: KeyAction::VimYank, context: BindingContext::VimVisualBlock, description: "Yank block" },
+            DefaultBinding { key: KeyCode::Char('d'), modifiers: KeyModifiers::NONE, action: KeyAction::VimDeleteChar, context: BindingContext::VimVisualBlock, description: "Delete block" },
             
             // Vim Command mode bindings
             DefaultBinding { key: KeyCode::Esc, modifiers: KeyModifiers::NONE, action: KeyAction::VimEnterNormal, context: BindingContext::VimCommand, description: "Exit to Normal mode" },
