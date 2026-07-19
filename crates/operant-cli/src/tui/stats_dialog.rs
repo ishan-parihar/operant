@@ -239,7 +239,7 @@ impl StatsDialogState {
     /// `cost` is in USD (not cents).
     #[allow(dead_code)] // Model usage tracking
     pub fn add_model_usage(&mut self, model_id: &str, input: u64, output: u64, cost: f64) {
-#[allow(dead_code)]
+        #[allow(dead_code)]
         if let Some(entry) = self
             .model_breakdown
             .iter_mut()

@@ -11,7 +11,6 @@ use operant_api::channel::{Channel, ChannelMessage, SendMessage};
 use portable_atomic::{AtomicU64, Ordering};
 use serde::{Deserialize, Serialize};
 #[allow(dead_code)] // Webhook module: handle_webhook and related items prepared for future use
-
 use std::sync::Arc;
 use tokio::sync::Mutex;
 

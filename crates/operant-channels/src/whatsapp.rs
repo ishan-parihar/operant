@@ -1547,10 +1547,7 @@ mod tests {
     #[test]
     fn whatsapp_strip_returns_none_for_whitespace_only() {
         let pats = WhatsAppChannel::compile_mention_patterns(&["@?Operant".into()]);
-        assert_eq!(
-            WhatsAppChannel::strip_patterns(&pats, "  @Operant  "),
-            None
-        );
+        assert_eq!(WhatsAppChannel::strip_patterns(&pats, "  @Operant  "), None);
     }
 
     #[test]

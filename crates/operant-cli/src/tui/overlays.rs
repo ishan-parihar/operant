@@ -776,7 +776,7 @@ pub struct HistorySearchOverlay {
 impl HistorySearchOverlay {
     #[allow(dead_code)] // History search match indices
     pub fn match_indices(&self) -> Vec<usize> {
-#[allow(dead_code)]
+        #[allow(dead_code)]
         self.matches.iter().map(|m| m.snapshot_idx).collect()
     }
 }

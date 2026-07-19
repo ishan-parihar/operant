@@ -254,7 +254,9 @@ mod tests {
     #[test]
     fn native_runtime_builds_shell_command() {
         let rt = NativeRuntime::new(PathBuf::from("/tmp/test"));
-        let cmd = rt.build_shell_command("echo hello", Path::new(".")).unwrap();
+        let cmd = rt
+            .build_shell_command("echo hello", Path::new("."))
+            .unwrap();
         // Just verify it constructs without error
         drop(cmd);
     }

@@ -31,6 +31,9 @@ impl Tool for ListenTool {
     async fn execute(&self, args: Value) -> ToolResult {
         let duration = args["duration_secs"].as_f64().unwrap_or(5.0);
         // TODO: implement actual STT
-        ToolResult::ok(format!("[mock] Listened for {}s, no speech detected", duration))
+        ToolResult::ok(format!(
+            "[mock] Listened for {}s, no speech detected",
+            duration
+        ))
     }
 }

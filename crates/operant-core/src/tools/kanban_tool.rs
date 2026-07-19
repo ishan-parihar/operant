@@ -156,22 +156,22 @@ impl KanbanTool {
                     .clone()
                     .ok_or_else(|| Error::Agent("assignee is required".into()))?;
 
-                let id =self.db.create_task(crate::kanban::db::CreateTaskParams {
-    title: &title,
-    body: args.body.as_deref(),
-    assignee: Some(&assignee),
-    created_by: Some("worker"),
-    workspace_kind: args.workspace_kind.as_deref().unwrap_or("scratch"),
-    workspace_path: args.workspace_path.as_deref(),
-    tenant: args.tenant.as_deref(),
-    priority: args.priority.unwrap_or(0),
-    parents: &args.parents.clone().unwrap_or_default(),
-    triage: args.triage.unwrap_or(false),
-    idempotency_key: args.idempotency_key.as_deref(),
-    max_runtime_seconds: args.max_runtime_seconds,
-    skills: args.skills.as_deref(),
-    max_retries: args.max_retries,
-})?;
+                let id = self.db.create_task(crate::kanban::db::CreateTaskParams {
+                    title: &title,
+                    body: args.body.as_deref(),
+                    assignee: Some(&assignee),
+                    created_by: Some("worker"),
+                    workspace_kind: args.workspace_kind.as_deref().unwrap_or("scratch"),
+                    workspace_path: args.workspace_path.as_deref(),
+                    tenant: args.tenant.as_deref(),
+                    priority: args.priority.unwrap_or(0),
+                    parents: &args.parents.clone().unwrap_or_default(),
+                    triage: args.triage.unwrap_or(false),
+                    idempotency_key: args.idempotency_key.as_deref(),
+                    max_runtime_seconds: args.max_runtime_seconds,
+                    skills: args.skills.as_deref(),
+                    max_retries: args.max_retries,
+                })?;
                 Ok(json!({"ok": true, "task_id": id}).to_string())
             }
             "link" => {

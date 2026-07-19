@@ -14,22 +14,22 @@
 #![allow(missing_docs)]
 
 pub mod config;
-pub mod traits;
 pub mod drive;
 pub mod emote;
 pub mod listen;
 pub mod look;
 pub mod sense;
 pub mod speak;
+pub mod traits;
 
 pub use config::RobotConfig;
-pub use traits::{Tool, ToolResult, ToolSpec};
 pub use drive::DriveTool;
 pub use emote::EmoteTool;
 pub use listen::ListenTool;
 pub use look::LookTool;
 pub use sense::SenseTool;
 pub use speak::SpeakTool;
+pub use traits::{Tool, ToolResult, ToolSpec};
 
 /// Crate version
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

@@ -34,7 +34,9 @@ impl Tool for SpeakTool {
 
     async fn execute(&self, args: Value) -> ToolResult {
         let text = args["text"].as_str().unwrap_or("");
-        let voice = args["voice"].as_str().or(self.config.speak.voice.as_deref());
+        let voice = args["voice"]
+            .as_str()
+            .or(self.config.speak.voice.as_deref());
         // TODO: implement actual TTS
         ToolResult::ok(format!(
             "[mock] Speaking via {:?}: \"{}\"",

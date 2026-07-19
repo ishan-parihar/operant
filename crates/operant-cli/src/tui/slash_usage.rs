@@ -110,9 +110,9 @@ pub fn usage_path() -> Option<PathBuf> {
 ///   3. Then by declaration order (stable)
 ///
 /// Returns the indices into the input slice in ranked order.
-    #[allow(dead_code)] // Command ranking algorithm
+#[allow(dead_code)] // Command ranking algorithm
 pub fn rank_commands(commands: &[(&str, &str)], usage: &UsageStore) -> Vec<usize> {
-#[allow(dead_code)]
+    #[allow(dead_code)]
     let mut indices: Vec<usize> = (0..commands.len()).collect();
     indices.sort_by(|&a, &b| {
         let ra = usage.recency_rank(commands[a].0);

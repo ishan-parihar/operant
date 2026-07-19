@@ -2,12 +2,12 @@ pub mod adapter_types;
 pub mod provider;
 
 pub mod bridge_state;
+pub mod debug;
+pub mod elicitation_dialog;
 pub mod file_injection;
 pub mod file_injection_dialog;
-pub mod elicitation_dialog;
 pub mod invalid_config_dialog;
 pub mod onboarding_dialog;
-pub mod debug;
 
 pub mod agents_view;
 pub mod app;
@@ -53,6 +53,7 @@ pub mod hooks_config_menu;
 pub mod import_config_dialog;
 pub mod key_input_dialog;
 pub mod memory_file_selector;
+pub mod theme_colors;
 pub mod theme_screen;
 pub mod voice_mode_notice;
 

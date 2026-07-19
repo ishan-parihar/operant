@@ -9881,9 +9881,7 @@ pub fn resolve_config_dir_for_workspace(workspace_dir: &Path) -> (PathBuf, PathB
         );
     }
 
-    let legacy_config_dir = workspace_dir
-        .parent()
-        .map(|parent| parent.join(".operant"));
+    let legacy_config_dir = workspace_dir.parent().map(|parent| parent.join(".operant"));
     if let Some(legacy_dir) = legacy_config_dir {
         if legacy_dir.join("config.toml").exists() {
             return (legacy_dir, workspace_config_dir);
@@ -11477,9 +11475,7 @@ impl Config {
             if let Some(parsed) = parse_skills_prompt_injection_mode(&mode) {
                 self.skills.prompt_injection_mode = parsed;
             } else {
-                tracing::warn!(
-                    "Ignoring invalid OPERANT_SKILLS_PROMPT_MODE (valid: full|compact)"
-                );
+                tracing::warn!("Ignoring invalid OPERANT_SKILLS_PROMPT_MODE (valid: full|compact)");
             }
         }
 
@@ -11531,9 +11527,7 @@ impl Config {
                     );
                 }
                 Err(_) => {
-                    tracing::warn!(
-                        "Ignoring OPERANT_TEMPERATURE={temp_str:?}: not a valid number"
-                    );
+                    tracing::warn!("Ignoring OPERANT_TEMPERATURE={temp_str:?}: not a valid number");
                 }
             }
         }
