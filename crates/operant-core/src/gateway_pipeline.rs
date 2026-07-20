@@ -336,4 +336,106 @@ mod tests {
 
         assert_eq!(counter.load(std::sync::atomic::Ordering::SeqCst), 2);
     }
+
+    #[tokio::test]
+    async fn turn_start_hook_carries_session_and_query() {
+        use std::sync::atomic::AtomicBool;
+
+        let registry = HookRegistry::new();
+        let called = Arc::new(AtomicBool::new(false));
+        let called_clone = called.clone();
+        let session_seen = Arc::new(std::sync::RwLock::new(String::new()));
+        let session_seen_clone = session_seen.clone();
+        let query_seen = Arc::new(std::sync::RwLock::new(String::new()));
+        let query_seen_clone = query_seen.clone();
+
+        registry
+            .register(
+                HookEvent::TurnStart,
+                Arc::new(move |_event, ctx| {
+                    let c = called_clone.clone();
+                    let s = session_seen_clone.clone();
+                    let q = query_seen_clone.clone();
+                    Box::pin(async move {
+                        c.store(true, std::sync::atomic::Ordering::SeqCst);
+                        *s.write().unwrap() = ctx.session_id.unwrap_or_default();
+                        *q.write().unwrap() =
+                            ctx.metadata.get("user_query").cloned().unwrap_or_default();
+                    })
+                }),
+            )
+            .await;
+
+        let ctx = HookContext::new()
+            .with_session("sess-abc")
+            .with_metadata("user_query", "hello world");
+        registry.emit(HookEvent::TurnStart, ctx).await;
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+
+        assert!(called.load(std::sync::atomic::Ordering::SeqCst));
+        assert_eq!(*session_seen.read().unwrap(), "sess-abc");
+        assert_eq!(*query_seen.read().unwrap(), "hello world");
+    }
+
+    #[tokio::test]
+    async fn turn_end_hook_carries_iterations_and_tool_calls() {
+        use std::sync::atomic::AtomicBool;
+
+        let registry = HookRegistry::new();
+        let called = Arc::new(AtomicBool::new(false));
+        let called_clone = called.clone();
+        let iters_seen = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let iters_seen_clone = iters_seen.clone();
+        let tools_seen = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let tools_seen_clone = tools_seen.clone();
+
+        registry
+            .register(
+                HookEvent::TurnEnd,
+                Arc::new(move |_event, ctx| {
+                    let c = called_clone.clone();
+                    let i = iters_seen_clone.clone();
+                    let t = tools_seen_clone.clone();
+                    Box::pin(async move {
+                        c.store(true, std::sync::atomic::Ordering::SeqCst);
+                        if let Some(v) = ctx.metadata.get("iterations").and_then(|s| s.parse().ok()) {
+                            i.store(v, std::sync::atomic::Ordering::SeqCst);
+                        }
+                        if let Some(v) = ctx.metadata.get("tool_calls").and_then(|s| s.parse().ok()) {
+                            t.store(v, std::sync::atomic::Ordering::SeqCst);
+                        }
+                    })
+                }),
+            )
+            .await;
+
+        let ctx = HookContext::new()
+            .with_session("sess-xyz")
+            .with_metadata("iterations", "5")
+            .with_metadata("tool_calls", "12");
+        registry.emit(HookEvent::TurnEnd, ctx).await;
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+
+        assert!(called.load(std::sync::atomic::Ordering::SeqCst));
+        assert_eq!(iters_seen.load(std::sync::atomic::Ordering::SeqCst), 5);
+        assert_eq!(tools_seen.load(std::sync::atomic::Ordering::SeqCst), 12);
+    }
+
+    #[tokio::test]
+    async fn hook_context_with_metadata_builder() {
+        let ctx = HookContext::new()
+            .with_metadata("key1", "val1")
+            .with_metadata("key2", "val2")
+            .with_session("sess-1")
+            .with_user("user-1")
+            .with_channel("chan-1")
+            .with_platform("telegram");
+
+        assert_eq!(ctx.session_id.as_deref(), Some("sess-1"));
+        assert_eq!(ctx.user_id.as_deref(), Some("user-1"));
+        assert_eq!(ctx.channel_id.as_deref(), Some("chan-1"));
+        assert_eq!(ctx.platform.as_deref(), Some("telegram"));
+        assert_eq!(ctx.metadata.get("key1").map(|s| s.as_str()), Some("val1"));
+        assert_eq!(ctx.metadata.get("key2").map(|s| s.as_str()), Some("val2"));
+    }
 }
