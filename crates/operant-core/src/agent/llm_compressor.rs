@@ -145,7 +145,6 @@ impl LlmCompressor {
     }
 
     /// Reset per-session state (call on /new or /reset).
-    #[allow(dead_code)]
     pub fn reset(&mut self) {
         self.previous_summary = None;
         self.compression_count = 0;

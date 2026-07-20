@@ -525,10 +525,17 @@ impl OperantAgent {
         self.conversation.read().await.clone()
     }
 
-    /// Clear conversation history
+    /// Clear conversation history and reset per-session state.
+    /// Called on /new, /reset, and session switches.
     pub async fn clear_history(&self) {
         let mut conv = self.conversation.write().await;
         conv.clear();
+        // Reset LLM compressor state so the next session starts fresh.
+        // Without this, a previous session's summary would bleed into
+        // the new session's compression context.
+        if let Some(ref compressor) = self.llm_compressor {
+            compressor.lock().await.reset();
+        }
     }
 
     /// Get a reference to the database
