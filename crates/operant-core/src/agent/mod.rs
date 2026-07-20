@@ -773,8 +773,7 @@ impl OperantAgent {
                     tool_turns: total_tool_calls,
                     response_len: 0,
                     session_id: session_id.clone(),
-                    completed: false,
-                    interrupted: true,
+
                 };
                 warn!("{}", diag.log_message());
                 if self.record_trajectories {
@@ -807,8 +806,6 @@ impl OperantAgent {
                     tool_turns: total_tool_calls,
                     response_len: 0,
                     session_id: session_id.clone(),
-                    completed: false,
-                    interrupted: false,
                 };
                 warn!("{}", diag.log_message());
                 // ── Grace call (iter-57) ────────────────────────────────
@@ -1042,8 +1039,7 @@ impl OperantAgent {
                                 tool_turns: total_tool_calls,
                                 response_len: result.content.len(),
                                 session_id: session_id.clone(),
-                                completed: true,
-                                interrupted: false,
+
                             };
                             info!("{}", diag.log_message());
                         }
@@ -1170,8 +1166,7 @@ impl OperantAgent {
                             tool_turns: total_tool_calls,
                             response_len: 0,
                             session_id: session_id.clone(),
-                            completed: false,
-                            interrupted: false,
+
                         };
                         warn!("{}", diag.log_message());
                     }
