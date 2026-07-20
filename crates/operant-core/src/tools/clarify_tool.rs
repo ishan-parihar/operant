@@ -85,7 +85,9 @@ impl OperantTool for ClarifyTool {
                 Err(_) => {
                     // The TUI dropped the reply_tx without sending —
                     // typically means the user pressed Esc (dismissed).
-                    return ToolResult::success("clarify", "[user dismissed the question]");
+                    // This is not a successful answer; return an error so the
+                    // agent knows the clarification was not provided.
+                    return ToolResult::error("clarify", "user dismissed the question");
                 }
             }
         }
