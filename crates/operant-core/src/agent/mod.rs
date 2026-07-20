@@ -715,7 +715,9 @@ impl OperantAgent {
                 e
             })?;
 
-        // Build initial messages including system prompt
+        // Build initial messages including system prompt.
+        // Applies preflight compression (proactive) + eviction to fit
+        // within the context window budget.
         let mut messages = self.build_messages().await?;
         let mut iteration = 0;
         let mut total_tool_calls: usize = 0;
@@ -1209,7 +1211,16 @@ impl OperantAgent {
         }
     }
 
-    /// Build messages including system prompt
+    /// Build messages including system prompt.
+    ///
+    /// Applies context management (decay + eviction) to fit within the
+    /// context window budget. When the estimated token count exceeds
+    /// 80% of the budget, aggressive preflight compression fires to
+    /// prevent wasted LLM calls that would fail with
+    /// context_length_exceeded.
+    ///
+    /// Ported from hermes-agent's `turn_context.py` preflight compression
+    /// pattern: estimate → check threshold → compress → fit within budget.
     async fn build_messages(&self) -> Result<Vec<Message>> {
         let mut messages = Vec::new();
 
@@ -1290,12 +1301,36 @@ impl OperantAgent {
 
         // Apply context management: decay-render old messages + evict
         // if over budget. Without this, any long-running session would
-        // eventually exceed the context window and 400-error. The budget
-        // is derived from the agent's context_window config; the reserve
-        // leaves room for the model's response.
+        // eventually exceed the context window and 400-error.
+        //
+        // Preflight compression (proactive): estimate tokens before the
+        // LLM call. If the estimated count exceeds 80% of the context
+        // window, apply aggressive decay to compress older messages.
+        // This prevents wasted LLM calls that would fail with
+        // context_length_exceeded. Ported from hermes-agent's
+        // turn_context.py preflight compression pattern.
         let budget = self.config.context_window;
         let reserve = 4096; // tokens reserved for the model's response
-        messages = crate::context_management::manage_context(messages, budget, reserve);
+        let effective_budget = budget.saturating_sub(reserve);
+
+        let estimated_tokens = crate::context_management::estimate_total_tokens(&messages);
+        let preflight_threshold = budget * 80 / 100; // 80% of context window
+        if estimated_tokens > preflight_threshold {
+            info!(
+                estimated = estimated_tokens,
+                threshold = preflight_threshold,
+                budget,
+                "Preflight compression: estimated tokens exceed 80%% threshold"
+            );
+            // Aggressive decay: shorter half-life (100 vs 200) and faster
+            // decay constant (20.0 vs 30.0) to compress older messages
+            // more aggressively before the LLM call.
+            messages = crate::context_management::decay_render(messages, 100, 20.0);
+        }
+
+        // Standard eviction: remove oldest messages within tiers until
+        // the total fits within the effective budget.
+        messages = crate::context_management::evict_to_budget(messages, effective_budget);
 
         Ok(messages)
     }
