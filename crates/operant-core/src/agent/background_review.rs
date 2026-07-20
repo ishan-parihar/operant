@@ -538,11 +538,7 @@ pub fn digest_history(messages_snapshot: &[crate::client::Message], tail: usize)
 ///
 /// Used by the background review daemon to surface a compact
 /// summary of skill/memory changes to the user.
-///
-/// TODO(phase-2): Re-enable when the review agent runs a multi-turn
-/// tool-execution loop.
 #[derive(Debug, Clone, Default)]
-#[cfg(test)]
 pub struct BackgroundReviewSummary {
     /// Human-readable action descriptions.
     pub actions: Vec<String>,
@@ -940,7 +936,6 @@ mod tests {
     #[test]
     fn test_digest_history_short_conversation() {
         use crate::client::Message;
-
         let messages = vec![
             Message::user("hello"),
             Message::assistant("hi there"),
@@ -953,7 +948,6 @@ mod tests {
     #[test]
     fn test_digest_history_long_conversation() {
         use crate::client::Message;
-
         let mut messages: Vec<Message> = Vec::new();
         for i in 0..20 {
             messages.push(Message::user(format!("msg {}", i)));
@@ -965,9 +959,6 @@ mod tests {
         // First message should be the digest
         assert!(result[0].content.contains("Earlier conversation digest"));
     }
-
-    #[cfg(test)]
-    use super::*;
 
     #[test]
     fn test_summarize_review_actions_empty() {
