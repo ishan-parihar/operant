@@ -32,6 +32,7 @@ use crate::tools::{ToolContext, ToolRegistry, ToolResult};
 
 use self::background_review::SelfEvolutionState;
 use self::iteration_budget::IterationBudget;
+use self::turn_finalizer::{PREFLIGHT_DECAY_CONSTANT, PREFLIGHT_DECAY_H50, PREFLIGHT_THRESHOLD_PERCENT, TurnDiagnostics, TurnExitReason};
 
 /// Response from the user for tool permission requests
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -747,7 +748,21 @@ impl OperantAgent {
             // signal handler in the TUI/CLI), exit the loop cleanly instead
             // of starting another LLM round-trip + tool execution cycle.
             if self.interrupt_flag.is_triggered() {
-                info!("Agent loop interrupted by user (Ctrl-C)");
+                // ── Turn diagnostics (interrupt exit) ────────────────────
+                let diag = TurnDiagnostics {
+                    exit_reason: TurnExitReason::Interrupted,
+                    model: self.model(),
+                    api_calls: iteration,
+                    max_iterations: self.config.max_iterations,
+                    budget_used: self.iteration_budget.used(),
+                    budget_max: self.iteration_budget.max_total(),
+                    tool_turns: total_tool_calls,
+                    response_len: 0,
+                    session_id: session_id.clone(),
+                    completed: false,
+                    interrupted: true,
+                };
+                warn!("{}", diag.log_message());
                 if self.record_trajectories {
                     self.save_trajectory(
                         &session_id,
@@ -767,15 +782,26 @@ impl OperantAgent {
             }
 
             if iteration > self.config.max_iterations {
+                // ── Turn diagnostics (budget exhaustion) ─────────────────
+                let diag = TurnDiagnostics {
+                    exit_reason: TurnExitReason::BudgetExhausted,
+                    model: self.model(),
+                    api_calls: iteration,
+                    max_iterations: self.config.max_iterations,
+                    budget_used: self.iteration_budget.used(),
+                    budget_max: self.iteration_budget.max_total(),
+                    tool_turns: total_tool_calls,
+                    response_len: 0,
+                    session_id: session_id.clone(),
+                    completed: false,
+                    interrupted: false,
+                };
+                warn!("{}", diag.log_message());
                 // ── Grace call (iter-57) ────────────────────────────────
                 // When max_iterations is exceeded, hermes-agent makes one
                 // extra "grace call" with tools stripped, asking the model
                 // to summarize what it has so far. This gives the user a
                 // partial answer instead of a hard error.
-                warn!(
-                    max = self.config.max_iterations,
-                    "Max iterations exceeded — attempting grace call"
-                );
                 return self
                     .attempt_grace_call(&messages, &session_id, iteration, total_tool_calls, None)
                     .await;
@@ -988,6 +1014,26 @@ impl OperantAgent {
                             .await;
                         }
 
+                        // ── Turn diagnostics (final response) ───────────────────
+                        // Log structured diagnostics at turn completion, matching
+                        // hermes-agent's turn-exit diagnostic log pattern.
+                        {
+                            let diag = TurnDiagnostics {
+                                exit_reason: TurnExitReason::TextResponse,
+                                model: self.model(),
+                                api_calls: iteration,
+                                max_iterations: self.config.max_iterations,
+                                budget_used: self.iteration_budget.used(),
+                                budget_max: self.iteration_budget.max_total(),
+                                tool_turns: total_tool_calls,
+                                response_len: result.content.len(),
+                                session_id: session_id.clone(),
+                                completed: true,
+                                interrupted: false,
+                            };
+                            info!("{}", diag.log_message());
+                        }
+
                         self.emit(AgentEvent::Done {
                             message: assistant_msg,
                         })
@@ -1098,6 +1144,23 @@ impl OperantAgent {
                     }
                 }
                 Err(e) => {
+                    // ── Turn diagnostics (error exit) ─────────────────────
+                    {
+                        let diag = TurnDiagnostics {
+                            exit_reason: TurnExitReason::Error,
+                            model: self.model(),
+                            api_calls: iteration,
+                            max_iterations: self.config.max_iterations,
+                            budget_used: self.iteration_budget.used(),
+                            budget_max: self.iteration_budget.max_total(),
+                            tool_turns: total_tool_calls,
+                            response_len: 0,
+                            session_id: session_id.clone(),
+                            completed: false,
+                            interrupted: false,
+                        };
+                        warn!("{}", diag.log_message());
+                    }
                     error!(error = %e, "Error processing stream");
                     self.emit(AgentEvent::Error {
                         error: e.user_message(),
@@ -1314,18 +1377,19 @@ impl OperantAgent {
         let effective_budget = budget.saturating_sub(reserve);
 
         let estimated_tokens = crate::context_management::estimate_total_tokens(&messages);
-        let preflight_threshold = budget * 80 / 100; // 80% of context window
+        let preflight_threshold = budget * PREFLIGHT_THRESHOLD_PERCENT as usize / 100;
         if estimated_tokens > preflight_threshold {
             info!(
                 estimated = estimated_tokens,
                 threshold = preflight_threshold,
                 budget,
-                "Preflight compression: estimated tokens exceed 80%% threshold"
+                "Preflight compression: estimated tokens exceed threshold"
             );
-            // Aggressive decay: shorter half-life (100 vs 200) and faster
-            // decay constant (20.0 vs 30.0) to compress older messages
-            // more aggressively before the LLM call.
-            messages = crate::context_management::decay_render(messages, 100, 20.0);
+            messages = crate::context_management::decay_render(
+                messages,
+                PREFLIGHT_DECAY_H50,
+                PREFLIGHT_DECAY_CONSTANT,
+            );
         }
 
         // Standard eviction: remove oldest messages within tiers until
@@ -1529,15 +1593,36 @@ If nothing needs updating, say 'Nothing to save.' and stop.\n\n{}",
 
             match client.chat(request).await {
                 Ok(response) => {
-                    let choice = response.choices.into_iter().next();
-                    if let Some(choice) = choice {
-                        let content = choice.message.content.unwrap_or_default();
-                        if content.contains("Nothing to save") {
-                            debug!("Background review: nothing to save");
+                    let content = response
+                        .choices
+                        .iter()
+                        .find_map(|c| c.message.content.clone())
+                        .unwrap_or_default();
+                    if content.contains("Nothing to save") {
+                        debug!("Background review: nothing to save");
+                    } else {
+                        // Summarize what the review agent changed.
+                        let tool_messages: Vec<String> = response
+                            .choices
+                            .iter()
+                            .filter_map(|c| c.message.content.clone())
+                            .collect();
+                        let summary = turn_finalizer::summarize_review_actions(
+                            &tool_messages,
+                            &[],
+                        );
+                        if summary.skills_changed || summary.memory_changed {
+                            info!(
+                                session_id = %session_id,
+                                skills = summary.skills_changed,
+                                memory = summary.memory_changed,
+                                actions = ?summary.actions,
+                                "Background review completed with updates"
+                            );
                         } else {
                             info!(
                                 session_id = %session_id,
-                                "Background review completed with updates"
+                                "Background review completed (no tracked changes)"
                             );
                         }
                     }

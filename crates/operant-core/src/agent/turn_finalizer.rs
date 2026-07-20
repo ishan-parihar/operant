@@ -13,8 +13,30 @@
 //! turn ended, how many iterations were used, what tools were called, and
 //! whether the response was successful. This mirrors hermes-agent's
 //! turn-exit diagnostic log pattern.
+//!
+//! ## Preflight Compression Constants
+//!
+//! Thresholds and decay parameters for proactive context compression,
+//! extracted from the agent loop for clarity.
 
 use std::fmt;
+
+// ---------------------------------------------------------------------------
+// Preflight Context Compression Constants
+// ---------------------------------------------------------------------------
+
+/// Percentage of context window that triggers proactive compression.
+/// When estimated tokens exceed this fraction of the budget, aggressive
+/// decay fires before the LLM call to prevent context_length_exceeded.
+pub const PREFLIGHT_THRESHOLD_PERCENT: u64 = 80;
+
+/// Half-life (in tokens) for aggressive preflight decay. Shorter than
+/// the standard 200 to compress older messages more aggressively.
+pub const PREFLIGHT_DECAY_H50: usize = 100;
+
+/// Decay constant for preflight compression. Lower = faster decay.
+/// Standard is 30.0; preflight uses 20.0 for more aggressive compression.
+pub const PREFLIGHT_DECAY_CONSTANT: f64 = 20.0;
 
 // ---------------------------------------------------------------------------
 // Turn Diagnostics
@@ -112,10 +134,9 @@ pub fn is_error_not_interrupted(&self) -> bool {
 
 /// Summary of actions taken by the background review.
 ///
-/// Used by the background review daemon (once wired up) to surface a compact
+/// Used by the background review daemon to surface a compact
 /// summary of skill/memory changes to the user.
 #[derive(Debug, Clone, Default)]
-#[allow(dead_code)]
 pub struct BackgroundReviewSummary {
     /// Human-readable action descriptions.
     pub actions: Vec<String>,
@@ -130,7 +151,6 @@ pub struct BackgroundReviewSummary {
 /// Scans the review agent's messages for successful tool actions and
 /// surfaces a compact summary to the user. Matches hermes-agent's
 /// `summarize_background_review_actions`.
-#[allow(dead_code)]
 pub fn summarize_review_actions(
     review_messages: &[String],
     prior_messages: &[String],
