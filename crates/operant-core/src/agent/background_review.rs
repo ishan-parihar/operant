@@ -7,10 +7,9 @@
 //!
 //! Ported from `hermes-agent/agent/background_review.py`.
 
-
-
 /// Review prompt for skill updates. This is the message sent to the
 /// review agent fork when a skill review is triggered.
+#[allow(dead_code)]
 pub const SKILL_REVIEW_PROMPT: &str = "\
 Review the conversation above and update the skill library. Be \
 ACTIVE — most sessions produce at least one skill update, even if \
@@ -36,6 +35,7 @@ Preference order — prefer the earliest action that fits:
 If nothing needs updating, say 'Nothing to save.' and stop.";
 
 /// Review prompt for memory updates.
+#[allow(dead_code)]
 pub const MEMORY_REVIEW_PROMPT: &str = "\
 Review the conversation above and consider saving to memory if appropriate.
 
@@ -48,6 +48,7 @@ If something stands out, save it using the memory tool. \
 If nothing is worth saving, just say 'Nothing to save.' and stop.";
 
 /// Combined review prompt for both memory and skill updates.
+#[allow(dead_code)]
 pub const COMBINED_REVIEW_PROMPT: &str = "\
 Review the conversation above and update two things:
 
@@ -62,22 +63,10 @@ at least one skill update. Signals that warrant a skill update:
 
 If genuinely nothing stands out on either, say 'Nothing to save.' and stop.";
 
-/// Result of a background review spawn attempt.
-#[derive(Debug, Clone)]
-pub struct BackgroundReviewResult {
-    /// Whether the review was spawned successfully.
-    pub spawned: bool,
-    /// The prompt that was sent to the review agent.
-    pub prompt: String,
-    /// Whether skill review was included.
-    pub review_skills: bool,
-    /// Whether memory review was included.
-    pub review_memory: bool,
-}
-
 /// Build the review prompt based on which triggers fired.
 ///
 /// Returns the appropriate prompt string for the background review agent.
+#[allow(dead_code)]
 pub fn build_review_prompt(review_memory: bool, review_skills: bool) -> String {
     if review_memory && review_skills {
         COMBINED_REVIEW_PROMPT.to_string()
@@ -89,12 +78,10 @@ pub fn build_review_prompt(review_memory: bool, review_skills: bool) -> String {
 }
 
 /// Configuration for the background review daemon.
+///
+/// Used to construct `SelfEvolutionState` and configure the review agent.
 #[derive(Debug, Clone)]
 pub struct BackgroundReviewConfig {
-    /// Maximum iterations for the review agent (default: 16).
-    pub max_iterations: usize,
-    /// Model to use for the review (None = inherit parent).
-    pub model: Option<String>,
     /// Skill nudge interval (default: 10).
     pub skill_nudge_interval: usize,
     /// Memory review interval in turns (default: 5).
@@ -104,8 +91,6 @@ pub struct BackgroundReviewConfig {
 impl Default for BackgroundReviewConfig {
     fn default() -> Self {
         Self {
-            max_iterations: 16,
-            model: None,
             skill_nudge_interval: 10,
             memory_review_interval: 5,
         }
@@ -115,14 +100,18 @@ impl Default for BackgroundReviewConfig {
 /// State tracking for the self-evolution pipeline.
 ///
 /// Tracks iteration counts and nudge thresholds across turns.
+/// Used by `OperantAgent::run()` to determine when skill/memory
+/// reviews should be triggered.
 pub struct SelfEvolutionState {
     /// Number of iterations since the last skill_manage call.
     pub iters_since_skill: usize,
     /// How many iterations between skill nudges (0 = disabled).
     pub skill_nudge_interval: usize,
     /// Number of turns since the last memory review.
+    #[allow(dead_code)]
     pub turns_since_memory_review: usize,
     /// How many turns between memory reviews (0 = disabled).
+    #[allow(dead_code)]
     pub memory_review_interval: usize,
 }
 
@@ -147,44 +136,9 @@ impl SelfEvolutionState {
         self.iters_since_skill = 0;
     }
 
-    /// Increment the memory review turn counter.
-    pub fn bump_memory_counter(&mut self) {
-        self.turns_since_memory_review += 1;
-    }
-
-    /// Reset the memory review turn counter.
-    pub fn reset_memory_counter(&mut self) {
-        self.turns_since_memory_review = 0;
-    }
-
     /// Check if a skill review should be triggered.
     pub fn should_review_skills(&self) -> bool {
         self.skill_nudge_interval > 0 && self.iters_since_skill >= self.skill_nudge_interval
-    }
-
-    /// Check if a memory review should be triggered.
-    pub fn should_review_memory(&self) -> bool {
-        self.memory_review_interval > 0
-            && self.turns_since_memory_review >= self.memory_review_interval
-    }
-
-    /// Check if any review should be triggered and return the result.
-    pub fn check_review_triggers(&mut self, skill_manage_called: bool) -> (bool, bool) {
-        if skill_manage_called {
-            self.reset_skill_counter();
-        }
-
-        let review_skills = self.should_review_skills();
-        let review_memory = self.should_review_memory();
-
-        if review_skills {
-            self.reset_skill_counter();
-        }
-        if review_memory {
-            self.reset_memory_counter();
-        }
-
-        (review_skills, review_memory)
     }
 }
 
@@ -217,17 +171,14 @@ mod tests {
         let config = BackgroundReviewConfig {
             skill_nudge_interval: 5,
             memory_review_interval: 10,
-            ..Default::default()
         };
         let mut state = SelfEvolutionState::new(&config);
 
-        // Bump 4 times — not enough
         for _ in 0..4 {
             state.bump_skill_counter();
         }
         assert!(!state.should_review_skills());
 
-        // Bump once more — triggers
         state.bump_skill_counter();
         assert!(state.should_review_skills());
     }
@@ -245,25 +196,18 @@ mod tests {
         }
         assert!(state.should_review_skills());
 
-        // skill_manage called — resets counter
-        let (review_skills, _) = state.check_review_triggers(true);
-        assert!(!review_skills); // reset before check
+        state.reset_skill_counter();
+        assert!(!state.should_review_skills());
         assert_eq!(state.iters_since_skill, 0);
     }
 
     #[test]
-    fn test_self_evolution_memory_review() {
+    fn test_self_evolution_disabled_when_zero() {
         let config = BackgroundReviewConfig {
-            memory_review_interval: 3,
-            ..Default::default()
+            skill_nudge_interval: 0,
+            memory_review_interval: 0,
         };
-        let mut state = SelfEvolutionState::new(&config);
-
-        state.bump_memory_counter();
-        state.bump_memory_counter();
-        assert!(!state.should_review_memory());
-
-        state.bump_memory_counter();
-        assert!(state.should_review_memory());
+        let state = SelfEvolutionState::new(&config);
+        assert!(!state.should_review_skills());
     }
 }
