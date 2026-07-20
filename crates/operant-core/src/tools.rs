@@ -132,7 +132,8 @@ pub struct ToolResult {
 impl ToolResult {
     /// Create a successful result
     pub fn success<T: Serialize>(tool_call_id: impl Into<String>, content: T) -> Self {
-        let content = serde_json::to_string(&content).unwrap_or_else(|_| "{}".to_string());
+        let content =
+            serde_json::to_string(&content).expect("serializable tool result always serializes");
         Self {
             tool_call_id: tool_call_id.into(),
             name: String::new(),
@@ -148,7 +149,8 @@ impl ToolResult {
         tool_call_id: impl Into<String>,
         content: T,
     ) -> Self {
-        let content = serde_json::to_string(&content).unwrap_or_else(|_| "{}".to_string());
+        let content =
+            serde_json::to_string(&content).expect("serializable tool result always serializes");
         Self {
             tool_call_id: tool_call_id.into(),
             name: name.into(),
@@ -526,5 +528,20 @@ mod tests {
             Error::ToolNotFound { name } => assert_eq!(name, "nonexistent"),
             _ => panic!("Expected ToolNotFound error"),
         }
+    }
+
+    /// Test that ToolResult::success serializes correctly for normal types
+    #[test]
+    fn test_toolresult_success_serialization() {
+        let result = ToolResult::success("call_1", serde_json::json!({"key": "value"}));
+        assert!(result.success);
+        assert_eq!(result.tool_call_id, "call_1");
+        assert_eq!(result.content, r#"{"key":"value"}"#);
+        assert!(result.error.is_none());
+
+        let result2 = ToolResult::success_with_name("my_tool", "call_2", 42);
+        assert!(result2.success);
+        assert_eq!(result2.name, "my_tool");
+        assert_eq!(result2.content, "42");
     }
 }
