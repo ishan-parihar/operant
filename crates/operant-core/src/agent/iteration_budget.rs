@@ -42,12 +42,7 @@ impl IterationBudget {
             }
             if self
                 .used
-                .compare_exchange(
-                    current,
-                    current + 1,
-                    Ordering::SeqCst,
-                    Ordering::SeqCst,
-                )
+                .compare_exchange(current, current + 1, Ordering::SeqCst, Ordering::SeqCst)
                 .is_ok()
             {
                 return true;
@@ -68,12 +63,7 @@ impl IterationBudget {
             }
             if self
                 .used
-                .compare_exchange(
-                    current,
-                    current - 1,
-                    Ordering::SeqCst,
-                    Ordering::SeqCst,
-                )
+                .compare_exchange(current, current - 1, Ordering::SeqCst, Ordering::SeqCst)
                 .is_ok()
             {
                 return;
@@ -152,17 +142,22 @@ mod tests {
 
     #[test]
     fn test_budget_concurrent_consume() {
-        use std::sync::Arc;
+        use std::sync::{Arc, Barrier};
         use std::thread;
 
         let budget = Arc::new(IterationBudget::new(100));
+        let barrier = Arc::new(Barrier::new(10));
         let mut handles = vec![];
 
         // Spawn 10 threads, each consuming 20 iterations.
         // Total = 200 attempted, but max is 100, so exactly 100 should succeed.
+        // Barrier forces all threads to start simultaneously for true
+        // concurrent access to the AtomicUsize CAS loops.
         for _ in 0..10 {
             let b = Arc::clone(&budget);
+            let bar = Arc::clone(&barrier);
             handles.push(thread::spawn(move || {
+                bar.wait(); // synchronize start
                 let mut succeeded = 0;
                 for _ in 0..20 {
                     if b.consume() {
@@ -182,18 +177,22 @@ mod tests {
 
     #[test]
     fn test_budget_concurrent_consume_refund() {
-        use std::sync::Arc;
+        use std::sync::{Arc, Barrier};
         use std::thread;
 
         let budget = Arc::new(IterationBudget::new(50));
+        let barrier = Arc::new(Barrier::new(10));
         let mut handles = vec![];
 
         // Spawn 10 threads: 5 consumers (15 each) and 5 refunders (10 each).
         // After consumers fill the budget, refunders free space.
+        // Barrier forces all threads to start simultaneously.
         for i in 0..10 {
             let b = Arc::clone(&budget);
+            let bar = Arc::clone(&barrier);
             if i % 2 == 0 {
                 handles.push(thread::spawn(move || -> usize {
+                    bar.wait();
                     let mut succeeded = 0;
                     for _ in 0..15 {
                         if b.consume() {
@@ -204,6 +203,7 @@ mod tests {
                 }));
             } else {
                 handles.push(thread::spawn(move || -> usize {
+                    bar.wait();
                     for _ in 0..10 {
                         b.refund();
                     }
@@ -219,22 +219,30 @@ mod tests {
         // capacity, so total_consumed should be > 50 (proving refunds
         // actually worked) but <= 75.
         assert!(budget.used() <= 50);
-        assert!(total_consumed > 50, "refunders should have freed capacity: got {total_consumed}");
+        assert!(
+            total_consumed > 50,
+            "refunders should have freed capacity: got {total_consumed}"
+        );
     }
 
     #[test]
     fn test_budget_concurrent_exhaustion_boundary() {
-        use std::sync::Arc;
+        use std::sync::{Arc, Barrier};
         use std::thread;
 
         let budget = Arc::new(IterationBudget::new(10));
+        let barrier = Arc::new(Barrier::new(20));
         let mut handles = vec![];
 
         // Spawn 20 threads, each trying to consume exactly 1 iteration.
-        // Exactly 10 should succeed.
+        // Exactly 10 should succeed. Barrier forces simultaneous start.
         for _ in 0..20 {
             let b = Arc::clone(&budget);
-            handles.push(thread::spawn(move || b.consume()));
+            let bar = Arc::clone(&barrier);
+            handles.push(thread::spawn(move || {
+                bar.wait();
+                b.consume()
+            }));
         }
 
         let successes: usize = handles
