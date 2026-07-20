@@ -6,8 +6,8 @@
 //! improvement after each turn.
 
 pub mod iteration_budget;
-pub mod turn_finalizer;
-pub mod background_review;
+pub(crate) mod turn_finalizer;
+pub(crate) mod background_review;
 
 
 use std::sync::Arc;
@@ -321,11 +321,6 @@ impl OperantAgent {
             )),
             iteration_budget: Arc::new(IterationBudget::new(max_iter)),
         }
-    }
-
-    /// Get a reference to the iteration budget.
-    pub fn iteration_budget(&self) -> &Arc<IterationBudget> {
-        &self.iteration_budget
     }
 
     /// Attach an observer for structured telemetry. When set, the agent
