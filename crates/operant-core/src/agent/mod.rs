@@ -5,10 +5,9 @@
 //! turn finalizer, and background review daemon for autonomous skill/memory
 //! improvement after each turn.
 
+pub(crate) mod background_review;
 pub mod iteration_budget;
 pub(crate) mod turn_finalizer;
-pub(crate) mod background_review;
-
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -275,7 +274,6 @@ impl OperantAgent {
                 &background_review::BackgroundReviewConfig {
                     skill_nudge_interval: nudge,
                     memory_review_interval: mem_interval,
-                    ..Default::default()
                 },
             )),
             iteration_budget: Arc::new(IterationBudget::new(max_iter)),
@@ -316,7 +314,6 @@ impl OperantAgent {
                 &background_review::BackgroundReviewConfig {
                     skill_nudge_interval: nudge,
                     memory_review_interval: mem_interval,
-                    ..Default::default()
                 },
             )),
             iteration_budget: Arc::new(IterationBudget::new(max_iter)),
@@ -607,8 +604,7 @@ impl OperantAgent {
                     hooks
                         .emit(
                             crate::gateway_pipeline::HookEvent::AgentEnd,
-                            crate::gateway_pipeline::HookContext::new()
-                                .with_session(session_id),
+                            crate::gateway_pipeline::HookContext::new().with_session(session_id),
                         )
                         .await;
                 }
@@ -631,21 +627,13 @@ impl OperantAgent {
                     hooks
                         .emit(
                             crate::gateway_pipeline::HookEvent::AgentEnd,
-                            crate::gateway_pipeline::HookContext::new()
-                                .with_session(session_id),
+                            crate::gateway_pipeline::HookContext::new().with_session(session_id),
                         )
                         .await;
                 }
                 if self.record_trajectories {
-                    self.save_trajectory(
-                        session_id,
-                        messages,
-                        iterations,
-                        tool_calls,
-                        false,
-                        None,
-                    )
-                    .await;
+                    self.save_trajectory(session_id, messages, iterations, tool_calls, false, None)
+                        .await;
                 }
                 Err(Error::MaxIterationsExceeded {
                     max: self.config.max_iterations,
@@ -745,13 +733,7 @@ impl OperantAgent {
                     "Iteration budget exhausted — attempting grace call"
                 );
                 return self
-                    .attempt_grace_call(
-                        &messages,
-                        &session_id,
-                        iteration,
-                        total_tool_calls,
-                        None,
-                    )
+                    .attempt_grace_call(&messages, &session_id, iteration, total_tool_calls, None)
                     .await;
             }
 
@@ -793,13 +775,7 @@ impl OperantAgent {
                     "Max iterations exceeded — attempting grace call"
                 );
                 return self
-                    .attempt_grace_call(
-                        &messages,
-                        &session_id,
-                        iteration,
-                        total_tool_calls,
-                        None,
-                    )
+                    .attempt_grace_call(&messages, &session_id, iteration, total_tool_calls, None)
                     .await;
             }
 
@@ -1196,7 +1172,8 @@ impl OperantAgent {
                     &session_id,
                     true,  // review_skills
                     false, // review_memory (triggered by separate cadence)
-                ).await;
+                )
+                .await;
             }
 
             // ── /steer directive drain (iter-65) ──────────────────────────
