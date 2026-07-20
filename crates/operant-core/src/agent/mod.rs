@@ -7,6 +7,7 @@
 
 pub(crate) mod background_review;
 pub mod iteration_budget;
+pub(crate) mod llm_compressor;
 pub(crate) mod turn_finalizer;
 
 use std::sync::Arc;
@@ -228,6 +229,11 @@ pub struct OperantAgent {
     /// Iteration budget: thread-safe consume/refund counter matching
     /// hermes-agent's `IterationBudget` class.
     iteration_budget: Arc<IterationBudget>,
+    /// LLM-based context compressor. When set, context overflow errors
+    /// trigger LLM summarization (summarize middle turns via auxiliary model)
+    /// before falling back to deterministic decay/eviction. Matches
+    /// hermes-agent's `ContextCompressor` pattern.
+    llm_compressor: Option<tokio::sync::Mutex<llm_compressor::LlmCompressor>>,
 }
 
 /// A pending permission request sent from the agent to the TUI
@@ -278,6 +284,7 @@ impl OperantAgent {
                 },
             )),
             iteration_budget: Arc::new(IterationBudget::new(max_iter)),
+            llm_compressor: None,
         }
     }
 
@@ -318,6 +325,7 @@ impl OperantAgent {
                 },
             )),
             iteration_budget: Arc::new(IterationBudget::new(max_iter)),
+            llm_compressor: None,
         }
     }
 
@@ -477,6 +485,19 @@ impl OperantAgent {
     /// saves it to `~/.operant/trajectories/<session_id>.json`.
     pub fn with_trajectory_recording(mut self, enabled: bool) -> Self {
         self.record_trajectories = enabled;
+        self
+    }
+
+    /// Attach an LLM-based context compressor for intelligent summarization.
+    /// When set, context overflow errors trigger LLM summarization before
+    /// falling back to deterministic decay/eviction.
+    pub fn with_llm_compressor(
+        mut self,
+        config: llm_compressor::LlmCompressorConfig,
+    ) -> Self {
+        self.llm_compressor = Some(tokio::sync::Mutex::new(
+            llm_compressor::LlmCompressor::new(config),
+        ));
         self
     }
 
@@ -858,9 +879,9 @@ impl OperantAgent {
                         let classified = FallbackModelClient::classify_error(&e);
                         if classified.should_compress {
                             warn!(reason = %classified.reason, "Context overflow detected — compressing and retrying");
-                            let budget = self.config.context_window;
-                            messages =
-                                crate::context_management::manage_context(messages, budget, 4096);
+                            // Try LLM summarization first (intelligent compression),
+                            // fall back to deterministic decay/eviction.
+                            messages = self.compress_context_overflow(messages).await;
                             // Refund the iteration since the original LLM call
                             // was wasted on a context overflow — the retry gets
                             // a fresh consume() on the next loop iteration.
@@ -887,9 +908,9 @@ impl OperantAgent {
                         let classified = FallbackModelClient::classify_error(&e);
                         if classified.should_compress {
                             warn!(reason = %classified.reason, "Context overflow detected — compressing and retrying");
-                            let budget = self.config.context_window;
-                            messages =
-                                crate::context_management::manage_context(messages, budget, 4096);
+                            // Try LLM summarization first (intelligent compression),
+                            // fall back to deterministic decay/eviction.
+                            messages = self.compress_context_overflow(messages).await;
                             // Refund the iteration since the original LLM call
                             // was wasted on a context overflow.
                             self.iteration_budget.refund();
@@ -1656,6 +1677,47 @@ If nothing needs updating, say 'Nothing to save.' and stop.\n\n{}",
 
             debug!(session_id = %session_id, "Background review daemon finished");
         });
+    }
+
+    /// Compress context on overflow: try LLM summarization first, fall back
+    /// to deterministic decay/eviction. Matches hermes-agent's compression
+    /// pipeline: LLM compressor → fallback to manage_context.
+    async fn compress_context_overflow(&self, messages: Vec<Message>) -> Vec<Message> {
+        if let Some(ref compressor) = self.llm_compressor {
+            // Check whether LLM compression is warranted (cheap, no await)
+            {
+                let guard = compressor.lock().await;
+                if !guard.should_compress(
+                    crate::context_management::estimate_total_tokens(&messages),
+                ) {
+                    // Under threshold — deterministic fallback
+                    let budget = self.config.context_window;
+                    return crate::context_management::manage_context(messages, budget, 4096);
+                }
+            }
+            info!("Attempting LLM-based context compression");
+            // Lock again for the async compress call (tokio::sync::Mutex is await-safe)
+            let mut guard = compressor.lock().await;
+            match guard.compress(messages.clone(), &self.client).await {
+                Ok(result) => {
+                    info!(
+                        tokens_before = result.tokens_before,
+                        tokens_after = result.tokens_after,
+                        turns_summarized = result.turns_summarized,
+                        "LLM compression succeeded"
+                    );
+                    drop(guard);
+                    return result.messages;
+                }
+                Err(e) => {
+                    warn!(error = %e, "LLM compression failed — falling back to deterministic");
+                }
+            }
+            drop(guard);
+        }
+        // Deterministic fallback: decay + eviction
+        let budget = self.config.context_window;
+        crate::context_management::manage_context(messages, budget, 4096)
     }
 
     /// Access the underlying model client (useful for tools needing direct
