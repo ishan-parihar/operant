@@ -1166,7 +1166,11 @@ impl OperantAgent {
             //
             // When skill_manage is called, the counter resets immediately
             // so the nudge window restarts from zero.
-            {
+            //
+            // Scope the MutexGuard so it's dropped before the .await below.
+            // A std::sync::MutexGuard held across an await point makes the
+            // future !Send, which breaks tokio::spawn.
+            let should_spawn_review = {
                 let skill_manage_called = tool_names.iter().any(|n| n == "skill_manage");
                 let mut evo = self.evolution_state.lock().unwrap();
                 if skill_manage_called {
@@ -1181,17 +1185,18 @@ impl OperantAgent {
                         "Skill nudge triggered — spawning background review"
                     );
                     evo.reset_skill_counter();
-                    // Spawn background review daemon — a lightweight tokio task
-                    // that replays the conversation snapshot through a forked agent
-                    // restricted to skill/memory tools. This matches hermes-agent's
-                    // spawn_background_review_thread pattern.
-                    self.spawn_background_review(
-                        &messages,
-                        &session_id,
-                        true,  // review_skills
-                        false, // review_memory (triggered by separate cadence)
-                    );
+                    true
+                } else {
+                    false
                 }
+            }; // MutexGuard dropped here — safe to .await
+            if should_spawn_review {
+                self.spawn_background_review(
+                    &messages,
+                    &session_id,
+                    true,  // review_skills
+                    false, // review_memory (triggered by separate cadence)
+                ).await;
             }
 
             // ── /steer directive drain (iter-65) ──────────────────────────
