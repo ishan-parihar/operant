@@ -2320,7 +2320,7 @@ mod tests {
     fn test_detect_invisible_unicode() {
         let tmp = temp_dir();
         let f = tmp.join("hidden.md");
-        fs::write(&f, format!("normal text\u{200b} with zero-width space\n")).unwrap();
+        fs::write(&f, "normal text\u{200b} with zero-width space\n").unwrap();
         let findings = scan_file_inner(&f);
         assert!(
             findings

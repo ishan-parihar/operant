@@ -1504,7 +1504,7 @@ mod tests {
         assert!(!entry.session_id.is_empty());
 
         // Reload from DB
-        let _store2 = {
+        {
             let _conn = Connection::open_in_memory().unwrap();
             // We can't reload from the same in-memory DB, so just test the cache
         };
@@ -1723,8 +1723,8 @@ mod tests {
         let short = hash_chat_id("a");
         let long = hash_chat_id(&"x".repeat(1000));
         assert_ne!(short, long);
-        assert!(short.len() > 0);
-        assert!(long.len() > 0);
+        assert!(!short.is_empty());
+        assert!(!long.is_empty());
     }
 
     #[test]

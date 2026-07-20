@@ -436,7 +436,7 @@ mod tests {
     fn test_discover_plugins_empty_dir() {
         let dir = std::env::temp_dir().join(format!("operant_plugin_test_{}", std::process::id()));
         let _ = fs::create_dir_all(&dir);
-        let manifests = discover_plugins(&[dir.clone()]);
+        let manifests = discover_plugins(std::slice::from_ref(&dir));
         assert!(manifests.is_empty());
         let _ = fs::remove_dir_all(&dir);
     }
@@ -465,7 +465,7 @@ author = "Test Author"
         )
         .unwrap();
 
-        let manifests = discover_plugins(&[dir.clone()]);
+        let manifests = discover_plugins(std::slice::from_ref(&dir));
         assert_eq!(manifests.len(), 1);
         assert_eq!(manifests[0].name, "my-plugin");
         assert_eq!(manifests[0].description, "My test plugin");
@@ -491,7 +491,7 @@ author = "Test Author"
         )
         .unwrap();
 
-        let manifests = discover_plugins(&[dir.clone()]);
+        let manifests = discover_plugins(std::slice::from_ref(&dir));
         assert_eq!(manifests.len(), 1);
         assert_eq!(manifests[0].name, "yaml-plugin");
         assert_eq!(manifests[0].description, "YAML test");
