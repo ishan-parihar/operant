@@ -1,6 +1,13 @@
 //! Operant Agent orchestration loop with self-healing
 //!
 //! Implements the ReAct (Reason + Act) pattern for LLM-driven tool execution.
+//! Includes the self-evolution pipeline: skill nudge counter, iteration budget,
+//! turn finalizer, and background review daemon for autonomous skill/memory
+//! improvement after each turn.
+
+pub mod iteration_budget;
+pub mod turn_finalizer;
+pub mod background_review;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -22,6 +29,9 @@ use crate::observer::{Observer, ObserverEvent, ObserverMetric};
 use crate::parser::{ToolCallParser, ToolCallStreamParser};
 use crate::skills::SkillManager;
 use crate::tools::{ToolContext, ToolRegistry, ToolResult};
+
+use self::background_review::SelfEvolutionState;
+use self::iteration_budget::IterationBudget;
 
 /// Response from the user for tool permission requests
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -63,6 +73,10 @@ pub struct AgentConfig {
     /// Whether to record trajectories (ReAct steps + messages) for each run.
     /// Saved to ~/.operant/trajectories/<session_id>.json.
     pub record_trajectories: bool,
+    /// How many iterations between skill nudges (0 = disabled).
+    pub skill_nudge_interval: usize,
+    /// How many turns between memory reviews (0 = disabled).
+    pub memory_review_interval: usize,
 }
 
 impl Default for AgentConfig {
@@ -86,6 +100,8 @@ impl From<&BehaviorSettings> for AgentConfig {
             fallback_on_errors: settings.fallback_on_errors,
             approval_mode: "smart".to_string(),
             record_trajectories: false,
+            skill_nudge_interval: 10,
+            memory_review_interval: 5,
         }
     }
 }
@@ -204,6 +220,13 @@ pub struct OperantAgent {
     /// ObserverEvent/ObserverMetric at key lifecycle points (agent start/end,
     /// LLM request/response, tool call start/end, turn complete).
     observer: Option<Arc<dyn Observer>>,
+    /// Self-evolution state: tracks iteration counts and nudge thresholds
+    /// for the skill/memory review pipeline. Matches hermes-agent's
+    /// `_iters_since_skill` / `_skill_nudge_interval` pattern.
+    evolution_state: std::sync::Mutex<SelfEvolutionState>,
+    /// Iteration budget: thread-safe consume/refund counter matching
+    /// hermes-agent's `IterationBudget` class.
+    iteration_budget: Arc<IterationBudget>,
 }
 
 /// A pending permission request sent from the agent to the TUI
@@ -225,6 +248,9 @@ impl OperantAgent {
         registry: ToolRegistry,
         database: Arc<Database>,
     ) -> Self {
+        let max_iter = config.max_iterations;
+        let nudge = config.skill_nudge_interval;
+        let mem_interval = config.memory_review_interval;
         Self {
             config,
             model_override: Arc::new(std::sync::RwLock::new(None::<String>)),
@@ -244,6 +270,14 @@ impl OperantAgent {
             record_trajectories: false,
             session_cost_usd: Arc::new(std::sync::RwLock::new(0.0)),
             observer: None,
+            evolution_state: std::sync::Mutex::new(SelfEvolutionState::new(
+                &background_review::BackgroundReviewConfig {
+                    skill_nudge_interval: nudge,
+                    memory_review_interval: mem_interval,
+                    ..Default::default()
+                },
+            )),
+            iteration_budget: Arc::new(IterationBudget::new(max_iter)),
         }
     }
 
@@ -255,6 +289,9 @@ impl OperantAgent {
         database: Arc<Database>,
         event_tx: mpsc::Sender<AgentEvent>,
     ) -> Self {
+        let max_iter = config.max_iterations;
+        let nudge = config.skill_nudge_interval;
+        let mem_interval = config.memory_review_interval;
         Self {
             config,
             model_override: Arc::new(std::sync::RwLock::new(None::<String>)),
@@ -274,7 +311,20 @@ impl OperantAgent {
             record_trajectories: false,
             session_cost_usd: Arc::new(std::sync::RwLock::new(0.0)),
             observer: None,
+            evolution_state: std::sync::Mutex::new(SelfEvolutionState::new(
+                &background_review::BackgroundReviewConfig {
+                    skill_nudge_interval: nudge,
+                    memory_review_interval: mem_interval,
+                    ..Default::default()
+                },
+            )),
+            iteration_budget: Arc::new(IterationBudget::new(max_iter)),
         }
+    }
+
+    /// Get a reference to the iteration budget.
+    pub fn iteration_budget(&self) -> &Arc<IterationBudget> {
+        &self.iteration_budget
     }
 
     /// Attach an observer for structured telemetry. When set, the agent
@@ -1046,6 +1096,32 @@ impl OperantAgent {
             // Emit TurnComplete observer event
             if let Some(ref obs) = self.observer {
                 obs.record_event(&ObserverEvent::TurnComplete);
+            }
+
+            // ── Self-evolution: skill nudge + background review ──────────
+            // After each completed iteration, bump the skill counter and
+            // check if a background review should be triggered. This matches
+            // hermes-agent's turn_finalizer.py logic where _iters_since_skill
+            // is checked after the tool-calling loop completes.
+            //
+            // Note: skill_manage tool calls reset the counter via the tool's
+            // record_usage path, which calls SelfEvolutionState::reset_skill_counter
+            // through the tool registry. Here we just bump and check.
+            {
+                let mut evo = self.evolution_state.lock().unwrap();
+                evo.bump_skill_counter();
+                if evo.should_review_skills() {
+                    info!(
+                        iters = evo.iters_since_skill,
+                        interval = evo.skill_nudge_interval,
+                        "Skill nudge triggered — background review will run"
+                    );
+                    evo.reset_skill_counter();
+                    // TODO(spawn_background_review): When the forked agent
+                    // infrastructure is ready, spawn a background review here.
+                    // For now, log the trigger so the self-evolution pipeline
+                    // can be wired up incrementally.
+                }
             }
 
             // ── /steer directive drain (iter-65) ──────────────────────────
