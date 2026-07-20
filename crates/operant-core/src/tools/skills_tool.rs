@@ -173,7 +173,6 @@ impl OperantTool for SkillsTool {
             return ToolResult::success(
                 "skills_list",
                 json!({
-                    "success": true,
                     "skills": [],
                     "categories": [],
                     "message": "No skills found. Skills directory created."
@@ -187,7 +186,6 @@ impl OperantTool for SkillsTool {
             return ToolResult::success(
                 "skills_list",
                 json!({
-                    "success": true,
                     "skills": [],
                     "categories": [],
                     "message": "No skills found in skills/ directory."
@@ -205,7 +203,6 @@ impl OperantTool for SkillsTool {
         ToolResult::success(
             "skills_list",
             json!({
-                "success": true,
                 "skills": skills,
                 "categories": categories,
                 "count": skills.len(),
@@ -310,7 +307,6 @@ impl OperantTool for SkillViewTool {
                 ToolResult::success(
                     "skill_view",
                     json!({
-                        "success": true,
                         "name": skill_name,
                         "description": description,
                         "content": body,
@@ -385,7 +381,7 @@ impl OperantTool for SkillManageTool {
                 match mgr.create(&parsed.name, content) {
                     Ok(_) => ToolResult::success(
                         "skill_manage",
-                        json!({"success": true, "action": "create", "name": parsed.name}),
+                        json!({"action": "create", "name": parsed.name}),
                     ),
                     Err(e) => ToolResult::error("skill_manage", format!("{}", e)),
                 }
@@ -410,7 +406,7 @@ impl OperantTool for SkillManageTool {
                         match fs::write(&skill_md, updated) {
                             Ok(_) => ToolResult::success(
                                 "skill_manage",
-                                json!({"success": true, "action": "patch", "name": parsed.name}),
+                                json!({"action": "patch", "name": parsed.name}),
                             ),
                             Err(e) => {
                                 ToolResult::error("skill_manage", format!("Failed to write: {}", e))
@@ -425,7 +421,7 @@ impl OperantTool for SkillManageTool {
                 match mgr.delete(&parsed.name) {
                     Ok(_) => ToolResult::success(
                         "skill_manage",
-                        json!({"success": true, "action": "delete", "name": parsed.name}),
+                        json!({"action": "delete", "name": parsed.name}),
                     ),
                     Err(e) => ToolResult::error("skill_manage", format!("{}", e)),
                 }
