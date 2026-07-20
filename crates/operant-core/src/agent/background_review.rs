@@ -7,6 +7,8 @@
 //!
 //! Ported from `hermes-agent/agent/background_review.py`.
 
+use tracing::debug;
+
 /// Review prompt for skill updates. This is the message sent to the
 /// review agent fork when a skill review is triggered.
 pub const SKILL_REVIEW_PROMPT: &str = "\
@@ -148,6 +150,46 @@ impl SelfEvolutionState {
     /// Check if a memory review should be triggered.
     pub fn should_review_memory(&self) -> bool {
         self.memory_review_interval > 0 && self.turns_since_memory_review >= self.memory_review_interval
+    }
+
+    // ── Hydration / Persistence (Phase 4) ───────────────────────────
+    // When a session is resumed via persistent_session_id, the in-memory
+    // counters start at 0. Hydrate them from session_metadata so the
+    // review cadence continues where it left off.
+
+    /// Hydrate counters from a metadata map (loaded from session_metadata).
+    ///
+    /// Keys: `evo_turns_since_memory`, `evo_iters_since_skill`.
+    /// Missing keys are treated as 0 (first run of a session).
+    pub fn hydrate_from_metadata(&mut self, metadata: &std::collections::HashMap<String, String>) {
+        if let Some(val) = metadata.get("evo_turns_since_memory") {
+            if let Ok(n) = val.parse::<usize>() {
+                self.turns_since_memory_review = n;
+                debug!(
+                    turns = n,
+                    "Hydrated memory review counter from persisted session"
+                );
+            }
+        }
+        if let Some(val) = metadata.get("evo_iters_since_skill") {
+            if let Ok(n) = val.parse::<usize>() {
+                self.iters_since_skill = n;
+                debug!(
+                    iters = n,
+                    "Hydrated skill nudge counter from persisted session"
+                );
+            }
+        }
+    }
+
+    /// Serialize current counters to a key-value map suitable for
+    /// `Database::set_session_metadata`. Call after each turn to persist
+    /// the counters so they survive session restarts.
+    pub fn persist_counters(&self) -> Vec<(&'static str, String)> {
+        vec![
+            ("evo_turns_since_memory", self.turns_since_memory_review.to_string()),
+            ("evo_iters_since_skill", self.iters_since_skill.to_string()),
+        ]
     }
 }
 
@@ -402,5 +444,121 @@ mod tests {
         state.reset_skill_counter();
         assert_eq!(state.iters_since_skill, 0);
         assert!(!state.should_review_skills());
+    }
+
+    // ── Hydration / Persistence tests (Phase 4) ─────────────────────
+
+    #[test]
+    fn test_hydrate_from_metadata_restores_counters() {
+        let config = BackgroundReviewConfig {
+            skill_nudge_interval: 5,
+            memory_review_interval: 3,
+        };
+        let mut state = SelfEvolutionState::new(&config);
+
+        // Simulate a session that had 4 memory turns and 2 skill iters
+        let mut metadata = std::collections::HashMap::new();
+        metadata.insert("evo_turns_since_memory".to_string(), "4".to_string());
+        metadata.insert("evo_iters_since_skill".to_string(), "2".to_string());
+
+        state.hydrate_from_metadata(&metadata);
+
+        assert_eq!(state.turns_since_memory_review, 4);
+        assert_eq!(state.iters_since_skill, 2);
+        // Memory review should trigger (4 >= 3)
+        assert!(state.should_review_memory());
+        // Skill review should NOT trigger (2 < 5)
+        assert!(!state.should_review_skills());
+    }
+
+    #[test]
+    fn test_hydrate_from_metadata_handles_missing_keys() {
+        let config = BackgroundReviewConfig {
+            skill_nudge_interval: 5,
+            memory_review_interval: 3,
+        };
+        let mut state = SelfEvolutionState::new(&config);
+
+        // Empty metadata — counters stay at 0 (fresh session)
+        let metadata = std::collections::HashMap::new();
+        state.hydrate_from_metadata(&metadata);
+
+        assert_eq!(state.turns_since_memory_review, 0);
+        assert_eq!(state.iters_since_skill, 0);
+        assert!(!state.should_review_memory());
+        assert!(!state.should_review_skills());
+    }
+
+    #[test]
+    fn test_hydrate_from_metadata_handles_invalid_values() {
+        let config = BackgroundReviewConfig {
+            skill_nudge_interval: 5,
+            memory_review_interval: 3,
+        };
+        let mut state = SelfEvolutionState::new(&config);
+
+        let mut metadata = std::collections::HashMap::new();
+        metadata.insert("evo_turns_since_memory".to_string(), "not_a_number".to_string());
+        metadata.insert("evo_iters_since_skill".to_string(), "".to_string());
+
+        // Invalid values are silently ignored; counters stay at 0
+        state.hydrate_from_metadata(&metadata);
+        assert_eq!(state.turns_since_memory_review, 0);
+        assert_eq!(state.iters_since_skill, 0);
+    }
+
+    #[test]
+    fn test_persist_counters_roundtrip() {
+        let config = BackgroundReviewConfig {
+            skill_nudge_interval: 5,
+            memory_review_interval: 3,
+        };
+        let mut state = SelfEvolutionState::new(&config);
+
+        // Bump counters
+        state.bump_memory_counter();
+        state.bump_memory_counter();
+        state.bump_skill_counter();
+
+        // Persist
+        let pairs = state.persist_counters();
+        assert_eq!(pairs.len(), 2);
+
+        // Convert to HashMap (simulates what Database would store/retrieve)
+        let metadata: std::collections::HashMap<String, String> = pairs
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .collect();
+
+        // Hydrate into a fresh state
+        let mut state2 = SelfEvolutionState::new(&config);
+        state2.hydrate_from_metadata(&metadata);
+
+        assert_eq!(state2.turns_since_memory_review, 2);
+        assert_eq!(state2.iters_since_skill, 1);
+    }
+
+    #[test]
+    fn test_hydrate_then_bump_continues_correctly() {
+        let config = BackgroundReviewConfig {
+            skill_nudge_interval: 3,
+            memory_review_interval: 3,
+        };
+        let mut state = SelfEvolutionState::new(&config);
+
+        // Hydrate at 2 turns (one away from memory review)
+        let mut metadata = std::collections::HashMap::new();
+        metadata.insert("evo_turns_since_memory".to_string(), "2".to_string());
+        state.hydrate_from_metadata(&metadata);
+
+        // One more bump triggers memory review
+        state.bump_memory_counter();
+        assert!(state.should_review_memory());
+        assert_eq!(state.turns_since_memory_review, 3);
+
+        // Reset and continue
+        state.reset_memory_counter();
+        assert!(!state.should_review_memory());
+        assert_eq!(state.turns_since_memory_review, 0);
     }
 }

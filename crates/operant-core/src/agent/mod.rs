@@ -675,6 +675,20 @@ impl OperantAgent {
             .clone()
             .unwrap_or_else(|| format!("sess_{}", uuid::Uuid::new_v4()));
 
+        // ── Phase 4: Hydrate evolution state counters from session metadata ──
+        // When a session is resumed, the in-memory counters start at 0.
+        // Hydrate them from persisted metadata so the review cadence
+        // continues where it left off. Matches hermes-agent's
+        // _restore_memory_nudge_from_history pattern.
+        if self.persistent_session_id.is_some() {
+            if let Some(metadata) = self.database.get_all_session_metadata(&session_id).ok() {
+                if !metadata.is_empty() {
+                    let mut evo = self.evolution_state.lock().unwrap();
+                    evo.hydrate_from_metadata(&metadata);
+                }
+            }
+        }
+
         // Add user message — but skip if the last message is already this
         // exact query (happens when run_with_healing retries run() — without
         // this check, N retries produce N duplicate user messages).
@@ -1219,7 +1233,7 @@ impl OperantAgent {
                 if skill_manage_called {
                     evo.reset_skill_counter();
                 } else {
-                    evo.bump_skill_counter();
+                evo.bump_skill_counter();
                 }
                 // Memory counter increments every completed turn regardless
                 // of whether skill_manage was called.
@@ -1244,6 +1258,15 @@ impl OperantAgent {
                     );
                     evo.reset_memory_counter();
                 }
+
+                // ── Phase 4: Persist evolution counters to session metadata ──
+                // After bumping, persist so the next run() can hydrate.
+                if self.persistent_session_id.is_some() {
+                    for (key, val) in evo.persist_counters() {
+                        let _ = self.database.set_session_metadata(&session_id, key, &val);
+                    }
+                }
+
                 (skills, memory)
             }; // MutexGuard dropped here — safe to .await
             if should_review_skills || should_review_memory {
