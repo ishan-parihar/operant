@@ -172,14 +172,20 @@ impl ObscuraProvider {
 
         let release: serde_json::Value = client.get(release_url).send().await?.json().await?;
 
-        let assets = release["assets"].as_array().ok_or_else(|| {
-            Error::Agent("No assets found in Obscura release".into())
-        })?;
+        let assets = release["assets"]
+            .as_array()
+            .ok_or_else(|| Error::Agent("No assets found in Obscura release".into()))?;
 
         let asset = Self::find_matching_asset(assets)?;
-        tracing::info!("Downloading asset: {}", asset["name"].as_str().unwrap_or("unknown"));
+        tracing::info!(
+            "Downloading asset: {}",
+            asset["name"].as_str().unwrap_or("unknown")
+        );
 
-        let response = client.get(asset["browser_download_url"].as_str().unwrap_or("")).send().await?;
+        let response = client
+            .get(asset["browser_download_url"].as_str().unwrap_or(""))
+            .send()
+            .await?;
 
         if !response.status().is_success() {
             return Err(Error::Agent(format!(
@@ -231,17 +237,21 @@ impl ObscuraProvider {
             ("macos", "x86_64") => ("macos", "x86_64"),
             ("macos", "aarch64") => ("macos", "aarch64"),
             ("windows", "x86_64") => ("windows", "x86_64"),
-            _ => return Err(Error::Agent(format!(
-                "Unsupported platform: {} on {}",
-                os, arch
-            ))),
+            _ => {
+                return Err(Error::Agent(format!(
+                    "Unsupported platform: {} on {}",
+                    os, arch
+                )));
+            }
         };
 
         assets
             .iter()
             .find(|a| {
                 let name = a["name"].as_str().unwrap_or("");
-                name.contains(os_pattern) && name.contains(arch_pattern) && name.ends_with(".tar.gz")
+                name.contains(os_pattern)
+                    && name.contains(arch_pattern)
+                    && name.ends_with(".tar.gz")
             })
             .cloned()
             .ok_or_else(|| {
