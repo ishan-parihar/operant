@@ -102,12 +102,12 @@ impl TurnDiagnostics {
         )
     }
 
-    /// Returns true if the turn ended abnormally (agent may appear stuck).
-    /// Matches hermes-agent's pattern: log at WARNING when the last message
-    /// is a tool result and the turn was not interrupted.
-    pub fn is_abnormal_tool_tail(&self) -> bool {
-        !self.interrupted && self.exit_reason == TurnExitReason::Error
-    }
+/// Returns true if the turn ended with an error and was not interrupted.
+/// Matches hermes-agent's pattern: log at WARNING when the turn ended
+/// with an error but the user did not interrupt — the agent may be stuck.
+pub fn is_error_not_interrupted(&self) -> bool {
+    !self.interrupted && self.exit_reason == TurnExitReason::Error
+}
 }
 
 /// Summary of actions taken by the background review.
