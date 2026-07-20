@@ -68,7 +68,9 @@ fn validate_frontmatter(content: &str) -> Option<String> {
     }
     let parts: Vec<&str> = trimmed.splitn(3, "---").collect();
     if parts.len() < 3 {
-        return Some("SKILL.md frontmatter is not closed. Ensure you have a closing '---' line.".into());
+        return Some(
+            "SKILL.md frontmatter is not closed. Ensure you have a closing '---' line.".into(),
+        );
     }
     let yaml_str = parts[1].trim();
     let body = parts[2].trim();
@@ -78,10 +80,20 @@ fn validate_frontmatter(content: &str) -> Option<String> {
             if !val.is_object() {
                 return Some("Frontmatter must be a YAML mapping (key: value pairs).".into());
             }
-            if val.get("name").and_then(|v| v.as_str()).unwrap_or("").is_empty() {
+            if val
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .is_empty()
+            {
                 return Some("Frontmatter must include 'name' field.".into());
             }
-            if val.get("description").and_then(|v| v.as_str()).unwrap_or("").is_empty() {
+            if val
+                .get("description")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .is_empty()
+            {
                 return Some("Frontmatter must include 'description' field.".into());
             }
             if body.is_empty() {
@@ -101,7 +113,9 @@ fn validate_content_size(content: &str, label: &str) -> Option<String> {
     if content.len() > MAX_SKILL_CONTENT_CHARS {
         Some(format!(
             "{} content is {} characters (limit: {}). Consider splitting into a smaller SKILL.md with supporting files in references/ or templates/.",
-            label, content.len(), MAX_SKILL_CONTENT_CHARS
+            label,
+            content.len(),
+            MAX_SKILL_CONTENT_CHARS
         ))
     } else {
         None
@@ -137,7 +151,11 @@ fn collect_skills_recursive(base_dir: &Path, current_dir: &Path, skills: &mut Ve
             continue;
         }
         let dir_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-        if dir_name.starts_with('.') || dir_name == "node_modules" || dir_name == ".archive" || dir_name == ".hub" {
+        if dir_name.starts_with('.')
+            || dir_name == "node_modules"
+            || dir_name == ".archive"
+            || dir_name == ".hub"
+        {
             continue;
         }
         let skill_md = path.join("SKILL.md");
@@ -209,7 +227,11 @@ fn find_skill_recursive(base_dir: &Path, current_dir: &Path, name: &str) -> Opti
             continue;
         }
         let dir_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-        if dir_name.starts_with('.') || dir_name == "node_modules" || dir_name == ".archive" || dir_name == ".hub" {
+        if dir_name.starts_with('.')
+            || dir_name == "node_modules"
+            || dir_name == ".archive"
+            || dir_name == ".hub"
+        {
             continue;
         }
         if dir_name == name && path.join("SKILL.md").exists() {
@@ -314,7 +336,9 @@ struct SkillsListArgs {
 
 impl SkillsTool {
     pub fn new(skills_dir: PathBuf) -> Self {
-        Self { root_dir: skills_dir }
+        Self {
+            root_dir: skills_dir,
+        }
     }
 }
 
@@ -390,7 +414,9 @@ struct SkillViewArgs {
 
 impl SkillViewTool {
     pub fn new(skills_dir: PathBuf) -> Self {
-        Self { root_dir: skills_dir }
+        Self {
+            root_dir: skills_dir,
+        }
     }
 }
 
@@ -427,10 +453,7 @@ impl OperantTool for SkillViewTool {
         // If file_path is specified, load a supporting file
         if let Some(file_path) = args.get("file_path").and_then(|v| v.as_str()) {
             let Some(skill_dir) = find_skill(skills_dir, name) else {
-                return ToolResult::error(
-                    "skill_view",
-                    format!("Skill '{}' not found", name),
-                );
+                return ToolResult::error("skill_view", format!("Skill '{}' not found", name));
             };
             let target = match resolve_skill_target(&skill_dir, file_path) {
                 Ok(t) => t,
@@ -550,7 +573,9 @@ pub struct SkillManageTool {
 
 impl SkillManageTool {
     pub fn new(skills_dir: PathBuf) -> Self {
-        Self { root_dir: skills_dir }
+        Self {
+            root_dir: skills_dir,
+        }
     }
 
     fn validate_name(name: &str) -> Option<String> {
@@ -558,7 +583,10 @@ impl SkillManageTool {
             return Some("Skill name is required.".into());
         }
         if name.len() > MAX_NAME_LENGTH {
-            return Some(format!("Skill name exceeds {} characters.", MAX_NAME_LENGTH));
+            return Some(format!(
+                "Skill name exceeds {} characters.",
+                MAX_NAME_LENGTH
+            ));
         }
         if !VALID_NAME_RE.is_match(name) {
             return Some(format!(
@@ -677,10 +705,7 @@ impl SkillManageTool {
             return ToolResult::error("skill_manage", err);
         }
         let Some(skill_dir) = find_skill(&self.root_dir, &parsed.name) else {
-            return ToolResult::error(
-                "skill_manage",
-                format!("Skill '{}' not found", parsed.name),
-            );
+            return ToolResult::error("skill_manage", format!("Skill '{}' not found", parsed.name));
         };
         let skill_md = skill_dir.join("SKILL.md");
         // Backup original for rollback
@@ -703,10 +728,7 @@ impl SkillManageTool {
     // ── patch (find-replace) ─────────────────────────────────────────
     async fn action_patch(&self, parsed: &SkillManageArgs) -> ToolResult {
         let Some(old_string) = &parsed.old_string else {
-            return ToolResult::error(
-                "skill_manage",
-                "old_string is required for patch.",
-            );
+            return ToolResult::error("skill_manage", "old_string is required for patch.");
         };
         let Some(new_string) = &parsed.new_string else {
             return ToolResult::error(
@@ -717,10 +739,7 @@ impl SkillManageTool {
         let replace_all = parsed.replace_all.unwrap_or(false);
 
         let Some(skill_dir) = find_skill(&self.root_dir, &parsed.name) else {
-            return ToolResult::error(
-                "skill_manage",
-                format!("Skill '{}' not found", parsed.name),
-            );
+            return ToolResult::error("skill_manage", format!("Skill '{}' not found", parsed.name));
         };
 
         // Determine target file
@@ -755,7 +774,10 @@ impl SkillManageTool {
             if count == 0 {
                 return ToolResult::error(
                     "skill_manage",
-                    format!("old_string not found in {}", target.file_name().unwrap_or_default().to_string_lossy()),
+                    format!(
+                        "old_string not found in {}",
+                        target.file_name().unwrap_or_default().to_string_lossy()
+                    ),
                 );
             }
             let updated = content.replace(old_string.as_str(), new_string);
@@ -765,7 +787,10 @@ impl SkillManageTool {
             // If patching SKILL.md, validate frontmatter still intact
             if target.file_name().map(|n| n == "SKILL.md").unwrap_or(false) {
                 if let Some(err) = validate_frontmatter(&updated) {
-                    return ToolResult::error("skill_manage", format!("Patch would break SKILL.md structure: {}", err));
+                    return ToolResult::error(
+                        "skill_manage",
+                        format!("Patch would break SKILL.md structure: {}", err),
+                    );
                 }
             }
             if let Err(e) = fs::write(&target, &updated) {
@@ -787,13 +812,19 @@ impl SkillManageTool {
         if occurrences == 0 {
             return ToolResult::error(
                 "skill_manage",
-                format!("old_string not found in {}", target.file_name().unwrap_or_default().to_string_lossy()),
+                format!(
+                    "old_string not found in {}",
+                    target.file_name().unwrap_or_default().to_string_lossy()
+                ),
             );
         }
         if occurrences > 1 {
             return ToolResult::error(
                 "skill_manage",
-                format!("old_string found {} times. Use replace_all=true or provide more context for a unique match.", occurrences),
+                format!(
+                    "old_string found {} times. Use replace_all=true or provide more context for a unique match.",
+                    occurrences
+                ),
             );
         }
         let updated = content.replacen(old_string.as_str(), new_string, 1);
@@ -802,7 +833,10 @@ impl SkillManageTool {
         }
         if target.file_name().map(|n| n == "SKILL.md").unwrap_or(false) {
             if let Some(err) = validate_frontmatter(&updated) {
-                return ToolResult::error("skill_manage", format!("Patch would break SKILL.md structure: {}", err));
+                return ToolResult::error(
+                    "skill_manage",
+                    format!("Patch would break SKILL.md structure: {}", err),
+                );
             }
         }
         if let Err(e) = fs::write(&target, &updated) {
@@ -822,16 +856,16 @@ impl SkillManageTool {
     // ── delete ───────────────────────────────────────────────────────
     async fn action_delete(&self, parsed: &SkillManageArgs) -> ToolResult {
         let Some(skill_dir) = find_skill(&self.root_dir, &parsed.name) else {
-            return ToolResult::error(
-                "skill_manage",
-                format!("Skill '{}' not found", parsed.name),
-            );
+            return ToolResult::error("skill_manage", format!("Skill '{}' not found", parsed.name));
         };
         // Check pinned status before deleting
         if self.is_pinned(&parsed.name) {
             return ToolResult::error(
                 "skill_manage",
-                format!("Skill '{}' is pinned and cannot be deleted. Unpin it first.", parsed.name),
+                format!(
+                    "Skill '{}' is pinned and cannot be deleted. Unpin it first.",
+                    parsed.name
+                ),
             );
         }
         if let Err(e) = fs::remove_dir_all(&skill_dir) {
@@ -918,10 +952,7 @@ impl SkillManageTool {
             return ToolResult::error("skill_manage", err);
         }
         let Some(skill_dir) = find_skill(&self.root_dir, &parsed.name) else {
-            return ToolResult::error(
-                "skill_manage",
-                format!("Skill '{}' not found", parsed.name),
-            );
+            return ToolResult::error("skill_manage", format!("Skill '{}' not found", parsed.name));
         };
         let target = match resolve_skill_target(&skill_dir, fp) {
             Ok(t) => t,
@@ -1018,7 +1049,11 @@ impl SkillManageTool {
             .or_insert_with(|| json!({ "use_count": 0, "patch_count": 0 }));
         if action == "delete" {
             telemetry.remove(name);
-        } else if action == "patch" || action == "edit" || action == "write_file" || action == "remove_file" {
+        } else if action == "patch"
+            || action == "edit"
+            || action == "write_file"
+            || action == "remove_file"
+        {
             if let Some(obj) = entry.as_object_mut() {
                 let count = obj.get("patch_count").and_then(|v| v.as_u64()).unwrap_or(0);
                 obj.insert("patch_count".into(), json!(count + 1));
