@@ -53,10 +53,6 @@ pub enum TurnExitReason {
     Interrupted,
     /// An error occurred during the turn.
     Error,
-    /// Context overflow triggered compression.
-    ContextOverflow,
-    /// No tool calls — turn completed with empty response.
-    EmptyResponse,
 }
 
 impl fmt::Display for TurnExitReason {
@@ -66,8 +62,6 @@ impl fmt::Display for TurnExitReason {
             Self::BudgetExhausted => write!(f, "budget_exhausted"),
             Self::Interrupted => write!(f, "interrupted"),
             Self::Error => write!(f, "error"),
-            Self::ContextOverflow => write!(f, "context_overflow"),
-            Self::EmptyResponse => write!(f, "empty_response"),
         }
     }
 }
@@ -98,10 +92,6 @@ pub struct TurnDiagnostics {
     pub response_len: usize,
     /// Session ID.
     pub session_id: String,
-    /// Whether the turn completed successfully.
-    pub completed: bool,
-    /// Whether the turn was interrupted.
-    pub interrupted: bool,
 }
 
 impl TurnDiagnostics {
@@ -123,13 +113,6 @@ impl TurnDiagnostics {
             self.session_id,
         )
     }
-
-/// Returns true if the turn ended with an error and was not interrupted.
-/// Matches hermes-agent's pattern: log at WARNING when the turn ended
-/// with an error but the user did not interrupt — the agent may be stuck.
-pub fn is_error_not_interrupted(&self) -> bool {
-    !self.interrupted && self.exit_reason == TurnExitReason::Error
-}
 }
 
 /// Summary of actions taken by the background review.
