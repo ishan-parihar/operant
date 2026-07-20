@@ -7,10 +7,108 @@
 //!
 //! Ported from `hermes-agent/agent/turn_finalizer.py`.
 //!
-//! The core turn-finalization logic is handled inline in `OperantAgent::run()`
-//! via `SelfEvolutionState`. This module provides additional types for
-//! background review result summarization (used when the forked-agent
-//! background review daemon is wired up).
+//! ## Turn Diagnostics
+//!
+//! Each turn produces a [`TurnDiagnostics`] record that captures why the
+//! turn ended, how many iterations were used, what tools were called, and
+//! whether the response was successful. This mirrors hermes-agent's
+//! turn-exit diagnostic log pattern.
+
+use std::fmt;
+
+// ---------------------------------------------------------------------------
+// Turn Diagnostics
+// ---------------------------------------------------------------------------
+
+/// Why the turn ended. Matches hermes-agent's `_turn_exit_reason` strings.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TurnExitReason {
+    /// Model produced a text response (normal completion).
+    TextResponse,
+    /// Budget exhausted — grace call was made.
+    BudgetExhausted,
+    /// User interrupted (Ctrl-C or /stop).
+    Interrupted,
+    /// An error occurred during the turn.
+    Error,
+    /// Context overflow triggered compression.
+    ContextOverflow,
+    /// No tool calls — turn completed with empty response.
+    EmptyResponse,
+}
+
+impl fmt::Display for TurnExitReason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::TextResponse => write!(f, "text_response"),
+            Self::BudgetExhausted => write!(f, "budget_exhausted"),
+            Self::Interrupted => write!(f, "interrupted"),
+            Self::Error => write!(f, "error"),
+            Self::ContextOverflow => write!(f, "context_overflow"),
+            Self::EmptyResponse => write!(f, "empty_response"),
+        }
+    }
+}
+
+/// Per-turn diagnostics record.
+///
+/// Captures why the turn ended, how many iterations were used, what
+/// tools were called, and whether the response was successful. Logged
+/// at INFO for every turn completion. Mirrors hermes-agent's turn-exit
+/// diagnostic log pattern.
+#[derive(Debug, Clone)]
+pub struct TurnDiagnostics {
+    /// Why the turn ended.
+    pub exit_reason: TurnExitReason,
+    /// Model name used for this turn.
+    pub model: String,
+    /// Number of LLM iterations consumed.
+    pub api_calls: usize,
+    /// Maximum allowed iterations.
+    pub max_iterations: usize,
+    /// Iteration budget used.
+    pub budget_used: usize,
+    /// Iteration budget maximum.
+    pub budget_max: usize,
+    /// Number of tool-calling iterations.
+    pub tool_turns: usize,
+    /// Length of the final response in characters.
+    pub response_len: usize,
+    /// Session ID.
+    pub session_id: String,
+    /// Whether the turn completed successfully.
+    pub completed: bool,
+    /// Whether the turn was interrupted.
+    pub interrupted: bool,
+}
+
+impl TurnDiagnostics {
+    /// Format the diagnostics as a human-readable log message.
+    ///
+    /// Matches hermes-agent's `_diag_msg` format:
+    /// `"Turn ended: reason=%s model=%s api_calls=%d/%d budget=%d/%d tool_turns=%d response_len=%d session=%s"`
+    pub fn log_message(&self) -> String {
+        format!(
+            "Turn ended: reason={} model={} api_calls={}/{} budget={}/{} tool_turns={} response_len={} session={}",
+            self.exit_reason,
+            self.model,
+            self.api_calls,
+            self.max_iterations,
+            self.budget_used,
+            self.budget_max,
+            self.tool_turns,
+            self.response_len,
+            self.session_id,
+        )
+    }
+
+    /// Returns true if the turn ended abnormally (agent may appear stuck).
+    /// Matches hermes-agent's pattern: log at WARNING when the last message
+    /// is a tool result and the turn was not interrupted.
+    pub fn is_abnormal_tool_tail(&self) -> bool {
+        !self.interrupted && self.exit_reason == TurnExitReason::Error
+    }
+}
 
 /// Summary of actions taken by the background review.
 ///
