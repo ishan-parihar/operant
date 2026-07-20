@@ -267,7 +267,7 @@ pub enum NotificationMode {
 
 impl Default for NotificationMode {
     fn default() -> Self {
-        Self::On
+        Self::On // derive would pick the first variant alphabetically, which is Off
     }
 }
 
@@ -327,8 +327,10 @@ pub struct BackgroundReviewConfig {
     /// Auxiliary model for background review (provider/model).
     /// When set, the review agent runs on this model instead of the main model.
     /// The review prompt is compacted to minimize cold-written tokens.
+    #[allow(dead_code)]
     pub auxiliary_review_model: Option<String>,
     /// Notification mode for background review actions.
+    #[allow(dead_code)]
     pub notification_mode: NotificationMode,
 }
 
@@ -538,6 +540,10 @@ pub fn digest_history(messages_snapshot: &[crate::client::Message], tail: usize)
 ///
 /// Used by the background review daemon to surface a compact
 /// summary of skill/memory changes to the user.
+///
+/// TODO(phase-2): Re-enable when the review agent runs a multi-turn
+/// tool-execution loop.
+#[cfg(test)]
 #[derive(Debug, Clone, Default)]
 pub struct BackgroundReviewSummary {
     /// Human-readable action descriptions.
@@ -711,19 +717,17 @@ pub fn summarize_review_actions(
             // (e.g. standalone tool messages), infer from message content.
             || message_lower.contains("updated skill") || message_lower.contains("skill_manage");
 
-        if !verbose {
-            if message_lower.contains("created")
+        if !verbose && (message_lower.contains("created")
                 || message_lower.contains("updated")
-                || (is_skill && message_lower.contains("patched"))
-            {
-                summary.actions.push(message);
-                if is_skill {
-                    summary.skills_changed = true;
-                } else {
-                    summary.memory_changed = true;
-                }
-                continue;
+                || (is_skill && message_lower.contains("patched")))
+        {
+            summary.actions.push(message);
+            if is_skill {
+                summary.skills_changed = true;
+            } else {
+                summary.memory_changed = true;
             }
+            continue;
         }
 
         // Verbose mode: include content previews

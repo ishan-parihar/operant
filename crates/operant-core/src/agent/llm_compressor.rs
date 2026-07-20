@@ -111,6 +111,7 @@ pub struct CompressionResult {
     /// Number of tokens after compression.
     pub tokens_after: usize,
     /// The summary text that was generated.
+    #[allow(dead_code)]
     pub summary_text: String,
     /// Number of turns that were summarized.
     pub turns_summarized: usize,
@@ -144,6 +145,7 @@ impl LlmCompressor {
     }
 
     /// Reset per-session state (call on /new or /reset).
+    #[allow(dead_code)]
     pub fn reset(&mut self) {
         self.previous_summary = None;
         self.compression_count = 0;
@@ -573,7 +575,7 @@ mod tests {
 
         // 8 messages, each ~100 chars = ~25 tokens each
         let messages: Vec<Message> = (0..8)
-            .map(|i| make_msg(Role::User, format!("message {}", "x".repeat(100))))
+            .map(|_i| make_msg(Role::User, format!("message {}", "x".repeat(100))))
             .collect();
 
         let tail_start = compressor.find_tail_start(&messages);

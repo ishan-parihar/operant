@@ -73,6 +73,12 @@ pub enum HookEvent {
     AgentStart,
     /// Agent finishes processing a message
     AgentEnd,
+    /// A single turn (user query → assistant response) begins.
+    /// Carries session_id and the user query.
+    TurnStart,
+    /// A single turn completes. Carries session_id, iteration count,
+    /// and tool call count.
+    TurnEnd,
     /// Slash command executed (stores the command name)
     Command(String),
 }
@@ -122,6 +128,11 @@ impl HookContext {
 
     pub fn with_session(mut self, session: impl Into<String>) -> Self {
         self.session_id = Some(session.into());
+        self
+    }
+
+    pub fn with_metadata(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.metadata.insert(key.into(), value.into());
         self
     }
 }

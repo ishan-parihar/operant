@@ -699,6 +699,18 @@ impl OperantAgent {
         let turn_ctx = turn_context::build_turn_context(self, &user_query).await?;
         let session_id = turn_ctx.session_id;
         let mut messages = turn_ctx.messages;
+
+        // ── TurnStart lifecycle hook ─────────────────────────────────────
+        // Emit TurnStart so external code (e.g., prefetch queues,
+        // telemetry, skill scaffolding) can react to per-turn events.
+        if let Some(ref hooks) = self.hook_registry {
+            let ctx = crate::gateway_pipeline::HookContext::new()
+                .with_session(&session_id)
+                .with_metadata("user_query", &user_query);
+            hooks
+                .emit(crate::gateway_pipeline::HookEvent::TurnStart, ctx)
+                .await;
+        }
         let mut iteration = 0;
         let mut total_tool_calls: usize = 0;
 
@@ -1007,6 +1019,18 @@ impl OperantAgent {
 
                             };
                             info!("{}", diag.log_message());
+                        }
+
+                        // ── TurnEnd lifecycle hook ───────────────────────────────
+                        // Emit TurnEnd with iteration and tool call counts.
+                        if let Some(ref hooks) = self.hook_registry {
+                            let ctx = crate::gateway_pipeline::HookContext::new()
+                                .with_session(&session_id)
+                                .with_metadata("iterations", &iteration.to_string())
+                                .with_metadata("tool_calls", &total_tool_calls.to_string());
+                            hooks
+                                .emit(crate::gateway_pipeline::HookEvent::TurnEnd, ctx)
+                                .await;
                         }
 
                         self.emit(AgentEvent::Done {
