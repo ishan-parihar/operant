@@ -2791,10 +2791,7 @@ impl App {
         match result {
             // ── Display ────────────────────────────────────────────────────
             CommandResult::Message(text) => {
-                self.push_system_message(
-                    text,
-                    crate::tui::app::SystemMessageStyle::Info,
-                );
+                self.push_system_message(text, crate::tui::app::SystemMessageStyle::Info);
                 true
             }
             CommandResult::Error(text) => {
@@ -2843,7 +2840,9 @@ impl App {
                     };
                     let message = crate::tui::adapter_types::types::Message {
                         role,
-                        content: crate::tui::adapter_types::types::MessageContent::Text(text.clone()),
+                        content: crate::tui::adapter_types::types::MessageContent::Text(
+                            text.clone(),
+                        ),
                     };
                     self.messages.push(message);
                 }
@@ -2854,7 +2853,8 @@ impl App {
 
             // ── Configuration ──────────────────────────────────────────────
             CommandResult::ToggleSetting { name, enabled } => {
-                self.status_message = Some(format!("{}: {}", name, if enabled { "on" } else { "off" }));
+                self.status_message =
+                    Some(format!("{}: {}", name, if enabled { "on" } else { "off" }));
                 true
             }
             CommandResult::CycleSetting { name, current } => {
@@ -2873,11 +2873,11 @@ impl App {
                 true
             }
             CommandResult::OpenModelPicker => {
-                let provider = self.active_provider.clone().unwrap_or_else(|| "anthropic".to_string());
-                self.open_model_picker_for_provider(
-                    &provider,
-                    None,
-                );
+                let provider = self
+                    .active_provider
+                    .clone()
+                    .unwrap_or_else(|| "anthropic".to_string());
+                self.open_model_picker_for_provider(&provider, None);
                 true
             }
             CommandResult::OpenThemePicker => {
@@ -2914,7 +2914,8 @@ impl App {
                 true
             }
             CommandResult::OpenSkills => {
-                self.skills_view.open(operant_core::platform::operant_skills_dir());
+                self.skills_view
+                    .open(operant_core::platform::operant_skills_dir());
                 true
             }
             CommandResult::OpenPlugins => {
@@ -2956,7 +2957,10 @@ impl App {
             }
             CommandResult::OpenJourney => {
                 let skills_dir = operant_core::platform::operant_skills_dir();
-                let memory_dir = skills_dir.join("../memory").canonicalize().unwrap_or_else(|_| skills_dir.join("../memory"));
+                let memory_dir = skills_dir
+                    .join("../memory")
+                    .canonicalize()
+                    .unwrap_or_else(|_| skills_dir.join("../memory"));
                 self.journey_view.open(skills_dir, memory_dir);
                 true
             }
@@ -2969,12 +2973,12 @@ impl App {
             }
             CommandResult::Retry => {
                 // Set pending_retry_query so the run loop resubmits the last user msg.
-                if let Some(last_user) = self.messages.iter().rev().find(|m| {
-                    matches!(
-                        m.role,
-                        crate::tui::adapter_types::types::Role::User
-                    )
-                }) {
+                if let Some(last_user) = self
+                    .messages
+                    .iter()
+                    .rev()
+                    .find(|m| matches!(m.role, crate::tui::adapter_types::types::Role::User))
+                {
                     let text = last_user.text_content();
                     if !text.is_empty() {
                         self.pending_retry_query = Some(text);
@@ -2986,22 +2990,22 @@ impl App {
                 // Remove the last user+assistant pair.
                 let mut removed = 0;
                 // Remove trailing assistant message
-                if self.messages.last().map(|m| {
-                    matches!(
-                        m.role,
-                        crate::tui::adapter_types::types::Role::Assistant
-                    )
-                }).unwrap_or(false) {
+                if self
+                    .messages
+                    .last()
+                    .map(|m| matches!(m.role, crate::tui::adapter_types::types::Role::Assistant))
+                    .unwrap_or(false)
+                {
                     self.messages.pop();
                     removed += 1;
                 }
                 // Remove trailing user message
-                if self.messages.last().map(|m| {
-                    matches!(
-                        m.role,
-                        crate::tui::adapter_types::types::Role::User
-                    )
-                }).unwrap_or(false) {
+                if self
+                    .messages
+                    .last()
+                    .map(|m| matches!(m.role, crate::tui::adapter_types::types::Role::User))
+                    .unwrap_or(false)
+                {
                     self.messages.pop();
                     removed += 1;
                 }
@@ -3012,12 +3016,11 @@ impl App {
 
             // ── Clipboard ──────────────────────────────────────────────────
             CommandResult::CopyLastResponse => {
-                if let Some(last_assistant) = self.messages.iter().rev().find(|m| {
-                    matches!(
-                        m.role,
-                        crate::tui::adapter_types::types::Role::Assistant
-                    )
-                }) {
+                if let Some(last_assistant) =
+                    self.messages.iter().rev().find(|m| {
+                        matches!(m.role, crate::tui::adapter_types::types::Role::Assistant)
+                    })
+                {
                     // Filter out thinking blocks — only copy visible text.
                     let text: String = last_assistant
                         .content_blocks()
