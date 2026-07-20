@@ -80,7 +80,6 @@ impl OperantTool for TerminalTool {
             ToolResult::success(
                 "terminal",
                 serde_json::json!({
-                    "success": true,
                     "exit_code": output.exit_code,
                     "stdout": output.stdout,
                     "stderr": output.stderr,
@@ -88,15 +87,15 @@ impl OperantTool for TerminalTool {
                 }),
             )
         } else {
-            ToolResult::success(
+            ToolResult::error(
                 "terminal",
                 serde_json::json!({
-                    "success": false,
                     "exit_code": output.exit_code,
                     "stdout": output.stdout,
                     "stderr": output.stderr,
                     "runtime": backend.name(),
-                }),
+                })
+                .to_string(),
             )
         }
     }
@@ -137,9 +136,10 @@ mod tests {
         let tool = TerminalTool;
         let args = json!({ "command": "false" });
         let result = tool.execute(args, ToolContext::default()).await;
-        assert!(result.success); // Non-zero exit is still a "successful" execution
-        let v: Value = serde_json::from_str(&result.content).unwrap();
-        assert_eq!(v["success"], false);
+        // Failed command (non-zero exit) should return error result
+        assert!(!result.success);
+        assert!(result.error.is_some());
+        let v: Value = serde_json::from_str(result.error.as_ref().unwrap()).unwrap();
         assert_eq!(v["exit_code"], 1);
     }
 
