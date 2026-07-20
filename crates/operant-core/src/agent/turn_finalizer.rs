@@ -45,7 +45,9 @@ pub fn summarize_review_actions(
         .filter_map(|m| {
             let data: serde_json::Value = serde_json::from_str(m).ok()?;
             if data.get("role").and_then(|v| v.as_str()) == Some("tool") {
-                data.get("tool_call_id").and_then(|v| v.as_str()).map(String::from)
+                data.get("tool_call_id")
+                    .and_then(|v| v.as_str())
+                    .map(String::from)
             } else {
                 None
             }
@@ -70,7 +72,11 @@ pub fn summarize_review_actions(
 
         let content = data.get("content").and_then(|v| v.as_str()).unwrap_or("");
         let result: serde_json::Value = serde_json::from_str(content).unwrap_or_default();
-        if !result.get("success").and_then(|v| v.as_bool()).unwrap_or(false) {
+        if !result
+            .get("success")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
             continue;
         }
 
