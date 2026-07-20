@@ -1134,19 +1134,21 @@ impl OperantAgent {
                 obs.record_event(&ObserverEvent::TurnComplete);
             }
 
-            // ── Self-evolution: skill nudge + background review ──────────
+            // ── Self-evolution: skill nudge + memory review + background review ──
             // After each completed iteration, bump the skill counter and
-            // check if a background review should be triggered. This matches
-            // hermes-agent's turn_finalizer.py logic where _iters_since_skill
-            // is checked after the tool-calling loop completes.
+            // memory turn counter, then check if a background review should
+            // be triggered. This matches hermes-agent's turn_finalizer.py
+            // logic where _iters_since_skill and _turns_since_memory are
+            // checked after the tool-calling loop completes.
             //
-            // When skill_manage is called, the counter resets immediately
-            // so the nudge window restarts from zero.
+            // When skill_manage is called, the skill counter resets immediately
+            // so the nudge window restarts from zero. Memory review fires
+            // on a separate turn-based cadence.
             //
             // Scope the MutexGuard so it's dropped before the .await below.
             // A std::sync::MutexGuard held across an await point makes the
             // future !Send, which breaks tokio::spawn.
-            let should_spawn_review = {
+            let (should_review_skills, should_review_memory) = {
                 let skill_manage_called = tool_names.iter().any(|n| n == "skill_manage");
                 let mut evo = self.evolution_state.lock().unwrap();
                 if skill_manage_called {
@@ -1154,24 +1156,37 @@ impl OperantAgent {
                 } else {
                     evo.bump_skill_counter();
                 }
-                if evo.should_review_skills() {
+                // Memory counter increments every completed turn regardless
+                // of whether skill_manage was called.
+                evo.bump_memory_counter();
+
+                let skills = evo.should_review_skills();
+                let memory = evo.should_review_memory();
+
+                if skills {
                     info!(
                         iters = evo.iters_since_skill,
                         interval = evo.skill_nudge_interval,
                         "Skill nudge triggered — spawning background review"
                     );
                     evo.reset_skill_counter();
-                    true
-                } else {
-                    false
                 }
+                if memory {
+                    info!(
+                        turns = evo.turns_since_memory_review,
+                        interval = evo.memory_review_interval,
+                        "Memory review triggered — spawning background review"
+                    );
+                    evo.reset_memory_counter();
+                }
+                (skills, memory)
             }; // MutexGuard dropped here — safe to .await
-            if should_spawn_review {
+            if should_review_skills || should_review_memory {
                 self.spawn_background_review(
                     &messages,
                     &session_id,
-                    true,  // review_skills
-                    false, // review_memory (triggered by separate cadence)
+                    should_review_skills,
+                    should_review_memory,
                 )
                 .await;
             }
