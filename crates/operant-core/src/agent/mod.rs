@@ -846,6 +846,10 @@ impl OperantAgent {
                             let budget = self.config.context_window;
                             messages =
                                 crate::context_management::manage_context(messages, budget, 4096);
+                            // Refund the iteration since the original LLM call
+                            // was wasted on a context overflow — the retry gets
+                            // a fresh consume() on the next loop iteration.
+                            self.iteration_budget.refund();
                             // Rebuild request with compressed messages
                             let tools = self.registry.get_schemas().await;
                             let retry_request =
@@ -871,6 +875,9 @@ impl OperantAgent {
                             let budget = self.config.context_window;
                             messages =
                                 crate::context_management::manage_context(messages, budget, 4096);
+                            // Refund the iteration since the original LLM call
+                            // was wasted on a context overflow.
+                            self.iteration_budget.refund();
                             let tools = self.registry.get_schemas().await;
                             let retry_request =
                                 ChatRequest::new(self.effective_model(), messages.clone())
@@ -1171,13 +1178,19 @@ impl OperantAgent {
                     info!(
                         iters = evo.iters_since_skill,
                         interval = evo.skill_nudge_interval,
-                        "Skill nudge triggered — background review will run"
+                        "Skill nudge triggered — spawning background review"
                     );
                     evo.reset_skill_counter();
-                    // TODO(spawn_background_review): When the forked agent
-                    // infrastructure is ready, spawn a background review here.
-                    // For now, log the trigger so the self-evolution pipeline
-                    // can be wired up incrementally.
+                    // Spawn background review daemon — a lightweight tokio task
+                    // that replays the conversation snapshot through a forked agent
+                    // restricted to skill/memory tools. This matches hermes-agent's
+                    // spawn_background_review_thread pattern.
+                    self.spawn_background_review(
+                        &messages,
+                        &session_id,
+                        true,  // review_skills
+                        false, // review_memory (triggered by separate cadence)
+                    );
                 }
             }
 
@@ -1417,6 +1430,96 @@ impl OperantAgent {
             {
                 warn!(error = %error, "Session distillation failed");
             }
+        });
+    }
+
+    /// Spawn a background review daemon — a lightweight tokio task that
+    /// replays the conversation snapshot through the LLM with a review
+    /// prompt. Matches hermes-agent's `spawn_background_review_thread`
+    /// pattern.
+    ///
+    /// The review agent:
+    /// 1. Receives the conversation snapshot + a review prompt.
+    /// 2. Gets tool schemas so it can call skill_manage / memory tools.
+    /// 3. Writes go straight to stores; main conversation is untouched.
+    /// 4. Results are logged but don't block the main loop.
+    async fn spawn_background_review(
+        &self,
+        messages: &[Message],
+        session_id: &str,
+        review_skills: bool,
+        review_memory: bool,
+    ) {
+        use self::background_review::build_review_prompt;
+
+        let prompt = build_review_prompt(review_memory, review_skills);
+        let client = self.client.clone();
+        let model = self.config.model.clone();
+        let session_id = session_id.to_string();
+
+        // Snapshot the conversation for the review agent.
+        // Limit to last 40 messages to keep token usage reasonable.
+        let start = messages.len().saturating_sub(40);
+        let snapshot: Vec<Message> = messages[start..].to_vec();
+
+        // Fetch tool schemas before spawning so the spawned task doesn't
+        // need a reference to the non-Clone ToolRegistry.
+        let tools = self.registry.get_schemas().await;
+
+        tokio::spawn(async move {
+            debug!(
+                session_id = %session_id,
+                review_skills,
+                review_memory,
+                "Background review daemon started"
+            );
+
+            // Build the review agent's system prompt: constrained to
+            // skill/memory review only.
+            let review_system = format!(
+                "You are a background review agent. Your job is to evaluate the \
+conversation above and update skills and/or memory as needed. \
+You have access to skill_manage and memory tools. \
+Be ACTIVE — most sessions produce at least one update. \
+If nothing needs updating, say 'Nothing to save.' and stop.\n\n{}",
+                prompt
+            );
+
+            // Build messages for the review agent: system prompt + snapshot
+            let mut review_messages = Vec::new();
+            review_messages.push(Message::system(&review_system));
+            review_messages.extend(snapshot);
+
+            // Create the review chat request
+            let request = ChatRequest::new(model.clone(), review_messages)
+                .with_tools(tools)
+                .with_stream(false); // non-streaming for background
+
+            match client.chat(request).await {
+                Ok(response) => {
+                    let choice = response.choices.into_iter().next();
+                    if let Some(choice) = choice {
+                        let content = choice.message.content.unwrap_or_default();
+                        if content.contains("Nothing to save") {
+                            debug!("Background review: nothing to save");
+                        } else {
+                            info!(
+                                session_id = %session_id,
+                                "Background review completed with updates"
+                            );
+                        }
+                    }
+                }
+                Err(e) => {
+                    warn!(
+                        error = %e,
+                        session_id = %session_id,
+                        "Background review agent failed"
+                    );
+                }
+            }
+
+            debug!(session_id = %session_id, "Background review daemon finished");
         });
     }
 
