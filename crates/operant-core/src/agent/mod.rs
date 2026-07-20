@@ -8,6 +8,7 @@
 pub(crate) mod background_review;
 pub mod iteration_budget;
 pub(crate) mod llm_compressor;
+pub(crate) mod turn_context;
 pub(crate) mod turn_finalizer;
 
 use std::sync::Arc;
@@ -686,75 +687,14 @@ impl OperantAgent {
                 .await;
         }
 
-        // Reset interrupt flag from any previous run() call. Without this,
-        // a Ctrl-C in run #1 permanently breaks run #2+ (the flag stays
-        // triggered and the loop exits immediately).
-        self.interrupt_flag.reset();
-
-        let session_id = self
-            .persistent_session_id
-            .clone()
-            .unwrap_or_else(|| format!("sess_{}", uuid::Uuid::new_v4()));
-
-        // ── Phase 4: Hydrate evolution state counters from session metadata ──
-        // When a session is resumed, the in-memory counters start at 0.
-        // Hydrate them from persisted metadata so the review cadence
-        // continues where it left off. Matches hermes-agent's
-        // _restore_memory_nudge_from_history pattern.
-        if self.persistent_session_id.is_some() {
-            if let Some(metadata) = self.database.get_all_session_metadata(&session_id).ok() {
-                if !metadata.is_empty() {
-                    let mut evo = self.evolution_state.lock().unwrap();
-                    evo.hydrate_from_metadata(&metadata);
-                }
-            }
-        }
-
-        // Add user message — but skip if the last message is already this
-        // exact query (happens when run_with_healing retries run() — without
-        // this check, N retries produce N duplicate user messages).
-        {
-            let conv = self.conversation.read().await;
-            let already_added = conv
-                .last()
-                .is_some_and(|last| last.role == Role::User && last.content == user_query);
-            if !already_added {
-                drop(conv);
-                self.add_message(Message::user(&user_query)).await;
-            }
-        }
-
-        // Save session first (must exist before messages can reference it)
-        self.database
-            .save_session(
-                &session_id,
-                None,
-                "agent",
-                &chrono::Utc::now().to_rfc3339(),
-                &chrono::Utc::now().to_rfc3339(),
-            )
-            .map_err(|e| {
-                warn!(error = %e, "Failed to save session metadata");
-                e
-            })?;
-
-        // Persist user message
-        self.database
-            .save_message(
-                &session_id,
-                "user",
-                &user_query,
-                &chrono::Utc::now().to_rfc3339(),
-            )
-            .map_err(|e| {
-                warn!(error = %e, "Failed to persist user message");
-                e
-            })?;
-
-        // Build initial messages including system prompt.
-        // Applies preflight compression (proactive) + eviction to fit
-        // within the context window budget.
-        let mut messages = self.build_messages().await?;
+        // ── Phase 3: Turn Context Prologue ──────────────────────────────
+        // Extract per-turn setup into a structured, testable module.
+        // Handles: interrupt flag reset, session ID resolution, evolution
+        // state hydration, user message dedup, DB persistence, message
+        // building. Matches hermes-agent's build_turn_context() pattern.
+        let turn_ctx = turn_context::build_turn_context(self, &user_query).await?;
+        let session_id = turn_ctx.session_id;
+        let mut messages = turn_ctx.messages;
         let mut iteration = 0;
         let mut total_tool_calls: usize = 0;
 
