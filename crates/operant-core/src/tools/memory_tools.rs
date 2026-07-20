@@ -248,12 +248,9 @@ impl OperantTool for MemoryRecallTool {
                     "found": true
                 }),
             ),
-            None => ToolResult::success(
+            None => ToolResult::error(
                 "memory_recall",
-                serde_json::json!({
-                    "key": args.key,
-                    "found": false
-                }),
+                format!("Memory with key '{}' not found", args.key),
             ),
         }
     }
@@ -331,6 +328,8 @@ mod tests {
         let result = tool
             .execute(json!({"key": "nonexistent_key"}), ToolContext::default())
             .await;
-        assert!(result.success); // Returns success with found=false
+        assert!(!result.success); // Returns error when key not found
+        assert!(result.error.is_some());
+        assert!(result.error.unwrap().contains("not found"));
     }
 }

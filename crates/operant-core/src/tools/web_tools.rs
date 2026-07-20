@@ -195,18 +195,34 @@ impl OperantTool for WebFetchTool {
                 match response.text().await {
                     Ok(body) => {
                         let body_size = body.len();
-                        ToolResult::success(
-                            "web_fetch",
-                            serde_json::json!({
-                                "url": args.url,
-                                "method": method,
-                                "status_code": status.as_u16(),
-                                "status_text": status.canonical_reason().unwrap_or(""),
-                                "headers": headers,
-                                "body": body,
-                                "body_size": body_size
-                            }),
-                        )
+                        if status.is_success() {
+                            ToolResult::success(
+                                "web_fetch",
+                                serde_json::json!({
+                                    "url": args.url,
+                                    "method": method,
+                                    "status_code": status.as_u16(),
+                                    "status_text": status.canonical_reason().unwrap_or(""),
+                                    "headers": headers,
+                                    "body": body,
+                                    "body_size": body_size
+                                }),
+                            )
+                        } else {
+                            ToolResult::error(
+                                "web_fetch",
+                                serde_json::json!({
+                                    "url": args.url,
+                                    "method": method,
+                                    "status_code": status.as_u16(),
+                                    "status_text": status.canonical_reason().unwrap_or(""),
+                                    "headers": headers,
+                                    "body": body,
+                                    "body_size": body_size
+                                })
+                                .to_string(),
+                            )
+                        }
                     }
                     Err(e) => ToolResult::error(
                         "web_fetch",

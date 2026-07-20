@@ -122,20 +122,38 @@ impl OperantTool for HttpRequestTool {
                 let body_size = response.content_length();
                 let body = response.text().await.ok();
 
-                ToolResult::success(
-                    "http_request",
-                    serde_json::json!({
-                        "url": args.url,
-                        "method": method,
-                        "status_code": status.as_u16(),
-                        "status_text": status.canonical_reason().unwrap_or(""),
-                        "version": version,
-                        "headers": response_headers,
-                        "body": body,
-                        "body_size": body_size,
-                        "response_time_ms": elapsed.as_millis() as u64
-                    }),
-                )
+                if status.is_success() {
+                    ToolResult::success(
+                        "http_request",
+                        serde_json::json!({
+                            "url": args.url,
+                            "method": method,
+                            "status_code": status.as_u16(),
+                            "status_text": status.canonical_reason().unwrap_or(""),
+                            "version": version,
+                            "headers": response_headers,
+                            "body": body,
+                            "body_size": body_size,
+                            "response_time_ms": elapsed.as_millis() as u64
+                        }),
+                    )
+                } else {
+                    ToolResult::error(
+                        "http_request",
+                        serde_json::json!({
+                            "url": args.url,
+                            "method": method,
+                            "status_code": status.as_u16(),
+                            "status_text": status.canonical_reason().unwrap_or(""),
+                            "version": version,
+                            "headers": response_headers,
+                            "body": body,
+                            "body_size": body_size,
+                            "response_time_ms": elapsed.as_millis() as u64
+                        })
+                        .to_string(),
+                    )
+                }
             }
             Err(e) => {
                 let error_type = if e.is_timeout() {
