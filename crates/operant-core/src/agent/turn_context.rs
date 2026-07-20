@@ -32,8 +32,6 @@ use tracing::{debug, warn};
 pub struct TurnContext {
     /// Resolved session ID (persistent or freshly generated).
     pub session_id: String,
-    /// Sanitized user query (surrogates stripped).
-    pub user_query: String,
     /// Whether the user message was already in the conversation (dedup).
     pub already_added: bool,
     /// Working message list for this turn (loop appends to it).
@@ -73,7 +71,7 @@ pub async fn build_turn_context(
     // continues where it left off. Matches hermes-agent's
     // _restore_memory_nudge_from_history pattern.
     if agent.persistent_session_id.is_some() {
-        if let Some(metadata) = agent.database.get_all_session_metadata(&session_id).ok() {
+        if let Ok(metadata) = agent.database.get_all_session_metadata(&session_id) {
             if !metadata.is_empty() {
                 let mut evo = agent.evolution_state.lock().unwrap();
                 evo.hydrate_from_metadata(&metadata);
@@ -138,7 +136,6 @@ pub async fn build_turn_context(
 
     Ok(TurnContext {
         session_id,
-        user_query: user_query.to_string(),
         already_added,
         messages,
     })
@@ -152,12 +149,10 @@ mod tests {
     fn test_turn_context_struct_creation() {
         let ctx = TurnContext {
             session_id: "test-session".to_string(),
-            user_query: "hello".to_string(),
             already_added: false,
             messages: vec![Message::user("hello")],
         };
         assert_eq!(ctx.session_id, "test-session");
-        assert_eq!(ctx.user_query, "hello");
         assert!(!ctx.already_added);
         assert_eq!(ctx.messages.len(), 1);
     }
@@ -166,7 +161,6 @@ mod tests {
     fn test_turn_context_with_dedup() {
         let ctx = TurnContext {
             session_id: "test-session".to_string(),
-            user_query: "hello".to_string(),
             already_added: true,
             messages: vec![Message::user("hello")],
         };
@@ -175,7 +169,6 @@ mod tests {
 
     #[test]
     fn test_turn_context_session_id_format() {
-        // Verify session ID format matches expected patterns
         let uuid_id = format!("sess_{}", uuid::Uuid::new_v4());
         assert!(uuid_id.starts_with("sess_"));
         assert!(uuid_id.len() > 5);
@@ -193,7 +186,6 @@ mod tests {
         ];
         let ctx = TurnContext {
             session_id: "test".to_string(),
-            user_query: "hello".to_string(),
             already_added: false,
             messages: messages.clone(),
         };
