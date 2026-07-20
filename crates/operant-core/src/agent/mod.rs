@@ -282,8 +282,6 @@ impl OperantAgent {
                 &background_review::BackgroundReviewConfig {
                     skill_nudge_interval: nudge,
                     memory_review_interval: mem_interval,
-                    auxiliary_review_model: None,
-                    notification_mode: background_review::NotificationMode::On,
                 },
             )),
             iteration_budget: Arc::new(IterationBudget::new(max_iter)),
@@ -325,8 +323,6 @@ impl OperantAgent {
                 &background_review::BackgroundReviewConfig {
                     skill_nudge_interval: nudge,
                     memory_review_interval: mem_interval,
-                    auxiliary_review_model: None,
-                    notification_mode: background_review::NotificationMode::On,
                 },
             )),
             iteration_budget: Arc::new(IterationBudget::new(max_iter)),

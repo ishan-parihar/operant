@@ -255,6 +255,11 @@ and stop — but don't reach for that conclusion as a default.";
 
 /// Controls how background review actions are surfaced to the user.
 /// Matches hermes-agent's `memory_notifications` setting.
+///
+/// Only used in `#[cfg(test)]` code (summarize_review_actions).
+/// Test-only infrastructure for future multi-turn review notifications
+/// when the review agent runs tool-execution loops.
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NotificationMode {
     /// Show no actions (silent review).
@@ -265,12 +270,14 @@ pub enum NotificationMode {
     Verbose,
 }
 
+#[cfg(test)]
 impl Default for NotificationMode {
     fn default() -> Self {
         Self::On // derive would pick the first variant alphabetically, which is Off
     }
 }
 
+#[cfg(test)]
 impl std::fmt::Display for NotificationMode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -281,6 +288,7 @@ impl std::fmt::Display for NotificationMode {
     }
 }
 
+#[cfg(test)]
 impl std::str::FromStr for NotificationMode {
     type Err = String;
 
@@ -318,20 +326,17 @@ pub fn build_review_prompt(review_memory: bool, review_skills: bool) -> String {
 /// Configuration for the background review daemon.
 ///
 /// Used to construct `SelfEvolutionState` and configure the review agent.
+///
+/// NOTE: Auxiliary model routing and notification mode are read directly
+/// from `runtime_config()` in `spawn_background_review`, not from these
+/// fields. Those fields were removed (YAGNI) because the config was
+/// constructed but never read by the review daemon.
 #[derive(Debug, Clone)]
 pub struct BackgroundReviewConfig {
     /// Skill nudge interval (default: 10).
     pub skill_nudge_interval: usize,
     /// Memory review interval in turns (default: 5).
     pub memory_review_interval: usize,
-    /// Auxiliary model for background review (provider/model).
-    /// When set, the review agent runs on this model instead of the main model.
-    /// The review prompt is compacted to minimize cold-written tokens.
-    #[allow(dead_code)]
-    pub auxiliary_review_model: Option<String>,
-    /// Notification mode for background review actions.
-    #[allow(dead_code)]
-    pub notification_mode: NotificationMode,
 }
 
 impl Default for BackgroundReviewConfig {
@@ -339,8 +344,6 @@ impl Default for BackgroundReviewConfig {
         Self {
             skill_nudge_interval: 10,
             memory_review_interval: 5,
-            auxiliary_review_model: None,
-            notification_mode: NotificationMode::On,
         }
     }
 }
