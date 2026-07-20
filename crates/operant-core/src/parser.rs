@@ -386,7 +386,9 @@ impl ToolCallParser {
                     s.to_string()
                 }
             }
-            Some(Value::Object(o)) => serde_json::to_string(o).unwrap_or_else(|_| "{}".to_string()),
+            Some(Value::Object(o)) => {
+                serde_json::to_string(o).expect("serializable JSON object always serializes")
+            }
             Some(Value::Null) => "{}".to_string(),
             _ => "{}".to_string(),
         };

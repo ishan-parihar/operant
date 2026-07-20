@@ -542,7 +542,7 @@ impl KanbanDb {
 
         let payload = note.map(|n| {
             serde_json::to_string(&serde_json::json!({ "note": n }))
-                .unwrap_or_else(|_| "{}".to_string())
+                .expect("serializable JSON object always serializes")
         });
 
         conn.execute(

@@ -115,7 +115,7 @@ impl OperantTool for McpManagementTool {
                         match t.call_tool(&tool_name, args).await {
                             Ok(result) => {
                                 let content = serde_json::to_string(&result)
-                                    .unwrap_or_else(|_| "{}".to_string());
+                                    .expect("MCP tool result always serializes");
                                 ToolResult::success(self.name(), content)
                             }
                             Err(e) => {
