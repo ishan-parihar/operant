@@ -145,4 +145,105 @@ mod tests {
         budget.refund();
         assert_eq!(budget.used(), 0);
     }
+
+    // ── Concurrent-access tests ──────────────────────────────────────
+    // These verify that the AtomicUsize-based compare_exchange loops
+    // produce consistent results under concurrent access.
+
+    #[test]
+    fn test_budget_concurrent_consume() {
+        use std::sync::Arc;
+        use std::thread;
+
+        let budget = Arc::new(IterationBudget::new(100));
+        let mut handles = vec![];
+
+        // Spawn 10 threads, each consuming 20 iterations.
+        // Total = 200 attempted, but max is 100, so exactly 100 should succeed.
+        for _ in 0..10 {
+            let b = Arc::clone(&budget);
+            handles.push(thread::spawn(move || {
+                let mut succeeded = 0;
+                for _ in 0..20 {
+                    if b.consume() {
+                        succeeded += 1;
+                    }
+                }
+                succeeded
+            }));
+        }
+
+        let total_consumed: usize = handles.into_iter().map(|h| h.join().unwrap()).sum();
+        assert_eq!(total_consumed, 100);
+        assert_eq!(budget.used(), 100);
+        assert_eq!(budget.remaining(), 0);
+        assert!(!budget.consume()); // exhausted
+    }
+
+    #[test]
+    fn test_budget_concurrent_consume_refund() {
+        use std::sync::Arc;
+        use std::thread;
+
+        let budget = Arc::new(IterationBudget::new(50));
+        let mut handles = vec![];
+
+        // Spawn 10 threads: 5 consumers (15 each) and 5 refunders (10 each).
+        // After consumers fill the budget, refunders free space.
+        for i in 0..10 {
+            let b = Arc::clone(&budget);
+            if i % 2 == 0 {
+                handles.push(thread::spawn(move || -> usize {
+                    let mut succeeded = 0;
+                    for _ in 0..15 {
+                        if b.consume() {
+                            succeeded += 1;
+                        }
+                    }
+                    succeeded
+                }));
+            } else {
+                handles.push(thread::spawn(move || -> usize {
+                    for _ in 0..10 {
+                        b.refund();
+                    }
+                    0 // refunders return 0
+                }));
+            }
+        }
+
+        let total_consumed: usize = handles.into_iter().map(|h| h.join().unwrap()).sum();
+
+        // Invariants: used never exceeds max_total, never goes negative.
+        // Consumers tried 5 * 15 = 75, but max is 50. Refunders freed
+        // capacity, so total_consumed should be > 50 (proving refunds
+        // actually worked) but <= 75.
+        assert!(budget.used() <= 50);
+        assert!(total_consumed > 50, "refunders should have freed capacity: got {total_consumed}");
+    }
+
+    #[test]
+    fn test_budget_concurrent_exhaustion_boundary() {
+        use std::sync::Arc;
+        use std::thread;
+
+        let budget = Arc::new(IterationBudget::new(10));
+        let mut handles = vec![];
+
+        // Spawn 20 threads, each trying to consume exactly 1 iteration.
+        // Exactly 10 should succeed.
+        for _ in 0..20 {
+            let b = Arc::clone(&budget);
+            handles.push(thread::spawn(move || b.consume()));
+        }
+
+        let successes: usize = handles
+            .into_iter()
+            .map(|h| if h.join().unwrap() { 1 } else { 0 })
+            .sum();
+
+        assert_eq!(successes, 10);
+        assert_eq!(budget.used(), 10);
+        assert_eq!(budget.remaining(), 0);
+    }
 }

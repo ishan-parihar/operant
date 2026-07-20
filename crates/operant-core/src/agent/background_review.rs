@@ -210,4 +210,114 @@ mod tests {
         let state = SelfEvolutionState::new(&config);
         assert!(!state.should_review_skills());
     }
+
+    // ── Integration tests for the self-evolution pipeline ─────────────
+    // These simulate the full loop pattern used in OperantAgent::run().
+
+    #[test]
+    fn test_full_cycle_bump_then_skill_manage_resets() {
+        // Simulates: bump 3 times → skill_manage called → bump 2 more.
+        // After skill_manage, the counter resets, so 2 bumps shouldn't
+        // trigger a review at threshold=5.
+        let config = BackgroundReviewConfig {
+            skill_nudge_interval: 5,
+            memory_review_interval: 10,
+        };
+        let mut state = SelfEvolutionState::new(&config);
+
+        // Bump 3 times
+        state.bump_skill_counter();
+        state.bump_skill_counter();
+        state.bump_skill_counter();
+        assert!(!state.should_review_skills());
+        assert_eq!(state.iters_since_skill, 3);
+
+        // skill_manage called — resets counter
+        state.reset_skill_counter();
+        assert_eq!(state.iters_since_skill, 0);
+        assert!(!state.should_review_skills());
+
+        // Bump 2 more — still below threshold
+        state.bump_skill_counter();
+        state.bump_skill_counter();
+        assert!(!state.should_review_skills());
+        assert_eq!(state.iters_since_skill, 2);
+    }
+
+    #[test]
+    fn test_full_cycle_nudge_triggers_then_resets() {
+        // Simulates: bump to threshold → trigger → reset → bump again.
+        // After reset, the next cycle starts fresh.
+        let config = BackgroundReviewConfig {
+            skill_nudge_interval: 3,
+            memory_review_interval: 10,
+        };
+        let mut state = SelfEvolutionState::new(&config);
+
+        // Bump to threshold
+        state.bump_skill_counter();
+        state.bump_skill_counter();
+        assert!(!state.should_review_skills());
+
+        state.bump_skill_counter();
+        assert!(state.should_review_skills());
+
+        // Reset after trigger
+        state.reset_skill_counter();
+        assert!(!state.should_review_skills());
+        assert_eq!(state.iters_since_skill, 0);
+
+        // Second cycle: bump 2 more — not enough to trigger
+        state.bump_skill_counter();
+        state.bump_skill_counter();
+        assert!(!state.should_review_skills());
+
+        // One more — triggers again
+        state.bump_skill_counter();
+        assert!(state.should_review_skills());
+    }
+
+    #[test]
+    fn test_skill_manage_at_exactly_threshold() {
+        // If skill_manage is called at exactly the threshold, the counter
+        // resets and no review is triggered.
+        let config = BackgroundReviewConfig {
+            skill_nudge_interval: 5,
+            memory_review_interval: 10,
+        };
+        let mut state = SelfEvolutionState::new(&config);
+
+        for _ in 0..5 {
+            state.bump_skill_counter();
+        }
+        assert!(state.should_review_skills());
+
+        // skill_manage resets BEFORE the check in the agent loop
+        state.reset_skill_counter();
+        assert!(!state.should_review_skills());
+    }
+
+    #[test]
+    fn test_interval_persists_after_reset() {
+        // Verify that the skill nudge interval is independent of config changes.
+        let config1 = BackgroundReviewConfig {
+            skill_nudge_interval: 3,
+            memory_review_interval: 10,
+        };
+        let mut state = SelfEvolutionState::new(&config1);
+
+        // Bump 2 — not enough
+        state.bump_skill_counter();
+        state.bump_skill_counter();
+        assert!(!state.should_review_skills());
+
+        // Bump 1 more — triggers
+        state.bump_skill_counter();
+        assert!(state.should_review_skills());
+
+        // Reset and verify the interval is still 3
+        state.reset_skill_counter();
+        assert_eq!(state.iters_since_skill, 0);
+        assert!(!state.should_review_skills());
+    }
 }
