@@ -87,7 +87,7 @@ pub use osv_check::OsvCheckTool;
 pub use process_tool::ProcessTool;
 pub use send_message_tool::SendMessageTool;
 pub use session_search_tool::{SessionMeta, SessionResult, SessionSearchTool};
-pub use skills_tool::{SkillViewTool, SkillsTool};
+pub use skills_tool::{SkillManageTool, SkillViewTool, SkillsTool};
 pub use spotify_tool::{
     SpotifyAlbumsTool, SpotifyDevicesTool, SpotifyLibraryTool, SpotifyPlaybackTool,
     SpotifyPlaylistsTool, SpotifyQueueTool, SpotifySearchTool,
