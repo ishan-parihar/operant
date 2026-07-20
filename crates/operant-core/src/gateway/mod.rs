@@ -3542,7 +3542,7 @@ mod tests {
         let _sid = session.session_id.clone();
 
         // get_operant_session uses the field, which is empty by default
-        let found = store.get_operant_session(&String::new());
+        let found = store.get_operant_session("");
         // the operant_session_id is empty string for newly created sessions
         assert!(found.is_some());
     }

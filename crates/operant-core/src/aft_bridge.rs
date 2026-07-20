@@ -526,7 +526,7 @@ mod tests {
         // installed). We use a mock by checking that two get() calls
         // with the same path return the same Arc.
         let pool = AftBridgePool::new();
-        let root = PathBuf::from("/tmp/test-project");
+        let _root = PathBuf::from("/tmp/test-project");
 
         // Both calls will fail (no aft binary), but we verify the
         // pool is structured correctly by checking that the bridges
