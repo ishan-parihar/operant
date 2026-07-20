@@ -545,6 +545,115 @@ impl OperantAgent {
         self.model()
     }
 
+    /// Attempt a "grace call" — a toolless summary request to the model.
+    ///
+    /// Called when the iteration budget or max_iterations is exhausted.
+    /// The model gets one final chance to summarize its progress without
+    /// tools, giving the user a partial answer instead of a hard error.
+    ///
+    /// Returns `Ok(Message)` on success, or `Err(MaxIterationsExceeded)`
+    /// if the grace call also fails.
+    async fn attempt_grace_call(
+        &self,
+        messages: &[Message],
+        session_id: &str,
+        iterations: usize,
+        tool_calls: usize,
+        final_response: Option<&Message>,
+    ) -> Result<Message> {
+        let grace_request = ChatRequest::new(self.effective_model(), messages.to_vec())
+            .with_stream(self.config.stream);
+
+        let grace_result = if self.config.stream {
+            let stream = self.client.chat_streaming(grace_request).await?;
+            let (text, reasoning, _tcs, _extra) = self.process_stream(stream).await?;
+            Ok((text, reasoning))
+        } else {
+            let response = self.client.chat(grace_request).await?;
+            self.process_response(response)
+                .await
+                .map(|(t, r, _)| (t, r))
+        };
+
+        match grace_result {
+            Ok((text, _reasoning)) => {
+                let result = Message::assistant(&text);
+                if self.record_trajectories {
+                    self.save_trajectory(
+                        session_id,
+                        messages,
+                        iterations,
+                        tool_calls,
+                        false,
+                        final_response,
+                    )
+                    .await;
+                }
+                self.emit(AgentEvent::Done {
+                    message: result.clone(),
+                })
+                .await;
+                if let Some(ref obs) = self.observer {
+                    let cost = self.session_cost_usd.read().map(|c| *c).unwrap_or(0.0);
+                    obs.record_event(&ObserverEvent::AgentEnd {
+                        provider: self.config.model.clone(),
+                        model: self.model(),
+                        duration: std::time::Duration::from_secs(0),
+                        tokens_used: None,
+                        cost_usd: if cost > 0.0 { Some(cost) } else { None },
+                    });
+                }
+                if let Some(ref hooks) = self.hook_registry {
+                    hooks
+                        .emit(
+                            crate::gateway_pipeline::HookEvent::AgentEnd,
+                            crate::gateway_pipeline::HookContext::new()
+                                .with_session(session_id),
+                        )
+                        .await;
+                }
+                Ok(result)
+            }
+            Err(e) => {
+                warn!(error = %e, "Grace call failed — returning hard error");
+                // Emit AgentEnd observer event for failure
+                if let Some(ref obs) = self.observer {
+                    let cost = self.session_cost_usd.read().map(|c| *c).unwrap_or(0.0);
+                    obs.record_event(&ObserverEvent::AgentEnd {
+                        provider: self.config.model.clone(),
+                        model: self.model(),
+                        duration: std::time::Duration::from_secs(0),
+                        tokens_used: None,
+                        cost_usd: if cost > 0.0 { Some(cost) } else { None },
+                    });
+                }
+                if let Some(ref hooks) = self.hook_registry {
+                    hooks
+                        .emit(
+                            crate::gateway_pipeline::HookEvent::AgentEnd,
+                            crate::gateway_pipeline::HookContext::new()
+                                .with_session(session_id),
+                        )
+                        .await;
+                }
+                if self.record_trajectories {
+                    self.save_trajectory(
+                        session_id,
+                        messages,
+                        iterations,
+                        tool_calls,
+                        false,
+                        None,
+                    )
+                    .await;
+                }
+                Err(Error::MaxIterationsExceeded {
+                    max: self.config.max_iterations,
+                })
+            }
+        }
+    }
+
     /// Run the agent with a user query
     #[instrument(skip(self), fields(model = % self.config.model))]
     pub async fn run(&self, user_query: String) -> Result<Message> {
@@ -635,40 +744,15 @@ impl OperantAgent {
                     budget_max = self.iteration_budget.max_total(),
                     "Iteration budget exhausted — attempting grace call"
                 );
-                // Attempt a grace call (toolless summary) before returning
-                // an error, matching the max_iterations behavior below.
-                let grace_request = ChatRequest::new(self.effective_model(), messages.clone())
-                    .with_stream(self.config.stream);
-                let grace_result = if self.config.stream {
-                    let stream = self.client.chat_streaming(grace_request).await?;
-                    let (text, reasoning, _tcs, _extra) = self.process_stream(stream).await?;
-                    Ok((text, reasoning))
-                } else {
-                    let response = self.client.chat(grace_request).await?;
-                    self.process_response(response)
-                        .await
-                        .map(|(t, r, _)| (t, r))
-                };
-                if let Ok((text, _reasoning)) = grace_result {
-                    let result = Message::assistant(&text);
-                    self.emit(AgentEvent::Done {
-                        message: result.clone(),
-                    })
+                return self
+                    .attempt_grace_call(
+                        &messages,
+                        &session_id,
+                        iteration,
+                        total_tool_calls,
+                        None,
+                    )
                     .await;
-                    if let Some(ref hooks) = self.hook_registry {
-                        hooks
-                            .emit(
-                                crate::gateway_pipeline::HookEvent::AgentEnd,
-                                crate::gateway_pipeline::HookContext::new()
-                                    .with_session(&session_id),
-                            )
-                            .await;
-                    }
-                    return Ok(result);
-                }
-                return Err(Error::MaxIterationsExceeded {
-                    max: self.config.max_iterations,
-                });
             }
 
             iteration += 1;
@@ -708,103 +792,15 @@ impl OperantAgent {
                     max = self.config.max_iterations,
                     "Max iterations exceeded — attempting grace call"
                 );
-
-                // Build a grace-call request: same messages but no tools
-                let grace_request = ChatRequest::new(self.effective_model(), messages.clone())
-                    .with_stream(self.config.stream);
-
-                let grace_result = if self.config.stream {
-                    let stream = self.client.chat_streaming(grace_request).await?;
-                    let (text, reasoning, _tcs, _extra) = self.process_stream(stream).await?;
-                    Ok((text, reasoning))
-                } else {
-                    let response = self.client.chat(grace_request).await?;
-                    self.process_response(response)
-                        .await
-                        .map(|(t, r, _)| (t, r))
-                };
-
-                match grace_result {
-                    Ok((text, _reasoning)) => {
-                        let result = Message::assistant(&text);
-                        if self.record_trajectories {
-                            self.save_trajectory(
-                                &session_id,
-                                &messages,
-                                iteration,
-                                total_tool_calls,
-                                false,
-                                Some(&result),
-                            )
-                            .await;
-                        }
-                        self.emit(AgentEvent::Done {
-                            message: result.clone(),
-                        })
-                        .await; // Emit AgentEnd observer event
-                        if let Some(ref obs) = self.observer {
-                            let cost = self.session_cost_usd.read().map(|c| *c).unwrap_or(0.0);
-                            obs.record_event(&ObserverEvent::AgentEnd {
-                                provider: self.config.model.clone(),
-                                model: self.model(),
-                                duration: std::time::Duration::from_secs(0),
-                                tokens_used: None,
-                                cost_usd: if cost > 0.0 { Some(cost) } else { None },
-                            });
-                        }
-                        // Emit AgentEnd hook
-                        if let Some(ref hooks) = self.hook_registry {
-                            hooks
-                                .emit(
-                                    crate::gateway_pipeline::HookEvent::AgentEnd,
-                                    crate::gateway_pipeline::HookContext::new()
-                                        .with_session(&session_id),
-                                )
-                                .await;
-                        }
-
-                        return Ok(result);
-                    }
-                    Err(e) => {
-                        warn!(error = %e, "Grace call failed — returning hard error");
-                    }
-                }
-
-                // Emit AgentEnd observer event for max-iterations failure
-                if let Some(ref obs) = self.observer {
-                    let cost = self.session_cost_usd.read().map(|c| *c).unwrap_or(0.0);
-                    obs.record_event(&ObserverEvent::AgentEnd {
-                        provider: self.config.model.clone(),
-                        model: self.model(),
-                        duration: std::time::Duration::from_secs(0),
-                        tokens_used: None,
-                        cost_usd: if cost > 0.0 { Some(cost) } else { None },
-                    });
-                }
-                // Emit AgentEnd hook for max-iterations
-                if let Some(ref hooks) = self.hook_registry {
-                    hooks
-                        .emit(
-                            crate::gateway_pipeline::HookEvent::AgentEnd,
-                            crate::gateway_pipeline::HookContext::new().with_session(&session_id),
-                        )
-                        .await;
-                }
-
-                if self.record_trajectories {
-                    self.save_trajectory(
-                        &session_id,
+                return self
+                    .attempt_grace_call(
                         &messages,
+                        &session_id,
                         iteration,
                         total_tool_calls,
-                        false,
                         None,
                     )
                     .await;
-                }
-                return Err(Error::MaxIterationsExceeded {
-                    max: self.config.max_iterations,
-                });
             }
 
             // Log iteration progress (not as a Thinking event — that pollutes
@@ -903,6 +899,11 @@ impl OperantAgent {
                 });
                 obs.record_metric(&ObserverMetric::RequestLatency(llm_duration));
             }
+
+            // Collect tool names before the match so they're accessible
+            // in the self-evolution check after the match block.
+            #[allow(unused_assignments)]
+            let mut tool_names: Vec<String> = Vec::new();
 
             match response {
                 Ok((response_text, reasoning_text, tool_calls)) => {
@@ -1044,6 +1045,15 @@ impl OperantAgent {
 
                     total_tool_calls += tool_calls.len();
 
+                    // Collect tool names before execute_tools() consumes
+                    // the Vec, so the self-evolution check can detect
+                    // skill_manage calls without holding a reference to the
+                    // moved tool_calls.
+                    tool_names = tool_calls
+                        .iter()
+                        .map(|tc| tc.function.name.clone())
+                        .collect();
+
                     // Execute tools and add results
                     let tool_results = self.execute_tools(tool_calls).await?;
 
@@ -1147,12 +1157,16 @@ impl OperantAgent {
             // hermes-agent's turn_finalizer.py logic where _iters_since_skill
             // is checked after the tool-calling loop completes.
             //
-            // Note: skill_manage tool calls reset the counter via the tool's
-            // record_usage path, which calls SelfEvolutionState::reset_skill_counter
-            // through the tool registry. Here we just bump and check.
+            // When skill_manage is called, the counter resets immediately
+            // so the nudge window restarts from zero.
             {
+                let skill_manage_called = tool_names.iter().any(|n| n == "skill_manage");
                 let mut evo = self.evolution_state.lock().unwrap();
-                evo.bump_skill_counter();
+                if skill_manage_called {
+                    evo.reset_skill_counter();
+                } else {
+                    evo.bump_skill_counter();
+                }
                 if evo.should_review_skills() {
                     info!(
                         iters = evo.iters_since_skill,
