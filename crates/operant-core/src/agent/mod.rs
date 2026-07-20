@@ -9,6 +9,7 @@ pub mod iteration_budget;
 pub mod turn_finalizer;
 pub mod background_review;
 
+
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -628,6 +629,53 @@ impl OperantAgent {
         let mut total_tool_calls: usize = 0;
 
         loop {
+            // ── Iteration budget enforcement ────────────────────────────
+            // Consume one iteration from the thread-safe budget counter before
+            // starting the loop body. This matches hermes-agent's
+            // IterationBudget.consume() pattern and provides a foundation for
+            // future compression-refund support.
+            if !self.iteration_budget.consume() {
+                warn!(
+                    budget_used = self.iteration_budget.used(),
+                    budget_max = self.iteration_budget.max_total(),
+                    "Iteration budget exhausted — attempting grace call"
+                );
+                // Attempt a grace call (toolless summary) before returning
+                // an error, matching the max_iterations behavior below.
+                let grace_request = ChatRequest::new(self.effective_model(), messages.clone())
+                    .with_stream(self.config.stream);
+                let grace_result = if self.config.stream {
+                    let stream = self.client.chat_streaming(grace_request).await?;
+                    let (text, reasoning, _tcs, _extra) = self.process_stream(stream).await?;
+                    Ok((text, reasoning))
+                } else {
+                    let response = self.client.chat(grace_request).await?;
+                    self.process_response(response)
+                        .await
+                        .map(|(t, r, _)| (t, r))
+                };
+                if let Ok((text, _reasoning)) = grace_result {
+                    let result = Message::assistant(&text);
+                    self.emit(AgentEvent::Done {
+                        message: result.clone(),
+                    })
+                    .await;
+                    if let Some(ref hooks) = self.hook_registry {
+                        hooks
+                            .emit(
+                                crate::gateway_pipeline::HookEvent::AgentEnd,
+                                crate::gateway_pipeline::HookContext::new()
+                                    .with_session(&session_id),
+                            )
+                            .await;
+                    }
+                    return Ok(result);
+                }
+                return Err(Error::MaxIterationsExceeded {
+                    max: self.config.max_iterations,
+                });
+            }
+
             iteration += 1;
             debug!(iteration, "Agent iteration");
 
