@@ -17,7 +17,7 @@ use tracing::{info, warn};
 use crate::error::Error;
 
 /// Export the full error classification from error_classifier module.
-pub use super::error_classifier::{classify_api_error, ClassifiedError, FailoverReason};
+pub use super::error_classifier::{ClassifiedError, FailoverReason, classify_api_error};
 use super::model_client::{ChatRequest, ModelClient, StreamChunk};
 use super::provider_registry::ProviderRegistry;
 use crate::client::ChatResponse;
@@ -86,6 +86,7 @@ impl FallbackModelClient {
     /// Called by chat() after try_models returns an auth/billing error.
     async fn try_next_provider_chat(&self, request: &ChatRequest) -> Option<Result<ChatResponse>> {
         let registry = self.provider_registry.as_ref()?;
+        // switch_to_next() skips providers in cooldown and returns None if all exhausted.
         let next_provider = registry.switch_to_next()?;
         let next_client = registry.get_client(&next_provider.name)?;
         let mut fallback_req = request.clone();
@@ -95,7 +96,15 @@ impl FallbackModelClient {
             to_model = %next_provider.model,
             "Auth/billing error — switching to fallback provider"
         );
-        Some(next_client.chat(fallback_req).await)
+        let result = next_client.chat(fallback_req).await;
+        if result.is_ok() {
+            // Clear failure count on successful switch.
+            registry.clear_failure_count(&next_provider.name);
+        } else {
+            // Arm cooldown on failure.
+            registry.arm_cooldown(&next_provider.name);
+        }
+        Some(result)
     }
 
     /// Try the next provider from the registry for streaming.
@@ -114,7 +123,13 @@ impl FallbackModelClient {
             to_model = %next_provider.model,
             "Auth/billing error — switching to fallback provider"
         );
-        Some(next_client.chat_streaming(fallback_req).await)
+        let result = next_client.chat_streaming(fallback_req).await;
+        if result.is_ok() {
+            registry.clear_failure_count(&next_provider.name);
+        } else {
+            registry.arm_cooldown(&next_provider.name);
+        }
+        Some(result)
     }
 
     /// Build the ordered list of models to try:
@@ -178,9 +193,7 @@ impl FallbackModelClient {
                 should_rotate_credential: true,
             },
 
-            Error::Provider { status, body, .. } => {
-                classify_api_error(Some(*status), body, None)
-            }
+            Error::Provider { status, body, .. } => classify_api_error(Some(*status), body, None),
 
             Error::Config(_) => ClassifiedError {
                 reason: FailoverReason::FormatError,
@@ -300,7 +313,8 @@ impl ModelClient for FallbackModelClient {
             if let Err(ref e) = result {
                 let classified = Self::classify_error(e);
                 if classified.is_auth() || matches!(classified.reason, FailoverReason::Billing) {
-                    if let Some(provider_result) = self.try_next_provider_streaming(&request).await {
+                    if let Some(provider_result) = self.try_next_provider_streaming(&request).await
+                    {
                         return provider_result;
                     }
                 }
@@ -308,7 +322,9 @@ impl ModelClient for FallbackModelClient {
             return result;
         }
 
-        let result = self.try_models(&request, |req| self.inner.chat_streaming(req)).await;
+        let result = self
+            .try_models(&request, |req| self.inner.chat_streaming(req))
+            .await;
         if let Err(ref e) = result {
             let classified = Self::classify_error(e);
             if classified.is_auth() || matches!(classified.reason, FailoverReason::Billing) {
