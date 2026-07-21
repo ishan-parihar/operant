@@ -16,23 +16,8 @@ use tracing::{info, warn};
 
 use crate::error::Error;
 
-/// Recovery hints derived from classifying an error. This is a simplified
-/// version of hermes-agent's 22-class FailoverReason taxonomy.
-///
-/// The agent loop can use these hints to decide:
-/// - `should_fallback`: try a different model in the fallback chain
-/// - `should_compress`: trigger context compression (context too long)
-/// - `should_retry_same`: retry the same model after a delay (transient)
-/// - `is_permanent`: don't retry, surface the error to the user
-#[derive(Debug, Clone)]
-pub struct ClassifiedError {
-    pub should_fallback: bool,
-    pub should_compress: bool,
-    pub should_retry_same: bool,
-    pub is_permanent: bool,
-    pub reason: String,
-}
-
+/// Export the full error classification from error_classifier module.
+pub use super::error_classifier::{classify_api_error, ClassifiedError, FailoverReason};
 use super::model_client::{ChatRequest, ModelClient, StreamChunk};
 use crate::client::ChatResponse;
 use crate::error::Result;
@@ -111,158 +96,65 @@ impl FallbackModelClient {
         }
     }
 
-    /// Classify an error into a recovery strategy. This is a simplified
-    /// version of hermes-agent's 22-class FailoverReason taxonomy.
+    /// Classify an error into a recovery strategy using the full
+    /// error_classifier taxonomy (22+ categories).
     ///
-    /// Returns recovery hints that the agent loop can use to decide:
-    /// - should_fallback: try a different model
-    /// - should_compress: trigger context compression (context too long)
-    /// - should_retry_same: retry the same model (transient)
-    /// - is_permanent: don't retry, surface to user
+    /// Extracts status code, body, and error code from the Error enum
+    /// and delegates to `classify_api_error` for pattern matching.
     pub fn classify_error(err: &Error) -> ClassifiedError {
         match err {
-            // Network errors — transient, try same or fallback
             Error::Network(_) => ClassifiedError {
+                reason: FailoverReason::Timeout,
+                status_code: None,
+                message: err.to_string(),
+                retryable: true,
                 should_fallback: true,
                 should_compress: false,
-                should_retry_same: true,
-                is_permanent: false,
-                reason: "network_error".to_string(),
+                should_rotate_credential: false,
             },
 
-            // Rate limited — try fallback (different rate-limit bucket)
             Error::RateLimited { retry_after } => ClassifiedError {
+                reason: FailoverReason::RateLimit,
+                status_code: Some(429),
+                message: format!("rate limited, retry after {:?}", retry_after),
+                retryable: true,
                 should_fallback: true,
                 should_compress: false,
-                should_retry_same: true,
-                is_permanent: false,
-                reason: format!("rate_limited (retry after {:?})", retry_after),
+                should_rotate_credential: true,
             },
 
-            // Authentication — permanent for this credential, don't retry same
-            Error::Authentication(_) => ClassifiedError {
+            Error::Authentication(msg) => ClassifiedError {
+                reason: FailoverReason::Auth,
+                status_code: None,
+                message: msg.clone(),
+                retryable: false,
                 should_fallback: true,
                 should_compress: false,
-                should_retry_same: false,
-                is_permanent: false,
-                reason: "auth_error".to_string(),
+                should_rotate_credential: true,
             },
 
-            // Provider errors — classify by status code
             Error::Provider { status, body, .. } => {
-                let body_lower = body.to_lowercase();
-                match *status {
-                    // 400 Bad Request — check for context overflow
-                    400 if body_lower.contains("context_length")
-                        || body_lower.contains("context window")
-                        || body_lower.contains("too many tokens")
-                        || body_lower.contains("maximum context") =>
-                    {
-                        ClassifiedError {
-                            should_fallback: false,
-                            should_compress: true,
-                            should_retry_same: true,
-                            is_permanent: false,
-                            reason: "context_overflow".to_string(),
-                        }
-                    }
-                    // 400 — generic bad request, don't retry
-                    400 => ClassifiedError {
-                        should_fallback: false,
-                        should_compress: false,
-                        should_retry_same: false,
-                        is_permanent: true,
-                        reason: "bad_request".to_string(),
-                    },
-                    // 402 Payment Required — billing issue
-                    402 => ClassifiedError {
-                        should_fallback: true,
-                        should_compress: false,
-                        should_retry_same: false,
-                        is_permanent: false,
-                        reason: "billing_error".to_string(),
-                    },
-                    // 403 Forbidden — content policy or permissions
-                    403 if body_lower.contains("content_policy")
-                        || body_lower.contains("content filter")
-                        || body_lower.contains("safety") =>
-                    {
-                        ClassifiedError {
-                            should_fallback: false,
-                            should_compress: false,
-                            should_retry_same: false,
-                            is_permanent: true,
-                            reason: "content_policy_blocked".to_string(),
-                        }
-                    }
-                    // 403 — generic forbidden
-                    403 => ClassifiedError {
-                        should_fallback: true,
-                        should_compress: false,
-                        should_retry_same: false,
-                        is_permanent: false,
-                        reason: "forbidden".to_string(),
-                    },
-                    // 404 — model not found, try fallback
-                    404 => ClassifiedError {
-                        should_fallback: true,
-                        should_compress: false,
-                        should_retry_same: false,
-                        is_permanent: false,
-                        reason: "model_not_found".to_string(),
-                    },
-                    // 413 Payload Too Large — context overflow variant
-                    413 => ClassifiedError {
-                        should_fallback: false,
-                        should_compress: true,
-                        should_retry_same: true,
-                        is_permanent: false,
-                        reason: "payload_too_large".to_string(),
-                    },
-                    // 429 — rate limited (already handled above, but in case
-                    // it comes through as Provider instead of RateLimited)
-                    429 => ClassifiedError {
-                        should_fallback: true,
-                        should_compress: false,
-                        should_retry_same: true,
-                        is_permanent: false,
-                        reason: "upstream_rate_limit".to_string(),
-                    },
-                    // 5xx — server error, transient
-                    s if s >= 500 => ClassifiedError {
-                        should_fallback: true,
-                        should_compress: false,
-                        should_retry_same: true,
-                        is_permanent: false,
-                        reason: "server_error".to_string(),
-                    },
-                    // Unknown status — try fallback as a safe default
-                    _ => ClassifiedError {
-                        should_fallback: true,
-                        should_compress: false,
-                        should_retry_same: false,
-                        is_permanent: false,
-                        reason: "unknown_provider_error".to_string(),
-                    },
-                }
+                classify_api_error(Some(*status), body, None)
             }
 
-            // Config errors — permanent, surface to user
             Error::Config(_) => ClassifiedError {
+                reason: FailoverReason::FormatError,
+                status_code: None,
+                message: err.to_string(),
+                retryable: false,
                 should_fallback: false,
                 should_compress: false,
-                should_retry_same: false,
-                is_permanent: true,
-                reason: "config_error".to_string(),
+                should_rotate_credential: false,
             },
 
-            // Everything else — try fallback as a safe default
             _ => ClassifiedError {
+                reason: FailoverReason::Unknown,
+                status_code: None,
+                message: err.to_string(),
+                retryable: true,
                 should_fallback: true,
                 should_compress: false,
-                should_retry_same: false,
-                is_permanent: false,
-                reason: "unknown_error".to_string(),
+                should_rotate_credential: false,
             },
         }
     }
