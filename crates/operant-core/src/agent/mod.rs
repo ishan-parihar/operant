@@ -12,6 +12,7 @@ pub mod learning_graph;
 pub(crate) mod llm_compressor;
 pub(crate) mod turn_context;
 pub(crate) mod turn_finalizer;
+pub mod turn_retry_state;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -82,6 +83,9 @@ pub struct AgentConfig {
     pub skill_nudge_interval: usize,
     /// How many turns between memory reviews (0 = disabled).
     pub memory_review_interval: usize,
+    /// Maximum LLM retries per turn before giving up.
+    /// Matches hermes-agent's `api_max_retries` (default 3).
+    pub max_retries: usize,
 }
 
 impl Default for AgentConfig {
@@ -107,6 +111,7 @@ impl From<&BehaviorSettings> for AgentConfig {
             record_trajectories: false,
             skill_nudge_interval: 10,
             memory_review_interval: 5,
+            max_retries: 3,
         }
     }
 }
@@ -818,6 +823,7 @@ impl OperantAgent {
         }
         let mut iteration = 0;
         let mut total_tool_calls: usize = 0;
+        let mut retry_state = turn_retry_state::TurnRetryState::new(Some(self.config.max_retries));
 
         loop {
             // ── Iteration budget enforcement ────────────────────────────
@@ -938,7 +944,8 @@ impl OperantAgent {
                         // and retry once. This prevents hard failures on long
                         // sessions that exceed the context window.
                         let classified = FallbackModelClient::classify_error(&e);
-                        if classified.should_compress {
+                        if classified.should_compress && !retry_state.compress_attempted {
+                            retry_state.compress_attempted = true;
                             warn!(reason = %classified.reason, "Context overflow detected — compressing and retrying");
                             // Try LLM summarization first (intelligent compression),
                             // fall back to deterministic decay/eviction.
@@ -947,6 +954,7 @@ impl OperantAgent {
                             // was wasted on a context overflow — the retry gets
                             // a fresh consume() on the next loop iteration.
                             self.iteration_budget.refund();
+                            retry_state.consume_retry();
                             // Rebuild request with compressed messages
                             let tools = self.registry.get_schemas().await;
                             let retry_request =
@@ -954,15 +962,19 @@ impl OperantAgent {
                                     .with_tools(tools)
                                     .with_stream(self.config.stream);
                             self.client.chat_streaming(retry_request).await?
-                        } else if classified.should_rotate_credential {
+                        } else if classified.should_rotate_credential && !retry_state.rotate_attempted {
                             // Credential rotation: invalidate current key,
                             // select next from pool, update client, and retry.
+                            retry_state.rotate_attempted = true;
                             warn!(
                                 reason = %classified.reason,
+                                retry = retry_state.retry_count,
+                                max = retry_state.max_retries,
                                 "Auth/rate-limit error — rotating credential and retrying"
                             );
                             if self.try_rotate_credential().is_some() {
                                 self.iteration_budget.refund();
+                                retry_state.consume_retry();
                                 let tools = self.registry.get_schemas().await;
                                 let retry_request =
                                     ChatRequest::new(self.effective_model(), messages.clone())
@@ -986,7 +998,8 @@ impl OperantAgent {
                     Ok(r) => r,
                     Err(e) => {
                         let classified = FallbackModelClient::classify_error(&e);
-                        if classified.should_compress {
+                        if classified.should_compress && !retry_state.compress_attempted {
+                            retry_state.compress_attempted = true;
                             warn!(reason = %classified.reason, "Context overflow detected — compressing and retrying");
                             // Try LLM summarization first (intelligent compression),
                             // fall back to deterministic decay/eviction.
@@ -994,20 +1007,25 @@ impl OperantAgent {
                             // Refund the iteration since the original LLM call
                             // was wasted on a context overflow.
                             self.iteration_budget.refund();
+                            retry_state.consume_retry();
                             let tools = self.registry.get_schemas().await;
                             let retry_request =
                                 ChatRequest::new(self.effective_model(), messages.clone())
                                     .with_tools(tools)
                                     .with_stream(self.config.stream);
                             self.client.chat(retry_request).await?
-                        } else if classified.should_rotate_credential {
+                        } else if classified.should_rotate_credential && !retry_state.rotate_attempted {
                             // Credential rotation: same as streaming path.
+                            retry_state.rotate_attempted = true;
                             warn!(
                                 reason = %classified.reason,
+                                retry = retry_state.retry_count,
+                                max = retry_state.max_retries,
                                 "Auth/rate-limit error — rotating credential and retrying"
                             );
                             if self.try_rotate_credential().is_some() {
                                 self.iteration_budget.refund();
+                                retry_state.consume_retry();
                                 let tools = self.registry.get_schemas().await;
                                 let retry_request =
                                     ChatRequest::new(self.effective_model(), messages.clone())
@@ -1048,6 +1066,8 @@ impl OperantAgent {
 
             match response {
                 Ok((response_text, reasoning_text, tool_calls)) => {
+                    // Reset retry state on successful LLM response.
+                    retry_state.reset_on_success();
                     // Add assistant message to conversation
                     // When tool calls are present, any text before them is typically
                     // model thinking/planning that shouldn't be shown to the user.
