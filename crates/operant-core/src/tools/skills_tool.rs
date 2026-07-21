@@ -217,7 +217,7 @@ fn find_skill(skills_dir: &Path, name: &str) -> Option<PathBuf> {
     find_skill_recursive(skills_dir, skills_dir, name)
 }
 
-fn find_skill_recursive(base_dir: &Path, current_dir: &Path, name: &str) -> Option<PathBuf> {
+fn find_skill_recursive(_base_dir: &Path, current_dir: &Path, name: &str) -> Option<PathBuf> {
     let Ok(entries) = fs::read_dir(current_dir) else {
         return None;
     };
@@ -237,7 +237,7 @@ fn find_skill_recursive(base_dir: &Path, current_dir: &Path, name: &str) -> Opti
         if dir_name == name && path.join("SKILL.md").exists() {
             return Some(path);
         }
-        if let Some(found) = find_skill_recursive(base_dir, &path, name) {
+        if let Some(found) = find_skill_recursive(_base_dir, &path, name) {
             return Some(found);
         }
     }
@@ -284,10 +284,9 @@ fn validate_file_path(file_path: &str) -> Option<String> {
         .file_name()
         .map(|n| n == "SKILL.md")
         .unwrap_or(false)
+        && normalized.components().count() <= 2
     {
-        if normalized.components().count() <= 2 {
-            return None;
-        }
+        return None;
     }
     // Must be under an allowed subdirectory
     match normalized.components().next() {

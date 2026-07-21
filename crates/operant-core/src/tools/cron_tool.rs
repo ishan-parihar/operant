@@ -303,23 +303,11 @@ impl OperantTool for CronTool {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_cron_schema() {
-        let schema = ToolSchema::from_type::<CronToolArgs>("cron", "test");
-        let json = serde_json::to_string(&schema).unwrap();
-        assert!(!json.is_empty());
-        assert_eq!(schema.name, "cron");
-    }
-}
-
 /// Compute the first next_run_at for a schedule string.
 /// Supports cron expressions (5-field) and interval shorthand (e.g. "every 30m").
 fn compute_first_run(schedule: &str) -> Option<String> {
     use chrono::Utc;
+    use std::str::FromStr;
     // Try cron expression first
     if let Ok(sched) = cron::Schedule::from_str(schedule) {
         return sched.upcoming(Utc).next().map(|t| t.to_rfc3339());
@@ -339,4 +327,15 @@ fn compute_first_run(schedule: &str) -> Option<String> {
     Some(next.to_rfc3339())
 }
 
-use std::str::FromStr;
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_cron_schema() {
+        let schema = ToolSchema::from_type::<CronToolArgs>("cron", "test");
+        let json = serde_json::to_string(&schema).unwrap();
+        assert!(!json.is_empty());
+        assert_eq!(schema.name, "cron");
+    }
+}

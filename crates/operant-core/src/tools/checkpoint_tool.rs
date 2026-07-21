@@ -472,6 +472,17 @@ impl OperantTool for CheckpointTool {
     }
 }
 
+/// Register the checkpoint tool
+pub fn register_checkpoint_tool() -> impl FnOnce() -> Result<()> {
+    || {
+        let _tool = CheckpointTool::new();
+        // Registration would happen here via the registry
+        // This is a placeholder for the registration function
+        info!("Checkpoint tool loaded");
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -551,16 +562,5 @@ mod tests {
             )
             .await;
         assert!(!result.success);
-    }
-}
-
-/// Register the checkpoint tool
-pub fn register_checkpoint_tool() -> impl FnOnce() -> Result<()> {
-    || {
-        let _tool = CheckpointTool::new();
-        // Registration would happen here via the registry
-        // This is a placeholder for the registration function
-        info!("Checkpoint tool loaded");
-        Ok(())
     }
 }

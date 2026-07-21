@@ -261,20 +261,16 @@ and stop — but don't reach for that conclusion as a default.";
 /// when the review agent runs tool-execution loops.
 #[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Default)]
 pub enum NotificationMode {
     /// Show no actions (silent review).
     Off,
     /// Show generic "Memory updated" / tool messages.
+    #[default]
+    /// Default: show generic "Memory updated" messages
     On,
     /// Include compact content previews from tool-call arguments.
     Verbose,
-}
-
-#[cfg(test)]
-impl Default for NotificationMode {
-    fn default() -> Self {
-        Self::On // derive would pick the first variant alphabetically, which is Off
-    }
 }
 
 #[cfg(test)]
@@ -859,7 +855,6 @@ mod tests {
         let config = BackgroundReviewConfig {
             skill_nudge_interval: 5,
             memory_review_interval: 10,
-            ..Default::default()
         };
         let mut state = SelfEvolutionState::new(&config);
 
@@ -876,7 +871,7 @@ mod tests {
     fn test_self_evolution_skill_manage_resets() {
         let config = BackgroundReviewConfig {
             skill_nudge_interval: 5,
-            ..Default::default()
+            memory_review_interval: 5,
         };
         let mut state = SelfEvolutionState::new(&config);
 
@@ -895,7 +890,6 @@ mod tests {
         let config = BackgroundReviewConfig {
             skill_nudge_interval: 0,
             memory_review_interval: 0,
-            ..Default::default()
         };
         let state = SelfEvolutionState::new(&config);
         assert!(!state.should_review_skills());
@@ -907,7 +901,6 @@ mod tests {
         let config = BackgroundReviewConfig {
             skill_nudge_interval: 10,
             memory_review_interval: 3,
-            ..Default::default()
         };
         let mut state = SelfEvolutionState::new(&config);
 
@@ -926,7 +919,6 @@ mod tests {
         let config = BackgroundReviewConfig {
             skill_nudge_interval: 10,
             memory_review_interval: 3,
-            ..Default::default()
         };
         let mut state = SelfEvolutionState::new(&config);
 
@@ -1004,7 +996,6 @@ mod tests {
         let config = BackgroundReviewConfig {
             skill_nudge_interval: 5,
             memory_review_interval: 3,
-            ..Default::default()
         };
         let mut state = SelfEvolutionState::new(&config);
 

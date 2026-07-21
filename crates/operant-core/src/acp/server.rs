@@ -84,23 +84,6 @@ async fn write_response(response: &RpcResponse) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::acp::{AcpHandler, AgentState};
-
-    /// A handler that records interactions for testing.
-    struct TestHandler {
-        state: AgentState,
-    }
-
-    #[async_trait::async_trait]
-    impl AcpHandler for TestHandler {
-        async fn agent_state(&self) -> AgentState {
-            self.state.clone()
-        }
-
-        async fn execute_command(&self, command: &str) -> Result<String, String> {
-            Ok(format!("handled: {}", command))
-        }
-    }
 
     #[tokio::test]
     async fn test_write_response_to_vec() {

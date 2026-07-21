@@ -165,6 +165,14 @@ impl OperantTool for SessionSearchTool {
     }
 }
 
+/// Register session search tool
+pub fn register_session_search_tool() -> impl FnOnce() -> Result<()> {
+    || {
+        info!("Session search tool loaded");
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -278,13 +286,5 @@ mod tests {
             )
             .await;
         assert!(result.success);
-    }
-}
-
-/// Register session search tool
-pub fn register_session_search_tool() -> impl FnOnce() -> Result<()> {
-    || {
-        info!("Session search tool loaded");
-        Ok(())
     }
 }

@@ -29,7 +29,7 @@ impl TaskStatus {
         }
     }
 
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse_status(s: &str) -> Option<Self> {
         match s {
             "triage" => Some(Self::Triage),
             "todo" => Some(Self::Todo),
@@ -287,7 +287,7 @@ impl KanbanDb {
                     title: row.get("title")?,
                     body: row.get("body")?,
                     assignee: row.get("assignee")?,
-                    status: TaskStatus::from_str(&row.get::<_, String>("status")?)
+                    status: TaskStatus::parse_status(&row.get::<_, String>("status")?)
                         .unwrap_or(TaskStatus::Todo),
                     priority: row.get("priority")?,
                     created_by: row.get("created_by")?,
@@ -334,7 +334,7 @@ impl KanbanDb {
                     title: row.get("title")?,
                     body: row.get("body")?,
                     assignee: row.get("assignee")?,
-                    status: TaskStatus::from_str(&row.get::<_, String>("status")?)
+                    status: TaskStatus::parse_status(&row.get::<_, String>("status")?)
                         .unwrap_or(TaskStatus::Todo),
                     priority: row.get("priority")?,
                     created_by: row.get("created_by")?,

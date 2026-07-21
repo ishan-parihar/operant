@@ -338,7 +338,7 @@ mod tests {
     fn evict_preserves_recency_reserve() {
         // 10 messages, all tool results (T3). Budget forces eviction.
         let msgs: Vec<Message> = (0..10)
-            .map(|i| make_msg(Role::Tool, &format!("tool result {}", i)))
+            .map(|i| make_msg(Role::Tool, format!("tool result {}", i)))
             .collect();
         let result = evict_to_budget(msgs, 50);
         // The last 6 (keep_recent) should always be preserved.

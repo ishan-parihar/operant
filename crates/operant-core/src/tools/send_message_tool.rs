@@ -250,7 +250,7 @@ impl SendMessageTool {
         // ── Helper: check if byte offset is inside a code block ─────────
         fn inside_code_block(message: &str, offset: usize) -> bool {
             let before = &message[..offset];
-            !before.matches("```").count().is_multiple_of(2)
+            before.matches("```").count() % 2 != 0
         }
 
         // ── Actual splitting ────────────────────────────────────────────

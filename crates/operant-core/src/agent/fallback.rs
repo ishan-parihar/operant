@@ -402,6 +402,7 @@ mod tests {
     }
 
     impl MockModelClient {
+        #[allow(clippy::new_ret_no_self)]
         fn new(provider: &'static str, results: Vec<MockResult>) -> Arc<dyn ModelClient> {
             Arc::new(Self {
                 provider,

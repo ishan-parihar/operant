@@ -86,7 +86,7 @@ pub enum PoolStrategy {
 
 impl PoolStrategy {
     /// Parse a strategy from a string, returning `FillFirst` for unknown values.
-    pub fn from_str(s: &str) -> Self {
+    pub fn parse_strategy(s: &str) -> Self {
         match s.trim().to_lowercase().as_str() {
             "fill_first" | "fill-first" => PoolStrategy::FillFirst,
             "round_robin" | "round-robin" => PoolStrategy::RoundRobin,
@@ -950,31 +950,31 @@ mod tests {
     #[test]
     fn test_strategy_from_str() {
         assert_eq!(
-            PoolStrategy::from_str("fill_first"),
+            PoolStrategy::parse_strategy("fill_first"),
             PoolStrategy::FillFirst
         );
         assert_eq!(
-            PoolStrategy::from_str("fill-first"),
+            PoolStrategy::parse_strategy("fill-first"),
             PoolStrategy::FillFirst
         );
         assert_eq!(
-            PoolStrategy::from_str("round_robin"),
+            PoolStrategy::parse_strategy("round_robin"),
             PoolStrategy::RoundRobin
         );
         assert_eq!(
-            PoolStrategy::from_str("round-robin"),
+            PoolStrategy::parse_strategy("round-robin"),
             PoolStrategy::RoundRobin
         );
-        assert_eq!(PoolStrategy::from_str("random"), PoolStrategy::Random);
+        assert_eq!(PoolStrategy::parse_strategy("random"), PoolStrategy::Random);
         assert_eq!(
-            PoolStrategy::from_str("least_used"),
+            PoolStrategy::parse_strategy("least_used"),
             PoolStrategy::LeastUsed
         );
         assert_eq!(
-            PoolStrategy::from_str("least-used"),
+            PoolStrategy::parse_strategy("least-used"),
             PoolStrategy::LeastUsed
         );
-        assert_eq!(PoolStrategy::from_str("unknown"), PoolStrategy::FillFirst);
+        assert_eq!(PoolStrategy::parse_strategy("unknown"), PoolStrategy::FillFirst);
     }
 
     #[test]

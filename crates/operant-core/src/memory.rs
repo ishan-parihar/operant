@@ -1200,7 +1200,7 @@ mod tests {
         for i in 0..10 {
             manager
                 .store(MemoryBlock::new(
-                    &format!("block_{i}"),
+                    format!("block_{i}"),
                     "fact",
                     format!("Fact number {i}"),
                 ))

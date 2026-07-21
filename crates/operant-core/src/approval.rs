@@ -371,6 +371,7 @@ static DOCKER_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
     ]
 });
 
+#[allow(clippy::type_complexity)]
 static ALL_DANGEROUS_PATTERNS: LazyLock<Vec<(&'static str, &'static LazyLock<Vec<Regex>>)>> =
     LazyLock::new(|| {
         vec![

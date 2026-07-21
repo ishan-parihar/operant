@@ -234,6 +234,7 @@ pub struct FFmpegRecorder {
     recording: bool,
     start_time: Option<Instant>,
     output_path: Option<PathBuf>,
+    #[allow(clippy::type_complexity)]
     silence_callback: Arc<Mutex<Option<Box<dyn FnOnce() + Send>>>>,
 }
 
@@ -730,7 +731,7 @@ pub enum SttProvider {
 }
 
 impl SttProvider {
-    pub fn from_str(s: &str) -> Self {
+    pub fn parse_provider(s: &str) -> Self {
         match s.to_lowercase().as_str() {
             "whisper" | "openai" => SttProvider::Whisper,
             "google" => SttProvider::Google,
@@ -1344,7 +1345,7 @@ impl SttEngine for LocalSttEngine {
 
 /// Create an STT engine from config
 pub fn create_stt_engine(config: &VoiceConfig) -> Result<Box<dyn SttEngine>, VoiceError> {
-    let provider = SttProvider::from_str(&config.stt_provider);
+    let provider = SttProvider::parse_provider(&config.stt_provider);
     match provider {
         SttProvider::Whisper => {
             // Try Groq first, then OpenAI
@@ -1496,13 +1497,13 @@ mod tests {
 
     #[test]
     fn test_stt_provider_parsing() {
-        assert_eq!(SttProvider::from_str("whisper"), SttProvider::Whisper);
-        assert_eq!(SttProvider::from_str("openai"), SttProvider::Whisper);
-        assert_eq!(SttProvider::from_str("google"), SttProvider::Google);
-        assert_eq!(SttProvider::from_str("azure"), SttProvider::Azure);
-        assert_eq!(SttProvider::from_str("assemblyai"), SttProvider::AssemblyAI);
-        assert_eq!(SttProvider::from_str("deepgram"), SttProvider::Deepgram);
-        assert_eq!(SttProvider::from_str("local"), SttProvider::Local);
-        assert_eq!(SttProvider::from_str("unknown"), SttProvider::Whisper);
+        assert_eq!(SttProvider::parse_provider("whisper"), SttProvider::Whisper);
+        assert_eq!(SttProvider::parse_provider("openai"), SttProvider::Whisper);
+        assert_eq!(SttProvider::parse_provider("google"), SttProvider::Google);
+        assert_eq!(SttProvider::parse_provider("azure"), SttProvider::Azure);
+        assert_eq!(SttProvider::parse_provider("assemblyai"), SttProvider::AssemblyAI);
+        assert_eq!(SttProvider::parse_provider("deepgram"), SttProvider::Deepgram);
+        assert_eq!(SttProvider::parse_provider("local"), SttProvider::Local);
+        assert_eq!(SttProvider::parse_provider("unknown"), SttProvider::Whisper);
     }
 }
