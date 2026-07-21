@@ -19,6 +19,7 @@ use crate::error::Error;
 /// Export the full error classification from error_classifier module.
 pub use super::error_classifier::{classify_api_error, ClassifiedError, FailoverReason};
 use super::model_client::{ChatRequest, ModelClient, StreamChunk};
+use super::provider_registry::ProviderRegistry;
 use crate::client::ChatResponse;
 use crate::error::Result;
 
@@ -45,6 +46,8 @@ pub struct FallbackModelClient {
     primary_model: String,
     fallback_models: Vec<String>,
     fallback_enabled: bool,
+    /// Optional provider registry for cross-provider fallback on auth/billing errors.
+    provider_registry: Option<Arc<ProviderRegistry>>,
 }
 
 impl FallbackModelClient {
@@ -69,7 +72,49 @@ impl FallbackModelClient {
             primary_model,
             fallback_models,
             fallback_enabled,
+            provider_registry: None,
         }
+    }
+
+    /// Attach a provider registry for cross-provider fallback.
+    pub fn with_provider_registry(mut self, registry: Arc<ProviderRegistry>) -> Self {
+        self.provider_registry = Some(registry);
+        self
+    }
+
+    /// Try the next provider from the registry for a non-streaming chat.
+    /// Called by chat() after try_models returns an auth/billing error.
+    async fn try_next_provider_chat(&self, request: &ChatRequest) -> Option<Result<ChatResponse>> {
+        let registry = self.provider_registry.as_ref()?;
+        let next_provider = registry.switch_to_next()?;
+        let next_client = registry.get_client(&next_provider.name)?;
+        let mut fallback_req = request.clone();
+        fallback_req.model.clone_from(&next_provider.model);
+        info!(
+            to_provider = %next_provider.name,
+            to_model = %next_provider.model,
+            "Auth/billing error — switching to fallback provider"
+        );
+        Some(next_client.chat(fallback_req).await)
+    }
+
+    /// Try the next provider from the registry for streaming.
+    /// Called by chat_streaming() after try_models returns an auth/billing error.
+    async fn try_next_provider_streaming(
+        &self,
+        request: &ChatRequest,
+    ) -> Option<Result<BoxStream<'static, Result<StreamChunk>>>> {
+        let registry = self.provider_registry.as_ref()?;
+        let next_provider = registry.switch_to_next()?;
+        let next_client = registry.get_client(&next_provider.name)?;
+        let mut fallback_req = request.clone();
+        fallback_req.model.clone_from(&next_provider.model);
+        info!(
+            to_provider = %next_provider.name,
+            to_model = %next_provider.model,
+            "Auth/billing error — switching to fallback provider"
+        );
+        Some(next_client.chat_streaming(fallback_req).await)
     }
 
     /// Build the ordered list of models to try:
@@ -220,10 +265,30 @@ impl ModelClient for FallbackModelClient {
     async fn chat(&self, request: ChatRequest) -> Result<ChatResponse> {
         if !self.fallback_enabled || self.fallback_models.is_empty() {
             // Fast path: no fallback configured, passthrough
-            return self.inner.chat(request).await;
+            let result = self.inner.chat(request.clone()).await;
+            // Check for auth/billing errors → try provider fallback
+            if let Err(ref e) = result {
+                let classified = Self::classify_error(e);
+                if classified.is_auth() || matches!(classified.reason, FailoverReason::Billing) {
+                    if let Some(provider_result) = self.try_next_provider_chat(&request).await {
+                        return provider_result;
+                    }
+                }
+            }
+            return result;
         }
 
-        self.try_models(&request, |req| self.inner.chat(req)).await
+        let result = self.try_models(&request, |req| self.inner.chat(req)).await;
+        // Check for auth/billing errors → try provider fallback
+        if let Err(ref e) = result {
+            let classified = Self::classify_error(e);
+            if classified.is_auth() || matches!(classified.reason, FailoverReason::Billing) {
+                if let Some(provider_result) = self.try_next_provider_chat(&request).await {
+                    return provider_result;
+                }
+            }
+        }
+        result
     }
 
     async fn chat_streaming(
@@ -231,11 +296,28 @@ impl ModelClient for FallbackModelClient {
         request: ChatRequest,
     ) -> Result<BoxStream<'static, Result<StreamChunk>>> {
         if !self.fallback_enabled || self.fallback_models.is_empty() {
-            return self.inner.chat_streaming(request).await;
+            let result = self.inner.chat_streaming(request.clone()).await;
+            if let Err(ref e) = result {
+                let classified = Self::classify_error(e);
+                if classified.is_auth() || matches!(classified.reason, FailoverReason::Billing) {
+                    if let Some(provider_result) = self.try_next_provider_streaming(&request).await {
+                        return provider_result;
+                    }
+                }
+            }
+            return result;
         }
 
-        self.try_models(&request, |req| self.inner.chat_streaming(req))
-            .await
+        let result = self.try_models(&request, |req| self.inner.chat_streaming(req)).await;
+        if let Err(ref e) = result {
+            let classified = Self::classify_error(e);
+            if classified.is_auth() || matches!(classified.reason, FailoverReason::Billing) {
+                if let Some(provider_result) = self.try_next_provider_streaming(&request).await {
+                    return provider_result;
+                }
+            }
+        }
+        result
     }
 
     fn set_api_key(&self, api_key: &str) {

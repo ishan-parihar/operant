@@ -10,6 +10,7 @@ pub mod error_classifier;
 pub mod iteration_budget;
 pub mod learning_graph;
 pub(crate) mod llm_compressor;
+pub mod provider_registry;
 pub(crate) mod turn_context;
 pub(crate) mod turn_finalizer;
 pub mod turn_retry_state;
