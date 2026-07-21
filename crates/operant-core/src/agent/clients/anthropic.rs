@@ -8,6 +8,7 @@ use futures::stream::BoxStream;
 use reqwest::Client;
 use serde_json::{Value, json};
 use std::collections::HashMap;
+use std::sync::{Arc, RwLock};
 
 use super::super::model_client::{ChatRequest, ModelClient, StreamChunk};
 use crate::client::{
@@ -18,7 +19,7 @@ use crate::error::{Error, Result};
 /// Anthropic Messages API client.
 #[derive(Clone)]
 pub struct AnthropicModelClient {
-    api_key: String,
+    api_key: Arc<RwLock<String>>,
     base_url: String,
     http: Client,
 }
@@ -35,7 +36,7 @@ impl AnthropicModelClient {
             .build()
             .unwrap_or_else(|_| Client::new());
         Self {
-            api_key,
+            api_key: Arc::new(RwLock::new(api_key)),
             base_url: "https://api.anthropic.com".to_string(),
             http,
         }
@@ -250,12 +251,20 @@ impl ModelClient for AnthropicModelClient {
         "anthropic"
     }
 
+    fn set_api_key(&self, api_key: &str) {
+        // Blocking write is acceptable here — set_api_key is only called
+        // from credential rotation in the error-handling path.
+        if let Ok(mut guard) = self.api_key.write() {
+            *guard = api_key.to_string();
+        }
+    }
+
     async fn chat(&self, request: ChatRequest) -> Result<ChatResponse> {
         let body = self.convert_request(&request);
         let resp = self
             .http
             .post(format!("{}/v1/messages", self.base_url))
-            .header("x-api-key", &self.api_key)
+            .header("x-api-key", self.api_key.read().unwrap().as_str())
             .header("anthropic-version", "2023-06-01")
             .header("content-type", "application/json")
             .json(&body)
@@ -286,7 +295,7 @@ impl ModelClient for AnthropicModelClient {
         let resp = self
             .http
             .post(format!("{}/v1/messages", self.base_url))
-            .header("x-api-key", &self.api_key)
+            .header("x-api-key", self.api_key.read().unwrap().as_str())
             .header("anthropic-version", "2023-06-01")
             .header("content-type", "application/json")
             .json(&body)
