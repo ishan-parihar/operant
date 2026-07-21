@@ -18,8 +18,8 @@
 //!
 //! ## Edge Types
 //!
-//! - **Skill↔Skill edges**: from declared `related_skills` in SKILL.md
-//!   frontmatter. Both endpoints must exist; edges are deduped.
+//! - **Skill↔Skill edges**: connect skills that share the same category
+//!   field. Both endpoints must exist; edges are deduped.
 //! - **Memory↔Skill edges**: from lexical overlap between memory card
 //!   text and skill names. Top 4 matches per memory card.
 //!
@@ -34,7 +34,6 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
-use tracing::{debug, warn};
 
 // ---------------------------------------------------------------------------
 // Node types
@@ -125,6 +124,7 @@ pub struct GraphStats {
 
 /// Result of a mutation operation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct MutationResult {
     pub ok: bool,
     pub message: String,
@@ -134,6 +134,7 @@ pub struct MutationResult {
 ///
 /// - Skills: archive the skill directory (recoverable via curator restore).
 /// - Memories: remove the chunk from the source file.
+#[allow(dead_code)]
 pub fn delete_node(
     node_id: &str,
     skills_dir: &Path,
@@ -150,6 +151,7 @@ pub fn delete_node(
 ///
 /// - Skills: rewrite the SKILL.md file.
 /// - Memories: rewrite the specific chunk in the source file.
+#[allow(dead_code)]
 pub fn edit_node(
     node_id: &str,
     content: &str,
@@ -167,6 +169,7 @@ pub fn edit_node(
 // Skill mutations
 // ---------------------------------------------------------------------------
 
+#[allow(dead_code)]
 fn delete_skill_node(name: &str, skills_dir: &Path) -> MutationResult {
     let skill_dir = skills_dir.join(name);
     if !skill_dir.exists() {
@@ -216,6 +219,7 @@ fn delete_skill_node(name: &str, skills_dir: &Path) -> MutationResult {
     }
 }
 
+#[allow(dead_code)]
 fn edit_skill_node(name: &str, content: &str, skills_dir: &Path) -> MutationResult {
     let skill_md = skills_dir.join(name).join("SKILL.md");
     if !skill_md.exists() {
@@ -282,6 +286,7 @@ fn write_memory_chunks(path: &Path, chunks: &[String]) -> Result<(), String> {
         .map_err(|e| format!("Failed to write {}: {}", path.display(), e))
 }
 
+#[allow(dead_code)]
 fn delete_memory_node(node_id: &str, memory_dir: &Path) -> MutationResult {
     let (source, index) = match parse_memory_id(node_id) {
         Some(v) => v,
@@ -337,6 +342,7 @@ fn delete_memory_node(node_id: &str, memory_dir: &Path) -> MutationResult {
     }
 }
 
+#[allow(dead_code)]
 fn edit_memory_node(node_id: &str, content: &str, memory_dir: &Path) -> MutationResult {
     let (source, index) = match parse_memory_id(node_id) {
         Some(v) => v,
@@ -409,7 +415,6 @@ fn edit_memory_node(node_id: &str, content: &str, memory_dir: &Path) -> Mutation
 /// This is a simplified version of hermes-agent's `build_learning_graph()`.
 /// It scans SKILL.md files for metadata and MEMORY.md/USER.md for memory
 /// chunks, then connects them via lexical overlap.
-#[allow(dead_code)]
 pub fn build_learning_graph(
     skills_dir: &Path,
     memory_dir: &Path,
