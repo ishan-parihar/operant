@@ -255,11 +255,6 @@ and stop — but don't reach for that conclusion as a default.";
 
 /// Controls how background review actions are surfaced to the user.
 /// Matches hermes-agent's `memory_notifications` setting.
-///
-/// Only used in `#[cfg(test)]` code (summarize_review_actions).
-/// Test-only infrastructure for future multi-turn review notifications
-/// when the review agent runs tool-execution loops.
-#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[derive(Default)]
 pub enum NotificationMode {
@@ -273,7 +268,6 @@ pub enum NotificationMode {
     Verbose,
 }
 
-#[cfg(test)]
 impl std::fmt::Display for NotificationMode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -284,7 +278,6 @@ impl std::fmt::Display for NotificationMode {
     }
 }
 
-#[cfg(test)]
 impl std::str::FromStr for NotificationMode {
     type Err = String;
 
@@ -539,10 +532,6 @@ pub fn digest_history(messages_snapshot: &[crate::client::Message], tail: usize)
 ///
 /// Used by the background review daemon to surface a compact
 /// summary of skill/memory changes to the user.
-///
-/// TODO(phase-2): Re-enable when the review agent runs a multi-turn
-/// tool-execution loop.
-#[cfg(test)]
 #[derive(Debug, Clone, Default)]
 pub struct BackgroundReviewSummary {
     /// Human-readable action descriptions.
@@ -564,12 +553,6 @@ pub struct BackgroundReviewSummary {
 /// - `On`: generic "Memory updated" / tool messages.
 /// - `Verbose`: include compact content previews from tool-call arguments.
 ///
-/// TODO(phase-2): Re-enable when the review agent runs a multi-turn
-/// tool-execution loop (matching hermes-agent's `run_conversation` pattern).
-/// Currently unused because the review agent runs a single non-streaming
-/// LLM call without tool execution, so there are no tool-role messages
-/// to summarize.
-#[cfg(test)]
 pub fn summarize_review_actions(
     review_messages: &[String],
     prior_messages: &[String],
