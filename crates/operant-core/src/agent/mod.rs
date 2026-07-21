@@ -38,7 +38,10 @@ use crate::tools::{ToolContext, ToolRegistry, ToolResult};
 
 use self::background_review::SelfEvolutionState;
 use self::iteration_budget::IterationBudget;
-use self::turn_finalizer::{PREFLIGHT_DECAY_CONSTANT, PREFLIGHT_DECAY_H50, PREFLIGHT_THRESHOLD_PERCENT, TurnDiagnostics, TurnExitReason};
+use self::turn_finalizer::{
+    PREFLIGHT_DECAY_CONSTANT, PREFLIGHT_DECAY_H50, PREFLIGHT_THRESHOLD_PERCENT, TurnDiagnostics,
+    TurnExitReason,
+};
 
 /// Response from the user for tool permission requests
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -257,6 +260,9 @@ pub struct OperantAgent {
     /// Anti-thrash: number of consecutive credential rotations in the
     /// current session (resets on successful LLM call).
     rotation_count: Arc<std::sync::RwLock<usize>>,
+    /// Provider registry for cross-provider fallback on auth/billing errors.
+    /// When set, auth/billing errors trigger provider switching.
+    provider_registry: Option<Arc<provider_registry::ProviderRegistry>>,
 }
 
 /// A pending permission request sent from the agent to the TUI
@@ -312,6 +318,7 @@ impl OperantAgent {
             active_credential_id: Arc::new(std::sync::RwLock::new(None)),
             rotation_cooldown_until: Arc::new(std::sync::RwLock::new(0.0)),
             rotation_count: Arc::new(std::sync::RwLock::new(0)),
+            provider_registry: None,
         }
     }
 
@@ -357,6 +364,7 @@ impl OperantAgent {
             active_credential_id: Arc::new(std::sync::RwLock::new(None)),
             rotation_cooldown_until: Arc::new(std::sync::RwLock::new(0.0)),
             rotation_count: Arc::new(std::sync::RwLock::new(0)),
+            provider_registry: None,
         }
     }
 
@@ -522,13 +530,10 @@ impl OperantAgent {
     /// Attach an LLM-based context compressor for intelligent summarization.
     /// When set, context overflow errors trigger LLM summarization before
     /// falling back to deterministic decay/eviction.
-    pub fn with_llm_compressor(
-        mut self,
-        config: llm_compressor::LlmCompressorConfig,
-    ) -> Self {
-        self.llm_compressor = Some(tokio::sync::Mutex::new(
-            llm_compressor::LlmCompressor::new(config),
-        ));
+    pub fn with_llm_compressor(mut self, config: llm_compressor::LlmCompressorConfig) -> Self {
+        self.llm_compressor = Some(tokio::sync::Mutex::new(llm_compressor::LlmCompressor::new(
+            config,
+        )));
         self
     }
 
@@ -541,6 +546,16 @@ impl OperantAgent {
         pool: Arc<crate::credential_pool::CredentialPool>,
     ) -> Self {
         self.credential_pool = Some(pool);
+        self
+    }
+
+    /// Attach a provider registry for cross-provider fallback.
+    /// When set, auth/billing errors trigger provider switching.
+    pub fn with_provider_registry(
+        mut self,
+        registry: Arc<provider_registry::ProviderRegistry>,
+    ) -> Self {
+        self.provider_registry = Some(registry);
         self
     }
 
@@ -826,6 +841,13 @@ impl OperantAgent {
         let mut total_tool_calls: usize = 0;
         let mut retry_state = turn_retry_state::TurnRetryState::new(Some(self.config.max_retries));
 
+        // Reset provider registry to primary at turn start.
+        // Matches hermes-agent's restore_primary_runtime() pattern —
+        // ensures provider fallback is temporary, not permanent.
+        if let Some(ref registry) = self.provider_registry {
+            registry.reset_to_primary();
+        }
+
         loop {
             // ── Iteration budget enforcement ────────────────────────────
             // Consume one iteration from the thread-safe budget counter before
@@ -862,7 +884,6 @@ impl OperantAgent {
                     tool_turns: total_tool_calls,
                     response_len: 0,
                     session_id: session_id.clone(),
-
                 };
                 warn!("{}", diag.log_message());
                 if self.record_trajectories {
@@ -963,7 +984,9 @@ impl OperantAgent {
                                     .with_tools(tools)
                                     .with_stream(self.config.stream);
                             self.client.chat_streaming(retry_request).await?
-                        } else if classified.should_rotate_credential && !retry_state.rotate_attempted {
+                        } else if classified.should_rotate_credential
+                            && !retry_state.rotate_attempted
+                        {
                             // Credential rotation: invalidate current key,
                             // select next from pool, update client, and retry.
                             retry_state.rotate_attempted = true;
@@ -1015,7 +1038,9 @@ impl OperantAgent {
                                     .with_tools(tools)
                                     .with_stream(self.config.stream);
                             self.client.chat(retry_request).await?
-                        } else if classified.should_rotate_credential && !retry_state.rotate_attempted {
+                        } else if classified.should_rotate_credential
+                            && !retry_state.rotate_attempted
+                        {
                             // Credential rotation: same as streaming path.
                             retry_state.rotate_attempted = true;
                             warn!(
@@ -1179,7 +1204,6 @@ impl OperantAgent {
                                 tool_turns: total_tool_calls,
                                 response_len: result.content.len(),
                                 session_id: session_id.clone(),
-
                             };
                             info!("{}", diag.log_message());
                         }
@@ -1318,7 +1342,6 @@ impl OperantAgent {
                             tool_turns: total_tool_calls,
                             response_len: 0,
                             session_id: session_id.clone(),
-
                         };
                         warn!("{}", diag.log_message());
                     }
@@ -1380,7 +1403,7 @@ impl OperantAgent {
                 if skill_manage_called {
                     evo.reset_skill_counter();
                 } else {
-                evo.bump_skill_counter();
+                    evo.bump_skill_counter();
                 }
                 // Memory counter increments every completed turn regardless
                 // of whether skill_manage was called.
@@ -1737,9 +1760,7 @@ impl OperantAgent {
         review_skills: bool,
         review_memory: bool,
     ) {
-        use self::background_review::{
-            build_review_prompt, digest_history,
-        };
+        use self::background_review::{build_review_prompt, digest_history};
 
         let prompt = build_review_prompt(review_memory, review_skills);
         let client = self.client.clone();
@@ -1781,7 +1802,10 @@ impl OperantAgent {
             "skill_manage".to_string(),
             "skill_view".to_string(),
         ];
-        let tools = self.registry.get_available_schemas_filtered(&review_tool_names).await;
+        let tools = self
+            .registry
+            .get_available_schemas_filtered(&review_tool_names)
+            .await;
 
         // ── Cache-aware replay selection ──────────────────────────────
         // Same model → full replay (warm cache reads, cheapest).
@@ -1891,7 +1915,8 @@ If nothing needs updating, say 'Nothing to save.' and stop.\n\n{}",
                 let mut assistant_message = Message::assistant(&content);
                 if !tool_calls_deltas.is_empty() {
                     // Convert ToolCallDelta to ToolCall for the message
-                    let tool_calls: Vec<ToolCall> = tool_calls_deltas.iter()
+                    let tool_calls: Vec<ToolCall> = tool_calls_deltas
+                        .iter()
                         .filter_map(|delta| {
                             let function = delta.function.as_ref()?;
                             let id = delta.id.clone().unwrap_or_else(|| {
@@ -1948,26 +1973,28 @@ If nothing needs updating, say 'Nothing to save.' and stop.\n\n{}",
                         .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
 
                     // Execute the tool using the registry
-                    let tool_result = registry_for_review.execute(
-                        tool_name,
-                        tool_id,
-                        args,
-                        ToolContext::default(),
-                    ).await;
+                    let tool_result = registry_for_review
+                        .execute(tool_name, tool_id, args, ToolContext::default())
+                        .await;
 
                     match tool_result {
                         Ok(result) => {
                             let result_str = if result.success {
                                 result.content.clone()
                             } else {
-                                format!("{{\"success\": false, \"error\": \"{}\"}}", 
-                                    result.error.unwrap_or_else(|| "Unknown error".to_string()))
+                                format!(
+                                    "{{\"success\": false, \"error\": \"{}\"}}",
+                                    result.error.unwrap_or_else(|| "Unknown error".to_string())
+                                )
                             };
 
                             // Track actions taken for summary
                             if result.success {
-                                let action_summary = format!("{}: {}", tool_name, 
-                                    result_str.chars().take(100).collect::<String>());
+                                let action_summary = format!(
+                                    "{}: {}",
+                                    tool_name,
+                                    result_str.chars().take(100).collect::<String>()
+                                );
                                 actions_taken.push(action_summary);
                             }
 
@@ -2020,9 +2047,9 @@ If nothing needs updating, say 'Nothing to save.' and stop.\n\n{}",
             // Check whether LLM compression is warranted (cheap, no await)
             {
                 let guard = compressor.lock().await;
-                if !guard.should_compress(
-                    crate::context_management::estimate_total_tokens(&messages),
-                ) {
+                if !guard
+                    .should_compress(crate::context_management::estimate_total_tokens(&messages))
+                {
                     // Under threshold — deterministic fallback
                     let budget = self.config.context_window;
                     return crate::context_management::manage_context(messages, budget, 4096);
