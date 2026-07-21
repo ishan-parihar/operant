@@ -21,7 +21,7 @@ use tokio::sync::{RwLock, mpsc};
 use tokio::time::timeout;
 use tracing::{debug, error, info, instrument, warn};
 
-use crate::client::{ChatResponse, Message, Role, ToolCall, Usage};
+use crate::client::{ChatResponse, Message, Role, ToolCall, ToolCallFunction, Usage};
 use crate::config::{BehaviorSettings, runtime_config};
 use crate::context_files::{load_default_context_files, load_workspace_context};
 use crate::database::Database;
@@ -1637,6 +1637,8 @@ impl OperantAgent {
             snapshot.clone()
         };
 
+        let registry_for_review = self.registry.clone();
+
         tokio::spawn(async move {
             debug!(
                 session_id = %session_id,
@@ -1664,42 +1666,184 @@ If nothing needs updating, say 'Nothing to save.' and stop.\n\n{}",
             review_messages.push(Message::system(&review_system));
             review_messages.extend(review_history);
 
-            // Create the review chat request (non-streaming for background)
-            let request = ChatRequest::new(review_model.clone(), review_messages)
-                .with_tools(tools)
-                .with_stream(false);
+            // ── Multi-turn tool execution loop ────────────────────────
+            // Run up to MAX_REVIEW_ITERATIONS iterations to allow the review
+            // agent to execute tools and see their results. This matches
+            // hermes-agent's forked AIAgent.run_conversation() pattern.
+            const MAX_REVIEW_ITERATIONS: usize = 5;
+            let mut actions_taken: Vec<String> = Vec::new();
 
-            match client.chat(request).await {
-                Ok(response) => {
-                    let content = response
-                        .choices
-                        .iter()
-                        .find_map(|c| c.message.content.clone())
-                        .unwrap_or_default();
+            for review_iter in 0..MAX_REVIEW_ITERATIONS {
+                debug!(
+                    iteration = review_iter + 1,
+                    max = MAX_REVIEW_ITERATIONS,
+                    session_id = %session_id,
+                    "Background review iteration"
+                );
+
+                // Create the review chat request (non-streaming for background)
+                let request = ChatRequest::new(review_model.clone(), review_messages.clone())
+                    .with_tools(tools.clone())
+                    .with_stream(false);
+
+                let response = match client.chat(request).await {
+                    Ok(r) => r,
+                    Err(e) => {
+                        warn!(
+                            error = %e,
+                            session_id = %session_id,
+                            iteration = review_iter + 1,
+                            "Background review agent failed at LLM call"
+                        );
+                        break;
+                    }
+                };
+
+                // Extract assistant message from response
+                let assistant_msg = match response.choices.first() {
+                    Some(choice) => choice.message.clone(),
+                    None => {
+                        warn!("Background review: no choices in response");
+                        break;
+                    }
+                };
+
+                // Check if the model wants to stop (no tool calls)
+                let tool_calls_deltas = assistant_msg.tool_calls.clone().unwrap_or_default();
+                let content = assistant_msg.content.clone().unwrap_or_default();
+
+                // If the model says "Nothing to save" or has no tool calls, we're done
+                if content.contains("Nothing to save") || tool_calls_deltas.is_empty() {
                     if content.contains("Nothing to save") {
                         debug!("Background review: nothing to save");
-                    } else {
-                        // The review agent produced actionable output.
-                        // Note: tool-call results aren't available in this
-                        // single-turn non-streaming path, so we log the
-                        // response content directly rather than using
-                        // summarize_review_actions (which expects serialized
-                        // tool-role messages from a multi-turn session).
+                    } else if !content.is_empty() {
+                        // Model provided a summary without tool calls
                         let preview: String = content.chars().take(200).collect();
                         info!(
                             session_id = %session_id,
                             response_preview = %preview,
-                            "Background review completed with updates"
+                            "Background review completed with summary"
                         );
                     }
+                    break;
                 }
-                Err(e) => {
-                    warn!(
-                        error = %e,
-                        session_id = %session_id,
-                        "Background review agent failed"
+
+                // Add assistant message to review conversation
+                let mut assistant_message = Message::assistant(&content);
+                if !tool_calls_deltas.is_empty() {
+                    // Convert ToolCallDelta to ToolCall for the message
+                    let tool_calls: Vec<ToolCall> = tool_calls_deltas.iter()
+                        .filter_map(|delta| {
+                            let function = delta.function.as_ref()?;
+                            let id = delta.id.clone().unwrap_or_else(|| {
+                                format!("bg-review-{}-{}", review_iter, delta.index)
+                            });
+                            Some(ToolCall {
+                                id,
+                                function: ToolCallFunction {
+                                    name: function.name.clone(),
+                                    arguments: function.arguments.clone(),
+                                },
+                            })
+                        })
+                        .collect();
+                    assistant_message = assistant_message.with_tool_calls(tool_calls);
+                }
+                review_messages.push(assistant_message);
+
+                // ── Execute whitelisted tools ─────────────────────────
+                // Only execute tools that are in our whitelist. This matches
+                // hermes-agent's set_thread_tool_whitelist pattern.
+                for tool_call_delta in &tool_calls_deltas {
+                    // Extract function info from the delta
+                    let function = match &tool_call_delta.function {
+                        Some(f) => f,
+                        None => continue,
+                    };
+                    let tool_name = &function.name;
+                    let args_str = &function.arguments;
+                    let tool_id = tool_call_delta.id.as_deref().unwrap_or("unknown");
+
+                    // Check if tool is in whitelist
+                    if !review_tool_names.contains(tool_name) {
+                        warn!(
+                            tool = %tool_name,
+                            "Background review attempted non-whitelisted tool"
+                        );
+                        let error_result = serde_json::json!({
+                            "success": false,
+                            "error": format!("Tool '{}' is not allowed in background review. Only memory and skill tools are permitted.", tool_name)
+                        });
+                        review_messages.push(Message::tool(tool_id, &error_result.to_string()));
+                        continue;
+                    }
+
+                    debug!(
+                        tool = %tool_name,
+                        args = %args_str,
+                        "Background review executing tool"
                     );
+
+                    // Parse arguments
+                    let args: serde_json::Value = serde_json::from_str(args_str)
+                        .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
+
+                    // Execute the tool using the registry
+                    let tool_result = registry_for_review.execute(
+                        tool_name,
+                        tool_id,
+                        args,
+                        ToolContext::default(),
+                    ).await;
+
+                    match tool_result {
+                        Ok(result) => {
+                            let result_str = if result.success {
+                                result.content.clone()
+                            } else {
+                                format!("{{\"success\": false, \"error\": \"{}\"}}", 
+                                    result.error.unwrap_or_else(|| "Unknown error".to_string()))
+                            };
+
+                            // Track actions taken for summary
+                            if result.success {
+                                let action_summary = format!("{}: {}", tool_name, 
+                                    result_str.chars().take(100).collect::<String>());
+                                actions_taken.push(action_summary);
+                            }
+
+                            review_messages.push(Message::tool(tool_id, &result_str));
+                        }
+                        Err(e) => {
+                            warn!(
+                                tool = %tool_name,
+                                error = %e,
+                                "Background review tool execution failed"
+                            );
+                            let error_result = serde_json::json!({
+                                "success": false,
+                                "error": format!("Tool execution failed: {}", e)
+                            });
+                            review_messages.push(Message::tool(tool_id, &error_result.to_string()));
+                        }
+                    }
                 }
+            }
+
+            // ── Summarize actions taken ──────────────────────────────
+            if !actions_taken.is_empty() {
+                let summary = actions_taken.join("; ");
+                info!(
+                    session_id = %session_id,
+                    actions = %summary,
+                    action_count = actions_taken.len(),
+                    "💾 Background review completed with updates"
+                );
+            } else {
+                debug!(
+                    session_id = %session_id,
+                    "Background review completed — no actions taken"
+                );
             }
 
             debug!(session_id = %session_id, "Background review daemon finished");
