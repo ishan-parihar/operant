@@ -234,7 +234,7 @@ impl ToolContext {
 
 /// Sandboxed tool executor with timeout support
 struct ToolExecutor {
-    timeout: Duration,
+    pub(crate) timeout: Duration,
 }
 
 impl ToolExecutor {
@@ -276,6 +276,17 @@ pub struct ToolRegistry {
     disabled_names: Arc<RwLock<HashSet<String>>>,
     disabled_toolsets: Arc<RwLock<HashSet<String>>>,
     executor: ToolExecutor,
+}
+
+impl Clone for ToolRegistry {
+    fn clone(&self) -> Self {
+        Self {
+            tools: Arc::clone(&self.tools),
+            disabled_names: Arc::clone(&self.disabled_names),
+            disabled_toolsets: Arc::clone(&self.disabled_toolsets),
+            executor: ToolExecutor::new(self.executor.timeout),
+        }
+    }
 }
 
 impl ToolRegistry {
