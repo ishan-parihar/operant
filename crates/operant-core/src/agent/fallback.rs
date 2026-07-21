@@ -653,4 +653,107 @@ mod tests {
         let result = client.chat(req).await.unwrap();
         assert_eq!(result.model, "fallback1");
     }
+
+    // ── Provider-level fallback tests ──────────────────────────────
+
+    #[tokio::test]
+    async fn auth_error_triggers_provider_switch() {
+        use crate::agent::provider_registry::{ProviderEntry, ProviderRegistry};
+
+        // Primary provider returns auth error → should switch to fallback provider
+        let primary_client = MockModelClient::new("openai", vec![MockResult::AuthError]);
+        let fallback_client = MockModelClient::new("anthropic", vec![MockResult::Ok(chat_response("claude-3"))]);
+
+        let mut clients = std::collections::HashMap::new();
+        clients.insert("openai".to_string(), primary_client);
+        clients.insert("anthropic".to_string(), fallback_client);
+
+        let chain = vec![
+            ProviderEntry {
+                name: "openai".to_string(),
+                model: "gpt-4".to_string(),
+            },
+            ProviderEntry {
+                name: "anthropic".to_string(),
+                model: "claude-3".to_string(),
+            },
+        ];
+        let registry = Arc::new(ProviderRegistry::new(clients, chain));
+
+        // Inner client is the openai one (returns auth error)
+        let inner = MockModelClient::new("openai", vec![MockResult::AuthError]);
+        let client = FallbackModelClient::new(inner, "gpt-4".into(), vec![], true)
+            .with_provider_registry(registry);
+
+        let result = client.chat(make_request()).await.unwrap();
+        assert_eq!(result.model, "claude-3");
+    }
+
+    #[tokio::test]
+    async fn non_auth_error_does_not_trigger_provider_switch() {
+        use crate::agent::provider_registry::{ProviderEntry, ProviderRegistry};
+
+        // Primary provider returns 503 (server error) → should NOT trigger provider switch
+        // (provider switch is only for auth/billing errors)
+        let primary_client = MockModelClient::new("openai", vec![MockResult::ServerError]);
+        let fallback_client = MockModelClient::new("anthropic", vec![MockResult::Ok(chat_response("claude-3"))]);
+
+        let mut clients = std::collections::HashMap::new();
+        clients.insert("openai".to_string(), primary_client);
+        clients.insert("anthropic".to_string(), fallback_client);
+
+        let chain = vec![
+            ProviderEntry {
+                name: "openai".to_string(),
+                model: "gpt-4".to_string(),
+            },
+            ProviderEntry {
+                name: "anthropic".to_string(),
+                model: "claude-3".to_string(),
+            },
+        ];
+        let registry = Arc::new(ProviderRegistry::new(clients, chain));
+
+        // Inner client returns 503 (not auth error)
+        let inner = MockModelClient::new("openai", vec![MockResult::ServerError]);
+        let client = FallbackModelClient::new(inner, "gpt-4".into(), vec![], true)
+            .with_provider_registry(registry);
+
+        let err = client.chat(make_request()).await.unwrap_err();
+        // Should return the 503 error, NOT switch providers
+        assert!(matches!(&err, Error::Provider { status: 503, .. }));
+    }
+
+    #[tokio::test]
+    async fn exhausted_provider_chain_returns_original_error() {
+        use crate::agent::provider_registry::{ProviderEntry, ProviderRegistry};
+
+        // Both providers return auth errors → chain exhausted → original error returned
+        let primary_client = MockModelClient::new("openai", vec![MockResult::AuthError]);
+        let fallback_client = MockModelClient::new("anthropic", vec![MockResult::AuthError]);
+
+        let mut clients = std::collections::HashMap::new();
+        clients.insert("openai".to_string(), primary_client);
+        clients.insert("anthropic".to_string(), fallback_client);
+
+        let chain = vec![
+            ProviderEntry {
+                name: "openai".to_string(),
+                model: "gpt-4".to_string(),
+            },
+            ProviderEntry {
+                name: "anthropic".to_string(),
+                model: "claude-3".to_string(),
+            },
+        ];
+        let registry = Arc::new(ProviderRegistry::new(clients, chain));
+
+        let inner = MockModelClient::new("openai", vec![MockResult::AuthError]);
+        let client = FallbackModelClient::new(inner, "gpt-4".into(), vec![], true)
+            .with_provider_registry(registry);
+
+        let err = client.chat(make_request()).await.unwrap_err();
+        // Should return auth error from the fallback provider (anthropic)
+        assert!(matches!(&err, Error::Authentication(_)));
+    }
 }
