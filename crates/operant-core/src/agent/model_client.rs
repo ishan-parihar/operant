@@ -118,6 +118,16 @@ pub trait ModelClient: Send + Sync {
 
     /// Human-readable provider name (e.g. `"openai"`, `"anthropic"`).
     fn provider_name(&self) -> &str;
+
+    /// Update the API key at runtime for credential rotation.
+    ///
+    /// Called by the credential pool when rotating to a new key. The default
+    /// implementation is a no-op (safe for clients that don't support dynamic
+    /// key switching). Clients that store the key as a field should override
+    /// this to update it.
+    fn set_api_key(&self, _api_key: &str) {
+        // Default no-op — not all clients store the key directly
+    }
 }
 
 // ---------------------------------------------------------------------------

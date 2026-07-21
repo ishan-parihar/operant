@@ -529,18 +529,9 @@ impl OperantAgent {
 
     /// Try to rotate to the next available credential in the pool.
     ///
-    /// Try to rotate to the next available credential in the pool.
-    ///
-    /// TODO(integrate-credential-pool): This method updates the pool state
-    /// but does NOT change the API key used by `self.client` because the
-    /// client is `Arc<dyn ModelClient>` constructed with a fixed key.
-    /// To complete the integration:
-    ///   1. Add `set_api_key(&str)` to the ModelClient trait
-    ///   2. After pool.select(), call `self.client.set_api_key(&cred.value)`
-    ///   3. Wire this into the error handling blocks in run()
-    ///
-    /// The pool and rotation logic are kept as infrastructure — once the
-    /// ModelClient trait supports dynamic key switching, this is ready to go.
+    /// Invalidates the current credential, selects the next one from the
+    /// pool, and updates the client's API key via `set_api_key()`. Returns
+    /// the new credential on success, or None if the pool is exhausted.
     pub fn try_rotate_credential(&self) -> Option<crate::credential_pool::PooledCredential> {
         let pool = self.credential_pool.as_ref()?;
 
@@ -556,10 +547,12 @@ impl OperantAgent {
         let next = pool.select();
         if let Some(ref cred) = next {
             *active_id = Some(cred.id.clone());
+            // Switch the client's API key to the new credential.
+            self.client.set_api_key(&cred.value);
             info!(
                 credential = %cred.name,
                 source = %cred.source,
-                "Credential rotated (pool state updated, client key not yet switched)"
+                "Credential rotated — client API key updated"
             );
         } else {
             warn!("No available credentials in pool for rotation");
@@ -919,18 +912,24 @@ impl OperantAgent {
                                     .with_stream(self.config.stream);
                             self.client.chat_streaming(retry_request).await?
                         } else if classified.should_rotate_credential {
-                            // TODO(integrate-credential-pool): The client holds a
-                            // fixed API key at construction time. Rotating
-                            // active_credential_id doesn't change the key the
-                            // client uses. To complete this integration:
-                            //   1. Add `set_api_key(&str)` to ModelClient trait
-                            //   2. After rotation, call client.set_api_key(&cred.value)
-                            //   3. Then rebuild and retry the request
+                            // Credential rotation: invalidate current key,
+                            // select next from pool, update client, and retry.
                             warn!(
                                 reason = %classified.reason,
-                                "Credential rotation needed but client uses fixed key"
+                                "Auth/rate-limit error — rotating credential and retrying"
                             );
-                            return Err(e);
+                            if self.try_rotate_credential().is_some() {
+                                self.iteration_budget.refund();
+                                let tools = self.registry.get_schemas().await;
+                                let retry_request =
+                                    ChatRequest::new(self.effective_model(), messages.clone())
+                                        .with_tools(tools)
+                                        .with_stream(self.config.stream);
+                                self.client.chat_streaming(retry_request).await?
+                            } else {
+                                warn!("No more credentials to rotate — returning original error");
+                                return Err(e);
+                            }
                         } else {
                             return Err(e);
                         }
@@ -959,13 +958,23 @@ impl OperantAgent {
                                     .with_stream(self.config.stream);
                             self.client.chat(retry_request).await?
                         } else if classified.should_rotate_credential {
-                            // TODO(integrate-credential-pool): Same as streaming
-                            // path — needs ModelClient::set_api_key() to work.
+                            // Credential rotation: same as streaming path.
                             warn!(
                                 reason = %classified.reason,
-                                "Credential rotation needed but client uses fixed key"
+                                "Auth/rate-limit error — rotating credential and retrying"
                             );
-                            return Err(e);
+                            if self.try_rotate_credential().is_some() {
+                                self.iteration_budget.refund();
+                                let tools = self.registry.get_schemas().await;
+                                let retry_request =
+                                    ChatRequest::new(self.effective_model(), messages.clone())
+                                        .with_tools(tools)
+                                        .with_stream(self.config.stream);
+                                self.client.chat(retry_request).await?
+                            } else {
+                                warn!("No more credentials to rotate — returning original error");
+                                return Err(e);
+                            }
                         } else {
                             return Err(e);
                         }

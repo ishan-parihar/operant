@@ -237,6 +237,10 @@ impl ModelClient for FallbackModelClient {
         self.try_models(&request, |req| self.inner.chat_streaming(req))
             .await
     }
+
+    fn set_api_key(&self, api_key: &str) {
+        self.inner.set_api_key(api_key);
+    }
 }
 
 #[cfg(test)]
