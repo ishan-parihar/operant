@@ -711,12 +711,12 @@ fn parse_skill_frontmatter(path: &Path) -> (String, String, u32, bool, Vec<Strin
 
     // Simple line-by-line parsing (YAML frontmatter between --- delimiters)
     let mut in_frontmatter = false;
-    let mut in_related_list = false;
+    let mut last_key = "";  // Track last YAML key to handle multi-line lists robustly
     for line in content.lines().take(30) {
         let trimmed = line.trim();
         if trimmed == "---" {
             in_frontmatter = !in_frontmatter;
-            in_related_list = false;
+            last_key = "";
             continue;
         }
         if !in_frontmatter {
@@ -724,19 +724,16 @@ fn parse_skill_frontmatter(path: &Path) -> (String, String, u32, bool, Vec<Strin
         }
         if let Some(val) = trimmed.strip_prefix("category:") {
             category = val.trim().to_string();
-            in_related_list = false;
-        }
-        if let Some(val) = trimmed.strip_prefix("created_by:") {
+            last_key = "category";
+        } else if let Some(val) = trimmed.strip_prefix("created_by:") {
             created_by = val.trim().to_string();
-            in_related_list = false;
-        }
-        if trimmed == "pinned: true" || trimmed == "pinned:true" {
+            last_key = "created_by";
+        } else if trimmed == "pinned: true" || trimmed == "pinned:true" {
             pinned = true;
-            in_related_list = false;
-        }
-        // Parse related_skills: either inline list or multi-line
-        if let Some(val) = trimmed.strip_prefix("related_skills:") {
+            last_key = "pinned";
+        } else if let Some(val) = trimmed.strip_prefix("related_skills:") {
             let val = val.trim();
+            last_key = "related_skills";
             if val.starts_with('[') && val.ends_with(']') {
                 // Inline: related_skills: [skill-a, skill-b]
                 let inner = &val[1..val.len() - 1];
@@ -744,25 +741,26 @@ fn parse_skill_frontmatter(path: &Path) -> (String, String, u32, bool, Vec<Strin
                     .map(|s| s.trim().trim_matches('"').trim_matches('\'').to_string())
                     .filter(|s| !s.is_empty())
                     .collect();
-                in_related_list = false;
+                last_key = "";  // List complete on this line
             } else if !val.is_empty() {
                 // Single value on same line
                 related_skills.push(val.trim_matches('"').trim_matches('\'').to_string());
-                in_related_list = false;
-            } else {
-                // Multi-line list starts on next lines
-                in_related_list = true;
+                last_key = "";  // Single value, not a multi-line list
             }
+            // else: multi-line list starts on next lines (last_key stays "related_skills")
             continue;
-        }
-        // Handle multi-line YAML list items (e.g. "  - skill-name")
-        if in_related_list && trimmed.starts_with('-') {
+        } else if trimmed.starts_with('-') && last_key == "related_skills" {
+            // Multi-line YAML list item (e.g. "  - skill-name")
             if let Some(val) = trimmed.strip_prefix('-') {
                 let val = val.trim().trim_matches('"').trim_matches('\'').to_string();
                 if !val.is_empty() {
                     related_skills.push(val);
                 }
             }
+            // Continue collecting list items; last_key stays "related_skills"
+        } else if !trimmed.is_empty() && !trimmed.starts_with('#') {
+            // Any other non-empty, non-comment line ends the current list context
+            last_key = "";
         }
     }
 
@@ -1019,6 +1017,130 @@ mod tests {
             (e.source == "debugging" && e.target == "rust-patterns")
         );
         assert!(has_edge, "Expected edge between rust-patterns and debugging from related_skills");
+
+        let _ = fs::remove_dir_all(&skills);
+        let _ = fs::remove_dir_all(&memory);
+    }
+
+    #[test]
+    fn test_category_fallback_edges() {
+        let skills = tmp_dir("skills_fallback");
+
+        // Three skills in same category, NONE with declared related_skills
+        for name in &["alpha", "beta", "gamma"] {
+            let dir = skills.join(name);
+            fs::create_dir_all(&dir).unwrap();
+            fs::write(
+                dir.join("SKILL.md"),
+                format!("---\nname: {}\ncategory: research\n---\n# {}\n", name, name),
+            )
+            .unwrap();
+        }
+
+        let memory = tmp_dir("memory_fallback");
+        let graph = build_learning_graph(&skills, &memory);
+        assert_eq!(graph.stats.skill_nodes, 3);
+
+        // All 3 pairs should be connected via category fallback:
+        // alpha-beta, alpha-gamma, beta-gamma
+        let edge_count = graph.edges.len();
+        assert_eq!(edge_count, 3, "Expected 3 category-fallback edges for 3 undeclared skills in same category");
+
+        let _ = fs::remove_dir_all(&skills);
+        let _ = fs::remove_dir_all(&memory);
+    }
+
+    #[test]
+    fn test_mixed_declared_and_fallback() {
+        let skills = tmp_dir("skills_mixed");
+
+        // skill_a declares related_skills: [skill_b]
+        let dir_a = skills.join("skill-a");
+        fs::create_dir_all(&dir_a).unwrap();
+        fs::write(
+            dir_a.join("SKILL.md"),
+            "---\nname: skill-a\ncategory: coding\nrelated_skills:\n  - skill-b\n---\n# Skill A\n",
+        )
+        .unwrap();
+
+        // skill_b has no related_skills — should NOT get category fallback with skill-a
+        let dir_b = skills.join("skill-b");
+        fs::create_dir_all(&dir_b).unwrap();
+        fs::write(
+            dir_b.join("SKILL.md"),
+            "---\nname: skill-b\ncategory: coding\n---\n# Skill B\n",
+        )
+        .unwrap();
+
+        // skill_c also no related_skills, same category as skill_b
+        let dir_c = skills.join("skill-c");
+        fs::create_dir_all(&dir_c).unwrap();
+        fs::write(
+            dir_c.join("SKILL.md"),
+            "---\nname: skill-c\ncategory: coding\n---\n# Skill C\n",
+        )
+        .unwrap();
+
+        let memory = tmp_dir("memory_mixed");
+        let graph = build_learning_graph(&skills, &memory);
+
+        // Expected edges:
+        // 1. skill-a → skill-b (declared related_skills)
+        // 2. skill-b → skill-c (category fallback — neither has declarations)
+        // skill-a is skipped for category fallback because it has declarations
+        let edge_count = graph.edges.len();
+        assert_eq!(edge_count, 2, "Expected 2 edges: 1 declared + 1 category fallback");
+
+        let has_ab = graph.edges.iter().any(|e|
+            (e.source == "skill-a" && e.target == "skill-b") ||
+            (e.source == "skill-b" && e.target == "skill-a")
+        );
+        assert!(has_ab, "Expected declared edge between skill-a and skill-b");
+
+        let has_bc = graph.edges.iter().any(|e|
+            (e.source == "skill-b" && e.target == "skill-c") ||
+            (e.source == "skill-c" && e.target == "skill-b")
+        );
+        assert!(has_bc, "Expected category-fallback edge between skill-b and skill-c");
+
+        let has_ac = graph.edges.iter().any(|e|
+            (e.source == "skill-a" && e.target == "skill-c") ||
+            (e.source == "skill-c" && e.target == "skill-a")
+        );
+        assert!(!has_ac, "Should NOT have fallback edge between skill-a and skill-c (skill-a has declarations)");
+
+        let _ = fs::remove_dir_all(&skills);
+        let _ = fs::remove_dir_all(&memory);
+    }
+
+    #[test]
+    fn test_yaml_comment_resilience() {
+        let skills = tmp_dir("skills_comments");
+        let dir_a = skills.join("my-skill");
+        fs::create_dir_all(&dir_a).unwrap();
+        fs::write(
+            dir_a.join("SKILL.md"),
+            "---\nname: my-skill\ncategory: coding\nrelated_skills:\n  # This is a comment that should NOT be parsed as a skill name\n  - target-skill\n  # Another comment\n---\n# My Skill\n",
+        )
+        .unwrap();
+
+        let dir_b = skills.join("target-skill");
+        fs::create_dir_all(&dir_b).unwrap();
+        fs::write(
+            dir_b.join("SKILL.md"),
+            "---\nname: target-skill\ncategory: coding\n---\n# Target\n",
+        )
+        .unwrap();
+
+        let memory = tmp_dir("memory_comments");
+        let graph = build_learning_graph(&skills, &memory);
+
+        // Verify exactly 1 edge (from related_skills), no spurious comment-as-skill edges
+        let skill_edge_count = graph.edges.iter()
+            .filter(|e| graph.nodes.iter().any(|n| n.id == e.source && n.kind == NodeKind::Skill)
+                     && graph.nodes.iter().any(|n| n.id == e.target && n.kind == NodeKind::Skill))
+            .count();
+        assert_eq!(skill_edge_count, 1, "Expected exactly 1 skill edge; comments should not become skill names");
 
         let _ = fs::remove_dir_all(&skills);
         let _ = fs::remove_dir_all(&memory);
