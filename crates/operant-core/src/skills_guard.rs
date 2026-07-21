@@ -2481,7 +2481,7 @@ mod tests {
     fn test_binary_file_detected() {
         let tmp = temp_dir();
         let exe = tmp.join("malware.exe");
-        fs::write(&exe, &[0u8; 100]).unwrap();
+        fs::write(&exe, [0u8; 100]).unwrap();
         let findings = check_structure(&tmp);
         assert!(findings.iter().any(|fi| fi.pattern_id == "binary_file"));
         cleanup(&tmp);

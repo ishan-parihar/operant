@@ -376,10 +376,10 @@ mod tests {
         let num_schema = ToolSchema::from_type::<NumberParams>("test_tool", "A test tool");
         let mut args3 = json!({
             "query": "test",
-            "threshold": "3.14"
+            "threshold": "1.5"
         });
         num_schema.sanitize_args(&mut args3);
-        assert_eq!(args3["threshold"], json!(3.14));
+        assert_eq!(args3["threshold"], json!(1.5));
         assert!(args3["threshold"].is_number());
     }
 }

@@ -226,6 +226,7 @@ impl SubAgentTool {
     }
 
     /// Run multiple tasks in parallel (batch mode)
+    #[allow(clippy::type_complexity)]
     pub async fn call_batch(
         &self,
         tasks: Vec<(String, Option<String>, SubAgentRole, Option<u32>, u64)>,

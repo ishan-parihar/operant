@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 fn test_storage_dir() -> PathBuf {
     let dir = tempfile::tempdir().unwrap();
-    dir.into_path()
+    dir.keep()
 }
 
 #[tokio::test]

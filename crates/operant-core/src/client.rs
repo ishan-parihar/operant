@@ -901,10 +901,8 @@ pub(crate) fn classify_http_error(status: u16, body: &str) -> Error {
 /// error messages in the TUI/CLI.
 fn sanitize_error_body(body: &str) -> String {
     // Strip CR/LF and collapse whitespace
-    let clean = body
-        .replace("\r\n", " ")
-        .replace('\r', " ")
-        .replace('\n', " ");
+    // collapse \r\n + \r + \n → spaces; split_whitespace() below normalizes
+    let clean = body.replace(['\r', '\n'], " ");
     let clean = clean.split_whitespace().collect::<Vec<_>>().join(" ");
     if clean.len() > 500 {
         format!("{}...", &clean[..500])
@@ -973,6 +971,7 @@ impl Stream for ChatStreamResponse {
     }
 }
 
+#[allow(clippy::collapsible_str_replace)]
 fn try_parse_next_sse_event(buffer: &mut String, allow_partial: bool) -> Option<ChatStreamEvent> {
     normalize_sse_buffer(buffer);
 
@@ -1023,6 +1022,8 @@ fn try_parse_next_sse_event(buffer: &mut String, allow_partial: bool) -> Option<
 
 fn normalize_sse_buffer(buffer: &mut String) {
     if buffer.contains('\r') {
+        // NOTE: \r\n→\n first, then \r→\n — NOT equivalent to ['\r','\n']→\n
+        // (which would produce \n\n for \r\n input)
         *buffer = buffer.replace("\r\n", "\n").replace('\r', "\n");
     }
 }

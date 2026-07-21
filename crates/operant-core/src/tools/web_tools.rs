@@ -394,6 +394,50 @@ fn html_decode(s: &str) -> String {
         .replace("&nbsp;", " ")
 }
 
+/// Check if a URL points to a private/loopback/link-local address.
+///
+/// Returns `Some(reason)` if the URL should be blocked, `None` if it's safe.
+fn check_ssrf(url: &reqwest::Url) -> Option<String> {
+    let host = url.host_str()?;
+
+    if host == "localhost" || host.ends_with(".localhost") {
+        return Some(format!("SSRF blocked: '{}' resolves to loopback.", host));
+    }
+
+    if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+        if ip.is_loopback() {
+            return Some(format!("SSRF blocked: {} is loopback.", ip));
+        }
+        match ip {
+            std::net::IpAddr::V4(v4) => {
+                if v4.is_link_local() {
+                    return Some(format!(
+                        "SSRF blocked: {} is link-local (e.g. cloud metadata).",
+                        v4
+                    ));
+                }
+                if v4.is_private() {
+                    return Some(format!("SSRF blocked: {} is private (RFC 1918).", v4));
+                }
+                if v4.octets()[0] == 100 && (v4.octets()[1] & 0xc0) == 64 {
+                    return Some(format!("SSRF blocked: {} is CGNAT (100.64/10).", v4));
+                }
+            }
+            std::net::IpAddr::V6(v6) => {
+                if v6.is_loopback() {
+                    return Some(format!("SSRF blocked: {} is loopback.", v6));
+                }
+                let seg = v6.segments()[0];
+                if (seg & 0xfe00) == 0xfc00 {
+                    return Some(format!("SSRF blocked: {} is unique-local (fc00::/7).", v6));
+                }
+            }
+        }
+    }
+
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -466,52 +510,4 @@ mod tests {
         // Should match the fallback heuristic (href="http...")
         assert_eq!(results.len(), 1);
     }
-}
-
-// ---------------------------------------------------------------------------
-// SSRF Protection
-// ---------------------------------------------------------------------------
-
-/// Check if a URL points to a private/loopback/link-local address.
-///
-/// Returns `Some(reason)` if the URL should be blocked, `None` if it's safe.
-fn check_ssrf(url: &reqwest::Url) -> Option<String> {
-    let host = url.host_str()?;
-
-    if host == "localhost" || host.ends_with(".localhost") {
-        return Some(format!("SSRF blocked: '{}' resolves to loopback.", host));
-    }
-
-    if let Ok(ip) = host.parse::<std::net::IpAddr>() {
-        if ip.is_loopback() {
-            return Some(format!("SSRF blocked: {} is loopback.", ip));
-        }
-        match ip {
-            std::net::IpAddr::V4(v4) => {
-                if v4.is_link_local() {
-                    return Some(format!(
-                        "SSRF blocked: {} is link-local (e.g. cloud metadata).",
-                        v4
-                    ));
-                }
-                if v4.is_private() {
-                    return Some(format!("SSRF blocked: {} is private (RFC 1918).", v4));
-                }
-                if v4.octets()[0] == 100 && (v4.octets()[1] & 0xc0) == 64 {
-                    return Some(format!("SSRF blocked: {} is CGNAT (100.64/10).", v4));
-                }
-            }
-            std::net::IpAddr::V6(v6) => {
-                if v6.is_loopback() {
-                    return Some(format!("SSRF blocked: {} is loopback.", v6));
-                }
-                let seg = v6.segments()[0];
-                if (seg & 0xfe00) == 0xfc00 {
-                    return Some(format!("SSRF blocked: {} is unique-local (fc00::/7).", v6));
-                }
-            }
-        }
-    }
-
-    None
 }

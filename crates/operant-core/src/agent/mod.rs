@@ -1029,8 +1029,8 @@ impl OperantAgent {
                         if let Some(ref hooks) = self.hook_registry {
                             let ctx = crate::gateway_pipeline::HookContext::new()
                                 .with_session(&session_id)
-                                .with_metadata("iterations", &iteration.to_string())
-                                .with_metadata("tool_calls", &total_tool_calls.to_string());
+                                .with_metadata("iterations", iteration.to_string())
+                                .with_metadata("tool_calls", total_tool_calls.to_string());
                             hooks
                                 .emit(crate::gateway_pipeline::HookEvent::TurnEnd, ctx)
                                 .await;
