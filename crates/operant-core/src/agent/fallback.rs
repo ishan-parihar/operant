@@ -97,11 +97,7 @@ impl FallbackModelClient {
             "Auth/billing error — switching to fallback provider"
         );
         let result = next_client.chat(fallback_req).await;
-        if result.is_ok() {
-            // Clear failure count on successful switch.
-            registry.clear_failure_count(&next_provider.name);
-        } else {
-            // Arm cooldown on failure.
+        if result.is_err() {
             registry.arm_cooldown(&next_provider.name);
         }
         Some(result)
@@ -124,9 +120,7 @@ impl FallbackModelClient {
             "Auth/billing error — switching to fallback provider"
         );
         let result = next_client.chat_streaming(fallback_req).await;
-        if result.is_ok() {
-            registry.clear_failure_count(&next_provider.name);
-        } else {
+        if result.is_err() {
             registry.arm_cooldown(&next_provider.name);
         }
         Some(result)
