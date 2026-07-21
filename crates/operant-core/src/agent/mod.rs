@@ -244,6 +244,13 @@ pub struct OperantAgent {
     credential_pool: Option<Arc<crate::credential_pool::CredentialPool>>,
     /// ID of the currently-active credential in the pool (for rotation).
     active_credential_id: Arc<std::sync::RwLock<Option<String>>>,
+    /// Anti-thrash: timestamp (seconds since epoch) after which credential
+    /// rotation is allowed again. Prevents burning through the pool rapidly
+    /// when multiple auth failures cascade across iterations.
+    rotation_cooldown_until: Arc<std::sync::RwLock<f64>>,
+    /// Anti-thrash: number of consecutive credential rotations in the
+    /// current session (resets on successful LLM call).
+    rotation_count: Arc<std::sync::RwLock<usize>>,
 }
 
 /// A pending permission request sent from the agent to the TUI
@@ -297,6 +304,8 @@ impl OperantAgent {
             llm_compressor: None,
             credential_pool: None,
             active_credential_id: Arc::new(std::sync::RwLock::new(None)),
+            rotation_cooldown_until: Arc::new(std::sync::RwLock::new(0.0)),
+            rotation_count: Arc::new(std::sync::RwLock::new(0)),
         }
     }
 
@@ -340,6 +349,8 @@ impl OperantAgent {
             llm_compressor: None,
             credential_pool: None,
             active_credential_id: Arc::new(std::sync::RwLock::new(None)),
+            rotation_cooldown_until: Arc::new(std::sync::RwLock::new(0.0)),
+            rotation_count: Arc::new(std::sync::RwLock::new(0)),
         }
     }
 
@@ -535,6 +546,23 @@ impl OperantAgent {
     pub fn try_rotate_credential(&self) -> Option<crate::credential_pool::PooledCredential> {
         let pool = self.credential_pool.as_ref()?;
 
+        // Anti-thrash: check rotation cooldown to prevent burning through
+        // the credential pool when multiple auth failures cascade.
+        {
+            let cooldown = self.rotation_cooldown_until.read().ok()?;
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs_f64())
+                .unwrap_or(0.0);
+            if now < *cooldown {
+                warn!(
+                    remaining_secs = (*cooldown - now) as u64,
+                    "Rotation anti-thrash cooldown active — skipping rotation"
+                );
+                return None;
+            }
+        }
+
         // Single write lock for the entire rotation to avoid TOCTOU races.
         let mut active_id = self.active_credential_id.write().ok()?;
 
@@ -549,11 +577,26 @@ impl OperantAgent {
             *active_id = Some(cred.id.clone());
             // Switch the client's API key to the new credential.
             self.client.set_api_key(&cred.value);
-            info!(
-                credential = %cred.name,
-                source = %cred.source,
-                "Credential rotated — client API key updated"
-            );
+            // Arm rotation cooldown: 5s, 10s, 20s, capped at 60s.
+            {
+                let mut count = self.rotation_count.write().ok()?;
+                *count += 1;
+                let base = 5.0_f64;
+                let delay = (base * 2.0_f64.powi(*count as i32 - 1)).min(60.0);
+                let mut cooldown = self.rotation_cooldown_until.write().ok()?;
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs_f64())
+                    .unwrap_or(0.0);
+                *cooldown = now + delay;
+                info!(
+                    credential = %cred.name,
+                    source = %cred.source,
+                    rotation_count = *count,
+                    cooldown_secs = delay,
+                    "Credential rotated — client API key updated"
+                );
+            }
         } else {
             warn!("No available credentials in pool for rotation");
         }
@@ -1960,6 +2003,12 @@ If nothing needs updating, say 'Nothing to save.' and stop.\n\n{}",
                     crate::context_management::estimate_total_tokens(&messages),
                 ) {
                     // Under threshold — deterministic fallback
+                    let budget = self.config.context_window;
+                    return crate::context_management::manage_context(messages, budget, 4096);
+                }
+                // Anti-thrash: skip LLM compression if in cooldown after recent failure.
+                if guard.is_in_cooldown() {
+                    warn!("LLM compression in anti-thrash cooldown — using deterministic fallback");
                     let budget = self.config.context_window;
                     return crate::context_management::manage_context(messages, budget, 4096);
                 }

@@ -132,6 +132,11 @@ pub struct LlmCompressor {
     previous_summary: Option<String>,
     /// Number of compressions performed in this session.
     compression_count: usize,
+    /// Timestamp (seconds since epoch) after which compression is allowed again.
+    /// Set on compression failure to implement anti-thrash cooldown.
+    cooldown_until: f64,
+    /// Number of consecutive compression failures (resets on success).
+    consecutive_failures: usize,
 }
 
 impl LlmCompressor {
@@ -141,13 +146,52 @@ impl LlmCompressor {
             config,
             previous_summary: None,
             compression_count: 0,
+            cooldown_until: 0.0,
+            consecutive_failures: 0,
         }
+    }
+
+    /// Anti-thrash: return true if compression is in cooldown after a recent failure.
+    /// Cooldown scales with failure count: 5s, 10s, 20s, 40s (capped at 60s).
+    pub fn is_in_cooldown(&self) -> bool {
+        if self.cooldown_until <= 0.0 {
+            return false;
+        }
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs_f64())
+            .unwrap_or(0.0);
+        now < self.cooldown_until
+    }
+
+    /// Record a compression failure and arm the cooldown.
+    fn record_failure(&mut self) {
+        self.consecutive_failures += 1;
+        let base = 5.0_f64;
+        let delay = (base * 2.0_f64.powi(self.consecutive_failures as i32 - 1)).min(60.0);
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs_f64())
+            .unwrap_or(0.0);
+        self.cooldown_until = now + delay;
+        warn!(
+            failure = self.consecutive_failures,
+            cooldown_secs = delay,
+            "Compression failure — anti-thrash cooldown armed"
+        );
+    }
+
+    /// Clear the cooldown (called on success or session reset).
+    fn clear_cooldown(&mut self) {
+        self.consecutive_failures = 0;
+        self.cooldown_until = 0.0;
     }
 
     /// Reset per-session state (call on /new or /reset).
     pub fn reset(&mut self) {
         self.previous_summary = None;
         self.compression_count = 0;
+        self.clear_cooldown();
     }
 
     /// Check whether compression should be triggered based on token estimates.
@@ -171,6 +215,23 @@ impl LlmCompressor {
         messages: Vec<Message>,
         client: &Arc<dyn ModelClient>,
     ) -> Result<CompressionResult> {
+        // Anti-thrash: skip LLM compression if we're in cooldown after recent failures.
+        if self.is_in_cooldown() {
+            debug!(
+                cooldown_until = self.cooldown_until,
+                failures = self.consecutive_failures,
+                "LLM compression in anti-thrash cooldown — skipping"
+            );
+            let tokens_before = crate::context_management::estimate_total_tokens(&messages);
+            return Ok(CompressionResult {
+                messages,
+                tokens_before,
+                tokens_after: tokens_before,
+                summary_text: String::new(),
+                turns_summarized: 0,
+            });
+        }
+
         let tokens_before = crate::context_management::estimate_total_tokens(&messages);
 
         if messages.len() < MIN_MESSAGES_FOR_LLM_COMPRESSION {
@@ -227,6 +288,7 @@ impl LlmCompressor {
             Ok(s) => s,
             Err(e) => {
                 warn!(error = %e, "LLM summarization failed — falling back to truncation");
+                self.record_failure();
                 self.fallback_summary(middle)
             }
         };
@@ -249,6 +311,7 @@ impl LlmCompressor {
         // Store for iterative updates
         self.previous_summary = Some(summary.clone());
         self.compression_count += 1;
+        self.clear_cooldown();
 
         info!(
             tokens_before,
