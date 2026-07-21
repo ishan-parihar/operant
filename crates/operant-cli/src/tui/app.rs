@@ -2768,6 +2768,14 @@ impl App {
                 // This wires up the unified CommandRegistry so commands defined
                 // in commands.rs but not yet added to the intercept match arms
                 // can still be dispatched via their registered handlers.
+                //
+                // Only dispatch if the command is actually registered in the
+                // registry — truly unknown commands (e.g. `/survey` after its
+                // deletion) should NOT be intercepted so the test
+                // `test_feedback_survey_removed` can verify they fall through.
+                if self.command_registry.resolve(cmd).is_none() {
+                    return false;
+                }
                 let cmd_name = cmd.to_string();
                 let args_owned = args.to_string();
                 let result = tokio::task::block_in_place(|| {
@@ -8353,8 +8361,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_feedback_survey_removed() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_feedback_survey_removed() {
         // Phase 4: /survey command must not be intercepted (feedback_survey deleted).
         // intercept_slash_command returns true if the command is known+intercepted.
         // /survey was removed from the command table, so it returns false.
