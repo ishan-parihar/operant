@@ -1831,8 +1831,11 @@ If nothing needs updating, say 'Nothing to save.' and stop.\n\n{}",
             }
 
             // ── Summarize actions taken ──────────────────────────────
+            // Surface a compact summary to the user via tracing.
+            // TODO(integrate): Wire into TUI/Gateway notification system
+            // for user-facing display (matching hermes-agent's _safe_print pattern).
             if !actions_taken.is_empty() {
-                let summary = actions_taken.join("; ");
+                let summary = actions_taken.join(" · ");
                 info!(
                     session_id = %session_id,
                     actions = %summary,

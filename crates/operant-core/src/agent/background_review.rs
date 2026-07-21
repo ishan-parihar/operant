@@ -256,7 +256,8 @@ and stop — but don't reach for that conclusion as a default.";
 /// Controls how background review actions are surfaced to the user.
 /// Matches hermes-agent's `memory_notifications` setting.
 ///
-/// TODO(integrate): Wire into spawn_background_review for user-facing notifications.
+/// TODO(integrate): Wire into TUI/Gateway notification system for
+/// user-facing display (matching hermes-agent's _safe_print pattern).
 #[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[derive(Default)]
@@ -538,7 +539,7 @@ pub fn digest_history(messages_snapshot: &[crate::client::Message], tail: usize)
 /// Used by the background review daemon to surface a compact
 /// summary of skill/memory changes to the user.
 ///
-/// TODO(integrate): Wire into spawn_background_review for user-facing notifications.
+/// TODO(integrate): Wire into TUI/Gateway notification system.
 #[cfg(test)]
 #[derive(Debug, Clone, Default)]
 pub struct BackgroundReviewSummary {
@@ -561,7 +562,6 @@ pub struct BackgroundReviewSummary {
 /// - `On`: generic "Memory updated" / tool messages.
 /// - `Verbose`: include compact content previews from tool-call arguments.
 ///
-/// TODO(integrate): Wire into spawn_background_review for user-facing notifications.
 #[cfg(test)]
 pub fn summarize_review_actions(
     review_messages: &[String],
