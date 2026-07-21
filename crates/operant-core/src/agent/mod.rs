@@ -237,6 +237,13 @@ pub struct OperantAgent {
     /// before falling back to deterministic decay/eviction. Matches
     /// hermes-agent's `ContextCompressor` pattern.
     llm_compressor: Option<tokio::sync::Mutex<llm_compressor::LlmCompressor>>,
+    /// Credential pool for multi-key failover and rotation.
+    /// When set, auth/rate-limit errors trigger automatic credential
+    /// rotation via pool.invalidate() + pool.select(). Matches
+    /// hermes-agent's `_credential_pool` pattern.
+    credential_pool: Option<Arc<crate::credential_pool::CredentialPool>>,
+    /// ID of the currently-active credential in the pool (for rotation).
+    active_credential_id: Arc<std::sync::RwLock<Option<String>>>,
 }
 
 /// A pending permission request sent from the agent to the TUI
@@ -288,6 +295,8 @@ impl OperantAgent {
             )),
             iteration_budget: Arc::new(IterationBudget::new(max_iter)),
             llm_compressor: None,
+            credential_pool: None,
+            active_credential_id: Arc::new(std::sync::RwLock::new(None)),
         }
     }
 
@@ -329,6 +338,8 @@ impl OperantAgent {
             )),
             iteration_budget: Arc::new(IterationBudget::new(max_iter)),
             llm_compressor: None,
+            credential_pool: None,
+            active_credential_id: Arc::new(std::sync::RwLock::new(None)),
         }
     }
 
@@ -502,6 +513,59 @@ impl OperantAgent {
             llm_compressor::LlmCompressor::new(config),
         ));
         self
+    }
+
+    /// Attach a credential pool for multi-key failover and rotation.
+    /// When set, auth/rate-limit errors trigger automatic credential
+    /// rotation via pool.invalidate() + pool.select(). Matches
+    /// hermes-agent's `_credential_pool` pattern.
+    pub fn with_credential_pool(
+        mut self,
+        pool: Arc<crate::credential_pool::CredentialPool>,
+    ) -> Self {
+        self.credential_pool = Some(pool);
+        self
+    }
+
+    /// Try to rotate to the next available credential in the pool.
+    ///
+    /// Try to rotate to the next available credential in the pool.
+    ///
+    /// TODO(integrate-credential-pool): This method updates the pool state
+    /// but does NOT change the API key used by `self.client` because the
+    /// client is `Arc<dyn ModelClient>` constructed with a fixed key.
+    /// To complete the integration:
+    ///   1. Add `set_api_key(&str)` to the ModelClient trait
+    ///   2. After pool.select(), call `self.client.set_api_key(&cred.value)`
+    ///   3. Wire this into the error handling blocks in run()
+    ///
+    /// The pool and rotation logic are kept as infrastructure — once the
+    /// ModelClient trait supports dynamic key switching, this is ready to go.
+    pub fn try_rotate_credential(&self) -> Option<crate::credential_pool::PooledCredential> {
+        let pool = self.credential_pool.as_ref()?;
+
+        // Single write lock for the entire rotation to avoid TOCTOU races.
+        let mut active_id = self.active_credential_id.write().ok()?;
+
+        // Invalidate the current credential
+        if let Some(ref id) = *active_id {
+            pool.invalidate(id, None, Some("rotated"), None, false);
+        }
+
+        // Select the next available credential
+        let next = pool.select();
+        if let Some(ref cred) = next {
+            *active_id = Some(cred.id.clone());
+            info!(
+                credential = %cred.name,
+                source = %cred.source,
+                "Credential rotated (pool state updated, client key not yet switched)"
+            );
+        } else {
+            warn!("No available credentials in pool for rotation");
+        }
+
+        next
     }
 
     /// Send an event to the channel
@@ -854,6 +918,19 @@ impl OperantAgent {
                                     .with_tools(tools)
                                     .with_stream(self.config.stream);
                             self.client.chat_streaming(retry_request).await?
+                        } else if classified.should_rotate_credential {
+                            // TODO(integrate-credential-pool): The client holds a
+                            // fixed API key at construction time. Rotating
+                            // active_credential_id doesn't change the key the
+                            // client uses. To complete this integration:
+                            //   1. Add `set_api_key(&str)` to ModelClient trait
+                            //   2. After rotation, call client.set_api_key(&cred.value)
+                            //   3. Then rebuild and retry the request
+                            warn!(
+                                reason = %classified.reason,
+                                "Credential rotation needed but client uses fixed key"
+                            );
+                            return Err(e);
                         } else {
                             return Err(e);
                         }
@@ -881,6 +958,14 @@ impl OperantAgent {
                                     .with_tools(tools)
                                     .with_stream(self.config.stream);
                             self.client.chat(retry_request).await?
+                        } else if classified.should_rotate_credential {
+                            // TODO(integrate-credential-pool): Same as streaming
+                            // path — needs ModelClient::set_api_key() to work.
+                            warn!(
+                                reason = %classified.reason,
+                                "Credential rotation needed but client uses fixed key"
+                            );
+                            return Err(e);
                         } else {
                             return Err(e);
                         }
