@@ -989,4 +989,38 @@ mod tests {
         assert_eq!(deserialized.nodes.len(), 1);
         assert_eq!(deserialized.nodes[0].id, "test");
     }
+
+    #[test]
+    fn test_related_skills_edges() {
+        let skills = tmp_dir("skills_related");
+        let skill_a = skills.join("rust-patterns");
+        fs::create_dir_all(&skill_a).unwrap();
+        fs::write(
+            skill_a.join("SKILL.md"),
+            "---\nname: rust-patterns\ncategory: coding\nrelated_skills:\n  - debugging\n---\n# Rust Patterns\n",
+        )
+        .unwrap();
+
+        let skill_b = skills.join("debugging");
+        fs::create_dir_all(&skill_b).unwrap();
+        fs::write(
+            skill_b.join("SKILL.md"),
+            "---\nname: debugging\ncategory: coding\n---\n# Debugging\n",
+        )
+        .unwrap();
+
+        let memory = tmp_dir("memory_related");
+        let graph = build_learning_graph(&skills, &memory);
+
+        assert_eq!(graph.stats.skill_nodes, 2);
+
+        let has_edge = graph.edges.iter().any(|e|
+            (e.source == "rust-patterns" && e.target == "debugging") ||
+            (e.source == "debugging" && e.target == "rust-patterns")
+        );
+        assert!(has_edge, "Expected edge between rust-patterns and debugging from related_skills");
+
+        let _ = fs::remove_dir_all(&skills);
+        let _ = fs::remove_dir_all(&memory);
+    }
 }
