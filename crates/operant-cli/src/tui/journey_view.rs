@@ -17,6 +17,7 @@
 //   - Memories: operant_core::memory::MemoryStore::read_memories() (sync read
 //                of ~/.operant/memory/MEMORY.md)
 
+use operant_core::agent::learning_graph::{self, LearningGraph};
 use operant_core::memory::{MemoryBlock, MemoryStore};
 use operant_core::skills::Skill;
 use ratatui::Frame;
@@ -46,6 +47,9 @@ pub struct JourneyViewState {
     pub skills_scroll: usize,
     pub memories_scroll: usize,
     pub last_error: String,
+    /// The learning graph built from skills + memory directories.
+    /// Provides node/edge/stats data for graph-aware rendering.
+    pub graph: Option<LearningGraph>,
 }
 
 impl JourneyViewState {
@@ -63,6 +67,15 @@ impl JourneyViewState {
         self.last_error.clear();
         self.skills.clear();
         self.memories.clear();
+
+        // Build the learning graph from skills + memory directories.
+        // This connects skills and memories as first-class graph nodes
+        // with edges derived from lexical overlap, powering the
+        // self-learning visualization.
+        self.graph = Some(learning_graph::build_learning_graph(
+            &skills_dir,
+            &memory_dir,
+        ));
 
         // Load skills (same primitive as skills_view.rs).
         let mut mgr = operant_core::skills::SkillManager::new(skills_dir);
@@ -229,19 +242,31 @@ pub fn render_journey_view(frame: &mut Frame, state: &JourneyViewState, area: Re
     render_skills_pane(frame, state, left_area);
     render_memories_pane(frame, state, right_area);
 
-    // Footer hint line (carved out of the bottom of inner).
+    // Footer: graph stats + key hints (carved out of the bottom of inner).
     let footer = Rect {
         x: inner.x,
         y: inner.y + inner.height.saturating_sub(1),
         width: inner.width,
         height: 1,
     };
-    let hint = match state.active_pane {
-        JourneyPane::Skills => "↑/↓ navigate · Tab switch pane · Esc close · [Skills pane active]",
-        JourneyPane::Memories => {
-            "↑/↓ navigate · Tab switch pane · Esc close · [Memories pane active]"
-        }
+    let pane_hint = match state.active_pane {
+        JourneyPane::Skills => "[Skills]",
+        JourneyPane::Memories => "[Memories]",
     };
+    let graph_stats = state.graph.as_ref().map_or_else(
+        || String::new(),
+        |g| format!(
+            " │ {} skills · {} memory · {} edges · {:.1}% linked",
+            g.stats.skill_nodes,
+            g.stats.memory_nodes,
+            g.stats.total_edges,
+            100.0 - g.stats.isolated_pct,
+        ),
+    );
+    let hint = format!(
+        "↑/↓ navigate · Tab switch · Esc close · {}{}",
+        pane_hint, graph_stats
+    );
     frame.render_widget(
         Paragraph::new(vec![Line::from(Span::styled(
             hint,

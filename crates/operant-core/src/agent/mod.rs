@@ -7,7 +7,7 @@
 
 pub(crate) mod background_review;
 pub mod iteration_budget;
-pub(crate) mod learning_graph;
+pub mod learning_graph;
 pub(crate) mod llm_compressor;
 pub(crate) mod turn_context;
 pub(crate) mod turn_finalizer;
