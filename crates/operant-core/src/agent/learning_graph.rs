@@ -32,7 +32,7 @@
 //! - Edit a memory → rewrite the source file chunk
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
@@ -182,7 +182,7 @@ fn delete_skill_node(name: &str, skills_dir: &Path) -> MutationResult {
     // Check if pinned — reuse frontmatter parser
     let skill_md = skill_dir.join("SKILL.md");
     if skill_md.exists() {
-        let (_, _, _, pinned) = parse_skill_frontmatter(&skill_md);
+        let (_, _, _, pinned, _) = parse_skill_frontmatter(&skill_md);
         if pinned {
             return MutationResult {
                 ok: false,
@@ -422,6 +422,7 @@ pub fn build_learning_graph(
     let mut nodes: Vec<GraphNode> = Vec::new();
     let mut edges: Vec<GraphEdge> = Vec::new();
     let mut categories: HashMap<String, usize> = HashMap::new();
+    let mut skill_related: HashMap<String, Vec<String>> = HashMap::new();
 
     // ── Skill nodes ────────────────────────────────────────────────
     if skills_dir.exists() {
@@ -454,7 +455,7 @@ pub fn build_learning_graph(
                 .unwrap_or("unknown")
                 .to_string();
 
-            let (category, created_by, use_count, pinned) =
+            let (category, created_by, use_count, pinned, related_skills) =
                 parse_skill_frontmatter(&skill_md);
 
             let ts = skill_md
@@ -465,6 +466,11 @@ pub fn build_learning_graph(
                 .map(|d| d.as_secs() as i64);
 
             *categories.entry(category.clone()).or_insert(0) += 1;
+
+            // Store related_skills for edge construction
+            if !related_skills.is_empty() {
+                skill_related.insert(name.clone(), related_skills);
+            }
 
             nodes.push(GraphNode {
                 id: name.clone(),
@@ -530,8 +536,9 @@ pub fn build_learning_graph(
         }
     }
 
-    // ── Skill↔Skill edges (from related_skills) ───────────────────
-    // Simplified: connect skills that share the same category
+    // ── Skill↔Skill edges (from declared related_skills) ──────────
+    // Matches hermes-agent's pattern: connect skills via declared
+    // related_skills in YAML frontmatter, with category fallback.
     let skill_nodes: Vec<GraphNode> = nodes
         .iter()
         .filter(|n| n.kind == NodeKind::Skill)
@@ -540,13 +547,53 @@ pub fn build_learning_graph(
     let mut seen_edges: std::collections::HashSet<(String, String)> =
         std::collections::HashSet::new();
 
+    // Build a lookup from skill name to its related_skills list
+    let mut related_map: HashMap<String, Vec<String>> = HashMap::new();
+    for (name, related) in &skill_related {
+        if !related.is_empty() {
+            related_map.insert(name.clone(), related.clone());
+        }
+    }
+
+    // Phase 1: Edges from declared related_skills (high-precision)
     for skill in &skill_nodes {
-        // Connect to other skills in the same category
+        if let Some(related) = related_map.get(&skill.id) {
+            for target_name in related {
+                // Only connect if the target skill exists
+                if skill_nodes.iter().any(|s| s.id == *target_name) {
+                    let key = if skill.id < *target_name {
+                        (skill.id.clone(), target_name.clone())
+                    } else {
+                        (target_name.clone(), skill.id.clone())
+                    };
+                    if seen_edges.insert(key.clone()) {
+                        edges.push(GraphEdge {
+                            source: key.0,
+                            target: key.1,
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    // Phase 2: Category-based edges for skills without declared relations
+    // Only connect skills that have no related_skills AND share a category.
+    // This avoids overly dense graphs when related_skills are available.
+    for skill in &skill_nodes {
+        // Skip skills that already have declared relations
+        if related_map.contains_key(&skill.id) {
+            continue;
+        }
         for other in &skill_nodes {
             if skill.id == other.id {
                 continue;
             }
-            if skill.category == other.category {
+            // Skip other skills that already have declared relations
+            if related_map.contains_key(&other.id) {
+                continue;
+            }
+            if skill.category == other.category && skill.category != "general" {
                 let key = if skill.id < other.id {
                     (skill.id.clone(), other.id.clone())
                 } else {
@@ -650,22 +697,26 @@ pub fn build_learning_graph(
 }
 
 /// Parse minimal frontmatter from a SKILL.md file.
-fn parse_skill_frontmatter(path: &Path) -> (String, String, u32, bool) {
+/// Returns (category, created_by, use_count, pinned, related_skills).
+fn parse_skill_frontmatter(path: &Path) -> (String, String, u32, bool, Vec<String>) {
     let content = match std::fs::read_to_string(path) {
         Ok(c) => c,
-        Err(_) => return ("general".to_string(), "user".to_string(), 0, false),
+        Err(_) => return ("general".to_string(), "user".to_string(), 0, false, Vec::new()),
     };
 
     let mut category = "general".to_string();
     let mut created_by = "user".to_string();
     let mut pinned = false;
+    let mut related_skills: Vec<String> = Vec::new();
 
     // Simple line-by-line parsing (YAML frontmatter between --- delimiters)
     let mut in_frontmatter = false;
+    let mut in_related_list = false;
     for line in content.lines().take(30) {
         let trimmed = line.trim();
         if trimmed == "---" {
             in_frontmatter = !in_frontmatter;
+            in_related_list = false;
             continue;
         }
         if !in_frontmatter {
@@ -673,16 +724,49 @@ fn parse_skill_frontmatter(path: &Path) -> (String, String, u32, bool) {
         }
         if let Some(val) = trimmed.strip_prefix("category:") {
             category = val.trim().to_string();
+            in_related_list = false;
         }
         if let Some(val) = trimmed.strip_prefix("created_by:") {
             created_by = val.trim().to_string();
+            in_related_list = false;
         }
         if trimmed == "pinned: true" || trimmed == "pinned:true" {
             pinned = true;
+            in_related_list = false;
+        }
+        // Parse related_skills: either inline list or multi-line
+        if let Some(val) = trimmed.strip_prefix("related_skills:") {
+            let val = val.trim();
+            if val.starts_with('[') && val.ends_with(']') {
+                // Inline: related_skills: [skill-a, skill-b]
+                let inner = &val[1..val.len() - 1];
+                related_skills = inner.split(',')
+                    .map(|s| s.trim().trim_matches('"').trim_matches('\'').to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect();
+                in_related_list = false;
+            } else if !val.is_empty() {
+                // Single value on same line
+                related_skills.push(val.trim_matches('"').trim_matches('\'').to_string());
+                in_related_list = false;
+            } else {
+                // Multi-line list starts on next lines
+                in_related_list = true;
+            }
+            continue;
+        }
+        // Handle multi-line YAML list items (e.g. "  - skill-name")
+        if in_related_list && trimmed.starts_with('-') {
+            if let Some(val) = trimmed.strip_prefix('-') {
+                let val = val.trim().trim_matches('"').trim_matches('\'').to_string();
+                if !val.is_empty() {
+                    related_skills.push(val);
+                }
+            }
         }
     }
 
-    (category, created_by, 0, pinned)
+    (category, created_by, 0, pinned, related_skills)
 }
 
 // ---------------------------------------------------------------------------
@@ -693,6 +777,7 @@ fn parse_skill_frontmatter(path: &Path) -> (String, String, u32, bool) {
 mod tests {
     use super::*;
     use std::fs;
+    use std::path::PathBuf;
 
     fn tmp_dir(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
