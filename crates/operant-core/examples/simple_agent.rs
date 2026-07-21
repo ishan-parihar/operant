@@ -171,6 +171,7 @@ Use the echo tool to repeat information and the calculate tool for math."
         record_trajectories: false,
         skill_nudge_interval: 10,
         memory_review_interval: 5,
+        max_retries: 3,
     };
 
     let database = Arc::new(Database::init(std::path::PathBuf::from("simple_agent.db"))?);
