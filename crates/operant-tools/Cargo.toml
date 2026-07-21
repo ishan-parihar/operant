@@ -39,11 +39,15 @@ urlencoding = "2.1"
 uuid = { workspace = true }
 which = "6.0"
 
+# Optional deps for feature-gated modules
+fantoccini = { version = "0.22.1", optional = true, default-features = false, features = ["rustls-tls"] }
+pdf-extract = { version = "0.10", optional = true }
+
 [features]
 default = []
-browser-native = []
+browser-native = ["dep:fantoccini"]
 probe = []
-rag-pdf = []
+rag-pdf = ["dep:pdf-extract"]
 
 [dev-dependencies]
 operant-infra.workspace = true
