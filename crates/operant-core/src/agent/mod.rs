@@ -1881,6 +1881,15 @@ impl OperantAgent {
                 "Background review daemon started"
             );
 
+            // ── Write origin context (Phase 2) ────────────────────
+            // Set the write origin to "background_review" so the
+            // skills_tool write guards know this is a review session.
+            // This prevents the review agent from modifying protected
+            // (bundled) or hub-installed skills. Matches hermes-agent's
+            // _memory_write_origin = "background_review" pattern.
+            let _origin_token = crate::write_origin::set_write_origin("background_review");
+            crate::tools::skills_tool::reset_review_read_marks();
+
             // ── Prompt cache parity (Phase 2) ─────────────────────
             // When parent_frozen_prefix is available (same model, not routed),
             // use the parent's EXACT system prompt bytes so the outbound HTTP
