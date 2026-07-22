@@ -73,19 +73,6 @@ mod tests {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Consolidation constants
-// ---------------------------------------------------------------------------
-
-/// Whether consolidation is enabled by default.
-///
-/// OFF by default — a curator run does ONLY the deterministic inactivity
-/// prune (mark stale / archive long-unused skills) and skips the
-/// forked aux-model review entirely. Set `curator.consolidate: true`
-/// to opt into the LLM pass that merges overlapping skills into
-/// class-level umbrellas.
-pub const DEFAULT_CONSOLIDATE: bool = false;
-
 /// Curator runtime state persisted to disk.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CuratorState {
@@ -262,7 +249,7 @@ impl CuratorEngine {
                 // Release the state write lock before calling consolidation
                 // (consolidation acquires its own locks internally)
                 drop(state);
-                match self.run_consolidation(client, true, dry_run).await {
+                match self.run_consolidation(client, dry_run).await {
                     Ok(consolidation) => {
                         skills_consolidated = consolidation.consolidated;
                         skills_pruned = consolidation.pruned;
@@ -512,18 +499,11 @@ impl CuratorEngine {
     /// Identifies overlapping skills and merges them into class-level
     /// umbrella skills. This matches hermes-agent's curator consolidation
     /// pass. Returns a [`review::ConsolidationResult`] describing what was merged.
-    ///
-    /// When `consolidate` is false (the default), this is a no-op.
     pub async fn run_consolidation(
         &self,
         llm_client: &dyn review::LlmReviewClient,
-        consolidate: bool,
         dry_run: bool,
     ) -> Result<review::ConsolidationResult> {
-        if !consolidate {
-            tracing::debug!("Consolidation disabled — skipping");
-            return Ok(review::ConsolidationResult::default());
-        }
 
         // Load fresh usage data
         self.usage_tracker.load()?;
@@ -650,6 +630,8 @@ impl CuratorEngine {
                         .set_state(skill_name, LifecycleState::Archived);
                 }
 
+                // Record consolidation entry (always, even in dry_run —
+                // this reports what *would* happen)
                 result.consolidated.push(review::ConsolidationEntry {
                     name: skill_name.clone(),
                     into: verdict.umbrella.clone(),
