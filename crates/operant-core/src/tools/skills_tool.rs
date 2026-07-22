@@ -565,6 +565,8 @@ impl OperantTool for SkillViewTool {
             let Some(skill_dir) = find_skill(skills_dir, name) else {
                 return ToolResult::error("skill_view", format!("Skill '{}' not found", name));
             };
+            // Track that this skill was read during background review
+            mark_review_skill_read(name);
             let target = match resolve_skill_target(&skill_dir, file_path) {
                 Ok(t) => t,
                 Err(e) => return ToolResult::error("skill_view", e),
