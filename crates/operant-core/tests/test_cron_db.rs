@@ -147,7 +147,51 @@ fn rewrite_pruned_skill_dropped() {
 
     let jobs = db.list_jobs(true).unwrap();
     assert!(jobs[0].skills.as_ref().map_or(true, |s| s.is_empty()));
-    assert!(jobs[0].skill.is_none() || jobs[0].skill.as_deref() == Some(""));
+    assert!(jobs[0].skill.is_none(), "skill should be None after all skills pruned");
+}
+
+#[test]
+fn rewrite_prune_only_no_consolidation() {
+    let (db, _path) = temp_db("prune_only");
+    db.create_job(make_job("j1", None, Some(vec!["skill-a", "skill-b", "skill-c"])))
+        .unwrap();
+
+    // Prune one skill, keep two — no consolidation involved
+    let report = db
+        .rewrite_skill_refs(&HashMap::new(), &["skill-b".to_string()])
+        .unwrap();
+    assert_eq!(report.jobs_updated, 1);
+    assert_eq!(report.drops.len(), 1);
+    assert_eq!(report.mappings.len(), 0);
+
+    let jobs = db.list_jobs(true).unwrap();
+    let skills = jobs[0].skills.as_ref().unwrap();
+    assert_eq!(skills.len(), 2);
+    assert!(skills.contains(&"skill-a".to_string()));
+    assert!(skills.contains(&"skill-c".to_string()));
+    assert!(!skills.contains(&"skill-b".to_string()));
+    // skill field should be set to first remaining skill
+    assert_eq!(jobs[0].skill.as_deref(), Some("skill-a"));
+}
+
+#[test]
+fn rewrite_prune_all_from_multi_skill_job() {
+    let (db, _path) = temp_db("prune_all_multi");
+    db.create_job(make_job("j1", None, Some(vec!["a", "b", "c"])))
+        .unwrap();
+
+    let report = db
+        .rewrite_skill_refs(
+            &HashMap::new(),
+            &["a".to_string(), "b".to_string(), "c".to_string()],
+        )
+        .unwrap();
+    assert_eq!(report.jobs_updated, 1);
+    assert_eq!(report.drops.len(), 3);
+
+    let jobs = db.list_jobs(true).unwrap();
+    assert!(jobs[0].skills.as_ref().map_or(true, |s| s.is_empty()));
+    assert!(jobs[0].skill.is_none(), "skill should be None after all pruned");
 }
 
 #[test]
