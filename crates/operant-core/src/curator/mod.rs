@@ -257,16 +257,17 @@ impl CuratorEngine {
         match state.last_run_at {
             None => {
                 // First run — seed state so we wait a full interval.
-                let mut state = self.state.write().await;
-                state.last_run_at = Some(now);
-                state.last_run_summary = Some(
-                    "deferred first run — curator seeded, will run after one interval".to_string(),
-                );
-                let _ = self.save_state_inner(&state).await;
-                tracing::info!(
-                    "Curator seeded — first run deferred by one interval ({}h)",
-                    state.interval_hours
-                );
+                {
+                    let mut state = self.state.write().await;
+                    state.last_run_at = Some(now);
+                    state.last_run_summary = Some(
+                        "deferred first run — curator seeded, will run after one interval"
+                            .to_string(),
+                    );
+                } // drop write guard before async I/O
+                let snapshot = self.state.read().await.clone();
+                let _ = self.save_state_inner(&snapshot).await;
+                tracing::info!("Curator seeded — first run deferred by one interval");
                 false
             }
             Some(last) => {
@@ -318,7 +319,6 @@ impl CuratorEngine {
 
         let mut counts = std::collections::HashMap::new();
         counts.insert("checked".to_string(), agent_created.len() as i64);
-        counts.insert("marked_stale".to_string(), 0);
         counts.insert("archived".to_string(), 0);
         counts.insert("reactivated".to_string(), 0);
         counts.insert("skipped_pinned".to_string(), 0);
@@ -362,19 +362,6 @@ impl CuratorEngine {
                         );
                     }
                 }
-            } else if record.last_used.timestamp() <= stale_cutoff
-                && *current == LifecycleState::Active
-            {
-                // Mark as stale
-                // Note: we don't have a Stale lifecycle state in the enum,
-                // so we log it but don't change state. The archive cutoff
-                // will handle the actual transition.
-                *counts.entry("marked_stale".to_string()).or_insert(0) += 1;
-                tracing::debug!(
-                    skill = %record.name,
-                    inactive_days,
-                    "Curator marked skill as stale (pending archive)"
-                );
             } else if record.last_used.timestamp() > stale_cutoff
                 && *current == LifecycleState::Archived
             {
@@ -382,24 +369,39 @@ impl CuratorEngine {
                 // This shouldn't normally happen (archived skills aren't loaded),
                 // but handle it defensively.
                 *counts.entry("reactivated".to_string()).or_insert(0) += 1;
-                tracing::info!(skill = %record.name, "Curator reactivated skill");
             }
         }
 
-        // Save updated state
-        let mut state = self.state.write().await;
-        state.last_run_at = Some(now);
-        state.run_count += 1;
+        // Aggregate logging (single line, not per-skill)
+        let archived_count = counts.get("archived").copied().unwrap_or(0);
+        let reactivated_count = counts.get("reactivated").copied().unwrap_or(0);
+        let skipped_count = counts.get("skipped_pinned").copied().unwrap_or(0);
+        if archived_count > 0 || reactivated_count > 0 {
+            tracing::info!(
+                checked = agent_created.len(),
+                archived = archived_count,
+                reactivated = reactivated_count,
+                skipped_pinned = skipped_count,
+                "Curator automatic transitions complete"
+            );
+        }
+
+        // Save updated state — clone before async write to release the lock early.
         let summary = format!(
-            "Auto-transitions: checked={}, archived={}, stale={}, reactivated={}, skipped_pinned={}",
+            "Auto-transitions: checked={}, archived={}, reactivated={}, skipped_pinned={}",
             counts.get("checked").unwrap_or(&0),
             counts.get("archived").unwrap_or(&0),
-            counts.get("marked_stale").unwrap_or(&0),
             counts.get("reactivated").unwrap_or(&0),
             counts.get("skipped_pinned").unwrap_or(&0),
         );
-        state.last_run_summary = Some(summary);
-        let _ = self.save_state_inner(&state).await;
+        {
+            let mut state = self.state.write().await;
+            state.last_run_at = Some(now);
+            state.run_count += 1;
+            state.last_run_summary = Some(summary);
+        } // drop write guard before async I/O
+        let state_snapshot = self.state.read().await.clone();
+        let _ = self.save_state_inner(&state_snapshot).await;
         let _ = self.usage_tracker.save();
 
         Ok(counts)

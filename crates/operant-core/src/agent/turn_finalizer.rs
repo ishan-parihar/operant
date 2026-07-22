@@ -21,6 +21,8 @@
 
 use std::fmt;
 
+use crate::client::{Message, Role};
+
 // ---------------------------------------------------------------------------
 // Preflight Context Compression Constants
 // ---------------------------------------------------------------------------
@@ -154,12 +156,11 @@ impl TurnDiagnostics {
 /// - `assistant → assistant` violations (consecutive assistant messages)
 ///
 /// Returns the number of repairs made.
-pub fn repair_message_sequence(messages: &mut Vec<crate::client::Message>) -> usize {
+#[allow(dead_code)]
+pub fn repair_message_sequence(messages: &mut Vec<Message>) -> usize {
     if messages.len() <= 2 {
         return 0;
     }
-
-    use crate::client::Role;
 
     let mut repairs = 0;
     let mut i = 1;
@@ -189,11 +190,10 @@ pub fn repair_message_sequence(messages: &mut Vec<crate::client::Message>) -> us
                 messages.remove(i);
                 repairs += 1;
                 true
-            }
-            // Assistant followed by assistant — merge into previous
+            }            // Assistant followed by assistant — keep the newer one
             (Role::Assistant, Role::Assistant) => {
-                let merged = format!("{}\n\n{}", messages[i - 1].content, messages[i].content);
-                messages[i - 1].content = merged;
+                messages[i - 1].content = messages[i].content.clone();
+                messages[i - 1].tool_calls = messages[i].tool_calls.clone();
                 messages.remove(i);
                 repairs += 1;
                 true
@@ -219,36 +219,53 @@ pub fn repair_message_sequence(messages: &mut Vec<crate::client::Message>) -> us
 /// When `write_file` or `patch` calls fail during a turn, this function
 /// detects them and produces a human-readable footer to append to the
 /// assistant response, preventing over-claiming.
-pub fn file_mutation_verifier_footer(messages: &[crate::client::Message]) -> Option<String> {
-    use crate::client::Role;
-
+#[allow(dead_code)]
+pub fn file_mutation_verifier_footer(messages: &[Message]) -> Option<String> {
     let mut failed_writes: Vec<String> = Vec::new();
 
-    // Walk messages looking for tool results with failed file mutations
+    // Walk assistant messages to find tool calls that are file mutations,
+    // then match against tool results that indicate failure.
+    let mut file_mutation_call_ids: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
+
     for msg in messages {
-        if msg.role != Role::Tool {
-            continue;
+        // Collect tool call IDs from assistant messages that invoked file mutations
+        if msg.role == Role::Assistant {
+            if let Some(ref tool_calls) = msg.tool_calls {
+                for tc in tool_calls {
+                    let name = tc.function.name.to_lowercase();
+                    if name == "write_file" || name == "patch" || name == "create_file" {
+                        file_mutation_call_ids.insert(tc.id.clone());
+                    }
+                }
+            }
         }
 
-        let content = &msg.content;
-        let content_lower = content.to_lowercase();
+        // Check tool results for failures on those specific call IDs
+        if msg.role == Role::Tool {
+            if let Some(ref tool_call_id) = msg.tool_call_id {
+                if !file_mutation_call_ids.contains(tool_call_id) {
+                    continue;
+                }
+            } else {
+                continue;
+            }
 
-        // Detect failed write_file / patch operations
-        let is_file_mutation = content_lower.contains("write_file")
-            || content_lower.contains("patch")
-            || content_lower.contains("file_path")
-            || content_lower.contains("write to file");
+            let content = &msg.content;
+            let content_lower = content.to_lowercase();
 
-        let is_failure = content_lower.contains("error")
-            || content_lower.contains("failed")
-            || content_lower.contains("could not find")
-            || content_lower.contains("no such file")
-            || content_lower.contains("permission denied");
+            let is_failure = content_lower.contains("error")
+                || content_lower.contains("failed")
+                || content_lower.contains("could not find")
+                || content_lower.contains("no such file")
+                || content_lower.contains("permission denied")
+                || content_lower.contains("old_string not found");
 
-        if is_file_mutation && is_failure {
-            // Extract a short preview of the failure
-            let preview: String = content.chars().take(120).collect();
-            failed_writes.push(preview);
+            if is_failure {
+                // Extract a short preview of the failure
+                let preview: String = content.chars().take(120).collect();
+                failed_writes.push(preview);
+            }
         }
     }
 
