@@ -128,6 +128,9 @@ pub struct CuratorReport {
     /// Skills that were pruned (archived for staleness, not consolidated).
     #[serde(default)]
     pub skills_pruned: Vec<String>,
+    /// Cron job skill references rewritten after consolidation.
+    #[serde(default)]
+    pub cron_rewrites: Option<crate::cronjobs::CronRewriteReport>,
 }
 
 /// Main curator engine — reviews skills, manages lifecycle transitions.
@@ -216,8 +219,26 @@ impl CuratorEngine {
         let mut stale = Vec::new();
         let mut errors = Vec::new();
 
+        // Protect cron-dependent skills from archival.
+        let cron_refs = if let Some(db) = cron_db {
+            match db.referenced_skill_names() {
+                Ok(refs) => refs,
+                Err(e) => {
+                    tracing::warn!(error = %e, "Failed to read cron skill refs — cron-dependent skills may be archived");
+                    std::collections::HashSet::new()
+                }
+            }
+        } else {
+            std::collections::HashSet::new()
+        };
+
         for record in &agent_created {
             if record.pinned {
+                continue;
+            }
+            // Skills referenced by cron jobs are never archived.
+            if cron_refs.contains(&record.name) {
+                tracing::debug!(skill = %record.name, "Skipping archive — skill is referenced by cron job");
                 continue;
             }
             let inactive_days = (now - record.last_used.timestamp()) / 86400;
@@ -246,6 +267,7 @@ impl CuratorEngine {
         // Run LLM-driven consolidation pass when enabled and a client is available
         let mut skills_consolidated = Vec::new();
         let mut skills_pruned = Vec::new();
+        let mut cron_rewrites = None;
         if consolidate {
             if let Some(client) = llm_client {
                 // Release the state write lock before calling consolidation
@@ -255,6 +277,7 @@ impl CuratorEngine {
                     Ok(consolidation) => {
                         skills_consolidated = consolidation.consolidated;
                         skills_pruned = consolidation.pruned;
+                        cron_rewrites = consolidation.cron_rewrites;
                         errors.extend(consolidation.errors);
                     }
                     Err(e) => {
@@ -301,6 +324,7 @@ impl CuratorEngine {
             summary,
             skills_consolidated,
             skills_pruned,
+            cron_rewrites,
         })
     }
 
@@ -665,6 +689,7 @@ impl CuratorEngine {
                                 "Cron job skill references rewritten after consolidation"
                             );
                         }
+                        result.cron_rewrites = Some(rewrite_report);
                     }
                     Err(e) => {
                         result.errors.push(format!(

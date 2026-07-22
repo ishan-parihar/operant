@@ -64,6 +64,8 @@ pub struct ConsolidationResult {
     pub pruned: Vec<String>,
     /// Errors encountered during consolidation.
     pub errors: Vec<String>,
+    /// Cron job skill references rewritten after consolidation.
+    pub cron_rewrites: Option<crate::cronjobs::CronRewriteReport>,
 }
 
 /// A single consolidation entry — records which skill was absorbed

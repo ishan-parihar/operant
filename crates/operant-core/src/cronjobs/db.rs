@@ -313,7 +313,7 @@ impl CronDb {
     pub fn update_job(
         &self,
         id: &str,
-        updates: std::collections::HashMap<String, Option<serde_json::Value>>,
+        updates: HashMap<String, Option<serde_json::Value>>,
     ) -> Result<Option<CronJob>, Error> {
         let conn = self.conn.lock().unwrap();
 
@@ -505,9 +505,12 @@ impl CronDb {
     /// Returns a report describing what was rewritten.
     pub fn rewrite_skill_refs(
         &self,
-        consolidated: &std::collections::HashMap<String, String>,
+        consolidated: &HashMap<String, String>,
         pruned: &[String],
     ) -> Result<CronRewriteReport, Error> {
+        // NOTE: Mutex is held for the entire rewrite loop to ensure atomicity.
+        // This is fine for CLI (short-lived) but could be relaxed in daemon mode
+        // if contention becomes an issue.
         let conn = self.conn.lock().unwrap();
         let mut report = CronRewriteReport::default();
 

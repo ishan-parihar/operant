@@ -4,6 +4,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use clap::Subcommand;
 use operant_core::config::AppConfig;
+use operant_core::cronjobs::CronDb;
 use operant_core::curator::{CuratorEngine, archiver, backup};
 use operant_core::skill_usage::{LifecycleState, SkillUsageTracker};
 
@@ -108,7 +109,7 @@ pub async fn handle_curator_command(
             background,
             dry_run,
             consolidate,
-        } => cmd_run(&engine, background, dry_run, consolidate).await,
+        } => cmd_run(&engine, background, dry_run, consolidate, &curator_dir).await,
         CuratorSubcommand::Pause => cmd_pause(&engine).await,
         CuratorSubcommand::Resume => cmd_resume(&engine).await,
         CuratorSubcommand::Pin { skill } => cmd_pin(&tracker, &skill).await,
@@ -158,7 +159,7 @@ async fn cmd_status(engine: &CuratorEngine) -> Result<()> {
     Ok(())
 }
 
-async fn cmd_run(engine: &CuratorEngine, background: bool, dry_run: bool, consolidate: bool) -> Result<()> {
+async fn cmd_run(engine: &CuratorEngine, background: bool, dry_run: bool, consolidate: bool, curator_dir: &Path) -> Result<()> {
     if background {
         println!("Curator run (background mode not yet supported, running synchronously)...");
     } else {
@@ -171,7 +172,22 @@ async fn cmd_run(engine: &CuratorEngine, background: bool, dry_run: bool, consol
         println!("  Consolidation: enabled (LLM-driven skill merging)");
     }
 
-    let report = engine.run_review(dry_run, None, consolidate, None).await?;
+    // Initialize CronDb only for the Run subcommand (best-effort).
+    let cron_db = {
+        let cron_db_path = curator_dir.join("cron.db");
+        match CronDb::init(cron_db_path) {
+            Ok(db) => {
+                println!("  Cron rewriting: enabled (skill refs updated after consolidation)");
+                Some(db)
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "Failed to init CronDb — cron rewriting disabled");
+                None
+            }
+        }
+    };
+
+    let report = engine.run_review(dry_run, None, consolidate, cron_db.as_ref()).await?;
     println!("{}", report.summary);
     if !report.skills_archived.is_empty() {
         println!(
@@ -202,6 +218,26 @@ async fn cmd_run(engine: &CuratorEngine, background: bool, dry_run: bool, consol
             report.skills_pruned.len(),
             report.skills_pruned.join(", ")
         );
+    }
+    if let Some(ref cron) = report.cron_rewrites {
+        if cron.jobs_updated > 0 {
+            println!(
+                "  Cron jobs rewritten ({}/{}):",
+                cron.jobs_updated, cron.jobs_scanned
+            );
+            for mapping in &cron.mappings {
+                println!(
+                    "    {} -> {} (job {})",
+                    mapping.old_skill, mapping.new_skill, mapping.job_id
+                );
+            }
+            for drop in &cron.drops {
+                println!(
+                    "    {} dropped (job {})",
+                    drop.dropped_skill, drop.job_id
+                );
+            }
+        }
     }
     for err in &report.errors {
         eprintln!("  Error: {}", err);
