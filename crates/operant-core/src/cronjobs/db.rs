@@ -328,10 +328,32 @@ impl CronDb {
             set_clauses.push(format!("{} = ?{}", key, i + 1));
             match value {
                 Some(val) => {
-                    let val_str = val.to_string();
-                    params_vec.push(Box::new(val_str));
+                    // Convert serde_json::Value to rusqlite::Value so booleans
+                    // and numbers are stored with correct SQLite types (not TEXT).
+                    // Convert serde_json::Value to rusqlite::Value so booleans
+                    // and numbers are stored with correct SQLite types (not TEXT).
+                    let sqlite_val = match val {
+                        serde_json::Value::Bool(b) => {
+                            rusqlite::types::Value::Integer(if *b { 1 } else { 0 })
+                        }
+                        serde_json::Value::Number(n) => {
+                            if let Some(i) = n.as_i64() {
+                                rusqlite::types::Value::Integer(i)
+                            } else if let Some(f) = n.as_f64() {
+                                rusqlite::types::Value::Real(f)
+                            } else {
+                                rusqlite::types::Value::Text(n.to_string())
+                            }
+                        }
+                        serde_json::Value::String(s) => {
+                            rusqlite::types::Value::Text(s.clone())
+                        }
+                        serde_json::Value::Null => rusqlite::types::Value::Null,
+                        other => rusqlite::types::Value::Text(other.to_string()),
+                    };
+                    params_vec.push(Box::new(sqlite_val));
                 }
-                None => params_vec.push(Box::new("NULL")),
+                None => params_vec.push(Box::new(rusqlite::types::Value::Null)),
             }
         }
 
@@ -575,8 +597,10 @@ impl CronDb {
                     });
                     changed = true;
                 } else {
-                    // Keep as-is
-                    new_skills.push(skill_name.clone());
+                    // Keep as-is, but skip if already present (dedup)
+                    if !new_skills.contains(skill_name) {
+                        new_skills.push(skill_name.clone());
+                    }
                 }
             }
 
