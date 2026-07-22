@@ -1454,36 +1454,26 @@ impl OperantAgent {
             let (should_review_skills, should_review_memory) = {
                 let skill_manage_called = tool_names.iter().any(|n| n == "skill_manage");
                 let mut evo = self.evolution_state.lock().unwrap();
-                if skill_manage_called {
-                    evo.reset_skill_counter();
-                } else {
-                    evo.bump_skill_counter();
-                }
-                // Memory counter increments every completed turn regardless
-                // of whether skill_manage was called.
-                evo.bump_memory_counter();
 
-                let skills = evo.should_review_skills();
-                let memory = evo.should_review_memory();
+                let trigger = turn_finalizer::check_and_advance_evolution_triggers(
+                    &mut evo,
+                    skill_manage_called,
+                );
 
-                if skills {
+                if trigger.should_review_skills {
                     info!(
-                        iters = evo.iters_since_skill,
-                        interval = evo.skill_nudge_interval,
+                        iters = trigger.iters_since_skill,
                         "Skill nudge triggered — spawning background review"
                     );
-                    evo.reset_skill_counter();
                 }
-                if memory {
+                if trigger.should_review_memory {
                     info!(
-                        turns = evo.turns_since_memory_review,
-                        interval = evo.memory_review_interval,
+                        turns = trigger.turns_since_memory,
                         "Memory review triggered — spawning background review"
                     );
-                    evo.reset_memory_counter();
                 }
 
-                // ── Phase 4: Persist evolution counters to session metadata ──
+                // ── Persist evolution counters to session metadata ──
                 // After bumping, persist so the next run() can hydrate.
                 if self.persistent_session_id.is_some() {
                     for (key, val) in evo.persist_counters() {
@@ -1491,7 +1481,7 @@ impl OperantAgent {
                     }
                 }
 
-                (skills, memory)
+                (trigger.should_review_skills, trigger.should_review_memory)
             }; // MutexGuard dropped here — safe to .await
             if should_review_skills || should_review_memory {
                 self.spawn_background_review(
