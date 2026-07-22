@@ -36,6 +36,7 @@ pub struct OverviewStats {
     pub total_input_tokens: u64,
     pub total_output_tokens: u64,
     pub total_tokens: u64,
+    pub total_cost_usd: f64,
     pub avg_messages_per_session: f64,
     pub avg_tokens_per_session: f64,
 }
@@ -48,6 +49,7 @@ pub struct ModelStats {
     pub output_tokens: u64,
     pub total_tokens: u64,
     pub tool_calls: usize,
+    pub estimated_cost_usd: f64,
 }
 
 #[derive(Debug, Clone)]
@@ -142,6 +144,7 @@ impl<'a> InsightsEngine<'a> {
             return empty_report(days, source);
         }
 
+        let conn = self.db.conn();
         InsightsReport {
             days,
             source_filter: source.map(String::from),
@@ -149,7 +152,7 @@ impl<'a> InsightsEngine<'a> {
             overview: compute_overview(&sessions),
             models: compute_model_breakdown(&sessions),
             platforms: compute_platform_breakdown(&sessions),
-            tools: compute_tool_breakdown(&sessions),
+            tools: compute_tool_breakdown_from_db(&sessions, &conn),
             activity: compute_activity_patterns(&sessions),
             top_sessions: compute_top_sessions(&sessions),
         }
@@ -232,6 +235,7 @@ fn compute_overview(sessions: &[SessionRow]) -> OverviewStats {
     let total_input: i64 = sessions.iter().map(|s| s.input_tokens).sum();
     let total_output: i64 = sessions.iter().map(|s| s.output_tokens).sum();
     let total_tokens = total_input + total_output;
+    let total_cost: f64 = sessions.iter().map(|s| estimate_session_cost(s)).sum();
 
     OverviewStats {
         total_sessions: n,
@@ -240,6 +244,7 @@ fn compute_overview(sessions: &[SessionRow]) -> OverviewStats {
         total_input_tokens: total_input as u64,
         total_output_tokens: total_output as u64,
         total_tokens: total_tokens as u64,
+        total_cost_usd: total_cost,
         avg_messages_per_session: if n > 0 {
             total_messages as f64 / n as f64
         } else {
@@ -264,12 +269,14 @@ fn compute_model_breakdown(sessions: &[SessionRow]) -> Vec<ModelStats> {
             output_tokens: 0,
             total_tokens: 0,
             tool_calls: 0,
+            estimated_cost_usd: 0.0,
         });
         entry.sessions += 1;
         entry.input_tokens += s.input_tokens as u64;
         entry.output_tokens += s.output_tokens as u64;
         entry.total_tokens += (s.input_tokens + s.output_tokens) as u64;
         entry.tool_calls += s.tool_call_count as usize;
+        entry.estimated_cost_usd += estimate_session_cost(s);
     }
     let mut result: Vec<ModelStats> = map.into_values().collect();
     result.sort_by(|a, b| b.total_tokens.cmp(&a.total_tokens));
@@ -297,16 +304,138 @@ fn compute_platform_breakdown(sessions: &[SessionRow]) -> Vec<PlatformStats> {
     result
 }
 
-fn compute_tool_breakdown(sessions: &[SessionRow]) -> Vec<ToolStats> {
+/// Estimate cost for a session using known model pricing.
+///
+/// Uses a static pricing map for common models (cost per million tokens).
+/// Falls back to $0.00 for unknown models. This matches hermes-agent's
+/// `has_known_pricing` / `estimate_usage_cost` pattern.
+fn estimate_session_cost(session: &SessionRow) -> f64 {
+    let model = match session.model.as_deref() {
+        Some(m) => m,
+        None => return 0.0,
+    };
+
+    // Static pricing map: (input_cost_per_million, output_cost_per_million)
+    // Sourced from models.dev and provider documentation as of 2025.
+    let pricing: Option<(f64, f64)> = match model {
+        // Anthropic Claude
+        m if m.contains("claude-3-opus") => Some((15.0, 75.0)),
+        m if m.contains("claude-3-sonnet") || m.contains("claude-3.5-sonnet") => Some((3.0, 15.0)),
+        m if m.contains("claude-3-haiku") || m.contains("claude-3.5-haiku") => Some((0.25, 1.25)),
+        m if m.contains("claude-4-opus") || m.contains("claude-opus-4") => Some((15.0, 75.0)),
+        m if m.contains("claude-4-sonnet") || m.contains("claude-sonnet-4") => Some((3.0, 15.0)),
+        // OpenAI GPT
+        m if m.contains("gpt-4o") && !m.contains("mini") => Some((2.5, 10.0)),
+        m if m.contains("gpt-4o-mini") => Some((0.15, 0.6)),
+        m if m.contains("gpt-4-turbo") => Some((10.0, 30.0)),
+        m if m.contains("gpt-4") => Some((30.0, 60.0)),
+        m if m.contains("gpt-3.5-turbo") => Some((0.5, 1.5)),
+        m if m.starts_with("o1-preview") => Some((15.0, 60.0)),
+        m if m.starts_with("o1-mini") => Some((3.0, 12.0)),
+        m if m.starts_with("o1") => Some((15.0, 60.0)),
+        m if m.starts_with("o3") && !m.contains("mini") => Some((10.0, 40.0)),
+        m if m.starts_with("o3-mini") => Some((1.1, 4.4)),
+        m if m.starts_with("o4-mini") => Some((1.1, 4.4)),
+        // Google Gemini
+        m if m.contains("gemini-1.5-pro") => Some((1.25, 5.0)),
+        m if m.contains("gemini-1.5-flash") => Some((0.075, 0.3)),
+        m if m.contains("gemini-2.0-flash") => Some((0.1, 0.4)),
+        m if m.contains("gemini-2.5-pro") => Some((1.25, 10.0)),
+        m if m.contains("gemini-2.5-flash") => Some((0.15, 0.6)),
+        // Meta Llama (via providers)
+        m if m.contains("llama-3.1-405b") => Some((3.0, 3.0)),
+        m if m.contains("llama-3.1-70b") => Some((0.59, 0.79)),
+        m if m.contains("llama-3.1-8b") => Some((0.05, 0.08)),
+        // Mistral
+        m if m.contains("mistral-large") => Some((2.0, 6.0)),
+        m if m.contains("mistral-small") => Some((0.1, 0.3)),
+        _ => None,
+    };
+
+    match pricing {
+        Some((input_per_m, output_per_m)) => {
+            let input_cost = (session.input_tokens as f64) / 1_000_000.0 * input_per_m;
+            let output_cost = (session.output_tokens as f64) / 1_000_000.0 * output_per_m;
+            input_cost + output_cost
+        }
+        None => 0.0,
+    }
+}
+
+fn compute_tool_breakdown_from_db(sessions: &[SessionRow], conn: &rusqlite::Connection) -> Vec<ToolStats> {
     let total: usize = sessions.iter().map(|s| s.tool_call_count as usize).sum();
     if total == 0 {
         return Vec::new();
     }
-    vec![ToolStats {
-        tool: "total_tool_calls".to_string(),
-        count: total,
-        percentage: 100.0,
-    }]
+
+    // Collect session IDs to query per-tool breakdown
+    let session_ids: Vec<&str> = sessions.iter().map(|s| s.id.as_str()).collect();
+    if session_ids.is_empty() {
+        return Vec::new();
+    }
+
+    // Build a parameterized IN clause using standard ? placeholders
+    let in_clause: String = session_ids.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
+    let query = format!(
+        "SELECT tool_name, COUNT(*) as cnt FROM messages 
+         WHERE session_id IN ({}) AND tool_name IS NOT NULL AND tool_name != ''
+         GROUP BY tool_name ORDER BY cnt DESC",
+        in_clause
+    );
+
+    // Convert to owned Strings so they implement ToSql directly,
+    // avoiding Sized trait issues with &str → &dyn ToSql casts.
+    let owned_ids: Vec<String> = session_ids.iter().map(|s| s.to_string()).collect();
+    let param_refs: Vec<&dyn rusqlite::types::ToSql> = owned_ids
+        .iter()
+        .map(|s| s as &dyn rusqlite::types::ToSql)
+        .collect();
+
+    let mut stmt = match conn.prepare(&query) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::warn!(error = %e, "Failed to prepare tool breakdown query");
+            return vec![ToolStats {
+                tool: "total_tool_calls".to_string(),
+                count: total,
+                percentage: 100.0,
+            }];
+        }
+    };
+
+    let tool_counts: Vec<(String, usize)> = stmt
+        .query_map(param_refs.as_slice(), |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, usize>(1)?,
+            ))
+        })
+        .ok()
+        .into_iter()
+        .flatten()
+        .filter_map(|r| r.ok())
+        .collect();
+
+    if tool_counts.is_empty() {
+        return vec![ToolStats {
+            tool: "total_tool_calls".to_string(),
+            count: total,
+            percentage: 100.0,
+        }];
+    }
+
+    tool_counts
+        .into_iter()
+        .map(|(tool, count)| ToolStats {
+            tool,
+            count,
+            percentage: if total > 0 {
+                (count as f64 / total as f64) * 100.0
+            } else {
+                0.0
+            },
+        })
+        .collect()
 }
 
 fn compute_activity_patterns(sessions: &[SessionRow]) -> ActivityPatterns {
@@ -437,6 +566,9 @@ fn format_report_terminal(report: &InsightsReport) -> String {
         "  Avg msgs/session:  {:.1}",
         o.avg_messages_per_session
     ));
+    if o.total_cost_usd > 0.0 {
+        lines.push(format!("  Estimated cost:    ${:.4}", o.total_cost_usd));
+    }
 
     if !report.models.is_empty() {
         lines.push(String::new());
@@ -448,11 +580,31 @@ fn format_report_terminal(report: &InsightsReport) -> String {
             } else {
                 &m.model
             };
+            let cost_str = if m.estimated_cost_usd > 0.0 {
+                format!("${:.4}", m.estimated_cost_usd)
+            } else {
+                "—".to_string()
+            };
             lines.push(format!(
-                "  {:<30} {:>8} {:>12}",
+                "  {:<30} {:>8} {:>12} {:>10}",
                 name,
                 m.sessions,
-                fmt_num(m.total_tokens as usize)
+                fmt_num(m.total_tokens as usize),
+                cost_str
+            ));
+        }
+    }
+
+    if !report.tools.is_empty() {
+        lines.push(String::new());
+        lines.push("  🔧 Tool Usage".to_string());
+        lines.push("  ────────────────────────────────────".to_string());
+        for t in report.tools.iter().take(10) {
+            let bar_len = (t.percentage / 5.0) as usize;
+            let bar: String = "█".repeat(bar_len);
+            lines.push(format!(
+                "  {:<25} {:>6} {:>6.1}% {}",
+                t.tool, t.count, t.percentage, bar
             ));
         }
     }
@@ -500,6 +652,9 @@ fn format_report_gateway(report: &InsightsReport) -> String {
         o.total_sessions,
         fmt_num(o.total_tokens as usize)
     ));
+    if o.total_cost_usd > 0.0 {
+        lines.push(format!("**Estimated cost:** ${:.4}", o.total_cost_usd));
+    }
     if let (Some(day), Some(hour)) = (&report.activity.busiest_day, report.activity.busiest_hour) {
         let (h, ampm) = if hour < 12 {
             (hour, "AM")
@@ -507,6 +662,13 @@ fn format_report_gateway(report: &InsightsReport) -> String {
             (hour - 12, "PM")
         };
         lines.push(format!("**Busiest:** {}s, {}{}", day, h, ampm));
+    }
+    if !report.tools.is_empty() {
+        lines.push(String::new());
+        lines.push("**Tool Usage:**".to_string());
+        for t in report.tools.iter().take(5) {
+            lines.push(format!("- {} ({} calls, {:.1}%)", t.tool, t.count, t.percentage));
+        }
     }
     lines.join("\n")
 }
