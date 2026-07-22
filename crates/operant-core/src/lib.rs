@@ -86,6 +86,7 @@ pub mod skills;
 pub mod skills_guard;
 pub mod tools;
 pub mod trajectory;
+pub mod write_origin;
 pub mod user_question;
 pub mod voice;
 
@@ -151,6 +152,7 @@ pub use tools::{
     register_builtin_tools_with_sub_agent,
 };
 pub use trajectory::Trajectory;
+pub use write_origin::{WriteOriginGuard, WriteOriginToken, get_write_origin, is_background_review, reset_write_origin, set_write_origin};
 
 pub use models_dev::{
     ModelCapabilities, fetch_models_dev, get_model_capabilities, list_agentic_models,
