@@ -4,13 +4,15 @@
 use operant_core::cronjobs::{CreateJobParams, CronDb};
 use std::collections::HashMap;
 use std::path::PathBuf;
+use tempfile::TempDir;
 
-/// Create a temp `CronDb` backed by a file in `/tmp`.
-fn temp_db(name: &str) -> (CronDb, PathBuf) {
-    let path = PathBuf::from(format!("/tmp/test_cron_{}.db", name));
-    let _ = std::fs::remove_file(&path); // clean up from prior runs
-    let db = CronDb::init(path.clone()).expect("CronDb::init failed");
-    (db, path)
+/// Create a temp `CronDb` backed by a unique file in a temp directory.
+/// `TempDir` is dropped (and cleaned up) when the returned guard goes out of scope.
+fn temp_db(_name: &str) -> (CronDb, TempDir) {
+    let dir = tempfile::tempdir().expect("tempdir failed");
+    let path = dir.path().join("cron.db");
+    let db = CronDb::init(path).expect("CronDb::init failed");
+    (db, dir)
 }
 
 fn make_job(name: &str, skill: Option<&str>, skills: Option<Vec<&str>>) -> CreateJobParams {
