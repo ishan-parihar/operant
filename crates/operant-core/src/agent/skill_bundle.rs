@@ -65,6 +65,7 @@ fn slugify(name: &str) -> String {
     let slug = name
         .to_lowercase()
         .replace('_', "-")
+        .replace(' ', "-")
         .chars()
         .filter(|c| c.is_alphanumeric() || *c == '-')
         .collect::<String>();
