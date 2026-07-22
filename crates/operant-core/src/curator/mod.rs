@@ -9,6 +9,8 @@ pub mod archiver;
 pub mod backup;
 pub mod review;
 
+pub use review::{LlmReviewClient, ModelReviewClient};
+
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
