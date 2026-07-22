@@ -394,8 +394,8 @@ impl KanbanDb {
         let skills_json = p.skills.and_then(|s| serde_json::to_string(s).ok());
 
         conn.execute(
-            "INSERT INTO tasks (id, title, body, assignee, status, priority, created_by, created_at, 
-             workspace_kind, workspace_path, tenant, idempotency_key, max_runtime_seconds, skills, max_retries) 
+            "INSERT INTO tasks (id, title, body, assignee, status, priority, created_by, created_at,
+             workspace_kind, workspace_path, tenant, idempotency_key, max_runtime_seconds, skills, max_retries)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
             params![id, p.title, p.body, p.assignee, status, p.priority, p.created_by, created_at,
                     p.workspace_kind, p.workspace_path, p.tenant, p.idempotency_key, p.max_runtime_seconds, skills_json, p.max_retries],
@@ -455,7 +455,7 @@ impl KanbanDb {
         }
 
         conn.execute(
-            "INSERT INTO task_events (task_id, run_id, kind, payload, created_at) 
+            "INSERT INTO task_events (task_id, run_id, kind, payload, created_at)
              VALUES (?1, ?2, 'completed', ?3, ?4)",
             params![
                 tid,
@@ -499,7 +499,7 @@ impl KanbanDb {
         let payload: Option<String> =
             serde_json::to_string(&serde_json::json!({"reason": reason})).ok();
         conn.execute(
-            "INSERT INTO task_events (task_id, run_id, kind, payload, created_at) 
+            "INSERT INTO task_events (task_id, run_id, kind, payload, created_at)
              VALUES (?1, ?2, 'blocked', ?3, ?4)",
             params![
                 tid,
@@ -546,7 +546,7 @@ impl KanbanDb {
         });
 
         conn.execute(
-            "INSERT INTO task_events (task_id, run_id, kind, payload, created_at) 
+            "INSERT INTO task_events (task_id, run_id, kind, payload, created_at)
              VALUES (?1, ?2, 'heartbeat', ?3, ?4)",
             params![
                 tid,

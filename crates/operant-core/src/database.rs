@@ -799,8 +799,8 @@ impl Database {
                  FROM messages m
                  JOIN messages_fts fts ON m.id = fts.rowid
                  JOIN sessions s ON m.session_id = s.id
-                 WHERE messages_fts MATCH ?1 
-                 ORDER BY rank 
+                 WHERE messages_fts MATCH ?1
+                 ORDER BY rank
                  LIMIT ?2",
             )
             .map_err(|e| Error::Agent(format!("Failed to prepare search: {}", e)))?;
@@ -843,9 +843,9 @@ impl Database {
     ) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
-            "INSERT INTO checkpoints (hash, timestamp, reason, directory) 
+            "INSERT INTO checkpoints (hash, timestamp, reason, directory)
              VALUES (?1, ?2, ?3, ?4)
-             ON CONFLICT(hash) DO UPDATE SET 
+             ON CONFLICT(hash) DO UPDATE SET
                  reason = excluded.reason,
                  timestamp = excluded.timestamp",
             params![hash, timestamp, reason, directory],
@@ -859,8 +859,8 @@ impl Database {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn
             .prepare(
-                "SELECT hash, timestamp, reason FROM checkpoints 
-                 WHERE directory = ?1 
+                "SELECT hash, timestamp, reason FROM checkpoints
+                 WHERE directory = ?1
                  ORDER BY timestamp DESC",
             )
             .map_err(|e| Error::Agent(format!("Failed to prepare list: {}", e)))?;
@@ -916,6 +916,14 @@ impl Database {
             .lock()
             .ok()
             .map(|c| PathBuf::from(c.path().unwrap_or("")))
+    }
+
+    /// Access the raw SQLite connection for advanced queries.
+    /// Returns a locked reference to the Connection. Prefer the typed
+    /// public methods on Database for standard operations; use this
+    /// only for queries that need direct SQL (e.g. analytics/aggregation).
+    pub fn conn(&self) -> std::sync::MutexGuard<'_, Connection> {
+        self.conn.lock().unwrap()
     }
 
     // === Session Metadata ===
@@ -1131,10 +1139,10 @@ impl Database {
         let limit = limit.unwrap_or(50) as i64;
         let mut stmt = conn
             .prepare(
-                "SELECT id, session_id, event_type, event_data, created_at 
-                 FROM session_events 
-                 WHERE session_id = ?1 
-                 ORDER BY created_at DESC 
+                "SELECT id, session_id, event_type, event_data, created_at
+                 FROM session_events
+                 WHERE session_id = ?1
+                 ORDER BY created_at DESC
                  LIMIT ?2",
             )
             .map_err(|e| Error::Agent(format!("Failed to prepare event query: {}", e)))?;
@@ -1169,10 +1177,10 @@ impl Database {
         let limit = limit.unwrap_or(50) as i64;
         let mut stmt = conn
             .prepare(
-                "SELECT id, session_id, event_type, event_data, created_at 
-                 FROM session_events 
-                 WHERE event_type = ?1 
-                 ORDER BY created_at DESC 
+                "SELECT id, session_id, event_type, event_data, created_at
+                 FROM session_events
+                 WHERE event_type = ?1
+                 ORDER BY created_at DESC
                  LIMIT ?2",
             )
             .map_err(|e| Error::Agent(format!("Failed to prepare event-by-type query: {}", e)))?;

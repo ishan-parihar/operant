@@ -33,7 +33,7 @@ impl NotifyManager {
         let conn = self.conn.lock().unwrap();
         let now = chrono::Utc::now().timestamp();
         conn.execute(
-            "INSERT OR REPLACE INTO kanban_notify_subs (task_id, platform, chat_id, thread_id, user_id, created_at, last_event_id) 
+            "INSERT OR REPLACE INTO kanban_notify_subs (task_id, platform, chat_id, thread_id, user_id, created_at, last_event_id)
              VALUES (?1, ?2, ?3, '', ?4, ?5, 0)",
             params![task_id, platform, chat_id, user_id, now],
         ).map_err(|e| Error::Agent(format!("Failed to subscribe: {}", e)))?;

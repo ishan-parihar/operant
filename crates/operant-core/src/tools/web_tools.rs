@@ -238,7 +238,7 @@ impl OperantTool for WebFetchTool {
 /// Parse DuckDuckGo Lite HTML results into structured JSON values.
 ///
 /// DDG Lite uses a simple table layout where each result has:
-/// - A link in an `<a>` tag with class "result-link"  
+/// - A link in an `<a>` tag with class "result-link"
 /// - A snippet in a `<td>` with class "result-snippet"
 pub(crate) fn parse_ddg_lite_results(html: &str, max_results: usize) -> Vec<serde_json::Value> {
     let mut results = Vec::new();

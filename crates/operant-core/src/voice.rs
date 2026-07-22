@@ -1501,8 +1501,14 @@ mod tests {
         assert_eq!(SttProvider::parse_provider("openai"), SttProvider::Whisper);
         assert_eq!(SttProvider::parse_provider("google"), SttProvider::Google);
         assert_eq!(SttProvider::parse_provider("azure"), SttProvider::Azure);
-        assert_eq!(SttProvider::parse_provider("assemblyai"), SttProvider::AssemblyAI);
-        assert_eq!(SttProvider::parse_provider("deepgram"), SttProvider::Deepgram);
+        assert_eq!(
+            SttProvider::parse_provider("assemblyai"),
+            SttProvider::AssemblyAI
+        );
+        assert_eq!(
+            SttProvider::parse_provider("deepgram"),
+            SttProvider::Deepgram
+        );
         assert_eq!(SttProvider::parse_provider("local"), SttProvider::Local);
         assert_eq!(SttProvider::parse_provider("unknown"), SttProvider::Whisper);
     }

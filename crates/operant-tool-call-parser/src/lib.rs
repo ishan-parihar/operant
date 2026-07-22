@@ -2881,7 +2881,7 @@ Let me check the result."#;
     #[test]
     fn extract_json_values_handles_whitespace_only() {
         let result = extract_json_values(
-            "   
+            "
 	  ",
         );
         assert!(result.is_empty());

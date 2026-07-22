@@ -384,11 +384,11 @@ impl CronDb {
         let conn = self.conn.lock().unwrap();
 
         conn.execute(
-            "UPDATE cron_jobs SET 
-                last_run_at = ?1, 
-                last_status = ?2, 
-                last_error = ?3, 
-                last_delivery_error = ?4, 
+            "UPDATE cron_jobs SET
+                last_run_at = ?1,
+                last_status = ?2,
+                last_error = ?3,
+                last_delivery_error = ?4,
                 next_run_at = ?5,
                 repeat_completed = repeat_completed + 1
              WHERE id = ?6",

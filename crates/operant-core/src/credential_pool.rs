@@ -974,7 +974,10 @@ mod tests {
             PoolStrategy::parse_strategy("least-used"),
             PoolStrategy::LeastUsed
         );
-        assert_eq!(PoolStrategy::parse_strategy("unknown"), PoolStrategy::FillFirst);
+        assert_eq!(
+            PoolStrategy::parse_strategy("unknown"),
+            PoolStrategy::FillFirst
+        );
     }
 
     #[test]
