@@ -22,6 +22,9 @@ pub enum CuratorSubcommand {
         /// Dry-run mode (no changes applied)
         #[arg(long, action = clap::ArgAction::SetTrue)]
         dry_run: bool,
+        /// Enable LLM-driven skill consolidation
+        #[arg(long, action = clap::ArgAction::SetTrue)]
+        consolidate: bool,
     },
     /// Pause the curator
     Pause,
@@ -104,7 +107,8 @@ pub async fn handle_curator_command(
             sync: _,
             background,
             dry_run,
-        } => cmd_run(&engine, background, dry_run).await,
+            consolidate,
+        } => cmd_run(&engine, background, dry_run, consolidate).await,
         CuratorSubcommand::Pause => cmd_pause(&engine).await,
         CuratorSubcommand::Resume => cmd_resume(&engine).await,
         CuratorSubcommand::Pin { skill } => cmd_pin(&tracker, &skill).await,
@@ -154,7 +158,7 @@ async fn cmd_status(engine: &CuratorEngine) -> Result<()> {
     Ok(())
 }
 
-async fn cmd_run(engine: &CuratorEngine, background: bool, dry_run: bool) -> Result<()> {
+async fn cmd_run(engine: &CuratorEngine, background: bool, dry_run: bool, consolidate: bool) -> Result<()> {
     if background {
         println!("Curator run (background mode not yet supported, running synchronously)...");
     } else {
@@ -163,8 +167,11 @@ async fn cmd_run(engine: &CuratorEngine, background: bool, dry_run: bool) -> Res
     if dry_run {
         println!("  Mode: dry-run (no changes applied)");
     }
+    if consolidate {
+        println!("  Consolidation: enabled (LLM-driven skill merging)");
+    }
 
-    let report = engine.run_review(dry_run, None).await?;
+    let report = engine.run_review(dry_run, None, consolidate).await?;
     println!("{}", report.summary);
     if !report.skills_archived.is_empty() {
         println!(
@@ -178,6 +185,22 @@ async fn cmd_run(engine: &CuratorEngine, background: bool, dry_run: bool) -> Res
             "  Stale ({}): {}",
             report.skills_stale.len(),
             report.skills_stale.join(", ")
+        );
+    }
+    if !report.skills_consolidated.is_empty() {
+        println!(
+            "  Consolidated ({}):",
+            report.skills_consolidated.len()
+        );
+        for entry in &report.skills_consolidated {
+            println!("    {} -> {} ({})", entry.name, entry.into, entry.reason);
+        }
+    }
+    if !report.skills_pruned.is_empty() {
+        println!(
+            "  Pruned ({}): {}",
+            report.skills_pruned.len(),
+            report.skills_pruned.join(", ")
         );
     }
     for err in &report.errors {

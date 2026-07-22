@@ -1,8 +1,9 @@
 //! Curator — background skill lifecycle management.
 //!
-//! Ported from operant-agent/agent/curator.py.
+//! Ported from hermes-agent/agent/curator.py.
 //! Manages skill states (active → stale → archived), pinning,
-//! usage tracking, and backup/rollback snapshots.
+//! usage tracking, backup/rollback snapshots, and LLM-driven
+//! skill consolidation (merging overlapping skills into umbrellas).
 
 pub mod archiver;
 pub mod backup;
@@ -17,6 +18,73 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 
 use crate::skill_usage::{LifecycleState, SkillUsageTracker};
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/// Strip YAML frontmatter (delimited by `---`) from a SKILL.md file.
+///
+/// Returns the content after the frontmatter block, or the full content
+/// if no frontmatter is found.
+fn strip_frontmatter(content: &str) -> String {
+    let trimmed = content.trim_start();
+    if !trimmed.starts_with("---") {
+        return content.to_string();
+    }
+    // Split on --- delimiters: first part is empty, second is frontmatter, third is content
+    let parts: Vec<&str> = trimmed.splitn(3, "---").collect();
+    if parts.len() >= 3 {
+        parts[2].trim_start_matches('\n').to_string()
+    } else {
+        content.to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_strip_frontmatter_with_frontmatter() {
+        let input = "---\nname: test\nversion: 1.0\n---\n\n# Test Skill\n\nContent here.";
+        let result = strip_frontmatter(input);
+        assert_eq!(result, "# Test Skill\n\nContent here.");
+    }
+
+    #[test]
+    fn test_strip_frontmatter_without_frontmatter() {
+        let input = "# Test Skill\n\nContent here.";
+        let result = strip_frontmatter(input);
+        assert_eq!(result, input);
+    }
+
+    #[test]
+    fn test_strip_frontmatter_empty() {
+        let result = strip_frontmatter("");
+        assert_eq!(result, "");
+    }
+
+    #[test]
+    fn test_strip_frontmatter_unclosed() {
+        let input = "---\nname: test\n\n# No closing";
+        let result = strip_frontmatter(input);
+        assert_eq!(result, input);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Consolidation constants
+// ---------------------------------------------------------------------------
+
+/// Whether consolidation is enabled by default.
+///
+/// OFF by default — a curator run does ONLY the deterministic inactivity
+/// prune (mark stale / archive long-unused skills) and skips the
+/// forked aux-model review entirely. Set `curator.consolidate: true`
+/// to opt into the LLM pass that merges overlapping skills into
+/// class-level umbrellas.
+pub const DEFAULT_CONSOLIDATE: bool = false;
 
 /// Curator runtime state persisted to disk.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -66,6 +134,12 @@ pub struct CuratorReport {
     pub skills_stale: Vec<String>,
     pub errors: Vec<String>,
     pub summary: String,
+    /// Skills that were consolidated (absorbed into an umbrella).
+    #[serde(default)]
+    pub skills_consolidated: Vec<review::ConsolidationEntry>,
+    /// Skills that were pruned (archived for staleness, not consolidated).
+    #[serde(default)]
+    pub skills_pruned: Vec<String>,
 }
 
 /// Main curator engine — reviews skills, manages lifecycle transitions.
@@ -135,7 +209,8 @@ impl CuratorEngine {
     pub async fn run_review(
         &self,
         dry_run: bool,
-        _llm_client: Option<&dyn review::LlmReviewClient>,
+        llm_client: Option<&dyn review::LlmReviewClient>,
+        consolidate: bool,
     ) -> Result<CuratorReport> {
         let mut state = self.state.write().await;
         let now = std::time::SystemTime::now()
@@ -179,13 +254,37 @@ impl CuratorEngine {
             }
         }
 
+        // Run LLM-driven consolidation pass when enabled and a client is available
+        let mut skills_consolidated = Vec::new();
+        let mut skills_pruned = Vec::new();
+        if consolidate {
+            if let Some(client) = llm_client {
+                // Release the state write lock before calling consolidation
+                // (consolidation acquires its own locks internally)
+                drop(state);
+                match self.run_consolidation(client, true, dry_run).await {
+                    Ok(consolidation) => {
+                        skills_consolidated = consolidation.consolidated;
+                        skills_pruned = consolidation.pruned;
+                        errors.extend(consolidation.errors);
+                    }
+                    Err(e) => {
+                        errors.push(format!("Consolidation failed: {}", e));
+                    }
+                }
+                // Re-acquire the state lock for the final save
+                state = self.state.write().await;
+            }
+        }
+
         state.last_run_at = Some(now);
         state.run_count += 1;
         let summary = format!(
-            "Scanned {} agent-created skills. Archived: {}, Stale: {}, Errors: {}",
+            "Scanned {} agent-created skills. Archived: {}, Stale: {}, Consolidated: {}, Errors: {}",
             agent_created.len(),
             archived.len(),
             stale.len(),
+            skills_consolidated.len(),
             errors.len()
         );
 
@@ -211,6 +310,8 @@ impl CuratorEngine {
             skills_stale: stale,
             errors,
             summary,
+            skills_consolidated,
+            skills_pruned,
         })
     }
 
@@ -329,7 +430,6 @@ impl CuratorEngine {
                 continue;
             }
 
-            let inactive_days = (now - record.last_used.timestamp()) / 86400;
             let current = &record.lifecycle;
 
             // Never-used skills (use_count == 0) get a grace floor:
@@ -405,5 +505,178 @@ impl CuratorEngine {
         let _ = self.usage_tracker.save();
 
         Ok(counts)
+    }
+
+    /// Run the LLM-driven skill consolidation pass.
+    ///
+    /// Identifies overlapping skills and merges them into class-level
+    /// umbrella skills. This matches hermes-agent's curator consolidation
+    /// pass. Returns a [`review::ConsolidationResult`] describing what was merged.
+    ///
+    /// When `consolidate` is false (the default), this is a no-op.
+    pub async fn run_consolidation(
+        &self,
+        llm_client: &dyn review::LlmReviewClient,
+        consolidate: bool,
+        dry_run: bool,
+    ) -> Result<review::ConsolidationResult> {
+        if !consolidate {
+            tracing::debug!("Consolidation disabled — skipping");
+            return Ok(review::ConsolidationResult::default());
+        }
+
+        // Load fresh usage data
+        self.usage_tracker.load()?;
+        let all_records = self.usage_tracker.all_records();
+        let agent_created: Vec<_> = all_records
+            .iter()
+            .filter(|r| r.agent_created && !r.pinned)
+            .collect();
+
+        if agent_created.is_empty() {
+            tracing::info!("No agent-created skills to consolidate");
+            return Ok(review::ConsolidationResult::default());
+        }
+
+        // Build skill summaries for the LLM (cache SKILL.md content for reuse)
+        let mut content_cache: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+        let summaries: Vec<review::SkillSummary> = agent_created
+            .iter()
+            .map(|r| {
+                // Read SKILL.md once — cache content for the absorption loop
+                let skill_md = self.skills_dir.join(&r.name).join("SKILL.md");
+                let (description, cached_content) = match fs::read_to_string(&skill_md) {
+                    Ok(raw) => {
+                        let desc = raw.lines().take(10).collect::<Vec<_>>().join(" ");
+                        let body = strip_frontmatter(&raw);
+                        (desc, body)
+                    }
+                    Err(e) => {
+                        tracing::warn!(skill = %r.name, error = %e, "Failed to read SKILL.md for summary");
+                        (String::new(), String::new())
+                    }
+                };
+                content_cache.insert(r.name.clone(), cached_content);
+                review::SkillSummary {
+                    name: r.name.clone(),
+                    description,
+                    use_count: r.use_count,
+                    last_used: r.last_used.timestamp(),
+                }
+            })
+            .collect();
+
+        // Ask the LLM to identify consolidation opportunities
+        let verdicts = llm_client.consolidate_skills(&summaries).await?;
+
+        let mut result = review::ConsolidationResult::default();
+
+        for verdict in &verdicts {
+            // Validate: umbrella must exist or be creatable, absorbed skills must exist
+            let umbrella_dir = self.skills_dir.join(&verdict.umbrella);
+            let umbrella_exists = umbrella_dir.exists();
+
+            // Process each absorbed skill
+            for skill_name in &verdict.absorbed {
+                let skill_dir = self.skills_dir.join(skill_name);
+                if !skill_dir.exists() {
+                    result.errors.push(format!(
+                        "Skill '{}' not found — skipping absorption into '{}'",
+                        skill_name, verdict.umbrella
+                    ));
+                    continue;
+                }
+
+                // Use cached SKILL.md content (already read and frontmatter-stripped)
+                let content = content_cache.get(skill_name).cloned().unwrap_or_default();
+                if content.trim().is_empty() {
+                    continue;
+                }
+
+                if !dry_run {
+                    // Ensure the umbrella directory exists
+                    if !umbrella_exists {
+                        if let Err(e) = fs::create_dir_all(&umbrella_dir) {
+                            result.errors.push(format!(
+                                "Failed to create umbrella '{}': {}",
+                                verdict.umbrella, e
+                            ));
+                            continue;
+                        }
+                    }
+
+                    // Append the absorbed skill's content to the umbrella's SKILL.md
+                    let umbrella_md = umbrella_dir.join("SKILL.md");
+                    let mut existing = if umbrella_md.exists() {
+                        fs::read_to_string(&umbrella_md).unwrap_or_default()
+                    } else {
+                        format!("---\nname: {}\n---\n\n# {}\n\n", verdict.umbrella, verdict.umbrella)
+                    };
+                    // Dedup: skip if this skill's section already exists
+                    let section_header = format!("## {}", skill_name);
+                    if existing.contains(&section_header) {
+                        tracing::debug!(
+                            skill = %skill_name,
+                            umbrella = %verdict.umbrella,
+                            "Skill already absorbed into umbrella — skipping"
+                        );
+                        continue;
+                    }
+                    let separator = format!("\n\n---\n\n{}\n\n", section_header);
+                    existing.push_str(&separator);
+                    existing.push_str(&content);
+                    if let Err(e) = fs::write(&umbrella_md, &existing) {
+                        result.errors.push(format!(
+                            "Failed to update umbrella SKILL.md: {}", e
+                        ));
+                        continue;
+                    }
+
+                    // Archive the original skill
+                    if let Err(e) = archiver::archive_skill(
+                        skill_name,
+                        &self.skills_dir,
+                        &self.archive_dir,
+                    ) {
+                        result.errors.push(format!(
+                            "Failed to archive '{}': {}", skill_name, e
+                        ));
+                        continue;
+                    }
+
+                    // Update usage tracker state
+                    let _ = self
+                        .usage_tracker
+                        .set_state(skill_name, LifecycleState::Archived);
+                }
+
+                result.consolidated.push(review::ConsolidationEntry {
+                    name: skill_name.clone(),
+                    into: verdict.umbrella.clone(),
+                    reason: verdict.rationale.clone(),
+                });
+            }
+        }
+
+        // TODO: Rewrite cron job references to follow consolidations.
+        // When a skill is absorbed into an umbrella, any cron jobs that
+        // reference the absorbed skill should be updated to point to the
+        // umbrella instead. This matches hermes-agent's curator behavior.
+        // See: hermes-agent/agent/curator.py → update_cron_references()
+        if !result.consolidated.is_empty() {
+            tracing::info!(
+                count = result.consolidated.len(),
+                "TODO: cron job reference rewriting not yet implemented — \
+                 consolidated skills may have stale cron references"
+            );
+        }
+
+        tracing::info!(
+            consolidated = result.consolidated.len(),
+            errors = result.errors.len(),
+            "Skill consolidation pass complete"
+        );
+
+        Ok(result)
     }
 }
