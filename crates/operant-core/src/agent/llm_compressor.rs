@@ -28,6 +28,7 @@ use tracing::{debug, info, warn};
 use crate::agent::model_client::{ChatRequest, ModelClient};
 use crate::client::{Message, Role};
 use crate::context_management::estimate_tokens;
+use crate::database::Database;
 use crate::error::Result;
 
 // ---------------------------------------------------------------------------
@@ -137,6 +138,13 @@ pub struct LlmCompressor {
     cooldown_until: f64,
     /// Number of consecutive compression failures (resets on success).
     consecutive_failures: usize,
+    /// Optional database for persisting cooldown state across restarts.
+    /// When set, cooldown_until and consecutive_failures are persisted
+    /// to session_metadata so they survive process restarts. Matches
+    /// hermes-agent's ContextCompressor persistence pattern.
+    database: Option<Arc<Database>>,
+    /// Session ID for database persistence. Required when database is set.
+    session_id: Option<String>,
 }
 
 impl LlmCompressor {
@@ -148,6 +156,65 @@ impl LlmCompressor {
             compression_count: 0,
             cooldown_until: 0.0,
             consecutive_failures: 0,
+            database: None,
+            session_id: None,
+        }
+    }
+
+    /// Bind a database and session ID for cooldown persistence.
+    /// When set, compression failure cooldowns are persisted to
+    /// session_metadata so they survive process restarts.
+    ///
+    /// Idempotent: safe to call multiple times. Loads existing cooldown
+    /// state from the database on first bind.
+    pub fn bind_persistence(&mut self, database: Arc<Database>, session_id: String) {
+        self.database = Some(database);
+        self.session_id = Some(session_id);
+        // Load existing cooldown state from DB so restarts don't
+        // immediately re-trigger compression after a recent failure.
+        self.load_cooldown_from_db();
+    }
+
+    /// Returns the currently-bound session ID, if any.
+    /// Used by the agent to check whether persistence is already bound
+    /// before calling `bind_persistence` again.
+    pub(crate) fn session_id(&self) -> Option<&str> {
+        self.session_id.as_deref()
+    }
+
+    /// Load cooldown state from the database (called by bind_persistence).
+    /// Restores `cooldown_until` and `consecutive_failures` from
+    /// session_metadata if they were persisted by a previous run.
+    fn load_cooldown_from_db(&mut self) {
+        let db = match self.database.as_ref() {
+            Some(db) => Arc::clone(db),
+            None => return,
+        };
+        let session_id = match self.session_id.as_ref() {
+            Some(id) => id.clone(),
+            None => return,
+        };
+
+        // Load cooldown_until
+        if let Some(val) = db.get_session_metadata(&session_id, "compression_cooldown_until") {
+            if let Ok(ts) = val.parse::<f64>() {
+                self.cooldown_until = ts;
+                debug!(
+                    cooldown_until = ts,
+                    "Loaded compression cooldown from database"
+                );
+            }
+        }
+
+        // Load consecutive_failures
+        if let Some(val) = db.get_session_metadata(&session_id, "compression_consecutive_failures") {
+            if let Ok(count) = val.parse::<usize>() {
+                self.consecutive_failures = count;
+                debug!(
+                    consecutive_failures = count,
+                    "Loaded compression failure count from database"
+                );
+            }
         }
     }
 
@@ -179,12 +246,46 @@ impl LlmCompressor {
             cooldown_secs = delay,
             "Compression failure — anti-thrash cooldown armed"
         );
+        // Persist to database so cooldown survives restarts
+        self.persist_cooldown_to_db();
+    }
+
+    /// Persist cooldown state to the database.
+    /// Stores `cooldown_until` and `consecutive_failures` in session_metadata
+    /// so they survive process restarts. Matches hermes-agent's
+    /// ContextCompressor cooldown persistence pattern.
+    fn persist_cooldown_to_db(&self) {
+        let db = match self.database.as_ref() {
+            Some(db) => Arc::clone(db),
+            None => return,
+        };
+        let session_id = match self.session_id.as_ref() {
+            Some(id) => id.clone(),
+            None => return,
+        };
+
+        if let Err(e) = db.set_session_metadata(
+            &session_id,
+            "compression_cooldown_until",
+            &self.cooldown_until.to_string(),
+        ) {
+            warn!(error = %e, "Failed to persist compression cooldown to database");
+        }
+        if let Err(e) = db.set_session_metadata(
+            &session_id,
+            "compression_consecutive_failures",
+            &self.consecutive_failures.to_string(),
+        ) {
+            warn!(error = %e, "Failed to persist compression failure count to database");
+        }
     }
 
     /// Clear the cooldown (called on success or session reset).
     fn clear_cooldown(&mut self) {
         self.consecutive_failures = 0;
         self.cooldown_until = 0.0;
+        // Persist cleared state to database
+        self.persist_cooldown_to_db();
     }
 
     /// Reset per-session state (call on /new or /reset).
@@ -732,5 +833,87 @@ mod tests {
 
         assert!(compressor.previous_summary.is_none());
         assert_eq!(compressor.compression_count, 0);
+    }
+
+    #[test]
+    fn test_persistence_round_trip() {
+        // Validates that cooldown state survives across separate compressor
+        // instances via the database, matching hermes-agent's persistence
+        // pattern where compression failure cooldowns persist to SQLite.
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("test.db");
+        let db = Arc::new(
+            crate::database::Database::init(db_path.clone()).unwrap(),
+        );
+        let session_id = "test-session-persist".to_string();
+
+        // Create a session row first (FK constraint)
+        db.save_session(&session_id, None, "test", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z")
+            .unwrap();
+
+        // --- Instance 1: record a failure ---
+        let config = LlmCompressorConfig::default();
+        let mut compressor1 = LlmCompressor::new(config.clone());
+        assert!(!compressor1.is_in_cooldown());
+
+        compressor1.bind_persistence(Arc::clone(&db), session_id.clone());
+        // Directly trigger the failure path by calling record_failure (private)
+        // We simulate it by manually setting the fields and persisting.
+        compressor1.consecutive_failures = 1;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs_f64();
+        compressor1.cooldown_until = now + 300.0; // 5 minutes from now
+        compressor1.persist_cooldown_to_db();
+
+        assert!(compressor1.is_in_cooldown());
+
+        // --- Instance 2: load from DB (simulates restart) ---
+        let mut compressor2 = LlmCompressor::new(config);
+        assert!(!compressor2.is_in_cooldown()); // not yet loaded
+
+        compressor2.bind_persistence(Arc::clone(&db), session_id);
+        // bind_persistence calls load_cooldown_from_db internally
+        assert!(compressor2.is_in_cooldown()); // restored from DB!
+        assert_eq!(compressor2.consecutive_failures, 1);
+    }
+
+    #[test]
+    fn test_persistence_clear_round_trip() {
+        // Validates that clearing cooldown also persists to DB.
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("test_clear.db");
+        let db = Arc::new(
+            crate::database::Database::init(db_path).unwrap(),
+        );
+        let session_id = "test-session-clear".to_string();
+        db.save_session(&session_id, None, "test", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z")
+            .unwrap();
+
+        let config = LlmCompressorConfig::default();
+        let mut compressor = LlmCompressor::new(config.clone());
+        compressor.bind_persistence(Arc::clone(&db), session_id.clone());
+
+        // Record a failure
+        compressor.consecutive_failures = 2;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs_f64();
+        compressor.cooldown_until = now + 600.0;
+        compressor.persist_cooldown_to_db();
+        assert!(compressor.is_in_cooldown());
+
+        // Clear cooldown
+        compressor.clear_cooldown();
+        assert!(!compressor.is_in_cooldown());
+        assert_eq!(compressor.consecutive_failures, 0);
+
+        // New instance should see cleared state
+        let mut compressor2 = LlmCompressor::new(config);
+        compressor2.bind_persistence(Arc::clone(&db), session_id);
+        assert!(!compressor2.is_in_cooldown());
+        assert_eq!(compressor2.consecutive_failures, 0);
     }
 }

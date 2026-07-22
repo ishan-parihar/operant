@@ -2122,6 +2122,19 @@ If nothing needs updating, say 'Nothing to save.' and stop.\n\n{}",
     /// pipeline: LLM compressor → fallback to manage_context.
     async fn compress_context_overflow(&self, messages: Vec<Message>) -> Vec<Message> {
         if let Some(ref compressor) = self.llm_compressor {
+            // Bind database persistence on first compression attempt.
+            // This ensures cooldown state survives process restarts —
+            // matching hermes-agent's ContextCompressor cooldown persistence.
+            // bind_persistence is idempotent and loads existing cooldown from DB.
+            {
+                let mut guard = compressor.lock().await;
+                if guard.session_id().is_none() {
+                    if let Some(session_id) = self.persistent_session_id.as_ref() {
+                        guard.bind_persistence(Arc::clone(&self.database), session_id.clone());
+                    }
+                }
+            }
+
             // Check whether LLM compression is warranted (cheap, no await)
             {
                 let guard = compressor.lock().await;
