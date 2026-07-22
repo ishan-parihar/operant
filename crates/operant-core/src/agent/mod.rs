@@ -1463,12 +1463,14 @@ impl OperantAgent {
                 if trigger.should_review_skills {
                     info!(
                         iters = trigger.iters_since_skill,
+                        interval = self.config.skill_nudge_interval,
                         "Skill nudge triggered — spawning background review"
                     );
                 }
                 if trigger.should_review_memory {
                     info!(
                         turns = trigger.turns_since_memory,
+                        interval = self.config.memory_review_interval,
                         "Memory review triggered — spawning background review"
                     );
                 }
