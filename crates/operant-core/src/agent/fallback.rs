@@ -662,7 +662,8 @@ mod tests {
 
         // Primary provider returns auth error → should switch to fallback provider
         let primary_client = MockModelClient::new("openai", vec![MockResult::AuthError]);
-        let fallback_client = MockModelClient::new("anthropic", vec![MockResult::Ok(chat_response("claude-3"))]);
+        let fallback_client =
+            MockModelClient::new("anthropic", vec![MockResult::Ok(chat_response("claude-3"))]);
 
         let mut clients = std::collections::HashMap::new();
         clients.insert("openai".to_string(), primary_client);
@@ -696,7 +697,8 @@ mod tests {
         // Primary provider returns 503 (server error) → should NOT trigger provider switch
         // (provider switch is only for auth/billing errors)
         let primary_client = MockModelClient::new("openai", vec![MockResult::ServerError]);
-        let fallback_client = MockModelClient::new("anthropic", vec![MockResult::Ok(chat_response("claude-3"))]);
+        let fallback_client =
+            MockModelClient::new("anthropic", vec![MockResult::Ok(chat_response("claude-3"))]);
 
         let mut clients = std::collections::HashMap::new();
         clients.insert("openai".to_string(), primary_client);

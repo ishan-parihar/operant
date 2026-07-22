@@ -72,8 +72,8 @@ impl KanbanDiagnostics {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn
             .prepare(
-                "SELECT r.id, r.task_id, t.title FROM task_runs r 
-             JOIN tasks t ON t.id = r.task_id 
+                "SELECT r.id, r.task_id, t.title FROM task_runs r
+             JOIN tasks t ON t.id = r.task_id
              WHERE r.status = 'running' AND t.status != 'running'",
             )
             .map_err(|e| Error::Agent(format!("Failed to prepare: {}", e)))?;
@@ -110,8 +110,8 @@ impl KanbanDiagnostics {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn
             .prepare(
-                "SELECT parent_id, child_id FROM task_links WHERE 
-             parent_id NOT IN (SELECT id FROM tasks) OR 
+                "SELECT parent_id, child_id FROM task_links WHERE
+             parent_id NOT IN (SELECT id FROM tasks) OR
              child_id NOT IN (SELECT id FROM tasks)",
             )
             .map_err(|e| Error::Agent(format!("Failed to prepare: {}", e)))?;

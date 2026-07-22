@@ -31,9 +31,9 @@
 //! - Edit a skill → rewrite SKILL.md
 //! - Edit a memory → rewrite the source file chunk
 
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
-use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
 // Node types
@@ -135,11 +135,7 @@ pub struct MutationResult {
 /// - Skills: archive the skill directory (recoverable via curator restore).
 /// - Memories: remove the chunk from the source file.
 #[allow(dead_code)]
-pub fn delete_node(
-    node_id: &str,
-    skills_dir: &Path,
-    memory_dir: &Path,
-) -> MutationResult {
+pub fn delete_node(node_id: &str, skills_dir: &Path, memory_dir: &Path) -> MutationResult {
     if node_id.starts_with("memory:") {
         delete_memory_node(node_id, memory_dir)
     } else {
@@ -186,10 +182,7 @@ fn delete_skill_node(name: &str, skills_dir: &Path) -> MutationResult {
         if pinned {
             return MutationResult {
                 ok: false,
-                message: format!(
-                    "'{}' is pinned — unpin it first before archiving",
-                    name
-                ),
+                message: format!("'{}' is pinned — unpin it first before archiving", name),
             };
         }
     }
@@ -294,7 +287,7 @@ fn delete_memory_node(node_id: &str, memory_dir: &Path) -> MutationResult {
             return MutationResult {
                 ok: false,
                 message: format!("Invalid memory node ID: {}", node_id),
-            }
+            };
         }
     };
 
@@ -304,7 +297,7 @@ fn delete_memory_node(node_id: &str, memory_dir: &Path) -> MutationResult {
             return MutationResult {
                 ok: false,
                 message: format!("Unknown memory source: {}", source),
-            }
+            };
         }
     };
 
@@ -350,7 +343,7 @@ fn edit_memory_node(node_id: &str, content: &str, memory_dir: &Path) -> Mutation
             return MutationResult {
                 ok: false,
                 message: format!("Invalid memory node ID: {}", node_id),
-            }
+            };
         }
     };
 
@@ -368,7 +361,7 @@ fn edit_memory_node(node_id: &str, content: &str, memory_dir: &Path) -> Mutation
             return MutationResult {
                 ok: false,
                 message: format!("Unknown memory source: {}", source),
-            }
+            };
         }
     };
 
@@ -415,10 +408,7 @@ fn edit_memory_node(node_id: &str, content: &str, memory_dir: &Path) -> Mutation
 /// This is a simplified version of hermes-agent's `build_learning_graph()`.
 /// It scans SKILL.md files for metadata and MEMORY.md/USER.md for memory
 /// chunks, then connects them via lexical overlap.
-pub fn build_learning_graph(
-    skills_dir: &Path,
-    memory_dir: &Path,
-) -> LearningGraph {
+pub fn build_learning_graph(skills_dir: &Path, memory_dir: &Path) -> LearningGraph {
     let mut nodes: Vec<GraphNode> = Vec::new();
     let mut edges: Vec<GraphEdge> = Vec::new();
     let mut categories: HashMap<String, usize> = HashMap::new();
@@ -657,10 +647,7 @@ pub fn build_learning_graph(
         .iter()
         .flat_map(|e| vec![e.source.clone(), e.target.clone()])
         .collect();
-    let agent_created = nodes
-        .iter()
-        .filter(|n| n.created_by == "agent")
-        .count();
+    let agent_created = nodes.iter().filter(|n| n.created_by == "agent").count();
     let used = nodes.iter().filter(|n| n.use_count > 0).count();
 
     let clusters: Vec<ClusterInfo> = categories
@@ -701,7 +688,15 @@ pub fn build_learning_graph(
 fn parse_skill_frontmatter(path: &Path) -> (String, String, u32, bool, Vec<String>) {
     let content = match std::fs::read_to_string(path) {
         Ok(c) => c,
-        Err(_) => return ("general".to_string(), "user".to_string(), 0, false, Vec::new()),
+        Err(_) => {
+            return (
+                "general".to_string(),
+                "user".to_string(),
+                0,
+                false,
+                Vec::new(),
+            );
+        }
     };
 
     let mut category = "general".to_string();
@@ -711,7 +706,7 @@ fn parse_skill_frontmatter(path: &Path) -> (String, String, u32, bool, Vec<Strin
 
     // Simple line-by-line parsing (YAML frontmatter between --- delimiters)
     let mut in_frontmatter = false;
-    let mut last_key = "";  // Track last YAML key to handle multi-line lists robustly
+    let mut last_key = ""; // Track last YAML key to handle multi-line lists robustly
     for line in content.lines().take(30) {
         let trimmed = line.trim();
         if trimmed == "---" {
@@ -737,15 +732,16 @@ fn parse_skill_frontmatter(path: &Path) -> (String, String, u32, bool, Vec<Strin
             if val.starts_with('[') && val.ends_with(']') {
                 // Inline: related_skills: [skill-a, skill-b]
                 let inner = &val[1..val.len() - 1];
-                related_skills = inner.split(',')
+                related_skills = inner
+                    .split(',')
                     .map(|s| s.trim().trim_matches('"').trim_matches('\'').to_string())
                     .filter(|s| !s.is_empty())
                     .collect();
-                last_key = "";  // List complete on this line
+                last_key = ""; // List complete on this line
             } else if !val.is_empty() {
                 // Single value on same line
                 related_skills.push(val.trim_matches('"').trim_matches('\'').to_string());
-                last_key = "";  // Single value, not a multi-line list
+                last_key = ""; // Single value, not a multi-line list
             }
             // else: multi-line list starts on next lines (last_key stays "related_skills")
             continue;
@@ -778,11 +774,8 @@ mod tests {
     use std::path::PathBuf;
 
     fn tmp_dir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "learning_graph_{}_{}",
-            name,
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("learning_graph_{}_{}", name, std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         dir
@@ -1012,11 +1005,14 @@ mod tests {
 
         assert_eq!(graph.stats.skill_nodes, 2);
 
-        let has_edge = graph.edges.iter().any(|e|
-            (e.source == "rust-patterns" && e.target == "debugging") ||
-            (e.source == "debugging" && e.target == "rust-patterns")
+        let has_edge = graph.edges.iter().any(|e| {
+            (e.source == "rust-patterns" && e.target == "debugging")
+                || (e.source == "debugging" && e.target == "rust-patterns")
+        });
+        assert!(
+            has_edge,
+            "Expected edge between rust-patterns and debugging from related_skills"
         );
-        assert!(has_edge, "Expected edge between rust-patterns and debugging from related_skills");
 
         let _ = fs::remove_dir_all(&skills);
         let _ = fs::remove_dir_all(&memory);
@@ -1044,7 +1040,10 @@ mod tests {
         // All 3 pairs should be connected via category fallback:
         // alpha-beta, alpha-gamma, beta-gamma
         let edge_count = graph.edges.len();
-        assert_eq!(edge_count, 3, "Expected 3 category-fallback edges for 3 undeclared skills in same category");
+        assert_eq!(
+            edge_count, 3,
+            "Expected 3 category-fallback edges for 3 undeclared skills in same category"
+        );
 
         let _ = fs::remove_dir_all(&skills);
         let _ = fs::remove_dir_all(&memory);
@@ -1089,25 +1088,34 @@ mod tests {
         // 2. skill-b → skill-c (category fallback — neither has declarations)
         // skill-a is skipped for category fallback because it has declarations
         let edge_count = graph.edges.len();
-        assert_eq!(edge_count, 2, "Expected 2 edges: 1 declared + 1 category fallback");
-
-        let has_ab = graph.edges.iter().any(|e|
-            (e.source == "skill-a" && e.target == "skill-b") ||
-            (e.source == "skill-b" && e.target == "skill-a")
+        assert_eq!(
+            edge_count, 2,
+            "Expected 2 edges: 1 declared + 1 category fallback"
         );
+
+        let has_ab = graph.edges.iter().any(|e| {
+            (e.source == "skill-a" && e.target == "skill-b")
+                || (e.source == "skill-b" && e.target == "skill-a")
+        });
         assert!(has_ab, "Expected declared edge between skill-a and skill-b");
 
-        let has_bc = graph.edges.iter().any(|e|
-            (e.source == "skill-b" && e.target == "skill-c") ||
-            (e.source == "skill-c" && e.target == "skill-b")
+        let has_bc = graph.edges.iter().any(|e| {
+            (e.source == "skill-b" && e.target == "skill-c")
+                || (e.source == "skill-c" && e.target == "skill-b")
+        });
+        assert!(
+            has_bc,
+            "Expected category-fallback edge between skill-b and skill-c"
         );
-        assert!(has_bc, "Expected category-fallback edge between skill-b and skill-c");
 
-        let has_ac = graph.edges.iter().any(|e|
-            (e.source == "skill-a" && e.target == "skill-c") ||
-            (e.source == "skill-c" && e.target == "skill-a")
+        let has_ac = graph.edges.iter().any(|e| {
+            (e.source == "skill-a" && e.target == "skill-c")
+                || (e.source == "skill-c" && e.target == "skill-a")
+        });
+        assert!(
+            !has_ac,
+            "Should NOT have fallback edge between skill-a and skill-c (skill-a has declarations)"
         );
-        assert!(!has_ac, "Should NOT have fallback edge between skill-a and skill-c (skill-a has declarations)");
 
         let _ = fs::remove_dir_all(&skills);
         let _ = fs::remove_dir_all(&memory);
@@ -1136,11 +1144,24 @@ mod tests {
         let graph = build_learning_graph(&skills, &memory);
 
         // Verify exactly 1 edge (from related_skills), no spurious comment-as-skill edges
-        let skill_edge_count = graph.edges.iter()
-            .filter(|e| graph.nodes.iter().any(|n| n.id == e.source && n.kind == NodeKind::Skill)
-                     && graph.nodes.iter().any(|n| n.id == e.target && n.kind == NodeKind::Skill))
+        let skill_edge_count = graph
+            .edges
+            .iter()
+            .filter(|e| {
+                graph
+                    .nodes
+                    .iter()
+                    .any(|n| n.id == e.source && n.kind == NodeKind::Skill)
+                    && graph
+                        .nodes
+                        .iter()
+                        .any(|n| n.id == e.target && n.kind == NodeKind::Skill)
+            })
             .count();
-        assert_eq!(skill_edge_count, 1, "Expected exactly 1 skill edge; comments should not become skill names");
+        assert_eq!(
+            skill_edge_count, 1,
+            "Expected exactly 1 skill edge; comments should not become skill names"
+        );
 
         let _ = fs::remove_dir_all(&skills);
         let _ = fs::remove_dir_all(&memory);

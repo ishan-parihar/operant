@@ -51,10 +51,7 @@ pub struct TurnContext {
 ///
 /// Behavior is identical to the original inline prologue; this is a
 /// pure move-and-name refactor with no semantic change.
-pub async fn build_turn_context(
-    agent: &OperantAgent,
-    user_query: &str,
-) -> Result<TurnContext> {
+pub async fn build_turn_context(agent: &OperantAgent, user_query: &str) -> Result<TurnContext> {
     // ── 1. Reset interrupt flag ──────────────────────────────────────
     // Without this, a Ctrl-C in run #1 permanently breaks run #2+
     // (the flag stays triggered and the loop exits immediately).
@@ -199,7 +196,9 @@ mod tests {
 
     #[test]
     fn test_preflight_constants_values() {
-        use crate::agent::turn_finalizer::{PREFLIGHT_THRESHOLD_PERCENT, PREFLIGHT_DECAY_H50, PREFLIGHT_DECAY_CONSTANT};
+        use crate::agent::turn_finalizer::{
+            PREFLIGHT_DECAY_CONSTANT, PREFLIGHT_DECAY_H50, PREFLIGHT_THRESHOLD_PERCENT,
+        };
         assert_eq!(PREFLIGHT_THRESHOLD_PERCENT, 80);
         assert_eq!(PREFLIGHT_DECAY_H50, 100);
         assert!((PREFLIGHT_DECAY_CONSTANT - 20.0).abs() < f64::EPSILON);

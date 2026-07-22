@@ -139,7 +139,10 @@ pub struct ClassifiedError {
 impl ClassifiedError {
     /// Whether this is an auth-related failure.
     pub fn is_auth(&self) -> bool {
-        matches!(self.reason, FailoverReason::Auth | FailoverReason::AuthPermanent)
+        matches!(
+            self.reason,
+            FailoverReason::Auth | FailoverReason::AuthPermanent
+        )
     }
 }
 
@@ -443,8 +446,7 @@ pub fn classify_api_error(
 
     // xAI Grok subscription entitlement errors
     if body_lower.contains("do not have an active grok subscription")
-        || (body_lower.contains("out of available resources")
-            && body_lower.contains("grok"))
+        || (body_lower.contains("out of available resources") && body_lower.contains("grok"))
     {
         return ClassifiedError {
             reason: FailoverReason::Auth,
@@ -1224,7 +1226,11 @@ mod tests {
 
     #[test]
     fn test_context_overflow_400() {
-        let c = classify_api_error(Some(400), "context length exceeded, reduce the length", None);
+        let c = classify_api_error(
+            Some(400),
+            "context length exceeded, reduce the length",
+            None,
+        );
         assert_eq!(c.reason, FailoverReason::ContextOverflow);
         assert!(c.should_compress);
         assert!(c.retryable);
@@ -1343,7 +1349,11 @@ mod tests {
 
     #[test]
     fn test_ssl_cert_verification() {
-        let c = classify_api_error(Some(400), "certificate verify failed: unable to get local issuer certificate", None);
+        let c = classify_api_error(
+            Some(400),
+            "certificate verify failed: unable to get local issuer certificate",
+            None,
+        );
         assert_eq!(c.reason, FailoverReason::SslCertVerification);
         assert!(!c.retryable);
         assert!(!c.should_fallback);

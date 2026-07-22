@@ -18,10 +18,10 @@ impl Dispatcher {
         let conn = self.db.lock().unwrap();
         let mut stmt = conn
             .prepare(
-                "SELECT id, title, max_runtime_seconds FROM tasks 
-             WHERE status IN ('todo', 'ready') 
+                "SELECT id, title, max_runtime_seconds FROM tasks
+             WHERE status IN ('todo', 'ready')
                AND (current_run_id IS NULL OR current_run_id = 0)
-             ORDER BY priority DESC, created_at ASC 
+             ORDER BY priority DESC, created_at ASC
              LIMIT ?1",
             )
             .map_err(|e| Error::Agent(format!("Failed to prepare: {}", e)))?;
@@ -44,7 +44,7 @@ impl Dispatcher {
             .unwrap()
             .as_secs() as i64;
         conn.execute(
-            "INSERT INTO task_runs (task_id, profile, status, claim_lock, started_at) 
+            "INSERT INTO task_runs (task_id, profile, status, claim_lock, started_at)
              VALUES (?1, ?2, 'running', ?3, ?4)",
             params![task_id, "dispatcher", worker, now],
         )

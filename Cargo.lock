@@ -6511,6 +6511,7 @@ version = "1.0.150"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e8014e44b4736ed0538adeecded0fce2a272f22dc9578a7eb6b2d9993c74cfb9"
 dependencies = [
+ "indexmap",
  "itoa",
  "memchr",
  "serde",
@@ -7023,6 +7024,7 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tokio-util",
+ "toon-helper",
  "tracing",
  "tracing-subscriber",
  "uuid",
@@ -7415,6 +7417,27 @@ name = "toml_writer"
 version = "1.1.2+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7d56353a2a665ad0f41a421187180aab746c8c325620617ad883a99a1cbe66d2"
+
+[[package]]
+name = "toon-format"
+version = "0.4.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "af1dae994fe9adfb44bdc74fc17546651604a59af32136256515bc1218850832"
+dependencies = [
+ "indexmap",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "toon-helper"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "toon-format",
+]
 
 [[package]]
 name = "tower"

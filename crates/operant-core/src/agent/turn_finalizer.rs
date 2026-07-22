@@ -113,6 +113,160 @@ impl TurnDiagnostics {
             self.session_id,
         )
     }
+
+    /// Build a user-facing explanation for why the turn ended abnormally.
+    ///
+    /// Ported from hermes-agent's `_format_turn_completion_explanation`.
+    /// Returns `None` for healthy `TextResponse` exits (no explanation needed).
+    pub fn explanation(&self) -> Option<String> {
+        match self.exit_reason {
+            TurnExitReason::TextResponse => None,
+            TurnExitReason::BudgetExhausted => Some(format!(
+                "⚠️ Turn ended early — iteration budget exhausted ({}/{} iterations used). \
+                 The agent ran out of tool-calling turns before completing the task. \
+                 Try breaking the task into smaller steps or increasing `max_iterations` in config.",
+                self.api_calls, self.max_iterations,
+            )),
+            TurnExitReason::Interrupted => Some(
+                "⚡ Turn was interrupted by the user. Partial work may have been done — \
+                 check what was accomplished before the interruption."
+                    .to_string(),
+            ),
+            TurnExitReason::Error => Some(
+                "❌ Turn ended due to an error. The agent encountered an unexpected failure \
+                 during processing. Check the logs for details."
+                    .to_string(),
+            ),
+        }
+    }
 }
 
+// ---------------------------------------------------------------------------
+// Message Sequence Repair
+// ---------------------------------------------------------------------------
 
+/// Repair role-alternation violations in a message list.
+///
+/// Ported from hermes-agent's `repair_message_sequence_with_cursor`.
+/// Fixes:
+/// - `tool → user` violations (tool result followed by user message)
+/// - `user → user` violations (consecutive user messages)
+/// - `assistant → assistant` violations (consecutive assistant messages)
+///
+/// Returns the number of repairs made.
+pub fn repair_message_sequence(messages: &mut Vec<crate::client::Message>) -> usize {
+    if messages.len() <= 2 {
+        return 0;
+    }
+
+    use crate::client::Role;
+
+    let mut repairs = 0;
+    let mut i = 1;
+
+    while i < messages.len() {
+        let prev_role = &messages[i - 1].role;
+        let curr_role = &messages[i].role;
+
+        let violation = match (prev_role, curr_role) {
+            // Tool followed by user — insert a synthetic assistant message
+            (Role::Tool, Role::User) => {
+                let synthetic = crate::client::Message {
+                    role: Role::Assistant,
+                    content: "[Continuing after tool result]".to_string(),
+                    tool_calls: None,
+                    tool_call_id: None,
+                    ..Default::default()
+                };
+                messages.insert(i, synthetic);
+                repairs += 1;
+                true
+            }
+            // User followed by user — merge into previous
+            (Role::User, Role::User) => {
+                let merged = format!("{}\n\n{}", messages[i - 1].content, messages[i].content);
+                messages[i - 1].content = merged;
+                messages.remove(i);
+                repairs += 1;
+                true
+            }
+            // Assistant followed by assistant — merge into previous
+            (Role::Assistant, Role::Assistant) => {
+                let merged = format!("{}\n\n{}", messages[i - 1].content, messages[i].content);
+                messages[i - 1].content = merged;
+                messages.remove(i);
+                repairs += 1;
+                true
+            }
+            _ => false,
+        };
+
+        if !violation {
+            i += 1;
+        }
+    }
+
+    repairs
+}
+
+// ---------------------------------------------------------------------------
+// File Mutation Verifier
+// ---------------------------------------------------------------------------
+
+/// Scan tool results for failed file mutations and return advisory footers.
+///
+/// Ported from hermes-agent's `_format_file_mutation_failure_footer`.
+/// When `write_file` or `patch` calls fail during a turn, this function
+/// detects them and produces a human-readable footer to append to the
+/// assistant response, preventing over-claiming.
+pub fn file_mutation_verifier_footer(messages: &[crate::client::Message]) -> Option<String> {
+    use crate::client::Role;
+
+    let mut failed_writes: Vec<String> = Vec::new();
+
+    // Walk messages looking for tool results with failed file mutations
+    for msg in messages {
+        if msg.role != Role::Tool {
+            continue;
+        }
+
+        let content = &msg.content;
+        let content_lower = content.to_lowercase();
+
+        // Detect failed write_file / patch operations
+        let is_file_mutation = content_lower.contains("write_file")
+            || content_lower.contains("patch")
+            || content_lower.contains("file_path")
+            || content_lower.contains("write to file");
+
+        let is_failure = content_lower.contains("error")
+            || content_lower.contains("failed")
+            || content_lower.contains("could not find")
+            || content_lower.contains("no such file")
+            || content_lower.contains("permission denied");
+
+        if is_file_mutation && is_failure {
+            // Extract a short preview of the failure
+            let preview: String = content.chars().take(120).collect();
+            failed_writes.push(preview);
+        }
+    }
+
+    if failed_writes.is_empty() {
+        return None;
+    }
+
+    let count = failed_writes.len();
+    let footer = format!(
+        "\n\n---\n⚠️ **File Mutation Advisory**: {} file operation(s) may have failed during this turn:\n{}\nPlease verify that the intended file changes were applied correctly.",
+        count,
+        failed_writes
+            .iter()
+            .enumerate()
+            .map(|(i, f)| format!("  {}. {}", i + 1, f))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+
+    Some(footer)
+}

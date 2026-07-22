@@ -7,10 +7,14 @@
 
 pub(crate) mod background_review;
 pub mod error_classifier;
+pub mod insights;
 pub mod iteration_budget;
+pub mod learn_prompt;
 pub mod learning_graph;
 pub(crate) mod llm_compressor;
 pub mod provider_registry;
+pub mod skill_bundle;
+pub mod skill_preprocessing;
 pub(crate) mod turn_context;
 pub(crate) mod turn_finalizer;
 pub mod turn_retry_state;

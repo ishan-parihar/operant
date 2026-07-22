@@ -470,7 +470,11 @@ impl LlmCompressor {
         let mut total_chars = 0usize;
         for msg in middle {
             let truncated_content = if msg.content.chars().count() > SUMMARIZER_TURN_MAX_CHARS {
-                let truncated: String = msg.content.chars().take(SUMMARIZER_TURN_MAX_CHARS).collect();
+                let truncated: String = msg
+                    .content
+                    .chars()
+                    .take(SUMMARIZER_TURN_MAX_CHARS)
+                    .collect();
                 format!("{} [...]", truncated)
             } else {
                 msg.content.clone()
@@ -480,8 +484,7 @@ impl LlmCompressor {
             if total_chars > SUMMARIZER_INPUT_MAX_CHARS {
                 debug!(
                     "Summarizer input truncated at {} chars (budget: {})",
-                    total_chars,
-                    SUMMARIZER_INPUT_MAX_CHARS
+                    total_chars, SUMMARIZER_INPUT_MAX_CHARS
                 );
                 break;
             }
@@ -516,7 +519,8 @@ impl LlmCompressor {
     /// user request and any file paths / function names mentioned, without
     /// requiring an LLM call.
     fn fallback_summary(&self, middle: &[Message]) -> String {
-        let mut summary = String::from("[Deterministic fallback — LLM summarization unavailable]\n\n");
+        let mut summary =
+            String::from("[Deterministic fallback — LLM summarization unavailable]\n\n");
 
         // Find the most recent user message and the most recent assistant message
         let last_user = middle

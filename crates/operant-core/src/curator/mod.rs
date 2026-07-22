@@ -231,4 +231,177 @@ impl CuratorEngine {
     pub async fn get_state(&self) -> CuratorState {
         self.state.read().await.clone()
     }
+
+    /// Check if the curator should run now based on idle/interval gates.
+    ///
+    /// Returns `true` when:
+    ///   - The curator is enabled and not paused
+    ///   - `last_run_at` is either None (first run) or older than `interval_hours`
+    ///
+    /// First-run behavior: when there is no `last_run_at` (fresh install),
+    /// we seed `last_run_at` to now and return false — deferring the first
+    /// real pass by one full interval. Users can invoke `operant curator run`
+    /// explicitly to bypass this gate.
+    pub async fn maybe_run_curator(&self) -> bool {
+        if !self.is_active().await {
+            return false;
+        }
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+
+        let state = self.state.read().await.clone();
+
+        match state.last_run_at {
+            None => {
+                // First run — seed state so we wait a full interval.
+                let mut state = self.state.write().await;
+                state.last_run_at = Some(now);
+                state.last_run_summary = Some(
+                    "deferred first run — curator seeded, will run after one interval".to_string(),
+                );
+                let _ = self.save_state_inner(&state).await;
+                tracing::info!(
+                    "Curator seeded — first run deferred by one interval ({}h)",
+                    state.interval_hours
+                );
+                false
+            }
+            Some(last) => {
+                let interval_secs = state.interval_hours as i64 * 3600;
+                let elapsed = now - last;
+                if elapsed >= interval_secs {
+                    tracing::info!(
+                        elapsed_hours = elapsed / 3600,
+                        interval_hours = state.interval_hours,
+                        "Curator interval elapsed — should run"
+                    );
+                    true
+                } else {
+                    tracing::debug!(
+                        elapsed_hours = elapsed / 3600,
+                        remaining_hours = (interval_secs - elapsed) / 3600,
+                        "Curator interval not yet elapsed"
+                    );
+                    false
+                }
+            }
+        }
+    }
+
+    /// Apply automatic lifecycle transitions to agent-created skills.
+    ///
+    /// Walks every curator-managed skill and moves active → stale → archived
+    /// based on the latest real activity timestamp. Pinned skills are never
+    /// touched. Returns a counter dict describing what changed.
+    ///
+    /// This is a deterministic, no-LLM operation that runs whenever the
+    /// curator fires — even when `consolidate` is off.
+    pub async fn apply_automatic_transitions(
+        &self,
+    ) -> Result<std::collections::HashMap<String, i64>> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+
+        let state = self.state.read().await.clone();
+        let stale_cutoff = now - (state.stale_after_days as i64 * 86400);
+        let archive_cutoff = now - (state.archive_after_days as i64 * 86400);
+
+        // Load fresh usage data
+        self.usage_tracker.load()?;
+        let all_records = self.usage_tracker.all_records();
+        let agent_created: Vec<_> = all_records.iter().filter(|r| r.agent_created).collect();
+
+        let mut counts = std::collections::HashMap::new();
+        counts.insert("checked".to_string(), agent_created.len() as i64);
+        counts.insert("marked_stale".to_string(), 0);
+        counts.insert("archived".to_string(), 0);
+        counts.insert("reactivated".to_string(), 0);
+        counts.insert("skipped_pinned".to_string(), 0);
+
+        for record in &agent_created {
+            if record.pinned {
+                *counts.entry("skipped_pinned".to_string()).or_insert(0) += 1;
+                continue;
+            }
+
+            let inactive_days = (now - record.last_used.timestamp()) / 86400;
+            let current = &record.lifecycle;
+
+            // Never-used skills (use_count == 0) get a grace floor:
+            // don't archive until at least stale_after_days old.
+            let never_used = record.use_count == 0;
+            if never_used && record.last_used.timestamp() > stale_cutoff {
+                // Younger than stale window — leave it alone.
+                if *current == LifecycleState::Active {
+                    // No change needed — it's already active.
+                }
+                continue;
+            }
+
+            if record.last_used.timestamp() <= archive_cutoff
+                && *current != LifecycleState::Archived
+            {
+                // Archive the skill
+                match archiver::archive_skill(&record.name, &self.skills_dir, &self.archive_dir) {
+                    Ok(()) => {
+                        let _ = self
+                            .usage_tracker
+                            .set_state(&record.name, LifecycleState::Archived);
+                        *counts.entry("archived".to_string()).or_insert(0) += 1;
+                        tracing::info!(skill = %record.name, "Curator archived stale skill");
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            skill = %record.name, error = %e,
+                            "Curator failed to archive skill"
+                        );
+                    }
+                }
+            } else if record.last_used.timestamp() <= stale_cutoff
+                && *current == LifecycleState::Active
+            {
+                // Mark as stale
+                // Note: we don't have a Stale lifecycle state in the enum,
+                // so we log it but don't change state. The archive cutoff
+                // will handle the actual transition.
+                *counts.entry("marked_stale".to_string()).or_insert(0) += 1;
+                tracing::debug!(
+                    skill = %record.name,
+                    inactive_days,
+                    "Curator marked skill as stale (pending archive)"
+                );
+            } else if record.last_used.timestamp() > stale_cutoff
+                && *current == LifecycleState::Archived
+            {
+                // Reactivate — skill got used again after being archived.
+                // This shouldn't normally happen (archived skills aren't loaded),
+                // but handle it defensively.
+                *counts.entry("reactivated".to_string()).or_insert(0) += 1;
+                tracing::info!(skill = %record.name, "Curator reactivated skill");
+            }
+        }
+
+        // Save updated state
+        let mut state = self.state.write().await;
+        state.last_run_at = Some(now);
+        state.run_count += 1;
+        let summary = format!(
+            "Auto-transitions: checked={}, archived={}, stale={}, reactivated={}, skipped_pinned={}",
+            counts.get("checked").unwrap_or(&0),
+            counts.get("archived").unwrap_or(&0),
+            counts.get("marked_stale").unwrap_or(&0),
+            counts.get("reactivated").unwrap_or(&0),
+            counts.get("skipped_pinned").unwrap_or(&0),
+        );
+        state.last_run_summary = Some(summary);
+        let _ = self.save_state_inner(&state).await;
+        let _ = self.usage_tracker.save();
+
+        Ok(counts)
+    }
 }

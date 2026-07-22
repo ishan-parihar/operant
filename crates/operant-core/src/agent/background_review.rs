@@ -259,8 +259,7 @@ and stop — but don't reach for that conclusion as a default.";
 /// TODO(integrate): Wire into TUI/Gateway notification system for
 /// user-facing display (matching hermes-agent's _safe_print pattern).
 #[cfg(test)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum NotificationMode {
     /// Show no actions (silent review).
     Off,
@@ -444,10 +443,7 @@ impl SelfEvolutionState {
                 "evo_turns_since_memory",
                 self.turns_since_memory_review.to_string(),
             ),
-            (
-                "evo_iters_since_skill",
-                self.iters_since_skill.to_string(),
-            ),
+            ("evo_iters_since_skill", self.iters_since_skill.to_string()),
         ]
     }
 }
@@ -464,7 +460,10 @@ impl SelfEvolutionState {
 /// tokens is a pure win). Never on the main-model path (full replay stays warm).
 ///
 /// Ported from `hermes-agent/agent/background_review.py::_digest_history`.
-pub fn digest_history(messages_snapshot: &[crate::client::Message], tail: usize) -> Vec<crate::client::Message> {
+pub fn digest_history(
+    messages_snapshot: &[crate::client::Message],
+    tail: usize,
+) -> Vec<crate::client::Message> {
     use crate::client::{Message, Role};
 
     let msgs = messages_snapshot;
@@ -593,11 +592,16 @@ pub fn summarize_review_actions(
     // Map review-agent tool results back to the calls that produced them.
     // The result JSON only says "Entry added"; the call arguments contain
     // action, target, and content previews.
-    let notify_tools: std::collections::HashSet<&str> =
-        ["memory_store", "memory_search", "memory_recall", "skill_manage", "skill_view"]
-            .iter()
-            .copied()
-            .collect();
+    let notify_tools: std::collections::HashSet<&str> = [
+        "memory_store",
+        "memory_search",
+        "memory_recall",
+        "skill_manage",
+        "skill_view",
+    ]
+    .iter()
+    .copied()
+    .collect();
 
     let mut all_tool_call_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut call_details: std::collections::HashMap<String, serde_json::Value> =
@@ -675,10 +679,7 @@ pub fn summarize_review_actions(
             continue;
         }
 
-        let content_str = data
-            .get("content")
-            .and_then(|v| v.as_str())
-            .unwrap_or("{}");
+        let content_str = data.get("content").and_then(|v| v.as_str()).unwrap_or("{}");
 
         let result: serde_json::Value = serde_json::from_str(content_str).unwrap_or_default();
         if !result
@@ -709,7 +710,8 @@ pub fn summarize_review_actions(
             // (e.g. standalone tool messages), infer from message content.
             || message_lower.contains("updated skill") || message_lower.contains("skill_manage");
 
-        if !verbose && (message_lower.contains("created")
+        if !verbose
+            && (message_lower.contains("created")
                 || message_lower.contains("updated")
                 || (is_skill && message_lower.contains("patched")))
         {
@@ -740,18 +742,9 @@ pub fn summarize_review_actions(
         let max_preview = 120;
 
         if verbose {
-            let action = detail
-                .get("action")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            let content = detail
-                .get("content")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            let skill_name = detail
-                .get("name")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
+            let action = detail.get("action").and_then(|v| v.as_str()).unwrap_or("");
+            let content = detail.get("content").and_then(|v| v.as_str()).unwrap_or("");
+            let skill_name = detail.get("name").and_then(|v| v.as_str()).unwrap_or("");
 
             if is_skill {
                 if action == "patch" && !content.is_empty() {
@@ -762,10 +755,12 @@ pub fn summarize_review_actions(
                         skill_name, preview, suffix
                     ));
                 } else if action == "create" {
-                    summary.actions
+                    summary
+                        .actions
                         .push(format!("📝 Skill '{}' created: {}", skill_name, message));
                 } else if action == "edit" {
-                    summary.actions
+                    summary
+                        .actions
                         .push(format!("📝 Skill '{}' rewritten: {}", skill_name, message));
                 } else {
                     summary.actions.push(format!("📝 {}", message));
@@ -837,9 +832,18 @@ mod tests {
 
     #[test]
     fn test_notification_mode_from_str() {
-        assert_eq!("off".parse::<NotificationMode>().unwrap(), NotificationMode::Off);
-        assert_eq!("on".parse::<NotificationMode>().unwrap(), NotificationMode::On);
-        assert_eq!("verbose".parse::<NotificationMode>().unwrap(), NotificationMode::Verbose);
+        assert_eq!(
+            "off".parse::<NotificationMode>().unwrap(),
+            NotificationMode::Off
+        );
+        assert_eq!(
+            "on".parse::<NotificationMode>().unwrap(),
+            NotificationMode::On
+        );
+        assert_eq!(
+            "verbose".parse::<NotificationMode>().unwrap(),
+            NotificationMode::Verbose
+        );
         assert!("invalid".parse::<NotificationMode>().is_err());
     }
 
@@ -928,10 +932,7 @@ mod tests {
     #[test]
     fn test_digest_history_short_conversation() {
         use crate::client::Message;
-        let messages = vec![
-            Message::user("hello"),
-            Message::assistant("hi there"),
-        ];
+        let messages = vec![Message::user("hello"), Message::assistant("hi there")];
         let result = digest_history(&messages, 10);
         // Conversation is shorter than tail — return as-is
         assert_eq!(result.len(), 2);
@@ -1002,10 +1003,8 @@ mod tests {
         assert_eq!(pairs.len(), 2);
 
         // Convert to HashMap (simulates what Database would store/retrieve)
-        let metadata: std::collections::HashMap<String, String> = pairs
-            .into_iter()
-            .map(|(k, v)| (k.to_string(), v))
-            .collect();
+        let metadata: std::collections::HashMap<String, String> =
+            pairs.into_iter().map(|(k, v)| (k.to_string(), v)).collect();
 
         // Hydrate into a fresh state
         let mut state2 = SelfEvolutionState::new(&config);

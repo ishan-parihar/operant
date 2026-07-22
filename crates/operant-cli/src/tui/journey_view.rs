@@ -255,13 +255,15 @@ pub fn render_journey_view(frame: &mut Frame, state: &JourneyViewState, area: Re
     };
     let graph_stats = state.graph.as_ref().map_or_else(
         || String::new(),
-        |g| format!(
-            " │ {} skills · {} memory · {} edges · {:.1}% linked",
-            g.stats.skill_nodes,
-            g.stats.memory_nodes,
-            g.stats.total_edges,
-            100.0 - g.stats.isolated_pct,
-        ),
+        |g| {
+            format!(
+                " │ {} skills · {} memory · {} edges · {:.1}% linked",
+                g.stats.skill_nodes,
+                g.stats.memory_nodes,
+                g.stats.total_edges,
+                100.0 - g.stats.isolated_pct,
+            )
+        },
     );
     let hint = format!(
         "↑/↓ navigate · Tab switch · Esc close · {}{}",

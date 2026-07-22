@@ -398,10 +398,12 @@ mod tests {
                     let t = tools_seen_clone.clone();
                     Box::pin(async move {
                         c.store(true, std::sync::atomic::Ordering::SeqCst);
-                        if let Some(v) = ctx.metadata.get("iterations").and_then(|s| s.parse().ok()) {
+                        if let Some(v) = ctx.metadata.get("iterations").and_then(|s| s.parse().ok())
+                        {
                             i.store(v, std::sync::atomic::Ordering::SeqCst);
                         }
-                        if let Some(v) = ctx.metadata.get("tool_calls").and_then(|s| s.parse().ok()) {
+                        if let Some(v) = ctx.metadata.get("tool_calls").and_then(|s| s.parse().ok())
+                        {
                             t.store(v, std::sync::atomic::Ordering::SeqCst);
                         }
                     })

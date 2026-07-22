@@ -5,7 +5,7 @@
 //!
 //! Supported providers (configured via `browser.provider` in config.toml):
 //! - `lightpanda` (default) - Local Lightpanda binary (auto-downloaded from GitHub Releases)
-//! - `obscura` - Local Obscura binary (auto-downloaded, supports CDP)  
+//! - `obscura` - Local Obscura binary (auto-downloaded, supports CDP)
 //! - `camofox` - Camofox REST API (`CAMOFOX_URL`)
 //! - `browserbase` - Browserbase cloud (`BROWSERBASE_API_KEY`)
 //! - `browser-use` - Browser Use cloud (`BROWSER_USE_API_KEY`)
