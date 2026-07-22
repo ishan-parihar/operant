@@ -21,6 +21,7 @@
 
 use std::fmt;
 
+use crate::agent::background_review::SelfEvolutionState;
 use crate::client::{Message, Role};
 
 // ---------------------------------------------------------------------------
@@ -286,4 +287,160 @@ pub fn file_mutation_verifier_footer(messages: &[Message]) -> Option<String> {
     );
 
     Some(footer)
+}
+
+// ---------------------------------------------------------------------------
+// Evolution Trigger Check
+// ---------------------------------------------------------------------------
+
+/// Result of checking evolution triggers after a completed turn.
+///
+/// Carries the flags indicating which reviews should fire, plus
+/// metadata for logging and persistence. Matches hermes-agent's
+/// turn_finalizer.py where _iters_since_skill and _turns_since_memory
+/// are checked after the tool-calling loop completes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EvolutionTriggerResult {
+    /// Whether a skill review should be triggered.
+    pub should_review_skills: bool,
+    /// Whether a memory review should be triggered.
+    pub should_review_memory: bool,
+    /// Current skill iteration counter (after bump/reset, before persist).
+    pub iters_since_skill: usize,
+    /// Current memory turn counter (after bump/reset, before persist).
+    pub turns_since_memory: usize,
+}
+
+/// Check and advance evolution counters after a completed turn.
+///
+/// Bumps or resets the skill counter based on whether `skill_manage`
+/// was called this turn, increments the memory counter, checks both
+/// nudge thresholds, and resets any that fired. Returns the result
+/// indicating which reviews should be triggered.
+///
+/// This function is pure (no side effects beyond mutating `evo`),
+/// making it easy to test. The caller is responsible for persisting
+/// the counters and spawning the review daemon.
+///
+/// Ported from hermes-agent's `turn_finalizer._check_evolution_triggers`.
+pub fn check_and_advance_evolution_triggers(
+    evo: &mut SelfEvolutionState,
+    skill_manage_called: bool,
+) -> EvolutionTriggerResult {
+    // Skill counter: reset if skill_manage was called, else bump.
+    if skill_manage_called {
+        evo.reset_skill_counter();
+    } else {
+        evo.bump_skill_counter();
+    }
+    // Memory counter increments every completed turn regardless.
+    evo.bump_memory_counter();
+
+    let should_review_skills = evo.should_review_skills();
+    let should_review_memory = evo.should_review_memory();
+
+    // Capture counter values BEFORE reset so the caller can log the
+    // threshold value that triggered the review (matches hermes-agent's
+    // log pattern where the counter is read before reset).
+    let iters_at_fire = evo.iters_since_skill;
+    let turns_at_fire = evo.turns_since_memory_review;
+
+    // Reset counters that fired so the next window starts fresh.
+    if should_review_skills {
+        evo.reset_skill_counter();
+    }
+    if should_review_memory {
+        evo.reset_memory_counter();
+    }
+
+    EvolutionTriggerResult {
+        should_review_skills,
+        should_review_memory,
+        iters_since_skill: iters_at_fire,
+        turns_since_memory: turns_at_fire,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agent::background_review::BackgroundReviewConfig;
+
+    fn make_evo(skill_interval: usize, memory_interval: usize) -> SelfEvolutionState {
+        SelfEvolutionState::new(&BackgroundReviewConfig {
+            skill_nudge_interval: skill_interval,
+            memory_review_interval: memory_interval,
+        })
+    }
+
+    #[test]
+    fn test_evolution_trigger_no_fire() {
+        let mut evo = make_evo(10, 5);
+        let result = check_and_advance_evolution_triggers(&mut evo, false);
+        assert!(!result.should_review_skills);
+        assert!(!result.should_review_memory);
+        assert_eq!(result.iters_since_skill, 1);
+        assert_eq!(result.turns_since_memory, 1);
+    }
+
+    #[test]
+    fn test_evolution_trigger_skill_fires() {
+        let mut evo = make_evo(3, 10);
+        // Bump 2 times → no fire yet
+        for _ in 0..2 {
+            let result = check_and_advance_evolution_triggers(&mut evo, false);
+            assert!(!result.should_review_skills);
+        }
+        // 3rd bump → fires at threshold
+        let result = check_and_advance_evolution_triggers(&mut evo, false);
+        assert!(result.should_review_skills);
+        assert!(!result.should_review_memory);
+        // iters_since_skill should be the threshold value (3), not 0
+        assert_eq!(result.iters_since_skill, 3);
+    }
+
+    #[test]
+    fn test_evolution_trigger_memory_fires() {
+        let mut evo = make_evo(100, 3);
+        // Bump 2 times → no fire yet
+        for _ in 0..2 {
+            let result = check_and_advance_evolution_triggers(&mut evo, false);
+            assert!(!result.should_review_memory);
+        }
+        // 3rd bump → fires at threshold
+        let result = check_and_advance_evolution_triggers(&mut evo, false);
+        assert!(result.should_review_memory);
+        assert!(!result.should_review_skills);
+        assert_eq!(result.turns_since_memory, 3);
+    }
+
+    #[test]
+    fn test_evolution_trigger_skill_manage_resets() {
+        let mut evo = make_evo(5, 10);
+        // Bump 4 times
+        for _ in 0..4 {
+            check_and_advance_evolution_triggers(&mut evo, false);
+        }
+        assert_eq!(evo.iters_since_skill, 4);
+        // skill_manage resets the counter
+        check_and_advance_evolution_triggers(&mut evo, true);
+        assert_eq!(evo.iters_since_skill, 0);
+        assert!(!evo.should_review_skills());
+    }
+
+    #[test]
+    fn test_evolution_disabled_when_zero() {
+        let mut evo = make_evo(0, 0);
+        let result = check_and_advance_evolution_triggers(&mut evo, false);
+        assert!(!result.should_review_skills);
+        assert!(!result.should_review_memory);
+    }
+
+    #[test]
+    fn test_evolution_both_fire() {
+        let mut evo = make_evo(1, 1);
+        let result = check_and_advance_evolution_triggers(&mut evo, false);
+        assert!(result.should_review_skills);
+        assert!(result.should_review_memory);
+    }
 }
