@@ -17,10 +17,12 @@ use serde_json::{Value, json};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use std::sync::LazyLock;
+use std::collections::HashSet;
+use std::sync::{LazyLock, RwLock};
 
 use crate::schema::ToolSchema;
 use crate::tools::{OperantTool, ToolContext, ToolResult};
+use crate::write_origin::is_background_review;
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -29,12 +31,121 @@ const MAX_DESCRIPTION_LENGTH: usize = 1024;
 const MAX_SKILL_CONTENT_CHARS: usize = 100_000; // ~36k tokens at 2.75 chars/token
 const MAX_SKILL_FILE_BYTES: usize = 1_048_576; // 1 MiB per supporting file
 
+/// Skills that ship with Operant and must never be modified by the background
+/// review agent. Matches hermes-agent's "bundled" + "hub-installed" protection.
+const PROTECTED_SKILL_PREFIXES: &[&str] = &[
+    "operant-agent",
+    "operant-dev",
+    "hermes-agent",
+    "hermes-dev",
+    "claw-dev",
+];
+
 /// Characters allowed in skill names (filesystem-safe, URL-friendly).
 static VALID_NAME_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^[a-z0-9][a-z0-9._-]*$").unwrap());
 
 /// Subdirectories allowed for write_file / remove_file.
 const ALLOWED_SUBDIRS: &[&str] = &["references", "templates", "scripts", "assets"];
+
+// ── Background review write guards ────────────────────────────────────────
+
+/// Tracks which skills have been read via `skill_view` during a background
+/// review session. The review agent must read a skill before modifying it
+/// to prevent uninformed mutations.
+static REVIEW_READ_SKILLS: LazyLock<RwLock<HashSet<String>>> =
+    LazyLock::new(|| RwLock::new(HashSet::new()));
+
+/// Mark a skill as having been read during the current background review.
+/// Called by `skill_view` when the origin is `background_review`.
+pub fn mark_review_skill_read(name: &str) {
+    if is_background_review() {
+        if let Ok(mut set) = REVIEW_READ_SKILLS.write() {
+            set.insert(name.to_string());
+        }
+    }
+}
+
+/// Check whether a skill has been read during the current background review.
+fn review_has_read(name: &str) -> bool {
+    REVIEW_READ_SKILLS
+        .read()
+        .map(|set| set.contains(name))
+        .unwrap_or(false)
+}
+
+/// Reset the read tracking set. Called at the start of each background review
+/// session so that a stale session doesn't leak read-tracking state.
+pub fn reset_review_read_marks() {
+    if let Ok(mut set) = REVIEW_READ_SKILLS.write() {
+        set.clear();
+    }
+}
+
+/// Check if a skill name matches a protected prefix (bundled/hub-installed).
+fn is_protected_skill(name: &str) -> bool {
+    PROTECTED_SKILL_PREFIXES
+        .iter()
+        .any(|prefix| name.starts_with(prefix) || name == *prefix)
+}
+
+/// Check if a skill was installed from a hub (lives under `.hub/` directory).
+/// Hub-installed skills are protected from background review modifications.
+fn is_hub_installed(skill_dir: &Path) -> bool {
+    let parent = skill_dir.parent().unwrap_or(skill_dir);
+    parent.file_name().map(|n| n == ".hub").unwrap_or(false)
+}
+
+/// Guard result for background review write operations.
+enum ReviewGuardResult {
+    /// Write is allowed.
+    Allowed,
+    /// Write is blocked with a reason.
+    Blocked(String),
+}
+
+/// Check if a background review is allowed to modify a skill.
+///
+/// Rules (matching hermes-agent):
+/// 1. Bundled skills (operant-agent, hermes-agent, etc.) — NEVER edit.
+/// 2. Hub-installed skills — NEVER edit.
+/// 3. Pinned skills — CAN be improved (pin only blocks delete/archive).
+/// 4. The review must have READ the skill before modifying it.
+fn review_write_guard(name: &str, skill_dir: &Path, action: &str) -> ReviewGuardResult {
+    if !is_background_review() {
+        return ReviewGuardResult::Allowed;
+    }
+
+    // Block edits/patches/deletes on bundled skills
+    if is_protected_skill(name) {
+        if action == "delete" || action == "edit" || action == "patch" {
+            return ReviewGuardResult::Blocked(format!(
+                "Skill '{}' is a bundled/protected skill and cannot be modified by the background review.",
+                name
+            ));
+        }
+    }
+
+    // Block edits/patches/deletes on hub-installed skills
+    if is_hub_installed(skill_dir) {
+        if action == "delete" || action == "edit" || action == "patch" {
+            return ReviewGuardResult::Blocked(format!(
+                "Skill '{}' is hub-installed and cannot be modified by the background review.",
+                name
+            ));
+        }
+    }
+
+    // For edit/patch: require that the skill was read first
+    if (action == "edit" || action == "patch") && !review_has_read(name) {
+        return ReviewGuardResult::Blocked(format!(
+            "Skill '{}' has not been read via skill_view. Read it first before modifying.",
+            name
+        ));
+    }
+
+    ReviewGuardResult::Allowed
+}
 
 // ── Frontmatter parsing ──────────────────────────────────────────────────────
 
@@ -479,7 +590,11 @@ impl OperantTool for SkillViewTool {
         }
 
         let skill_dir = match find_skill(skills_dir, name) {
-            Some(d) => d,
+            Some(d) => {
+                // Track that this skill was read during background review
+                mark_review_skill_read(name);
+                d
+            }
             None => {
                 let available: Vec<String> = find_skills_in_dir(skills_dir)
                     .iter()
@@ -706,6 +821,10 @@ impl SkillManageTool {
         let Some(skill_dir) = find_skill(&self.root_dir, &parsed.name) else {
             return ToolResult::error("skill_manage", format!("Skill '{}' not found", parsed.name));
         };
+        // Background review write guard
+        if let ReviewGuardResult::Blocked(msg) = review_write_guard(&parsed.name, &skill_dir, "edit") {
+            return ToolResult::error("skill_manage", msg);
+        }
         let skill_md = skill_dir.join("SKILL.md");
         // Backup original for rollback
         let original = fs::read_to_string(&skill_md).ok();
@@ -740,6 +859,10 @@ impl SkillManageTool {
         let Some(skill_dir) = find_skill(&self.root_dir, &parsed.name) else {
             return ToolResult::error("skill_manage", format!("Skill '{}' not found", parsed.name));
         };
+        // Background review write guard
+        if let ReviewGuardResult::Blocked(msg) = review_write_guard(&parsed.name, &skill_dir, "patch") {
+            return ToolResult::error("skill_manage", msg);
+        }
 
         // Determine target file
         let target = if let Some(fp) = &parsed.file_path {
@@ -857,6 +980,10 @@ impl SkillManageTool {
         let Some(skill_dir) = find_skill(&self.root_dir, &parsed.name) else {
             return ToolResult::error("skill_manage", format!("Skill '{}' not found", parsed.name));
         };
+        // Background review write guard
+        if let ReviewGuardResult::Blocked(msg) = review_write_guard(&parsed.name, &skill_dir, "delete") {
+            return ToolResult::error("skill_manage", msg);
+        }
         // Check pinned status before deleting
         if self.is_pinned(&parsed.name) {
             return ToolResult::error(
