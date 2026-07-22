@@ -508,9 +508,10 @@ impl CronDb {
         consolidated: &HashMap<String, String>,
         pruned: &[String],
     ) -> Result<CronRewriteReport, Error> {
-        // NOTE: Mutex is held for the entire rewrite loop to ensure atomicity.
-        // This is fine for CLI (short-lived) but could be relaxed in daemon mode
-        // if contention becomes an issue.
+        // NOTE: Mutex is held for the entire rewrite loop so all job references
+        // are rewritten atomically (no partial rewrites on failure). This is fine
+        // for CLI (short-lived) but could be relaxed in daemon mode if contention
+        // becomes an issue — e.g. by batching into per-job transactions.
         let conn = self.conn.lock().unwrap();
         let mut report = CronRewriteReport::default();
 
