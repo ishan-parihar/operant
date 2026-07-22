@@ -1620,6 +1620,18 @@ impl OperantAgent {
             info!(repairs = seq_repairs, "Repaired message sequence violations");
         }
 
+        // Drop thinking-only assistant messages and merge consecutive user
+        // messages. Needed for Anthropic models that emit reasoning as
+        // separate empty-content assistant messages.
+        messages = message_safety::drop_thinking_only_and_merge_users(&messages);
+
+        // Sanitize tool calls for strict API providers (Gemini, Claude
+        // strict mode) that enforce stricter name/argument validation.
+        let tool_sans = message_safety::sanitize_tool_calls_for_strict_api(&mut messages);
+        if tool_sans > 0 {
+            debug!( sanitizations = tool_sans, "Sanitized tool calls for strict API");
+        }
+
         Ok(messages)
     }
 
