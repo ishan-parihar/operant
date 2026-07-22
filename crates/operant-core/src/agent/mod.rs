@@ -12,6 +12,7 @@ pub mod iteration_budget;
 pub mod learn_prompt;
 pub mod learning_graph;
 pub(crate) mod llm_compressor;
+pub mod message_safety;
 pub mod provider_registry;
 pub mod skill_bundle;
 pub mod skill_preprocessing;
@@ -955,6 +956,7 @@ impl OperantAgent {
                     error: "Interrupted by user".to_string(),
                 })
                 .await;
+                let _ = message_safety::close_interrupted_tool_sequence(&mut messages, None);
                 return Err(Error::Agent("Interrupted by user".to_string()));
             }
 
@@ -1612,6 +1614,11 @@ impl OperantAgent {
         // Standard eviction: remove oldest messages within tiers until
         // the total fits within the effective budget.
         messages = crate::context_management::evict_to_budget(messages, effective_budget);
+
+        let seq_repairs = message_safety::repair_message_sequence(&mut messages);
+        if seq_repairs > 0 {
+            info!(repairs = seq_repairs, "Repaired message sequence violations");
+        }
 
         Ok(messages)
     }
@@ -2420,7 +2427,7 @@ If nothing needs updating, say 'Nothing to save.' and stop.\n\n{}",
             match serde_json::from_str::<serde_json::Value>(args) {
                 Ok(_) => true,
                 Err(_) => {
-                    let repaired = repair_json(args);
+                    let repaired = message_safety::repair_tool_call_arguments(args, &tc.function.name);
                     match serde_json::from_str::<serde_json::Value>(&repaired) {
                         Ok(_) => {
                             debug!(
@@ -2591,7 +2598,7 @@ If nothing needs updating, say 'Nothing to save.' and stop.\n\n{}",
                     // 1. Missing closing brace — append }
                     // 2. Missing closing bracket — append ]
                     // 3. Truncated string value — append "
-                    let repaired = repair_json(&args_str);
+                    let repaired = message_safety::repair_tool_call_arguments(&args_str, &name);
                     if let Ok(a) = serde_json::from_str(&repaired) {
                         debug!(tool = %name, "Tool arguments auto-repaired");
                         a
@@ -3075,6 +3082,12 @@ fn extract_tool_calls_from_choice(
 /// Attempt to repair truncated JSON by balancing braces, brackets, and quotes.
 /// This handles common streaming truncation issues where the model's tool-call
 /// arguments are cut off mid-value. (iter-123, improved iter-261)
+///
+/// NOTE: This function is superseded by [`message_safety::repair_tool_call_arguments`]
+/// but retained temporarily because it handles streaming-specific truncation edge cases
+/// (trailing colons, incomplete key-value pairs) that the replacement doesn't cover.
+/// Remove once streaming truncation handling is ported to message_safety.
+#[allow(dead_code)]
 fn repair_json(s: &str) -> String {
     let mut result = s.trim().to_string();
     if result.is_empty() {

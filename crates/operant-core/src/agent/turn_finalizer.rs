@@ -145,69 +145,17 @@ impl TurnDiagnostics {
 }
 
 // ---------------------------------------------------------------------------
-// Message Sequence Repair
+// Message Sequence Repair (re-exported from message_safety)
 // ---------------------------------------------------------------------------
 
 /// Repair role-alternation violations in a message list.
 ///
-/// Ported from hermes-agent's `repair_message_sequence_with_cursor`.
-/// Fixes:
-/// - `tool → user` violations (tool result followed by user message)
-/// - `user → user` violations (consecutive user messages)
-/// - `assistant → assistant` violations (consecutive assistant messages)
+/// Delegates to [`super::message_safety::repair_message_sequence`] which
+/// contains the canonical implementation ported from hermes-agent.
 ///
 /// Returns the number of repairs made.
-#[allow(dead_code)]
 pub fn repair_message_sequence(messages: &mut Vec<Message>) -> usize {
-    if messages.len() <= 2 {
-        return 0;
-    }
-
-    let mut repairs = 0;
-    let mut i = 1;
-
-    while i < messages.len() {
-        let prev_role = &messages[i - 1].role;
-        let curr_role = &messages[i].role;
-
-        let violation = match (prev_role, curr_role) {
-            // Tool followed by user — insert a synthetic assistant message
-            (Role::Tool, Role::User) => {
-                let synthetic = crate::client::Message {
-                    role: Role::Assistant,
-                    content: "[Continuing after tool result]".to_string(),
-                    tool_calls: None,
-                    tool_call_id: None,
-                    ..Default::default()
-                };
-                messages.insert(i, synthetic);
-                repairs += 1;
-                true
-            }
-            // User followed by user — merge into previous
-            (Role::User, Role::User) => {
-                let merged = format!("{}\n\n{}", messages[i - 1].content, messages[i].content);
-                messages[i - 1].content = merged;
-                messages.remove(i);
-                repairs += 1;
-                true
-            }            // Assistant followed by assistant — keep the newer one
-            (Role::Assistant, Role::Assistant) => {
-                messages[i - 1].content = messages[i].content.clone();
-                messages[i - 1].tool_calls = messages[i].tool_calls.clone();
-                messages.remove(i);
-                repairs += 1;
-                true
-            }
-            _ => false,
-        };
-
-        if !violation {
-            i += 1;
-        }
-    }
-
-    repairs
+    super::message_safety::repair_message_sequence(messages)
 }
 
 // ---------------------------------------------------------------------------
