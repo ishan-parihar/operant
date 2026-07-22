@@ -1,0 +1,371 @@
+//! Message and tool-payload sanitization helpers.
+//!
+//! Pure functions extracted for the agent's message pipeline. These walk
+//! OpenAI-format message lists and structured payloads, repairing or
+//! stripping problematic characters that would otherwise crash JSON
+//! serialization or be rejected by upstream APIs.
+//!
+//! Ported from `hermes-agent/agent/message_sanitization.py`.
+
+use regex::Regex;
+use std::sync::LazyLock;
+
+use crate::client::{Message, Role};
+
+/// Regex to strip trailing commas before `}` or `]` in JSON.
+static TRAILING_COMMA_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r",\s*([}\]])").unwrap());
+
+// ---------------------------------------------------------------------------
+// Surrogate sanitization
+// ---------------------------------------------------------------------------
+
+/// Replace any remaining surrogate code points with U+FFFD.
+///
+/// Rust `String` is guaranteed valid UTF-8, so lone surrogates (U+D800..=U+DFFF)
+/// can never appear in-memory — they are already replaced by U+FFFD during
+/// `String::from_utf8_lossy` or similar decoding. This function exists for API
+/// parity with hermes-agent's `_sanitize_surrogates` and is a no-op in Rust.
+#[inline]
+#[allow(dead_code)]
+pub fn sanitize_surrogates(text: &str) -> String {
+    // Rust strings are valid UTF-8; surrogates are impossible.
+    // This is a no-op kept for API parity with hermes-agent.
+    text.to_string()
+}
+
+/// Sanitize surrogate characters from all string content in a messages list.
+///
+/// In Rust, `String` is guaranteed valid UTF-8 so surrogates cannot appear.
+/// This function is a no-op kept for API parity with hermes-agent's
+/// `_sanitize_messages_surrogates`.
+#[inline]
+#[allow(dead_code)]
+pub fn sanitize_messages_surrogates(_messages: &mut [Message]) -> usize {
+    // Rust strings are valid UTF-8; surrogates are impossible.
+    0
+}
+
+// ---------------------------------------------------------------------------
+// Tool call argument repair
+// ---------------------------------------------------------------------------
+
+/// Attempt to repair malformed tool_call argument JSON.
+///
+/// Models like GLM-5.1 via Ollama can produce truncated JSON, trailing
+/// commas, Python `None`, etc. The API proxy rejects these with HTTP 400
+/// "invalid tool call arguments". This function applies common repairs;
+/// if all fail it returns `"{}"` so the request succeeds (better than
+/// crashing the session).
+pub fn repair_tool_call_arguments(raw_args: &str, tool_name: &str) -> String {
+    let raw_stripped = raw_args.trim();
+
+    // Fast-path: empty / whitespace-only -> empty object
+    if raw_stripped.is_empty() {
+        tracing::warn!("Sanitized empty tool_call arguments for {}", tool_name);
+        return "{}".to_string();
+    }
+
+    // Python-literal None -> normalise to {}
+    if raw_stripped == "None" {
+        tracing::warn!(
+            "Sanitized Python-None tool_call arguments for {}",
+            tool_name
+        );
+        return "{}".to_string();
+    }
+
+    // Pass 0: try strict=False (accept control chars in strings)
+    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(raw_stripped) {
+        // If it parsed, re-serialize to clean it up
+        let reserialized = serde_json::to_string(&parsed).unwrap_or_default();
+        if reserialized != raw_stripped {
+            tracing::warn!(
+                "Repaired tool_call arguments for {}: control chars cleaned",
+                tool_name
+            );
+        }
+        return reserialized;
+    }
+
+    // Attempt common JSON repairs
+    let mut fixed = raw_stripped.to_string();
+
+    // 1. Strip trailing commas before } or ]
+    fixed = TRAILING_COMMA_RE.replace_all(&fixed, "$1").to_string();
+
+    // 2. Close unclosed structures
+    let open_curly = fixed.matches('{').count() as i32 - fixed.matches('}').count() as i32;
+    let open_bracket = fixed.matches('[').count() as i32 - fixed.matches(']').count() as i32;
+    if open_curly > 0 {
+        fixed.extend(std::iter::repeat('}').take(open_curly as usize));
+    }
+    if open_bracket > 0 {
+        fixed.extend(std::iter::repeat(']').take(open_bracket as usize));
+    }
+
+    // 3. Remove excess closing braces/brackets (bounded to 50 iterations)
+    for _ in 0..50 {
+        if serde_json::from_str::<serde_json::Value>(&fixed).is_ok() {
+            break;
+        }
+        if fixed.ends_with('}') && fixed.matches('}').count() > fixed.matches('{').count() {
+            fixed.pop();
+        } else if fixed.ends_with(']')
+            && fixed.matches(']').count() > fixed.matches('[').count()
+        {
+            fixed.pop();
+        } else {
+            break;
+        }
+    }
+
+    if serde_json::from_str::<serde_json::Value>(&fixed).is_ok() {
+        tracing::warn!(
+            "Repaired malformed tool_call arguments for {}: {:?} -> {:?}",
+            tool_name,
+            raw_stripped.chars().take(80).collect::<String>(),
+            fixed.chars().take(80).collect::<String>()
+        );
+        return fixed;
+    }
+
+    // Last resort: replace with empty object so the API request doesn't
+    // crash the entire session.
+    tracing::warn!(
+        "Unrepairable tool_call arguments for {} — replaced with empty object",
+        tool_name
+    );
+    "{}".to_string()
+}
+
+// ---------------------------------------------------------------------------
+// Message sequence repair
+// ---------------------------------------------------------------------------
+
+/// Repair role-alternation violations in a message list.
+///
+/// Ported from hermes-agent's `repair_message_sequence`.
+/// Fixes:
+/// - `tool -> user` violations (insert synthetic assistant)
+/// - `user -> user` violations (merge content)
+/// - `assistant -> assistant` violations (merge tool_calls, keep newer content)
+///
+/// Returns the number of repairs made.
+pub fn repair_message_sequence(messages: &mut Vec<Message>) -> usize {
+    if messages.len() < 2 {
+        return 0;
+    }
+
+    let mut repairs = 0;
+    let mut i = 1;
+
+    while i < messages.len() {
+        let prev_role = messages[i - 1].role.clone();
+        let curr_role = messages[i].role.clone();
+
+        let violation = match (&prev_role, &curr_role) {
+            // Tool followed by user — insert a synthetic assistant message
+            (Role::Tool, Role::User) => {
+                let synthetic = Message::assistant("[Continuing after tool result]");
+                messages.insert(i, synthetic);
+                repairs += 1;
+                true
+            }
+            // User followed by user — merge into previous
+            (Role::User, Role::User) => {
+                let merged = format!("{}\n\n{}", messages[i - 1].content, messages[i].content);
+                messages[i - 1].content = merged;
+                messages.remove(i);
+                repairs += 1;
+                true
+            }
+            // Assistant followed by assistant — merge tool_calls, keep newer content
+            (Role::Assistant, Role::Assistant) => {
+                // Union tool_calls from both messages
+                let prev_calls = messages[i - 1].tool_calls.take().unwrap_or_default();
+                let new_calls = messages[i].tool_calls.take().unwrap_or_default();
+                if !new_calls.is_empty() {
+                    let mut merged_calls = prev_calls;
+                    merged_calls.extend(new_calls);
+                    messages[i - 1].tool_calls = Some(merged_calls);
+                } else if messages[i - 1].tool_calls.is_none() {
+                    messages[i - 1].tool_calls = Some(prev_calls);
+                }
+                // Keep the newer content
+                if !messages[i].content.is_empty() {
+                    messages[i - 1].content = messages[i].content.clone();
+                }
+                messages.remove(i);
+                repairs += 1;
+                true
+            }
+            _ => false,
+        };
+
+        if !violation {
+            i += 1;
+        }
+    }
+
+    repairs
+}
+
+// ---------------------------------------------------------------------------
+// Close interrupted tool sequence
+// ---------------------------------------------------------------------------
+
+/// Append a synthetic assistant turn when an interrupted tail is a tool result.
+///
+/// A turn cut short by Ctrl-C can leave the transcript ending on a raw
+/// `tool` message. Persisting that tail means the next user message lands
+/// as `tool -> user` — a role-alternation violation that strict providers
+/// (Gemini, Claude) reject.
+///
+/// Returns true if a closing turn was appended.
+pub fn close_interrupted_tool_sequence(messages: &mut Vec<Message>, final_response: Option<&str>) -> bool {
+    if messages.is_empty() {
+        return false;
+    }
+    let last = messages.last().unwrap();
+    if last.role != Role::Tool {
+        return false;
+    }
+    let text = final_response.unwrap_or("");
+    let content = if text.trim().is_empty() {
+        "Operation interrupted.".to_string()
+    } else {
+        text.trim().to_string()
+    };
+    messages.push(Message::assistant(&content));
+    true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_sanitize_surrogates_noop() {
+        // In Rust, strings are valid UTF-8 so surrogates are impossible.
+        // The function is a documented no-op for API parity with hermes-agent.
+        assert_eq!(sanitize_surrogates("hello"), "hello");
+        assert_eq!(
+            sanitize_surrogates("hello\u{FFFD}world"),
+            "hello\u{FFFD}world"
+        );
+        assert_eq!(sanitize_surrogates(""), "");
+        assert_eq!(sanitize_surrogates("\u{1F600}"), "\u{1F600}");
+    }
+
+    #[test]
+    fn test_repair_tool_call_arguments_empty() {
+        assert_eq!(repair_tool_call_arguments("", "test_tool"), "{}");
+        assert_eq!(repair_tool_call_arguments("  ", "test_tool"), "{}");
+    }
+
+    #[test]
+    fn test_repair_tool_call_arguments_none() {
+        assert_eq!(repair_tool_call_arguments("None", "test_tool"), "{}");
+    }
+
+    #[test]
+    fn test_repair_tool_call_arguments_valid() {
+        let args = r#"{"key": "value"}"#;
+        assert_eq!(
+            repair_tool_call_arguments(args, "test_tool"),
+            r#"{"key":"value"}"#
+        );
+    }
+
+    #[test]
+    fn test_repair_tool_call_arguments_trailing_comma() {
+        let args = r#"{"key": "value",}"#;
+        let result = repair_tool_call_arguments(args, "test_tool");
+        let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(parsed["key"], "value");
+    }
+
+    #[test]
+    fn test_repair_tool_call_arguments_unclosed_brace() {
+        let args = r#"{"key": "value""#;
+        let result = repair_tool_call_arguments(args, "test_tool");
+        let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(parsed["key"], "value");
+    }
+
+    #[test]
+    fn test_repair_message_sequence_tool_then_user() {
+        let mut messages = vec![
+            Message::assistant("calling tool"),
+            Message::tool("tc1", "result"),
+            Message::user("next question"),
+        ];
+        let repairs = repair_message_sequence(&mut messages);
+        assert!(repairs > 0);
+        // Should now have: assistant, tool, assistant (synthetic), user
+        assert_eq!(messages.len(), 4);
+        assert_eq!(messages[2].role, Role::Assistant);
+        assert_eq!(messages[3].role, Role::User);
+    }
+
+    #[test]
+    fn test_repair_message_sequence_consecutive_users() {
+        let mut messages = vec![
+            Message::user("first question"),
+            Message::user("second question"),
+        ];
+        let repairs = repair_message_sequence(&mut messages);
+        assert!(repairs > 0);
+        assert_eq!(messages.len(), 1);
+        assert!(messages[0].content.contains("first question"));
+        assert!(messages[0].content.contains("second question"));
+    }
+
+    #[test]
+    fn test_repair_message_sequence_consecutive_assistants() {
+        let mut messages = vec![
+            Message::assistant("first response"),
+            Message::assistant("second response"),
+        ];
+        let repairs = repair_message_sequence(&mut messages);
+        assert!(repairs > 0);
+        assert_eq!(messages.len(), 1);
+        // Should keep the newer content
+        assert_eq!(messages[0].content, "second response");
+    }
+
+    #[test]
+    fn test_close_interrupted_tool_sequence() {
+        let mut messages = vec![Message::tool("tc1", "result")];
+        assert!(close_interrupted_tool_sequence(&mut messages, None));
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[1].role, Role::Assistant);
+        assert_eq!(messages[1].content, "Operation interrupted.");
+    }
+
+    #[test]
+    fn test_close_interrupted_tool_sequence_not_tool_tail() {
+        let mut messages = vec![Message::user("hello")];
+        assert!(!close_interrupted_tool_sequence(&mut messages, None));
+        assert_eq!(messages.len(), 1);
+    }
+
+    #[test]
+    fn test_sanitize_messages_surrogates_clean() {
+        let mut messages = vec![Message::user("hello world")];
+        let count = sanitize_messages_surrogates(&mut messages);
+        assert_eq!(count, 0);
+        assert_eq!(messages[0].content, "hello world");
+    }
+
+    #[test]
+    fn test_sanitize_messages_surrogates_with_replacement() {
+        // Text with existing U+FFFD (what Python's from_utf8_lossy produces)
+        let mut messages = vec![Message::user("hello\u{FFFD}world")];
+        let count = sanitize_messages_surrogates(&mut messages);
+        // U+FFFD is not a surrogate, so no replacements
+        assert_eq!(count, 0);
+        assert_eq!(messages[0].content, "hello\u{FFFD}world");
+    }
+}
