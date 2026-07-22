@@ -188,25 +188,51 @@ async fn cmd_run(config: &AppConfig, engine: &CuratorEngine, background: bool, d
     };
 
     // Wire a real LLM client when consolidation is enabled.
+    // Respects the configured provider (openai, anthropic, deepseek, etc.)
+    // matching the pattern in main.rs create_model_client().
     let review_client;
     let llm_ref: Option<&dyn operant_core::curator::LlmReviewClient> = if consolidate {
-        let api_key = std::env::var("OPENAI_API_KEY")
-            .or_else(|_| std::env::var("ANTHROPIC_API_KEY"))
-            .ok();
-        if api_key.is_none() || api_key.as_deref() == Some("") {
-            tracing::warn!("No OPENAI_API_KEY or ANTHROPIC_API_KEY set — consolidation will be skipped");
-            None
-        } else {
-            let client = operant_core::client::OpenAIClient::new(operant_core::client::ClientConfig {
-                api_key,
-                base_url: config.client.base_url.clone(),
-                ..Default::default()
-            });
-            let model_client: Arc<dyn operant_core::agent::ModelClient> = Arc::new(
-                operant_core::agent::clients::openai::OpenAIModelClient::new(client)
-            );
+        // Infer provider from model name (e.g. "claude-*" → "anthropic", "gpt-*" → "openai")
+        let provider = crate::tui::provider::infer_provider_from_model(&config.agent.model)
+            .unwrap_or_else(|| "openai".to_string());
+
+        // Check that the required API key is present for the provider.
+        let api_key: Option<String> = match provider.as_str() {
+            #[cfg(feature = "anthropic")]
+            "anthropic" => std::env::var("ANTHROPIC_API_KEY").ok(),
+            _ => std::env::var("OPENAI_API_KEY").ok(),
+        };
+
+        let key: Option<String> = match api_key {
+            Some(k) if !k.is_empty() => Some(k),
+            _ => {
+                tracing::warn!(
+                    provider = %provider,
+                    "No API key set for provider — consolidation will be skipped"
+                );
+                None
+            }
+        };
+
+        if let Some(api_key) = key {
+            let model_client: Arc<dyn operant_core::agent::ModelClient> = match provider.as_str() {
+                #[cfg(feature = "anthropic")]
+                "anthropic" => {
+                    let client = operant_core::agent::clients::anthropic::AnthropicModelClient::new(api_key);
+                    Arc::new(client)
+                }
+                _ => {
+                    // Default to OpenAI-compatible client for openai, deepseek, and others
+                    let raw_client = operant_core::client::OpenAIClient::new(
+                        operant_core::client::ClientConfig::from(&config.client),
+                    );
+                    Arc::new(operant_core::agent::clients::openai::OpenAIModelClient::new(raw_client))
+                }
+            };
             review_client = Some(ModelReviewClient::new(model_client, config.agent.model.clone()));
             review_client.as_ref().map(|c| c as &dyn operant_core::curator::LlmReviewClient)
+        } else {
+            None
         }
     } else {
         None
