@@ -718,6 +718,37 @@ impl OperantAgent {
         self.model()
     }
 
+    /// Build the frozen prefix (base system prompt + skills).
+    ///
+    /// This is the byte-stable portion of the system prompt that rarely
+    /// changes across turns. Keeping it identical between the parent agent
+    /// and the background review fork enables prompt cache hits on
+    /// Anthropic/OpenRouter (cache reads cost ~10x less than fresh tokens).
+    ///
+    /// Extracted from `build_messages()` to share with `spawn_background_review`.
+    fn build_frozen_prefix(&self) -> String {
+        let mut frozen = self.config.system_prompt.clone().unwrap_or_else(|| {
+            "You are Operant, a helpful AI assistant. You have access to tools that you can use to help users. \
+                Use the provided tools when needed to accomplish tasks. \
+                After receiving tool results, continue reasoning and either call more tools or provide your final response to the user."
+                .to_string()
+        });
+        if let Some(skill_manager) = &self.skill_manager {
+            let skills = skill_manager.list();
+            if !skills.is_empty() {
+                frozen.push_str("\n\n<available_skills>\n");
+                for (name, description) in &skills {
+                    frozen.push_str(&format!(
+                        "  <skill name=\"{}\">{}</skill>\n",
+                        name, description
+                    ));
+                }
+                frozen.push_str("</available_skills>");
+            }
+        }
+        frozen
+    }
+
     /// Attempt a "grace call" — a toolless summary request to the model.
     ///
     /// Called when the iteration budget or max_iterations is exhausted.
@@ -1521,32 +1552,10 @@ impl OperantAgent {
         // just splits into frozen vs volatile, which captures ~80% of
         // the cache benefit with ~10% of the complexity.
 
-        let frozen_prefix = if let Some(ref system) = self.config.system_prompt {
-            system.clone()
-        } else {
-            "You are Operant, a helpful AI assistant. You have access to tools that you can use to help users. \
-                Use the provided tools when needed to accomplish tasks. \
-                After receiving tool results, continue reasoning and either call more tools or provide your final response to the user."
-                .to_string()
-        };
-
-        // Skills are stable within a session (they're loaded once at
-        // startup), so they go in the frozen prefix.
-        let mut frozen = frozen_prefix;
-        if let Some(skill_manager) = &self.skill_manager {
-            let skills = skill_manager.list();
-            if !skills.is_empty() {
-                frozen.push_str("\n\n<available_skills>\n");
-                for (name, description) in &skills {
-                    frozen.push_str(&format!(
-                        "  <skill name=\"{}\">{}</skill>\n",
-                        name, description
-                    ));
-                }
-                frozen.push_str("</available_skills>");
-            }
-        }
-        messages.push(Message::system(frozen));
+        // Build the frozen prefix (base system prompt + skills).
+        // Uses the shared helper to avoid duplicating the prefix logic
+        // with spawn_background_review's cache parity path.
+        messages.push(Message::system(self.build_frozen_prefix()));
 
         // Volatile suffix: memory context + workspace context. These
         // change each turn, so they're a separate message that doesn't
@@ -1846,6 +1855,22 @@ impl OperantAgent {
         let registry_for_review = self.registry.clone();
         let callback = self.background_review_callback.clone();
 
+        // ── Prompt cache parity (Phase 2) ─────────────────────────
+        // When the review runs on the SAME model (not routed), share the
+        // parent's frozen prefix (system prompt + skills) so the outbound
+        // HTTP request hits the same provider prefix cache. The review
+        // instructions go in a USER message, not the system message, so
+        // the system prompt bytes stay byte-identical to the parent's.
+        // Matches hermes-agent's `_cached_system_prompt` pinning pattern.
+        //
+        // When routed to a different model, the cache key differs anyway,
+        // so no benefit to sharing — use None.
+        let parent_frozen_prefix: Option<String> = if !is_routed {
+            Some(self.build_frozen_prefix())
+        } else {
+            None
+        };
+
         tokio::spawn(async move {
             debug!(
                 session_id = %session_id,
@@ -1856,21 +1881,45 @@ impl OperantAgent {
                 "Background review daemon started"
             );
 
-            // Build the review agent's system prompt: constrained to
-            // skill/memory review only.
-            let review_system = format!(
-                "You are a background review agent. Your job is to evaluate the \
+            // ── Prompt cache parity (Phase 2) ─────────────────────
+            // When parent_frozen_prefix is available (same model, not routed),
+            // use the parent's EXACT system prompt bytes so the outbound HTTP
+            // request hits the same provider prefix cache. The review-specific
+            // instructions go in a USER message, not the system message — this
+            // ensures the system prompt bytes stay byte-identical.
+            // Matches hermes-agent's `_cached_system_prompt` pinning pattern.
+            let (system_prompt_str, review_harness) = if let Some(ref frozen) = parent_frozen_prefix {
+                (
+                    frozen.clone(),
+                    format!(
+                        "[Background review context]\n\nYou are a background review agent. Your job is to evaluate the \
 conversation above and update skills and/or memory as needed. \
 You have access to memory_store, memory_search, memory_recall, \
 skill_manage, and skill_view tools only — do not attempt other tools. \
 Be ACTIVE — most sessions produce at least one update. \
 If nothing needs updating, say 'Nothing to save.' and stop.\n\n{}",
-                prompt
-            );
+                        prompt
+                    ),
+                )
+            } else {
+                (
+                    "You are Operant, a helpful AI assistant.".to_string(),
+                    format!(
+                        "You are a background review agent. Your job is to evaluate the \
+conversation above and update skills and/or memory as needed. \
+You have access to memory_store, memory_search, memory_recall, \
+skill_manage, and skill_view tools only — do not attempt other tools. \
+Be ACTIVE — most sessions produce at least one update. \
+If nothing needs updating, say 'Nothing to save.' and stop.\n\n{}",
+                        prompt
+                    ),
+                )
+            };
 
-            // Build messages for the review agent: system prompt + snapshot
+            // Build messages: identical system prompt + review harness as user msg + snapshot
             let mut review_messages = Vec::new();
-            review_messages.push(Message::system(&review_system));
+            review_messages.push(Message::system(&system_prompt_str));
+            review_messages.push(Message::user(&review_harness));
             review_messages.extend(review_history);
 
             // ── Multi-turn tool execution loop ────────────────────────
