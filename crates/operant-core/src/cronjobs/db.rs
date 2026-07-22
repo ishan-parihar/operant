@@ -1,8 +1,37 @@
 use crate::error::Error;
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+
+/// Report from rewriting cron job skill references.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CronRewriteReport {
+    /// Total cron jobs scanned.
+    pub jobs_scanned: usize,
+    /// Cron jobs that had skill refs changed.
+    pub jobs_updated: usize,
+    /// Individual skill-to-umbrella mappings applied.
+    pub mappings: Vec<CronRewriteMapping>,
+    /// Individual pruned skill drops.
+    pub drops: Vec<CronRewriteDrop>,
+}
+
+/// A single skill-to-umbrella mapping applied to a cron job.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CronRewriteMapping {
+    pub job_id: String,
+    pub old_skill: String,
+    pub new_skill: String,
+}
+
+/// A single pruned skill drop from a cron job.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CronRewriteDrop {
+    pub job_id: String,
+    pub dropped_skill: String,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CronJob {
@@ -422,6 +451,157 @@ impl CronDb {
             .execute("DELETE FROM cron_jobs WHERE id = ?1", params![id])
             .map_err(|e| Error::Agent(format!("Failed to delete cron job: {}", e)))?;
         Ok(affected > 0)
+    }
+
+    /// Return the set of skill names referenced by any cron job (including disabled).
+    ///
+    /// Used by the curator to protect cron-dependent skills from inactivity
+    /// archival and to identify which jobs need rewriting after consolidation.
+    pub fn referenced_skill_names(&self) -> Result<std::collections::HashSet<String>, Error> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare("SELECT skill, skills FROM cron_jobs")
+            .map_err(|e| Error::Agent(format!("Failed to prepare referenced_skill_names: {}", e)))?;
+
+        let mut refs = std::collections::HashSet::new();
+        let rows = stmt
+            .query_map([], |row| {
+                let skill: Option<String> = row.get(0)?;
+                let skills_raw: Option<String> = row.get(1)?;
+                Ok((skill, skills_raw))
+            })
+            .map_err(|e| Error::Agent(format!("Error querying cron skill refs: {}", e)))?;
+
+        for row in rows {
+            let (skill, skills_raw) = row.map_err(|e| Error::Agent(format!("Row error: {}", e)))?;
+            if let Some(s) = skill {
+                let trimmed = s.trim().to_string();
+                if !trimmed.is_empty() {
+                    refs.insert(trimmed);
+                }
+            }
+            if let Some(raw) = skills_raw {
+                if let Ok(list) = serde_json::from_str::<Vec<String>>(&raw) {
+                    for s in list {
+                        let trimmed = s.trim().to_string();
+                        if !trimmed.is_empty() {
+                            refs.insert(trimmed);
+                        }
+                    }
+                }
+            }
+        }
+        Ok(refs)
+    }
+
+    /// Rewrite cron job skill references after a curator consolidation pass.
+    ///
+    /// For each job:
+    /// - Skills in `consolidated` mapping are replaced with their umbrella target.
+    /// - Skills in `pruned` list are dropped entirely.
+    /// - Deduplication: if the umbrella is already in the list, the old ref is
+    ///   removed without adding a duplicate.
+    ///
+    /// Returns a report describing what was rewritten.
+    pub fn rewrite_skill_refs(
+        &self,
+        consolidated: &std::collections::HashMap<String, String>,
+        pruned: &[String],
+    ) -> Result<CronRewriteReport, Error> {
+        let conn = self.conn.lock().unwrap();
+        let mut report = CronRewriteReport::default();
+
+        // Load all jobs
+        let mut stmt = conn
+            .prepare("SELECT id, skill, skills FROM cron_jobs")
+            .map_err(|e| Error::Agent(format!("Failed to prepare rewrite query: {}", e)))?;
+
+        let job_rows: Vec<(String, Option<String>, Option<String>)> = stmt
+            .query_map([], |row| Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, Option<String>>(1)?,
+                row.get::<_, Option<String>>(2)?,
+            )))
+            .map_err(|e| Error::Agent(format!("Error querying jobs for rewrite: {}", e)))?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        report.jobs_scanned = job_rows.len();
+
+        for (job_id, skill_field, skills_field) in &job_rows {
+            // Parse the skills list
+            let mut skills: Vec<String> = skills_field
+                .as_ref()
+                .and_then(|raw| serde_json::from_str::<Vec<String>>(raw).ok())
+                .unwrap_or_default();
+
+            // Also include the legacy single skill field
+            if let Some(s) = skill_field {
+                let trimmed = s.trim().to_string();
+                if !trimmed.is_empty() && !skills.contains(&trimmed) {
+                    skills.push(trimmed);
+                }
+            }
+
+            if skills.is_empty() {
+                continue;
+            }
+
+            let original = skills.clone();
+            let mut changed = false;
+            let mut new_skills = Vec::new();
+
+            for skill_name in &skills {
+                if let Some(umbrella) = consolidated.get(skill_name) {
+                    // Replace with umbrella, avoiding duplicates
+                    if !new_skills.contains(umbrella) {
+                        new_skills.push(umbrella.clone());
+                        report.mappings.push(CronRewriteMapping {
+                            job_id: job_id.clone(),
+                            old_skill: skill_name.clone(),
+                            new_skill: umbrella.clone(),
+                        });
+                    }
+                    changed = true;
+                } else if pruned.contains(skill_name) {
+                    // Drop pruned skill entirely
+                    report.drops.push(CronRewriteDrop {
+                        job_id: job_id.clone(),
+                        dropped_skill: skill_name.clone(),
+                    });
+                    changed = true;
+                } else {
+                    // Keep as-is
+                    new_skills.push(skill_name.clone());
+                }
+            }
+
+            if !changed {
+                continue;
+            }
+
+            report.jobs_updated += 1;
+
+            // Serialize and update
+            let new_skills_json = serde_json::to_string(&new_skills)
+                .map_err(|e| Error::Agent(format!("Failed to serialize skills: {}", e)))?;
+            let new_primary = new_skills.first().cloned();
+
+            conn.execute(
+                "UPDATE cron_jobs SET skills = ?1, skill = ?2 WHERE id = ?3",
+                params![new_skills_json, new_primary, job_id],
+            )
+            .map_err(|e| Error::Agent(format!("Failed to update cron job {}: {}", job_id, e)))?;
+
+            tracing::info!(
+                job_id = %job_id,
+                before = ?original,
+                after = ?new_skills,
+                "Cron job skill refs rewritten"
+            );
+        }
+
+        Ok(report)
     }
 
     pub fn get_due_jobs(&self) -> Result<Vec<CronJob>, Error> {
