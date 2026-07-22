@@ -282,3 +282,23 @@ fn rewrite_legacy_skill_field() {
     let skills = jobs[0].skills.as_ref().unwrap();
     assert!(skills.contains(&"web-quality".to_string()));
 }
+
+#[test]
+fn rewrite_prune_nonexistent_skill_is_noop() {
+    let (db, _dir) = temp_db();
+    db.create_job(make_job("j1", None, Some(vec!["a", "b", "c"])))
+        .unwrap();
+
+    // Prune a skill that doesn't exist in any job — should be a no-op
+    let report = db
+        .rewrite_skill_refs(&HashMap::new(), &["nonexistent-d".to_string()])
+        .unwrap();
+    assert_eq!(report.jobs_scanned, 1);
+    assert_eq!(report.jobs_updated, 0, "should not update when prune target doesn't exist");
+    assert!(report.drops.is_empty());
+
+    // Verify original skills are unchanged
+    let jobs = db.list_jobs(true).unwrap();
+    let skills = jobs[0].skills.as_ref().unwrap();
+    assert_eq!(skills, &vec!["a".to_string(), "b".to_string(), "c".to_string()]);
+}
