@@ -267,6 +267,12 @@ pub struct OperantAgent {
     /// Provider registry for cross-provider fallback on auth/billing errors.
     /// When set, auth/billing errors trigger provider switching.
     provider_registry: Option<Arc<provider_registry::ProviderRegistry>>,
+    /// Optional callback for background review notifications.
+    /// When set, the agent calls this with a summary string after each
+    /// background review completes, matching hermes-agent's
+    /// `background_review_callback` pattern. The TUI/Gateway wires this
+    /// to surface "Self-improvement review: ..." messages to the user.
+    background_review_callback: Option<Arc<dyn Fn(String) + Send + Sync>>,
 }
 
 /// A pending permission request sent from the agent to the TUI
@@ -323,6 +329,7 @@ impl OperantAgent {
             rotation_cooldown_until: Arc::new(std::sync::RwLock::new(0.0)),
             rotation_count: Arc::new(std::sync::RwLock::new(0)),
             provider_registry: None,
+            background_review_callback: None,
         }
     }
 
@@ -369,6 +376,7 @@ impl OperantAgent {
             rotation_cooldown_until: Arc::new(std::sync::RwLock::new(0.0)),
             rotation_count: Arc::new(std::sync::RwLock::new(0)),
             provider_registry: None,
+            background_review_callback: None,
         }
     }
 
@@ -411,6 +419,17 @@ impl OperantAgent {
     /// Attach a skill manager for available skills injection into the system prompt.
     pub fn with_skill_manager(mut self, skill_manager: SkillManager) -> Self {
         self.skill_manager = Some(skill_manager);
+        self
+    }
+
+    /// Set the background review callback. When set, the agent calls this
+    /// with a summary string after each background review completes,
+    /// matching hermes-agent's `background_review_callback` pattern.
+    pub fn with_background_review_callback(
+        mut self,
+        callback: Arc<dyn Fn(String) + Send + Sync>,
+    ) -> Self {
+        self.background_review_callback = Some(callback);
         self
     }
 
@@ -1825,6 +1844,7 @@ impl OperantAgent {
         };
 
         let registry_for_review = self.registry.clone();
+        let callback = self.background_review_callback.clone();
 
         tokio::spawn(async move {
             debug!(
@@ -2021,17 +2041,21 @@ If nothing needs updating, say 'Nothing to save.' and stop.\n\n{}",
             }
 
             // ── Summarize actions taken ──────────────────────────────
-            // Surface a compact summary to the user via tracing.
-            // TODO(integrate): Wire into TUI/Gateway notification system
-            // for user-facing display (matching hermes-agent's _safe_print pattern).
+            // Surface a compact summary to the user via tracing AND callback.
+            // Matches hermes-agent's _safe_print + background_review_callback pattern.
             if !actions_taken.is_empty() {
                 let summary = actions_taken.join(" · ");
+                let notification = format!("💾 Self-improvement review: {}", summary);
                 info!(
                     session_id = %session_id,
                     actions = %summary,
                     action_count = actions_taken.len(),
-                    "💾 Background review completed with updates"
+                    "Background review completed with updates"
                 );
+                // Deliver via callback (TUI/Gateway wired via with_background_review_callback)
+                if let Some(ref cb) = callback {
+                    cb(notification);
+                }
             } else {
                 debug!(
                     session_id = %session_id,
