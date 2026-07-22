@@ -5,7 +5,7 @@ use anyhow::Result;
 use clap::Subcommand;
 use operant_core::config::AppConfig;
 use operant_core::cronjobs::CronDb;
-use operant_core::curator::{CuratorEngine, archiver, backup};
+use operant_core::curator::{CuratorEngine, ModelReviewClient, archiver, backup};
 use operant_core::skill_usage::{LifecycleState, SkillUsageTracker};
 
 #[derive(Debug, Clone, Subcommand)]
@@ -109,7 +109,7 @@ pub async fn handle_curator_command(
             background,
             dry_run,
             consolidate,
-        } => cmd_run(&engine, background, dry_run, consolidate, &curator_dir).await,
+        } => cmd_run(config, &engine, background, dry_run, consolidate, &curator_dir).await,
         CuratorSubcommand::Pause => cmd_pause(&engine).await,
         CuratorSubcommand::Resume => cmd_resume(&engine).await,
         CuratorSubcommand::Pin { skill } => cmd_pin(&tracker, &skill).await,
@@ -159,7 +159,7 @@ async fn cmd_status(engine: &CuratorEngine) -> Result<()> {
     Ok(())
 }
 
-async fn cmd_run(engine: &CuratorEngine, background: bool, dry_run: bool, consolidate: bool, curator_dir: &Path) -> Result<()> {
+async fn cmd_run(config: &AppConfig, engine: &CuratorEngine, background: bool, dry_run: bool, consolidate: bool, curator_dir: &Path) -> Result<()> {
     if background {
         println!("Curator run (background mode not yet supported, running synchronously)...");
     } else {
@@ -187,7 +187,32 @@ async fn cmd_run(engine: &CuratorEngine, background: bool, dry_run: bool, consol
         }
     };
 
-    let report = engine.run_review(dry_run, None, consolidate, cron_db.as_ref()).await?;
+    // Wire a real LLM client when consolidation is enabled.
+    let review_client;
+    let llm_ref: Option<&dyn operant_core::curator::LlmReviewClient> = if consolidate {
+        let api_key = std::env::var("OPENAI_API_KEY")
+            .or_else(|_| std::env::var("ANTHROPIC_API_KEY"))
+            .ok();
+        if api_key.is_none() || api_key.as_deref() == Some("") {
+            tracing::warn!("No OPENAI_API_KEY or ANTHROPIC_API_KEY set — consolidation will be skipped");
+            None
+        } else {
+            let client = operant_core::client::OpenAIClient::new(operant_core::client::ClientConfig {
+                api_key,
+                base_url: config.client.base_url.clone(),
+                ..Default::default()
+            });
+            let model_client: Arc<dyn operant_core::agent::ModelClient> = Arc::new(
+                operant_core::agent::clients::openai::OpenAIModelClient::new(client)
+            );
+            review_client = Some(ModelReviewClient::new(model_client, config.agent.model.clone()));
+            review_client.as_ref().map(|c| c as &dyn operant_core::curator::LlmReviewClient)
+        }
+    } else {
+        None
+    };
+
+    let report = engine.run_review(dry_run, llm_ref, consolidate, cron_db.as_ref()).await?;
     println!("{}", report.summary);
     if !report.skills_archived.is_empty() {
         println!(
