@@ -17,6 +17,7 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 
+use crate::cronjobs::CronDb;
 use crate::skill_usage::{LifecycleState, SkillUsageTracker};
 
 // ---------------------------------------------------------------------------
@@ -198,6 +199,7 @@ impl CuratorEngine {
         dry_run: bool,
         llm_client: Option<&dyn review::LlmReviewClient>,
         consolidate: bool,
+        cron_db: Option<&CronDb>,
     ) -> Result<CuratorReport> {
         let mut state = self.state.write().await;
         let now = std::time::SystemTime::now()
@@ -249,7 +251,7 @@ impl CuratorEngine {
                 // Release the state write lock before calling consolidation
                 // (consolidation acquires its own locks internally)
                 drop(state);
-                match self.run_consolidation(client, dry_run).await {
+                match self.run_consolidation(client, dry_run, cron_db).await {
                     Ok(consolidation) => {
                         skills_consolidated = consolidation.consolidated;
                         skills_pruned = consolidation.pruned;
@@ -503,6 +505,7 @@ impl CuratorEngine {
         &self,
         llm_client: &dyn review::LlmReviewClient,
         dry_run: bool,
+        cron_db: Option<&CronDb>,
     ) -> Result<review::ConsolidationResult> {
 
         // Load fresh usage data
@@ -640,17 +643,41 @@ impl CuratorEngine {
             }
         }
 
-        // TODO: Rewrite cron job references to follow consolidations.
+        // Rewrite cron job references to follow consolidations.
         // When a skill is absorbed into an umbrella, any cron jobs that
         // reference the absorbed skill should be updated to point to the
         // umbrella instead. This matches hermes-agent's curator behavior.
-        // See: hermes-agent/agent/curator.py → update_cron_references()
-        if !result.consolidated.is_empty() {
-            tracing::info!(
-                count = result.consolidated.len(),
-                "TODO: cron job reference rewriting not yet implemented — \
-                 consolidated skills may have stale cron references"
-            );
+        if !dry_run && !result.consolidated.is_empty() {
+            if let Some(db) = cron_db {
+                let mut mapping = std::collections::HashMap::new();
+                for entry in &result.consolidated {
+                    // Map old skill name → umbrella name
+                    mapping.insert(entry.name.clone(), entry.into.clone());
+                }
+                match db.rewrite_skill_refs(&mapping, &result.pruned) {
+                    Ok(rewrite_report) => {
+                        if rewrite_report.jobs_updated > 0 {
+                            tracing::info!(
+                                jobs_scanned = rewrite_report.jobs_scanned,
+                                jobs_updated = rewrite_report.jobs_updated,
+                                mappings = rewrite_report.mappings.len(),
+                                drops = rewrite_report.drops.len(),
+                                "Cron job skill references rewritten after consolidation"
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        result.errors.push(format!(
+                            "Failed to rewrite cron job skill refs: {}", e
+                        ));
+                    }
+                }
+            } else {
+                tracing::warn!(
+                    count = result.consolidated.len(),
+                    "Cron DB not available — consolidated skills may have stale cron references"
+                );
+            }
         }
 
         tracing::info!(

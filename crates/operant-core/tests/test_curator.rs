@@ -335,7 +335,7 @@ async fn test_curator_engine_dry_run() {
     let engine = CuratorEngine::new(skills_dir.clone(), state_path, tracker);
     engine.load_state().await.unwrap();
 
-    let report = engine.run_review(true, None, false).await.unwrap();
+    let report = engine.run_review(true, None, false, None).await.unwrap();
 
     // Dry run should report but not archive
     assert_eq!(report.skills_scanned, 1);

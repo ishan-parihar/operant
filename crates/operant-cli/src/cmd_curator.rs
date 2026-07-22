@@ -171,7 +171,7 @@ async fn cmd_run(engine: &CuratorEngine, background: bool, dry_run: bool, consol
         println!("  Consolidation: enabled (LLM-driven skill merging)");
     }
 
-    let report = engine.run_review(dry_run, None, consolidate).await?;
+    let report = engine.run_review(dry_run, None, consolidate, None).await?;
     println!("{}", report.summary);
     if !report.skills_archived.is_empty() {
         println!(
