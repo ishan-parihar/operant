@@ -611,6 +611,8 @@ impl CronDb {
             report.jobs_updated += 1;
 
             // Serialize and update
+            // Filter empty strings from stale production entries before serializing.
+            let new_skills: Vec<String> = new_skills.into_iter().filter(|s| !s.is_empty()).collect();
             let new_skills_json = serde_json::to_string(&new_skills)
                 .map_err(|e| Error::Agent(format!("Failed to serialize skills: {}", e)))?;
             let new_primary = new_skills.first().cloned();
