@@ -255,23 +255,18 @@ and stop — but don't reach for that conclusion as a default.";
 
 /// Controls how background review actions are surfaced to the user.
 /// Matches hermes-agent's `memory_notifications` setting.
-///
-/// TODO(integrate): Wire into TUI/Gateway notification system for
-/// user-facing display (matching hermes-agent's _safe_print pattern).
-#[cfg(test)]
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum NotificationMode {
     /// Show no actions (silent review).
     Off,
     /// Show generic "Memory updated" / tool messages.
     #[default]
-    /// Default: show generic "Memory updated" messages
     On,
     /// Include compact content previews from tool-call arguments.
     Verbose,
 }
 
-#[cfg(test)]
 impl std::fmt::Display for NotificationMode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -282,7 +277,6 @@ impl std::fmt::Display for NotificationMode {
     }
 }
 
-#[cfg(test)]
 impl std::str::FromStr for NotificationMode {
     type Err = String;
 
@@ -537,9 +531,6 @@ pub fn digest_history(
 ///
 /// Used by the background review daemon to surface a compact
 /// summary of skill/memory changes to the user.
-///
-/// TODO(integrate): Wire into TUI/Gateway notification system.
-#[cfg(test)]
 #[derive(Debug, Clone, Default)]
 pub struct BackgroundReviewSummary {
     /// Human-readable action descriptions.
@@ -561,7 +552,27 @@ pub struct BackgroundReviewSummary {
 /// - `On`: generic "Memory updated" / tool messages.
 /// - `Verbose`: include compact content previews from tool-call arguments.
 ///
-#[cfg(test)]
+/// Build a compact action summary from background review messages.
+///
+/// Scans the review agent's messages for successful tool actions and
+/// surfaces a compact summary to the user. Matches hermes-agent's
+/// `summarize_background_review_actions`.
+///
+/// `notification_mode` controls display detail:
+/// - `Off`: return no actions.
+/// - `On`: generic "Memory updated" / tool messages.
+/// - `Verbose`: include compact content previews from tool-call arguments.
+#[allow(dead_code)]
+/// Build a compact action summary from background review messages.
+///
+/// Scans the review agent's messages for successful tool actions and
+/// surfaces a compact summary to the user. Matches hermes-agent's
+/// `summarize_background_review_actions`.
+///
+/// `notification_mode` controls display detail:
+/// - `Off`: return no actions.
+/// - `On`: generic "Memory updated" / tool messages.
+/// - `Verbose`: include compact content previews from tool-call arguments.
 pub fn summarize_review_actions(
     review_messages: &[String],
     prior_messages: &[String],
