@@ -241,6 +241,154 @@ pub fn close_interrupted_tool_sequence(messages: &mut Vec<Message>, final_respon
     true
 }
 
+// ---------------------------------------------------------------------------
+// Thinking-only drop and user-merge (Anthropic-style cleanup)
+// ---------------------------------------------------------------------------
+
+/// Check if an assistant message is "thinking-only" — it has reasoning
+/// content but empty main content and no tool calls.
+///
+/// Models like Claude emit thinking/reasoning blocks as separate messages.
+/// These are useful for internal reasoning but strict providers reject them
+/// if sent as standalone assistant messages with empty content.
+fn is_thinking_only(msg: &Message) -> bool {
+    msg.role == Role::Assistant
+        && msg.content.trim().is_empty()
+        && msg.tool_calls.is_none()
+        && msg.reasoning.is_some()
+}
+
+/// Drop thinking-only assistant messages and merge consecutive user messages.
+///
+/// Ported from hermes-agent's `drop_thinking_only_and_merge_users`.
+/// Operates on a copy to avoid mutating the original conversation.
+///
+/// This is needed because:
+/// 1. Anthropic/Claude models emit reasoning as separate assistant messages
+///    with empty content — these confuse strict providers (Gemini, OpenAI
+///    strict mode) if forwarded as-is.
+/// 2. After dropping those messages, consecutive user messages may appear,
+///    which violates role-alternation invariants.
+///
+/// Returns the cleaned message list (original is not mutated).
+pub fn drop_thinking_only_and_merge_users(messages: &[Message]) -> Vec<Message> {
+    // Pass 1: Drop thinking-only assistant messages
+    let mut cleaned: Vec<Message> = messages
+        .iter()
+        .filter(|m| !is_thinking_only(m))
+        .cloned()
+        .collect();
+
+    let dropped = messages.len() - cleaned.len();
+
+    // Pass 2: Merge consecutive user messages
+    let mut merged: Vec<Message> = Vec::with_capacity(cleaned.len());
+    for msg in cleaned.drain(..) {
+        if msg.role == Role::User
+            && !merged.is_empty()
+            && merged.last().unwrap().role == Role::User
+        {
+            // Merge into the previous user message
+            let prev = merged.last_mut().unwrap();
+            if prev.content.is_empty() {
+                prev.content = msg.content;
+            } else if !msg.content.is_empty() {
+                prev.content = format!("{}\n\n{}", prev.content, msg.content);
+            }
+        } else {
+            merged.push(msg);
+        }
+    }
+
+    let merge_count = messages.len() - dropped - merged.len();
+    if dropped > 0 || merge_count > 0 {
+        tracing::debug!(
+            dropped,
+            merged = merge_count,
+            "drop_thinking_only_and_merge_users: cleaned message list"
+        );
+    }
+
+    merged
+}
+
+// ---------------------------------------------------------------------------
+// Tool call sanitization for strict providers
+// ---------------------------------------------------------------------------
+
+/// Sanitize tool call names and arguments for strict API providers.
+///
+/// Ported from hermes-agent's `_sanitize_tool_calls_for_strict_api`.
+/// Some providers (Gemini, Claude strict mode) enforce stricter validation:
+/// - Tool names must match `^[a-zA-Z0-9_-]{1,64}$`
+/// - Tool call arguments must be valid JSON objects (not arrays, strings, etc.)
+///
+/// Returns the number of sanitizations performed.
+pub fn sanitize_tool_calls_for_strict_api(messages: &mut [Message]) -> usize {
+    let mut sanitizations = 0;
+
+    for msg in messages.iter_mut() {
+        if msg.role != Role::Assistant {
+            continue;
+        }
+        if let Some(ref mut tool_calls) = msg.tool_calls {
+            for tc in tool_calls.iter_mut() {
+                // 1. Sanitize tool name: strip invalid chars, truncate to 64
+                let sanitized_name = sanitize_tool_name_for_strict(&tc.function.name);
+                if sanitized_name != tc.function.name {
+                    tracing::debug!(
+                        original = %tc.function.name,
+                        sanitized = %sanitized_name,
+                        "Sanitized tool name for strict API"
+                    );
+                    tc.function.name = sanitized_name;
+                    sanitizations += 1;
+                }
+
+                // 2. Ensure arguments are valid JSON object
+                if !tc.function.arguments.is_empty() {
+                    let trimmed = tc.function.arguments.trim();
+                    // If it doesn't start with '{', wrap it
+                    if !trimmed.starts_with('{') && !trimmed.starts_with('[') {
+                        // Might be a bare string or other non-object
+                        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(trimmed) {
+                            if !parsed.is_object() {
+                                // Wrap non-object values in {"input": ...}
+                                tc.function.arguments =
+                                    format!("{{\"input\":{}}}", trimmed);
+                                sanitizations += 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    sanitizations
+}
+
+/// Sanitize a single tool name to conform to strict API requirements.
+///
+/// Rules: `^[a-zA-Z0-9_-]{1,64}$`
+fn sanitize_tool_name_for_strict(name: &str) -> String {
+    let mut result = String::with_capacity(name.len().min(64));
+    for ch in name.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '_' || ch == '-' {
+            result.push(ch);
+        } else {
+            result.push('_');
+        }
+        if result.len() >= 64 {
+            break;
+        }
+    }
+    if result.is_empty() {
+        result.push('_');
+    }
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -367,5 +515,149 @@ mod tests {
         // U+FFFD is not a surrogate, so no replacements
         assert_eq!(count, 0);
         assert_eq!(messages[0].content, "hello\u{FFFD}world");
+    }
+
+    // ── drop_thinking_only_and_merge_users tests ──────────────────────
+
+    #[test]
+    fn test_drop_thinking_only_removes_empty_assistant_with_reasoning() {
+        let messages = vec![
+            Message::user("hello"),
+            Message {
+                role: Role::Assistant,
+                content: String::new(),
+                reasoning: Some("I think...".to_string()),
+                tool_calls: None,
+                ..Default::default()
+            },
+            Message::assistant("Hi there!"),
+        ];
+        let cleaned = drop_thinking_only_and_merge_users(&messages);
+        assert_eq!(cleaned.len(), 2);
+        assert_eq!(cleaned[0].role, Role::User);
+        assert_eq!(cleaned[1].content, "Hi there!");
+    }
+
+    #[test]
+    fn test_drop_thinking_only_keeps_assistant_with_content() {
+        let messages = vec![
+            Message::assistant("I have something to say"),
+        ];
+        let cleaned = drop_thinking_only_and_merge_users(&messages);
+        assert_eq!(cleaned.len(), 1);
+        assert_eq!(cleaned[0].content, "I have something to say");
+    }
+
+    #[test]
+    fn test_drop_thinking_only_keeps_assistant_with_tool_calls() {
+        use crate::client::{ToolCall, ToolCallFunction};
+        let messages = vec![
+            Message {
+                role: Role::Assistant,
+                content: String::new(),
+                reasoning: Some("thinking".to_string()),
+                tool_calls: Some(vec![ToolCall {
+                    id: "tc1".to_string(),
+                    function: ToolCallFunction {
+                        name: "read_file".to_string(),
+                        arguments: "{}".to_string(),
+                    },
+                }]),
+                ..Default::default()
+            },
+        ];
+        let cleaned = drop_thinking_only_and_merge_users(&messages);
+        assert_eq!(cleaned.len(), 1);
+    }
+
+    #[test]
+    fn test_drop_thinking_only_merges_consecutive_users() {
+        let messages = vec![
+            Message::user("first"),
+            Message::user("second"),
+            Message::assistant("response"),
+        ];
+        let cleaned = drop_thinking_only_and_merge_users(&messages);
+        assert_eq!(cleaned.len(), 2);
+        assert!(cleaned[0].content.contains("first"));
+        assert!(cleaned[0].content.contains("second"));
+    }
+
+    #[test]
+    fn test_drop_thinking_only_does_not_mutate_original() {
+        let messages = vec![
+            Message {
+                role: Role::Assistant,
+                content: String::new(),
+                reasoning: Some("thinking".to_string()),
+                tool_calls: None,
+                ..Default::default()
+            },
+        ];
+        let _cleaned = drop_thinking_only_and_merge_users(&messages);
+        assert_eq!(messages.len(), 1); // original unchanged
+    }
+
+    // ── sanitize_tool_calls_for_strict_api tests ─────────────────────
+
+    #[test]
+    fn test_sanitize_tool_name_invalid_chars() {
+        let name = sanitize_tool_name_for_strict("my tool.name!");
+        assert_eq!(name, "my_tool_name_");
+    }
+
+    #[test]
+    fn test_sanitize_tool_name_truncates_at_64() {
+        let long_name = "a".repeat(100);
+        let name = sanitize_tool_name_for_strict(&long_name);
+        assert_eq!(name.len(), 64);
+    }
+
+    #[test]
+    fn test_sanitize_tool_name_empty_becomes_underscore() {
+        let name = sanitize_tool_name_for_strict("");
+        assert_eq!(name, "_");
+    }
+
+    #[test]
+    fn test_sanitize_tool_calls_for_strict_api_name_fix() {
+        use crate::client::{ToolCall, ToolCallFunction};
+        let mut messages = vec![Message {
+            role: Role::Assistant,
+            content: String::new(),
+            tool_calls: Some(vec![ToolCall {
+                id: "tc1".to_string(),
+                function: ToolCallFunction {
+                    name: "bad name!".to_string(),
+                    arguments: "{}".to_string(),
+                },
+            }]),
+            ..Default::default()
+        }];
+        let count = sanitize_tool_calls_for_strict_api(&mut messages);
+        assert!(count > 0);
+        assert_eq!(messages[0].tool_calls.as_ref().unwrap()[0].function.name, "bad_name_");
+    }
+
+    #[test]
+    fn test_sanitize_tool_calls_for_strict_api_wraps_non_object() {
+        use crate::client::{ToolCall, ToolCallFunction};
+        let mut messages = vec![Message {
+            role: Role::Assistant,
+            content: String::new(),
+            tool_calls: Some(vec![ToolCall {
+                id: "tc1".to_string(),
+                function: ToolCallFunction {
+                    name: "read_file".to_string(),
+                    arguments: "\"just a string\"".to_string(),
+                },
+            }]),
+            ..Default::default()
+        }];
+        let count = sanitize_tool_calls_for_strict_api(&mut messages);
+        assert!(count > 0);
+        let args = &messages[0].tool_calls.as_ref().unwrap()[0].function.arguments;
+        let parsed: serde_json::Value = serde_json::from_str(args).unwrap();
+        assert!(parsed.is_object());
     }
 }
