@@ -258,19 +258,27 @@ impl LlmReviewClient for ModelReviewClient {
 }
 
 /// Strip markdown fences and extract the JSON array from the response.
+///
+/// Uses `find('[')` / `rfind(']')` extraction which is more robust
+/// than fence stripping — handles text-wrapped responses like:
+///   "Here's the result:\n```json\n[...]\n```"
 fn extract_json_array(raw: &str) -> String {
     let trimmed = raw.trim();
-    // Strip ```json ... ``` fences
-    if let Some(rest) = trimmed.strip_prefix("```") {
-        let inner = rest.strip_prefix("json").unwrap_or(rest);
-        let inner = inner.trim();
-        // Strip closing fence
-        if let Some(inner) = inner.strip_suffix("```") {
-            return inner.trim().to_string();
-        }
-        return inner.to_string();
+
+    // Strip ```json ... ``` fences if present
+    let content = if let Some(rest) = trimmed.strip_prefix("```") {
+        rest.strip_prefix("json").unwrap_or(rest).trim()
+    } else {
+        trimmed
+    };
+
+    // Extract the JSON array using bracket matching
+    if let (Some(start), Some(end)) = (content.find('['), content.rfind(']')) {
+        content[start..=end].to_string()
+    } else {
+        // Fallback: return content as-is (parse will fail with a clear error)
+        content.to_string()
     }
-    trimmed.to_string()
 }
 
 #[cfg(test)]
@@ -392,6 +400,24 @@ mod tests {
     #[test]
     fn test_extract_json_array_whitespace() {
         assert_eq!(extract_json_array("  [{\"a\":1}]  "), "[{\"a\":1}]");
+    }
+
+    #[test]
+    fn test_extract_json_array_text_wrapped() {
+        let input = "Here's the result:\n```json\n[{\"a\":1}]\n```";
+        assert_eq!(extract_json_array(input), "[{\"a\":1}]");
+    }
+
+    #[test]
+    fn test_extract_json_array_prose_before() {
+        let input = "Based on my analysis, the skills are:\n\n[{\"name\": \"seo\"}]";
+        assert_eq!(extract_json_array(input), "[{\"name\": \"seo\"}]");
+    }
+
+    #[test]
+    fn test_extract_json_array_no_array() {
+        let input = "No consolidation needed.";
+        assert_eq!(extract_json_array(input), "No consolidation needed.");
     }
 
     #[test]
