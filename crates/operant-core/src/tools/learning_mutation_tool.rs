@@ -49,6 +49,10 @@ impl OperantTool for LearningMutationTool {
          Use this to remove outdated skills/memories or update their content."
     }
 
+    fn is_available(&self) -> bool {
+        self.skills_dir.exists() && self.memory_dir.exists()
+    }
+
     fn schema(&self) -> crate::tools::ToolSchema {
         crate::tools::ToolSchema {
             name: "learning_manage".to_string(),
@@ -76,6 +80,20 @@ impl OperantTool for LearningMutationTool {
     }
 
     async fn execute(&self, args: Value, _context: ToolContext) -> ToolResult {
+        // Validate directories exist
+        if !self.skills_dir.exists() {
+            return ToolResult::error(
+                "learning_manage",
+                format!("Skills directory not found: {}", self.skills_dir.display()),
+            );
+        }
+        if !self.memory_dir.exists() {
+            return ToolResult::error(
+                "learning_manage",
+                format!("Memory directory not found: {}", self.memory_dir.display()),
+            );
+        }
+
         let parsed: LearningManageArgs = match serde_json::from_value(args) {
             Ok(v) => v,
             Err(e) => {
