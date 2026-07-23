@@ -45,7 +45,7 @@ use self::background_review::SelfEvolutionState;
 use self::iteration_budget::IterationBudget;
 use self::turn_finalizer::{
     PREFLIGHT_DECAY_CONSTANT, PREFLIGHT_DECAY_H50, PREFLIGHT_THRESHOLD_PERCENT, TurnDiagnostics,
-    TurnExitReason,
+    TurnExitReason, file_mutation_verifier_footer,
 };
 
 /// Response from the user for tool permission requests
@@ -1383,6 +1383,21 @@ impl OperantAgent {
                         messages.push(Message::tool(&result.tool_call_id, &content));
                         self.add_message(Message::tool(&result.tool_call_id, &content))
                             .await;
+                    }
+
+                    // ── File mutation advisory footer ──────────────────────────
+                    // After all tool results are processed, scan for failed file
+                    // mutations (write_file, patch, create_file) and append an
+                    // advisory footer to the assistant response. This prevents
+                    // over-claiming when file operations fail silently. Matches
+                    // hermes-agent's _format_file_mutation_failure_footer pattern.
+                    if let Some(footer) = file_mutation_verifier_footer(&messages) {
+                        tracing::warn!(footer = %footer, "File mutation advisory");
+                        // Append to the last assistant message so the model
+                        // sees it on the next iteration and can self-correct.
+                        if let Some(last) = messages.iter_mut().rfind(|m| m.role == Role::Assistant) {
+                            last.content.push_str(&footer);
+                        }
                     }
                 }
                 Err(e) => {
