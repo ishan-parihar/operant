@@ -133,27 +133,19 @@ The `LearningMutationTool` in `tools/learning_mutation_tool.rs` wraps `delete_no
 ### Category E: Agent Infrastructure (🟡 MEDIUM RISK — Wire up or document)
 **~15 instances** across agent files
 
-| File | Items | Purpose | hermes-agent Equivalent |
-|------|-------|---------|------------------------|
-| `turn_finalizer.rs` | 1 item | Turn finalization logic | `agent/turn_finalizer.py` |
-| `background_review.rs` | 2 items | Background code review | `agent/background_review.py` |
-| `llm_compressor.rs` | 1 item | LLM compression | `agent/context_compressor.py` |
-| `turn_context.rs` | 1 item | `NotificationMode` enum | `agent/turn_context.py` |
-| `insights.rs` | 1 item | Insights extraction | `agent/insights.py` |
-| `message_safety.rs` | 2 items | `sanitize_surrogates`, `sanitize_messages_surrogates` | `agent/message_sanitization.py` |
-| `mod.rs` | 3 items | Test helpers | Various test utilities |
+| File | Items | Purpose | Status |
+|------|-------|---------|--------|
+| `turn_finalizer.rs` | 1 item | Turn finalization logic | ✅ Wired up (check_and_advance_evolution_triggers called in run()) |
+| `background_review.rs` | 2 items | Background code review | ✅ Wired up (spawn_background_review called at line 1684) |
+| `llm_compressor.rs` | 1 item | LLM compression | ✅ Wired up (compress_context_overflow called in run()) |
+| `turn_context.rs` | 1 item | `NotificationMode` enum | ✅ Used by background_review |
+| `insights.rs` | 1 item | Insights extraction | 🔴 NOT wired up — InsightsEngine exists but not imported/used in mod.rs |
+| `message_safety.rs` | 2 items | `sanitize_surrogates`, `sanitize_messages_surrogates` | ✅ Keep — API parity with hermes-agent |
+| `mod.rs` | 3 items | Test helpers | ✅ Keep — legitimate test utilities |
 
-**hermes-agent Reference:**
-- `agent/turn_finalizer.py` has `_is_pure_tool_call_tail()`, `_drop_verification_continuation_scaffolding()`, `finalize_turn()`
-- `agent/background_review.py` has `summarize_background_review_actions()`, `build_memory_write_metadata()`, `spawn_background_review_thread()`
-- `agent/insights.py` has `InsightsEngine` with full analytics
-
-**Gap:** Operant has these modules implemented but some functions are **not called** from the main agent loop. The hermes-agent integrates them more deeply.
-
-**Recommendation:** 🟡 **Mixed.**
-- `message_safety.rs` no-ops: ✅ **Keep** — API parity with hermes-agent
-- Test helpers: ✅ **Keep** — legitimate test utilities
-- `background_review.rs`, `insights.rs`, `turn_context.rs`: 🔴 **Wire up or remove** — features not yet connected
+**Recommendation:**
+- `insights.rs`: 🔴 **Wire up or remove** — InsightsEngine exists but is never called from the agent loop or CLI. Either connect it to a `/insights` command or remove it.
+- All others: ✅ **Already wired up.**
 
 ---
 
