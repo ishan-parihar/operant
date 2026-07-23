@@ -97,8 +97,8 @@ tower = { version = "0.4", features = ["make"] }
 tower-http = { version = "0.5", features = ["cors", "fs"] }
 
 # Terminal UI
-ratatui = "=0.28.1"
-crossterm = "0.28"
+ratatui = "0.29"
+crossterm = "0.29"
 unicode-width = "0.2"
 
 # Skills lifecycle
