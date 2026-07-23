@@ -57,12 +57,14 @@ pub use super::tts_tool::TtsTool;
 pub use super::video_analysis_tool::VideoAnalysisTool;
 pub use super::vision_tool::VisionTool;
 pub use super::web_tools::{WebFetchTool, WebSearchTool};
+pub use super::learning_mutation_tool::LearningMutationTool;
 pub use super::xai_http::XaiHttpTool;
 
 /// Register all built-in tools with a registry
 pub async fn register_builtin_tools(
     registry: &ToolRegistry,
     skills_dir: &Path,
+    memory_dir: &Path,
     database: Arc<Database>,
     cron_db: Arc<CronDb>,
     kanban_db: Arc<KanbanDb>,
@@ -142,6 +144,11 @@ pub async fn register_builtin_tools(
     registry.register(SpotifyAlbumsTool).await?;
     registry.register(SpotifyLibraryTool).await?;
 
+    // Register learning mutation tool
+    registry
+        .register(LearningMutationTool::new(skills_dir.to_path_buf(), memory_dir.to_path_buf()))
+        .await?;
+
     // Register MCP management tool if a manager reference is provided
     if let Some(manager) = mcp_manager {
         registry.register(McpManagementTool::new(manager)).await?;
@@ -155,6 +162,7 @@ pub async fn register_builtin_tools(
 pub async fn register_builtin_tools_with_sub_agent(
     registry: &ToolRegistry,
     skills_dir: &Path,
+    memory_dir: &Path,
     parent_client: &OpenAIClient,
     model: impl Into<String>,
     database: Arc<Database>,
@@ -166,6 +174,7 @@ pub async fn register_builtin_tools_with_sub_agent(
     register_builtin_tools(
         registry,
         skills_dir,
+        memory_dir,
         database.clone(),
         cron_db,
         kanban_db,
@@ -241,6 +250,7 @@ pub fn builtin_tool_names() -> Vec<&'static str> {
         "delegate_task",
         "browser_dialog",
         "browser_cdp",
+        "learning_manage",
         "spotify_playback",
         "spotify_devices",
         "spotify_queue",
@@ -276,7 +286,8 @@ mod tests {
         let database = Arc::new(Database::init(PathBuf::from("test_all_builtin.db")).unwrap());
         let cron_db = Arc::new(CronDb::init(PathBuf::from("test_all_cron.db")).unwrap());
         let kanban_db = Arc::new(KanbanDb::init(PathBuf::from("test_all_kanban.db")).unwrap());
-        register_builtin_tools(&registry, &skills_dir, database, cron_db, kanban_db, None)
+        let memory_dir = skills_dir.parent().unwrap_or(&skills_dir).join("memory");
+        register_builtin_tools(&registry, &skills_dir, &memory_dir, database, cron_db, kanban_db, None)
             .await
             .unwrap();
 
@@ -304,9 +315,11 @@ mod tests {
         let cron_db = Arc::new(CronDb::init(PathBuf::from("test_with_sub_cron.db")).unwrap());
         let kanban_db = Arc::new(KanbanDb::init(PathBuf::from("test_with_sub_kanban.db")).unwrap());
 
+        let memory_dir = skills_dir.parent().unwrap_or(&skills_dir).join("memory");
         register_builtin_tools_with_sub_agent(
             &registry,
             &skills_dir,
+            &memory_dir,
             &client,
             "gpt-4.1",
             database,
