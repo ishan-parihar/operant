@@ -20,31 +20,7 @@ static TRAILING_COMMA_RE: LazyLock<Regex> =
 // Surrogate sanitization
 // ---------------------------------------------------------------------------
 
-/// Replace any remaining surrogate code points with U+FFFD.
-///
-/// Rust `String` is guaranteed valid UTF-8, so lone surrogates (U+D800..=U+DFFF)
-/// can never appear in-memory — they are already replaced by U+FFFD during
-/// `String::from_utf8_lossy` or similar decoding. This function exists for API
-/// parity with hermes-agent's `_sanitize_surrogates` and is a no-op in Rust.
-#[inline]
-#[allow(dead_code)]
-pub fn sanitize_surrogates(text: &str) -> String {
-    // Rust strings are valid UTF-8; surrogates are impossible.
-    // This is a no-op kept for API parity with hermes-agent.
-    text.to_string()
-}
 
-/// Sanitize surrogate characters from all string content in a messages list.
-///
-/// In Rust, `String` is guaranteed valid UTF-8 so surrogates cannot appear.
-/// This function is a no-op kept for API parity with hermes-agent's
-/// `_sanitize_messages_surrogates`.
-#[inline]
-#[allow(dead_code)]
-pub fn sanitize_messages_surrogates(_messages: &mut [Message]) -> usize {
-    // Rust strings are valid UTF-8; surrogates are impossible.
-    0
-}
 
 // ---------------------------------------------------------------------------
 // Tool call argument repair
@@ -435,18 +411,6 @@ fn sanitize_tool_name_for_strict(name: &str) -> String {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_sanitize_surrogates_noop() {
-        // In Rust, strings are valid UTF-8 so surrogates are impossible.
-        // The function is a documented no-op for API parity with hermes-agent.
-        assert_eq!(sanitize_surrogates("hello"), "hello");
-        assert_eq!(
-            sanitize_surrogates("hello\u{FFFD}world"),
-            "hello\u{FFFD}world"
-        );
-        assert_eq!(sanitize_surrogates(""), "");
-        assert_eq!(sanitize_surrogates("\u{1F600}"), "\u{1F600}");
-    }
 
     #[test]
     fn test_repair_tool_call_arguments_empty() {
@@ -493,7 +457,6 @@ mod tests {
         ];
         let repairs = repair_message_sequence(&mut messages);
         assert!(repairs > 0);
-        // Should now have: assistant, tool, assistant (synthetic), user
         assert_eq!(messages.len(), 4);
         assert_eq!(messages[2].role, Role::Assistant);
         assert_eq!(messages[3].role, Role::User);
@@ -521,7 +484,6 @@ mod tests {
         let repairs = repair_message_sequence(&mut messages);
         assert!(repairs > 0);
         assert_eq!(messages.len(), 1);
-        // Should keep the newer content
         assert_eq!(messages[0].content, "second response");
     }
 
@@ -542,28 +504,7 @@ mod tests {
     }
 
     #[test]
-    fn test_sanitize_messages_surrogates_clean() {
-        let mut messages = vec![Message::user("hello world")];
-        let count = sanitize_messages_surrogates(&mut messages);
-        assert_eq!(count, 0);
-        assert_eq!(messages[0].content, "hello world");
-    }
-
-    #[test]
-    fn test_sanitize_messages_surrogates_with_replacement() {
-        // Text with existing U+FFFD (what Python's from_utf8_lossy produces)
-        let mut messages = vec![Message::user("hello\u{FFFD}world")];
-        let count = sanitize_messages_surrogates(&mut messages);
-        // U+FFFD is not a surrogate, so no replacements
-        assert_eq!(count, 0);
-        assert_eq!(messages[0].content, "hello\u{FFFD}world");
-    }
-
-    // ── Streaming truncation edge case tests ─────────────────────────
-
-    #[test]
     fn test_repair_unclosed_string_literal() {
-        // Streaming cut off mid-string value
         let args = r#"{"key": "value""#;
         let result = repair_tool_call_arguments(args, "test_tool");
         let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
@@ -572,7 +513,6 @@ mod tests {
 
     #[test]
     fn test_repair_trailing_colon_incomplete_pair() {
-        // Streaming cut off after colon (incomplete key-value pair)
         let args = r#"{"a": 1, "b": "#;
         let result = repair_tool_call_arguments(args, "test_tool");
         let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
@@ -582,7 +522,6 @@ mod tests {
 
     #[test]
     fn test_repair_trailing_colon_no_comma() {
-        // Streaming cut off after colon with no prior comma at depth 1
         let args = r#"{"a": "#;
         let result = repair_tool_call_arguments(args, "test_tool");
         let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
@@ -591,7 +530,6 @@ mod tests {
 
     #[test]
     fn test_repair_string_with_escapes_unclosed() {
-        // String with escape sequences, cut off mid-string
         let args = r#"{"path": "C:\\Users\\test""#;
         let result = repair_tool_call_arguments(args, "test_tool");
         let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
@@ -600,15 +538,12 @@ mod tests {
 
     #[test]
     fn test_repair_trailing_colon_after_array() {
-        // Incomplete pair after an array value — tests depth-1 comma logic
         let args = r#"{"a": [1, 2], "b": "#;
         let result = repair_tool_call_arguments(args, "test_tool");
         let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert_eq!(parsed["a"], serde_json::json!([1, 2]));
         assert!(parsed.get("b").is_none());
     }
-
-    // ── drop_thinking_only_and_merge_users tests ──────────────────────
 
     #[test]
     fn test_drop_thinking_only_removes_empty_assistant_with_reasoning() {
@@ -686,22 +621,17 @@ mod tests {
             },
         ];
         let _cleaned = drop_thinking_only_and_merge_users(&messages);
-        assert_eq!(messages.len(), 1); // original unchanged
+        assert_eq!(messages.len(), 1);
     }
-
-    // ── sanitize_tool_calls_for_strict_api tests ─────────────────────
 
     #[test]
     fn test_sanitize_tool_name_invalid_chars() {
-        // Delegates to schema::sanitize_tool_name which allows . and :
-        // but replaces spaces and ! with _
         let name = sanitize_tool_name_for_strict("my tool.name!");
         assert_eq!(name, "my_tool.name_");
     }
 
     #[test]
     fn test_sanitize_tool_name_truncates_at_128() {
-        // Delegates to schema::sanitize_tool_name which truncates at 128
         let long_name = "a".repeat(200);
         let name = sanitize_tool_name_for_strict(&long_name);
         assert_eq!(name.len(), 128);
