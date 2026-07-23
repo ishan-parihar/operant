@@ -417,9 +417,24 @@ impl OpenAIClient {
         max_tokens: Option<u32>,
         temperature: Option<f32>,
     ) -> Result<serde_json::Value> {
+        let mut api_messages: Vec<Value> = messages.iter().map(|m| m.to_value()).collect();
+
+        // Apply Anthropic prompt caching for OpenRouter-compatible endpoints.
+        // When the base URL contains "openrouter", apply the system_and_3
+        // caching strategy (system prompt + last 3 non-system messages) to
+        // reduce input token costs by ~75% on multi-turn conversations.
+        // This matches hermes-agent's prompt_caching.py strategy.
+        if self.config.base_url.contains("openrouter") {
+            crate::agent::clients::prompt_caching::apply_cache_control(
+                &mut api_messages,
+                crate::agent::clients::prompt_caching::CacheTtl::default(),
+                false, // envelope layout (OpenRouter)
+            );
+        }
+
         let mut request = json!({
             "model": model,
-            "messages": messages.iter().map(|m| m.to_value()).collect::<Vec<_>>(),
+            "messages": api_messages,
             "stream": stream,
         });
 
