@@ -1387,17 +1387,12 @@ impl OperantAgent {
 
                     // ── File mutation advisory footer ──────────────────────────
                     // After all tool results are processed, scan for failed file
-                    // mutations (write_file, patch, create_file) and append an
-                    // advisory footer to the assistant response. This prevents
-                    // over-claiming when file operations fail silently. Matches
-                    // hermes-agent's _format_file_mutation_failure_footer pattern.
+                    // mutations (write_file, patch, create_file) and log an advisory.
+                    // The footer is logged for observability — the model will see the
+                    // tool results with error messages on the next iteration anyway.
+                    // Matches hermes-agent's _format_file_mutation_failure_footer pattern.
                     if let Some(footer) = file_mutation_verifier_footer(&messages) {
                         tracing::warn!(footer = %footer, "File mutation advisory");
-                        // Append to the last assistant message so the model
-                        // sees it on the next iteration and can self-correct.
-                        if let Some(last) = messages.iter_mut().rfind(|m| m.role == Role::Assistant) {
-                            last.content.push_str(&footer);
-                        }
                     }
                 }
                 Err(e) => {
