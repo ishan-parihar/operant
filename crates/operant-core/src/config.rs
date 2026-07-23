@@ -354,6 +354,7 @@ impl Default for McpSettings {
 #[serde(default, deny_unknown_fields)]
 pub struct SkillsSettings {
     pub root_dir: PathBuf,
+    pub memory_dir: PathBuf,
     pub autoload: bool,
     pub template_name: String,
     pub template_description: String,
@@ -361,8 +362,13 @@ pub struct SkillsSettings {
 
 impl Default for SkillsSettings {
     fn default() -> Self {
+        let root_dir = platform::operant_skills_dir();
+        let memory_dir = root_dir.parent()
+            .unwrap_or(&root_dir)
+            .join("memory");
         Self {
-            root_dir: platform::operant_skills_dir(),
+            root_dir,
+            memory_dir,
             autoload: true,
             template_name: "new-skill".to_string(),
             template_description: "Describe what this skill does.".to_string(),
