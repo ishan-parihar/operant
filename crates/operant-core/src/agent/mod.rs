@@ -281,6 +281,25 @@ pub struct OperantAgent {
     background_review_callback: Option<Arc<dyn Fn(String) + Send + Sync>>,
 }
 
+/// Strip `<memory-context>` / `<long_term_memory>` XML tags from streaming
+/// output. This is the streaming context scrubber — it prevents injected
+/// memory context from leaking into the TUI when the LLM echoes back tags
+/// from the system prompt.
+///
+/// Ported from hermes-agent's StreamingContextScrubber pattern.
+fn strip_memory_context_tags(text: &str) -> String {
+    let mut result = text.to_string();
+    // Strip opening and closing tags for both naming conventions
+    for tag in &[
+        "<long_term_memory>", "</long_term_memory>",
+        "<memory-context>", "</memory-context>",
+        "<workspace_context>", "</workspace_context>",
+    ] {
+        result = result.replace(tag, "");
+    }
+    result
+}
+
 /// A pending permission request sent from the agent to the TUI
 #[derive(Debug)]
 pub struct ToolPermissionRequest {
@@ -2502,8 +2521,11 @@ If nothing needs updating, say 'Nothing to save.' and stop.\n\n{}",
 
                             let visible_text = tool_call_router.feed(&content_delta);
                             if !visible_text.is_empty() {
-                                accumulated_text.push_str(&visible_text);
-                                self.emit(AgentEvent::Content { text: visible_text }).await;
+                                let scrubbed = strip_memory_context_tags(&visible_text);
+                                if !scrubbed.is_empty() {
+                                    accumulated_text.push_str(&scrubbed);
+                                    self.emit(AgentEvent::Content { text: scrubbed }).await;
+                                }
                             }
                         }
 
@@ -2556,13 +2578,14 @@ If nothing needs updating, say 'Nothing to save.' and stop.\n\n{}",
                 // Emit the flushed partial so the TUI sees it even if we're
                 // about to return Err — otherwise content streamed right
                 // before the error would be silently lost.
-                self.emit(AgentEvent::Content { text: visible }).await;
+                self.emit(AgentEvent::Content { text: strip_memory_context_tags(&visible) }).await;
             }
         }
         let tail = tool_call_router.finish();
         if !tail.is_empty() {
-            accumulated_text.push_str(&tail);
-            self.emit(AgentEvent::Content { text: tail }).await;
+            let scrubbed_tail = strip_memory_context_tags(&tail);
+            accumulated_text.push_str(&scrubbed_tail);
+            self.emit(AgentEvent::Content { text: scrubbed_tail }).await;
         }
         if !remaining_reasoning.is_empty() {
             accumulated_reasoning.push_str(&remaining_reasoning);
@@ -2687,7 +2710,7 @@ If nothing needs updating, say 'Nothing to save.' and stop.\n\n{}",
 
         if !content.is_empty() {
             self.emit(AgentEvent::Content {
-                text: content.clone(),
+                text: strip_memory_context_tags(&content),
             })
             .await;
         }
