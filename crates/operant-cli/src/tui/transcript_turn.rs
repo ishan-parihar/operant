@@ -33,7 +33,6 @@ impl<'a> TranscriptTurn<'a> {
 
     #[allow(dead_code)] // Reasoning heading renderer
     pub fn reasoning_heading(&self) -> Option<String> {
-        #[allow(dead_code)]
         if let Some(text) = self.live_thinking.and_then(reasoning_heading) {
             return Some(text);
         }
