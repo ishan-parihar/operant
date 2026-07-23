@@ -12,7 +12,7 @@ use std::sync::OnceLock;
 use std::time::Duration;
 
 use regex::Regex;
-use tracing::{debug, warn};
+use tracing::debug;
 
 /// Maximum output from an inline shell snippet (chars).
 const INLINE_SHELL_MAX_OUTPUT: usize = 4000;

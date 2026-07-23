@@ -3223,71 +3223,6 @@ mod tests {
     use crate::client::ChatStreamEvent;
     use serial_test::serial;
 
-    #[allow(dead_code)]
-    fn extract_text_from_event(event: &ChatStreamEvent) -> Option<String> {
-        let mut text = String::new();
-
-        for choice in &event.choices {
-            if let Some(content) = &choice.delta.content {
-                text.push_str(content);
-            }
-        }
-
-        if text.is_empty() { None } else { Some(text) }
-    }
-
-    #[allow(dead_code)]
-    fn extract_reasoning_from_event(event: &ChatStreamEvent) -> Option<String> {
-        let mut reasoning = String::new();
-
-        for choice in &event.choices {
-            if let Some(content) = &choice.delta.reasoning_content {
-                reasoning.push_str(content);
-            }
-        }
-
-        if reasoning.is_empty() {
-            None
-        } else {
-            Some(reasoning)
-        }
-    }
-
-    #[allow(dead_code)]
-    fn extract_tool_calls_from_event(event: &ChatStreamEvent) -> Vec<ToolCall> {
-        let mut tool_calls: Vec<ToolCall> = Vec::new();
-
-        for choice in &event.choices {
-            if let Some(delta_tool_calls) = &choice.delta.tool_calls {
-                for delta in delta_tool_calls {
-                    if let Some(ref function) = delta.function {
-                        let id = delta.id.clone().unwrap_or_else(|| {
-                            format!("call_stream_{}_{}", delta.index, function.name)
-                        });
-
-                        if let Some(last) = tool_calls.last_mut() {
-                            if last.id == id {
-                                last.function.arguments.push_str(&function.arguments);
-                                continue;
-                            }
-                        }
-
-                        tool_calls.push(ToolCall {
-                            id: id.clone(),
-                            function: crate::client::ToolCallFunction {
-                                name: function.name.clone(),
-                                arguments: function.arguments.clone(),
-                            },
-                        });
-                    }
-                }
-            }
-        }
-
-        tool_calls
-    }
-
-    #[test]
     fn test_default_config() {
         let config = AgentConfig::default();
         assert_eq!(config.model, "gpt-4");
@@ -3335,32 +3270,6 @@ mod tests {
         assert!(system.contains("[fact] User prefers concise answers"));
         assert!(system.contains("</long_term_memory>"));
     }
-
-    #[test]
-    fn test_extract_text_from_event() {
-        let event = ChatStreamEvent {
-            id: "test".to_string(),
-            object: "chat.completion.chunk".to_string(),
-            created: 0,
-            model: "test".to_string(),
-            choices: vec![crate::client::StreamChoice {
-                index: 0,
-                delta: crate::client::StreamingMessageDelta {
-                    role: None,
-                    content: Some("Hello ".to_string()),
-                    reasoning_content: None,
-                    tool_calls: None,
-                    extra_content: None,
-                },
-                finish_reason: None,
-            }],
-            usage: None,
-        };
-
-        let text = extract_text_from_event(&event);
-        assert_eq!(text, Some("Hello ".to_string()));
-    }
-
     #[test]
     fn think_router_splits_inline_think_blocks() {
         let mut router = ThinkBlockRouter::default();
