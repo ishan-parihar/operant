@@ -91,10 +91,65 @@ pub fn repair_tool_call_arguments(raw_args: &str, tool_name: &str) -> String {
     // Attempt common JSON repairs
     let mut fixed = raw_stripped.to_string();
 
-    // 1. Strip trailing commas before } or ]
+    // Combined pass: close unclosed strings and find trailing colon position
+    // in a single O(n) traversal instead of two separate passes.
+    //
+    // - Tracks in_string/escape_next state to detect truncated string literals
+    // - Tracks depth ({} only, not []) to find last comma at depth 1
+    //   for trailing colon cleanup (object-level commas always come after
+    //   array contents, so this works correctly)
+    {
+        let mut in_string = false;
+        let mut escape_next = false;
+        let mut depth = 0i32;
+        let mut last_comma_at_depth1: Option<usize> = None;
+
+        for (pos, ch) in fixed.char_indices() {
+            if escape_next {
+                escape_next = false;
+                continue;
+            }
+            if ch == '\\' && in_string {
+                escape_next = true;
+                continue;
+            }
+            if ch == '"' {
+                in_string = !in_string;
+                continue;
+            }
+            if !in_string {
+                match ch {
+                    '{' => depth += 1,
+                    '}' => depth -= 1,
+                    ',' if depth == 1 => last_comma_at_depth1 = Some(pos),
+                    _ => {}
+                }
+            }
+        }
+
+        // Close unclosed string literal (streaming truncation)
+        if in_string {
+            fixed.push('"');
+        }
+
+        // Remove trailing incomplete key-value pairs (streaming truncation:
+        // the output was cut after a colon, e.g. {"a": 1, "b": )
+        if fixed.ends_with(':') {
+            if let Some(comma_pos) = last_comma_at_depth1 {
+                fixed.truncate(comma_pos);
+            } else {
+                // No comma at depth 1 — truncate to just after the opening brace
+                if let Some(brace_pos) = fixed.find('{') {
+                    fixed.truncate(brace_pos + 1);
+                }
+            }
+        }
+    }
+
+    // 3. Strip trailing commas before } or ]
     fixed = TRAILING_COMMA_RE.replace_all(&fixed, "$1").to_string();
 
-    // 2. Close unclosed structures
+    // 4. Close unclosed structures
     let open_curly = fixed.matches('{').count() as i32 - fixed.matches('}').count() as i32;
     let open_bracket = fixed.matches('[').count() as i32 - fixed.matches(']').count() as i32;
     if open_curly > 0 {
@@ -104,7 +159,7 @@ pub fn repair_tool_call_arguments(raw_args: &str, tool_name: &str) -> String {
         fixed.extend(std::iter::repeat(']').take(open_bracket as usize));
     }
 
-    // 3. Remove excess closing braces/brackets (bounded to 50 iterations)
+    // 5. Remove excess closing braces/brackets (bounded to 50 iterations)
     for _ in 0..50 {
         if serde_json::from_str::<serde_json::Value>(&fixed).is_ok() {
             break;
@@ -502,6 +557,55 @@ mod tests {
         // U+FFFD is not a surrogate, so no replacements
         assert_eq!(count, 0);
         assert_eq!(messages[0].content, "hello\u{FFFD}world");
+    }
+
+    // ── Streaming truncation edge case tests ─────────────────────────
+
+    #[test]
+    fn test_repair_unclosed_string_literal() {
+        // Streaming cut off mid-string value
+        let args = r#"{"key": "value""#;
+        let result = repair_tool_call_arguments(args, "test_tool");
+        let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(parsed["key"], "value");
+    }
+
+    #[test]
+    fn test_repair_trailing_colon_incomplete_pair() {
+        // Streaming cut off after colon (incomplete key-value pair)
+        let args = r#"{"a": 1, "b": "#;
+        let result = repair_tool_call_arguments(args, "test_tool");
+        let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(parsed["a"], 1);
+        assert!(parsed.get("b").is_none());
+    }
+
+    #[test]
+    fn test_repair_trailing_colon_no_comma() {
+        // Streaming cut off after colon with no prior comma at depth 1
+        let args = r#"{"a": "#;
+        let result = repair_tool_call_arguments(args, "test_tool");
+        let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert!(parsed.is_object());
+    }
+
+    #[test]
+    fn test_repair_string_with_escapes_unclosed() {
+        // String with escape sequences, cut off mid-string
+        let args = r#"{"path": "C:\\Users\\test""#;
+        let result = repair_tool_call_arguments(args, "test_tool");
+        let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert!(parsed["path"].as_str().unwrap().contains("test"));
+    }
+
+    #[test]
+    fn test_repair_trailing_colon_after_array() {
+        // Incomplete pair after an array value — tests depth-1 comma logic
+        let args = r#"{"a": [1, 2], "b": "#;
+        let result = repair_tool_call_arguments(args, "test_tool");
+        let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(parsed["a"], serde_json::json!([1, 2]));
+        assert!(parsed.get("b").is_none());
     }
 
     // ── drop_thinking_only_and_merge_users tests ──────────────────────
