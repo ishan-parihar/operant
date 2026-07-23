@@ -603,13 +603,14 @@ impl MemoryProvider for TdgMemoryProvider {
     fn on_pre_compress(&self, messages: &[crate::client::Message]) -> String {
         // Extract insights from messages about to be compressed so the
         // compression summary preserves important context.
+        // Use chars().take() for safe UTF-8 truncation (no byte-slicing panics).
         let insights: Vec<String> = messages
             .iter()
             .filter(|m| m.role == crate::client::Role::Assistant)
             .filter_map(|m| m.content.as_ref())
             .filter(|s| s.len() > 50)
             .take(3)
-            .map(|s| format!("- {}", &s[..s.len().min(200)]))
+            .map(|s| format!("- {}", s.chars().take(200).collect::<String>()))
             .collect();
         if insights.is_empty() {
             String::new()

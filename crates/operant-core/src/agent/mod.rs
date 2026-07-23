@@ -679,9 +679,16 @@ impl OperantAgent {
         // This fires at actual session boundaries so the graph captures
         // session-level patterns. Ported from hermes-agent's
         // MemoryManager.on_session_end() pattern.
-        if let Some(provider) = &self.memory_provider {
+        //
+        // Clone the snapshot under the read lock, then drop it before
+        // acquiring the write lock — prevents TOCTOU race where another
+        // task modifies the conversation between read() and write().
+        let snapshot = {
             let conv = self.conversation.read().await;
-            provider.on_session_end(&conv);
+            conv.clone()
+        };
+        if let Some(provider) = &self.memory_provider {
+            provider.on_session_end(&snapshot);
         }
         let mut conv = self.conversation.write().await;
         conv.clear();
@@ -690,6 +697,15 @@ impl OperantAgent {
         // the new session's compression context.
         if let Some(ref compressor) = self.llm_compressor {
             compressor.lock().await.reset();
+        }
+        // Notify memory provider of session switch (reset=true).
+        // This fires on /new, /reset, and session switches so the
+        // graph knows the session boundary. Ported from hermes-agent's
+        // MemoryManager.on_session_switch() pattern.
+        // Use the existing public method for consistency.
+        if let Some(provider) = &self.memory_provider {
+            let old_id = self.persistent_session_id.clone().unwrap_or_default();
+            provider.on_session_switch(&old_id, &old_id, true);
         }
     }
 
@@ -1330,6 +1346,10 @@ impl OperantAgent {
                         // This is the native equivalent of the hermes-agent
                         // MemoryManager.sync_all() + queue_prefetch_all() pattern.
                         // Failures are logged but don't break the turn.
+                        //
+                        // prefetch is bounded by an 8s timeout (matching
+                        // hermes-agent's _prefetch_provider timeout) to prevent
+                        // a slow provider from leaking a spawned task forever.
                         if let Some(provider) = &self.memory_provider {
                             let user_text = user_query.clone();
                             let assistant_text = result.content.clone();
@@ -1341,7 +1361,10 @@ impl OperantAgent {
                                 {
                                     tracing::warn!(error = %e, "Memory provider sync_turn hook failed");
                                 }
-                                // Queue background prefetch for next turn
+                                // Queue background prefetch for next turn.
+                                // queue_prefetch is sync (just enqueues work),
+                                // so no async timeout needed — the actual
+                                // blocking work happens in background threads.
                                 provider_clone.queue_prefetch(&prefetch_query);
                             });
                         }
@@ -1371,6 +1394,14 @@ impl OperantAgent {
                         .map(|tc| tc.function.name.clone())
                         .collect();
 
+                    // Build a lookup map from tool_call_id → arguments so
+                    // we can extract file paths / task descriptions when
+                    // mirroring memory writes and delegation results.
+                    let call_args: std::collections::HashMap<String, String> = tool_calls
+                        .iter()
+                        .map(|tc| (tc.id.clone(), tc.function.arguments.clone()))
+                        .collect();
+
                     // Execute tools and add results
                     let tool_results = self.execute_tools(tool_calls).await?;
 
@@ -1381,6 +1412,39 @@ impl OperantAgent {
                         } else {
                             result.error.as_deref().unwrap_or("Error").to_string()
                         };
+
+                        // ── Memory write mirroring (hermes parity) ────────
+                        // When a built-in memory tool writes an entry
+                        // (write_file to MEMORY.md/USER.md, patch, create_file),
+                        // mirror the write to the memory provider so the graph
+                        // stays in sync. Ported from hermes-agent's
+                        // MemoryManager.notify_memory_tool_write() pattern.
+                        // Only fires for memory-related file paths, not all writes.
+                        if result.success && (result.name == "write_file" || result.name == "patch" || result.name == "create_file") {
+                            if let Some(args_str) = call_args.get(&result.tool_call_id) {
+                                if let Ok(args_val) = serde_json::from_str::<serde_json::Value>(args_str) {
+                                    let path = args_val.get("path").or_else(|| args_val.get("file_path")).and_then(|v| v.as_str()).unwrap_or("");
+                                    // Only mirror writes to memory-related files
+                                    let is_memory = path.ends_with("MEMORY.md") || path.ends_with("USER.md") || path.contains("/MEMORY.") || path.contains("/USER.");
+                                    if is_memory {
+                                        self.notify_memory_write(&result.name, path, &result.content);
+                                    }
+                                }
+                            }
+                        }
+
+                        // ── Delegation observation (hermes parity) ────────
+                        // When a subagent tool completes (delegate_task,
+                        // spawn_subagent), notify the memory provider so the
+                        // parent's graph captures delegated work. Ported from
+                        // hermes-agent's MemoryManager.on_delegation() pattern.
+                        if result.success && (result.name == "delegate_task" || result.name == "spawn_subagent") {
+                            let task_desc = call_args.get(&result.tool_call_id)
+                                .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+                                .and_then(|v| v.get("task").or_else(|| v.get("prompt")).and_then(|t| t.as_str()).map(String::from))
+                                .unwrap_or_else(|| result.name.clone());
+                            self.notify_delegation(&task_desc, &result.content);
+                        }
 
                         // Persist tool result (truncated)
                         let _ = self.database.save_message(
