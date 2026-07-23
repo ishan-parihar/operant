@@ -145,20 +145,6 @@ impl TurnDiagnostics {
 }
 
 // ---------------------------------------------------------------------------
-// Message Sequence Repair (re-exported from message_safety)
-// ---------------------------------------------------------------------------
-
-/// Repair role-alternation violations in a message list.
-///
-/// Delegates to [`super::message_safety::repair_message_sequence`] which
-/// contains the canonical implementation ported from hermes-agent.
-///
-/// Returns the number of repairs made.
-pub fn repair_message_sequence(messages: &mut Vec<Message>) -> usize {
-    super::message_safety::repair_message_sequence(messages)
-}
-
-// ---------------------------------------------------------------------------
 // File Mutation Verifier
 // ---------------------------------------------------------------------------
 
