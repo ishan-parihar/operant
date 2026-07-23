@@ -139,12 +139,12 @@ The `LearningMutationTool` in `tools/learning_mutation_tool.rs` wraps `delete_no
 | `background_review.rs` | 2 items | Background code review | ✅ Wired up (spawn_background_review called at line 1684) |
 | `llm_compressor.rs` | 1 item | LLM compression | ✅ Wired up (compress_context_overflow called in run()) |
 | `turn_context.rs` | 1 item | `NotificationMode` enum | ✅ Used by background_review |
-| `insights.rs` | 1 item | Insights extraction | 🔴 NOT wired up — InsightsEngine exists but not imported/used in mod.rs |
+| `insights.rs` | 1 item | Insights extraction | ✅ Wired up (InsightsTool registered in builtin.rs as session_insights) |
 | `message_safety.rs` | 2 items | `sanitize_surrogates`, `sanitize_messages_surrogates` | ✅ Keep — API parity with hermes-agent |
 | `mod.rs` | 3 items | Test helpers | ✅ Keep — legitimate test utilities |
 
 **Recommendation:**
-- `insights.rs`: 🔴 **Wire up or remove** — InsightsEngine exists but is never called from the agent loop or CLI. Either connect it to a `/insights` command or remove it.
+- `insights.rs`: ✅ **Already wired up** via `InsightsTool` (session_insights) in `tools/insights_tool.rs`.
 - All others: ✅ **Already wired up.**
 
 ---
@@ -201,9 +201,9 @@ The `LearningMutationTool` in `tools/learning_mutation_tool.rs` wraps `delete_no
 8. Wire up voice mode, notifications, image paste, and stats dialogs to the TUI event system
 9. Or remove if these features are not planned for operant
 
-### Phase 5: Background Features ✅ MOSTLY DONE
+### Phase 5: Background Features ✅ DONE
 10. ✅ `background_review.rs` — already wired (spawn_background_review called at line 1684)
-11. 🔴 `insights.rs` — NOT wired up. Connect to a `/insights` command or remove.
+11. ✅ `insights.rs` — wired up via `InsightsTool` (session_insights) in `tools/insights_tool.rs`
 
 ---
 
