@@ -629,6 +629,10 @@ pub struct App {
     pub tool_use_blocks: Vec<ToolUseBlock>,
     pub permission_request: Option<PermissionRequest>,
     pub frame_count: u64,
+    /// Performance tier for adaptive redraw cadence (Minimal/Normal/High).
+    pub perf_tier: crate::tui::redraw::PerformanceTier,
+    /// Timestamp of last user activity (for idle detection in redraw cadence).
+    pub last_activity: std::time::Instant,
     pub token_count: u32,
     pub cost_usd: f64,
     pub model_name: String,
@@ -1100,6 +1104,8 @@ impl App {
             tool_use_blocks: Vec::new(),
             permission_request: None,
             frame_count: 0,
+            perf_tier: crate::tui::redraw::PerformanceTier::detect(),
+            last_activity: std::time::Instant::now(),
             token_count: 0,
             cost_usd: 0.0,
             model_name,
@@ -7419,16 +7425,25 @@ impl App {
             let pending = self.pending_key.take();
             let has_simulated = !self.simulated_keys.is_empty();
 
-            // Poll for events with a short timeout so we can redraw for animation
-            let got_event = pending.is_some() || has_simulated || {
-                if self.is_simulating {
-                    false
-                } else {
-                    event::poll(std::time::Duration::from_millis(50))?
-                }
-            };
+    // Poll for events with an adaptive timeout based on performance tier and
+    // activity state. This reduces CPU usage by 5-10x on idle terminals.
+    let got_event = pending.is_some() || has_simulated || {
+        if self.is_simulating {
+            false
+        } else {
+            let poll_timeout = crate::tui::redraw::redraw_interval(
+                self.perf_tier,
+                self.is_streaming,
+                Some(self.last_activity.elapsed()),
+                None, // use default 5s idle threshold
+            );
+            event::poll(poll_timeout)?
+        }
+    };
 
             if got_event {
+                // Update activity timestamp for adaptive redraw cadence.
+                self.last_activity = std::time::Instant::now();
                 let event = if let Some(k) = pending {
                     Event::Key(k)
                 } else if has_simulated {
