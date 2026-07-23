@@ -91,6 +91,7 @@ enabled = false
 
 [skills]
 root_dir = "$HOME/.operant/skills"
+memory_dir = "$HOME/.operant/memory"
 autoload = true
 template_name = "new-skill"
 template_description = "Describe what this skill does."
