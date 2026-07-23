@@ -213,7 +213,7 @@ pub struct OperantAgent {
     /// Single-worker FIFO executor that processes sync_turn, on_memory_write,
     /// and other background writes sequentially without blocking the agent loop.
     /// Ported from hermes-agent's MemoryManager._submit_background() pattern.
-    memory_sync_executor: Option<crate::memory_provider::MemorySyncExecutor>,
+    memory_sync_executor: Arc<std::sync::Mutex<Option<crate::memory_provider::MemorySyncExecutor>>>,
     /// Hook registry for lifecycle events (AgentStart, AgentEnd, etc.).
     /// When set, the agent emits events at key lifecycle points.
     hook_registry: Option<Arc<crate::gateway_pipeline::HookRegistry>>,
@@ -332,7 +332,7 @@ impl OperantAgent {
             permission_tx: None,
             memory_manager: None,
             memory_provider: None,
-            memory_sync_executor: None,
+            memory_sync_executor: Arc::new(std::sync::Mutex::new(None)),
             hook_registry: None,
             steer_queue: Arc::new(tokio::sync::Mutex::new(Vec::new())),
             skill_manager: None,
@@ -380,7 +380,7 @@ impl OperantAgent {
             permission_tx: None,
             memory_manager: None,
             memory_provider: None,
-            memory_sync_executor: None,
+            memory_sync_executor: Arc::new(std::sync::Mutex::new(None)),
             hook_registry: None,
             steer_queue: Arc::new(tokio::sync::Mutex::new(Vec::new())),
             skill_manager: None,
@@ -432,7 +432,7 @@ impl OperantAgent {
         // Create a background sync executor for this provider.
         // Single-worker FIFO ensures sync_turn, on_memory_write, and
         // other background writes happen in order without blocking the agent loop.
-        self.memory_sync_executor = Some(
+        *self.memory_sync_executor.lock().unwrap() = Some(
             crate::memory_provider::MemorySyncExecutor::new(memory_provider.clone()),
         );
         self.memory_provider = Some(memory_provider);
@@ -720,10 +720,13 @@ impl OperantAgent {
             conv.clone()
         };
         // Route through the executor when available for FIFO ordering.
-        if let Some(executor) = &self.memory_sync_executor {
-            executor.submit_session_end(&snapshot);
-        } else if let Some(provider) = &self.memory_provider {
-            provider.on_session_end(&snapshot);
+        {
+            let exec_guard = self.memory_sync_executor.lock().unwrap();
+            if let Some(executor) = exec_guard.as_ref() {
+                executor.submit_session_end(&snapshot);
+            } else if let Some(provider) = &self.memory_provider {
+                provider.on_session_end(&snapshot);
+            }
         }
         let mut conv = self.conversation.write().await;
         conv.clear();
@@ -758,10 +761,16 @@ impl OperantAgent {
     /// MEMORY.md / USER.md changes. Uses the background executor
     /// when available to avoid blocking the agent loop.
     pub fn notify_memory_write(&self, action: &str, target: &str, content: &str) {
-        if let Some(executor) = &self.memory_sync_executor {
-            executor.submit_memory_write(action, target, content);
-        } else if let Some(provider) = &self.memory_provider {
-            provider.on_memory_write(action, target, content);
+        // Use try_lock() to avoid blocking — if the mutex is held by shutdown,
+        // just drop the write silently.
+        if let Ok(exec_guard) = self.memory_sync_executor.try_lock() {
+            if let Some(executor) = exec_guard.as_ref() {
+                executor.submit_memory_write(action, target, content);
+            } else if let Some(provider) = &self.memory_provider {
+                provider.on_memory_write(action, target, content);
+            }
+        } else {
+            debug!("memory_sync_executor lock contended — memory_write notification dropped");
         }
     }
 
@@ -770,18 +779,24 @@ impl OperantAgent {
     /// observation of what was delegated and what came back.
     /// Uses the background executor when available.
     pub fn notify_delegation(&self, task: &str, result: &str) {
-        if let Some(executor) = &self.memory_sync_executor {
-            executor.submit_delegation(task, result);
-        } else if let Some(provider) = &self.memory_provider {
-            provider.on_delegation(task, result);
+        if let Ok(exec_guard) = self.memory_sync_executor.try_lock() {
+            if let Some(executor) = exec_guard.as_ref() {
+                executor.submit_delegation(task, result);
+            } else if let Some(provider) = &self.memory_provider {
+                provider.on_delegation(task, result);
+            }
+        } else {
+            debug!("memory_sync_executor lock contended — delegation notification dropped");
         }
     }
 
     /// Gracefully shut down the memory sync executor.
     /// Drains pending jobs (up to 5s) then abandons remaining work.
     /// Call this during agent shutdown to avoid losing in-flight writes.
-    pub async fn shutdown_memory_executor(&mut self) {
-        if let Some(executor) = self.memory_sync_executor.take() {
+    /// Takes `&self` (not `&mut self`) so it works through `Arc<OperantAgent>`.
+    pub async fn shutdown_memory_executor(&self) {
+        let executor = self.memory_sync_executor.lock().unwrap().take();
+        if let Some(executor) = executor {
             executor.shutdown().await;
         }
     }
@@ -1399,17 +1414,20 @@ impl OperantAgent {
                         // Uses the MemorySyncExecutor for ordered, non-blocking
                         // background writes. Falls back to direct spawn when the
                         // executor isn't available (e.g. no memory provider).
-                        if let Some(executor) = &self.memory_sync_executor {
-                            executor.submit_sync_turn(&user_query, &result.content);
-                        } else if let Some(provider) = &self.memory_provider {
-                            let user_text = user_query.clone();
-                            let assistant_text = result.content.clone();
-                            let provider_clone = provider.clone();
-                            tokio::spawn(async move {
-                                if let Err(e) = provider_clone.sync_turn(&user_text, &assistant_text).await {
-                                    tracing::warn!(error = %e, "Memory provider sync_turn hook failed");
-                                }
-                            });
+                        if let Ok(exec_guard) = self.memory_sync_executor.try_lock() {
+                            if let Some(executor) = exec_guard.as_ref() {
+                                executor.submit_sync_turn(&user_query, &result.content);
+                            } else if let Some(provider) = &self.memory_provider {
+
+                                let user_text = user_query.clone();
+                                let assistant_text = result.content.clone();
+                                let provider_clone = provider.clone();
+                                tokio::spawn(async move {
+                                    if let Err(e) = provider_clone.sync_turn(&user_text, &assistant_text).await {
+                                        tracing::warn!(error = %e, "Memory provider sync_turn hook failed");
+                                    }
+                                });
+                            }
                         }
                         // Queue background prefetch with 8s timeout.
                         // Matches hermes-agent's _prefetch_provider timeout.
