@@ -19,6 +19,8 @@ pub use markdown::render_markdown;
 
 mod markdown_enhanced;
 
+pub(crate) mod cache;
+
 /// Context passed to all renderers.
 pub struct RenderContext {
     /// Current terminal width (for word-wrap decisions).
