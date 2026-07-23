@@ -75,7 +75,7 @@ This is the most critical area. hermes-agent has a **deeply integrated self-evol
 
 ### 2.3 Memory Provider Hook Gaps (All Resolved)
 
-hermes-agent's `MemoryProvider` ABC defines **12 lifecycle hooks**. operant's `MemoryProvider` trait now implements **all 15 hooks**:
+hermes-agent's `MemoryProvider` ABC defines **12 lifecycle hooks** (plus 7 core methods). operant's `MemoryProvider` trait now implements **all 15 trait methods, including all 8 lifecycle hooks**:
 
 | Hook | hermes-agent | operant | Status |
 |------|-------------|---------|--------|
