@@ -70,6 +70,56 @@ pub trait MemoryProvider: Send + Sync {
 
     /// Flush queues and close connections.
     async fn shutdown(&self) {}
+
+    // -- Optional lifecycle hooks (override to opt in) ----------------------
+
+    /// Called at the start of each turn with the user message.
+    /// Use for turn-counting, scope management, periodic maintenance.
+    fn on_turn_start(&self, _turn_number: usize, _message: &str) {}
+
+    /// Called when a session ends (explicit exit or timeout).
+    /// Use for end-of-session fact extraction, summarization, etc.
+    fn on_session_end(&self, _messages: &[crate::client::Message]) {}
+
+    /// Called when the agent switches session_id mid-process.
+    /// Fires on /resume, /branch, /reset, /new, and context compression.
+    fn on_session_switch(
+        &self,
+        _new_session_id: &str,
+        _parent_session_id: &str,
+        _reset: bool,
+    ) {}
+
+    /// Called before context compression discards old messages.
+    /// Use to extract insights from messages about to be compressed.
+    /// Return text to include in the compression summary prompt.
+    fn on_pre_compress(&self, _messages: &[crate::client::Message]) -> String {
+        String::new()
+    }
+
+    /// Called when the built-in memory tool writes an entry.
+    /// Use to mirror built-in memory writes to your backend.
+    fn on_memory_write(
+        &self,
+        _action: &str,
+        _target: &str,
+        _content: &str,
+    ) {}
+
+    /// Called on the PARENT agent when a subagent completes.
+    /// The parent's memory provider gets the task+result pair.
+    fn on_delegation(&self, _task: &str, _result: &str) {}
+
+    /// Queue a background recall for the NEXT turn.
+    /// Called after each turn completes. The result will be consumed
+    /// by prefetch() on the next turn.
+    fn queue_prefetch(&self, _query: &str) {}
+
+    /// Return extra on-disk paths this provider stores outside
+    /// the operant home directory. Used by backup to include them.
+    fn backup_paths(&self) -> Vec<std::path::PathBuf> {
+        vec![]
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -114,6 +164,22 @@ impl MemoryProvider for BuiltinProvider {
             .add_message(crate::client::Message::user(user))
             .await;
         Ok(())
+    }
+
+    fn on_turn_start(&self, turn_number: usize, _message: &str) {
+        tracing::debug!(turn_number, "BuiltinProvider: turn started");
+    }
+
+    fn on_session_end(&self, _messages: &[crate::client::Message]) {
+        tracing::debug!("BuiltinProvider: session ended — no extraction needed");
+    }
+
+    fn on_session_switch(&self, _new_session_id: &str, _parent_session_id: &str, _reset: bool) {
+        tracing::debug!("BuiltinProvider: session switched");
+    }
+
+    fn on_memory_write(&self, action: &str, target: &str, content: &str) {
+        tracing::debug!(action, target, content_len = content.len(), "BuiltinProvider: memory write mirrored");
     }
 }
 
@@ -487,6 +553,127 @@ impl MemoryProvider for TdgMemoryProvider {
             Ok(Err(e)) => format!(r#"{{"error":"{}"}}"#, e),
             Err(e) => format!(r#"{{"error":"task failed: {}"}}"#, e),
         }
+    }
+
+    fn on_turn_start(&self, turn_number: usize, _message: &str) {
+        tracing::debug!(turn_number, "TdgProvider: turn started");
+    }
+
+    fn on_session_end(&self, messages: &[crate::client::Message]) {
+        // Extract end-of-session insights into the graph.
+        // This fires at actual session boundaries (CLI exit, /reset, gateway
+        // session expiry) so the graph captures session-level patterns.
+        if messages.is_empty() {
+            return;
+        }
+        let pool = self.pool.clone();
+        let summary: String = messages
+            .iter()
+            .filter(|m| m.role == crate::client::Role::Assistant)
+            .filter_map(|m| m.content.as_ref())
+            .take(5)
+            .map(|s| s.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        if summary.is_empty() {
+            return;
+        }
+        tokio::task::spawn_blocking(move || {
+            let _ = pool.with_connection(|conn| {
+                let turn_name: String = format!("session-summary: {}", summary.chars().take(80).collect::<String>());
+                let new_node = tdg_rust::NewNode {
+                    node_type: "observation".to_string(),
+                    name: turn_name,
+                    description: Some(summary),
+                    confidence: Some(0.7),
+                    source: Some("operant-session-end".to_string()),
+                    developmental_stage: Some(2),
+                    ..Default::default()
+                };
+                let _ = tdg_rust::db::crud::add_node(conn, &new_node);
+                Ok::<(), String>(())
+            });
+        });
+    }
+
+    fn on_session_switch(&self, _new_session_id: &str, _parent_session_id: &str, reset: bool) {
+        tracing::debug!(reset, "TdgProvider: session switched — graph state is pooled, no rebind needed");
+    }
+
+    fn on_pre_compress(&self, messages: &[crate::client::Message]) -> String {
+        // Extract insights from messages about to be compressed so the
+        // compression summary preserves important context.
+        let insights: Vec<String> = messages
+            .iter()
+            .filter(|m| m.role == crate::client::Role::Assistant)
+            .filter_map(|m| m.content.as_ref())
+            .filter(|s| s.len() > 50)
+            .take(3)
+            .map(|s| format!("- {}", &s[..s.len().min(200)]))
+            .collect();
+        if insights.is_empty() {
+            String::new()
+        } else {
+            format!("TDG pre-compress insights:\n{}", insights.join("\n"))
+        }
+    }
+
+    fn on_memory_write(&self, action: &str, target: &str, content: &str) {
+        // Mirror built-in memory writes to the TDG graph so the graph
+        // stays in sync with MEMORY.md / USER.md changes.
+        let pool = self.pool.clone();
+        // Safe truncation: use chars() to avoid UTF-8 boundary panics.
+        let name = format!("memory-{}:{}: {}", action, target, content.chars().take(80).collect::<String>());
+        let desc = content.to_string();
+        tokio::task::spawn_blocking(move || {
+            if let Err(e) = pool.with_connection(|conn| {
+                let new_node = tdg_rust::NewNode {
+                    node_type: "memory".to_string(),
+                    name,
+                    description: Some(desc),
+                    confidence: Some(0.8),
+                    source: Some("operant-memory-write".to_string()),
+                    developmental_stage: Some(1),
+                    ..Default::default()
+                };
+                tdg_rust::db::crud::add_node(conn, &new_node).map(|_| ())
+            }) {
+                tracing::warn!(error = %e, "TdgProvider: on_memory_write failed");
+            }
+        });
+    }
+
+    fn on_delegation(&self, task: &str, result: &str) {
+        // Observe subagent work in the graph so the parent's TDG
+        // captures delegated tasks and their outcomes.
+        let pool = self.pool.clone();
+        // Safe truncation: use chars() to avoid UTF-8 boundary panics.
+        let combined = format!("Task: {}\nResult: {}", task, result.chars().take(500).collect::<String>());
+        let name: String = format!("delegation: {}", task.chars().take(80).collect::<String>());
+        tokio::task::spawn_blocking(move || {
+            if let Err(e) = pool.with_connection(|conn| {
+                let new_node = tdg_rust::NewNode {
+                    node_type: "observation".to_string(),
+                    name,
+                    description: Some(combined),
+                    confidence: Some(0.6),
+                    source: Some("operant-delegation".to_string()),
+                    developmental_stage: Some(2),
+                    ..Default::default()
+                };
+                tdg_rust::db::crud::add_node(conn, &new_node).map(|_| ())
+            }) {
+                tracing::warn!(error = %e, "TdgProvider: on_delegation failed");
+            }
+        });
+    }
+
+    fn backup_paths(&self) -> Vec<std::path::PathBuf> {
+        // Return the TDG database path so it's included in backups.
+        // The pool was created with a known db_path in new(), but we
+        // don't store it. Return an empty vec — the TDG DB lives under
+        // the operant home dir which is already backed up.
+        vec![]
     }
 
     async fn shutdown(&self) {}

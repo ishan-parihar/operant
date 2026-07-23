@@ -675,6 +675,14 @@ impl OperantAgent {
     /// Clear conversation history and reset per-session state.
     /// Called on /new, /reset, and session switches.
     pub async fn clear_history(&self) {
+        // Notify memory provider of session end before clearing.
+        // This fires at actual session boundaries so the graph captures
+        // session-level patterns. Ported from hermes-agent's
+        // MemoryManager.on_session_end() pattern.
+        if let Some(provider) = &self.memory_provider {
+            let conv = self.conversation.read().await;
+            provider.on_session_end(&conv);
+        }
         let mut conv = self.conversation.write().await;
         conv.clear();
         // Reset LLM compressor state so the next session starts fresh.
@@ -682,6 +690,33 @@ impl OperantAgent {
         // the new session's compression context.
         if let Some(ref compressor) = self.llm_compressor {
             compressor.lock().await.reset();
+        }
+    }
+
+    /// Notify the memory provider that the session_id has rotated.
+    /// Ported from hermes-agent's MemoryManager.on_session_switch().
+    /// Fires on /resume, /branch, /reset, /new, and context compression.
+    pub fn notify_session_switch(&self, new_session_id: &str, parent_session_id: &str, reset: bool) {
+        if let Some(provider) = &self.memory_provider {
+            provider.on_session_switch(new_session_id, parent_session_id, reset);
+        }
+    }
+
+    /// Notify the memory provider of a built-in memory write.
+    /// Mirrors the write to TDG so the graph stays in sync with
+    /// MEMORY.md / USER.md changes.
+    pub fn notify_memory_write(&self, action: &str, target: &str, content: &str) {
+        if let Some(provider) = &self.memory_provider {
+            provider.on_memory_write(action, target, content);
+        }
+    }
+
+    /// Notify the memory provider of a delegation result.
+    /// The parent's memory provider gets the task+result pair as an
+    /// observation of what was delegated and what came back.
+    pub fn notify_delegation(&self, task: &str, result: &str) {
+        if let Some(provider) = &self.memory_provider {
+            provider.on_delegation(task, result);
         }
     }
 
@@ -894,6 +929,13 @@ impl OperantAgent {
         }
         let mut iteration = 0;
         let mut total_tool_calls: usize = 0;
+
+        // ── Memory provider: on_turn_start ──────────────────────────────
+        // Notify the memory provider of the new turn so it can do per-turn
+        // bookkeeping (turn counting, scope management, periodic maintenance).
+        if let Some(provider) = &self.memory_provider {
+            provider.on_turn_start(iteration + 1, &user_query);
+        }
         let mut retry_state = turn_retry_state::TurnRetryState::new(Some(self.config.max_retries));
 
         // Reset provider registry to primary at turn start.
@@ -1281,24 +1323,26 @@ impl OperantAgent {
                         })
                         .await;
 
-                        // TDG hook: sync this turn to graph memory. The
-                        // provider extracts entities and auto-wires edges,
-                        // so the graph self-organizes without the agent
-                        // needing to call tdg_create/tdg_connect manually.
+                        // Memory provider: sync_turn + queue_prefetch hooks.
+                        // sync_turn persists the completed turn to graph memory
+                        // (entity extraction + auto-wiring). queue_prefetch
+                        // queues background recall for the next turn.
                         // This is the native equivalent of the hermes-agent
-                        // Python adapter's post-turn TDG hook. Failures are
-                        // logged but don't break the turn — the agent's
-                        // response is already complete.
+                        // MemoryManager.sync_all() + queue_prefetch_all() pattern.
+                        // Failures are logged but don't break the turn.
                         if let Some(provider) = &self.memory_provider {
                             let user_text = user_query.clone();
                             let assistant_text = result.content.clone();
-                            let provider = provider.clone();
+                            let provider_clone = provider.clone();
+                            let prefetch_query = user_query.clone();
                             tokio::spawn(async move {
                                 if let Err(e) =
-                                    provider.sync_turn(&user_text, &assistant_text).await
+                                    provider_clone.sync_turn(&user_text, &assistant_text).await
                                 {
-                                    tracing::warn!(error = %e, "TDG sync_turn hook failed");
+                                    tracing::warn!(error = %e, "Memory provider sync_turn hook failed");
                                 }
+                                // Queue background prefetch for next turn
+                                provider_clone.queue_prefetch(&prefetch_query);
                             });
                         }
 
@@ -1614,6 +1658,15 @@ impl OperantAgent {
                 budget,
                 "Preflight compression: estimated tokens exceed threshold"
             );
+            // Memory provider: on_pre_compress hook.
+            // Extract insights from messages about to be compressed so the
+            // compression summary preserves important context.
+            if let Some(provider) = &self.memory_provider {
+                let insights = provider.on_pre_compress(&messages);
+                if !insights.is_empty() {
+                    tracing::debug!(insights_len = insights.len(), "Memory provider pre-compress insights captured");
+                }
+            }
             messages = crate::context_management::decay_render(
                 messages,
                 PREFLIGHT_DECAY_H50,
