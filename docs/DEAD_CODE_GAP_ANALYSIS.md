@@ -79,26 +79,13 @@ These are `#[derive(JsonSchema, Deserialize)]` structs for tool input arguments.
 
 ---
 
-### Category B: Learning Graph Mutation Functions (🔴 HIGH RISK — Wire up or remove)
-**7 instances** in `agent/learning_graph.rs`
+### Category B: Learning Graph Mutation Functions (✅ RESOLVED)
 
-These are **complete, implemented functions** that are never called:
+**Status:** ✅ **Already wired up** via `LearningMutationTool` (`learning_manage` tool).
 
-| Line | Function | Purpose | hermes-agent Equivalent |
-|------|----------|---------|------------------------|
-| 127 | `delete_node()` | Routes node deletion to memory/skill | `learning_mutations.delete_node()` |
-| 137 | `edit_node()` | Routes content edit to memory/skill | `learning_mutations.edit_node()` |
-| 150 | `delete_skill_node()` | Archives skill directories | `learning_mutations._delete_skill()` |
-| 168 | `edit_skill_node()` | Updates SKILL.md files | `learning_mutations._edit_skill()` |
-| 215 | `MutationResult` | Result struct for mutations | `dict[str, Any]` return |
-| 282 | `delete_memory_node()` | Deletes chunks from MEMORY.md/USER.md | `learning_mutations._delete_memory()` |
-| 338 | `edit_memory_node()` | Edits memory chunks | `learning_mutations._edit_memory()` |
+The `LearningMutationTool` in `tools/learning_mutation_tool.rs` wraps `delete_node` and `edit_node` from `learning_graph.rs` and is registered in `tools/builtin.rs` via `register_builtin_tools()`. The tool supports `delete` and `edit` actions for both skill and memory nodes.
 
-**hermes-agent Reference:** `agent/learning_mutations.py` has 15 functions for node mutations, including `node_detail()`, `delete_node()`, `edit_node()`, `_delete_skill()`, `_delete_memory()`, `_edit_skill()`, `_edit_memory()`, `_write_memory()`, `_clear_skill_cache()`.
-
-**Gap:** Operant has the core mutation functions implemented but they are **not wired up** to any tool or command system. The hermes-agent routes these through the agent's tool system so the LLM can call them directly.
-
-**Recommendation:** 🔴 **Wire up.** Connect `delete_node`, `edit_node`, `delete_memory_node`, `edit_memory_node`, `delete_skill_node`, `edit_skill_node` as tools in the agent tool system.
+**Verified:** Code review confirmed complete. No action needed.
 
 ---
 
@@ -211,9 +198,8 @@ These are **complete, implemented functions** that are never called:
 2. Remove unused `old_significator` variable in operant-core
 3. Remove the 2 remaining test helpers in `agent/mod.rs` (if not used in tests)
 
-### Phase 2: Learning Graph (Wire up or remove)
-4. **Decision needed:** Wire up `learning_graph.rs` mutation functions to the tool system, or remove them entirely
-5. If wiring up: Add `delete_memory_node`, `edit_memory_node`, `delete_skill_node`, `edit_skill_node` as tools
+### Phase 2: Learning Graph ✅ DONE
+4. ~~Wire up `learning_graph.rs` mutation functions to the tool system~~ — Already done via `LearningMutationTool`
 
 ### Phase 3: MCP Infrastructure (Wire up or remove)
 6. **Decision needed:** Complete MCP server support, or remove the unused protocol types
