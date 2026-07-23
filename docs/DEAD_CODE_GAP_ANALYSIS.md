@@ -201,9 +201,9 @@ The `LearningMutationTool` in `tools/learning_mutation_tool.rs` wraps `delete_no
 8. Wire up voice mode, notifications, image paste, and stats dialogs to the TUI event system
 9. Or remove if these features are not planned for operant
 
-### Phase 5: Background Features (Wire up or remove)
-10. Wire up `background_review.rs` and `insights.rs` to the agent loop
-11. Or remove if these features are not planned
+### Phase 5: Background Features ✅ MOSTLY DONE
+10. ✅ `background_review.rs` — already wired (spawn_background_review called at line 1684)
+11. 🔴 `insights.rs` — NOT wired up. Connect to a `/insights` command or remove.
 
 ---
 
