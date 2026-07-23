@@ -719,6 +719,16 @@ pub fn render_app(frame: &mut Frame, app: &App) {
 
     // ---- Debug overlay (F12) — topmost, always last ---------------------
     crate::tui::debug::overlay::render_debug_overlay(frame, &app.debug_hub, size);
+
+    // ---- OSC 8 hyperlink overlay (post-paint pass) ---------------------
+    // Scan the rendered buffer for URLs and emit OSC 8 escape sequences so
+    // terminals that support the protocol (Windows Terminal, iTerm2, WezTerm,
+    // Kitty, etc.) make them Ctrl/Cmd-clickable. This runs after all other
+    // rendering so it sees the final buffer state.
+    let hits = crate::tui::osc8::scan_buffer_for_urls(frame.buffer_mut());
+    if let Err(e) = crate::tui::osc8::emit_hits(&hits) {
+        tracing::debug!("OSC8 hyperlink emission failed: {e}");
+    }
 }
 
 /// Snapshot the rendered text of every row inside the selectable area into
