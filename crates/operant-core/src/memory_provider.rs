@@ -720,7 +720,7 @@ impl MemoryProvider for TdgMemoryProvider {
             return;
         }
         tokio::task::spawn_blocking(move || {
-            let _ = pool.with_connection(|conn| {
+            if let Err(e) = pool.with_connection(|conn| {
                 let turn_name: String = format!("session-summary: {}", summary.chars().take(80).collect::<String>());
                 let new_node = tdg_rust::NewNode {
                     node_type: "observation".to_string(),
@@ -731,9 +731,10 @@ impl MemoryProvider for TdgMemoryProvider {
                     developmental_stage: Some(2),
                     ..Default::default()
                 };
-                let _ = tdg_rust::db::crud::add_node(conn, &new_node);
-                Ok::<(), String>(())
-            });
+                tdg_rust::db::crud::add_node(conn, &new_node).map(|_| ())
+            }) {
+                tracing::warn!(error = %e, "TdgProvider: on_session_end failed");
+            }
         });
     }
 
