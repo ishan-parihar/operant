@@ -16,10 +16,151 @@
 use async_trait::async_trait;
 use serde_json::Value;
 use std::sync::Arc;
+use tokio::sync::mpsc;
 
 #[cfg(feature = "tdg")]
 use crate::error::Error;
 use crate::error::Result;
+
+// ---------------------------------------------------------------------------
+// Background sync executor
+// ---------------------------------------------------------------------------
+
+/// Single-worker FIFO executor for memory provider operations.
+/// Ensures sync_turn, on_memory_write, and other background writes
+/// happen in order (no interleaving) and don't block the agent loop.
+///
+/// Ported from hermes-agent's MemoryManager._submit_background() pattern
+/// where a dedicated ThreadPoolExecutor with FIFO ordering processes
+/// memory writes sequentially.
+pub struct MemorySyncExecutor {
+    tx: mpsc::Sender<SyncJob>,
+    handle: Option<tokio::task::JoinHandle<()>>,
+}
+
+enum SyncJob {
+    SyncTurn {
+        user: String,
+        assistant: String,
+    },
+    MemoryWrite {
+        action: String,
+        target: String,
+        content: String,
+    },
+    Delegation {
+        task: String,
+        result: String,
+    },
+    SessionEnd {
+        messages: Vec<crate::client::Message>,
+    },
+    Shutdown,
+}
+
+impl MemorySyncExecutor {
+    /// Create a new executor that processes jobs sequentially on a
+    /// dedicated background task. The channel capacity (256) bounds
+    /// memory to ~256 pending writes before backpressure kicks in.
+    pub fn new(provider: Arc<dyn MemoryProvider>) -> Self {
+        let (tx, rx) = mpsc::channel(256);
+        let handle = tokio::spawn(Self::run_loop(provider, rx));
+        Self {
+            tx,
+            handle: Some(handle),
+        }
+    }
+
+    /// Submit a sync_turn job (non-blocking).
+    pub fn submit_sync_turn(&self, user: &str, assistant: &str) {
+        if self.tx.try_send(SyncJob::SyncTurn {
+            user: user.to_string(),
+            assistant: assistant.to_string(),
+        }).is_err() {
+            tracing::warn!("MemorySyncExecutor: sync_turn channel full — job dropped");
+        }
+    }
+
+    /// Submit a memory write mirror job (non-blocking).
+    pub fn submit_memory_write(&self, action: &str, target: &str, content: &str) {
+        if self.tx.try_send(SyncJob::MemoryWrite {
+            action: action.to_string(),
+            target: target.to_string(),
+            content: content.to_string(),
+        }).is_err() {
+            tracing::warn!("MemorySyncExecutor: memory_write channel full — job dropped");
+        }
+    }
+
+    /// Submit a delegation observation job (non-blocking).
+    pub fn submit_delegation(&self, task: &str, result: &str) {
+        if self.tx.try_send(SyncJob::Delegation {
+            task: task.to_string(),
+            result: result.to_string(),
+        }).is_err() {
+            tracing::warn!("MemorySyncExecutor: delegation channel full — job dropped");
+        }
+    }
+
+    /// Submit a session end extraction job (non-blocking).
+    /// Limits to the last 5 assistant messages to avoid cloning large conversations.
+    pub fn submit_session_end(&self, messages: &[crate::client::Message]) {
+        let limited: Vec<_> = messages
+            .iter()
+            .filter(|m| m.role == crate::client::Role::Assistant)
+            .take(5)
+            .cloned()
+            .collect();
+        if self.tx.try_send(SyncJob::SessionEnd {
+            messages: limited,
+        }).is_err() {
+            tracing::warn!("MemorySyncExecutor: session_end channel full — job dropped");
+        }
+    }
+
+    /// Graceful shutdown: drain pending jobs (up to 5s) then abandon.
+    /// Ported from hermes-agent's _drain_sync_executor() pattern.
+    pub async fn shutdown(mut self) {
+        // Send shutdown sentinel
+        let _ = self.tx.send(SyncJob::Shutdown).await;
+        // Drop the sender so the channel closes
+        drop(self.tx);
+        // Wait for the worker to finish (up to 5s)
+        if let Some(handle) = self.handle.take() {
+            let _ = tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                handle,
+            ).await;
+        }
+    }
+
+    /// Background worker loop: processes jobs in FIFO order.
+    async fn run_loop(provider: Arc<dyn MemoryProvider>, mut rx: mpsc::Receiver<SyncJob>) {
+        while let Some(job) = rx.recv().await {
+            match job {
+                SyncJob::SyncTurn { user, assistant } => {
+                    if let Err(e) = provider.sync_turn(&user, &assistant).await {
+                        tracing::warn!(error = %e, "MemorySyncExecutor: sync_turn failed");
+                    }
+                }
+                SyncJob::MemoryWrite { action, target, content } => {
+                    provider.on_memory_write(&action, &target, &content);
+                }
+                SyncJob::Delegation { task, result } => {
+                    provider.on_delegation(&task, &result);
+                }
+                SyncJob::SessionEnd { messages } => {
+                    provider.on_session_end(&messages);
+                }
+                SyncJob::Shutdown => {
+                    tracing::debug!("MemorySyncExecutor: shutdown received");
+                    break;
+                }
+            }
+        }
+        tracing::debug!("MemorySyncExecutor: worker exited");
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Trait

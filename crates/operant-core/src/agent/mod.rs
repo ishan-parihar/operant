@@ -209,6 +209,11 @@ pub struct OperantAgent {
     /// This is the native equivalent of the hermes-agent Python adapter's
     /// TDG hooks — no manual tdg_create/tdg_connect needed.
     memory_provider: Option<Arc<dyn crate::memory_provider::MemoryProvider>>,
+    /// Background sync executor for memory provider operations.
+    /// Single-worker FIFO executor that processes sync_turn, on_memory_write,
+    /// and other background writes sequentially without blocking the agent loop.
+    /// Ported from hermes-agent's MemoryManager._submit_background() pattern.
+    memory_sync_executor: Option<crate::memory_provider::MemorySyncExecutor>,
     /// Hook registry for lifecycle events (AgentStart, AgentEnd, etc.).
     /// When set, the agent emits events at key lifecycle points.
     hook_registry: Option<Arc<crate::gateway_pipeline::HookRegistry>>,
@@ -308,6 +313,7 @@ impl OperantAgent {
             permission_tx: None,
             memory_manager: None,
             memory_provider: None,
+            memory_sync_executor: None,
             hook_registry: None,
             steer_queue: Arc::new(tokio::sync::Mutex::new(Vec::new())),
             skill_manager: None,
@@ -355,6 +361,7 @@ impl OperantAgent {
             permission_tx: None,
             memory_manager: None,
             memory_provider: None,
+            memory_sync_executor: None,
             hook_registry: None,
             steer_queue: Arc::new(tokio::sync::Mutex::new(Vec::new())),
             skill_manager: None,
@@ -403,6 +410,12 @@ impl OperantAgent {
         mut self,
         memory_provider: Arc<dyn crate::memory_provider::MemoryProvider>,
     ) -> Self {
+        // Create a background sync executor for this provider.
+        // Single-worker FIFO ensures sync_turn, on_memory_write, and
+        // other background writes happen in order without blocking the agent loop.
+        self.memory_sync_executor = Some(
+            crate::memory_provider::MemorySyncExecutor::new(memory_provider.clone()),
+        );
         self.memory_provider = Some(memory_provider);
         self
     }
@@ -687,7 +700,10 @@ impl OperantAgent {
             let conv = self.conversation.read().await;
             conv.clone()
         };
-        if let Some(provider) = &self.memory_provider {
+        // Route through the executor when available for FIFO ordering.
+        if let Some(executor) = &self.memory_sync_executor {
+            executor.submit_session_end(&snapshot);
+        } else if let Some(provider) = &self.memory_provider {
             provider.on_session_end(&snapshot);
         }
         let mut conv = self.conversation.write().await;
@@ -720,9 +736,12 @@ impl OperantAgent {
 
     /// Notify the memory provider of a built-in memory write.
     /// Mirrors the write to TDG so the graph stays in sync with
-    /// MEMORY.md / USER.md changes.
+    /// MEMORY.md / USER.md changes. Uses the background executor
+    /// when available to avoid blocking the agent loop.
     pub fn notify_memory_write(&self, action: &str, target: &str, content: &str) {
-        if let Some(provider) = &self.memory_provider {
+        if let Some(executor) = &self.memory_sync_executor {
+            executor.submit_memory_write(action, target, content);
+        } else if let Some(provider) = &self.memory_provider {
             provider.on_memory_write(action, target, content);
         }
     }
@@ -730,9 +749,21 @@ impl OperantAgent {
     /// Notify the memory provider of a delegation result.
     /// The parent's memory provider gets the task+result pair as an
     /// observation of what was delegated and what came back.
+    /// Uses the background executor when available.
     pub fn notify_delegation(&self, task: &str, result: &str) {
-        if let Some(provider) = &self.memory_provider {
+        if let Some(executor) = &self.memory_sync_executor {
+            executor.submit_delegation(task, result);
+        } else if let Some(provider) = &self.memory_provider {
             provider.on_delegation(task, result);
+        }
+    }
+
+    /// Gracefully shut down the memory sync executor.
+    /// Drains pending jobs (up to 5s) then abandons remaining work.
+    /// Call this during agent shutdown to avoid losing in-flight writes.
+    pub async fn shutdown_memory_executor(&mut self) {
+        if let Some(executor) = self.memory_sync_executor.take() {
+            executor.shutdown().await;
         }
     }
 
@@ -1345,27 +1376,34 @@ impl OperantAgent {
                         // queues background recall for the next turn.
                         // This is the native equivalent of the hermes-agent
                         // MemoryManager.sync_all() + queue_prefetch_all() pattern.
-                        // Failures are logged but don't break the turn.
                         //
-                        // prefetch is bounded by an 8s timeout (matching
-                        // hermes-agent's _prefetch_provider timeout) to prevent
-                        // a slow provider from leaking a spawned task forever.
-                        if let Some(provider) = &self.memory_provider {
+                        // Uses the MemorySyncExecutor for ordered, non-blocking
+                        // background writes. Falls back to direct spawn when the
+                        // executor isn't available (e.g. no memory provider).
+                        if let Some(executor) = &self.memory_sync_executor {
+                            executor.submit_sync_turn(&user_query, &result.content);
+                        } else if let Some(provider) = &self.memory_provider {
                             let user_text = user_query.clone();
                             let assistant_text = result.content.clone();
                             let provider_clone = provider.clone();
-                            let prefetch_query = user_query.clone();
                             tokio::spawn(async move {
-                                if let Err(e) =
-                                    provider_clone.sync_turn(&user_text, &assistant_text).await
-                                {
+                                if let Err(e) = provider_clone.sync_turn(&user_text, &assistant_text).await {
                                     tracing::warn!(error = %e, "Memory provider sync_turn hook failed");
                                 }
-                                // Queue background prefetch for next turn.
-                                // queue_prefetch is sync (just enqueues work),
-                                // so no async timeout needed — the actual
-                                // blocking work happens in background threads.
-                                provider_clone.queue_prefetch(&prefetch_query);
+                            });
+                        }
+                        // Queue background prefetch with 8s timeout.
+                        // Matches hermes-agent's _prefetch_provider timeout.
+                        if let Some(provider) = &self.memory_provider {
+                            let pf = provider.clone();
+                            let q = user_query.clone();
+                            tokio::spawn(async move {
+                                let _ = tokio::time::timeout(
+                                    std::time::Duration::from_secs(8),
+                                    async move {
+                                        pf.prefetch(&q).await;
+                                    },
+                                ).await;
                             });
                         }
 
