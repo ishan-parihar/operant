@@ -370,23 +370,10 @@ pub fn sanitize_tool_calls_for_strict_api(messages: &mut [Message]) -> usize {
 
 /// Sanitize a single tool name to conform to strict API requirements.
 ///
-/// Rules: `^[a-zA-Z0-9_-]{1,64}$`
+/// Reuses the existing [`crate::schema::sanitize_tool_name`] which allows
+/// alphanumeric, `_`, `.`, `:`, `-` and truncates to 128 chars.
 fn sanitize_tool_name_for_strict(name: &str) -> String {
-    let mut result = String::with_capacity(name.len().min(64));
-    for ch in name.chars() {
-        if ch.is_ascii_alphanumeric() || ch == '_' || ch == '-' {
-            result.push(ch);
-        } else {
-            result.push('_');
-        }
-        if result.len() >= 64 {
-            break;
-        }
-    }
-    if result.is_empty() {
-        result.push('_');
-    }
-    result
+    crate::schema::sanitize_tool_name(name)
 }
 
 #[cfg(test)]
@@ -602,15 +589,18 @@ mod tests {
 
     #[test]
     fn test_sanitize_tool_name_invalid_chars() {
+        // Delegates to schema::sanitize_tool_name which allows . and :
+        // but replaces spaces and ! with _
         let name = sanitize_tool_name_for_strict("my tool.name!");
-        assert_eq!(name, "my_tool_name_");
+        assert_eq!(name, "my_tool.name_");
     }
 
     #[test]
-    fn test_sanitize_tool_name_truncates_at_64() {
-        let long_name = "a".repeat(100);
+    fn test_sanitize_tool_name_truncates_at_128() {
+        // Delegates to schema::sanitize_tool_name which truncates at 128
+        let long_name = "a".repeat(200);
         let name = sanitize_tool_name_for_strict(&long_name);
-        assert_eq!(name.len(), 64);
+        assert_eq!(name.len(), 128);
     }
 
     #[test]
