@@ -89,21 +89,27 @@ The `LearningMutationTool` in `tools/learning_mutation_tool.rs` wraps `delete_no
 
 ---
 
-### Category C: MCP Infrastructure (🟡 MEDIUM RISK — Complete or remove)
+### Category C: MCP Infrastructure (🟡 MEDIUM RISK — Client-side complete, server-side not needed)
 **~45 instances** across MCP-related files
 
-| File | Items | Purpose | hermes-agent Equivalent |
-|------|-------|---------|------------------------|
-| `mcp.rs` | `McpClient`, `McpCapabilities`, `McpToolDefinition`, `McpStdioClient`, `McpSseClient` | MCP client types | `acp_adapter/server.py`, `acp_adapter/session.py` |
-| `mcp_oauth.rs` | `OAuthError`, `OAuthToken`, `OAuthClientInfo`, `OAuthMetadata`, `MpOAuthConfig`, `TokenStorage` | OAuth for MCP | `acp_adapter/entry.py` |
-| `mcp_tool.rs` | `McpManagementTool` | MCP management tool | `transports/hermes_tools_mcp_server.py` |
-| `misc/schema.rs` | `GenerateSchema`, `GenerateInput` | JSON Schema generation | Various schema utilities |
+| File | Items | Purpose | Status |
+|------|-------|---------|--------|
+| `mcp.rs` | `McpClient`, `McpStdioClient`, `McpSseClient`, `McpTransport`, `McpTool`, `McpManager` | MCP client (HTTP, Stdio, SSE) | ✅ Complete |
+| `mcp_oauth.rs` | `OAuthError`, `OAuthToken`, `OAuthClientInfo`, etc. | OAuth for MCP | ⚠️ Partial (auto-refresh deferred) |
+| `mcp_tool.rs` | `McpManagementTool` | MCP management tool | ✅ Complete |
 
-**hermes-agent Reference:** `agent/transports/hermes_tools_mcp_server.py` has `_build_server()`, `_make_handler()`, `_dispatch()` for full MCP server support.
+**Client-side (connecting to external MCP servers): ✅ COMPLETE**
+- All three transport types (HTTP, Stdio, SSE) are fully implemented
+- Tool discovery, connection, and execution work across all transports
+- `McpManager` handles server lifecycle (add/remove/list)
+- `McpManagementTool` exposes MCP management to the LLM
 
-**Gap:** Operant has MCP client infrastructure but the **server-side MCP** (exposing operant's tools to external clients) is incomplete. The hermes-agent exposes its tools via MCP for external clients.
+**Server-side (exposing operant tools to external MCP clients): ⏭️ DEFERRED**
+- The hermes-agent has `acp_adapter/server.py` for full MCP server support
+- Operant has no equivalent — this is a separate feature decision, not a gap
+- If MCP server support is planned, implement it. If not, mark as deferred.
 
-**Recommendation:** 🟡 **Complete or remove.** If MCP server support is planned, connect `_build_server()` equivalent. Otherwise, remove unused types.
+**Recommendation:** ✅ **Client-side is complete.** Server-side is a separate feature decision. No action needed for core agentic loop parity.
 
 ---
 
