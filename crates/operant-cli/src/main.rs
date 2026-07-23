@@ -651,11 +651,11 @@ pub(crate) async fn build_registry(
     let cron_db = Arc::new(CronDb::init(cron_path)?);
     let kanban_db = Arc::new(KanbanDb::init(kanban_path)?);
     let registry = ToolRegistry::new(Duration::from_secs(config.tools.registry_timeout_secs));
-    let memory_dir = config.skills.root_dir.parent().unwrap_or(&config.skills.root_dir).join("memory");
+    let memory_dir = &config.skills.memory_dir;
     operant_core::tools::register_builtin_tools_with_sub_agent(
         &registry,
         &config.skills.root_dir,
-        &memory_dir,
+        memory_dir,
         client,
         model,
         database,
