@@ -25,6 +25,7 @@ pub mod file_tools;
 pub mod http_tool;
 pub mod image_generation_tool;
 pub mod kanban_tool;
+pub mod learning_mutation_tool;
 pub mod mcp_tool;
 pub mod memory_tools;
 pub mod neutts_synth;
