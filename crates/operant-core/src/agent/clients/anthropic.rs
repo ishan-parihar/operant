@@ -10,6 +10,7 @@ use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
+use super::prompt_caching::{CacheTtl, apply_cache_control};
 use super::super::model_client::{ChatRequest, ModelClient, StreamChunk};
 use crate::client::{
     ChatResponse, Choice, Message, MessageDelta, Role, ToolCall, ToolCallFunction, Usage,
@@ -123,6 +124,15 @@ impl AnthropicModelClient {
                 "cache_control": {"type": "ephemeral"}
             }]);
         }
+
+        // Apply the full system_and_3 caching strategy to messages.
+        // This places cache_control breakpoints on the last 3 non-system
+        // messages, reducing input token costs by ~75% on multi-turn
+        // conversations (ported from hermes-agent prompt_caching.py).
+        if let Some(msgs) = body["messages"].as_array_mut() {
+            apply_cache_control(msgs, CacheTtl::default(), true);
+        }
+
         if let Some(temp) = request.temperature {
             body["temperature"] = json!(temp);
         }
