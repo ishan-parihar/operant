@@ -117,7 +117,6 @@ struct ClientInfo {
 
 /// Initialize response
 #[derive(Debug, Deserialize)]
-#[allow(dead_code)]
 struct InitializeResponse {
     #[serde(rename = "protocolVersion")]
     protocol_version: String,
@@ -128,7 +127,6 @@ struct InitializeResponse {
 
 /// Server capabilities
 #[derive(Debug, Deserialize)]
-#[allow(dead_code)]
 struct ServerCapabilities {
     #[serde(rename = "tools")]
     tools: Option<ToolsCapability>,
@@ -140,7 +138,6 @@ struct ServerCapabilities {
 
 /// Tools capability
 #[derive(Debug, Deserialize)]
-#[allow(dead_code)]
 struct ToolsCapability {
     #[serde(rename = "listChanged")]
     list_changed: Option<bool>,
@@ -148,7 +145,6 @@ struct ToolsCapability {
 
 /// Resources capability
 #[derive(Debug, Deserialize)]
-#[allow(dead_code)]
 struct ResourcesCapability {
     #[serde(rename = "subscribe")]
     subscribe: Option<bool>,
@@ -180,7 +176,6 @@ struct JsonRpcRequest {
 
 /// JSON-RPC response
 #[derive(Debug, Deserialize)]
-#[allow(dead_code)]
 struct JsonRpcResponse {
     jsonrpc: String,
     id: u64,
@@ -190,7 +185,6 @@ struct JsonRpcResponse {
 
 /// JSON-RPC error
 #[derive(Debug, Deserialize)]
-#[allow(dead_code)]
 struct JsonRpcError {
     code: i32,
     message: String,
