@@ -57,6 +57,7 @@ pub use super::tts_tool::TtsTool;
 pub use super::video_analysis_tool::VideoAnalysisTool;
 pub use super::vision_tool::VisionTool;
 pub use super::web_tools::{WebFetchTool, WebSearchTool};
+pub use super::insights_tool::InsightsTool;
 pub use super::learning_mutation_tool::LearningMutationTool;
 pub use super::xai_http::XaiHttpTool;
 
@@ -126,6 +127,11 @@ pub async fn register_builtin_tools(
     registry.register(TtsTool::new()).await?;
     registry.register(NeuttsSynthTool).await?;
     registry.register(VideoAnalysisTool::new()).await?;
+    // Register insights tool for session analytics (before SessionSearchTool takes ownership)
+    registry
+        .register(InsightsTool::new(database.clone()))
+        .await?;
+
     registry.register(SessionSearchTool::new(database)).await?;
     registry.register(SendMessageTool).await?;
     registry.register(DiscordTool).await?;
@@ -148,6 +154,8 @@ pub async fn register_builtin_tools(
     registry
         .register(LearningMutationTool::new(skills_dir.to_path_buf(), memory_dir.to_path_buf()))
         .await?;
+
+
 
     // Register MCP management tool if a manager reference is provided
     if let Some(manager) = mcp_manager {
@@ -226,6 +234,7 @@ pub fn builtin_tool_names() -> Vec<&'static str> {
         "osv_check",
         "patch",
         "process",
+        "session_insights",
         "session_search",
         "skills_list",
         "skill_manage",
