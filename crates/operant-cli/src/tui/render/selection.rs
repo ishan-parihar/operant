@@ -5,7 +5,6 @@ use crate::tui::overlays::OPERANT_ACCENT;
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
-use ratatui::text::Line;
 use ratatui::widgets::{Block, BorderType, Borders, Widget};
 
 pub(crate) fn cache_selectable_row_text(frame: &mut Frame, app: &App) {

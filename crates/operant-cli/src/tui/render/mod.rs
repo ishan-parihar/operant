@@ -17,76 +17,54 @@ pub(crate) mod tools;
 pub(crate) mod utils;
 pub(crate) mod welcome;
 
-pub(crate) use cache::{
-    CompletedMsgCache, CompletedMsgCacheKey, MessageLinesCache, MessageLinesCacheKey,
-    RenderedLineItem, StreamingTextCache, COMPLETED_MSG_CACHE, MESSAGE_LINES_CACHE,
-    STREAMING_TEXT_CACHE, flatten_line_text,
-};
+pub(crate) use cache::RenderedLineItem;
 pub(crate) use footer::{render_footer, render_input, render_prompt_suggestions, render_status_row, should_render_status_row};
-pub(crate) use messages::{append_live_content, append_turn_items, render_message_items, render_messages};
+pub(crate) use messages::render_messages;
 pub(crate) use selection::{apply_selection_highlight, cache_selectable_row_text, render_context_menu};
 pub(crate) use tools::{build_tool_names, render_system_annotation_lines, render_tool_block_lines};
 pub(crate) use utils::{
     is_modal_open, render_error_modal, shimmer_spans, spinner_char, spinner_color,
     truncate_end, truncate_middle, truncate_text,
 };
-pub(crate) use welcome::{render_banner_block, render_startup_notices, render_welcome_box, startup_notice_lines};
 
 // render.rs â€” All ratatui rendering logic.
 
-use std::cell::RefCell;
 
 use crate::tui::agents_view::render_agents_menu;
-use crate::tui::app::{App, ContextMenuKind, SystemAnnotation, SystemMessageStyle, ToolStatus};
+use crate::tui::app::App;
 use crate::tui::context_viz::render_context_viz;
 use crate::tui::dialogs::{render_mcp_approval_dialog, render_permission_dialog};
 use crate::tui::diff_viewer::render_diff_dialog;
 use crate::tui::export_dialog::render_export_dialog;
 use crate::tui::model_picker::render_model_picker;
-use crate::tui::rustle::rustle_lines;
 use crate::tui::session_branching::render_session_branching;
 use crate::tui::session_browser::render_session_browser;
 use crate::tui::tasks_overlay::render_tasks_overlay;
 // (iter-211: feedback_survey render import deleted — no telemetry backend)
-use crate::tui::adapter_types::constants::APP_VERSION;
-use crate::tui::adapter_types::types::Role;
 use crate::tui::ask_user_dialog::render_ask_user_dialog;
 use crate::tui::bypass_permissions_dialog::render_bypass_permissions_dialog;
 use crate::tui::custom_provider_dialog::render_custom_provider_dialog;
 use crate::tui::device_auth_dialog::render_device_auth_dialog;
 use crate::tui::dialog_select::render_dialog_select;
-use crate::tui::figures;
 use crate::tui::hooks_config_menu::render_hooks_config_menu;
 use crate::tui::import_config_dialog::render_import_config_dialog;
 use crate::tui::key_input_dialog::render_key_input_dialog;
 use crate::tui::mcp_view::render_mcp_view;
 use crate::tui::memory_file_selector::render_memory_file_selector;
-use crate::tui::messages::{
-    RenderContext, render_thinking_live_content,
-    render_transcript_assistant_message_tagged, render_transcript_assistant_meta,
-    render_transcript_live_text, render_transcript_user_message,
-};
-use crate::tui::notifications::{Notification, NotificationKind, render_notification_banner};
+use crate::tui::notifications::{NotificationKind, render_notification_banner};
 use crate::tui::overlays::{
-    OPERANT_ACCENT, render_global_search, render_help_overlay, render_history_search_overlay,
+    render_global_search, render_help_overlay, render_history_search_overlay,
     render_rewind_flow,
 };
-use crate::tui::prompt_input::{
-    InputMode, TypeaheadSource, VimMode, input_height, render_prompt_input,
-};
+use crate::tui::prompt_input::input_height;
 use crate::tui::settings_screen::render_settings_screen;
 use crate::tui::stats_dialog::render_stats_dialog;
 use crate::tui::theme_screen::render_theme_screen;
-use crate::tui::transcript_turn::{TranscriptTurn, build_transcript_turns};
-use crate::tui::virtual_list::{VirtualItem, VirtualList};
 use crate::tui::voice_mode_notice::render_voice_mode_notice;
 use ratatui::Frame;
-use ratatui::buffer::Buffer;
-use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph, Widget, Wrap};
-use unicode_width::UnicodeWidthStr;
+use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::style::{Color, Style};
+use ratatui::widgets::Block;
 
 // Spinner frames matching the TypeScript SpinnerGlyph: platform-specific base
 // characters mirrored (forward + reverse) for a smooth pulse effect.

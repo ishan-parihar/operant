@@ -4,7 +4,7 @@ use crate::tui::adapter_types::constants::APP_VERSION;
 use crate::tui::app::App;
 use crate::tui::rustle::rustle_lines;
 use ratatui::Frame;
-use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
+use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph, Wrap};

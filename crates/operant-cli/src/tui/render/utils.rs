@@ -1,15 +1,15 @@
 // render/utils.rs — Spinner helpers, modal checks, text truncation, shimmer effects.
 
 use crate::tui::app::App;
-use crate::tui::notifications::{Notification, NotificationKind};
+use crate::tui::notifications::Notification;
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph, Widget, Wrap};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use unicode_width::UnicodeWidthStr;
 
-use super::{ACCENT_PRIMARY, SPINNER, WELCOME_BOX_HEIGHT};
+use super::{SPINNER, WELCOME_BOX_HEIGHT};
 
 pub(crate) fn spinner_char(frame_count: u64) -> char {
     SPINNER[(frame_count as usize) % SPINNER.len()]

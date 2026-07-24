@@ -16,14 +16,6 @@ pub mod tools;
 pub mod items;
 
 // Flat re-exports for backward compatibility.
-pub use config::{Settings, PermissionMode, OutputFormat, Theme};
-pub use constants::APP_VERSION;
-pub use cost::CostTracker;
-pub use types::{Message, ContentBlock, MessageContent, Role, ToolResultContent};
-pub use output_styles::{StyleInfo, builtin_styles, find_style};
-pub use voice::{VoiceEvent, VoiceRecorder, global_voice_recorder};
-pub use import_config::{ImportPaths, ImportSelection, ImportResult, ImportPreview, build_import_preview, execute_import, summarize_import_result};
-pub use history::{SessionRecord, list_sessions, load_session};
-pub use tips::select_tip;
-pub use items::{AuthStore, StoredCredential, FreeUpstream, ModelRegistry, RegistryModelEntry, ModelInfo, AnthropicClient, FREE_CATALOG, TuiApp, ProviderId, LaunchMode, context_window_for_model, sample_completion_verb, sample_spinner_verb};
-pub use tools::TaskStatus;
+pub use config::Settings;
+pub use import_config::{ImportPaths, ImportSelection, build_import_preview, execute_import, summarize_import_result};
+pub use items::{AuthStore, StoredCredential, FreeUpstream, ModelRegistry, FREE_CATALOG, TuiApp, ProviderId, LaunchMode, context_window_for_model, sample_completion_verb, sample_spinner_verb};
