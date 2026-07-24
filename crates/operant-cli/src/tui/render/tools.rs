@@ -1,7 +1,9 @@
 // render/tools.rs — Tool block rendering and system annotations.
 
 use crate::tui::app::{App, SystemAnnotation, ToolStatus};
+use crate::tui::figures;
 use crate::tui::messages::RenderContext;
+use crate::app::ToolUseBlock;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
