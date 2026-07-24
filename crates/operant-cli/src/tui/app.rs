@@ -4249,7 +4249,7 @@ impl App {
                                                 }),
                                             other => self.auth_store.api_key_for(other),
                                         };
-                                        key.filter(|k| !k.is_empty())
+                                        key.filter(|k: &String| !k.is_empty())
                                             .map(|k| (upstream.id, k))
                                     })
                                     .collect();
