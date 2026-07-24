@@ -5,8 +5,7 @@ use std::cell::RefCell;
 use crate::tui::virtual_list::VirtualItem;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::Style;
-use ratatui::text::{Line, Span};
+use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 

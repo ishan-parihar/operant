@@ -1,19 +1,18 @@
 // render/footer.rs — Input pane, status row, footer bar, prompt suggestions.
 
-use crate::tui::adapter_types::types::Role;
 use crate::tui::app::App;
 use crate::tui::figures;
 use crate::tui::prompt_input::{
-    InputMode, TypeaheadSource, VimMode, input_height, render_prompt_input,
+    InputMode, TypeaheadSource, VimMode, render_prompt_input,
 };
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
+use ratatui::widgets::Paragraph;
 use unicode_width::UnicodeWidthStr;
 
-use super::{shimmer_spans, spinner_char, spinner_color, truncate_end, truncate_middle, truncate_text, ACCENT_PRIMARY, STATUS_THINKING, STATUS_THINKING_ELLIPSIS};
+use super::{shimmer_spans, spinner_char, spinner_color, truncate_middle, truncate_text, ACCENT_PRIMARY, STATUS_THINKING, STATUS_THINKING_ELLIPSIS};
 
 pub(crate) fn render_input(frame: &mut Frame, app: &App, area: Rect, focused: bool) {
     // Split: 1-row model/mode status line + remaining rows for the prompt input.

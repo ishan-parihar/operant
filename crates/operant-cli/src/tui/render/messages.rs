@@ -1,7 +1,7 @@
 use crate::tui::adapter_types::types::Role;
 // render/messages.rs — Message pane rendering, turn items, live content.
 
-use crate::tui::app::{App, SystemAnnotation, ToolStatus};
+use crate::tui::app::{App, ToolStatus};
 use crate::tui::messages::{
     RenderContext, render_thinking_live_content,
     render_transcript_assistant_message_tagged, render_transcript_assistant_meta,
@@ -14,8 +14,6 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
-use ratatui::widgets::Widget;
-use unicode_width::UnicodeWidthStr;
 
 use super::cache::*;
 use super::{build_tool_names, render_system_annotation_lines, render_tool_block_lines, shimmer_spans};

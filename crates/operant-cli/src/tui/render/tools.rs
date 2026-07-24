@@ -1,14 +1,11 @@
 // render/tools.rs — Tool block rendering and system annotations.
 
-use crate::tui::app::{App, SystemAnnotation, SystemMessageStyle, ToolStatus};
+use crate::tui::app::{SystemAnnotation, SystemMessageStyle, ToolStatus};
 use crate::tui::figures;
-use crate::tui::messages::RenderContext;
-use crate::app::ToolUseBlock;
-use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
-use super::{shimmer_spans, truncate_text, ACCENT_PRIMARY};
+use super::{shimmer_spans, ACCENT_PRIMARY};
 
 pub(crate) fn build_tool_names(
     messages: &[crate::tui::adapter_types::types::Message],
