@@ -11,13 +11,13 @@ use unicode_width::UnicodeWidthStr;
 
 use super::{ACCENT_PRIMARY, SPINNER, WELCOME_BOX_HEIGHT};
 
-fn spinner_char(frame_count: u64) -> char {
+pub(crate) fn spinner_char(frame_count: u64) -> char {
     SPINNER[(frame_count as usize) % SPINNER.len()]
 }
 
 /// Returns the colour to use for the streaming spinner.
 /// Turns red when no stream data has arrived for more than 3 seconds.
-fn spinner_color(app: &App) -> Color {
+pub(crate) fn spinner_color(app: &App) -> Color {
     if let Some(start) = app.stall_start {
         if start.elapsed() > std::time::Duration::from_secs(3) {
             return Color::Red;
@@ -26,13 +26,13 @@ fn spinner_color(app: &App) -> Color {
     Color::Yellow
 }
 
-fn is_modal_open(app: &App) -> bool {
+pub(crate) fn is_modal_open(app: &App) -> bool {
     app.any_modal_open()
 }
 
 // -----------------------------------------------------------------------
 /// Render an error modal dialog with wrapped content.
-fn render_error_modal(
+pub(crate) fn render_error_modal(
     frame: &mut Frame,
     area: Rect,
     notification: &Notification,
@@ -124,7 +124,7 @@ fn render_error_modal(
 // Text truncation helpers
 // -----------------------------------------------------------------------
 
-fn truncate_end(text: &str, max_width: usize) -> String {
+pub(crate) fn truncate_end(text: &str, max_width: usize) -> String {
     if max_width == 0 {
         return String::new();
     }
@@ -148,7 +148,7 @@ fn truncate_end(text: &str, max_width: usize) -> String {
     out
 }
 
-fn truncate_middle(text: &str, max_width: usize) -> String {
+pub(crate) fn truncate_middle(text: &str, max_width: usize) -> String {
     if max_width == 0 {
         return String::new();
     }
@@ -171,7 +171,7 @@ fn truncate_middle(text: &str, max_width: usize) -> String {
     format!("{left}\u{2026}{right}")
 }
 
-fn truncate_text(text: &str, max_width: usize) -> String {
+pub(crate) fn truncate_text(text: &str, max_width: usize) -> String {
     if max_width == 0 {
         return String::new();
     }
@@ -189,7 +189,7 @@ fn truncate_text(text: &str, max_width: usize) -> String {
     out
 }
 
-fn shimmer_spans(text: &str, frame_count: u64) -> Vec<Span<'static>> {
+pub(crate) fn shimmer_spans(text: &str, frame_count: u64) -> Vec<Span<'static>> {
     let chars: Vec<char> = text.chars().collect();
     let len = chars.len();
     if len == 0 {
@@ -226,3 +226,10 @@ fn shimmer_spans(text: &str, frame_count: u64) -> Vec<Span<'static>> {
         run_bright = is_bright;
         run.push(ch);
     }
+
+    // Push the final run
+    if !run.is_empty() {
+        spans.push(Span::styled(run, if run_bright { bright } else { base }));
+    }
+    spans
+}

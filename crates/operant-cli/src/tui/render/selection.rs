@@ -8,7 +8,7 @@ use ratatui::style::{Color, Style};
 use ratatui::text::Line;
 use ratatui::widgets::{Block, BorderType, Borders, Widget};
 
-fn cache_selectable_row_text(frame: &mut Frame, app: &App) {
+pub(crate) fn cache_selectable_row_text(frame: &mut Frame, app: &App) {
     let selectable_area = app.last_selectable_area.get();
     if selectable_area.width == 0 || selectable_area.height == 0 {
         app.last_row_text.borrow_mut().clear();
@@ -43,7 +43,7 @@ fn cache_selectable_row_text(frame: &mut Frame, app: &App) {
 
 /// Post-render pass: invert colours on selected cells and extract the
 /// selection text into `app.selection_text`.
-fn apply_selection_highlight(frame: &mut Frame, app: &App) {
+pub(crate) fn apply_selection_highlight(frame: &mut Frame, app: &App) {
     let (anchor, focus) = match (app.selection_anchor, app.selection_focus) {
         (Some(a), Some(f)) => (a, f),
         _ => return,
@@ -132,7 +132,7 @@ fn apply_selection_highlight(frame: &mut Frame, app: &App) {
 }
 
 /// Render a right-click context menu at the specified position.
-fn render_context_menu(frame: &mut Frame, app: &App) {
+pub(crate) fn render_context_menu(frame: &mut Frame, app: &App) {
     if let Some(menu) = app.context_menu_state {
         let selection_present = !app.selection_text.borrow().trim().is_empty();
         let items: Vec<(&str, bool)> = match menu.kind {

@@ -1,6 +1,6 @@
 // render/tools.rs — Tool block rendering and system annotations.
 
-use crate::tui::app::{App, SystemAnnotation, ToolStatus};
+use crate::tui::app::{App, SystemAnnotation, SystemMessageStyle, ToolStatus};
 use crate::tui::figures;
 use crate::tui::messages::RenderContext;
 use crate::app::ToolUseBlock;
@@ -8,9 +8,9 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
-use super::{shimmer_spans, truncate_text};
+use super::{shimmer_spans, truncate_text, ACCENT_PRIMARY};
 
-fn build_tool_names(
+pub(crate) fn build_tool_names(
     messages: &[crate::tui::adapter_types::types::Message],
 ) -> std::collections::HashMap<String, String> {
     let mut map = std::collections::HashMap::new();
@@ -27,7 +27,7 @@ fn build_tool_names(
 
 // â”€â”€ System annotation (compact boundary, info notices) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-fn render_system_annotation_lines(
+pub(crate) fn render_system_annotation_lines(
     lines: &mut Vec<Line<'static>>,
     ann: &SystemAnnotation,
     width: usize,
@@ -79,7 +79,7 @@ fn render_system_annotation_lines(
 
 // â”€â”€ Tool use block â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-fn render_tool_block_lines(
+pub(crate) fn render_tool_block_lines(
     lines: &mut Vec<Line<'static>>,
     block: &crate::app::ToolUseBlock,
     frame_count: u64,

@@ -446,7 +446,3 @@ pub fn render_app(frame: &mut Frame, app: &App) {
         tracing::debug!("OSC8 hyperlink emission failed: {e}");
     }
 }
-
-/// Snapshot the rendered text of every row inside the selectable area into
-/// `app.last_row_text` so that subsequent double/triple-clicks can locate
-/// word and paragraph boundaries (issue #149 follow-up).
