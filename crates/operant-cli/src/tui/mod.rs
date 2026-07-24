@@ -3,7 +3,6 @@ pub mod provider;
 
 pub mod bridge_state;
 pub mod debug;
-pub mod file_injection;
 
 pub mod agents_view;
 pub mod app;
