@@ -13,6 +13,6 @@
 pub use super::helpers::{sample_completion_verb, sample_spinner_verb, context_window_for_model};
 pub use super::auth::{AuthStore, StoredCredential};
 pub use super::free_catalog::{FreeUpstream, FREE_CATALOG};
-pub use super::model_registry::{ModelRegistry, RegistryModelEntry, ModelInfo};
+pub use super::model_registry::ModelRegistry;
 pub use super::provider_id::ProviderId;
 pub use super::tui_app::{TuiApp, LaunchMode};
