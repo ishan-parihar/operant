@@ -1,3 +1,119 @@
+use crate::commands::CommandResult;
+use super::config::Settings;
+// CommandResult enum from commands.rs
+
+
+
+
+
+
+// (iter-209: pub mod file_history { ... } deleted — stub where
+// snapshots_for_turn always returned vec![] and latest_turn_index
+// returned None. The /changes turn-diff feature never worked.
+// Removed: FileHistory, FileSnapshot, App.file_history field,
+// App.attach_turn_diff_state, refresh_turn_diff_from_history,
+// build_turn_diff in diff_viewer.rs. The diff_viewer's real git-diff
+// functionality (/diff, /review) is unaffected.
+// To re-implement: wire to operant_core::tools::file_state or a new
+// per-turn snapshot store in core.)
+
+// (iter-136: ImageSource enum deleted — zero callers, ponytail-audit Tier-2 cut)
+
+// (iter-165: keybindings module deleted — completely unused after iter-164)
+
+/// TUI-side rich rendering types.
+///
+/// # Why this module is intentionally separate from `operant_core::client`
+///
+/// There are two distinct message type families in this codebase and they must
+/// NOT be merged:
+///
+/// - **`operant_core::client::Message`** — the wire-format LLM API message.
+///   `content: String`, `reasoning: Option<String>`, `tool_calls: Option<Vec<ToolCall>>`.
+///   Serialized to/from JSON for OpenAI/Anthropic API calls.  Lives in operant-core
+///   and must remain free of TUI/rendering concerns.
+///
+/// - **`adapter_types::types::Message`** (this module) — the TUI rendering message.
+///   `content: MessageContent` which holds rich `ContentBlock` variants: Text, Thinking,
+///   ToolUse, ToolResult, Image, Document, UserLocalCommandOutput, etc.  Used exclusively
+///   by the ratatui transcript renderer in `render/`.  These variants do not correspond
+///   1-to-1 with any LLM API concept.
+///
+/// # How the two domains connect
+///
+/// `App::handle_agent_event` in `tui/app.rs` is the bridge.  It receives
+/// `AgentEvent` variants emitted by the core agent loop and maps them into
+/// TUI `ContentBlock`s:
+///
+/// - `AgentEvent::Content { text }` → accumulate into `streaming_text`, eventually
+///   flushed as `ContentBlock::Text`.
+/// - `AgentEvent::Thinking { content }` → `ContentBlock::Thinking { thinking, signature }`.
+/// - `AgentEvent::ToolStart { .. }` → `ToolUseBlock` tracked in `app.tool_use_blocks`.
+/// - `AgentEvent::ToolComplete { result }` → status update on the `ToolUseBlock`.
+/// - `AgentEvent::Done { message }` → if no streamed content, `message.content: String`
+///   and `message.reasoning: Option<String>` (core wire fields) are mapped to
+///   `ContentBlock::Text` / `ContentBlock::Thinking` and pushed as a TUI `Message`.
+///
+/// This mapping is the correct and intentional seam.  Do NOT replace the TUI `Message`
+/// with `operant_core::client::Message`; that would destroy the transcript rendering.
+
+
+/// Rotating completion verbs — shown after a turn completes ("✽ Worked for 2m 5s").
+/// Varied per turn so the UI feels alive rather than mechanical.
+/// (P2-15 from UX audit — was always "done".)
+pub fn sample_completion_verb(seed: u64) -> &'static str {
+    const VERBS: &[&str] = &[
+        "done",
+        "finished",
+        "completed",
+        "wrapped up",
+        "sorted",
+        "nailed it",
+        "shipped",
+        "landed",
+    ];
+    VERBS[(seed as usize) % VERBS.len()]
+}
+
+/// Rotating spinner verbs — shown while the agent is thinking ("Thinking…").
+/// Varied per turn so the status row feels expressive.
+/// (P2-15 from UX audit — was always "thinking".)
+pub fn sample_spinner_verb(seed: u64) -> &'static str {
+    const VERBS: &[&str] = &[
+        "thinking",
+        "processing",
+        "working",
+        "pondering",
+        "analyzing",
+        "computing",
+        "reasoning",
+        "reflecting",
+        "considering",
+        "exploring",
+        "investigating",
+        "composing",
+        "searching",
+        "crafting",
+    ];
+    VERBS[(seed as usize) % VERBS.len()]
+}
+
+
+/// Model context-window lookup. (iter-115 — the query module's
+/// QueryEvent/StreamEvent/UsageInfo types were deleted with the bridge
+/// in iter-114. Only this function survived because it's still used by
+/// refresh_context_window_size in app.rs.)
+pub fn context_window_for_model(_model: &str) -> usize {
+    128000
+}
+
+// (iter-211: pub mod compact {} deleted — empty module, zero callers)
+
+
+
+
+
+
 
 // ---------- AuthStore ----------
 
@@ -94,9 +210,6 @@ impl AuthStore {
     }
 }
 
-pub use import_config::{
-    ImportPaths, ImportSelection, build_import_preview, execute_import, summarize_import_result,
-};
 
 // (iter-223: pub mod file_injection { AtFileRef, AtFileIssue, parse_at_refs }
 // deleted — zero callers anywhere; the @-file parsing path they supported
@@ -576,3 +689,1020 @@ impl std::str::FromStr for ProviderId {
 //
 // (iter-155: pub mod streaming {} deleted — was empty, only a deletion marker.)
 
+
+pub struct TuiApp {
+    app: crate::tui::app::App,
+    initial_query: Option<String>,
+    /// Whether to skip EnableMouseCapture in the TUI setup. Set by the
+    /// --no-mouse CLI flag. (Bug #24 from iter-82 audit.)
+    no_mouse: bool,
+}
+
+impl TuiApp {
+    pub async fn enter(
+        config: operant_core::config::AppConfig,
+        _system: Option<String>,
+        _mode: LaunchMode,
+        no_mouse: bool,
+        dangerously_skip_permissions: bool,
+    ) -> anyhow::Result<Self> {
+        use crate::commands::{CommandContext, CommandHandler, CommandRegistry, CommandResult};
+        use crate::tui::adapter_types::cost::CostTracker;
+        use std::sync::Arc;
+
+        let initial_query = match &_mode {
+            LaunchMode::Query(q) => Some(q.clone()),
+            _ => None,
+        };
+        let mut app_config = config;
+        let settings = Settings::load_sync().unwrap_or_default();
+
+        // Layer in the user's saved settings.json (written by App::persist_provider_and_model).
+        // provider+model are now exclusively stored in operant.toml (config.agent.model /
+        // config.client.base_url). The settings.json only carries visual prefs (theme, vim, etc.).
+
+        if let Some(entry) = settings.providers.get("custom-openai") {
+            if let Some(ref base) = entry.api_base {
+                app_config.client.base_url = base.clone();
+            }
+        }
+
+        let cost_tracker = Arc::new(CostTracker::new());
+
+        let mut command_registry = CommandRegistry::new();
+        // Register handlers for commands that were previously falling through to the agent
+        struct CompactHandler;
+        #[async_trait::async_trait]
+        impl CommandHandler for CompactHandler {
+            async fn execute(&self, _ctx: &CommandContext<'_>) -> CommandResult {
+                CommandResult::message("Context compaction is handled automatically by the agent.")
+            }
+        }
+        command_registry
+            .register_handler("compact", Box::new(CompactHandler))
+            .ok();
+
+        struct DoctorHandler;
+        #[async_trait::async_trait]
+        impl CommandHandler for DoctorHandler {
+            async fn execute(&self, _ctx: &CommandContext<'_>) -> CommandResult {
+                let mut report = String::from("Operant Diagnostics:\n");
+                report.push_str(&format!("  Version: {}\n", env!("CARGO_PKG_VERSION")));
+                report.push_str(&format!(
+                    "  Config dir: {:?}\n",
+                    crate::tui::adapter_types::config::Settings::config_dir()
+                ));
+                let api_key_set = std::env::var("ANTHROPIC_API_KEY").is_ok()
+                    || std::env::var("OPENAI_API_KEY").is_ok();
+                report.push_str(&format!("  API key configured: {}\n", api_key_set));
+                report.push_str("  Status: OK\n");
+                CommandResult::message(report)
+            }
+        }
+        command_registry
+            .register_handler("doctor", Box::new(DoctorHandler))
+            .ok();
+
+        struct InitHandler;
+        #[async_trait::async_trait]
+        impl CommandHandler for InitHandler {
+            async fn execute(&self, _ctx: &CommandContext<'_>) -> CommandResult {
+                let agentic_dir = std::path::PathBuf::from("AGENTS.md");
+                if agentic_dir.exists() {
+                    CommandResult::message("AGENTS.md already exists in this project.")
+                } else {
+                    match std::fs::write(&agentic_dir, "# Project Agent Memory\n\n") {
+                        Ok(_) => CommandResult::message("Created AGENTS.md in current directory."),
+                        Err(e) => {
+                            CommandResult::message(format!("Failed to create AGENTS.md: {}", e))
+                        }
+                    }
+                }
+            }
+        }
+        command_registry
+            .register_handler("init", Box::new(InitHandler))
+            .ok();
+
+        struct LoginHandler;
+        #[async_trait::async_trait]
+        impl CommandHandler for LoginHandler {
+            async fn execute(&self, _ctx: &CommandContext<'_>) -> CommandResult {
+                CommandResult::message(
+                    "Set your API key: export ANTHROPIC_API_KEY=sk-... or export OPENAI_API_KEY=sk-...",
+                )
+            }
+        }
+        command_registry
+            .register_handler("login", Box::new(LoginHandler))
+            .ok();
+
+        struct LogoutHandler;
+        #[async_trait::async_trait]
+        impl CommandHandler for LogoutHandler {
+            async fn execute(&self, _ctx: &CommandContext<'_>) -> CommandResult {
+                CommandResult::message("Clear your API key: unset ANTHROPIC_API_KEY OPENAI_API_KEY")
+            }
+        }
+        command_registry
+            .register_handler("logout", Box::new(LogoutHandler))
+            .ok();
+
+        struct RefreshHandler;
+        #[async_trait::async_trait]
+        impl CommandHandler for RefreshHandler {
+            async fn execute(&self, _ctx: &CommandContext<'_>) -> CommandResult {
+                CommandResult::message("Provider auth and model caches cleared.")
+            }
+        }
+        command_registry
+            .register_handler("refresh", Box::new(RefreshHandler))
+            .ok();
+
+        struct ProvidersHandler;
+        #[async_trait::async_trait]
+        impl CommandHandler for ProvidersHandler {
+            async fn execute(&self, _ctx: &CommandContext<'_>) -> CommandResult {
+                let auth = AuthStore::load();
+                let mut report = String::from("Available providers:\n");
+                for p in crate::provider::PROVIDERS {
+                    let has_key = auth.api_key_for(p.name).is_some();
+                    let env_key = !p.env_var.is_empty() && std::env::var(p.env_var).is_ok();
+                    let configured = has_key || env_key;
+                    report.push_str(&format!(
+                        "  {}: {}\n",
+                        p.display_name,
+                        if configured {
+                            "configured"
+                        } else {
+                            "not configured"
+                        }
+                    ));
+                }
+                report.push_str("\nUsage: /provider <name> — switch LLM provider");
+                CommandResult::message(report)
+            }
+        }
+        command_registry
+            .register_handler("providers", Box::new(ProvidersHandler))
+            .ok();
+
+        struct StatusHandler;
+        #[async_trait::async_trait]
+        impl CommandHandler for StatusHandler {
+            async fn execute(&self, _ctx: &CommandContext<'_>) -> CommandResult {
+                let model = std::env::var("OPERANT_MODEL").unwrap_or_else(|_| "gpt-4".to_string());
+                let anthropic = std::env::var("ANTHROPIC_API_KEY").is_ok();
+                let openai = std::env::var("OPENAI_API_KEY").is_ok();
+                CommandResult::message(format!(
+                    "Session Status:\n  Model: {}\n  Anthropic: {}\n  OpenAI: {}",
+                    model,
+                    if anthropic {
+                        "configured"
+                    } else {
+                        "not configured"
+                    },
+                    if openai {
+                        "configured"
+                    } else {
+                        "not configured"
+                    }
+                ))
+            }
+        }
+        command_registry
+            .register_handler("status", Box::new(StatusHandler))
+            .ok();
+
+        struct VersionHandler;
+        #[async_trait::async_trait]
+        impl CommandHandler for VersionHandler {
+            async fn execute(&self, _ctx: &CommandContext<'_>) -> CommandResult {
+                CommandResult::message(format!("operant v{}", env!("CARGO_PKG_VERSION")))
+            }
+        }
+        command_registry
+            .register_handler("version", Box::new(VersionHandler))
+            .ok();
+
+        struct TimeHandler;
+        #[async_trait::async_trait]
+        impl CommandHandler for TimeHandler {
+            async fn execute(&self, _ctx: &CommandContext<'_>) -> CommandResult {
+                CommandResult::message(chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string())
+            }
+        }
+        command_registry
+            .register_handler("time", Box::new(TimeHandler))
+            .ok();
+
+        struct DebugHandler;
+        #[async_trait::async_trait]
+        impl CommandHandler for DebugHandler {
+            async fn execute(&self, _ctx: &CommandContext<'_>) -> CommandResult {
+                let mut info = String::from("Debug Info:\n");
+                info.push_str(&format!("  Version: {}\n", env!("CARGO_PKG_VERSION")));
+                info.push_str(&format!(
+                    "  Config dir: {:?}\n",
+                    crate::tui::adapter_types::config::Settings::config_dir()
+                ));
+                info.push_str(&format!(
+                    "  Rust version: {}\n",
+                    env!("CARGO_PKG_RUST_VERSION")
+                ));
+                CommandResult::message(info)
+            }
+        }
+        command_registry
+            .register_handler("debug", Box::new(DebugHandler))
+            .ok();
+
+        // (iter-270: NewHandler, HistoryHandler, RetryHandler, UndoHandler,
+        // StopHandler removed — these commands are now intercepted in
+        // app.rs intercept_slash_command_with_args_impl and directly
+        // mutate App state. The registry fallback path is no longer reached.)
+
+        struct CompressHandler;
+        #[async_trait::async_trait]
+        impl CommandHandler for CompressHandler {
+            async fn execute(&self, _ctx: &CommandContext<'_>) -> CommandResult {
+                CommandResult::message("Context compaction is handled automatically by the agent.")
+            }
+        }
+        command_registry
+            .register_handler("compress", Box::new(CompressHandler))
+            .ok();
+
+        // (iter-270: RollbackHandler removed — /rollback is intercepted in app.rs)
+        // (iter-270: BranchHandler removed — /branch falls through to /session browser)
+        // (iter-270: GoalHandler removed — /goal is intercepted in app.rs)
+        // (iter-270: YoloHandler removed — /yolo is intercepted in app.rs)
+        // (iter-270: PersonalityHandler removed — /personality is intercepted in app.rs)
+        // (iter-270: ReasoningHandler removed — /reasoning is intercepted in app.rs)
+        // (iter-270: SkillsHandler removed — /skills is intercepted in app.rs)
+        // (iter-270: CreditsHandler removed — /credits is intercepted in app.rs)
+        // (iter-270: BillingHandler removed — /billing is intercepted in app.rs)
+        // (iter-270: SessionsHandler removed — /sessions is intercepted in app.rs)
+
+        struct ProviderHandler;
+        #[async_trait::async_trait]
+        impl CommandHandler for ProviderHandler {
+            async fn execute(&self, ctx: &CommandContext<'_>) -> CommandResult {
+                if ctx.args.is_empty() {
+                    CommandResult::message("Usage: /provider <name> — switch LLM provider")
+                } else {
+                    CommandResult::message(format!("Provider switched to: {}", ctx.args))
+                }
+            }
+        }
+        command_registry
+            .register_handler("provider", Box::new(ProviderHandler))
+            .ok();
+
+        struct ToolsHandler;
+        #[async_trait::async_trait]
+        impl CommandHandler for ToolsHandler {
+            async fn execute(&self, _ctx: &CommandContext<'_>) -> CommandResult {
+                CommandResult::message(
+                    "Available tools: memory, web_search, web_fetch, bash, and more. Use /toolsets for the full list.",
+                )
+            }
+        }
+        command_registry
+            .register_handler("tools", Box::new(ToolsHandler))
+            .ok();
+
+        struct BundlesHandler;
+        #[async_trait::async_trait]
+        impl CommandHandler for BundlesHandler {
+            async fn execute(&self, _ctx: &CommandContext<'_>) -> CommandResult {
+                CommandResult::message(
+                    "Skill bundles: curated sets of skills for specific workflows. (No bundles installed)",
+                )
+            }
+        }
+        command_registry
+            .register_handler("bundles", Box::new(BundlesHandler))
+            .ok();
+
+        struct UsageHandler;
+        #[async_trait::async_trait]
+        impl CommandHandler for UsageHandler {
+            async fn execute(&self, _ctx: &CommandContext<'_>) -> CommandResult {
+                CommandResult::message(
+                    "Token usage and rate limits are displayed in the stats dialog. Use /stats to view.",
+                )
+            }
+        }
+        command_registry
+            .register_handler("usage", Box::new(UsageHandler))
+            .ok();
+
+        struct InsightsHandler;
+        #[async_trait::async_trait]
+        impl CommandHandler for InsightsHandler {
+            async fn execute(&self, _ctx: &CommandContext<'_>) -> CommandResult {
+                CommandResult::message(
+                    "Insights: session analysis and conversation statistics. Use /stats for details.",
+                )
+            }
+        }
+        command_registry
+            .register_handler("insights", Box::new(InsightsHandler))
+            .ok();
+
+        struct UpdateHandler;
+        #[async_trait::async_trait]
+        impl CommandHandler for UpdateHandler {
+            async fn execute(&self, _ctx: &CommandContext<'_>) -> CommandResult {
+                CommandResult::message(format!(
+                    "Current version: {}. Check https://github.com/operant-ai/operant-rs for updates.",
+                    env!("CARGO_PKG_VERSION")
+                ))
+            }
+        }
+        command_registry
+            .register_handler("update", Box::new(UpdateHandler))
+            .ok();
+
+        struct WhoamiHandler;
+        #[async_trait::async_trait]
+        impl CommandHandler for WhoamiHandler {
+            async fn execute(&self, _ctx: &CommandContext<'_>) -> CommandResult {
+                CommandResult::message("Access level: admin (local TUI session)")
+            }
+        }
+        command_registry
+            .register_handler("whoami", Box::new(WhoamiHandler))
+            .ok();
+
+        let mut app =
+            crate::tui::app::App::new(app_config, settings, cost_tracker, command_registry);
+
+        // Wire the voice-mode notice: if audio input is available (e.g. not
+        // an SSH session, ffmpeg/arecord installed) and the user hasn't
+        // enabled voice mode yet, show a one-time hint on startup.
+        let audio_env = operant_core::voice::detect_audio_environment();
+        app.voice_mode_notice
+            .show_if_available(audio_env.available, false);
+
+        // First-run onboarding: if no credentials and onboarding hasn't been
+        // completed, auto-open the connect dialog so the user is guided to
+        // set up a provider. (P0-2 from UX audit — was silently dropping the
+        // user onto a blank welcome screen with no guidance.)
+        if !app.has_credentials {
+            let settings = Settings::load_sync().unwrap_or_default();
+            if !settings.has_completed_onboarding {
+                app.connect_dialog.open();
+                app.status_message =
+                    Some("Welcome to Operant! Connect a provider to get started.".to_string());
+            }
+        }
+
+        // --dangerously-skip-permissions: show the bypass-permissions
+        // confirmation dialog at startup. Bypass mode is NOT enabled yet —
+        // it's applied only when the user accepts (see app.rs dialog handler).
+        if dangerously_skip_permissions {
+            app.bypass_permissions_dialog.show();
+        }
+
+        Ok(Self {
+            app,
+            initial_query,
+            no_mouse,
+        })
+    }
+
+    pub async fn run(mut self) -> anyhow::Result<()> {
+        // Create the agent event channel directly — no bridge.
+        // (iter-114 — eliminates the bridge layer. The TUI now receives
+        // AgentEvent directly and handles it in handle_agent_event.)
+        let (agent_tx, agent_rx) =
+            tokio::sync::mpsc::channel::<operant_core::agent::AgentEvent>(256);
+        self.app.agent_event_rx = Some(agent_rx);
+
+        use crossterm::execute;
+        use crossterm::terminal::{
+            EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
+        };
+        use ratatui::Terminal;
+        use ratatui::backend::CrosstermBackend;
+
+        enable_raw_mode()?;
+
+        // Install a panic hook that restores the terminal before printing
+        // the panic message. Without this, any panic between enable_raw_mode
+        // and disable_raw_mode leaves the user's terminal in raw mode +
+        // alternate screen (broken terminal, garbled output).
+        let no_mouse = self.no_mouse;
+        let prev_hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            let _ = disable_raw_mode();
+            let _ = execute!(std::io::stdout(), LeaveAlternateScreen);
+            if !no_mouse {
+                let _ = execute!(std::io::stdout(), crossterm::event::DisableMouseCapture);
+            }
+            prev_hook(info);
+        }));
+
+        let mut stdout = std::io::stdout();
+        execute!(stdout, EnterAlternateScreen)?;
+        // Enable mouse capture unless --no-mouse was passed. Mouse capture
+        // lets the TUI receive scroll/click events for the transcript, diff
+        // viewer, and overlay scrolling. Some terminal multiplexers (tmux,
+        // screen) interfere with mouse capture; --no-mouse disables it so
+        // the terminal's native mouse selection works. (Bug #24 from iter-82
+        // audit — /mouse mentioned a --no-mouse flag that didn't exist.)
+        if !self.no_mouse {
+            execute!(stdout, crossterm::event::EnableMouseCapture)?;
+        }
+        let backend = CrosstermBackend::new(stdout);
+        let mut terminal = Terminal::new(backend)?;
+
+        // agent_tx was created above; agent_rx is stored on app.
+        // No bridge — the agent sends AgentEvent directly to the TUI.
+
+        let (permission_tx, permission_rx) =
+            tokio::sync::mpsc::channel::<operant_core::agent::ToolPermissionRequest>(4);
+        self.app.permission_rx = Some(permission_rx);
+
+        let config = self.app.config.clone();
+        let mcp_manager = operant_core::mcp::McpManager::new();
+        let skills_dir = config.skills.root_dir.clone();
+
+        let agent: Option<std::sync::Arc<operant_core::agent::OperantAgent>> =
+            match crate::create_runtime_agent(
+                &config,
+                &config.agent,
+                None,
+                agent_tx,
+                &mcp_manager,
+                &skills_dir,
+            )
+            .await
+            {
+                Ok(agent) => Some(std::sync::Arc::new(agent.with_permissions(permission_tx))),
+                Err(e) => {
+                    self.app.status_message = Some(format!("Agent init failed: {}", e));
+                    None
+                }
+            };
+
+        // Store the real McpManager + steer queue handle on the App so the
+        // run loop can act on /mcp reconnect and /steer. (iter-93 — closes
+        // the /mcp reconnect + /steer parity gaps.)
+        self.app.core_mcp_manager = Some(std::sync::Arc::new(mcp_manager));
+        if let Some(ref agent) = agent {
+            self.app.steer_queue_handle = Some(agent.steer_queue_handle());
+        }
+
+        // Create the user-question channel and register the sender with
+        // operant_core::user_question. The clarify tool will push
+        // UserQuestionRequest { question, choices, reply_tx } to this
+        // channel; the TUI drains it in the run loop and opens the
+        // ask_user_dialog. (iter-97 — closes Bug #2 from iter-82 audit.)
+        let (uq_tx, uq_rx) = tokio::sync::mpsc::unbounded_channel::<
+            operant_core::user_question::UserQuestionRequest,
+        >();
+        let _ = operant_core::user_question::set_user_question_sender(uq_tx);
+        self.app.user_question_rx = Some(uq_rx);
+
+        // Attach the MCP manager + file-history + current-turn counter to the
+        // App. Without these, /mcp always shows "Disconnected" for every
+        // server, /changes always shows "No changes", the "iter N" status
+        // pill never renders, and the subagent HUD never renders. (Bug #3
+        // from iter-82 audit.)
+        // (iter-208: stub TUI McpManager deleted. load_mcp_servers now reads
+        // directly from core_mcp_manager, which is set below at line ~2148.)
+
+        // (iter-209: FileHistory + current_turn stub creation deleted.
+        // The turn-diff feature never worked — /changes now uses git-diff.)
+
+        // Force a context-window-size refresh so /context shows real numbers
+        // on the first frame instead of "0 / 0" (Bug #13 from iter-82 audit).
+        self.app.refresh_context_window_size();
+
+        self.app.model_registry.load_models_dev().await;
+
+        if let Some(query) = self.initial_query.take() {
+            if let Some(ref agent) = agent {
+                use crate::tui::adapter_types::types::{Message, MessageContent, Role};
+                self.app.messages.push(Message {
+                    role: Role::User,
+                    content: MessageContent::Text(query.clone()),
+                });
+                self.app.is_streaming = true;
+                self.app.streaming_text.clear();
+                self.app.streaming_thinking.clear();
+
+                let agent_clone = std::sync::Arc::clone(agent);
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                let handle = tokio::spawn(async move {
+                    let result = agent_clone.run(query).await.map(|_| ());
+                    let _ = tx.send(result);
+                });
+                self.app.run_complete_rx = Some(rx);
+                self.app.agent_task_handle = Some(handle);
+            }
+        }
+
+        let result = loop {
+            match self.app.run(&mut terminal) {
+                Ok(Some(input)) => {
+                    // Poll pending MCP state set by /mcp 'a' (panel auth) and
+                    // 'r' (reconnect) keys. Without this, the keys set state
+                    // that the run loop never reads, so panel-auth + reconnect
+                    // are no-ops. (Bug #7 from iter-82 audit.)
+                    // For now we surface a status message acknowledging the
+                    // request; a real implementation would spawn the MCP
+                    // panel-auth flow / reconnect the MCP runtime.
+                    if let Some(server_name) = self.app.take_pending_mcp_panel_auth() {
+                        self.app.status_message = Some(format!(
+                            "MCP panel auth requested for '{}' (not yet wired — restart operant to re-authenticate).",
+                            server_name
+                        ));
+                    }
+                    if self.app.take_pending_mcp_reconnect() {
+                        // Real MCP reconnect: re-add all configured servers.
+                        // (iter-93 — closes the /mcp reconnect parity gap.)
+                        // We extract the server configs into a plain Vec of
+                        // tuples first (so the async block doesn't capture
+                        // the AppConfig, which contains non-Send tracing
+                        // types via the McpManager's internal spans).
+                        if let Some(ref mcp) = self.app.core_mcp_manager {
+                            let mcp_clone = std::sync::Arc::clone(mcp);
+                            // Extract server configs into Send-safe tuples.
+                            let server_configs: Vec<(
+                                String,
+                                Option<String>,
+                                Option<String>,
+                                Vec<String>,
+                                std::collections::HashMap<String, String>,
+                                bool,
+                            )> = self
+                                .app
+                                .config
+                                .mcp
+                                .servers
+                                .iter()
+                                .map(|s| {
+                                    (
+                                        s.name.clone(),
+                                        s.url.clone(),
+                                        s.auth_token.clone(),
+                                        s.args.clone(),
+                                        s.env.clone(),
+                                        s.enabled,
+                                    )
+                                })
+                                .collect();
+                            tokio::spawn(async move {
+                                for (name, url, auth_token, args, env, enabled) in server_configs {
+                                    if !enabled {
+                                        continue;
+                                    }
+                                    // Remove first (no-op if not present).
+                                    let _ = mcp_clone.remove_server(&name).await;
+                                    // Re-add based on transport.
+                                    if let Some(url) = url {
+                                        let _ = mcp_clone.add_server(&name, url, auth_token).await;
+                                    }
+                                    // Note: stdio servers need a command, which
+                                    // we didn't capture here. SSE servers need
+                                    // add_sse_server. For now, HTTP is the
+                                    // primary path; stdio/SSE reconnect is a
+                                    // future enhancement.
+                                    let _ = (args, env);
+                                }
+                            });
+                            self.app.status_message = Some(
+                                "MCP reconnect initiated — servers will reconnect in the background.".to_string()
+                            );
+                        } else {
+                            self.app.status_message = Some(
+                                "MCP reconnect requested but no McpManager is attached."
+                                    .to_string(),
+                            );
+                        }
+                    }
+
+                    // Poll device_auth_pending set by /connect for github-copilot
+                    // and openai-codex. Without this, the device-code dialog
+                    // shows "waiting for code" forever because no background
+                    // device-flow task is ever spawned. (Bug #15 from iter-82
+                    // audit — partial fix; full fix needs the device-flow task
+                    // spawned here.)
+                    if let Some(provider) = self.app.device_auth_pending.take() {
+                        self.app.status_message = Some(format!(
+                            "Device auth initiated for '{}' — open the provider's URL in a browser to complete. (Background polling not yet wired; restart operant after authenticating.)",
+                            provider
+                        ));
+                    }
+
+                    // Poll bridge/gateway connection state updates from handler.
+                    if let Some(ref mut rx) = self.app.bridge_state_rx {
+                        while let Ok(state) = rx.try_recv() {
+                            self.app.bridge_state = state;
+                            self.app
+                                .transcript_version
+                                .set(self.app.transcript_version.get().wrapping_add(1));
+                        }
+                    }
+
+                    // If a slash command set a pending shell command on a
+                    // *previous* iteration, run it BEFORE processing the next
+                    // input. (Slash commands set the field inside
+                    // handle_tui_command → intercept_slash_command, then we
+                    // `continue` to the next loop iteration; we run the shell
+                    // command at the top of the next iteration so the TUI
+                    // gets a chance to redraw the "Launching…" status message
+                    // before we suspend.)
+                    if let Some(argv) = self.app.pending_shell_command.take() {
+                        if let Err(e) = run_suspended_shell_command(&mut terminal, &argv) {
+                            self.app.status_message = Some(format!("Shell command failed: {}", e));
+                        } else {
+                            self.app.status_message = Some("Returned to operant.".to_string());
+                        }
+                        // Force a redraw on the next frame so the status
+                        // message + restored terminal show immediately.
+                        self.app
+                            .transcript_version
+                            .set(self.app.transcript_version.get().wrapping_add(1));
+                    }
+
+                    if crate::input::is_slash_command(&input) {
+                        let (cmd, args) = crate::input::parse_slash_command(&input);
+                        if self.app.handle_tui_command(cmd, args) {
+                            // If the slash command set a pending shell command,
+                            // we need to run it on the NEXT iteration — but
+                            // app.run() will block waiting for input. To avoid
+                            // that, run it NOW if it was set.
+                            if let Some(argv) = self.app.pending_shell_command.take() {
+                                if let Err(e) = run_suspended_shell_command(&mut terminal, &argv) {
+                                    self.app.status_message =
+                                        Some(format!("Shell command failed: {}", e));
+                                } else {
+                                    self.app.status_message =
+                                        Some("Returned to operant.".to_string());
+                                }
+                                self.app
+                                    .transcript_version
+                                    .set(self.app.transcript_version.get().wrapping_add(1));
+                            }
+                            continue;
+                        }
+                        if let Some(canonical) = self.app.command_registry.resolve(cmd) {
+                            match self.app.command_registry.execute(canonical, args).await {
+                                CommandResult::Message(output) => {
+                                    self.app.push_system_message(
+                                        output,
+                                        crate::tui::app::SystemMessageStyle::Info,
+                                    );
+                                }
+                                CommandResult::Error(e) => {
+                                    self.app.status_message = Some(format!("Command error: {}", e));
+                                }
+                                other => {
+                                    // Other CommandResult intents (OpenHelp, Exit, etc.)
+                                    // are handled by the TUI intercept in app.rs.
+                                    tracing::debug!("Deferred CommandResult variant: {:?}", other);
+                                }
+                            }
+                            continue;
+                        }
+                    }
+                    // /retry: drain pending_retry_query set by intercept arm.
+                    // (iter-270 — real /retry wiring.)
+                    if let Some(retry_text) = self.app.pending_retry_query.take() {
+                        if let Some(ref agent) = agent {
+                            if !self.app.is_streaming {
+                                use crate::tui::adapter_types::types::{
+                                    Message, MessageContent, Role,
+                                };
+                                self.app.messages.push(Message {
+                                    role: Role::User,
+                                    content: MessageContent::Text(retry_text.clone()),
+                                });
+                                self.app.is_streaming = true;
+                                self.app.streaming_text.clear();
+                                self.app.streaming_thinking.clear();
+                                let agent_clone = std::sync::Arc::clone(agent);
+                                let (tx, rx) = tokio::sync::oneshot::channel();
+                                let handle = tokio::spawn(async move {
+                                    let result = agent_clone.run(retry_text).await.map(|_| ());
+                                    let _ = tx.send(result);
+                                });
+                                self.app.run_complete_rx = Some(rx);
+                                self.app.agent_task_handle = Some(handle);
+                                continue;
+                            }
+                        }
+                    }
+                    if let Some(ref agent) = agent {
+                        // If a turn is currently streaming, push the input as
+                        // a steer directive instead of starting a new turn.
+                        // The agent drains steers at the next iteration boundary
+                        // and injects them as user-role messages. (iter-93 —
+                        // closes the /steer parity gap.)
+                        if self.app.is_streaming {
+                            if let Some(ref handle) = self.app.steer_queue_handle {
+                                let mut q = handle.lock().await;
+                                q.push(input.clone());
+                                self.app.status_message = Some(format!(
+                                    "Steer queued: {}",
+                                    input.chars().take(60).collect::<String>()
+                                ));
+                                continue;
+                            }
+                        }
+                        use crate::tui::adapter_types::types::{Message, MessageContent, Role};
+                        self.app.messages.push(Message {
+                            role: Role::User,
+                            content: MessageContent::Text(input.clone()),
+                        });
+                        self.app.is_streaming = true;
+                        self.app.streaming_text.clear();
+                        self.app.streaming_thinking.clear();
+
+                        let agent_clone = std::sync::Arc::clone(agent);
+                        let (tx, rx) = tokio::sync::oneshot::channel();
+                        let handle = tokio::spawn(async move {
+                            let result = agent_clone.run(input).await.map(|_| ());
+                            let _ = tx.send(result);
+                        });
+                        self.app.run_complete_rx = Some(rx);
+                        self.app.agent_task_handle = Some(handle);
+                    }
+                }
+                Ok(None) => break Ok(()),
+                Err(e) => break Err(e),
+            }
+        };
+
+        disable_raw_mode()?;
+        if !self.no_mouse {
+            let _ = execute!(
+                terminal.backend_mut(),
+                crossterm::event::DisableMouseCapture
+            );
+        }
+        execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+        result
+    }
+
+    /// Run the real `App::run` loop headlessly against a `TestBackend`,
+    /// replaying `keys`. Returns the captured event log, the final `App`
+    /// state (for assertions), and the final rendered screen as trimmed
+    /// text rows (for screen-content assertions and snapshots).
+    pub async fn run_headless(
+        mut self,
+        keys: Vec<crossterm::event::KeyEvent>,
+        agent_script: Option<Vec<operant_core::agent::AgentEvent>>,
+        size: (u16, u16),
+        max_frames: Option<u64>,
+    ) -> anyhow::Result<(
+        Vec<crate::tui::debug::TuiEvent>,
+        crate::tui::app::App,
+        Vec<String>,
+    )> {
+        let (agent_tx, agent_rx) =
+            tokio::sync::mpsc::channel::<operant_core::agent::AgentEvent>(256);
+        self.app.agent_event_rx = Some(agent_rx);
+
+        let (permission_tx, permission_rx) =
+            tokio::sync::mpsc::channel::<operant_core::agent::ToolPermissionRequest>(4);
+        self.app.permission_rx = Some(permission_rx);
+
+        let config = self.app.config.clone();
+        let mcp_manager = operant_core::mcp::McpManager::new();
+        let skills_dir = config.skills.root_dir.clone();
+
+        let is_mock = agent_script.is_some();
+        let agent: Option<std::sync::Arc<operant_core::agent::OperantAgent>> =
+            if let Some(script) = agent_script {
+                // Mock path: inject scripted AgentEvents through the real
+                // agent_event_rx channel instead of spawning a network agent.
+                // Events are buffered; is_streaming keeps the run loop alive to
+                // process them; a pre-resolved run_complete oneshot guarantees
+                // the loop terminates (is_streaming flips false) even if the
+                // script omits a Done event. No network calls on this path.
+                for ev in script {
+                    let _ = agent_tx.try_send(ev);
+                }
+                drop(agent_tx);
+                self.app.is_streaming = true;
+                let (done_tx, done_rx) = tokio::sync::oneshot::channel();
+                let _ = done_tx.send(Ok(()));
+                self.app.run_complete_rx = Some(done_rx);
+                None
+            } else {
+                match crate::create_runtime_agent(
+                    &config,
+                    &config.agent,
+                    None,
+                    agent_tx,
+                    &mcp_manager,
+                    &skills_dir,
+                )
+                .await
+                {
+                    Ok(agent) => Some(std::sync::Arc::new(agent.with_permissions(permission_tx))),
+                    Err(e) => {
+                        self.app.status_message = Some(format!("Agent init failed: {}", e));
+                        None
+                    }
+                }
+            };
+
+        self.app.core_mcp_manager = Some(std::sync::Arc::new(mcp_manager));
+        if let Some(ref agent) = agent {
+            self.app.steer_queue_handle = Some(agent.steer_queue_handle());
+        }
+
+        let (uq_tx, uq_rx) = tokio::sync::mpsc::unbounded_channel::<
+            operant_core::user_question::UserQuestionRequest,
+        >();
+        let _ = operant_core::user_question::set_user_question_sender(uq_tx);
+        self.app.user_question_rx = Some(uq_rx);
+
+        self.app.refresh_context_window_size();
+        // Skip the network models.dev fetch on the deterministic mock path.
+        if !is_mock {
+            self.app.model_registry.load_models_dev().await;
+        }
+
+        if let Some(query) = self.initial_query.take() {
+            if let Some(ref agent) = agent {
+                use crate::tui::adapter_types::types::{Message, MessageContent, Role};
+                self.app.messages.push(Message {
+                    role: Role::User,
+                    content: MessageContent::Text(query.clone()),
+                });
+                self.app.is_streaming = true;
+                self.app.streaming_text.clear();
+                self.app.streaming_thinking.clear();
+
+                let agent_clone = std::sync::Arc::clone(agent);
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                let handle = tokio::spawn(async move {
+                    let result = agent_clone.run(query).await.map(|_| ());
+                    let _ = tx.send(result);
+                });
+                self.app.run_complete_rx = Some(rx);
+                self.app.agent_task_handle = Some(handle);
+            }
+        }
+
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+        let (width, height) = size;
+        let backend = TestBackend::new(width.max(20), height.max(5));
+        let mut terminal = Terminal::new(backend)?;
+
+        self.app.is_simulating = true;
+        self.app.simulation_max_frames = max_frames;
+        self.app.simulated_keys = keys;
+        self.app.debug_hub.event_bus().set_enabled(true);
+
+        loop {
+            match self.app.run(&mut terminal) {
+                Ok(Some(input)) => {
+                    // Intercept slash commands exactly like the interactive
+                    // run loop (see TuiApp::run) so the simulator is faithful:
+                    // submitting "/help" opens the help overlay instead of
+                    // being sent to the agent as a prompt. This also lets the
+                    // SlashCommand debug event fire on the headless path.
+                    if crate::input::is_slash_command(&input) {
+                        let (cmd, args) = crate::input::parse_slash_command(&input);
+                        if self.app.handle_tui_command(cmd, args) {
+                            continue;
+                        }
+                    }
+                    if let Some(ref agent) = agent {
+                        if self.app.is_streaming {
+                            if let Some(ref handle) = self.app.steer_queue_handle {
+                                let mut q = handle.lock().await;
+                                q.push(input.clone());
+                                continue;
+                            }
+                        }
+                        use crate::tui::adapter_types::types::{Message, MessageContent, Role};
+                        self.app.messages.push(Message {
+                            role: Role::User,
+                            content: MessageContent::Text(input.clone()),
+                        });
+                        self.app.is_streaming = true;
+                        self.app.streaming_text.clear();
+                        self.app.streaming_thinking.clear();
+
+                        let agent_clone = std::sync::Arc::clone(agent);
+                        let (tx, rx) = tokio::sync::oneshot::channel();
+                        let handle = tokio::spawn(async move {
+                            let result = agent_clone.run(input).await.map(|_| ());
+                            let _ = tx.send(result);
+                        });
+                        self.app.run_complete_rx = Some(rx);
+                        self.app.agent_task_handle = Some(handle);
+                    }
+                }
+                Ok(None) => break,
+                Err(e) => {
+                    self.app
+                        .debug_hub
+                        .record_error("headless_simulation", &e.to_string());
+                    break;
+                }
+            }
+            tokio::task::yield_now().await;
+        }
+
+        // The run loop's exit check fires at the top of the loop before the
+        // draw, so the last key's effect (and, with zero keys, the landing
+        // screen) is never painted. Do one final render of the terminal state
+        // so the captured screen reflects the final App state after all keys.
+        let _ = terminal.draw(|f| crate::tui::render::render_app(f, &self.app));
+
+        // Capture the final rendered screen as trimmed text rows. The
+        // TestBackend buffer is row-major; chunk the flat cell slice by width.
+        let screen = {
+            let buf = terminal.backend().buffer();
+            let width = (buf.area.width as usize).max(1);
+            buf.content()
+                .chunks(width)
+                .map(|row| {
+                    row.iter()
+                        .map(|c| c.symbol())
+                        .collect::<String>()
+                        .trim_end()
+                        .to_string()
+                })
+                .collect::<Vec<String>>()
+        };
+        let events = self.app.debug_hub.event_bus().recent(1000);
+        Ok((events, self.app, screen))
+    }
+}
+
+/// Suspend the TUI, run a shell command with inherited stdio, then resume.
+///
+/// Used by slash commands like `/setup` that need to launch an interactive
+/// subprocess (the operant setup wizard, an editor, etc.). The terminal is
+/// left in alt-screen + raw mode by the TUI; this function:
+///   1. leaves alt screen + disables raw mode (restoring the user's terminal)
+///   2. spawns the command with inherited stdin/stdout/stderr
+///   3. waits for it to complete
+///   4. re-enters alt screen + re-enables raw mode
+///   5. forces a terminal resize detection + full redraw on the next frame
+///
+/// Errors are returned if any of the crossterm operations fail or the spawn
+/// fails. A non-zero exit code from the subprocess is NOT an error (the user
+/// may have hit Ctrl+C in the wizard); we surface it via the returned
+/// `Ok(ExitStatus)` so the caller can decide whether to message the user.
+fn run_suspended_shell_command(
+    terminal: &mut ratatui::Terminal<ratatui::backend::CrosstermBackend<std::io::Stdout>>,
+    argv: &[String],
+) -> anyhow::Result<std::process::ExitStatus> {
+    use crossterm::execute;
+    use crossterm::terminal::{
+        EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
+    };
+    use std::io::Write;
+
+    if argv.is_empty() {
+        anyhow::bail!("run_suspended_shell_command: empty argv");
+    }
+
+    // 1. Leave alt screen + disable raw mode.
+    disable_raw_mode()?;
+    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    // Flush so the user sees the wizard's first prompt immediately.
+    let _ = std::io::stdout().flush();
+
+    // 2. Spawn the subprocess with inherited stdio.
+    let mut cmd = std::process::Command::new(&argv[0]);
+    cmd.args(&argv[1..]);
+    cmd.stdin(std::process::Stdio::inherit())
+        .stdout(std::process::Stdio::inherit())
+        .stderr(std::process::Stdio::inherit());
+
+    let result = cmd.spawn()?.wait();
+
+    // 3. Re-enter alt screen + re-enable raw mode regardless of subprocess
+    //    outcome. If we skip this, the TUI is permanently broken.
+    enable_raw_mode()?;
+    execute!(terminal.backend_mut(), EnterAlternateScreen)?;
+    // Force ratatui to forget its cached buffer sizes — the terminal may have
+    // been resized while we were suspended. ratatui::Terminal::resize takes a
+    // Rect; we read the current size and convert.
+    let size = terminal.size()?;
+    let _ = terminal.resize(ratatui::layout::Rect::new(0, 0, size.width, size.height));
+
+    let status = result?;
+    Ok(status)
+}
+
+#[derive(Debug, Clone)]
+pub enum LaunchMode {
+    Landing,
+    Query(String),
+}

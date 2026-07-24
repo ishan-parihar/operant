@@ -2,19 +2,20 @@
 
 use crate::tui::adapter_types::types::Role;
 use crate::tui::app::App;
+use crate::tui::figures;
 use crate::tui::prompt_input::{
     InputMode, TypeaheadSource, VimMode, input_height, render_prompt_input,
 };
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use unicode_width::UnicodeWidthStr;
 
-use super::{shimmer_spans, truncate_end, truncate_middle, ACCENT_PRIMARY, STATUS_THINKING, STATUS_THINKING_ELLIPSIS};
+use super::{shimmer_spans, spinner_char, spinner_color, truncate_end, truncate_middle, truncate_text, ACCENT_PRIMARY, STATUS_THINKING, STATUS_THINKING_ELLIPSIS};
 
-fn render_input(frame: &mut Frame, app: &App, area: Rect, focused: bool) {
+pub(crate) fn render_input(frame: &mut Frame, app: &App, area: Rect, focused: bool) {
     // Split: 1-row model/mode status line + remaining rows for the prompt input.
     let (status_area, input_area) = if area.height > 2 {
         let splits = Layout::default()
@@ -166,7 +167,7 @@ fn render_input(frame: &mut Frame, app: &App, area: Rect, focused: bool) {
     );
 }
 
-fn should_render_status_row(app: &App) -> bool {
+pub(crate) fn should_render_status_row(app: &App) -> bool {
     let interesting_stream_status = app
         .status_message
         .as_deref()
@@ -184,7 +185,7 @@ fn should_render_status_row(app: &App) -> bool {
         || (app.is_streaming && interesting_stream_status)
 }
 
-fn render_status_row(frame: &mut Frame, app: &App, area: Rect) {
+pub(crate) fn render_status_row(frame: &mut Frame, app: &App, area: Rect) {
     if area.height == 0 {
         return;
     }
@@ -253,22 +254,13 @@ fn render_status_row(frame: &mut Frame, app: &App, area: Rect) {
     );
 }
 
-/// Build spans for a text string with a right-to-left glimmer sweep, matching
-/// the TS `GlimmerMessage` behaviour (glimmerSpeed=200ms, 3-char shimmer window).
-///
-/// At ~50ms per frame a 4-frame step ≈ 200ms, giving the same cadence as TS.
-    if !run.is_empty() {
-        spans.push(Span::styled(run, if run_bright { bright } else { base }));
-    }
-    spans
-}
 // Keybinding hints footer
 // -----------------------------------------------------------------------
 
 /// Single footer line matching the TS contract more closely:
 /// - `? for shortcuts` is suppressed once the prompt becomes non-empty
 /// - the right side shows comprehensive status info and notifications
-fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
+pub(crate) fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
     if area.height == 0 {
         return;
     }
@@ -618,7 +610,7 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(Paragraph::new(vec![Line::from(spans)]), padded_area);
 }
 
-fn render_prompt_suggestions(frame: &mut Frame, app: &App, area: Rect) {
+pub(crate) fn render_prompt_suggestions(frame: &mut Frame, app: &App, area: Rect) {
     let suggestions = &app.prompt_input.suggestions;
     if suggestions.is_empty() || area.height == 0 {
         return;

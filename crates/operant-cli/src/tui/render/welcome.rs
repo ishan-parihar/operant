@@ -11,7 +11,7 @@ use ratatui::widgets::{Block, BorderType, Borders, Paragraph, Wrap};
 
 use super::{truncate_end, ACCENT_PRIMARY, WELCOME_BOX_HEIGHT};
 
-fn startup_notice_lines(app: &App, width: u16) -> Vec<Line<'static>> {
+pub(crate) fn startup_notice_lines(app: &App, width: u16) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     let max_width = width.saturating_sub(10) as usize;
     // (iter-141: away_summary render branch deleted — field was always None)
@@ -36,7 +36,7 @@ fn startup_notice_lines(app: &App, width: u16) -> Vec<Line<'static>> {
     lines
 }
 
-fn render_startup_notices(frame: &mut Frame, app: &App, area: Rect) {
+pub(crate) fn render_startup_notices(frame: &mut Frame, app: &App, area: Rect) {
     if area.height == 0 {
         return;
     }
@@ -47,8 +47,7 @@ fn render_startup_notices(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), area);
 }
 
-#[derive(Clone)]
-fn render_banner_block(frame: &mut Frame, _app: &App, area: Rect) {
+pub(crate) fn render_banner_block(frame: &mut Frame, _app: &App, area: Rect) {
     use crate::tui::banner;
 
     if area.height == 0 || area.width == 0 {
@@ -94,7 +93,7 @@ fn render_banner_block(frame: &mut Frame, _app: &App, area: Rect) {
 }
 
 /// Render the two-column orange round-bordered welcome box (matches TS LogoV2).
-fn render_welcome_box(frame: &mut Frame, app: &App, area: Rect) {
+pub(crate) fn render_welcome_box(frame: &mut Frame, app: &App, area: Rect) {
     // --- Box dimensions ---
     // The box should be at most the full area width, and a fixed height.
     let box_width = area.width;
@@ -310,6 +309,3 @@ fn render_welcome_box(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 // â”€â”€ Per-message rendering â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-
-/// Build a tool_use_id → tool_name lookup from all messages in the transcript.
-/// This allows ToolResult blocks to dispatch to tool-specific renderers.

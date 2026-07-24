@@ -1,3 +1,4 @@
+use crate::tui::adapter_types::types::Role;
 // render/messages.rs — Message pane rendering, turn items, live content.
 
 use crate::tui::app::{App, SystemAnnotation, ToolStatus};
@@ -20,7 +21,7 @@ use super::cache::*;
 use super::{build_tool_names, render_system_annotation_lines, render_tool_block_lines, shimmer_spans};
 use super::{ACCENT_PRIMARY, RenderedLineItem};
 
-fn render_messages(frame: &mut Frame, app: &App, area: Rect) {
+pub(crate) fn render_messages(frame: &mut Frame, app: &App, area: Rect) {
     let content_area = area; // (iter-143: plugin_hints deleted — Vec was always empty)
 
     // Welcome block and banner removed — always use the full content area for messages.
@@ -216,7 +217,7 @@ fn push_blank_item(items: &mut Vec<RenderedLineItem>) {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn append_turn_items(
+pub(crate) fn append_turn_items(
     items: &mut Vec<RenderedLineItem>,
     turn: &TranscriptTurn<'_>,
     width: u16,
@@ -316,7 +317,7 @@ fn append_turn_items(
     push_blank_item(items);
 }
 
-fn render_message_items(app: &App, width: u16) -> Vec<RenderedLineItem> {
+pub(crate) fn render_message_items(app: &App, width: u16) -> Vec<RenderedLineItem> {
     let streaming =
         app.is_streaming || !app.streaming_text.is_empty() || !app.streaming_thinking.is_empty();
     let has_running_tool_blocks = app
@@ -465,7 +466,7 @@ fn render_message_items(app: &App, width: u16) -> Vec<RenderedLineItem> {
 /// completed messages → live thinking → live tool calls → live text.
 /// (iter-118 — user-reported bug: thinking was always at the bottom while
 /// tool calls piled up above it, breaking the causation chain order.)
-fn append_live_content(
+pub(crate) fn append_live_content(
     app: &App,
     mut items: Vec<RenderedLineItem>,
     width: u16,
@@ -531,10 +532,3 @@ fn append_live_content(
 }
 
 // â”€â”€ Welcome / startup screen â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-
-/// Render the OPERANT ASCII wordmark banner above the welcome box.
-///
-/// The banner is responsive: full 7-line art + dim version rule at >=80 cols,
-/// compact 4-line art + version rule at >=40 cols, nothing below 40 cols (the
-/// welcome box itself shows a styled text fallback). The art is centered
-/// horizontally within `area`.
