@@ -1,3 +1,4 @@
+#![allow(dead_code)] // Foundation modules for future multi-crate extraction — wired in Phase 2I
 //! TuiState trait — the presentation interface for the transcript renderer.
 //!
 //! Instead of the renderer taking `&App` directly (tight coupling), it takes

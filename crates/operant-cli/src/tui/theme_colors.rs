@@ -1,3 +1,4 @@
+#![allow(dead_code)] // Foundation modules for future multi-crate extraction — wired in Phase 2I
 // theme_colors.rs — Color palette management for accessibility-friendly themes.
 //
 // Provides color definitions for different themes, with special support for

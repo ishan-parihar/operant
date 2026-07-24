@@ -1,3 +1,4 @@
+#![allow(dead_code)] // Foundation modules for future multi-crate extraction — wired in Phase 2I
 //! Operant ASCII wordmark banner.
 //!
 //! Renders the OPERANT wordmark in three sizes (full / compact / minimal) so

@@ -1,3 +1,4 @@
+#![allow(dead_code)] // Foundation modules for future multi-crate extraction — wired in Phase 2I
 // image_render.rs — Kitty/Sixel/iTerm2 inline image rendering for TUI.
 //
 // Provides terminal capability detection and image rendering via:
