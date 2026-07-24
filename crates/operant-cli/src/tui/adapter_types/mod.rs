@@ -13,6 +13,13 @@ pub mod tips;
 pub mod git_utils;
 pub mod spinner;
 pub mod tools;
+pub mod helpers;
+pub mod auth;
+pub mod free_catalog;
+pub mod model_registry;
+pub mod anthropic_client;
+pub mod provider_id;
+pub mod tui_app;
 pub mod items;
 
 // Flat re-exports for backward compatibility.
