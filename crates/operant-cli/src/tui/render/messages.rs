@@ -17,7 +17,7 @@ use ratatui::widgets::Widget;
 use unicode_width::UnicodeWidthStr;
 
 use super::cache::*;
-use super::{append_turn_items, build_tool_names, render_system_annotation_lines, render_tool_block_lines, shimmer_spans};
+use super::{build_tool_names, render_system_annotation_lines, render_tool_block_lines, shimmer_spans};
 use super::{ACCENT_PRIMARY, RenderedLineItem};
 
 fn render_messages(frame: &mut Frame, app: &App, area: Rect) {
