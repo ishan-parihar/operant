@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use operant_core::voice::{
-    AudioEnvironment, AudioRecorder, SttEngine, SttResult, VoiceConfig, VoiceError,
+    AudioEnvironment, AudioRecorder, SttEngine, VoiceConfig, VoiceError,
     create_recorder, create_stt_engine, detect_audio_environment,
 };
 use ratatui::buffer::Buffer;

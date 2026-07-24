@@ -9,7 +9,6 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Widget};
 
-use crate::tui::overlays::centered_rect;
 use std::collections::HashMap;
 
 // ---------------------------------------------------------------------------

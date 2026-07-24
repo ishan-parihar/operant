@@ -36,13 +36,12 @@ pub mod ws_approval;
 
 use anyhow::{Context, Result};
 use axum::{
-    Extension, Router,
+    Router,
     body::Bytes,
     extract::{ConnectInfo, Query, State},
     http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Json},
-    routing::{delete, get, patch, post},
-    serve,
+    routing::get,
 };
 use axum_server::tls_rustls::RustlsConfig;
 use operant_api::channel::{Channel, SendMessage};
@@ -53,15 +52,13 @@ use operant_channels::nextcloud_talk::NextcloudTalkChannel;
 use operant_channels::wati::WatiChannel;
 use operant_channels::whatsapp::WhatsAppChannel;
 use operant_config::pairing::PairingGuard;
-use operant_config::policy::SecurityPolicy;
 use operant_config::schema::Config;
 use operant_infra::session_backend::SessionBackend;
 use operant_memory::{self, Memory, MemoryCategory};
 use operant_providers::{self, Provider};
 use operant_runtime::cost::CostTracker;
-use operant_runtime::observability::{self, Observer, ObserverEvent, set_scoped_broadcast_hook};
-use operant_runtime::platform;
-use operant_runtime::security::pairing::{constant_time_eq, is_public_bind};
+use operant_runtime::observability::{Observer, set_scoped_broadcast_hook};
+use operant_runtime::security::pairing::constant_time_eq;
 use operant_runtime::tools;
 use operant_runtime::tools::CanvasStore;
 use operant_runtime::util::truncate_with_ellipsis;
@@ -70,7 +67,6 @@ use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tower::Service;
 use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::timeout::TimeoutLayer;
 use uuid::Uuid;
@@ -121,27 +117,27 @@ pub const RATE_LIMIT_MAX_KEYS_DEFAULT: usize = 10_000;
 pub const IDEMPOTENCY_MAX_KEYS_DEFAULT: usize = 10_000;
 
 fn webhook_memory_key() -> String {
-    #[allow(dead_code)]
+    
     format!("webhook_msg_{}", Uuid::new_v4())
 }
 
 fn whatsapp_memory_key(msg: &operant_api::channel::ChannelMessage) -> String {
-    #[allow(dead_code)]
+    
     format!("whatsapp_{}_{}", msg.sender, msg.id)
 }
 
 fn linq_memory_key(msg: &operant_api::channel::ChannelMessage) -> String {
-    #[allow(dead_code)]
+    
     format!("linq_{}_{}", msg.sender, msg.id)
 }
 
 fn wati_memory_key(msg: &operant_api::channel::ChannelMessage) -> String {
-    #[allow(dead_code)]
+    
     format!("wati_{}_{}", msg.sender, msg.id)
 }
 
 fn nextcloud_talk_memory_key(msg: &operant_api::channel::ChannelMessage) -> String {
-    #[allow(dead_code)]
+    
     format!("nextcloud_talk_{}_{}", msg.sender, msg.id)
 }
 
@@ -456,11 +452,11 @@ impl AppState {
     pub fn new(
         config: Config,
         pairing: Arc<PairingGuard>,
-        shutdown_rx: tokio::sync::watch::Receiver<bool>,
-        event_tx: tokio::sync::broadcast::Sender<serde_json::Value>,
-        external_event_tx: Option<tokio::sync::broadcast::Sender<serde_json::Value>>,
-        reload_tx: Option<tokio::sync::watch::Sender<bool>>,
-        canvas_store: Option<CanvasStore>,
+        _shutdown_rx: tokio::sync::watch::Receiver<bool>,
+        _event_tx: tokio::sync::broadcast::Sender<serde_json::Value>,
+        _external_event_tx: Option<tokio::sync::broadcast::Sender<serde_json::Value>>,
+        _reload_tx: Option<tokio::sync::watch::Sender<bool>>,
+        _canvas_store: Option<CanvasStore>,
     ) -> Self {
         let config = Arc::new(Mutex::new(config));
 
@@ -572,7 +568,7 @@ impl AppState {
 /// Create a test AppState for unit tests.
 pub fn test_state(config: operant_config::schema::Config) -> AppState {
     let (event_tx, _event_rx) = tokio::sync::broadcast::channel(16);
-    let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
+    let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let pairing = Arc::new(operant_config::pairing::PairingGuard::new(false, &[]));
 
     AppState::new(config, pairing, shutdown_rx, event_tx, None, None, None)
@@ -619,7 +615,7 @@ pub async fn run_gateway(
     };
 
     // ── Build application router ──────────────────────────────────
-    let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
+    let (_shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
     let (event_tx, _event_rx) = tokio::sync::broadcast::channel(128);
 
     // Create a broadcast observer that forwards events to the SSE channel
@@ -755,7 +751,7 @@ fn paircode_recovery_host_arg(host: &str) -> Option<&str> {
 }
 
 fn format_paircode_recovery_curl(host: &str, port: u16, path_prefix: &str) -> String {
-    #[allow(dead_code)]
+    
     format!("curl -s -X POST http://{host}:{port}{path_prefix}/admin/paircode/new")
 }
 

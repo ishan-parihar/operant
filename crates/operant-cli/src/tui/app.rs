@@ -101,7 +101,7 @@ fn import_config_picker_items() -> Vec<SelectItem> {
 }
 
 fn provider_picker_items() -> Vec<SelectItem> {
-    use crate::provider::ProviderDef;
+    
 
     // Special entries not in PROVIDERS (composite/virtual providers)
     let mut items = vec![
@@ -1531,7 +1531,7 @@ impl App {
             let (tx, rx) = tokio::sync::mpsc::channel(1);
             self.model_fetch_rx = Some(rx);
             tokio::spawn(async move {
-                let fetch_result = registry
+                let _fetch_result = registry
                     .fetch_from_provider_async(&provider_id, &key, &url)
                     .await;
                 // Check if fetch returned any models; if empty, it's likely an error

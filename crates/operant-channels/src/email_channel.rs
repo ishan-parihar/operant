@@ -11,7 +11,6 @@
 use anyhow::{Result, anyhow};
 use async_imap::Session;
 use async_imap::extensions::idle::IdleResponse;
-use async_imap::types::Fetch;
 use async_trait::async_trait;
 use futures_util::TryStreamExt;
 use lettre::message::header::ContentType;
@@ -29,7 +28,7 @@ use tokio::sync::{Mutex, mpsc};
 use tokio::time::{sleep, timeout};
 use tokio_rustls::TlsConnector;
 use tokio_rustls::client::TlsStream;
-use tokio_util::compat::{Compat, TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
+use tokio_util::compat::TokioAsyncReadCompatExt;
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
