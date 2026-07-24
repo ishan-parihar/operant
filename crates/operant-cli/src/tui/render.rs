@@ -28,7 +28,7 @@ use crate::tui::key_input_dialog::render_key_input_dialog;
 use crate::tui::mcp_view::render_mcp_view;
 use crate::tui::memory_file_selector::render_memory_file_selector;
 use crate::tui::messages::{
-    RenderContext, render_markdown, render_thinking_live_content,
+    RenderContext, render_thinking_live_content,
     render_transcript_assistant_message_tagged, render_transcript_assistant_meta,
     render_transcript_live_text, render_transcript_user_message,
 };
@@ -42,10 +42,6 @@ use crate::tui::prompt_input::{
 };
 use crate::tui::settings_screen::render_settings_screen;
 use crate::tui::stats_dialog::render_stats_dialog;
-use crate::tui::theme_colors::palette_for_theme;
-use crate::tui::theme_colors::{
-    ColorPalette, get_error_color, get_success_color, get_warning_color,
-};
 use crate::tui::theme_screen::render_theme_screen;
 use crate::tui::transcript_turn::{TranscriptTurn, build_transcript_turns};
 use crate::tui::virtual_list::{VirtualItem, VirtualList};

@@ -12,7 +12,6 @@ use rustls::server::WebPkiClientVerifier;
 use rustls::server::danger::{ClientCertVerified, ClientCertVerifier};
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
-use tokio_rustls::TlsAcceptor;
 
 /// Build a [`rustls::ServerConfig`] from the gateway TLS configuration.
 pub fn build_rustls_config(config: &GatewayTlsConfig) -> Result<rustls::ServerConfig> {

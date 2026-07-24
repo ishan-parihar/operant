@@ -1059,7 +1059,7 @@ pub fn render_tool_result_error(error: &str) -> Vec<Line<'static>> {
 /// Render a bash command input line with a green `$ ` prefix.
 #[allow(dead_code)] // Bash input line renderer
 pub fn render_bash_input_line(command: &str) -> Vec<Line<'static>> {
-    #[allow(dead_code)]
+    
     vec![Line::from(vec![
         Span::styled(
             "  $ ".to_string(),

@@ -4,17 +4,11 @@
 
 use super::AppState;
 use axum::{
-    Router,
     extract::{Path, Query, State},
     http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Json},
-    routing::{delete, get, patch, post},
 };
-use operant_config::pairing::PairingGuard;
 use serde::Deserialize;
-use std::sync::Arc;
-use tokio::sync::broadcast;
-use tokio::sync::watch;
 
 // ── Bearer token auth extractor ─────────────────────────────────
 
@@ -2346,22 +2340,12 @@ pub fn router(
     reload_tx: Option<tokio::sync::watch::Sender<bool>>,
     canvas_store: Option<crate::tools::CanvasStore>,
 ) -> axum::Router<super::AppState> {
-    use crate::{
-        auth_rate_limit::AuthRateLimiter, session_queue::SessionActorQueue, sse::EventBuffer,
-        tools::CanvasStore,
-    };
-    use axum::{
-        Router,
-        routing::{delete, get, patch, post},
-    };
-    use operant_memory::Memory;
-    use operant_providers::Provider;
-    use operant_runtime::cron::CronJob;
-    use std::{
-        collections::HashMap,
-        sync::{Arc, Mutex},
-        time::Duration,
-    };
+    
+    use axum::Router;
+    
+    
+    
+    
 
     // Build the AppState from the config
     let state = super::AppState::new(
@@ -2458,7 +2442,7 @@ pub fn cron_router(config: operant_config::schema::Config) -> axum::Router {
     use parking_lot::Mutex as ParkingMutex;
     use std::{
         collections::HashMap,
-        sync::{Arc, Mutex},
+        sync::Arc,
         time::Duration,
     };
     use tokio::sync::broadcast;

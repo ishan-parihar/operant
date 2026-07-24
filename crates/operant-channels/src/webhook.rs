@@ -1,11 +1,9 @@
 use anyhow::{Result, bail};
 use async_trait::async_trait;
 use axum::{
-    Router,
     body::Bytes,
     extract::State,
     http::{HeaderMap, StatusCode},
-    routing::post,
 };
 use operant_api::channel::{Channel, ChannelMessage, SendMessage};
 use portable_atomic::{AtomicU64, Ordering};
@@ -244,17 +242,13 @@ impl Channel for WebhookChannel {
 
     async fn listen(&self, tx: tokio::sync::mpsc::Sender<ChannelMessage>) -> Result<()> {
         use axum::{
-            Router,
             body::Bytes,
             extract::State,
             http::{HeaderMap, StatusCode},
             routing::post,
         };
-        use hyper_util::{
-            rt::{TokioExecutor, TokioIo},
-            server::conn::auto::Builder,
-        };
-        use tower::{Service, ServiceBuilder, ServiceExt, limit::ConcurrencyLimitLayer};
+        
+        use tower::{Service, ServiceExt};
 
         let counter = Arc::new(AtomicU64::new(0));
 
@@ -318,7 +312,7 @@ impl Channel for WebhookChannel {
                                 return StatusCode::BAD_REQUEST;
                             }
 
-                            let seq = state.counter.fetch_add(1, Ordering::Relaxed);
+                            let _seq = state.counter.fetch_add(1, Ordering::Relaxed);
 
                             #[allow(clippy::cast_possible_truncation)]
                             let timestamp = std::time::SystemTime::now()
@@ -369,7 +363,7 @@ impl Channel for WebhookChannel {
         let make_svc = app.into_make_service();
         let acceptor =
             hyper_util::server::conn::auto::Builder::new(hyper_util::rt::TokioExecutor::new());
-        let (shutdown_tx, mut shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+        let (_shutdown_tx, mut shutdown_rx) = tokio::sync::oneshot::channel::<()>();
         loop {
             tokio::select! {
                 result = listener.accept() => {

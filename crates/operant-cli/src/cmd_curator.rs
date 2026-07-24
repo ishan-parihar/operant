@@ -214,7 +214,7 @@ async fn cmd_run(config: &AppConfig, engine: &CuratorEngine, background: bool, d
             }
         };
 
-        if let Some(api_key) = key {
+        if let Some(_api_key) = key {
             let model_client: Arc<dyn operant_core::agent::ModelClient> = match provider.as_str() {
                 #[cfg(feature = "anthropic")]
                 "anthropic" => {
