@@ -1,3 +1,4 @@
+#![allow(dead_code)] // Foundation modules for future multi-crate extraction — wired in Phase 2I
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 

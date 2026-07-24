@@ -1,3 +1,4 @@
+#![allow(dead_code)] // Foundation modules for future multi-crate extraction — wired in Phase 2I
 //! Prepared-frame message cache for efficient transcript rendering.
 //!
 //! Instead of re-rendering markdown on every frame, we cache rendered

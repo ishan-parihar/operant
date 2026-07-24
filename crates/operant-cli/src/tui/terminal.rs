@@ -1,3 +1,4 @@
+#![allow(dead_code)] // Foundation modules for future multi-crate extraction — wired in Phase 2I
 //! Terminal setup/teardown with panic hook for the ratatui-based TUI.
 //!
 //! Without a panic hook, any panic in rendering code leaves the terminal in

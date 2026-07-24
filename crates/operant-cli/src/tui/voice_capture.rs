@@ -1,3 +1,4 @@
+#![allow(dead_code)] // Foundation modules for future multi-crate extraction — wired in Phase 2I
 // voice_capture.rs — Push-to-talk voice capture for TUI.
 //
 // Integrates with operant_core::voice for audio recording, STT, and TTS.

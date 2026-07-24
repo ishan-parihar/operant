@@ -1,3 +1,4 @@
+#![allow(dead_code)] // Foundation modules for future multi-crate extraction — wired in Phase 2I
 // keybindings.rs — Custom keybinding system for the TUI.
 //
 // Provides a flexible keybinding system that goes beyond simple vim_enabled bool,
