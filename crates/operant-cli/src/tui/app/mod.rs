@@ -2241,6 +2241,8 @@ impl App {
 
 
 #[cfg(test)]
+}
+
 mod tests {
     use super::*;
     use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};

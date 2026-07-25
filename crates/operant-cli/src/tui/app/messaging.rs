@@ -3,7 +3,7 @@
 use super::*;
 
 impl App {
-    fn flush_streamed_assistant_message(&mut self) {
+    pub(super) fn flush_streamed_assistant_message(&mut self) {
         if self.streaming_text.trim().is_empty() && self.streaming_thinking.trim().is_empty() {
             self.streaming_text.clear();
             self.streaming_thinking.clear();
@@ -83,7 +83,7 @@ impl App {
 
     /// Called whenever a new message is appended to `messages`.
     /// Manages the auto-scroll / new-message-counter state.
-    fn on_new_message(&mut self) {
+    pub(super) fn on_new_message(&mut self) {
         if self.auto_scroll {
             // Auto-scroll: keep offset at 0 so render shows the bottom.
             self.scroll_offset = 0;
