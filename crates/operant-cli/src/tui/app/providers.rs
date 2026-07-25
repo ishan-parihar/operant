@@ -218,7 +218,7 @@ impl App {
         }
         self.model_name = model.clone();
         self.config.agent.model = model.clone();
-        if let Some(provider) = super::provider::infer_provider_from_model(&model) {
+        if let Some(provider) = crate::tui::provider::infer_provider_from_model(&model) {
             self.active_provider = Some(provider);
         }
         self.refresh_context_window_size();
@@ -283,5 +283,5 @@ impl App {
         self.clear_prompt();
     }
 
-    /// Handle slash commands that should open UI screens rather than execute
+    // Handle slash commands that should open UI screens rather than execute
 }
