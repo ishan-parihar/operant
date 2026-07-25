@@ -3,7 +3,7 @@
 mod enums;
 mod helpers;
 pub use enums::*;
-pub use helpers::*;
+use helpers::*;
 
 use crate::tui::adapter_types::config::{Settings, Theme};
 use crate::tui::adapter_types::cost::CostTracker;
@@ -18,7 +18,7 @@ use crate::tui::mcp_view::{McpServerView, McpToolView, McpViewState, McpViewStat
 use crate::tui::model_picker::{EffortLevel, ModelPickerState};
 use crate::tui::notifications::{NotificationKind, NotificationQueue};
 use crate::tui::overlays::{
-    GlobalSearchState, HelpEntry, HelpOverlay, HistorySearchOverlay, RewindFlowOverlay,
+    GlobalSearchState, HelpOverlay, HistorySearchOverlay, RewindFlowOverlay,
     SelectorMessage,
 };
 use crate::tui::prompt_input::{InputMode, PromptInputState, VimMode};
@@ -34,7 +34,6 @@ use crate::tui::{
 };
 use operant_core::config::AppConfig;
 // (iter-209: FileHistory import deleted — stub removed, turn-diff feature cut)
-use crate::provider::PROVIDERS;
 use crate::tui::adapter_types::types::{ContentBlock, Message, Role};
 use crate::tui::adapter_types::{sample_completion_verb, sample_spinner_verb};
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
