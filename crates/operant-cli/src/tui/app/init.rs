@@ -47,7 +47,7 @@ impl App {
             }
         };
         let initial_active_provider =
-            super::provider::infer_provider_from_model(&config.agent.model);
+            super::super::provider::infer_provider_from_model(&config.agent.model);
         let (bridge_state_tx, bridge_state_rx) = tokio::sync::mpsc::unbounded_channel::<
             crate::tui::bridge_state::BridgeConnectionState,
         >();
