@@ -173,8 +173,4 @@ impl App {
         input
     }
 
-    /// Compute the number of lines to scroll per wheel/trackpad event.
-    /// Implements a simple acceleration model: rapid events (< 40 ms apart) are
-    /// treated as trackpad bursts and accelerate up to 2×; slower events (mouse
-    /// wheel) stay at the base 3-line step.
 }
