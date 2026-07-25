@@ -1904,13 +1904,13 @@ impl App {
 
     // (iter-164: fn handle_keybinding_action deleted — unused after keybinding processor removal)
 
-    /// Resolve the currently-shown permission dialog by mapping the selected
-    /// option to a `ToolPermissionResponse` and sending it to the agent.
-    /// Drops the dialog state and the response sender regardless of whether
-    /// the agent is still listening (send fails silently if the agent has
-    /// already timed out / been dropped).
-    ///
-    /// Option key mapping:
+    // Resolve the currently-shown permission dialog by mapping the selected
+    // option to a `ToolPermissionResponse` and sending it to the agent.
+    // Drops the dialog state and the response sender regardless of whether
+    // the agent is still listening (send fails silently if the agent has
+    // already timed out / been dropped).
+    //
+    // Option key mapping:
     //   `y` → AllowOnce
     //   `Y` → AllowSession
     //   `p` (persistent) → AllowSession (no persistent store wired yet —
