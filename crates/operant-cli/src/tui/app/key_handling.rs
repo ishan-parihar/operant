@@ -1911,8 +1911,8 @@ impl App {
     /// already timed out / been dropped).
     ///
     /// Option key mapping:
-    ///   `y` → AllowOnce
-    ///   `Y` → AllowSession
-    ///   `p` (persistent) → AllowSession (no persistent store wired yet —
-    ///       session-scoped is the closest equivalent)
+    //   `y` → AllowOnce
+    //   `Y` → AllowSession
+    //   `p` (persistent) → AllowSession (no persistent store wired yet —
+    //       session-scoped is the closest equivalent)
 }
