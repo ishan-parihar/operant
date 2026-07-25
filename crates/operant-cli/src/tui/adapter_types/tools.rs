@@ -5,10 +5,13 @@
 #[derive(Debug, Clone, PartialEq)]
 pub enum TaskStatus {
     Pending,
+    #[allow(dead_code)] // Prepared for task overlay integration
     Running,
     Completed,
+    #[allow(dead_code)] // Prepared for task overlay integration
     Failed,
     InProgress,
+    #[allow(dead_code)] // Prepared for task overlay integration
     Deleted,
 }
 

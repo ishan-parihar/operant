@@ -19,10 +19,13 @@ pub enum BridgeConnectionState {
         peer_count: u32,
     },
     /// Lost connection and retrying.
+    #[allow(dead_code)] // Prepared for bridge reconnection UI
     Reconnecting { attempt: u32 },
     /// Connection failed unrecoverably.
+    #[allow(dead_code)] // Prepared for bridge failure UI
     Failed { reason: String },
     /// Outbound-only mode (no incoming peers).
+    #[allow(dead_code)] // Prepared for outbound-only bridge mode
     OutboundOnly,
 }
 

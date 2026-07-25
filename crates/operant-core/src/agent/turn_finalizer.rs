@@ -121,6 +121,7 @@ impl TurnDiagnostics {
     ///
     /// Ported from hermes-agent's `_format_turn_completion_explanation`.
     /// Returns `None` for healthy `TextResponse` exits (no explanation needed).
+    #[allow(dead_code)] // Prepared for UI integration — will surface turn-exit reasons
     pub fn explanation(&self) -> Option<String> {
         match self.exit_reason {
             TurnExitReason::TextResponse => None,

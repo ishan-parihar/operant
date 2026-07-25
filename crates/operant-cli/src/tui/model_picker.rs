@@ -321,11 +321,13 @@ impl ModelPickerState {
     /// `current_model` is highlighted as active; `current_effort` and
     /// `fast_mode` are carried over from app state so the user sees the live
     /// values.
+    #[allow(dead_code)] // Prepared for model picker initialization
     pub fn open(&mut self, current_model: &str) {
         self.open_with_state(current_model, EffortLevel::Normal, false);
     }
 
     /// Open the overlay with full state context.
+    #[allow(dead_code)] // Prepared for model picker with effort/fast mode state
     pub fn open_with_state(&mut self, current_model: &str, effort: EffortLevel, fast_mode: bool) {
         self.open_with_title("Select model", current_model, effort, fast_mode);
     }

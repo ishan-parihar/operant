@@ -11,6 +11,7 @@ use ratatui::widgets::{Block, BorderType, Borders, Paragraph, Wrap};
 
 use super::{truncate_end, ACCENT_PRIMARY, WELCOME_BOX_HEIGHT};
 
+#[allow(dead_code)] // Prepared for welcome screen rendering — not yet wired into render_app()
 pub(crate) fn startup_notice_lines(app: &App, width: u16) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     let max_width = width.saturating_sub(10) as usize;
@@ -36,6 +37,7 @@ pub(crate) fn startup_notice_lines(app: &App, width: u16) -> Vec<Line<'static>> 
     lines
 }
 
+#[allow(dead_code)] // Prepared for welcome screen rendering
 pub(crate) fn render_startup_notices(frame: &mut Frame, app: &App, area: Rect) {
     if area.height == 0 {
         return;
@@ -47,6 +49,7 @@ pub(crate) fn render_startup_notices(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), area);
 }
 
+#[allow(dead_code)] // Prepared for welcome screen rendering
 pub(crate) fn render_banner_block(frame: &mut Frame, _app: &App, area: Rect) {
     use crate::tui::banner;
 
@@ -93,6 +96,7 @@ pub(crate) fn render_banner_block(frame: &mut Frame, _app: &App, area: Rect) {
 }
 
 /// Render the two-column orange round-bordered welcome box (matches TS LogoV2).
+#[allow(dead_code)] // Prepared for welcome screen rendering
 pub(crate) fn render_welcome_box(frame: &mut Frame, app: &App, area: Rect) {
     // --- Box dimensions ---
     // The box should be at most the full area width, and a fixed height.
