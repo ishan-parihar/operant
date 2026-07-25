@@ -4,7 +4,7 @@ use super::*;
 
 impl App {
 
-    fn prompt_mode(&self) -> InputMode {
+    pub(super) fn prompt_mode(&self) -> InputMode {
         // Note: previously returned Readonly while streaming, but the prompt
         // now accepts input during streaming so the user can compose / queue
         // a follow-up message. Plan mode still wins.
@@ -15,14 +15,14 @@ impl App {
         }
     }
 
-    fn sync_legacy_prompt_fields(&mut self) {
+    pub(super) fn sync_legacy_prompt_fields(&mut self) {
         self.input = self.prompt_input.text.clone();
         self.cursor_pos = self.prompt_input.cursor;
     }
 
     /// Check if any modal dialog is open that should block suggestion updates.
     /// Mirrors claurst's file_injection_dialog guard for suggestion updates.
-    fn should_block_suggestions(&self) -> bool {
+    pub(super) fn should_block_suggestions(&self) -> bool {
         self.connect_dialog.visible
             || self.import_config_picker.visible
             || self.import_config_dialog.visible
@@ -151,7 +151,7 @@ impl App {
         None // Actual result is read by CLI loop via mcp_approval.visible + confirm()
     }
 
-    fn clear_prompt(&mut self) {
+    pub(super) fn clear_prompt(&mut self) {
         self.prompt_input.clear();
         self.refresh_prompt_input();
     }
