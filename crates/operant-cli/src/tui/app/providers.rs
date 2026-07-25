@@ -243,45 +243,4 @@ impl App {
         let _ = settings.save_sync();
         self.status_message = Some(format!("Theme set to: {}", theme_name));
     }
-
-    pub fn apply_provider_refresh(
-        &mut self,
-        config: AppConfig,
-        settings: Settings,
-        auth_store: crate::tui::adapter_types::AuthStore,
-        has_credentials: bool,
-        status_message: String,
-    ) {
-        self.close_secondary_views();
-        self.config = config;
-        self.settings = settings;
-        // (iter-158: provider_registry assignment deleted — field was always None)
-        self.model_registry.ensure_provider_defaults();
-        self.auth_store = auth_store;
-        self.connect_dialog = DialogSelectState::new("Connect a provider", provider_picker_items());
-        self.import_config_picker =
-            DialogSelectState::new("Import config", import_config_picker_items());
-        self.import_config_dialog = ImportConfigDialogState::new();
-        self.model_picker = ModelPickerState::new();
-        self.key_input_dialog = crate::tui::key_input_dialog::KeyInputDialogState::new();
-        self.custom_provider_dialog =
-            crate::tui::custom_provider_dialog::CustomProviderDialogState::new();
-        self.free_mode_dialog = crate::tui::free_mode_dialog::FreeModeDialogState::new();
-        self.device_auth_dialog = crate::tui::device_auth_dialog::DeviceAuthDialogState::new();
-        self.device_auth_pending = None;
-        self.pending_mcp_panel_auth = None;
-        self.model_picker_fetch_pending = false;
-        self.model_picker_provider_id = None;
-        self.has_credentials = has_credentials;
-        self.fast_mode = false;
-        let model_to_resolve = self.config.agent.model.clone();
-        self.model_name = self.resolve_stale_model(&model_to_resolve);
-        if let Some(tracker) = Arc::get_mut(&mut self.cost_tracker) {
-            tracker.set_model(&self.model_name);
-        }
-        self.status_message = Some(status_message);
-        self.clear_prompt();
-    }
-
-    // Handle slash commands that should open UI screens rather than execute
 }

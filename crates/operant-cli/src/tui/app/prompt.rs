@@ -127,6 +127,7 @@ impl App {
         pending
     }
 
+    #[allow(dead_code)] // Called from providers.rs
     pub(super) fn clear_prompt(&mut self) {
         self.prompt_input.clear();
         self.refresh_prompt_input();
