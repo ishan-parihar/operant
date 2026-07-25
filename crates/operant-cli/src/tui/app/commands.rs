@@ -33,7 +33,7 @@ impl App {
     /// `effort_picker` from `any_modal_open` in iter-227). Each entry is
     /// `(snapshot_key, is_visible)`. `permission_request` is tracked via
     /// `.is_some()` rather than a `.visible` flag.
-    fn overlay_flags(&self) -> [(&'static str, bool); 35] {
+    pub(crate) fn overlay_flags(&self) -> [(&'static str, bool); 35] {
         [
             ("help_overlay", self.help_overlay.visible),
             (

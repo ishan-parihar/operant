@@ -5885,7 +5885,7 @@ mod tests {
         let mut flag_keys: Vec<String> = app
             .overlay_flags()
             .iter()
-            .map(|(k, _)| k.to_string())
+            .map(|(k, _): (&str, bool)| k.to_string())
             .collect();
         flag_keys.sort();
 
