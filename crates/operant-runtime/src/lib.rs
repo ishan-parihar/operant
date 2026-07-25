@@ -1,3 +1,5 @@
+#![allow(unexpected_cfgs)] // operant_root_crate is set by workspace-level cfg for integration tests
+
 //! Agent runtime — orchestration, security, observability, cron, SOP, skills, hardware, and more.
 
 pub mod cli_input;

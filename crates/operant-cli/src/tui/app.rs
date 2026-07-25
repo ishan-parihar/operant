@@ -280,6 +280,7 @@ pub enum ContextMenuItem {
 
 /// Key context for determining which key bindings apply.
 /// Mirrors claurst's KeyContext for cleaner key routing.
+#[allow(dead_code)] // Prepared for key routing system
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeyContext {
     /// Normal prompt input mode
@@ -351,6 +352,7 @@ pub enum KeyContext {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum DialogPriority {
     /// No dialog active
+    #[allow(dead_code)] // Prepared for dialog priority routing
     None = 0,
     /// Context menu
     ContextMenu = 10,
@@ -710,9 +712,11 @@ pub struct App {
     /// Optional session title shown in the status bar.
     pub session_title: Option<String>,
     /// Remote session URL (set when bridge connects; readable by commands).
-    pub remote_session_url: Option<String>,
-    /// Bridge/gateway connection state for status bar badge.
-    pub bridge_state: crate::tui::bridge_state::BridgeConnectionState,
+    #[allow(dead_code)] // Prepared for bridge connection UI
+    pub remote_session_url: Option<String>,    /// Bridge/gateway connection state for status bar badge.
+    #[allow(dead_code)] // Prepared for bridge status badge
+    pub bridge_state:
+        crate::tui::bridge_state::BridgeConnectionState,
     /// Live MCP manager snapshot source when available.
     /// (iter-208: stub mcp_manager field deleted — load_mcp_servers now reads
     /// from core_mcp_manager directly.)
@@ -919,6 +923,7 @@ pub struct App {
         tokio::sync::mpsc::UnboundedReceiver<crate::tui::bridge_state::BridgeConnectionState>,
     >,
     /// Sender for bridge connection state updates (given to gateway handler).
+    #[allow(dead_code)] // Prepared for bridge connection handler
     pub bridge_state_tx:
         Option<tokio::sync::mpsc::UnboundedSender<crate::tui::bridge_state::BridgeConnectionState>>,
 
@@ -1394,6 +1399,9 @@ impl App {
             .unwrap_or_else(|| if self.plan_mode { "plan" } else { "build" }.to_string())
     }
 
+    #[allow(dead_code)] // Prepared for turn metadata tracking
+#[allow(dead_code)] // Prepared for turn metadata tracking
+#[allow(dead_code)] // Prepared for turn metadata tracking
     fn begin_user_turn_snapshot(&mut self) {
         self.turn_metadata.push(TurnMetadata {
             model_name: Some(self.model_name.clone()),

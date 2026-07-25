@@ -2,6 +2,7 @@
 /// so the tip changes each session but is deterministic within a session.
 /// (iter-106 — was a stub returning None, so the welcome screen always
 /// showed "Edit AGENTS.md" as the fallback tip.)
+#[allow(dead_code)] // Prepared for welcome screen tip rotation
 pub fn select_tip(seed: u64) -> Option<String> {
     const TIPS: &[&str] = &[
         "Type /help to see all commands. Try /skills, /journey, /effort.",

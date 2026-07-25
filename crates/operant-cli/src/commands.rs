@@ -93,6 +93,7 @@ pub struct CommandContext<'a> {
 /// Ported from the Claurst `CommandResult` pattern, adapted for Operant's TUI.
 #[must_use]
 #[non_exhaustive]
+#[allow(dead_code)] // All variants are prepared for command dispatch — many not yet wired to handlers
 pub enum CommandResult {
     // ── Display ────────────────────────────────────────────────────────────
     /// Display a message to the user (does NOT go to the model).
@@ -184,6 +185,7 @@ pub enum CommandResult {
     Exit,
 }
 
+#[allow(dead_code)] // Prepared convenience constructors for future command handlers
 impl CommandResult {
     /// Convenience: create a Message variant.
     pub fn message(text: impl Into<String>) -> Self {
@@ -391,6 +393,7 @@ pub struct CommandDef {
     /// Argument hint shown in help (e.g. "<prompt>", "[key] [value]").
     pub args_hint: &'static str,
     /// Detailed help text shown by `/help <command>`.
+    #[allow(dead_code)] // Prepared for /help <command> detailed view
     pub help: &'static str,
     /// Only available in interactive CLI (not in gateway/messaging).
     #[allow(dead_code)] // cli_only is used for command filtering, not yet wired up
@@ -424,6 +427,7 @@ impl CommandDef {
     }
 
     /// Set the detailed help text.
+    #[allow(dead_code)] // Prepared for /help <command> detailed view
     pub const fn with_help(mut self, help: &'static str) -> Self {
         self.help = help;
         self
@@ -988,6 +992,7 @@ impl CommandRegistry {
     }
 
     /// Collect commands grouped by category, in display order.
+    #[allow(dead_code)] // Prepared for help text display
     pub fn commands_by_category(&self) -> Vec<(&'static str, Vec<&'static CommandDef>)> {
         let mut categories: Vec<(&str, Vec<&CommandDef>)> = Vec::new();
         let mut seen_canonical = std::collections::HashSet::new();
@@ -1005,6 +1010,7 @@ impl CommandRegistry {
     }
 
     /// Format help text for all registered commands, organized by category.
+    #[allow(dead_code)] // Prepared for help text display
     pub fn format_help(&self) -> String {
         let mut output = String::from("Available commands:\n\n");
 
@@ -1034,6 +1040,7 @@ impl CommandRegistry {
         output
     }
 
+    #[allow(dead_code)] // Prepared for command enumeration
     pub fn all_commands(&self) -> Vec<&'static CommandDef> {
         let mut seen = std::collections::HashSet::new();
         let mut cmds = Vec::new();
@@ -1045,6 +1052,7 @@ impl CommandRegistry {
         cmds
     }
 
+    #[allow(dead_code)] // Prepared for command completion
     pub fn slash_completions(&self, prefix: &str) -> Vec<String> {
         let trimmed = prefix.trim_start_matches('/');
         COMMAND_REGISTRY
@@ -1285,6 +1293,7 @@ pub fn tui_slash_commands() -> &'static [TuiSlashCommand] {
 ///
 /// Returns `(category_name, commands)` pairs. Commands within each category
 /// are sorted by name for consistent display.
+#[allow(dead_code)] // Prepared for TUI help overlay grouping
 pub fn tui_commands_by_category() -> Vec<(&'static str, Vec<&'static TuiSlashCommand>)> {
     let commands = tui_slash_commands();
     let mut categories: Vec<(&str, Vec<&TuiSlashCommand>)> = Vec::new();

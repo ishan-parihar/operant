@@ -27,14 +27,18 @@ pub enum DeviceAuthStatus {
     /// Requesting the device code from the authorization server.
     WaitingForCode,
     /// User code is displayed; waiting for the user to authorize in-browser.
+    #[allow(dead_code)] // Prepared for device auth state machine
     ShowingCode,
     /// Actively polling the token endpoint.
     Polling,
     /// Browser-based auth (Anthropic OAuth) — browser was opened.
+    #[allow(dead_code)] // Prepared for browser-based auth flow
     BrowserAuth,
     /// Successfully obtained a token.
+    #[allow(dead_code)] // Prepared for auth success state
     Success(String),
     /// An error occurred.
+    #[allow(dead_code)] // Prepared for auth error state
     Error(String),
 }
 
@@ -92,12 +96,14 @@ impl DeviceAuthDialogState {
 
     /// Switch to BrowserAuth status and store the URL so the dialog can
     /// display it as a copy-paste fallback.
+    #[allow(dead_code)] // Prepared for browser-based auth flow
     pub fn set_browser_url(&mut self, url: String) {
         self.auth_url = url;
         self.status = DeviceAuthStatus::BrowserAuth;
     }
 
     /// Set the device code information received from the authorization server.
+    #[allow(dead_code)] // Prepared for device auth state machine
     pub fn set_code(
         &mut self,
         user_code: String,
@@ -114,16 +120,19 @@ impl DeviceAuthDialogState {
 
     /// Transition to the polling state (code has been shown, now waiting for
     /// the user to complete authorization).
+    #[allow(dead_code)] // Prepared for device auth polling
     pub fn set_polling(&mut self) {
         self.status = DeviceAuthStatus::Polling;
     }
 
     /// Mark the flow as successful with the obtained token.
+    #[allow(dead_code)] // Prepared for auth success state
     pub fn set_success(&mut self, token: String) {
         self.status = DeviceAuthStatus::Success(token);
     }
 
     /// Mark the flow as failed.
+    #[allow(dead_code)] // Prepared for auth error state
     pub fn set_error(&mut self, msg: String) {
         self.status = DeviceAuthStatus::Error(msg);
     }

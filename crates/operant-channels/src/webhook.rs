@@ -248,7 +248,7 @@ impl Channel for WebhookChannel {
             routing::post,
         };
         
-        use tower::{Service, ServiceExt};
+        use tower::Service;
 
         let counter = Arc::new(AtomicU64::new(0));
 

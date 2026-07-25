@@ -139,6 +139,7 @@ struct ServerCapabilities {
 /// Tools capability
 #[derive(Debug, Deserialize)]
 struct ToolsCapability {
+    #[allow(dead_code)] // Deserialized from MCP server response; kept for protocol completeness
     #[serde(rename = "listChanged")]
     list_changed: Option<bool>,
 }
@@ -146,8 +147,10 @@ struct ToolsCapability {
 /// Resources capability
 #[derive(Debug, Deserialize)]
 struct ResourcesCapability {
+    #[allow(dead_code)] // Deserialized from MCP server response; kept for protocol completeness
     #[serde(rename = "subscribe")]
     subscribe: Option<bool>,
+    #[allow(dead_code)] // Deserialized from MCP server response; kept for protocol completeness
     #[serde(rename = "listChanged")]
     list_changed: Option<bool>,
 }
@@ -177,6 +180,7 @@ struct JsonRpcRequest {
 /// JSON-RPC response
 #[derive(Debug, Deserialize)]
 struct JsonRpcResponse {
+    #[allow(dead_code)] // Deserialized from MCP server; protocol field kept for completeness
     jsonrpc: String,
     id: u64,
     result: Option<Value>,
@@ -188,6 +192,7 @@ struct JsonRpcResponse {
 struct JsonRpcError {
     code: i32,
     message: String,
+    #[allow(dead_code)] // Deserialized from MCP server; may contain debug info
     data: Option<Value>,
 }
 
