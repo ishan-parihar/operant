@@ -151,6 +151,7 @@ impl App {
         None // Actual result is read by CLI loop via mcp_approval.visible + confirm()
     }
 
+
     pub(super) fn clear_prompt(&mut self) {
         self.prompt_input.clear();
         self.refresh_prompt_input();

@@ -721,7 +721,7 @@ impl App {
 
     /// Determine the current key context based on visible UI elements.
     /// Higher-priority contexts are checked first. Mirrors claurst's system.
-    fn current_key_context(&self) -> KeyContext {
+    fn key_context(&self) -> KeyContext {
         if self.context_menu_state.is_some() {
             KeyContext::ContextMenu
         } else if self.bypass_permissions_dialog.visible
@@ -2240,8 +2240,8 @@ impl App {
     }
 
 
-#[cfg(test)]
 }
+#[cfg(test)]
 
 mod tests {
     use super::*;
@@ -3305,5 +3305,4 @@ mod tests {
             "Ctrl+K should open the command palette"
         );
     }
-}
 }
