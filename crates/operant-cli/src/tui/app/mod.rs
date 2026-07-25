@@ -479,6 +479,42 @@ pub struct App {
 // (iter-143b already deleted the speech_mode system; caveman_prompt/rocky_prompt
 // leaf functions were left behind as orphans and are now removed too.)
 
+fn open_file_externally(path: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
+    // Try to open with the system's default application
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open").arg(path).spawn()?;
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        std::process::Command::new("xdg-open").arg(path).spawn()?;
+        Ok(())
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("cmd")
+            .args(&["/C", "start", ""])
+            .arg(path)
+            .spawn()?;
+        Ok(())
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+    {
+        // Fallback for other systems: try common editors in order
+        for editor in &["nano", "vi", "vim", "emacs"] {
+            match std::process::Command::new(editor).arg(path).spawn() {
+                Ok(_) => return Ok(()),
+                Err(_) => continue,
+            }
+        }
+        Err("No suitable editor found".into())
+    }
+}
+
 impl App {
     pub fn open_import_config_picker(&mut self) {
         self.import_config_picker =
@@ -6727,41 +6763,6 @@ impl App {
     }
 
 // Helper function to open a file in the user's external editor
-fn open_file_externally(path: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
-    // Try to open with the system's default application
-    #[cfg(target_os = "macos")]
-    {
-        std::process::Command::new("open").arg(path).spawn()?;
-        Ok(())
-    }
-
-    #[cfg(target_os = "linux")]
-    {
-        std::process::Command::new("xdg-open").arg(path).spawn()?;
-        Ok(())
-    }
-
-    #[cfg(target_os = "windows")]
-    {
-        std::process::Command::new("cmd")
-            .args(&["/C", "start", ""])
-            .arg(path)
-            .spawn()?;
-        Ok(())
-    }
-
-    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
-    {
-        // Fallback for other systems: try common editors in order
-        for editor in &["nano", "vi", "vim", "emacs"] {
-            match std::process::Command::new(editor).arg(path).spawn() {
-                Ok(_) => return Ok(()),
-                Err(_) => continue,
-            }
-        }
-        Err("No suitable editor found".into())
-    }
-}
 }
 
 #[cfg(test)]

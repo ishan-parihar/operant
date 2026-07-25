@@ -35,7 +35,7 @@ impl App {
                     .join("models.json");
                 probe_reg.load_cache(&probe_cache);
                 let resolved =
-                    super::model_picker::default_model_for_provider(provider, &probe_reg);
+                    crate::tui::model_picker::default_model_for_provider(provider, &probe_reg);
                 if resolved != format!("{}/default", provider) {
                     config.agent.model = resolved.clone();
                     resolved
