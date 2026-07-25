@@ -75,12 +75,6 @@ impl App {
         self.voice_recording = true;
         if let Some(ref recorder_arc) = self.voice_recorder {
             let recorder = recorder_arc.clone();
-            // spawn_blocking + block_on: the std MutexGuard is not Send,
-            // so we can't hold it across .await in a tokio::spawn.
-            // spawn_blocking runs on a dedicated blocking thread, so the
-            // main tokio runtime (and TUI render) continues unblocked.
-            // start_recording is a quick operation (creates recorder +
-            // starts capture subprocess).
             tokio::task::spawn_blocking(move || {
                 if let Ok(mut r) = recorder.lock() {
                     tokio::runtime::Handle::current()
@@ -104,10 +98,6 @@ impl App {
         self.voice_recording = false;
         if let Some(ref recorder_arc) = self.voice_recorder {
             let recorder = recorder_arc.clone();
-            // spawn_blocking: stop_recording does network STT (5-30s).
-            // Using a blocking thread ensures the main tokio runtime
-            // (TUI render, event loop) continues running while the
-            // transcription happens in the background.
             tokio::task::spawn_blocking(move || {
                 if let Ok(mut r) = recorder.lock() {
                     tokio::runtime::Handle::current()
@@ -127,11 +117,6 @@ impl App {
     // load_mcp_servers now reads from core_mcp_manager, which is set directly
     // in TuiApp::enter via self.app.core_mcp_manager = Some(...).)
 
-    pub fn refresh_mcp_view(&mut self) {
-        let servers = self.load_mcp_servers();
-        self.mcp_view.open(servers);
-    }
-
     pub fn take_pending_mcp_panel_auth(&mut self) -> Option<String> {
         self.pending_mcp_panel_auth.take()
     }
@@ -141,16 +126,6 @@ impl App {
         self.pending_mcp_reconnect = false;
         pending
     }
-
-    /// Returns and clears any pending MCP approval result.
-    pub fn take_mcp_approval_result(&mut self) -> Option<crate::dialogs::McpApprovalChoice> {
-        if !self.mcp_approval.visible {
-            return None;
-        }
-        // The dialog closes itself on confirm; we check if it's now closed
-        None // Actual result is read by CLI loop via mcp_approval.visible + confirm()
-    }
-
 
     pub(super) fn clear_prompt(&mut self) {
         self.prompt_input.clear();

@@ -677,19 +677,6 @@ impl App {
         self.rewind_flow.open(selector_msgs);
     }
 
-    /// Return the elapsed session time as a human-readable string, e.g. "2m 5s".
-    pub fn elapsed_str(&self) -> String {
-        let secs = self.session_start.elapsed().as_secs();
-        if secs < 60 {
-            format!("{}s", secs)
-        } else {
-            format!("{}m {}s", secs / 60, secs % 60)
-        }
-    }
-
-    // (iter-209: refresh_turn_diff_from_history deleted — turn-diff feature
-    // cut. Call sites now no-op; /changes uses git-diff instead.)
-
     // -------------------------------------------------------------------
     // Event handling
     // -------------------------------------------------------------------
@@ -700,12 +687,6 @@ impl App {
         let mut settings = crate::tui::adapter_types::config::Settings::load_sync()?;
         settings.has_completed_onboarding = true;
         settings.save_sync()
-    }
-
-    /// Public wrapper so the main loop can mark onboarding complete without
-    /// going through the dialog flow.
-    pub fn persist_onboarding_complete_pub() -> anyhow::Result<()> {
-        Self::persist_onboarding_complete()
     }
 
     /// Enable bypass-permissions mode and persist it — the "arm" half of the
@@ -721,6 +702,7 @@ impl App {
 
     /// Determine the current key context based on visible UI elements.
     /// Higher-priority contexts are checked first. Mirrors claurst's system.
+    #[allow(dead_code)] // Prepared for keybinding processor
     fn key_context(&self) -> KeyContext {
         if self.context_menu_state.is_some() {
             KeyContext::ContextMenu
@@ -992,6 +974,7 @@ impl App {
     /// Returns `true` if the given bash `command` is covered by the session-local
     /// prefix allowlist (i.e. its first word matches an entry in
     /// `bash_prefix_allowlist`).  Used by callers to skip the permission dialog.
+    #[allow(dead_code)] // Used in tests
     pub fn bash_command_allowed_by_prefix(&self, command: &str) -> bool {
         let first_word = command.split_whitespace().next().unwrap_or("");
         !first_word.is_empty() && self.bash_prefix_allowlist.contains(first_word)
