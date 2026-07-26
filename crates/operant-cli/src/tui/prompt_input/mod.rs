@@ -19,7 +19,7 @@ pub use typeahead::{
     AcceptForSubmitOutcome, TypeaheadSource, TypeaheadSuggestion, compute_typeahead,
 };
 pub use vim::{
-    DotRepeatAction, VimFindKind, VimMode, VimOperator, VimPendingState, apply_vim_key,
+    DotRepeatAction, VimFindKind, VimMode, VimPendingState, apply_vim_key,
 };
 use vim::{is_word_char, char_idx_to_byte};
 
@@ -2037,7 +2037,7 @@ pub fn render_prompt_input(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use super::vim::{
+    use super::vim::{ VimOperator, 
         motion_w, motion_b, motion_e, motion_W, motion_B, motion_E,
         motion_first_nonblank, motion_G, motion_gg, motion_find_char,
         apply_operator_range, uppercase_region, lowercase_region,

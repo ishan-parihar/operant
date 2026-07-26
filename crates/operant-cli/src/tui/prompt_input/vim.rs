@@ -11,17 +11,7 @@
 //! - Paste handling (large pastes → placeholder)
 //! - Character count + token estimate
 
-use ratatui::{
-    buffer::Buffer,
-    layout::Rect,
-    style::{Color, Modifier, Style},
-    text::{Line, Span},
-    widgets::{Paragraph, Widget},
-};
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-const ACCENT_PRIMARY: Color = Color::Rgb(255, 191, 0);
-const PROMPT_POINTER: &str = "\u{276f}";
 
 // ---------------------------------------------------------------------------
 // Vim mode
