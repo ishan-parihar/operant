@@ -143,7 +143,9 @@ gitignore is doing its job; leave them alone.
   - `cargo fmt --all`
   - `cargo check --workspace`
   - `cargo test --workspace`
-  - `cargo clippy --workspace --all-targets --all-features -- -D warnings`
+  - `bash scripts/clippy-warning-gate.sh` (incremental clippy gate — see "Local Compilation Protocol")
+  - **Never** `cargo ... --all-features` — several workspace features have never
+    compiled (see "Local Compilation Protocol" for the broken-feature inventory)
 
 ---
 
@@ -160,20 +162,28 @@ These are the user's intentional design choices. Do not replace, remove, or
 - Do NOT switch to Edge TTS, OpenAI TTS, or any other provider as the default
 
 ### Memory
-- **Default: TDG (Teleological Developmental Graph)** via `tdg-rust` path dependency
-- TDG is the ONLY real memory backend (`memory_provider.rs`)
-- All other providers (Hindsight, RetainDb, Mem0, LocalVector) were removed in iter-30
+- **Default: agentmemory** (`agent_memory.rs`) — hybrid semantic memory via the
+  agentmemory server (BM25 + local-embedding hybrid retrieval, 4-tier
+  consolidation, decay, knowledge graph). https://github.com/rohitg00/agentmemory
+- Operant auto-spawns `npx -y @agentmemory/agentmemory@latest` on `:3111` when
+  `memory.agentmemory_auto_spawn = true` (default) and the server is unreachable
+- `AgentMemoryProvider` implements the `MemoryProvider` trait over REST
+  (`/agentmemory/smart-search`, `/agentmemory/remember`); degrades gracefully
+  (empty prefetch / no-op sync) instead of failing the loop
 - `BuiltinProvider` (file-backed MEMORY.md/USER.md) is the zero-dependency fallback
-- TDG integration is deep: HybridRetriever + EntityExtractor + auto_wire_edges
-- Agent loop auto-calls `sync_turn(user, assistant)` after each turn (iter-33)
-- Graph self-organizes — no manual `tdg_create`/`tdg_connect` needed
-- Config: `config.memory.provider = "tdg"`
+- All legacy providers (TDG, Hindsight, RetainDb, Mem0, LocalVector) were REMOVED;
+  unknown provider names silently downgrade to builtin (see `build_memory_provider`)
+- The 53-tool agentmemory MCP server is auto-registered when the provider is active
+- Config: `config.memory.provider = "agentmemory"` (default) | `"builtin"`
 
-### Browser
-- **Default: Obscura/Camofox** (`browser_provider.rs`)
-- 5 backends available: lightpanda, camofox, browserbase, browser-use, firecrawl
-- Camofox is the preferred default for local automation
-- Do NOT switch to a different browser backend as the default
+### Browser & Web Tools
+- **Default: IGS** — `igs` binary (https://github.com/ishan-parihar/igs-rust),
+  keyless, drives `web_scrape` + `web_extract` + the `IgsBrowserProvider`
+- Install: `curl -sSL https://raw.githubusercontent.com/ishan-parihar/igs-rust/master/scripts/install.sh | bash`
+- All web tools degrade to a helpful error when the `igs` binary is missing
+- Other backends still available: lightpanda, camofox, browserbase, browser-use,
+  firecrawl (config `[browser] provider`)
+- Do NOT switch the default away from igs
 
 ### Platform Adapters (Gateway)
 - **Supported: 7 platforms** — telegram, discord, slack, whatsapp, email_smtp,
@@ -191,8 +201,9 @@ These are the user's intentional design choices. Do not replace, remove, or
   - Auto-downloads from GitHub releases, auto-updates
   - When `aft_enabled=true`, basic file/terminal tools are auto-disabled (no duplication)
   - Feature flag: `aft_enabled` in config
-- **IGS (Intelligence Gathering System)**: 14 OSINT/research tools (`igs_tools.rs`)
-  - Feature flag: `igs` cargo feature + `igs_enabled` in config
+- **IGS (Intelligence Gathering System)**: `web_scrape`, `web_extract` + igs
+  browser provider (`tools/igs.rs`), invoked via the `igs` binary. Keyless —
+  no API keys required (the previous `igs_tools.rs` OSINT surface was replaced)
 - **LifeOS**: 22 Notion-backed holonic life-management tools (`lifeos_tools.rs`)
   - Feature flag: `lifeos` cargo feature + `lifeos_enabled` in config
   - Requires `NOTION_API_TOKEN` env var
@@ -220,17 +231,17 @@ operant/
 │   │   │   │   └── fallback.rs # FallbackModelClient
 │   │   │   ├── tools/         # Tool registry + all tool implementations
 │   │   │   │   ├── builtin.rs # register_builtin_tools()
-│   │   │   │   ├── tdg_tools.rs   # 4 TDG graph memory tools
+│   │   │   │   ├── igs.rs     # web_scrape / web_extract + igs browser (keyless)
 │   │   │   │   ├── aft_tools.rs   # 15 AFT IDE tools
-│   │   │   │   ├── igs_tools.rs   # 14 IGS OSINT tools (feature-gated)
-│   │   │   │   └── lifeos_tools.rs # 22 LifeOS tools (feature-gated)
-│   │   │   ├── memory_provider.rs # TDG + BuiltinProvider
+│   │   │   │   └── memory_tools.rs # memory_* tools (agentmemory/builtin)
+│   │   │   ├── agent_memory.rs # AgentMemoryProvider (REST + auto-spawn :3111)
+│   │   │   ├── memory_provider.rs # agentmemory + BuiltinProvider
 │   │   │   ├── context_management.rs # Tiered eviction + decay curve
 │   │   │   ├── aft_bridge.rs  # AFT subprocess + auto-update
 │   │   │   ├── gateway/       # Platform adapters (Telegram/Discord/Slack/Webhook)
 │   │   │   ├── mcp.rs         # MCP client (HTTP + Stdio + SSE)
 │   │   │   └── config.rs      # AppConfig, BehaviorSettings, ToolSettings
-│   │   └── Cargo.toml         # Features: anthropic, igs, lifeos
+│   │   └── Cargo.toml         # Features: agentmemory (default), anthropic
 │   └── operant-cli/           # CLI + TUI
 │       ├── src/
 │       │   ├── main.rs        # CLI entry point, Clap enum, agent setup
@@ -246,7 +257,7 @@ operant/
 │   ├── check.sh               # Wrapper that applies dev-env + cargo
 │   ├── self-test.sh           # Build + test + clippy + fmt sweep
 │   └── provision-build-deps.sh # One-time dependency provisioning
-├── Cargo.toml                 # Workspace deps (tdg-rust, igs-rust, lifeos-core)
+├── Cargo.toml                 # Workspace members (16 crates, self-contained)
 ├── operant.example.toml       # Config template (7 platforms only)
 ├── TODO.md                    # Autonomous-mode task ledger
 ├── BUGS.md                    # Open issues tracker
@@ -257,15 +268,15 @@ operant/
 
 ## Path Dependencies
 
-Operant depends on three path dependencies that must be cloned alongside it
-(outside this repo, at the relative paths shown):
+Operant no longer depends on any external git path dependencies. The workspace
+is fully self-contained (see `Cargo.toml` members). External tools are installed
+as binaries/servers, not path deps:
 
-- `../../tdg-rust` — TDG graph memory (clone from `ishan-parihar/tdg-rust`)
-- `../../igs-rust` — Intelligence Gathering System (clone from `ishan-parihar/igs-rust`)
-- `../../lifeos-ops/lifeos-core` — LifeOS Notion tools (clone from `ishan-parihar/lifeos-ops`)
+- **igs** — web/browser binary: `curl -sSL https://raw.githubusercontent.com/ishan-parihar/igs-rust/master/scripts/install.sh | bash`
+- **agentmemory** — memory server: auto-spawned via `npx -y @agentmemory/agentmemory@latest` (port 3111)
 
-If any of these are missing, `cargo check` will fail at workspace resolution.
-They are **not** git submodules — clone them manually once per machine.
+If `cargo check` fails at workspace resolution, it's a workspace-internal
+issue, not a missing clone.
 
 ---
 
@@ -320,6 +331,79 @@ rm -rf target/debug/deps target/debug/build target/debug/incremental
 
 Do **not** `rm -rf target/` wholesale — that throws away the release binary
 and forces a full rebuild of every dependency.
+
+---
+
+## Local Compilation Protocol (READ BEFORE CODING)
+
+**The canonical development loop is compile-locally-first.** Do not rely on CI
+(workflows are intentionally left out of scope for now). Every iteration must
+pass the full local pipeline before it is committed:
+
+```bash
+# 1. Source the dev env (sets LIBCLANG_PATH, ORT_LIB_LOCATION, PKG_CONFIG_PATH...)
+source scripts/dev-env.sh
+
+# 2. Format + fast scoped check of the crate you touched
+cargo fmt --all
+./scripts/check.sh check -p operant-core --lib          # or the crate you edited
+
+# 3. Clippy — via the incremental gate (NOT -D warnings / NOT --all-features)
+bash scripts/clippy-warning-gate.sh                     # fail only on NEW warnings
+
+# 4. Tests for the changed area
+cargo test -p operant-core                              # or -- <filter>
+
+# 5. Full workspace verification before push
+cargo check --workspace
+cargo test --workspace
+bash scripts/clippy-warning-gate.sh --update           # refresh allowlist if you
+                                                        # FIXED warnings (prune entries)
+```
+
+### The clippy gate (scripts/clippy-warning-gate.sh)
+
+- Runs `cargo clippy --workspace --all-targets` (default features) and compares
+  warnings against `.ci/clippy-allowlist.txt`.
+- **Passes** when no NEW warnings appear; **reports** stale allowlist entries
+  (fixed warnings) so they get pruned.
+- `--update` regenerates the allowlist from current warnings — use it after
+  fixing warnings, never to hide new ones.
+- Currently at **4 baseline entries** (all in the user's in-flight
+  `prompt_input/` refactor — leave them; they disappear when that lands).
+
+### `--all-features` is BROKEN — never use it
+
+Several workspace feature flags reference code that has **never compiled**
+(undeclared deps or missing assets). Using `--all-features` in CI or locally
+fails. Inventory (from the 2026-08-02 audit):
+
+| Crate | Broken feature | Reason | Status |
+|-------|---------------|--------|--------|
+| operant-tools | `probe` | `probe-rs` dep never declared | FIXED — feature + dead code removed |
+| operant-core | `anthropic` | `RwLockGuard` held across `.await` (non-Send) | FIXED — temp released before send |
+| operant-gateway | `schema-export` | `use super::*` compiled out by clippy --fix | FIXED — feature-gated import |
+| operant-runtime | observability (`otel`, `prometheus`) | deps never declared (1,669 LOC) | **OPEN** — see plan §broken inventory |
+| operant-hardware | `hardware` | `include_str!` firmware/ dir never committed | **OPEN** |
+
+Until the OPEN rows are wired (or removed), always compile with **default
+features only**: `cargo check --workspace` / `cargo test --workspace`.
+
+### The prompt_input/ WIP (user's in-flight work)
+
+`crates/operant-cli/src/tui/prompt_input/` contains an **uncommitted, mid-refactor
+vim_command work-in-progress** that does not compile. It is the user's work:
+
+- **Never commit, edit, or "fix" it.**
+- When building, stash it first, then restore it unchanged:
+  ```bash
+  git stash push -u -m 'wip-batch' -- crates/operant-cli/src/tui/prompt_input/
+  # ... build/test/clippy ...
+  git stash pop
+  ```
+- The clippy gate baseline includes its 4 warnings, so a stashed build still
+  passes the gate.
+- Confirm prompt_input files are back after the pop (`git status` shows them).
 
 ---
 
@@ -406,17 +490,20 @@ setup, acp, dashboard, trajectory
 - `/steer` directive: real-time user steering between iterations (iter-65)
 - Hook system: `AgentStart`/`AgentEnd` events wired into `run()` (iter-61/62)
 - Error recovery: 12-class `ClassifiedError` with `should_compress`/`should_fallback` (iter-61)
-- TDG `sync_turn`: auto graph self-organization after each turn (iter-33)
+- `sync_turn`: auto memory write-back after each turn — agentmemory
+  `/agentmemory/remember` (was TDG graph self-organization pre-integration)
 - Credential rotation: `CredentialPool` with `PooledCredential` + OAuth refresh (iter-66)
 - MCP sampling/elicitation: server-initiated request handlers in stdio (iter-66)
 - MCP SSE transport: `McpSseClient` with background reader + oneshot routing (iter-68)
 
-### Memory (TDG — deeply integrated)
-- HybridRetriever (FTS5 + trust + recency + embedding scoring)
-- EntityExtractor (auto-extracts entities from conversation text)
-- `auto_wire_edges` (auto-connects entities via grammar contracts)
-- `sync_turn` hooks (agent loop auto-calls after each turn)
+### Memory (agentmemory — deeply integrated)
+- `AgentMemoryProvider` (REST client + auto-spawn of agentmemory server on :3111)
+- Hybrid retrieval via `/agentmemory/smart-search` (BM25 + local embeddings)
+- `sync_turn` → `/agentmemory/remember` (agent loop auto-calls after each turn)
+- 53-tool agentmemory MCP server auto-registered when provider is active
 - `BuiltinProvider` fallback (file-backed MEMORY.md/USER.md)
+- Legacy providers (TDG/Hindsight/RetainDb/Mem0/LocalVector) removed — unknown
+  provider names downgrade to builtin silently
 
 ### Context Management
 - Tiered eviction (T3→T2→T1 oldest-first, iter-37/38)
@@ -427,13 +514,13 @@ setup, acp, dashboard, trajectory
 
 ### Native Tool Integrations
 - AFT: 15 IDE-grade tools (subprocess + auto-update, iter-40/41)
-- IGS: 14 OSINT tools (feature-gated, iter-47)
+- IGS: web_scrape + web_extract + igs browser provider (keyless, via `igs` binary)
 - LifeOS: 22 Notion tools (feature-gated, iter-47/48)
 - AFT dedup: basic file/terminal tools auto-disabled when AFT enabled (iter-51)
 
 ### Unique Features (operant has, hermes doesn't)
 - AFT bridge: IDE-grade coding tools via subprocess with auto-update
-- IGS: 14 OSINT/research tools (news, Reddit, finance, security, YouTube)
+- IGS: web_scrape + web_extract + igs browser provider (keyless, via `igs` binary)
 - LifeOS: 22 Notion-backed holonomic life-management tools
 - Context management: tiered eviction + decay curve (ported from magic-context)
 - Prompt-cache frozen prefix: Anthropic `cache_control` breakpoints
@@ -443,6 +530,13 @@ setup, acp, dashboard, trajectory
 
 ## Iteration History (recent)
 
+- 2026-08-02/03: rust-best-practices plan + execution — clippy gate (4-entry
+  baseline), 0 lib warnings (core+gateway), --all-targets clean, probe-rs
+  vestige removed, anthropic Send fix, workspace fmt normalization (see
+  docs/RUST_BEST_PRACTICES_PLAN.md)
+- agentmemory integration: TDG memory removed → `AgentMemoryProvider`
+  (REST + auto-spawn :3111) + BuiltinProvider fallback (feature-gated)
+- igs-rust integration: web_scrape/web_extract + igs browser provider (keyless)
 - iter-69: Verify operant with OpenCode API + mimo-v2.5-free model (test only)
 - iter-68: MCP SSE transport — all hermes-agent gaps closed
 - iter-67: Comprehensive AGENTS.md update — final audit status
@@ -485,7 +579,7 @@ setup, acp, dashboard, trajectory
 ## MVP Deployment (Current Focus)
 
 **Goal**: Make operant deployable and functional for end-to-end testing.
-**Config defaults**: TDG memory provider, Kokoro TTS (set in `operant.example.toml`).
+**Config defaults**: agentmemory memory provider, igs browser/web tools, Kokoro TTS (set in `operant.example.toml`).
 **Web dashboard**: Copied from operant-agent, wired to axum backend.
 
 ### Quick Start for AI Agents
@@ -741,7 +835,7 @@ To set up a fresh machine:
 Example config defaults (already set in `operant.example.toml`):
 ```toml
 [memory]
-provider = "tdg"      # Default memory provider
+provider = "agentmemory"  # Default memory provider (agentmemory | builtin)
 
 [tts]
 provider = "kokoro"   # Default TTS provider
@@ -764,7 +858,7 @@ model = "gpt-4"       # Default model (override in user config)
 6. **Commit** with `feat(iter-N): ...` / `fix(iter-N): ...` / `docs(iter-N): ...`.
 7. **PUSH.** `git push origin main`. Then `git log origin/main -1` to confirm.
 8. **Do not commit** `target/`, `*.sqlite` test artifacts, or `~/.operant/.env`.
-9. **Respect the design preferences** — Kokoro TTS, TDG memory, Camofox browser,
-   7 platforms only. Do not "improve" them.
+9. **Respect the design preferences** — Kokoro TTS, agentmemory memory, igs
+   browser/web tools, 7 platforms only. Do not "improve" them.
 10. **When in doubt, ask.** Pushing back is welcome; silently doing the wrong
     thing is not.
