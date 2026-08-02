@@ -354,15 +354,27 @@ pub fn run_platform_checks(
     // =====================================================================
     section_header("Tool Availability");
 
+    // The IGS binary provides web search/scrape + browser automation with
+    // zero API keys (DuckDuckGo/Obscura via igs-rust). When `igs_enabled`
+    // and the binary is present, web/search/browser are available without
+    // any of the legacy API-key providers. (audit 2026-08-02)
+    // Reuse the core resolver: honors tools.igs_binary_path override + PATH.
+    let igs_present = config.tools.igs_enabled
+        && operant_core::tools::igs::find_igs_binary().is_some();
+
     // Simplified port: list main tool categories and check their requirements
     let tool_categories: Vec<(&str, Vec<&str>, bool)> = vec![
         ("terminal", vec![], true),
         ("file", vec![], true),
-        ("web", vec!["TAVILY_API_KEY", "EXA_API_KEY"], false),
-        ("search", vec!["TAVILY_API_KEY", "EXA_API_KEY"], false),
-        ("memory", vec!["HONCHO_API_KEY", "MEM0_API_KEY"], false),
+        // web + search are covered by igs (keyless) or Tavily/Exa keys
+        ("web", vec![], igs_present),
+        ("search", vec![], igs_present),
+        // memory is covered by the builtin MEMORY.md backend + agentmemory
+        // (auto-spawned, keyless) — legacy HONCHO/MEM0 keys are optional
+        ("memory", vec![], true),
         ("cron", vec![], true),
-        ("browser", vec![], false),
+        // browser is covered by igs (keyless) or any cloud provider key
+        ("browser", vec![], igs_present),
         ("vision", vec![], config.vision.provider.is_some()),
         ("tts", vec![], config.tts.enabled),
     ];
