@@ -363,9 +363,7 @@ pub struct SkillsSettings {
 impl Default for SkillsSettings {
     fn default() -> Self {
         let root_dir = platform::operant_skills_dir();
-        let memory_dir = root_dir.parent()
-            .unwrap_or(&root_dir)
-            .join("memory");
+        let memory_dir = root_dir.parent().unwrap_or(&root_dir).join("memory");
         Self {
             root_dir,
             memory_dir,

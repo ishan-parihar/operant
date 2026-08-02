@@ -117,22 +117,21 @@ fn review_write_guard(name: &str, skill_dir: &Path, action: &str) -> ReviewGuard
     }
 
     // Block edits/patches/deletes on bundled skills
-    if is_protected_skill(name)
-        && (action == "delete" || action == "edit" || action == "patch") {
-            return ReviewGuardResult::Blocked(format!(
-                "Skill '{}' is a bundled/protected skill and cannot be modified by the background review.",
-                name
-            ));
-        }
+    if is_protected_skill(name) && (action == "delete" || action == "edit" || action == "patch") {
+        return ReviewGuardResult::Blocked(format!(
+            "Skill '{}' is a bundled/protected skill and cannot be modified by the background review.",
+            name
+        ));
+    }
 
     // Block edits/patches/deletes on hub-installed skills
-    if is_hub_installed(skill_dir)
-        && (action == "delete" || action == "edit" || action == "patch") {
-            return ReviewGuardResult::Blocked(format!(
-                "Skill '{}' is hub-installed and cannot be modified by the background review.",
-                name
-            ));
-        }
+    if is_hub_installed(skill_dir) && (action == "delete" || action == "edit" || action == "patch")
+    {
+        return ReviewGuardResult::Blocked(format!(
+            "Skill '{}' is hub-installed and cannot be modified by the background review.",
+            name
+        ));
+    }
 
     // For edit/patch: require that the skill was read first
     if (action == "edit" || action == "patch") && !review_has_read(name) {
@@ -822,7 +821,9 @@ impl SkillManageTool {
             return ToolResult::error("skill_manage", format!("Skill '{}' not found", parsed.name));
         };
         // Background review write guard
-        if let ReviewGuardResult::Blocked(msg) = review_write_guard(&parsed.name, &skill_dir, "edit") {
+        if let ReviewGuardResult::Blocked(msg) =
+            review_write_guard(&parsed.name, &skill_dir, "edit")
+        {
             return ToolResult::error("skill_manage", msg);
         }
         let skill_md = skill_dir.join("SKILL.md");
@@ -860,7 +861,9 @@ impl SkillManageTool {
             return ToolResult::error("skill_manage", format!("Skill '{}' not found", parsed.name));
         };
         // Background review write guard
-        if let ReviewGuardResult::Blocked(msg) = review_write_guard(&parsed.name, &skill_dir, "patch") {
+        if let ReviewGuardResult::Blocked(msg) =
+            review_write_guard(&parsed.name, &skill_dir, "patch")
+        {
             return ToolResult::error("skill_manage", msg);
         }
 
@@ -981,7 +984,9 @@ impl SkillManageTool {
             return ToolResult::error("skill_manage", format!("Skill '{}' not found", parsed.name));
         };
         // Background review write guard
-        if let ReviewGuardResult::Blocked(msg) = review_write_guard(&parsed.name, &skill_dir, "delete") {
+        if let ReviewGuardResult::Blocked(msg) =
+            review_write_guard(&parsed.name, &skill_dir, "delete")
+        {
             return ToolResult::error("skill_manage", msg);
         }
         // Check pinned status before deleting

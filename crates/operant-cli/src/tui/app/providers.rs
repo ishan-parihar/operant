@@ -7,7 +7,11 @@ impl App {
         crate::tui::model_picker::default_model_for_provider(provider_id, &self.model_registry)
     }
 
-    pub(super) fn open_model_picker_for_provider(&mut self, provider_id: &str, title: Option<String>) {
+    pub(super) fn open_model_picker_for_provider(
+        &mut self,
+        provider_id: &str,
+        title: Option<String>,
+    ) {
         self.dismiss_error_notifications();
 
         let cache_path = dirs::cache_dir()
@@ -201,8 +205,10 @@ impl App {
     pub(super) fn resolve_stale_model(&mut self, model: &str) -> String {
         if model.ends_with("/default") {
             let provider = model.strip_suffix("/default").unwrap_or(model);
-            let resolved =
-                crate::tui::model_picker::default_model_for_provider(provider, &self.model_registry);
+            let resolved = crate::tui::model_picker::default_model_for_provider(
+                provider,
+                &self.model_registry,
+            );
             if resolved != format!("{}/default", provider) {
                 self.config.agent.model = resolved.clone();
                 return resolved;

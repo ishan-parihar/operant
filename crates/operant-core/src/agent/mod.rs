@@ -291,9 +291,12 @@ fn strip_memory_context_tags(text: &str) -> String {
     let mut result = text.to_string();
     // Strip opening and closing tags for both naming conventions
     for tag in &[
-        "<long_term_memory>", "</long_term_memory>",
-        "<memory-context>", "</memory-context>",
-        "<workspace_context>", "</workspace_context>",
+        "<long_term_memory>",
+        "</long_term_memory>",
+        "<memory-context>",
+        "</memory-context>",
+        "<workspace_context>",
+        "</workspace_context>",
     ] {
         result = result.replace(tag, "");
     }
@@ -750,7 +753,12 @@ impl OperantAgent {
     /// Notify the memory provider that the session_id has rotated.
     /// Ported from hermes-agent's MemoryManager.on_session_switch().
     /// Fires on /resume, /branch, /reset, /new, and context compression.
-    pub fn notify_session_switch(&self, new_session_id: &str, parent_session_id: &str, reset: bool) {
+    pub fn notify_session_switch(
+        &self,
+        new_session_id: &str,
+        parent_session_id: &str,
+        reset: bool,
+    ) {
         if let Some(provider) = &self.memory_provider {
             provider.on_session_switch(new_session_id, parent_session_id, reset);
         }
@@ -1418,12 +1426,13 @@ impl OperantAgent {
                             if let Some(executor) = exec_guard.as_ref() {
                                 executor.submit_sync_turn(&user_query, &result.content);
                             } else if let Some(provider) = &self.memory_provider {
-
                                 let user_text = user_query.clone();
                                 let assistant_text = result.content.clone();
                                 let provider_clone = provider.clone();
                                 tokio::spawn(async move {
-                                    if let Err(e) = provider_clone.sync_turn(&user_text, &assistant_text).await {
+                                    if let Err(e) =
+                                        provider_clone.sync_turn(&user_text, &assistant_text).await
+                                    {
                                         tracing::warn!(error = %e, "Memory provider sync_turn hook failed");
                                     }
                                 });
@@ -1440,7 +1449,8 @@ impl OperantAgent {
                                     async move {
                                         pf.prefetch(&q).await;
                                     },
-                                ).await;
+                                )
+                                .await;
                             });
                         }
 
@@ -1495,14 +1505,31 @@ impl OperantAgent {
                         // stays in sync. Ported from hermes-agent's
                         // MemoryManager.notify_memory_tool_write() pattern.
                         // Only fires for memory-related file paths, not all writes.
-                        if result.success && (result.name == "write_file" || result.name == "patch" || result.name == "create_file") {
+                        if result.success
+                            && (result.name == "write_file"
+                                || result.name == "patch"
+                                || result.name == "create_file")
+                        {
                             if let Some(args_str) = call_args.get(&result.tool_call_id) {
-                                if let Ok(args_val) = serde_json::from_str::<serde_json::Value>(args_str) {
-                                    let path = args_val.get("path").or_else(|| args_val.get("file_path")).and_then(|v| v.as_str()).unwrap_or("");
+                                if let Ok(args_val) =
+                                    serde_json::from_str::<serde_json::Value>(args_str)
+                                {
+                                    let path = args_val
+                                        .get("path")
+                                        .or_else(|| args_val.get("file_path"))
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("");
                                     // Only mirror writes to memory-related files
-                                    let is_memory = path.ends_with("MEMORY.md") || path.ends_with("USER.md") || path.contains("/MEMORY.") || path.contains("/USER.");
+                                    let is_memory = path.ends_with("MEMORY.md")
+                                        || path.ends_with("USER.md")
+                                        || path.contains("/MEMORY.")
+                                        || path.contains("/USER.");
                                     if is_memory {
-                                        self.notify_memory_write(&result.name, path, &result.content);
+                                        self.notify_memory_write(
+                                            &result.name,
+                                            path,
+                                            &result.content,
+                                        );
                                     }
                                 }
                             }
@@ -1513,10 +1540,18 @@ impl OperantAgent {
                         // spawn_subagent), notify the memory provider so the
                         // parent's graph captures delegated work. Ported from
                         // hermes-agent's MemoryManager.on_delegation() pattern.
-                        if result.success && (result.name == "delegate_task" || result.name == "spawn_subagent") {
-                            let task_desc = call_args.get(&result.tool_call_id)
+                        if result.success
+                            && (result.name == "delegate_task" || result.name == "spawn_subagent")
+                        {
+                            let task_desc = call_args
+                                .get(&result.tool_call_id)
                                 .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
-                                .and_then(|v| v.get("task").or_else(|| v.get("prompt")).and_then(|t| t.as_str()).map(String::from))
+                                .and_then(|v| {
+                                    v.get("task")
+                                        .or_else(|| v.get("prompt"))
+                                        .and_then(|t| t.as_str())
+                                        .map(String::from)
+                                })
                                 .unwrap_or_else(|| result.name.clone());
                             self.notify_delegation(&task_desc, &result.content);
                         }
@@ -1780,12 +1815,10 @@ impl OperantAgent {
                     .map(|m| m.content.clone())
             };
             if let Some(query) = last_user {
-                let provider_context = tokio::time::timeout(
-                    Duration::from_secs(8),
-                    provider.prefetch(&query),
-                )
-                .await
-                .unwrap_or_default();
+                let provider_context =
+                    tokio::time::timeout(Duration::from_secs(8), provider.prefetch(&query))
+                        .await
+                        .unwrap_or_default();
                 let provider_context = provider_context.trim();
                 if !provider_context.is_empty() {
                     volatile_suffix.push_str("\n\n<memory_context>\n");
@@ -1840,7 +1873,10 @@ impl OperantAgent {
             if let Some(provider) = &self.memory_provider {
                 let insights = provider.on_pre_compress(&messages);
                 if !insights.is_empty() {
-                    tracing::debug!(insights_len = insights.len(), "Memory provider pre-compress insights captured");
+                    tracing::debug!(
+                        insights_len = insights.len(),
+                        "Memory provider pre-compress insights captured"
+                    );
                 }
             }
             messages = crate::context_management::decay_render(
@@ -1856,7 +1892,10 @@ impl OperantAgent {
 
         let seq_repairs = message_safety::repair_message_sequence(&mut messages);
         if seq_repairs > 0 {
-            info!(repairs = seq_repairs, "Repaired message sequence violations");
+            info!(
+                repairs = seq_repairs,
+                "Repaired message sequence violations"
+            );
         }
 
         // Drop thinking-only assistant messages and merge consecutive user
@@ -1868,7 +1907,10 @@ impl OperantAgent {
         // strict mode) that enforce stricter name/argument validation.
         let tool_sans = message_safety::sanitize_tool_calls_for_strict_api(&mut messages);
         if tool_sans > 0 {
-            debug!( sanitizations = tool_sans, "Sanitized tool calls for strict API");
+            debug!(
+                sanitizations = tool_sans,
+                "Sanitized tool calls for strict API"
+            );
         }
 
         Ok(messages)
@@ -2147,7 +2189,8 @@ impl OperantAgent {
             // instructions go in a USER message, not the system message — this
             // ensures the system prompt bytes stay byte-identical.
             // Matches hermes-agent's `_cached_system_prompt` pinning pattern.
-            let (system_prompt_str, review_harness) = if let Some(ref frozen) = parent_frozen_prefix {
+            let (system_prompt_str, review_harness) = if let Some(ref frozen) = parent_frozen_prefix
+            {
                 (
                     frozen.clone(),
                     format!(
@@ -2633,14 +2676,20 @@ If nothing needs updating, say 'Nothing to save.' and stop.\n\n{}",
                 // Emit the flushed partial so the TUI sees it even if we're
                 // about to return Err — otherwise content streamed right
                 // before the error would be silently lost.
-                self.emit(AgentEvent::Content { text: strip_memory_context_tags(&visible) }).await;
+                self.emit(AgentEvent::Content {
+                    text: strip_memory_context_tags(&visible),
+                })
+                .await;
             }
         }
         let tail = tool_call_router.finish();
         if !tail.is_empty() {
             let scrubbed_tail = strip_memory_context_tags(&tail);
             accumulated_text.push_str(&scrubbed_tail);
-            self.emit(AgentEvent::Content { text: scrubbed_tail }).await;
+            self.emit(AgentEvent::Content {
+                text: scrubbed_tail,
+            })
+            .await;
         }
         if !remaining_reasoning.is_empty() {
             accumulated_reasoning.push_str(&remaining_reasoning);
@@ -2682,7 +2731,8 @@ If nothing needs updating, say 'Nothing to save.' and stop.\n\n{}",
             match serde_json::from_str::<serde_json::Value>(args) {
                 Ok(_) => true,
                 Err(_) => {
-                    let repaired = message_safety::repair_tool_call_arguments(args, &tc.function.name);
+                    let repaired =
+                        message_safety::repair_tool_call_arguments(args, &tc.function.name);
                     match serde_json::from_str::<serde_json::Value>(&repaired) {
                         Ok(_) => {
                             debug!(

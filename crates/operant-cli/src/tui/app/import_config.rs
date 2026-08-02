@@ -93,5 +93,4 @@ impl App {
             .count()
             .checked_sub(1)
     }
-
 }

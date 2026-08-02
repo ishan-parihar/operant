@@ -98,4 +98,3 @@ thread_local! {
     pub(crate) static COMPLETED_MSG_CACHE: RefCell<Option<CompletedMsgCache>> = const { RefCell::new(None) };
     pub(crate) static STREAMING_TEXT_CACHE: RefCell<Option<StreamingTextCache>> = const { RefCell::new(None) };
 }
-

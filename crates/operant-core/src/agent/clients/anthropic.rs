@@ -10,8 +10,8 @@ use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
-use super::prompt_caching::{CacheTtl, apply_cache_control};
 use super::super::model_client::{ChatRequest, ModelClient, StreamChunk};
+use super::prompt_caching::{CacheTtl, apply_cache_control};
 use crate::client::{
     ChatResponse, Choice, Message, MessageDelta, Role, ToolCall, ToolCallFunction, Usage,
 };
@@ -271,10 +271,21 @@ impl ModelClient for AnthropicModelClient {
 
     async fn chat(&self, request: ChatRequest) -> Result<ChatResponse> {
         let body = self.convert_request(&request);
+        // Clone the key into an owned String FIRST: `RwLockReadGuard` is not
+        // Send, so holding the guard (via `.read().unwrap().as_str()`) across
+        // the `.send().await` below makes this future non-Send and fails to
+        // compile wherever the ModelClient::chat future must be Send. On a
+        // poisoned lock the guard is still readable, so recover via
+        // `PoisonError::into_inner()` rather than unwrap.
+        let api_key = self
+            .api_key
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
         let resp = self
             .http
             .post(format!("{}/v1/messages", self.base_url))
-            .header("x-api-key", self.api_key.read().unwrap().as_str())
+            .header("x-api-key", api_key)
             .header("anthropic-version", "2023-06-01")
             .header("content-type", "application/json")
             .json(&body)
@@ -302,10 +313,18 @@ impl ModelClient for AnthropicModelClient {
         req.stream = true;
         let body = self.convert_request(&req);
 
+        // Same Send-safety requirement as `chat`: clone the key out of the
+        // lock before building the request so the non-Send guard isn't held
+        // across the await.
+        let api_key = self
+            .api_key
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
         let resp = self
             .http
             .post(format!("{}/v1/messages", self.base_url))
-            .header("x-api-key", self.api_key.read().unwrap().as_str())
+            .header("x-api-key", api_key)
             .header("anthropic-version", "2023-06-01")
             .header("content-type", "application/json")
             .json(&body)

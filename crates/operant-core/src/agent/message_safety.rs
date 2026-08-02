@@ -13,14 +13,11 @@ use std::sync::LazyLock;
 use crate::client::{Message, Role};
 
 /// Regex to strip trailing commas before `}` or `]` in JSON.
-static TRAILING_COMMA_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r",\s*([}\]])").unwrap());
+static TRAILING_COMMA_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r",\s*([}\]])").unwrap());
 
 // ---------------------------------------------------------------------------
 // Surrogate sanitization
 // ---------------------------------------------------------------------------
-
-
 
 // ---------------------------------------------------------------------------
 // Tool call argument repair
@@ -257,7 +254,10 @@ pub fn repair_message_sequence(messages: &mut Vec<Message>) -> usize {
 /// (Gemini, Claude) reject.
 ///
 /// Returns true if a closing turn was appended.
-pub fn close_interrupted_tool_sequence(messages: &mut Vec<Message>, final_response: Option<&str>) -> bool {
+pub fn close_interrupted_tool_sequence(
+    messages: &mut Vec<Message>,
+    final_response: Option<&str>,
+) -> bool {
     if messages.is_empty() {
         return false;
     }
@@ -318,9 +318,7 @@ pub fn drop_thinking_only_and_merge_users(messages: &[Message]) -> Vec<Message> 
     // Pass 2: Merge consecutive user messages
     let mut merged: Vec<Message> = Vec::with_capacity(cleaned.len());
     for msg in cleaned.drain(..) {
-        if msg.role == Role::User
-            && !merged.is_empty()
-            && merged.last().unwrap().role == Role::User
+        if msg.role == Role::User && !merged.is_empty() && merged.last().unwrap().role == Role::User
         {
             // Merge into the previous user message
             let prev = merged.last_mut().unwrap();
@@ -388,8 +386,7 @@ pub fn sanitize_tool_calls_for_strict_api(messages: &mut [Message]) -> usize {
                         if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(trimmed) {
                             if !parsed.is_object() {
                                 // Wrap non-object values in {"input": ...}
-                                tc.function.arguments =
-                                    format!("{{\"input\":{}}}", trimmed);
+                                tc.function.arguments = format!("{{\"input\":{}}}", trimmed);
                                 sanitizations += 1;
                             }
                         }
@@ -413,7 +410,6 @@ fn sanitize_tool_name_for_strict(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
 
     #[test]
     fn test_repair_tool_call_arguments_empty() {
@@ -569,9 +565,7 @@ mod tests {
 
     #[test]
     fn test_drop_thinking_only_keeps_assistant_with_content() {
-        let messages = vec![
-            Message::assistant("I have something to say"),
-        ];
+        let messages = vec![Message::assistant("I have something to say")];
         let cleaned = drop_thinking_only_and_merge_users(&messages);
         assert_eq!(cleaned.len(), 1);
         assert_eq!(cleaned[0].content, "I have something to say");
@@ -580,21 +574,19 @@ mod tests {
     #[test]
     fn test_drop_thinking_only_keeps_assistant_with_tool_calls() {
         use crate::client::{ToolCall, ToolCallFunction};
-        let messages = vec![
-            Message {
-                role: Role::Assistant,
-                content: String::new(),
-                reasoning: Some("thinking".to_string()),
-                tool_calls: Some(vec![ToolCall {
-                    id: "tc1".to_string(),
-                    function: ToolCallFunction {
-                        name: "read_file".to_string(),
-                        arguments: "{}".to_string(),
-                    },
-                }]),
-                ..Default::default()
-            },
-        ];
+        let messages = vec![Message {
+            role: Role::Assistant,
+            content: String::new(),
+            reasoning: Some("thinking".to_string()),
+            tool_calls: Some(vec![ToolCall {
+                id: "tc1".to_string(),
+                function: ToolCallFunction {
+                    name: "read_file".to_string(),
+                    arguments: "{}".to_string(),
+                },
+            }]),
+            ..Default::default()
+        }];
         let cleaned = drop_thinking_only_and_merge_users(&messages);
         assert_eq!(cleaned.len(), 1);
     }
@@ -614,15 +606,13 @@ mod tests {
 
     #[test]
     fn test_drop_thinking_only_does_not_mutate_original() {
-        let messages = vec![
-            Message {
-                role: Role::Assistant,
-                content: String::new(),
-                reasoning: Some("thinking".to_string()),
-                tool_calls: None,
-                ..Default::default()
-            },
-        ];
+        let messages = vec![Message {
+            role: Role::Assistant,
+            content: String::new(),
+            reasoning: Some("thinking".to_string()),
+            tool_calls: None,
+            ..Default::default()
+        }];
         let _cleaned = drop_thinking_only_and_merge_users(&messages);
         assert_eq!(messages.len(), 1);
     }
@@ -663,7 +653,10 @@ mod tests {
         }];
         let count = sanitize_tool_calls_for_strict_api(&mut messages);
         assert!(count > 0);
-        assert_eq!(messages[0].tool_calls.as_ref().unwrap()[0].function.name, "bad_name_");
+        assert_eq!(
+            messages[0].tool_calls.as_ref().unwrap()[0].function.name,
+            "bad_name_"
+        );
     }
 
     #[test]
@@ -683,7 +676,9 @@ mod tests {
         }];
         let count = sanitize_tool_calls_for_strict_api(&mut messages);
         assert!(count > 0);
-        let args = &messages[0].tool_calls.as_ref().unwrap()[0].function.arguments;
+        let args = &messages[0].tool_calls.as_ref().unwrap()[0]
+            .function
+            .arguments;
         let parsed: serde_json::Value = serde_json::from_str(args).unwrap();
         assert!(parsed.is_object());
     }

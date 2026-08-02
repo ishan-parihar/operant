@@ -362,7 +362,10 @@ fn estimate_session_cost(session: &SessionRow) -> f64 {
     }
 }
 
-fn compute_tool_breakdown_from_db(sessions: &[SessionRow], conn: &rusqlite::Connection) -> Vec<ToolStats> {
+fn compute_tool_breakdown_from_db(
+    sessions: &[SessionRow],
+    conn: &rusqlite::Connection,
+) -> Vec<ToolStats> {
     let total: usize = sessions.iter().map(|s| s.tool_call_count as usize).sum();
     if total == 0 {
         return Vec::new();
@@ -375,7 +378,11 @@ fn compute_tool_breakdown_from_db(sessions: &[SessionRow], conn: &rusqlite::Conn
     }
 
     // Build a parameterized IN clause using standard ? placeholders
-    let in_clause: String = session_ids.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
+    let in_clause: String = session_ids
+        .iter()
+        .map(|_| "?")
+        .collect::<Vec<_>>()
+        .join(", ");
     let query = format!(
         "SELECT tool_name, COUNT(*) as cnt FROM messages 
          WHERE session_id IN ({}) AND tool_name IS NOT NULL AND tool_name != ''
@@ -405,10 +412,7 @@ fn compute_tool_breakdown_from_db(sessions: &[SessionRow], conn: &rusqlite::Conn
 
     let tool_counts: Vec<(String, usize)> = stmt
         .query_map(param_refs.as_slice(), |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, usize>(1)?,
-            ))
+            Ok((row.get::<_, String>(0)?, row.get::<_, usize>(1)?))
         })
         .ok()
         .into_iter()
@@ -667,7 +671,10 @@ fn format_report_gateway(report: &InsightsReport) -> String {
         lines.push(String::new());
         lines.push("**Tool Usage:**".to_string());
         for t in report.tools.iter().take(5) {
-            lines.push(format!("- {} ({} calls, {:.1}%)", t.tool, t.count, t.percentage));
+            lines.push(format!(
+                "- {} ({} calls, {:.1}%)",
+                t.tool, t.count, t.percentage
+            ));
         }
     }
     lines.join("\n")

@@ -1,9 +1,20 @@
 // adapter_types/tui_app.rs — Application bootstrap and run loop.
 
-use super::config::Settings;
 use super::auth::AuthStore;
+use super::config::Settings;
 use crate::commands::CommandResult;
 
+/// Send-safe copy of an MCP server config, moved into spawned tasks:
+/// (name, url, auth_token, args, env, enabled). Aliased so the spawned-task
+/// tuple isn't repeated inline (clippy::type_complexity).
+type McpServerConfigTuple = (
+    String,
+    Option<String>,
+    Option<String>,
+    Vec<String>,
+    std::collections::HashMap<String, String>,
+    bool,
+);
 
 pub struct TuiApp {
     app: crate::tui::app::App,
@@ -547,14 +558,7 @@ impl TuiApp {
                         if let Some(ref mcp) = self.app.core_mcp_manager {
                             let mcp_clone = std::sync::Arc::clone(mcp);
                             // Extract server configs into Send-safe tuples.
-                            let server_configs: Vec<(
-                                String,
-                                Option<String>,
-                                Option<String>,
-                                Vec<String>,
-                                std::collections::HashMap<String, String>,
-                                bool,
-                            )> = self
+                            let server_configs: Vec<McpServerConfigTuple> = self
                                 .app
                                 .config
                                 .mcp

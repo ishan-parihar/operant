@@ -30,8 +30,11 @@ pub use super::file_state::FileStateTool;
 pub use super::file_tools::{FileListTool, FileReadTool, FileSearchTool, FileWriteTool};
 pub use super::home_assistant_tool::HomeAssistantTool;
 pub use super::http_tool::HttpRequestTool;
+pub use super::igs::{WebExtractTool, WebScrapeTool};
 pub use super::image_generation_tool::ImageGenerationTool;
+pub use super::insights_tool::InsightsTool;
 pub use super::kanban_tool::KanbanTool;
+pub use super::learning_mutation_tool::LearningMutationTool;
 pub use super::mcp_tool::McpManagementTool;
 pub use super::memory_tools::{MemoryRecallTool, MemorySearchTool, MemoryStoreTool};
 pub use super::neutts_synth::NeuttsSynthTool;
@@ -54,10 +57,7 @@ pub use super::transcription_tool::TranscriptionTool;
 pub use super::tts_tool::TtsTool;
 pub use super::video_analysis_tool::VideoAnalysisTool;
 pub use super::vision_tool::VisionTool;
-pub use super::igs::{WebExtractTool, WebScrapeTool};
 pub use super::web_tools::{WebFetchTool, WebSearchTool};
-pub use super::insights_tool::InsightsTool;
-pub use super::learning_mutation_tool::LearningMutationTool;
 pub use super::xai_http::XaiHttpTool;
 
 /// Register all built-in tools with a registry
@@ -151,10 +151,11 @@ pub async fn register_builtin_tools(
 
     // Register learning mutation tool
     registry
-        .register(LearningMutationTool::new(skills_dir.to_path_buf(), memory_dir.to_path_buf()))
+        .register(LearningMutationTool::new(
+            skills_dir.to_path_buf(),
+            memory_dir.to_path_buf(),
+        ))
         .await?;
-
-
 
     // Register MCP management tool if a manager reference is provided
     if let Some(manager) = mcp_manager {
@@ -297,9 +298,17 @@ mod tests {
         let cron_db = Arc::new(CronDb::init(PathBuf::from("test_all_cron.db")).unwrap());
         let kanban_db = Arc::new(KanbanDb::init(PathBuf::from("test_all_kanban.db")).unwrap());
         let memory_dir = skills_dir.parent().unwrap_or(&skills_dir).join("memory");
-        register_builtin_tools(&registry, &skills_dir, &memory_dir, database, cron_db, kanban_db, None)
-            .await
-            .unwrap();
+        register_builtin_tools(
+            &registry,
+            &skills_dir,
+            &memory_dir,
+            database,
+            cron_db,
+            kanban_db,
+            None,
+        )
+        .await
+        .unwrap();
 
         let count = registry.len().await;
         // register_builtin_tools registers everything in builtin_tool_names

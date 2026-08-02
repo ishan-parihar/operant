@@ -3,9 +3,9 @@
 //! Contains command registry helpers, provider picker items, and import
 //! configuration picker items — all module-level functions with no `self` dependency.
 
+use crate::provider::PROVIDERS;
 use crate::tui::dialog_select::SelectItem;
 use crate::tui::overlays::HelpEntry;
-use crate::provider::PROVIDERS;
 
 // ---------------------------------------------------------------------------
 // Unified command data (single source of truth from COMMAND_REGISTRY)
@@ -27,7 +27,7 @@ pub(super) fn tui_slash_command_data() -> Vec<(&'static str, &'static str)> {
 /// TUI category for grouped display.
 pub(super) fn help_overlay_entries() -> Vec<HelpEntry> {
     crate::commands::tui_slash_commands()
-        .into_iter()
+        .iter()
         .map(|cmd| HelpEntry {
             name: cmd.name.to_string(),
             aliases: cmd.aliases.join(", "),
@@ -326,7 +326,9 @@ pub(super) fn format_elapsed_ms(ms: u128) -> String {
 // ---------------------------------------------------------------------------
 
 /// Attempt to open a file using the system's default application.
-pub(super) fn open_file_externally(path: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
+pub(super) fn open_file_externally(
+    path: &std::path::Path,
+) -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(target_os = "macos")]
     {
         std::process::Command::new("open").arg(path).spawn()?;
@@ -336,7 +338,7 @@ pub(super) fn open_file_externally(path: &std::path::Path) -> Result<(), Box<dyn
     #[cfg(target_os = "linux")]
     {
         std::process::Command::new("xdg-open").arg(path).spawn()?;
-        return Ok(());
+        Ok(())
     }
 
     #[cfg(target_os = "windows")]

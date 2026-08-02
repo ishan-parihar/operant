@@ -1,8 +1,8 @@
 //! Hardware memory map tool — returns flash/RAM address ranges for connected boards.
 //!
 //! Phase B: When user asks "what are the upper and lower memory addresses?", this tool
-//! returns the memory map. Uses probe-rs for Nucleo/STM32 when available; otherwise
-//! returns static maps from datasheets.
+//! returns the memory map. Returns static maps from datasheets (probe-rs live
+//! lookup is not wired into this build — the `probe` feature was removed 2026-08-02).
 
 use async_trait::async_trait;
 use operant_api::tool::{Tool, ToolResult};
@@ -94,45 +94,20 @@ impl Tool for HardwareMemoryMapTool {
 
         let mut output = String::new();
 
-        #[cfg(feature = "probe")]
-        let probe_ok = {
-            if board == "nucleo-f401re" || board == "nucleo-f411re" {
-                let chip = if board == "nucleo-f411re" {
-                    "STM32F411RETx"
-                } else {
-                    "STM32F401RETx"
-                };
-                match probe_rs_memory_map(chip) {
-                    Ok(probe_msg) => {
-                        output.push_str(&format!("**{}** (via probe-rs):\n{}\n", board, probe_msg));
-                        true
-                    }
-                    Err(e) => {
-                        output.push_str(&format!("Probe-rs failed: {}. ", e));
-                        false
-                    }
-                }
-            } else {
-                false
-            }
-        };
-
-        #[cfg(not(feature = "probe"))]
-        let probe_ok = false;
-
-        if !probe_ok {
-            if let Some(map) = self.static_map_for_board(board) {
-                use std::fmt::Write;
-                let _ = write!(output, "**{board}** (from datasheet):\n{map}");
-            } else {
-                use std::fmt::Write;
-                let known: Vec<&str> = MEMORY_MAPS.iter().map(|(b, _)| *b).collect();
-                let _ = write!(
-                    output,
-                    "No memory map for board '{board}'. Known boards: {}",
-                    known.join(", ")
-                );
-            }
+        // Live probe-rs memory map lookup is not wired into this build (the
+        // `probe` feature had never compiled — see Cargo.toml note).
+        // Fall back to datasheet maps.
+        if let Some(map) = self.static_map_for_board(board) {
+            use std::fmt::Write;
+            let _ = write!(output, "**{board}** (from datasheet):\n{map}");
+        } else {
+            use std::fmt::Write;
+            let known: Vec<&str> = MEMORY_MAPS.iter().map(|(b, _)| *b).collect();
+            let _ = write!(
+                output,
+                "No memory map for board '{board}'. Known boards: {}",
+                known.join(", ")
+            );
         }
 
         Ok(ToolResult {
@@ -141,48 +116,6 @@ impl Tool for HardwareMemoryMapTool {
             error: None,
         })
     }
-}
-
-#[cfg(feature = "probe")]
-fn probe_rs_memory_map(chip: &str) -> anyhow::Result<String> {
-    use probe_rs::config::MemoryRegion;
-    use probe_rs::{Session, SessionConfig};
-
-    let session = Session::auto_attach(chip, SessionConfig::default())
-        .map_err(|e| anyhow::anyhow!("probe-rs attach failed: {}", e))?;
-
-    let target = session.target();
-    let mut out = String::new();
-
-    for region in target.memory_map.iter() {
-        match region {
-            MemoryRegion::Ram(ram) => {
-                let start = ram.range.start;
-                let end = ram.range.end;
-                let size_kb = (end - start) / 1024;
-                out.push_str(&format!(
-                    "RAM: 0x{:08X} - 0x{:08X} ({} KB)\n",
-                    start, end, size_kb
-                ));
-            }
-            MemoryRegion::Nvm(flash) => {
-                let start = flash.range.start;
-                let end = flash.range.end;
-                let size_kb = (end - start) / 1024;
-                out.push_str(&format!(
-                    "Flash: 0x{:08X} - 0x{:08X} ({} KB)\n",
-                    start, end, size_kb
-                ));
-            }
-            _ => {}
-        }
-    }
-
-    if out.is_empty() {
-        out = "Could not read memory regions from probe.".to_string();
-    }
-
-    Ok(out)
 }
 
 #[cfg(test)]

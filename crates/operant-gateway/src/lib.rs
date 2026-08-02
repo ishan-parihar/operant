@@ -117,27 +117,22 @@ pub const RATE_LIMIT_MAX_KEYS_DEFAULT: usize = 10_000;
 pub const IDEMPOTENCY_MAX_KEYS_DEFAULT: usize = 10_000;
 
 fn webhook_memory_key() -> String {
-    
     format!("webhook_msg_{}", Uuid::new_v4())
 }
 
 fn whatsapp_memory_key(msg: &operant_api::channel::ChannelMessage) -> String {
-    
     format!("whatsapp_{}_{}", msg.sender, msg.id)
 }
 
 fn linq_memory_key(msg: &operant_api::channel::ChannelMessage) -> String {
-    
     format!("linq_{}_{}", msg.sender, msg.id)
 }
 
 fn wati_memory_key(msg: &operant_api::channel::ChannelMessage) -> String {
-    
     format!("wati_{}_{}", msg.sender, msg.id)
 }
 
 fn nextcloud_talk_memory_key(msg: &operant_api::channel::ChannelMessage) -> String {
-    
     format!("nextcloud_talk_{}_{}", msg.sender, msg.id)
 }
 
@@ -751,7 +746,6 @@ fn paircode_recovery_host_arg(host: &str) -> Option<&str> {
 }
 
 fn format_paircode_recovery_curl(host: &str, port: u16, path_prefix: &str) -> String {
-    
     format!("curl -s -X POST http://{host}:{port}{path_prefix}/admin/paircode/new")
 }
 

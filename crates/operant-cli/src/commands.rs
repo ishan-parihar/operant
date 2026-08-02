@@ -1372,9 +1372,9 @@ pub fn commands_by_category() -> Vec<(&'static str, Vec<&'static CommandDef>)> {
 // Gateway helpers
 // ---------------------------------------------------------------------------
 
-/// Set of all command names + aliases recognized by the gateway.
-/// Includes config-gated commands so the gateway can dispatch them
-/// (the handler checks the config gate at runtime).
+// Set of all command names + aliases recognized by the gateway.
+// Includes config-gated commands so the gateway can dispatch them
+// (the handler checks the config gate at runtime).
 
 // ---------------------------------------------------------------------------
 // Tests

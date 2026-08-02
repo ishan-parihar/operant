@@ -9,8 +9,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use operant_core::voice::{
-    AudioEnvironment, VoiceConfig, VoiceError,
-    create_recorder, create_stt_engine, detect_audio_environment,
+    AudioEnvironment, VoiceConfig, VoiceError, create_recorder, create_stt_engine,
+    detect_audio_environment,
 };
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -25,7 +25,7 @@ pub enum VoiceCaptureMode {
     /// Push-to-talk: hold key to record, release to transcribe
     PushToTalk,
     /// Voice activity detection: auto-start/stop on speech/silence
-    VAD,
+    Vad,
 }
 
 /// Voice capture state

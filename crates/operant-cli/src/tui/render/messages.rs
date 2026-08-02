@@ -3,9 +3,8 @@ use crate::tui::adapter_types::types::Role;
 
 use crate::tui::app::{App, ToolStatus};
 use crate::tui::messages::{
-    RenderContext, render_thinking_live_content,
-    render_transcript_assistant_message_tagged, render_transcript_assistant_meta,
-    render_transcript_live_text, render_transcript_user_message,
+    RenderContext, render_thinking_live_content, render_transcript_assistant_message_tagged,
+    render_transcript_assistant_meta, render_transcript_live_text, render_transcript_user_message,
 };
 use crate::tui::transcript_turn::{TranscriptTurn, build_transcript_turns};
 use crate::tui::virtual_list::VirtualList;
@@ -16,8 +15,10 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
 use super::cache::*;
-use super::{build_tool_names, render_system_annotation_lines, render_tool_block_lines, shimmer_spans};
 use super::{ACCENT_PRIMARY, RenderedLineItem};
+use super::{
+    build_tool_names, render_system_annotation_lines, render_tool_block_lines, shimmer_spans,
+};
 
 pub(crate) fn render_messages(frame: &mut Frame, app: &App, area: Rect) {
     let content_area = area; // (iter-143: plugin_hints deleted — Vec was always empty)

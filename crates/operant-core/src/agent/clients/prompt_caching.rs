@@ -11,8 +11,7 @@
 use serde_json::{Value, json};
 
 /// Cache TTL options.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum CacheTtl {
     /// 5-minute cache (default for Anthropic).
     #[default]
@@ -30,7 +29,6 @@ impl CacheTtl {
         }
     }
 }
-
 
 /// Build a `cache_control` marker JSON for the given TTL.
 fn build_marker(ttl: CacheTtl) -> Value {
@@ -60,7 +58,11 @@ fn apply_cache_marker_envelope(msg: &mut Value, marker: &Value) {
             "text": text,
             "cache_control": marker
         }]);
-    } else if let Some(last) = msg.get_mut("content").and_then(|c| c.as_array_mut()).and_then(|a| a.last_mut()) {
+    } else if let Some(last) = msg
+        .get_mut("content")
+        .and_then(|c| c.as_array_mut())
+        .and_then(|a| a.last_mut())
+    {
         if let Some(obj) = last.as_object_mut() {
             obj.insert("cache_control".to_string(), marker.clone());
         }
@@ -100,11 +102,7 @@ fn can_carry_marker_envelope(msg: &Value) -> bool {
 /// * `messages` — The messages in API format (mutated in place)
 /// * `cache_ttl` — Cache duration (`FiveMinutes` or `OneHour`)
 /// * `native_anthropic` — `true` for native Anthropic layout, `false` for envelope (OpenRouter)
-pub fn apply_cache_control(
-    messages: &mut [Value],
-    cache_ttl: CacheTtl,
-    native_anthropic: bool,
-) {
+pub fn apply_cache_control(messages: &mut [Value], cache_ttl: CacheTtl, native_anthropic: bool) {
     if messages.is_empty() {
         return;
     }
@@ -127,9 +125,7 @@ pub fn apply_cache_control(
     let non_sys_indices: Vec<usize> = messages
         .iter()
         .enumerate()
-        .filter(|(_, msg)| {
-            msg.get("role").and_then(|r| r.as_str()) != Some("system")
-        })
+        .filter(|(_, msg)| msg.get("role").and_then(|r| r.as_str()) != Some("system"))
         .filter(|(_, msg)| {
             if native_anthropic {
                 true
@@ -255,26 +251,33 @@ mod tests {
         // Actually, envelope layout treats system as a regular message
         // The cache_control should be on the content part
         let content = msgs[0]["content"].as_array().expect("should be array");
-        assert_eq!(content.last().unwrap()["cache_control"]["type"], "ephemeral");
+        assert_eq!(
+            content.last().unwrap()["cache_control"]["type"],
+            "ephemeral"
+        );
     }
 
     #[test]
     fn envelope_skips_empty_assistant() {
-        let mut msgs = vec![
-            system_msg("prompt"),
-            empty_assistant(),
-            user_msg("Hi"),
-        ];
+        let mut msgs = vec![system_msg("prompt"), empty_assistant(), user_msg("Hi")];
         apply_cache_control(&mut msgs, CacheTtl::default(), false);
 
         // System gets marker
         let content = msgs[0]["content"].as_array().expect("should be array");
-        assert_eq!(content.last().unwrap()["cache_control"]["type"], "ephemeral");
+        assert_eq!(
+            content.last().unwrap()["cache_control"]["type"],
+            "ephemeral"
+        );
 
         // Empty assistant is skipped (can't carry marker)
         assert!(msgs[1].get("cache_control").is_none());
         // But it shouldn't have the marker
-        assert!(msgs[1]["content"].as_str().map(|s| s.is_empty()).unwrap_or(true));
+        assert!(
+            msgs[1]["content"]
+                .as_str()
+                .map(|s| s.is_empty())
+                .unwrap_or(true)
+        );
     }
 
     #[test]

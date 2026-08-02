@@ -345,9 +345,7 @@ impl CronDb {
                                 rusqlite::types::Value::Text(n.to_string())
                             }
                         }
-                        serde_json::Value::String(s) => {
-                            rusqlite::types::Value::Text(s.clone())
-                        }
+                        serde_json::Value::String(s) => rusqlite::types::Value::Text(s.clone()),
                         serde_json::Value::Null => rusqlite::types::Value::Null,
                         other => rusqlite::types::Value::Text(other.to_string()),
                     };
@@ -483,7 +481,9 @@ impl CronDb {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn
             .prepare("SELECT skill, skills FROM cron_jobs")
-            .map_err(|e| Error::Agent(format!("Failed to prepare referenced_skill_names: {}", e)))?;
+            .map_err(|e| {
+                Error::Agent(format!("Failed to prepare referenced_skill_names: {}", e))
+            })?;
 
         let mut refs = std::collections::HashSet::new();
         let rows = stmt
@@ -543,11 +543,13 @@ impl CronDb {
             .map_err(|e| Error::Agent(format!("Failed to prepare rewrite query: {}", e)))?;
 
         let job_rows: Vec<(String, Option<String>, Option<String>)> = stmt
-            .query_map([], |row| Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, Option<String>>(1)?,
-                row.get::<_, Option<String>>(2)?,
-            )))
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                ))
+            })
             .map_err(|e| Error::Agent(format!("Error querying jobs for rewrite: {}", e)))?
             .filter_map(|r| r.ok())
             .collect();
@@ -612,7 +614,8 @@ impl CronDb {
 
             // Serialize and update
             // Filter empty strings from stale production entries before serializing.
-            let new_skills: Vec<String> = new_skills.into_iter().filter(|s| !s.is_empty()).collect();
+            let new_skills: Vec<String> =
+                new_skills.into_iter().filter(|s| !s.is_empty()).collect();
             let new_skills_json = serde_json::to_string(&new_skills)
                 .map_err(|e| Error::Agent(format!("Failed to serialize skills: {}", e)))?;
             let new_primary = new_skills.first().cloned();

@@ -9,10 +9,10 @@
 use crossterm::event::{DisableMouseCapture, EnableMouseCapture};
 use crossterm::execute;
 use crossterm::terminal::{
-    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
+    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
-use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
+use ratatui::backend::CrosstermBackend;
 use std::io::{self, Stdout};
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -43,11 +43,7 @@ pub fn setup_terminal(mouse_capture: bool) -> io::Result<Terminal<CrosstermBacke
     enable_raw_mode()?;
     let mut stdout = io::stdout();
 
-    execute!(
-        stdout,
-        EnterAlternateScreen,
-        EnableMouseCapture,
-    )?;
+    execute!(stdout, EnterAlternateScreen, EnableMouseCapture,)?;
 
     let backend = CrosstermBackend::new(stdout);
     let terminal = Terminal::new(backend)?;
@@ -68,19 +64,13 @@ fn restore_terminal_cleanup() -> io::Result<()> {
     if MOUSE_CAPTURE_ACTIVE.load(Ordering::Relaxed) {
         let _ = execute!(io::stdout(), DisableMouseCapture);
     }
-    execute!(
-        io::stdout(),
-        LeaveAlternateScreen,
-    )?;
+    execute!(io::stdout(), LeaveAlternateScreen,)?;
     Ok(())
 }
 
 /// Set the terminal window title via OSC escape sequence.
 pub fn set_terminal_title(title: &str) {
-    let _ = execute!(
-        io::stdout(),
-        crossterm::terminal::SetTitle(title),
-    );
+    let _ = execute!(io::stdout(), crossterm::terminal::SetTitle(title),);
 }
 
 /// Whether the current terminal supports the OSC 9;4 progress sequence.

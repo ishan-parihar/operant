@@ -1,8 +1,7 @@
 // adapter_types/model_registry.rs — Model discovery and caching.
 
-use super::free_catalog::reverse_provider_lookup;
 use super::anthropic_client::{AnthropicClient, fetch_openai_compatible_models_async};
-
+use super::free_catalog::reverse_provider_lookup;
 
 #[derive(Debug, Clone)]
 pub struct ModelRegistry {
@@ -212,4 +211,3 @@ impl ModelRegistry {
         }
     }
 }
-

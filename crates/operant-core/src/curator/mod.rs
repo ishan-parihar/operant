@@ -533,7 +533,6 @@ impl CuratorEngine {
         dry_run: bool,
         cron_db: Option<&CronDb>,
     ) -> Result<review::ConsolidationResult> {
-
         // Load fresh usage data
         self.usage_tracker.load()?;
         let all_records = self.usage_tracker.all_records();
@@ -548,7 +547,8 @@ impl CuratorEngine {
         }
 
         // Build skill summaries for the LLM (cache SKILL.md content for reuse)
-        let mut content_cache: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+        let mut content_cache: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
         let summaries: Vec<review::SkillSummary> = agent_created
             .iter()
             .map(|r| {
@@ -619,7 +619,10 @@ impl CuratorEngine {
                     let mut existing = if umbrella_md.exists() {
                         fs::read_to_string(&umbrella_md).unwrap_or_default()
                     } else {
-                        format!("---\nname: {}\n---\n\n# {}\n\n", verdict.umbrella, verdict.umbrella)
+                        format!(
+                            "---\nname: {}\n---\n\n# {}\n\n",
+                            verdict.umbrella, verdict.umbrella
+                        )
                     };
                     // Dedup: skip if this skill's section already exists
                     let section_header = format!("## {}", skill_name);
@@ -635,21 +638,19 @@ impl CuratorEngine {
                     existing.push_str(&separator);
                     existing.push_str(&content);
                     if let Err(e) = fs::write(&umbrella_md, &existing) {
-                        result.errors.push(format!(
-                            "Failed to update umbrella SKILL.md: {}", e
-                        ));
+                        result
+                            .errors
+                            .push(format!("Failed to update umbrella SKILL.md: {}", e));
                         continue;
                     }
 
                     // Archive the original skill
-                    if let Err(e) = archiver::archive_skill(
-                        skill_name,
-                        &self.skills_dir,
-                        &self.archive_dir,
-                    ) {
-                        result.errors.push(format!(
-                            "Failed to archive '{}': {}", skill_name, e
-                        ));
+                    if let Err(e) =
+                        archiver::archive_skill(skill_name, &self.skills_dir, &self.archive_dir)
+                    {
+                        result
+                            .errors
+                            .push(format!("Failed to archive '{}': {}", skill_name, e));
                         continue;
                     }
 
@@ -694,9 +695,9 @@ impl CuratorEngine {
                         result.cron_rewrites = Some(rewrite_report);
                     }
                     Err(e) => {
-                        result.errors.push(format!(
-                            "Failed to rewrite cron job skill refs: {}", e
-                        ));
+                        result
+                            .errors
+                            .push(format!("Failed to rewrite cron job skill refs: {}", e));
                     }
                 }
             } else {

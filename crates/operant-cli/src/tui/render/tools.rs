@@ -5,7 +5,7 @@ use crate::tui::figures;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
-use super::{shimmer_spans, ACCENT_PRIMARY};
+use super::{ACCENT_PRIMARY, shimmer_spans};
 
 pub(crate) fn build_tool_names(
     messages: &[crate::tui::adapter_types::types::Message],
@@ -196,4 +196,3 @@ pub(crate) fn render_tool_block_lines(
         }
     }
 }
-

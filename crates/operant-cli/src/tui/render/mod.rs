@@ -18,17 +18,21 @@ pub(crate) mod utils;
 pub(crate) mod welcome;
 
 pub(crate) use cache::RenderedLineItem;
-pub(crate) use footer::{render_footer, render_input, render_prompt_suggestions, render_status_row, should_render_status_row};
+pub(crate) use footer::{
+    render_footer, render_input, render_prompt_suggestions, render_status_row,
+    should_render_status_row,
+};
 pub(crate) use messages::render_messages;
-pub(crate) use selection::{apply_selection_highlight, cache_selectable_row_text, render_context_menu};
+pub(crate) use selection::{
+    apply_selection_highlight, cache_selectable_row_text, render_context_menu,
+};
 pub(crate) use tools::{build_tool_names, render_system_annotation_lines, render_tool_block_lines};
 pub(crate) use utils::{
-    is_modal_open, render_error_modal, shimmer_spans, spinner_char, spinner_color,
-    truncate_end, truncate_middle, truncate_text,
+    is_modal_open, render_error_modal, shimmer_spans, spinner_char, spinner_color, truncate_end,
+    truncate_middle, truncate_text,
 };
 
 // render.rs â€” All ratatui rendering logic.
-
 
 use crate::tui::agents_view::render_agents_menu;
 use crate::tui::app::App;
@@ -53,8 +57,7 @@ use crate::tui::mcp_view::render_mcp_view;
 use crate::tui::memory_file_selector::render_memory_file_selector;
 use crate::tui::notifications::{NotificationKind, render_notification_banner};
 use crate::tui::overlays::{
-    render_global_search, render_help_overlay, render_history_search_overlay,
-    render_rewind_flow,
+    render_global_search, render_help_overlay, render_history_search_overlay, render_rewind_flow,
 };
 use crate::tui::prompt_input::input_height;
 use crate::tui::settings_screen::render_settings_screen;

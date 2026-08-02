@@ -9,7 +9,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph, Wrap};
 
-use super::{truncate_end, ACCENT_PRIMARY, WELCOME_BOX_HEIGHT};
+use super::{ACCENT_PRIMARY, WELCOME_BOX_HEIGHT, truncate_end};
 
 #[allow(dead_code)] // Prepared for welcome screen rendering — not yet wired into render_app()
 pub(crate) fn startup_notice_lines(app: &App, width: u16) -> Vec<Line<'static>> {

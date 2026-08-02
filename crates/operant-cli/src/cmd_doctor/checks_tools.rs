@@ -359,8 +359,8 @@ pub fn run_platform_checks(
     // and the binary is present, web/search/browser are available without
     // any of the legacy API-key providers. (audit 2026-08-02)
     // Reuse the core resolver: honors tools.igs_binary_path override + PATH.
-    let igs_present = config.tools.igs_enabled
-        && operant_core::tools::igs::find_igs_binary().is_some();
+    let igs_present =
+        config.tools.igs_enabled && operant_core::tools::igs::find_igs_binary().is_some();
 
     // Simplified port: list main tool categories and check their requirements.
     // `is_configured` covers keyless backends (igs, builtin memory); `required_envs`

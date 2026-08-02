@@ -87,19 +87,19 @@ pub mod skills;
 pub mod skills_guard;
 pub mod tools;
 pub mod trajectory;
-pub mod write_origin;
 pub mod user_question;
 pub mod voice;
+pub mod write_origin;
 
 pub use observer::{ConsoleObserver, Observer, ObserverEvent, ObserverMetric};
 pub use runtime_adapter::{NativeRuntime, RuntimeAdapter};
 
 pub use acp::{AcpHandler, AgentState, RpcRequest, RpcResponse, server};
 pub use agent::{AgentConfig, AgentEvent, FallbackModelClient, OperantAgent};
+pub use agent_memory::AgentMemoryProvider;
 pub use approval::{
     ApprovalContext, ApprovalGuard, ApprovalMode, ApprovalVerdict, RiskLevel, check_tool_approval,
 };
-pub use agent_memory::AgentMemoryProvider;
 pub use browser_provider::{
     BrowserProvider, BrowserUseProvider, BrowserbaseProvider, CamofoxProvider, FirecrawlProvider,
     LightpandaProvider, build_browser_provider,
@@ -152,7 +152,10 @@ pub use tools::{
     register_builtin_tools_with_sub_agent,
 };
 pub use trajectory::Trajectory;
-pub use write_origin::{WriteOriginGuard, WriteOriginToken, get_write_origin, is_background_review, reset_write_origin, set_write_origin};
+pub use write_origin::{
+    WriteOriginGuard, WriteOriginToken, get_write_origin, is_background_review, reset_write_origin,
+    set_write_origin,
+};
 
 pub use models_dev::{
     ModelCapabilities, fetch_models_dev, get_model_capabilities, list_agentic_models,

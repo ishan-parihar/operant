@@ -163,7 +163,11 @@ fn generate_session_token() -> String {
 
 /// Check the Authorization header against the session token.
 /// Returns Ok(()) if authorized, Err(response) if not.
-fn check_auth(state: &DashboardState, headers: &HeaderMap) -> Result<(), Response> {
+///
+/// The error is boxed: `axum::http::Response<Body>` is ~128+ bytes, which
+/// trips clippy::result_large_err on the hot path. Boxing the error variant
+/// keeps the Result small (callers deref with `return *e;`).
+fn check_auth(state: &DashboardState, headers: &HeaderMap) -> Result<(), Box<Response>> {
     let token = match &state.session_token {
         None => return Ok(()), // Insecure mode — no auth required
         Some(t) => t,
@@ -177,11 +181,13 @@ fn check_auth(state: &DashboardState, headers: &HeaderMap) -> Result<(), Respons
     if auth_header == format!("Bearer {}", token) {
         Ok(())
     } else {
-        Err((
-            StatusCode::UNAUTHORIZED,
-            "Missing or invalid Authorization header",
-        )
-            .into_response())
+        Err(Box::new(
+            (
+                StatusCode::UNAUTHORIZED,
+                "Missing or invalid Authorization header",
+            )
+                .into_response(),
+        ))
     }
 }
 
@@ -200,7 +206,7 @@ struct StatusResponse {
 
 async fn handle_status(State(state): State<DashboardState>, headers: HeaderMap) -> Response {
     if let Err(e) = check_auth(&state, &headers) {
-        return e;
+        return *e;
     }
 
     let kanban_task_count = count_all_kanban_tasks(&state.kanban_dir).unwrap_or(0);
@@ -238,7 +244,7 @@ struct TaskCounts {
 
 async fn handle_boards(State(state): State<DashboardState>, headers: HeaderMap) -> Response {
     if let Err(e) = check_auth(&state, &headers) {
-        return e;
+        return *e;
     }
 
     let kanban_dir = match &state.kanban_dir {
@@ -311,7 +317,7 @@ struct ConfigResponse {
 
 async fn handle_config(State(state): State<DashboardState>, headers: HeaderMap) -> Response {
     if let Err(e) = check_auth(&state, &headers) {
-        return e;
+        return *e;
     }
 
     let cfg = &state.app_config;

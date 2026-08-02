@@ -3,7 +3,6 @@
 use super::*;
 
 impl App {
-
     pub(super) fn prompt_mode(&self) -> InputMode {
         // Note: previously returned Readonly while streaming, but the prompt
         // now accepts input during streaming so the user can compose / queue

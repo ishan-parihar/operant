@@ -27,20 +27,26 @@ use std::sync::OnceLock;
 use tokio::sync::Mutex;
 use tokio::sync::mpsc;
 
+/// Pending permission requests, keyed by channel_id: outer std Mutex guards
+/// the inner tokio Mutex<HashMap>, shared via Arc so multiple tasks can
+/// insert/remove while the gateway runner holds the store.
+type PendingPermissions = std::sync::Mutex<
+    Option<Arc<Mutex<HashMap<String, operant_core::agent::ToolPermissionRequest>>>>,
+>;
+
+/// Pending user-question reply senders, keyed by channel_id (same shape as
+/// PendingPermissions).
+type PendingUserQuestions =
+    std::sync::Mutex<Option<Arc<Mutex<HashMap<String, tokio::sync::oneshot::Sender<String>>>>>>;
+
 /// Global store of pending permission requests, keyed by channel_id.
-pub static PENDING_PERMISSIONS: OnceLock<
-    std::sync::Mutex<
-        Option<Arc<Mutex<HashMap<String, operant_core::agent::ToolPermissionRequest>>>>,
-    >,
-> = OnceLock::new();
+pub static PENDING_PERMISSIONS: OnceLock<PendingPermissions> = OnceLock::new();
 
 /// Global store of pending user-question replies, keyed by channel_id.
 /// When the clarify tool asks a question, we store the reply_tx here.
 /// The next incoming message from that channel is routed as the reply
 /// instead of being sent to the agent. (iter-161)
-pub static PENDING_USER_QUESTIONS: OnceLock<
-    std::sync::Mutex<Option<Arc<Mutex<HashMap<String, tokio::sync::oneshot::Sender<String>>>>>>,
-> = OnceLock::new();
+pub static PENDING_USER_QUESTIONS: OnceLock<PendingUserQuestions> = OnceLock::new();
 
 /// Initialize the globals (call once at startup).
 fn init_pending_permissions() {

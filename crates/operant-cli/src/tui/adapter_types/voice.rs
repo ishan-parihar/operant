@@ -170,8 +170,7 @@ impl VoiceRecorder {
         }
 
         let stt_engine = self.stt_engine.as_ref().unwrap();
-        match operant_core::voice::transcribe_recording(&audio_path, stt_engine.as_ref()).await
-        {
+        match operant_core::voice::transcribe_recording(&audio_path, stt_engine.as_ref()).await {
             Ok(result) => {
                 if result.success && !result.transcript.is_empty() {
                     if let Some(tx) = &self.event_tx {

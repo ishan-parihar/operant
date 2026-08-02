@@ -97,19 +97,12 @@ impl OperantTool for LearningMutationTool {
         let parsed: LearningManageArgs = match serde_json::from_value(args) {
             Ok(v) => v,
             Err(e) => {
-                return ToolResult::error(
-                    "learning_manage",
-                    format!("Invalid arguments: {}", e),
-                );
+                return ToolResult::error("learning_manage", format!("Invalid arguments: {}", e));
             }
         };
 
         let result = match parsed.action.as_str() {
-            "delete" => delete_node(
-                &parsed.node_id,
-                &self.skills_dir,
-                &self.memory_dir,
-            ),
+            "delete" => delete_node(&parsed.node_id, &self.skills_dir, &self.memory_dir),
             "edit" => {
                 let content = match parsed.content {
                     Some(c) => c,
@@ -128,10 +121,7 @@ impl OperantTool for LearningMutationTool {
                 )
             }
             other => {
-                return ToolResult::error(
-                    "learning_manage",
-                    format!("Unknown action: {}", other),
-                );
+                return ToolResult::error("learning_manage", format!("Unknown action: {}", other));
             }
         };
 

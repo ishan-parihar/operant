@@ -109,7 +109,17 @@ pub async fn handle_curator_command(
             background,
             dry_run,
             consolidate,
-        } => cmd_run(config, &engine, background, dry_run, consolidate, &curator_dir).await,
+        } => {
+            cmd_run(
+                config,
+                &engine,
+                background,
+                dry_run,
+                consolidate,
+                &curator_dir,
+            )
+            .await
+        }
         CuratorSubcommand::Pause => cmd_pause(&engine).await,
         CuratorSubcommand::Resume => cmd_resume(&engine).await,
         CuratorSubcommand::Pin { skill } => cmd_pin(&tracker, &skill).await,
@@ -159,7 +169,14 @@ async fn cmd_status(engine: &CuratorEngine) -> Result<()> {
     Ok(())
 }
 
-async fn cmd_run(config: &AppConfig, engine: &CuratorEngine, background: bool, dry_run: bool, consolidate: bool, curator_dir: &Path) -> Result<()> {
+async fn cmd_run(
+    config: &AppConfig,
+    engine: &CuratorEngine,
+    background: bool,
+    dry_run: bool,
+    consolidate: bool,
+    curator_dir: &Path,
+) -> Result<()> {
     if background {
         println!("Curator run (background mode not yet supported, running synchronously)...");
     } else {
@@ -218,7 +235,8 @@ async fn cmd_run(config: &AppConfig, engine: &CuratorEngine, background: bool, d
             let model_client: Arc<dyn operant_core::agent::ModelClient> = match provider.as_str() {
                 #[cfg(feature = "anthropic")]
                 "anthropic" => {
-                    let client = operant_core::agent::clients::anthropic::AnthropicModelClient::new(api_key);
+                    let client =
+                        operant_core::agent::clients::anthropic::AnthropicModelClient::new(api_key);
                     Arc::new(client)
                 }
                 _ => {
@@ -226,11 +244,18 @@ async fn cmd_run(config: &AppConfig, engine: &CuratorEngine, background: bool, d
                     let raw_client = operant_core::client::OpenAIClient::new(
                         operant_core::client::ClientConfig::from(&config.client),
                     );
-                    Arc::new(operant_core::agent::clients::openai::OpenAIModelClient::new(raw_client))
+                    Arc::new(
+                        operant_core::agent::clients::openai::OpenAIModelClient::new(raw_client),
+                    )
                 }
             };
-            review_client = Some(ModelReviewClient::new(model_client, config.agent.model.clone()));
-            review_client.as_ref().map(|c| c as &dyn operant_core::curator::LlmReviewClient)
+            review_client = Some(ModelReviewClient::new(
+                model_client,
+                config.agent.model.clone(),
+            ));
+            review_client
+                .as_ref()
+                .map(|c| c as &dyn operant_core::curator::LlmReviewClient)
         } else {
             None
         }
@@ -238,7 +263,9 @@ async fn cmd_run(config: &AppConfig, engine: &CuratorEngine, background: bool, d
         None
     };
 
-    let report = engine.run_review(dry_run, llm_ref, consolidate, cron_db.as_ref()).await?;
+    let report = engine
+        .run_review(dry_run, llm_ref, consolidate, cron_db.as_ref())
+        .await?;
     println!("{}", report.summary);
     if !report.skills_archived.is_empty() {
         println!(
@@ -255,10 +282,7 @@ async fn cmd_run(config: &AppConfig, engine: &CuratorEngine, background: bool, d
         );
     }
     if !report.skills_consolidated.is_empty() {
-        println!(
-            "  Consolidated ({}):",
-            report.skills_consolidated.len()
-        );
+        println!("  Consolidated ({}):", report.skills_consolidated.len());
         for entry in &report.skills_consolidated {
             println!("    {} -> {} ({})", entry.name, entry.into, entry.reason);
         }
@@ -283,10 +307,7 @@ async fn cmd_run(config: &AppConfig, engine: &CuratorEngine, background: bool, d
                 );
             }
             for drop in &cron.drops {
-                println!(
-                    "    {} dropped (job {})",
-                    drop.dropped_skill, drop.job_id
-                );
+                println!("    {} dropped (job {})", drop.dropped_skill, drop.job_id);
             }
         }
     }

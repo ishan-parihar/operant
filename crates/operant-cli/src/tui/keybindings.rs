@@ -225,13 +225,10 @@ impl KeyBindingRegistry {
         }
 
         // Check global bindings
-        for binding in &self.global_bindings {
-            if self.matches(binding, event) {
-                return Some(binding);
-            }
-        }
-
-        None
+        self.global_bindings
+            .iter()
+            .find(|&binding| self.matches(binding, event))
+            .map(|v| v as _)
     }
 
     /// Find binding for a key event, trying multiple contexts in priority order

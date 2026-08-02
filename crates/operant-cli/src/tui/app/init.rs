@@ -279,5 +279,4 @@ impl App {
             exit_key_sequence_start: None,
         }
     }
-
 }

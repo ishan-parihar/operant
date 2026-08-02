@@ -55,8 +55,8 @@ impl OperantTool for WebSearchTool {
         // aggregates Tavily/Firecrawl + DuckDuckGo with JS rendering. When
         // `igs` is missing (or returns nothing — its upstream needs a key),
         // we fall back to the configured provider / DuckDuckGo.
-        let igs_available = runtime_config().tools.igs_enabled
-            && crate::tools::igs::find_igs_binary().is_some();
+        let igs_available =
+            runtime_config().tools.igs_enabled && crate::tools::igs::find_igs_binary().is_some();
         let want_igs = settings.preferred_provider == "igs" || igs_available;
 
         let provider: Box<dyn WebSearchProvider> = if want_igs && igs_available {
@@ -89,13 +89,16 @@ impl OperantTool for WebSearchTool {
             // to DuckDuckGo so search still works out of the box.
             _ if used_provider == "igs" => {
                 tracing::warn!("igs search returned no results — falling back to DuckDuckGo");
-                let ddg = DDGProvider::new(settings.search_url.clone(), settings.user_agent.clone());
+                let ddg =
+                    DDGProvider::new(settings.search_url.clone(), settings.user_agent.clone());
                 match ddg.search(&args.query, num_results).await {
                     Ok(results) => {
                         used_provider = ddg.name().to_string();
                         results
                     }
-                    Err(e) => return ToolResult::error("web_search", format!("Search failed: {e}")),
+                    Err(e) => {
+                        return ToolResult::error("web_search", format!("Search failed: {e}"));
+                    }
                 }
             }
             Ok(results) => results,

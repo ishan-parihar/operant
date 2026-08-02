@@ -75,7 +75,9 @@ impl IgsCli {
 
         let out = tokio::time::timeout(
             self.timeout,
-            tokio::process::Command::new(&self.binary).args(&full).output(),
+            tokio::process::Command::new(&self.binary)
+                .args(&full)
+                .output(),
         )
         .await
         .map_err(|_| Error::Agent(format!("igs command timed out after {:?}", self.timeout)))?
@@ -138,8 +140,7 @@ fn first_text_field(value: &Value) -> Option<String> {
 
 /// Scrape a URL to markdown via `igs web scrape`.
 pub async fn scrape_url(url: &str) -> Result<String> {
-    let cli = IgsCli::new()
-        .ok_or_else(|| Error::Agent(IGS_INSTALL_HINT.to_string()))?;
+    let cli = IgsCli::new().ok_or_else(|| Error::Agent(IGS_INSTALL_HINT.to_string()))?;
     cli.run_extract(
         &["web", "scrape", "--url", url],
         &["markdown", "content", "text"],
@@ -150,7 +151,10 @@ pub async fn scrape_url(url: &str) -> Result<String> {
 /// Parse an `igs web search --format json` response into structured results.
 /// Defensive against shape drift: accepts `results` / `memories` / `data`
 /// arrays, and individual items with `title`/`url` + `content`/`snippet`/`text`.
-pub fn parse_search_results(value: &Value, limit: usize) -> Vec<crate::tools::web_providers::WebSearchResult> {
+pub fn parse_search_results(
+    value: &Value,
+    limit: usize,
+) -> Vec<crate::tools::web_providers::WebSearchResult> {
     use crate::tools::web_providers::WebSearchResult;
 
     let items = value
@@ -183,7 +187,11 @@ pub fn parse_search_results(value: &Value, limit: usize) -> Vec<crate::tools::we
             .unwrap_or("")
             .to_string();
         if !title.trim().is_empty() || !url.trim().is_empty() {
-            out.push(WebSearchResult { title, url, snippet });
+            out.push(WebSearchResult {
+                title,
+                url,
+                snippet,
+            });
         }
     }
     out
@@ -195,9 +203,11 @@ pub fn parse_search_results(value: &Value, limit: usize) -> Vec<crate::tools::we
 /// corresponding upstream key; with no key it returns zero results. Callers
 /// (e.g. `WebSearchTool`) should fall back to DuckDuckGo when this returns
 /// an empty vec or an error.
-pub async fn web_search_igs(query: &str, limit: usize) -> Result<Vec<crate::tools::web_providers::WebSearchResult>> {
-    let cli = IgsCli::new()
-        .ok_or_else(|| Error::Agent(IGS_INSTALL_HINT.to_string()))?;
+pub async fn web_search_igs(
+    query: &str,
+    limit: usize,
+) -> Result<Vec<crate::tools::web_providers::WebSearchResult>> {
+    let cli = IgsCli::new().ok_or_else(|| Error::Agent(IGS_INSTALL_HINT.to_string()))?;
     let raw = cli
         .run_json(&[
             "web",
@@ -215,8 +225,7 @@ pub async fn web_search_igs(query: &str, limit: usize) -> Result<Vec<crate::tool
 
 /// Run a `igs browser` subcommand (goto, markdown, click, fill, scroll, ...).
 pub async fn browser_command(args: &[&str]) -> Result<String> {
-    let cli = IgsCli::new()
-        .ok_or_else(|| Error::Agent(IGS_INSTALL_HINT.to_string()))?;
+    let cli = IgsCli::new().ok_or_else(|| Error::Agent(IGS_INSTALL_HINT.to_string()))?;
     cli.run_extract(args, &["markdown", "content", "text", "result"])
         .await
 }
@@ -423,7 +432,14 @@ mod tests {
         let value = serde_json::json!({ "results": [{"title": "a", "url": "u"}, {"title": "b", "url": "u"}] });
         assert_eq!(parse_search_results(&value, 1).len(), 1);
         assert!(parse_search_results(&serde_json::json!({ "results": [] }), 5).is_empty());
-        assert!(parse_search_results(&serde_json::json!({ "data": [{"title": "x", "url": "y"}] }), 5).len() == 1);
+        assert!(
+            parse_search_results(
+                &serde_json::json!({ "data": [{"title": "x", "url": "y"}] }),
+                5
+            )
+            .len()
+                == 1
+        );
     }
 
     #[test]

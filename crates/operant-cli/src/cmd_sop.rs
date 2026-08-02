@@ -122,9 +122,9 @@ fn discover_sops(sop_dir: &Path) -> Vec<(String, String)> {
                         c.parse::<toml::Value>()
                             .ok()
                             .and_then(|v| v.get("description").cloned())
-                            .and_then(|v| match v {
-                                toml::Value::String(s) => Some(s),
-                                _ => Some(v.to_string()),
+                            .map(|v| match v {
+                                toml::Value::String(s) => s,
+                                _ => v.to_string(),
                             })
                     })
                     .unwrap_or_else(|| "(no description)".to_string());

@@ -169,11 +169,12 @@ impl ModelReviewClient {
     /// Send a prompt to the LLM and return the text response.
     async fn chat_completion(&self, prompt: &str) -> Result<String> {
         let messages = vec![
-            Message::system("You are a precise JSON-generating assistant. Return ONLY valid JSON, no markdown fences, no explanation."),
+            Message::system(
+                "You are a precise JSON-generating assistant. Return ONLY valid JSON, no markdown fences, no explanation.",
+            ),
             Message::user(prompt),
         ];
-        let request = ChatRequest::new(&self.model, messages)
-            .with_stream(false);
+        let request = ChatRequest::new(&self.model, messages).with_stream(false);
 
         let response: ChatResponse = self.client.chat(request).await?;
 
@@ -193,14 +194,17 @@ impl LlmReviewClient for ModelReviewClient {
         }
 
         let skills_json = serde_json::to_string(
-            &skills.iter().map(|s| {
-                serde_json::json!({
-                    "name": s.name,
-                    "description": s.description,
-                    "use_count": s.use_count,
-                    "last_used": s.last_used,
+            &skills
+                .iter()
+                .map(|s| {
+                    serde_json::json!({
+                        "name": s.name,
+                        "description": s.description,
+                        "use_count": s.use_count,
+                        "last_used": s.last_used,
+                    })
                 })
-            }).collect::<Vec<_>>(),
+                .collect::<Vec<_>>(),
         )?;
 
         let prompt = format!(
@@ -229,20 +233,19 @@ impl LlmReviewClient for ModelReviewClient {
         }
 
         let skills_json = serde_json::to_string(
-            &skills.iter().map(|s| {
-                serde_json::json!({
-                    "name": s.name,
-                    "description": s.description,
-                    "use_count": s.use_count,
+            &skills
+                .iter()
+                .map(|s| {
+                    serde_json::json!({
+                        "name": s.name,
+                        "description": s.description,
+                        "use_count": s.use_count,
+                    })
                 })
-            }).collect::<Vec<_>>(),
+                .collect::<Vec<_>>(),
         )?;
 
-        let prompt = format!(
-            "{}\n\nSkills:\n{}",
-            CONSOLIDATION_PROMPT,
-            skills_json
-        );
+        let prompt = format!("{}\n\nSkills:\n{}", CONSOLIDATION_PROMPT, skills_json);
 
         let raw = self.chat_completion(&prompt).await?;
         let raw = extract_json_array(&raw);
@@ -320,7 +323,9 @@ mod tests {
         async fn chat_streaming(
             &self,
             _request: ChatRequest,
-        ) -> crate::error::Result<futures::stream::BoxStream<'static, crate::error::Result<crate::agent::StreamChunk>>> {
+        ) -> crate::error::Result<
+            futures::stream::BoxStream<'static, crate::error::Result<crate::agent::StreamChunk>>,
+        > {
             unimplemented!("not needed for tests")
         }
 
@@ -332,7 +337,9 @@ mod tests {
     #[tokio::test]
     async fn test_review_skills_empty() {
         let client = ModelReviewClient::new(
-            Arc::new(MockModelClient { response: "[]".to_string() }),
+            Arc::new(MockModelClient {
+                response: "[]".to_string(),
+            }),
             "mock".to_string(),
         );
         let verdicts = client.review_skills(&[]).await.unwrap();
@@ -341,9 +348,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_review_skills_parses_verdicts() {
-        let mock_response = r#"[{"skill_name": "seo-audit", "action": "keep", "reason": "Active use"}]"#;
+        let mock_response =
+            r#"[{"skill_name": "seo-audit", "action": "keep", "reason": "Active use"}]"#;
         let client = ModelReviewClient::new(
-            Arc::new(MockModelClient { response: mock_response.to_string() }),
+            Arc::new(MockModelClient {
+                response: mock_response.to_string(),
+            }),
             "mock".to_string(),
         );
         let skills = vec![SkillSummary {
@@ -361,7 +371,9 @@ mod tests {
     #[tokio::test]
     async fn test_consolidate_skills_empty() {
         let client = ModelReviewClient::new(
-            Arc::new(MockModelClient { response: "[]".to_string() }),
+            Arc::new(MockModelClient {
+                response: "[]".to_string(),
+            }),
             "mock".to_string(),
         );
         let verdicts = client.consolidate_skills(&[]).await.unwrap();
@@ -372,7 +384,9 @@ mod tests {
     async fn test_consolidate_skills_parses_verdicts() {
         let mock_response = r#"[{"umbrella": "web-quality", "absorbed": ["seo-audit", "web-vitals"], "rationale": "Overlap"}]"#;
         let client = ModelReviewClient::new(
-            Arc::new(MockModelClient { response: mock_response.to_string() }),
+            Arc::new(MockModelClient {
+                response: mock_response.to_string(),
+            }),
             "mock".to_string(),
         );
         let skills = vec![SkillSummary {
@@ -394,7 +408,10 @@ mod tests {
 
     #[test]
     fn test_extract_json_array_fenced() {
-        assert_eq!(extract_json_array("```json\n[{\"a\":1}]\n```"), "[{\"a\":1}]");
+        assert_eq!(
+            extract_json_array("```json\n[{\"a\":1}]\n```"),
+            "[{\"a\":1}]"
+        );
     }
 
     #[test]

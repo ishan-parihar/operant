@@ -207,7 +207,11 @@ impl App {
     }
 
     // Handle a context menu action.
-    pub(super) fn handle_context_menu_action(&mut self, item: ContextMenuItem, kind: ContextMenuKind) {
+    pub(super) fn handle_context_menu_action(
+        &mut self,
+        item: ContextMenuItem,
+        kind: ContextMenuKind,
+    ) {
         match item {
             ContextMenuItem::Copy => {
                 let text = match kind {
@@ -410,7 +414,6 @@ impl App {
     }
 
     // Process mouse events (trackpad scroll, text selection, etc.).
-
 
     /// Detect if a click is a double-click based on timing and position.
     /// Returns true if the click is within ~500ms and ~5px of the last click.
@@ -778,6 +781,4 @@ impl App {
             _ => {}
         }
     }
-
-
 }

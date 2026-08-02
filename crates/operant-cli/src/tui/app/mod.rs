@@ -1,17 +1,17 @@
 // app/mod.rs — App state struct and main event loop.
 
-mod enums;
-mod helpers;
-mod init;
-mod providers;
+mod agent_events;
 mod commands;
 mod dialog_routing;
+mod enums;
+mod helpers;
 mod import_config;
+mod init;
 mod key_handling;
-mod mouse;
-mod agent_events;
 mod messaging;
+mod mouse;
 mod prompt;
+mod providers;
 pub use enums::*;
 use helpers::*;
 
@@ -28,8 +28,7 @@ use crate::tui::mcp_view::{McpServerView, McpToolView, McpViewState, McpViewStat
 use crate::tui::model_picker::{EffortLevel, ModelPickerState};
 use crate::tui::notifications::{NotificationKind, NotificationQueue};
 use crate::tui::overlays::{
-    GlobalSearchState, HelpOverlay, HistorySearchOverlay, RewindFlowOverlay,
-    SelectorMessage,
+    GlobalSearchState, HelpOverlay, HistorySearchOverlay, RewindFlowOverlay, SelectorMessage,
 };
 use crate::tui::prompt_input::{InputMode, PromptInputState, VimMode};
 use crate::tui::render;
@@ -189,10 +188,10 @@ pub struct App {
     pub session_title: Option<String>,
     /// Remote session URL (set when bridge connects; readable by commands).
     #[allow(dead_code)] // Prepared for bridge connection UI
-    pub remote_session_url: Option<String>,    /// Bridge/gateway connection state for status bar badge.
+    pub remote_session_url: Option<String>,
+    /// Bridge/gateway connection state for status bar badge.
     #[allow(dead_code)] // Prepared for bridge status badge
-    pub bridge_state:
-        crate::tui::bridge_state::BridgeConnectionState,
+    pub bridge_state: crate::tui::bridge_state::BridgeConnectionState,
     /// Live MCP manager snapshot source when available.
     /// (iter-208: stub mcp_manager field deleted — load_mcp_servers now reads
     /// from core_mcp_manager directly.)
@@ -488,9 +487,7 @@ pub struct App {
 // (iter-143b already deleted the speech_mode system; caveman_prompt/rocky_prompt
 // leaf functions were left behind as orphans and are now removed too.)
 
-
 impl App {
-
     fn current_agent_mode_snapshot(&self) -> String {
         self.agent_mode
             .clone()
@@ -626,7 +623,6 @@ impl App {
         self.invalidate_transcript();
         self.on_new_message();
     }
-
 
     // -------------------------------------------------------------------
     // Main run loop
@@ -1026,21 +1022,21 @@ impl App {
             let pending = self.pending_key.take();
             let has_simulated = !self.simulated_keys.is_empty();
 
-    // Poll for events with an adaptive timeout based on performance tier and
-    // activity state. This reduces CPU usage by 5-10x on idle terminals.
-    let got_event = pending.is_some() || has_simulated || {
-        if self.is_simulating {
-            false
-        } else {
-            let poll_timeout = crate::tui::redraw::redraw_interval(
-                self.perf_tier,
-                self.is_streaming,
-                Some(self.last_activity.elapsed()),
-                None, // use default 5s idle threshold
-            );
-            event::poll(poll_timeout)?
-        }
-    };
+            // Poll for events with an adaptive timeout based on performance tier and
+            // activity state. This reduces CPU usage by 5-10x on idle terminals.
+            let got_event = pending.is_some() || has_simulated || {
+                if self.is_simulating {
+                    false
+                } else {
+                    let poll_timeout = crate::tui::redraw::redraw_interval(
+                        self.perf_tier,
+                        self.is_streaming,
+                        Some(self.last_activity.elapsed()),
+                        None, // use default 5s idle threshold
+                    );
+                    event::poll(poll_timeout)?
+                }
+            };
 
             if got_event {
                 // Update activity timestamp for adaptive redraw cadence.
@@ -1142,11 +1138,8 @@ impl App {
             }
         }
     }
-
-
 }
 #[cfg(test)]
-
 mod tests {
     use super::*;
     use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};

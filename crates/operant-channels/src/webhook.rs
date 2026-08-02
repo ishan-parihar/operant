@@ -247,7 +247,7 @@ impl Channel for WebhookChannel {
             http::{HeaderMap, StatusCode},
             routing::post,
         };
-        
+
         use tower::Service;
 
         let counter = Arc::new(AtomicU64::new(0));

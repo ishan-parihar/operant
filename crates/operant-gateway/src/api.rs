@@ -1431,12 +1431,7 @@ pub fn router(
     reload_tx: Option<tokio::sync::watch::Sender<bool>>,
     canvas_store: Option<crate::tools::CanvasStore>,
 ) -> axum::Router<super::AppState> {
-    
     use axum::Router;
-    
-    
-    
-    
 
     // Build the AppState from the config
     let state = super::AppState::new(
@@ -1448,8 +1443,6 @@ pub fn router(
         reload_tx,
         canvas_store,
     );
-
-    
 
     Router::new()
         .nest("/api", build_api_routes())
@@ -1531,11 +1524,7 @@ pub fn cron_router(config: operant_config::schema::Config) -> axum::Router {
     use axum::{Router, routing::post};
     use operant_runtime::observability::NoopObserver;
     use parking_lot::Mutex as ParkingMutex;
-    use std::{
-        collections::HashMap,
-        sync::Arc,
-        time::Duration,
-    };
+    use std::{collections::HashMap, sync::Arc, time::Duration};
     use tokio::sync::broadcast;
 
     // Build minimal state using mock provider/memory
@@ -1749,7 +1738,7 @@ mod tests {
     use operant_memory::{Memory, MemoryCategory, MemoryEntry};
     use operant_providers::Provider;
     use operant_runtime::security::pairing::PairingGuard;
-    
+
     use std::sync::Arc;
     use std::time::Duration;
 
@@ -1829,11 +1818,7 @@ mod tests {
         };
         use operant_runtime::observability::NoopObserver;
         use parking_lot::Mutex as ParkingMutex;
-        use std::{
-            collections::HashMap,
-            sync::Arc,
-            time::Duration,
-        };
+        use std::{collections::HashMap, sync::Arc, time::Duration};
         use tokio::sync::broadcast;
 
         AppState {

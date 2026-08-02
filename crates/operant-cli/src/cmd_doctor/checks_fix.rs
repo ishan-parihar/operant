@@ -16,6 +16,10 @@ use operant_core::platform::{
 };
 use std::path::Path;
 
+/// A function returning a home-relative directory path (used by `--fix` to
+/// create the standard directory layout).
+type DirGetter = fn() -> std::path::PathBuf;
+
 fn fix_create_dir(path: &Path, label: &str, fixed: &mut u32, errors: &mut u32) {
     if path.exists() {
         return;
@@ -62,7 +66,7 @@ pub async fn cmd_fix(config: &AppConfig) -> Result<()> {
         );
     }
 
-    let dirs: &[(fn() -> std::path::PathBuf, &str)] = &[
+    let dirs: &[(DirGetter, &str)] = &[
         (operant_home, "HERMES_HOME"),
         (operant_config_dir, "HERMES_HOME/config"),
         (operant_data_dir, "HERMES_HOME/data"),

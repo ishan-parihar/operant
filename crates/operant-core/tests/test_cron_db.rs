@@ -52,11 +52,14 @@ fn referenced_skill_names_collects_both_fields() {
     let (db, _dir) = temp_db();
 
     // Job with legacy single skill field
-    db.create_job(make_job("j1", Some("seo-audit"), None)).unwrap();
+    db.create_job(make_job("j1", Some("seo-audit"), None))
+        .unwrap();
     // Job with skills array
-    db.create_job(make_job("j2", None, Some(vec!["code-review", "seo-audit"]))).unwrap();
+    db.create_job(make_job("j2", None, Some(vec!["code-review", "seo-audit"])))
+        .unwrap();
     // Job with both — "seo-audit" appears in both, should dedup
-    db.create_job(make_job("j3", Some("seo-audit"), Some(vec!["code-review"]))).unwrap();
+    db.create_job(make_job("j3", Some("seo-audit"), Some(vec!["code-review"])))
+        .unwrap();
 
     let refs = db.referenced_skill_names().unwrap();
     assert_eq!(refs.len(), 2);
@@ -68,7 +71,8 @@ fn referenced_skill_names_collects_both_fields() {
 fn referenced_skill_names_skips_empty_whitespace() {
     let (db, _dir) = temp_db();
     db.create_job(make_job("j1", Some("  "), None)).unwrap();
-    db.create_job(make_job("j2", None, Some(vec!["", "  "]))).unwrap();
+    db.create_job(make_job("j2", None, Some(vec!["", "  "])))
+        .unwrap();
 
     let refs = db.referenced_skill_names().unwrap();
     assert!(refs.is_empty());
@@ -77,14 +81,19 @@ fn referenced_skill_names_skips_empty_whitespace() {
 #[test]
 fn referenced_skill_names_includes_disabled_jobs() {
     let (db, _dir) = temp_db();
-    let id = db.create_job(make_job("j1", Some("old-skill"), None)).unwrap();
+    let id = db
+        .create_job(make_job("j1", Some("old-skill"), None))
+        .unwrap();
     // Disable the job
     let mut updates = HashMap::new();
     updates.insert("enabled".to_string(), Some(serde_json::json!(false)));
     db.update_job(&id, updates).unwrap();
 
     let refs = db.referenced_skill_names().unwrap();
-    assert!(refs.contains("old-skill"), "Disabled job skill should still be returned");
+    assert!(
+        refs.contains("old-skill"),
+        "Disabled job skill should still be returned"
+    );
 }
 
 // ── rewrite_skill_refs ──────────────────────────────────────────────────
@@ -102,7 +111,8 @@ fn rewrite_no_jobs_scanned() {
 #[test]
 fn rewrite_unchanged_job_not_counted() {
     let (db, _dir) = temp_db();
-    db.create_job(make_job("j1", None, Some(vec!["keep-me"]))).unwrap();
+    db.create_job(make_job("j1", None, Some(vec!["keep-me"])))
+        .unwrap();
 
     let mut consolidated = HashMap::new();
     consolidated.insert("unrelated".to_string(), "umbrella".to_string());
@@ -116,7 +126,8 @@ fn rewrite_unchanged_job_not_counted() {
 #[test]
 fn rewrite_consolidation_mapping() {
     let (db, _dir) = temp_db();
-    db.create_job(make_job("j1", None, Some(vec!["seo-audit", "code-review"]))).unwrap();
+    db.create_job(make_job("j1", None, Some(vec!["seo-audit", "code-review"])))
+        .unwrap();
 
     let mut consolidated = HashMap::new();
     consolidated.insert("seo-audit".to_string(), "web-quality".to_string());
@@ -139,23 +150,33 @@ fn rewrite_consolidation_mapping() {
 #[test]
 fn rewrite_pruned_skill_dropped() {
     let (db, _dir) = temp_db();
-    db.create_job(make_job("j1", Some("dead-skill"), None)).unwrap();
+    db.create_job(make_job("j1", Some("dead-skill"), None))
+        .unwrap();
 
-    let report = db.rewrite_skill_refs(&HashMap::new(), &["dead-skill".to_string()]).unwrap();
+    let report = db
+        .rewrite_skill_refs(&HashMap::new(), &["dead-skill".to_string()])
+        .unwrap();
     assert_eq!(report.jobs_updated, 1);
     assert_eq!(report.drops.len(), 1);
     assert_eq!(report.drops[0].dropped_skill, "dead-skill");
 
     let jobs = db.list_jobs(true).unwrap();
     assert!(jobs[0].skills.as_ref().is_none_or(|s| s.is_empty()));
-    assert!(jobs[0].skill.is_none(), "skill should be None after all skills pruned");
+    assert!(
+        jobs[0].skill.is_none(),
+        "skill should be None after all skills pruned"
+    );
 }
 
 #[test]
 fn rewrite_prune_only_no_consolidation() {
     let (db, _dir) = temp_db();
-    db.create_job(make_job("j1", None, Some(vec!["skill-a", "skill-b", "skill-c"])))
-        .unwrap();
+    db.create_job(make_job(
+        "j1",
+        None,
+        Some(vec!["skill-a", "skill-b", "skill-c"]),
+    ))
+    .unwrap();
 
     // Prune one skill, keep two — no consolidation involved
     let report = db
@@ -192,14 +213,18 @@ fn rewrite_prune_all_from_multi_skill_job() {
 
     let jobs = db.list_jobs(true).unwrap();
     assert!(jobs[0].skills.as_ref().is_none_or(|s| s.is_empty()));
-    assert!(jobs[0].skill.is_none(), "skill should be None after all pruned");
+    assert!(
+        jobs[0].skill.is_none(),
+        "skill should be None after all pruned"
+    );
 }
 
 #[test]
 fn rewrite_dedup_umbrella_already_present() {
     let (db, _dir) = temp_db();
     // Job has both "seo-audit" and the umbrella "web-quality"
-    db.create_job(make_job("j1", None, Some(vec!["seo-audit", "web-quality"]))).unwrap();
+    db.create_job(make_job("j1", None, Some(vec!["seo-audit", "web-quality"])))
+        .unwrap();
 
     let mut consolidated = HashMap::new();
     consolidated.insert("seo-audit".to_string(), "web-quality".to_string());
@@ -211,14 +236,23 @@ fn rewrite_dedup_umbrella_already_present() {
 
     let jobs = db.list_jobs(true).unwrap();
     let skills = jobs[0].skills.as_ref().unwrap();
-    assert_eq!(skills.len(), 1, "Should have only web-quality, not duplicate");
+    assert_eq!(
+        skills.len(),
+        1,
+        "Should have only web-quality, not duplicate"
+    );
     assert_eq!(skills[0], "web-quality");
 }
 
 #[test]
 fn rewrite_mixed_consolidation_and_prune() {
     let (db, _dir) = temp_db();
-    db.create_job(make_job("j1", None, Some(vec!["seo-audit", "dead-skill", "code-review"]))).unwrap();
+    db.create_job(make_job(
+        "j1",
+        None,
+        Some(vec!["seo-audit", "dead-skill", "code-review"]),
+    ))
+    .unwrap();
 
     let mut consolidated = HashMap::new();
     consolidated.insert("seo-audit".to_string(), "web-quality".to_string());
@@ -240,9 +274,12 @@ fn rewrite_mixed_consolidation_and_prune() {
 #[test]
 fn rewrite_multiple_jobs() {
     let (db, _dir) = temp_db();
-    db.create_job(make_job("j1", Some("seo-audit"), None)).unwrap();
-    db.create_job(make_job("j2", None, Some(vec!["code-review"]))).unwrap();
-    db.create_job(make_job("j3", None, Some(vec!["seo-audit", "code-review"]))).unwrap();
+    db.create_job(make_job("j1", Some("seo-audit"), None))
+        .unwrap();
+    db.create_job(make_job("j2", None, Some(vec!["code-review"])))
+        .unwrap();
+    db.create_job(make_job("j3", None, Some(vec!["seo-audit", "code-review"])))
+        .unwrap();
 
     let mut consolidated = HashMap::new();
     consolidated.insert("seo-audit".to_string(), "web-quality".to_string());
@@ -267,7 +304,8 @@ fn rewrite_multiple_jobs() {
 fn rewrite_legacy_skill_field() {
     let (db, _dir) = temp_db();
     // Job with only the legacy single skill field
-    db.create_job(make_job("j1", Some("seo-audit"), None)).unwrap();
+    db.create_job(make_job("j1", Some("seo-audit"), None))
+        .unwrap();
 
     let mut consolidated = HashMap::new();
     consolidated.insert("seo-audit".to_string(), "web-quality".to_string());
@@ -294,11 +332,17 @@ fn rewrite_prune_nonexistent_skill_is_noop() {
         .rewrite_skill_refs(&HashMap::new(), &["nonexistent-d".to_string()])
         .unwrap();
     assert_eq!(report.jobs_scanned, 1);
-    assert_eq!(report.jobs_updated, 0, "should not update when prune target doesn't exist");
+    assert_eq!(
+        report.jobs_updated, 0,
+        "should not update when prune target doesn't exist"
+    );
     assert!(report.drops.is_empty());
 
     // Verify original skills are unchanged
     let jobs = db.list_jobs(true).unwrap();
     let skills = jobs[0].skills.as_ref().unwrap();
-    assert_eq!(skills, &vec!["a".to_string(), "b".to_string(), "c".to_string()]);
+    assert_eq!(
+        skills,
+        &vec!["a".to_string(), "b".to_string(), "c".to_string()]
+    );
 }

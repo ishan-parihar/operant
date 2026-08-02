@@ -207,7 +207,8 @@ impl LlmCompressor {
         }
 
         // Load consecutive_failures
-        if let Some(val) = db.get_session_metadata(&session_id, "compression_consecutive_failures") {
+        if let Some(val) = db.get_session_metadata(&session_id, "compression_consecutive_failures")
+        {
             if let Ok(count) = val.parse::<usize>() {
                 self.consecutive_failures = count;
                 debug!(
@@ -842,14 +843,18 @@ mod tests {
         // pattern where compression failure cooldowns persist to SQLite.
         let tmp = tempfile::tempdir().unwrap();
         let db_path = tmp.path().join("test.db");
-        let db = Arc::new(
-            crate::database::Database::init(db_path.clone()).unwrap(),
-        );
+        let db = Arc::new(crate::database::Database::init(db_path.clone()).unwrap());
         let session_id = "test-session-persist".to_string();
 
         // Create a session row first (FK constraint)
-        db.save_session(&session_id, None, "test", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z")
-            .unwrap();
+        db.save_session(
+            &session_id,
+            None,
+            "test",
+            "2026-01-01T00:00:00Z",
+            "2026-01-01T00:00:00Z",
+        )
+        .unwrap();
 
         // --- Instance 1: record a failure ---
         let config = LlmCompressorConfig::default();
@@ -884,12 +889,16 @@ mod tests {
         // Validates that clearing cooldown also persists to DB.
         let tmp = tempfile::tempdir().unwrap();
         let db_path = tmp.path().join("test_clear.db");
-        let db = Arc::new(
-            crate::database::Database::init(db_path).unwrap(),
-        );
+        let db = Arc::new(crate::database::Database::init(db_path).unwrap());
         let session_id = "test-session-clear".to_string();
-        db.save_session(&session_id, None, "test", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z")
-            .unwrap();
+        db.save_session(
+            &session_id,
+            None,
+            "test",
+            "2026-01-01T00:00:00Z",
+            "2026-01-01T00:00:00Z",
+        )
+        .unwrap();
 
         let config = LlmCompressorConfig::default();
         let mut compressor = LlmCompressor::new(config.clone());

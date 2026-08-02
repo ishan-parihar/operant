@@ -173,5 +173,4 @@ impl App {
         self.refresh_prompt_input();
         input
     }
-
 }

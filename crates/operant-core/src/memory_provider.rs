@@ -70,31 +70,43 @@ impl MemorySyncExecutor {
 
     /// Submit a sync_turn job (non-blocking).
     pub fn submit_sync_turn(&self, user: &str, assistant: &str) {
-        if self.tx.try_send(SyncJob::SyncTurn {
-            user: user.to_string(),
-            assistant: assistant.to_string(),
-        }).is_err() {
+        if self
+            .tx
+            .try_send(SyncJob::SyncTurn {
+                user: user.to_string(),
+                assistant: assistant.to_string(),
+            })
+            .is_err()
+        {
             tracing::warn!("MemorySyncExecutor: sync_turn channel full — job dropped");
         }
     }
 
     /// Submit a memory write mirror job (non-blocking).
     pub fn submit_memory_write(&self, action: &str, target: &str, content: &str) {
-        if self.tx.try_send(SyncJob::MemoryWrite {
-            action: action.to_string(),
-            target: target.to_string(),
-            content: content.to_string(),
-        }).is_err() {
+        if self
+            .tx
+            .try_send(SyncJob::MemoryWrite {
+                action: action.to_string(),
+                target: target.to_string(),
+                content: content.to_string(),
+            })
+            .is_err()
+        {
             tracing::warn!("MemorySyncExecutor: memory_write channel full — job dropped");
         }
     }
 
     /// Submit a delegation observation job (non-blocking).
     pub fn submit_delegation(&self, task: &str, result: &str) {
-        if self.tx.try_send(SyncJob::Delegation {
-            task: task.to_string(),
-            result: result.to_string(),
-        }).is_err() {
+        if self
+            .tx
+            .try_send(SyncJob::Delegation {
+                task: task.to_string(),
+                result: result.to_string(),
+            })
+            .is_err()
+        {
             tracing::warn!("MemorySyncExecutor: delegation channel full — job dropped");
         }
     }
@@ -108,9 +120,11 @@ impl MemorySyncExecutor {
             .take(5)
             .cloned()
             .collect();
-        if self.tx.try_send(SyncJob::SessionEnd {
-            messages: limited,
-        }).is_err() {
+        if self
+            .tx
+            .try_send(SyncJob::SessionEnd { messages: limited })
+            .is_err()
+        {
             tracing::warn!("MemorySyncExecutor: session_end channel full — job dropped");
         }
     }
@@ -124,10 +138,7 @@ impl MemorySyncExecutor {
         drop(self.tx);
         // Wait for the worker to finish (up to 5s)
         if let Some(handle) = self.handle.take() {
-            let _ = tokio::time::timeout(
-                std::time::Duration::from_secs(5),
-                handle,
-            ).await;
+            let _ = tokio::time::timeout(std::time::Duration::from_secs(5), handle).await;
         }
     }
 
@@ -140,7 +151,11 @@ impl MemorySyncExecutor {
                         tracing::warn!(error = %e, "MemorySyncExecutor: sync_turn failed");
                     }
                 }
-                SyncJob::MemoryWrite { action, target, content } => {
+                SyncJob::MemoryWrite {
+                    action,
+                    target,
+                    content,
+                } => {
                     provider.on_memory_write(&action, &target, &content);
                 }
                 SyncJob::Delegation { task, result } => {
@@ -221,12 +236,7 @@ pub trait MemoryProvider: Send + Sync {
 
     /// Called when the agent switches session_id mid-process.
     /// Fires on /resume, /branch, /reset, /new, and context compression.
-    fn on_session_switch(
-        &self,
-        _new_session_id: &str,
-        _parent_session_id: &str,
-        _reset: bool,
-    ) {}
+    fn on_session_switch(&self, _new_session_id: &str, _parent_session_id: &str, _reset: bool) {}
 
     /// Called before context compression discards old messages.
     /// Use to extract insights from messages about to be compressed.
@@ -237,12 +247,7 @@ pub trait MemoryProvider: Send + Sync {
 
     /// Called when the built-in memory tool writes an entry.
     /// Use to mirror built-in memory writes to your backend.
-    fn on_memory_write(
-        &self,
-        _action: &str,
-        _target: &str,
-        _content: &str,
-    ) {}
+    fn on_memory_write(&self, _action: &str, _target: &str, _content: &str) {}
 
     /// Called on the PARENT agent when a subagent completes.
     /// The parent's memory provider gets the task+result pair.
@@ -317,7 +322,12 @@ impl MemoryProvider for BuiltinProvider {
     }
 
     fn on_memory_write(&self, action: &str, target: &str, content: &str) {
-        tracing::debug!(action, target, content_len = content.len(), "BuiltinProvider: memory write mirrored");
+        tracing::debug!(
+            action,
+            target,
+            content_len = content.len(),
+            "BuiltinProvider: memory write mirrored"
+        );
     }
 }
 

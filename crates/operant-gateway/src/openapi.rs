@@ -396,6 +396,9 @@ pub fn build_spec() -> serde_json::Value {
 
 #[cfg(test)]
 mod tests {
+    // Only used by the schema-export gated tests; keep the glob import
+    // feature-gated so default builds don't warn about an unused glob.
+    #[cfg(feature = "schema-export")]
     use super::*;
 
     #[cfg(feature = "schema-export")]

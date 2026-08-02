@@ -975,8 +975,7 @@ pub(crate) async fn create_agent_without_events(
     })
 }
 
-async fn load_repo_memory_manager(
-) -> Result<(MemoryManager, Option<Arc<dyn MemoryProvider>>)> {
+async fn load_repo_memory_manager() -> Result<(MemoryManager, Option<Arc<dyn MemoryProvider>>)> {
     let storage_dir = operant_core::platform::operant_home();
     load_memory_manager(storage_dir).await
 }

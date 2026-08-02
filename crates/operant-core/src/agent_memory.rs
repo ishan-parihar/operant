@@ -142,7 +142,9 @@ impl AgentMemoryProvider {
             }
         }
         if spawned.is_none() {
-            tracing::info!("agentmemory server unreachable — auto-spawning npx @agentmemory/agentmemory");
+            tracing::info!(
+                "agentmemory server unreachable — auto-spawning npx @agentmemory/agentmemory"
+            );
             let mut cmd = tokio::process::Command::new("npx");
             cmd.args(["-y", "@agentmemory/agentmemory@latest"])
                 .env("CI", "1")
@@ -168,12 +170,17 @@ impl AgentMemoryProvider {
         let deadline = tokio::time::Instant::now() + SPAWN_WARMUP_TIMEOUT;
         while tokio::time::Instant::now() < deadline {
             if self.check_health().await {
-                tracing::info!("agentmemory server is up ({}); memory hooks active", self.base_url);
+                tracing::info!(
+                    "agentmemory server is up ({}); memory hooks active",
+                    self.base_url
+                );
                 return true;
             }
             tokio::time::sleep(Duration::from_secs(1)).await;
         }
-        tracing::warn!("agentmemory server did not become reachable within {SPAWN_WARMUP_TIMEOUT:?}");
+        tracing::warn!(
+            "agentmemory server did not become reachable within {SPAWN_WARMUP_TIMEOUT:?}"
+        );
         false
     }
 
@@ -196,9 +203,8 @@ impl AgentMemoryProvider {
                 text.chars().take(300).collect::<String>()
             )));
         }
-        serde_json::from_str::<Value>(&text).map_err(|e| {
-            Error::Agent(format!("agentmemory {path} returned non-JSON body: {e}"))
-        })
+        serde_json::from_str::<Value>(&text)
+            .map_err(|e| Error::Agent(format!("agentmemory {path} returned non-JSON body: {e}")))
     }
 
     /// Format a smart-search response into a compact text block for prefetch.
@@ -467,7 +473,9 @@ mod tests {
     #[tokio::test]
     async fn test_handle_tool_call_unknown_tool() {
         let provider = AgentMemoryProvider::with_url("http://127.0.0.1:1");
-        let out = provider.handle_tool_call("nope", serde_json::json!({})).await;
+        let out = provider
+            .handle_tool_call("nope", serde_json::json!({}))
+            .await;
         assert!(out.contains("unknown tool"));
     }
 

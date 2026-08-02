@@ -96,8 +96,6 @@ impl AuthStore {
     }
 }
 
-
 // (iter-223: pub mod file_injection { AtFileRef, AtFileIssue, parse_at_refs }
 // deleted — zero callers anywhere; the @-file parsing path they supported
 // was never wired to a consumer.)
-

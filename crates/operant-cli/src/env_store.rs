@@ -229,7 +229,7 @@ mod tests {
             assert_eq!(env.get("KEY_C").map(|s| s.as_str()), Some("value_c"));
             remove_env_value("KEY_A").unwrap();
             let env = load_env();
-            assert!(env.get("KEY_A").is_none());
+            assert!(!env.contains_key("KEY_A"));
             assert_eq!(env.get("KEY_B").map(|s| s.as_str()), Some("updated_b"));
             assert_eq!(env.get("KEY_C").map(|s| s.as_str()), Some("value_c"));
         });

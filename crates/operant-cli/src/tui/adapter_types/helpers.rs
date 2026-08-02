@@ -37,7 +37,6 @@ pub fn sample_spinner_verb(seed: u64) -> &'static str {
     VERBS[(seed as usize) % VERBS.len()]
 }
 
-
 /// Model context-window lookup. (iter-115 — the query module's
 /// QueryEvent/StreamEvent/UsageInfo types were deleted with the bridge
 /// in iter-114. Only this function survived because it's still used by
@@ -48,11 +47,4 @@ pub fn context_window_for_model(_model: &str) -> usize {
 
 // (iter-211: pub mod compact {} deleted — empty module, zero callers)
 
-
-
-
-
-
-
 // ---------- AuthStore ----------
-

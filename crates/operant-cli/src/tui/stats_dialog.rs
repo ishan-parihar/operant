@@ -132,7 +132,8 @@ fn timestamp_to_date(ts_ms: u64) -> String {
 }
 
 fn is_leap_year(year: u32) -> bool {
-    year.is_multiple_of(4) && (!year.is_multiple_of(100) || year.is_multiple_of(400))
+    // Modulo instead of `is_multiple_of` (stable since 1.87; MSRV is 1.85).
+    year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)
 }
 
 fn day_of_year_to_month_day(doy: u32, leap: bool) -> (u32, u32) {

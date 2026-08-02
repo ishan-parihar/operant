@@ -75,10 +75,7 @@ impl OperantTool for InsightsTool {
         let parsed: InsightsArgs = match serde_json::from_value(args) {
             Ok(v) => v,
             Err(e) => {
-                return ToolResult::error(
-                    "session_insights",
-                    format!("Invalid arguments: {}", e),
-                );
+                return ToolResult::error("session_insights", format!("Invalid arguments: {}", e));
             }
         };
 
@@ -107,9 +104,7 @@ mod tests {
     #[test]
     fn test_schema_valid() {
         let tmp = tempfile::tempdir().unwrap();
-        let db = std::sync::Arc::new(
-            Database::init(tmp.path().join("test_insights.db")).unwrap(),
-        );
+        let db = std::sync::Arc::new(Database::init(tmp.path().join("test_insights.db")).unwrap());
         let tool = InsightsTool::new(db);
         let schema = tool.schema();
         assert_eq!(schema.name, "session_insights");

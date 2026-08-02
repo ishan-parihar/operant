@@ -147,4 +147,3 @@ pub async fn fetch_openai_compatible_models_async(api_key: &str, base_url: &str)
 }
 
 // (iter-136: LoadedPlugin struct deleted — single name field, zero callers)
-
