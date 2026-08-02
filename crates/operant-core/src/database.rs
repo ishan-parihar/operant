@@ -163,9 +163,22 @@ impl Database {
         Self::init(path)
     }
 
+    /// Lock the shared connection, converting mutex poisoning into a
+    /// recoverable [`Error::Agent`] instead of panicking.
+    ///
+    /// Poisoning would mean another thread panicked while holding the lock;
+    /// the underlying `Connection` may still be usable, so we surface it as
+    /// a normal database error and let callers decide (per rust-best-practices
+    /// Ch. 4 — poison is an invariant violation, not a control-flow panic).
+    fn lock_conn(&self) -> Result<std::sync::MutexGuard<'_, Connection>> {
+        self.conn
+            .lock()
+            .map_err(|_| Error::Agent("database mutex poisoned".to_string()))
+    }
+
     /// Run all database migrations.
     fn run_migrations(&self) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
 
         // Enable foreign keys
         conn.execute("PRAGMA foreign_keys = ON", [])
@@ -512,7 +525,7 @@ impl Database {
         created_at: &str,
         updated_at: &str,
     ) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
         conn.execute(
             "INSERT INTO sessions (id, title, source, started_at, ended_at)
              VALUES (?1, ?2, ?3, ?4, ?5)
@@ -528,7 +541,7 @@ impl Database {
 
     /// Update the accumulated actual cost for a session (R3 — cost fidelity).
     pub fn update_session_cost(&self, id: &str, actual_cost_usd: f64) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
         conn.execute(
             "UPDATE sessions SET actual_cost_usd = ?1 WHERE id = ?2",
             params![actual_cost_usd, id],
@@ -539,7 +552,7 @@ impl Database {
 
     /// Save a session with full Python-compatible fields.
     pub fn save_session_full(&self, session: &SessionData) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
         conn.execute(
             "INSERT INTO sessions (
                 id, source, user_id, model, model_config, system_prompt,
@@ -637,7 +650,7 @@ impl Database {
         content: &str,
         timestamp: &str,
     ) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
         conn.execute(
             "INSERT INTO messages (session_id, role, content, timestamp) VALUES (?1, ?2, ?3, ?4)",
             params![session_id, role, content, timestamp],
@@ -648,7 +661,7 @@ impl Database {
 
     /// Save a message with full Python-compatible fields.
     pub fn save_message_full(&self, message: &MessageData) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
         conn.execute(
             "INSERT INTO messages (
                 session_id, role, content, tool_call_id, tool_calls, tool_name,
@@ -684,7 +697,7 @@ impl Database {
 
     /// Get all messages for a session, ordered by timestamp.
     pub fn get_session_messages(&self, session_id: &str) -> Result<Vec<Message>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
         let mut stmt = conn
             .prepare("SELECT role, content, timestamp FROM messages WHERE session_id = ?1 ORDER BY timestamp ASC")
             .map_err(|e| Error::Agent(format!("Failed to prepare statement: {}", e)))?;
@@ -708,7 +721,7 @@ impl Database {
 
     /// Get all messages for a session with full fields, ordered by timestamp.
     pub fn get_session_messages_full(&self, session_id: &str) -> Result<Vec<MessageData>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
         let mut stmt = conn
             .prepare(
                 "SELECT id, session_id, role, content, tool_call_id, tool_calls, tool_name,
@@ -753,7 +766,7 @@ impl Database {
 
     /// List recent sessions (for session_search_tool).
     pub fn list_sessions(&self, limit: usize) -> Result<Vec<DatabaseSession>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
         let mut stmt = conn
             .prepare(
                 "SELECT s.id, s.title, s.source, s.started_at, s.ended_at, COUNT(m.id) as msg_count,
@@ -790,7 +803,7 @@ impl Database {
     /// Search sessions by content query (using FTS5).
     /// Returns session IDs and matching content snippets.
     pub fn search_sessions(&self, query: &str, limit: usize) -> Result<Vec<SessionSearchResult>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
 
         // Use FTS5 to find matching messages, join to get session info
         let mut stmt = conn
@@ -825,7 +838,7 @@ impl Database {
 
     /// Delete a session and all its messages.
     pub fn delete_session(&self, session_id: &str) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
         conn.execute("DELETE FROM sessions WHERE id = ?1", params![session_id])
             .map_err(|e| Error::Agent(format!("Failed to delete session: {}", e)))?;
         Ok(())
@@ -841,7 +854,7 @@ impl Database {
         reason: Option<&str>,
         directory: &str,
     ) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
         conn.execute(
             "INSERT INTO checkpoints (hash, timestamp, reason, directory)
              VALUES (?1, ?2, ?3, ?4)
@@ -856,7 +869,7 @@ impl Database {
 
     /// List checkpoints for a directory.
     pub fn list_checkpoints(&self, directory: &str) -> Result<Vec<StoredCheckpoint>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
         let mut stmt = conn
             .prepare(
                 "SELECT hash, timestamp, reason FROM checkpoints
@@ -884,7 +897,7 @@ impl Database {
 
     /// Get a specific checkpoint by hash.
     pub fn get_checkpoint(&self, hash: &str) -> Result<Option<StoredCheckpoint>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
         let mut stmt = conn
             .prepare("SELECT hash, timestamp, reason, directory FROM checkpoints WHERE hash = ?1")
             .map_err(|e| Error::Agent(format!("Failed to prepare get: {}", e)))?;
@@ -904,7 +917,7 @@ impl Database {
 
     /// Delete a checkpoint.
     pub fn delete_checkpoint(&self, hash: &str) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
         conn.execute("DELETE FROM checkpoints WHERE hash = ?1", params![hash])
             .map_err(|e| Error::Agent(format!("Failed to delete checkpoint: {}", e)))?;
         Ok(())
@@ -923,14 +936,19 @@ impl Database {
     /// public methods on Database for standard operations; use this
     /// only for queries that need direct SQL (e.g. analytics/aggregation).
     pub fn conn(&self) -> std::sync::MutexGuard<'_, Connection> {
-        self.conn.lock().unwrap()
+        // Poisoning the database mutex is a programmer-error invariant
+        // violation; a loud panic is the correct failure mode (the guard is
+        // returned by value, so `?` is unavailable here). See lock_conn().
+        self.conn
+            .lock()
+            .expect("database mutex poisoned — a thread panicked while holding it")
     }
 
     // === Session Metadata ===
 
     /// Set a metadata key-value pair for a session.
     pub fn set_session_metadata(&self, session_id: &str, key: &str, value: &str) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
         conn.execute(
             "INSERT INTO session_metadata (session_id, key, value) VALUES (?1, ?2, ?3)
              ON CONFLICT(session_id, key) DO UPDATE SET value = excluded.value",
@@ -953,7 +971,7 @@ impl Database {
 
     /// Get all metadata for a session.
     pub fn get_all_session_metadata(&self, session_id: &str) -> Result<HashMap<String, String>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
         let mut stmt = conn
             .prepare("SELECT key, value FROM session_metadata WHERE session_id = ?1")
             .map_err(|e| Error::Agent(format!("Failed to prepare metadata query: {}", e)))?;
@@ -973,7 +991,7 @@ impl Database {
 
     /// Delete a specific metadata key for a session.
     pub fn delete_session_metadata(&self, session_id: &str, key: &str) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
         conn.execute(
             "DELETE FROM session_metadata WHERE session_id = ?1 AND key = ?2",
             params![session_id, key],
@@ -988,7 +1006,7 @@ impl Database {
     pub fn set_tool_state(&self, session_id: &str, tool_name: &str, state: &Value) -> Result<()> {
         let state_json = serde_json::to_string(state)?;
         let now = chrono::Utc::now().to_rfc3339();
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
         conn.execute(
             "INSERT INTO tools_state (session_id, tool_name, state_json, updated_at) VALUES (?1, ?2, ?3, ?4)
              ON CONFLICT(session_id, tool_name) DO UPDATE SET state_json = excluded.state_json, updated_at = excluded.updated_at",
@@ -1013,7 +1031,7 @@ impl Database {
 
     /// Clear tool state for a specific tool in a session.
     pub fn clear_tool_state(&self, session_id: &str, tool_name: &str) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
         conn.execute(
             "DELETE FROM tools_state WHERE session_id = ?1 AND tool_name = ?2",
             params![session_id, tool_name],
@@ -1024,7 +1042,7 @@ impl Database {
 
     /// Clear all tool states for a session.
     pub fn clear_all_tool_states(&self, session_id: &str) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
         conn.execute(
             "DELETE FROM tools_state WHERE session_id = ?1",
             params![session_id],
@@ -1037,7 +1055,7 @@ impl Database {
 
     /// Add a tag to a session.
     pub fn add_session_tag(&self, session_id: &str, tag: &str) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
         conn.execute(
             "INSERT OR IGNORE INTO session_tags (session_id, tag) VALUES (?1, ?2)",
             params![session_id, tag],
@@ -1048,7 +1066,7 @@ impl Database {
 
     /// Remove a tag from a session.
     pub fn remove_session_tag(&self, session_id: &str, tag: &str) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
         conn.execute(
             "DELETE FROM session_tags WHERE session_id = ?1 AND tag = ?2",
             params![session_id, tag],
@@ -1059,7 +1077,7 @@ impl Database {
 
     /// Get all tags for a session.
     pub fn get_session_tags(&self, session_id: &str) -> Result<Vec<String>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
         let mut stmt = conn
             .prepare("SELECT tag FROM session_tags WHERE session_id = ?1 ORDER BY tag")
             .map_err(|e| Error::Agent(format!("Failed to prepare tags query: {}", e)))?;
@@ -1075,7 +1093,7 @@ impl Database {
 
     /// Find sessions by tag, returning session summaries.
     pub fn find_sessions_by_tag(&self, tag: &str) -> Result<Vec<SessionSummary>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
         let mut stmt = conn
             .prepare(
                 "SELECT s.id, s.title, s.source, s.started_at, s.ended_at, COUNT(m.id) as msg_count
@@ -1120,7 +1138,7 @@ impl Database {
     ) -> Result<()> {
         let data_json = serde_json::to_string(event_data)?;
         let now = chrono::Utc::now().to_rfc3339();
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
         conn.execute(
             "INSERT INTO session_events (session_id, event_type, event_data, created_at) VALUES (?1, ?2, ?3, ?4)",
             params![session_id, event_type, data_json, now],
@@ -1135,7 +1153,7 @@ impl Database {
         session_id: &str,
         limit: Option<u32>,
     ) -> Result<Vec<StoredEvent>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
         let limit = limit.unwrap_or(50) as i64;
         let mut stmt = conn
             .prepare(
@@ -1173,7 +1191,7 @@ impl Database {
         event_type: &str,
         limit: Option<u32>,
     ) -> Result<Vec<StoredEvent>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
         let limit = limit.unwrap_or(50) as i64;
         let mut stmt = conn
             .prepare(
@@ -1214,7 +1232,7 @@ impl Database {
         session_id: Option<&str>,
         limit: Option<u32>,
     ) -> Result<Vec<SearchResult>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
         let limit = limit.unwrap_or(50) as i64;
 
         if contains_cjk(query) {
@@ -1314,7 +1332,7 @@ impl Database {
     /// Update the title of a session.
     pub fn update_session_title(&self, session_id: &str, title: &str) -> Result<()> {
         let now = chrono::Utc::now().to_rfc3339();
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
         conn.execute(
             "UPDATE sessions SET title = ?1, ended_at = ?2 WHERE id = ?3",
             params![title, now, session_id],
@@ -1325,7 +1343,7 @@ impl Database {
 
     /// Get total session count.
     pub fn get_session_count(&self) -> Result<u64> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
         let count: i64 = conn
             .query_row("SELECT COUNT(*) FROM sessions", [], |row| row.get(0))
             .map_err(|e| Error::Agent(format!("Failed to count sessions: {}", e)))?;
@@ -1334,7 +1352,7 @@ impl Database {
 
     /// Get recently updated sessions with message counts and tags.
     pub fn get_recent_sessions(&self, limit: u32) -> Result<Vec<SessionSummary>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
         let limit = limit as i64;
         let mut stmt = conn
             .prepare(
@@ -1372,7 +1390,7 @@ impl Database {
     pub fn get_active_sessions(&self, since_minutes: u64) -> Result<Vec<SessionSummary>> {
         let cutoff = chrono::Utc::now() - chrono::Duration::minutes(since_minutes as i64);
         let cutoff_str = cutoff.to_rfc3339();
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
         let mut stmt = conn
             .prepare(
                 "SELECT s.id, s.title, s.source, s.started_at, s.ended_at, COUNT(m.id) as msg_count
@@ -1408,7 +1426,7 @@ impl Database {
     /// Merge one or more source sessions into a target session.
     /// Moves messages, metadata, tags, and events; deletes source sessions.
     pub fn merge_sessions(&self, target_id: &str, source_ids: &[&str]) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
         for &source_id in source_ids {
             // Move messages
             conn.execute(
@@ -1474,7 +1492,7 @@ impl Database {
 
     /// Set a state_meta key-value pair.
     pub fn set_state_meta(&self, key: &str, value: &str) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
         conn.execute(
             "INSERT INTO state_meta (key, value) VALUES (?1, ?2)
              ON CONFLICT(key) DO UPDATE SET value = excluded.value",
@@ -1505,7 +1523,7 @@ impl Database {
         acquired_at: &str,
         expires_at: &str,
     ) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
         conn.execute(
             "INSERT OR REPLACE INTO compression_locks (session_id, holder, acquired_at, expires_at)
              VALUES (?1, ?2, ?3, ?4)",
@@ -1533,7 +1551,7 @@ impl Database {
 
     /// Release a compression lock for a session.
     pub fn release_compression_lock(&self, session_id: &str) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
         conn.execute(
             "DELETE FROM compression_locks WHERE session_id = ?1",
             params![session_id],
