@@ -97,8 +97,11 @@ fi
 
 grep -vE '^\s*(#|$)' "${ALLOWLIST_FILE}" | LC_ALL=C sort -u > "${tmp_allow}"
 
-comm -23 "${tmp_seen}" "${tmp_allow}" > "${tmp_new}"
-comm -13 "${tmp_seen}" "${tmp_allow}" > "${tmp_stale}"
+# `comm` compares using the collation of the ambient locale, but the inputs are
+# byte-sorted under LC_ALL=C, so it must run under the same locale to avoid
+# spurious "not in sorted order" errors.
+LC_ALL=C comm -23 "${tmp_seen}" "${tmp_allow}" > "${tmp_new}"
+LC_ALL=C comm -13 "${tmp_seen}" "${tmp_allow}" > "${tmp_stale}"
 
 seen_count="$(wc -l < "${tmp_seen}" | tr -d ' ')"
 allow_count="$(wc -l < "${tmp_allow}" | tr -d ' ')"

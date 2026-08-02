@@ -6,10 +6,9 @@
 //! **Auto-Hydration**: if `brain.db` is missing but `MEMORY_SNAPSHOT.md` exists,
 //! re-indexes all entries back into a fresh SQLite database.
 
-use anyhow::Result;
+use crate::error::Result;
 use chrono::Local;
 use rusqlite::{Connection, params};
-use std::fmt::Write;
 use std::fs;
 use std::path::{Path, PathBuf};
 

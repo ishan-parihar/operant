@@ -1522,6 +1522,7 @@ pub fn cron_router(config: operant_config::schema::Config) -> axum::Router {
         nodes::NodeRegistry, session_queue::SessionActorQueue, sse::EventBuffer,
     };
     use axum::{Router, routing::post};
+    use operant_memory::MemoryResult;
     use operant_runtime::observability::NoopObserver;
     use parking_lot::Mutex as ParkingMutex;
     use std::{collections::HashMap, sync::Arc, time::Duration};
@@ -1560,7 +1561,7 @@ pub fn cron_router(config: operant_config::schema::Config) -> axum::Router {
             _content: &str,
             _category: operant_memory::MemoryCategory,
             _session_id: Option<&str>,
-        ) -> anyhow::Result<()> {
+        ) -> MemoryResult<()> {
             Ok(())
         }
         async fn recall(
@@ -1570,23 +1571,23 @@ pub fn cron_router(config: operant_config::schema::Config) -> axum::Router {
             _session_id: Option<&str>,
             _since: Option<&str>,
             _until: Option<&str>,
-        ) -> anyhow::Result<Vec<operant_memory::MemoryEntry>> {
+        ) -> MemoryResult<Vec<operant_memory::MemoryEntry>> {
             Ok(Vec::new())
         }
-        async fn get(&self, _key: &str) -> anyhow::Result<Option<operant_memory::MemoryEntry>> {
+        async fn get(&self, _key: &str) -> MemoryResult<Option<operant_memory::MemoryEntry>> {
             Ok(None)
         }
         async fn list(
             &self,
             _category: Option<&operant_memory::MemoryCategory>,
             _session_id: Option<&str>,
-        ) -> anyhow::Result<Vec<operant_memory::MemoryEntry>> {
+        ) -> MemoryResult<Vec<operant_memory::MemoryEntry>> {
             Ok(Vec::new())
         }
-        async fn forget(&self, _key: &str) -> anyhow::Result<bool> {
+        async fn forget(&self, _key: &str) -> MemoryResult<bool> {
             Ok(false)
         }
-        async fn count(&self) -> anyhow::Result<usize> {
+        async fn count(&self) -> MemoryResult<usize> {
             Ok(0)
         }
         async fn health_check(&self) -> bool {
@@ -1735,7 +1736,7 @@ mod tests {
     use http_body_util::BodyExt;
     use operant_infra::session_backend::SessionBackend;
     use operant_infra::session_store::SessionStore;
-    use operant_memory::{Memory, MemoryCategory, MemoryEntry};
+    use operant_memory::{Memory, MemoryCategory, MemoryEntry, MemoryResult};
     use operant_providers::Provider;
     use operant_runtime::security::pairing::PairingGuard;
 
@@ -1756,7 +1757,7 @@ mod tests {
             _content: &str,
             _category: MemoryCategory,
             _session_id: Option<&str>,
-        ) -> anyhow::Result<()> {
+        ) -> MemoryResult<()> {
             Ok(())
         }
 
@@ -1767,11 +1768,11 @@ mod tests {
             _session_id: Option<&str>,
             _since: Option<&str>,
             _until: Option<&str>,
-        ) -> anyhow::Result<Vec<MemoryEntry>> {
+        ) -> MemoryResult<Vec<MemoryEntry>> {
             Ok(Vec::new())
         }
 
-        async fn get(&self, _key: &str) -> anyhow::Result<Option<MemoryEntry>> {
+        async fn get(&self, _key: &str) -> MemoryResult<Option<MemoryEntry>> {
             Ok(None)
         }
 
@@ -1779,15 +1780,15 @@ mod tests {
             &self,
             _category: Option<&MemoryCategory>,
             _session_id: Option<&str>,
-        ) -> anyhow::Result<Vec<MemoryEntry>> {
+        ) -> MemoryResult<Vec<MemoryEntry>> {
             Ok(Vec::new())
         }
 
-        async fn forget(&self, _key: &str) -> anyhow::Result<bool> {
+        async fn forget(&self, _key: &str) -> MemoryResult<bool> {
             Ok(false)
         }
 
-        async fn count(&self) -> anyhow::Result<usize> {
+        async fn count(&self) -> MemoryResult<usize> {
             Ok(0)
         }
 

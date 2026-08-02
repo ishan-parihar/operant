@@ -139,7 +139,9 @@ impl Tool for MemoryRecallTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use operant_memory::{MemoryCategory, MemoryEntry, SqliteMemory, is_recent_recall_query};
+    use operant_memory::{
+        MemoryCategory, MemoryEntry, MemoryResult, SqliteMemory, is_recent_recall_query,
+    };
     use std::sync::Mutex;
     use tempfile::TempDir;
 
@@ -165,7 +167,7 @@ mod tests {
             _content: &str,
             _category: MemoryCategory,
             _session_id: Option<&str>,
-        ) -> anyhow::Result<()> {
+        ) -> MemoryResult<()> {
             Ok(())
         }
 
@@ -176,7 +178,7 @@ mod tests {
             _session_id: Option<&str>,
             _since: Option<&str>,
             _until: Option<&str>,
-        ) -> anyhow::Result<Vec<MemoryEntry>> {
+        ) -> MemoryResult<Vec<MemoryEntry>> {
             *self.last_query.lock().unwrap() = Some(query.to_string());
             if is_recent_recall_query(query) {
                 Ok(vec![MemoryEntry {
@@ -196,7 +198,7 @@ mod tests {
             }
         }
 
-        async fn get(&self, _key: &str) -> anyhow::Result<Option<MemoryEntry>> {
+        async fn get(&self, _key: &str) -> MemoryResult<Option<MemoryEntry>> {
             Ok(None)
         }
 
@@ -204,15 +206,15 @@ mod tests {
             &self,
             _category: Option<&MemoryCategory>,
             _session_id: Option<&str>,
-        ) -> anyhow::Result<Vec<MemoryEntry>> {
+        ) -> MemoryResult<Vec<MemoryEntry>> {
             Ok(Vec::new())
         }
 
-        async fn forget(&self, _key: &str) -> anyhow::Result<bool> {
+        async fn forget(&self, _key: &str) -> MemoryResult<bool> {
             Ok(false)
         }
 
-        async fn count(&self) -> anyhow::Result<usize> {
+        async fn count(&self) -> MemoryResult<usize> {
             Ok(0)
         }
 

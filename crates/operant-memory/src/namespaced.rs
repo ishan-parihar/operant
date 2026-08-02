@@ -7,7 +7,8 @@
 //! All store operations redirect to `store_with_metadata()` with the configured
 //! namespace, and all recall operations redirect to `recall_namespaced()`.
 
-use super::traits::{Memory, MemoryCategory, MemoryEntry, ProceduralMessage};
+use super::traits::{Memory, MemoryCategory, MemoryEntry, MemoryResult, ProceduralMessage};
+use crate::error::Error;
 use async_trait::async_trait;
 use std::sync::Arc;
 
@@ -45,7 +46,7 @@ impl Memory for NamespacedMemory {
         content: &str,
         category: MemoryCategory,
         session_id: Option<&str>,
-    ) -> anyhow::Result<()> {
+    ) -> MemoryResult<()> {
         self.inner
             .store_with_metadata(
                 key,
@@ -65,13 +66,13 @@ impl Memory for NamespacedMemory {
         session_id: Option<&str>,
         since: Option<&str>,
         until: Option<&str>,
-    ) -> anyhow::Result<Vec<MemoryEntry>> {
+    ) -> MemoryResult<Vec<MemoryEntry>> {
         self.inner
             .recall_namespaced(&self.namespace, query, limit, session_id, since, until)
             .await
     }
 
-    async fn get(&self, key: &str) -> anyhow::Result<Option<MemoryEntry>> {
+    async fn get(&self, key: &str) -> MemoryResult<Option<MemoryEntry>> {
         let entry = self.inner.get(key).await?;
         // Return the entry only if it matches our namespace
         Ok(entry.filter(|e| e.namespace == self.namespace))
@@ -81,7 +82,7 @@ impl Memory for NamespacedMemory {
         &self,
         category: Option<&MemoryCategory>,
         session_id: Option<&str>,
-    ) -> anyhow::Result<Vec<MemoryEntry>> {
+    ) -> MemoryResult<Vec<MemoryEntry>> {
         let entries = self.inner.list(category, session_id).await?;
         // Filter to only entries in our namespace
         Ok(entries
@@ -90,7 +91,7 @@ impl Memory for NamespacedMemory {
             .collect())
     }
 
-    async fn forget(&self, key: &str) -> anyhow::Result<bool> {
+    async fn forget(&self, key: &str) -> MemoryResult<bool> {
         // First verify the entry is in our namespace before forgetting
         if let Some(entry) = self.inner.get(key).await?
             && entry.namespace == self.namespace
@@ -100,7 +101,7 @@ impl Memory for NamespacedMemory {
         Ok(false)
     }
 
-    async fn count(&self) -> anyhow::Result<usize> {
+    async fn count(&self) -> MemoryResult<usize> {
         let entries = self.inner.list(None, None).await?;
         Ok(entries
             .into_iter()
@@ -116,7 +117,7 @@ impl Memory for NamespacedMemory {
         &self,
         messages: &[ProceduralMessage],
         session_id: Option<&str>,
-    ) -> anyhow::Result<()> {
+    ) -> MemoryResult<()> {
         // For procedural storage, we delegate directly without enforcing namespace
         // since the backend may handle this differently
         self.inner.store_procedural(messages, session_id).await
@@ -130,7 +131,7 @@ impl Memory for NamespacedMemory {
         session_id: Option<&str>,
         since: Option<&str>,
         until: Option<&str>,
-    ) -> anyhow::Result<Vec<MemoryEntry>> {
+    ) -> MemoryResult<Vec<MemoryEntry>> {
         // If the requested namespace matches our own, delegate to the inner memory.
         // Otherwise, return empty results (namespace isolation).
         if namespace == self.namespace {
@@ -150,7 +151,7 @@ impl Memory for NamespacedMemory {
         session_id: Option<&str>,
         _namespace: Option<&str>,
         importance: Option<f64>,
-    ) -> anyhow::Result<()> {
+    ) -> MemoryResult<()> {
         // Always use the configured namespace, ignoring any provided namespace
         self.inner
             .store_with_metadata(
@@ -164,20 +165,21 @@ impl Memory for NamespacedMemory {
             .await
     }
 
-    async fn purge_namespace(&self, namespace: &str) -> anyhow::Result<usize> {
+    async fn purge_namespace(&self, namespace: &str) -> MemoryResult<usize> {
         // Only allow purging our own namespace
         if namespace == self.namespace {
             self.inner.purge_namespace(namespace).await
         } else {
-            anyhow::bail!(
+            return Err(Error::message(format!(
                 "Cannot purge namespace '{}' from isolation context '{}'",
                 namespace,
                 self.namespace
-            )
+            ))
+            .into())
         }
     }
 
-    async fn purge_session(&self, session_id: &str) -> anyhow::Result<usize> {
+    async fn purge_session(&self, session_id: &str) -> MemoryResult<usize> {
         // Purge sessions, but filtered to our namespace
         let entries = self.inner.list(None, Some(session_id)).await?;
         let mut count = 0;

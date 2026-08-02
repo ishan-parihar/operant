@@ -125,6 +125,39 @@ pub fn normalize_recent_recall_query(query: &str) -> &str {
     }
 }
 
+/// Error type returned by `Memory` backends.
+///
+/// The trait contract stays dependency-free: operant-api declares only
+/// std + serde variants, and `operant-memory` maps its richer typed
+/// `crate::error::Error` into this type via `From` (and back), so `?`
+/// works across the seam in both directions.
+#[derive(Debug, thiserror::Error)]
+pub enum MemoryError {
+    /// Plain message with no underlying source.
+    #[error("{0}")]
+    Message(String),
+    /// I/O error (file/dir operations).
+    #[error("I/O error: {0}")]
+    Io(#[from] std::io::Error),
+    /// Serialization/deserialization error.
+    #[error("serialization error: {0}")]
+    Serde(#[from] serde_json::Error),
+    /// Any other backend-specific error, boxed for the dependency-free seam.
+    #[error("{0}")]
+    Backend(#[from] Box<dyn std::error::Error + Send + Sync>),
+}
+
+impl MemoryError {
+    /// Construct a plain-message error.
+    pub fn message(msg: impl Into<String>) -> Self {
+        Self::Message(msg.into())
+    }
+}
+
+/// Convenience alias used by `Memory` trait signatures: a typed error that
+/// any consumer can `?` into its own error type (thiserror or anyhow).
+pub type MemoryResult<T> = std::result::Result<T, MemoryError>;
+
 /// Core memory trait — implement for any persistence backend
 #[async_trait]
 pub trait Memory: Send + Sync {
@@ -138,7 +171,7 @@ pub trait Memory: Send + Sync {
         content: &str,
         category: MemoryCategory,
         session_id: Option<&str>,
-    ) -> anyhow::Result<()>;
+    ) -> MemoryResult<()>;
 
     /// Recall memories matching a query (keyword search), optionally scoped to a session
     /// and time range. Empty, whitespace-only, and bare "*" queries return recent/time-only
@@ -152,37 +185,41 @@ pub trait Memory: Send + Sync {
         session_id: Option<&str>,
         since: Option<&str>,
         until: Option<&str>,
-    ) -> anyhow::Result<Vec<MemoryEntry>>;
+    ) -> MemoryResult<Vec<MemoryEntry>>;
 
     /// Get a specific memory by key
-    async fn get(&self, key: &str) -> anyhow::Result<Option<MemoryEntry>>;
+    async fn get(&self, key: &str) -> MemoryResult<Option<MemoryEntry>>;
 
     /// List all memory keys, optionally filtered by category and/or session
     async fn list(
         &self,
         category: Option<&MemoryCategory>,
         session_id: Option<&str>,
-    ) -> anyhow::Result<Vec<MemoryEntry>>;
+    ) -> MemoryResult<Vec<MemoryEntry>>;
 
     /// Remove a memory by key
-    async fn forget(&self, key: &str) -> anyhow::Result<bool>;
+    async fn forget(&self, key: &str) -> MemoryResult<bool>;
 
     /// Remove all memories in a namespace (category).
     /// Returns the number of deleted entries.
     /// Default: returns unsupported error. Backends that support bulk deletion override this.
-    async fn purge_namespace(&self, _namespace: &str) -> anyhow::Result<usize> {
-        anyhow::bail!("purge_namespace not supported by this memory backend")
+    async fn purge_namespace(&self, _namespace: &str) -> MemoryResult<usize> {
+        Err(MemoryError::message(
+            "purge_namespace not supported by this memory backend",
+        ))
     }
 
     /// Remove all memories in a session.
     /// Returns the number of deleted entries.
     /// Default: returns unsupported error. Backends that support bulk deletion override this.
-    async fn purge_session(&self, _session_id: &str) -> anyhow::Result<usize> {
-        anyhow::bail!("purge_session not supported by this memory backend")
+    async fn purge_session(&self, _session_id: &str) -> MemoryResult<usize> {
+        Err(MemoryError::message(
+            "purge_session not supported by this memory backend",
+        ))
     }
 
     /// Count total memories
-    async fn count(&self) -> anyhow::Result<usize>;
+    async fn count(&self) -> MemoryResult<usize>;
 
     /// Health check
     async fn health_check(&self) -> bool;
@@ -197,7 +234,7 @@ pub trait Memory: Send + Sync {
     ///
     /// Default: no-op. Overridden by backends that maintain separate
     /// derived indexes (e.g. `SqliteMemory`).
-    async fn reindex(&self) -> anyhow::Result<usize> {
+    async fn reindex(&self) -> MemoryResult<usize> {
         Ok(0)
     }
 
@@ -210,7 +247,7 @@ pub trait Memory: Send + Sync {
         &self,
         _messages: &[ProceduralMessage],
         _session_id: Option<&str>,
-    ) -> anyhow::Result<()> {
+    ) -> MemoryResult<()> {
         Ok(())
     }
 
@@ -226,7 +263,7 @@ pub trait Memory: Send + Sync {
         session_id: Option<&str>,
         since: Option<&str>,
         until: Option<&str>,
-    ) -> anyhow::Result<Vec<MemoryEntry>> {
+    ) -> MemoryResult<Vec<MemoryEntry>> {
         let entries = self
             .recall(query, limit * 2, session_id, since, until)
             .await?;
@@ -246,7 +283,7 @@ pub trait Memory: Send + Sync {
     /// Default implementation delegates to `list()` and post-filters on
     /// namespace and time range. Backends with native query support should
     /// override for efficiency.
-    async fn export(&self, filter: &ExportFilter) -> anyhow::Result<Vec<MemoryEntry>> {
+    async fn export(&self, filter: &ExportFilter) -> MemoryResult<Vec<MemoryEntry>> {
         let entries = self
             .list(filter.category.as_ref(), filter.session_id.as_deref())
             .await?;
@@ -286,7 +323,7 @@ pub trait Memory: Send + Sync {
         session_id: Option<&str>,
         _namespace: Option<&str>,
         _importance: Option<f64>,
-    ) -> anyhow::Result<()> {
+    ) -> MemoryResult<()> {
         self.store(key, content, category, session_id).await
     }
 }

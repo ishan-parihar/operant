@@ -94,6 +94,7 @@ mod tests {
     use super::*;
     use operant_memory::{
         MEMORY_CONTEXT_CLOSE, MEMORY_CONTEXT_OPEN, Memory, MemoryCategory, MemoryEntry,
+        MemoryResult,
     };
     use std::sync::Arc;
 
@@ -110,7 +111,7 @@ mod tests {
             _content: &str,
             _category: MemoryCategory,
             _session_id: Option<&str>,
-        ) -> anyhow::Result<()> {
+        ) -> MemoryResult<()> {
             Ok(())
         }
 
@@ -121,7 +122,7 @@ mod tests {
             _session_id: Option<&str>,
             _since: Option<&str>,
             _until: Option<&str>,
-        ) -> anyhow::Result<Vec<MemoryEntry>> {
+        ) -> MemoryResult<Vec<MemoryEntry>> {
             if limit == 0 {
                 return Ok(vec![]);
             }
@@ -139,7 +140,7 @@ mod tests {
             }])
         }
 
-        async fn get(&self, _key: &str) -> anyhow::Result<Option<MemoryEntry>> {
+        async fn get(&self, _key: &str) -> MemoryResult<Option<MemoryEntry>> {
             Ok(None)
         }
 
@@ -147,15 +148,15 @@ mod tests {
             &self,
             _category: Option<&MemoryCategory>,
             _session_id: Option<&str>,
-        ) -> anyhow::Result<Vec<MemoryEntry>> {
+        ) -> MemoryResult<Vec<MemoryEntry>> {
             Ok(vec![])
         }
 
-        async fn forget(&self, _key: &str) -> anyhow::Result<bool> {
+        async fn forget(&self, _key: &str) -> MemoryResult<bool> {
             Ok(true)
         }
 
-        async fn count(&self) -> anyhow::Result<usize> {
+        async fn count(&self) -> MemoryResult<usize> {
             Ok(0)
         }
 
@@ -176,7 +177,7 @@ mod tests {
             _content: &str,
             _category: MemoryCategory,
             _session_id: Option<&str>,
-        ) -> anyhow::Result<()> {
+        ) -> MemoryResult<()> {
             Ok(())
         }
 
@@ -187,11 +188,11 @@ mod tests {
             _session_id: Option<&str>,
             _since: Option<&str>,
             _until: Option<&str>,
-        ) -> anyhow::Result<Vec<MemoryEntry>> {
+        ) -> MemoryResult<Vec<MemoryEntry>> {
             Ok(self.entries.as_ref().clone())
         }
 
-        async fn get(&self, _key: &str) -> anyhow::Result<Option<MemoryEntry>> {
+        async fn get(&self, _key: &str) -> MemoryResult<Option<MemoryEntry>> {
             Ok(None)
         }
 
@@ -199,15 +200,15 @@ mod tests {
             &self,
             _category: Option<&MemoryCategory>,
             _session_id: Option<&str>,
-        ) -> anyhow::Result<Vec<MemoryEntry>> {
+        ) -> MemoryResult<Vec<MemoryEntry>> {
             Ok(vec![])
         }
 
-        async fn forget(&self, _key: &str) -> anyhow::Result<bool> {
+        async fn forget(&self, _key: &str) -> MemoryResult<bool> {
             Ok(true)
         }
 
-        async fn count(&self) -> anyhow::Result<usize> {
+        async fn count(&self) -> MemoryResult<usize> {
             Ok(self.entries.len())
         }
 

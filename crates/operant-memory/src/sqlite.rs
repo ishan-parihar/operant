@@ -1,7 +1,9 @@
 use super::embeddings::EmbeddingProvider;
-use super::traits::{ExportFilter, Memory, MemoryCategory, MemoryEntry, is_recent_recall_query};
+use super::traits::{
+    ExportFilter, Memory, MemoryCategory, MemoryEntry, MemoryResult, is_recent_recall_query,
+};
 use super::vector;
-use anyhow::Context;
+use crate::error::{Error, MemoryContextExt as _, Result};
 use async_trait::async_trait;
 use chrono::Local;
 use operant_api::session_keys::sanitize_session_key;
@@ -47,7 +49,7 @@ pub struct SqliteMemory {
 }
 
 impl SqliteMemory {
-    pub fn new(workspace_dir: &Path) -> anyhow::Result<Self> {
+    pub fn new(workspace_dir: &Path) -> Result<Self> {
         Self::with_embedder(
             workspace_dir,
             Arc::new(super::embeddings::NoopEmbedding),
@@ -60,7 +62,7 @@ impl SqliteMemory {
     }
 
     /// Like `new`, but stores data in `{db_name}.db` instead of `brain.db`.
-    pub fn new_named(workspace_dir: &Path, db_name: &str) -> anyhow::Result<Self> {
+    pub fn new_named(workspace_dir: &Path, db_name: &str) -> Result<Self> {
         let db_path = workspace_dir.join("memory").join(format!("{db_name}.db"));
         let _startup_guard = acquire_sqlite_startup_lock();
         if let Some(parent) = db_path.parent() {
@@ -99,7 +101,7 @@ impl SqliteMemory {
         cache_max: usize,
         open_timeout_secs: Option<u64>,
         search_mode: SearchMode,
-    ) -> anyhow::Result<Self> {
+    ) -> Result<Self> {
         let db_path = workspace_dir.join("memory").join("brain.db");
         let _startup_guard = acquire_sqlite_startup_lock();
 
@@ -140,7 +142,7 @@ impl SqliteMemory {
     fn open_connection(
         db_path: &Path,
         open_timeout_secs: Option<u64>,
-    ) -> anyhow::Result<Connection> {
+    ) -> Result<Connection> {
         let path_buf = db_path.to_path_buf();
 
         let conn = if let Some(secs) = open_timeout_secs {
@@ -154,10 +156,10 @@ impl SqliteMemory {
                 Ok(Ok(c)) => c,
                 Ok(Err(e)) => return Err(e).context("SQLite failed to open database"),
                 Err(mpsc::RecvTimeoutError::Timeout) => {
-                    anyhow::bail!("SQLite connection open timed out after {} seconds", capped);
+                    return Err(Error::message(format!("SQLite connection open timed out after {} seconds", capped)));
                 }
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
-                    anyhow::bail!("SQLite open thread exited unexpectedly");
+                    return Err(Error::message("SQLite open thread exited unexpectedly"));
                 }
             }
         } else {
@@ -168,7 +170,7 @@ impl SqliteMemory {
     }
 
     /// Initialize all tables: memories, FTS5, `embedding_cache`
-    fn init_schema(conn: &Connection) -> anyhow::Result<()> {
+    fn init_schema(conn: &Connection) -> Result<()> {
         fn is_db_locked_error(e: &rusqlite::Error) -> bool {
             use rusqlite::ffi::ErrorCode;
             matches!(
@@ -178,7 +180,7 @@ impl SqliteMemory {
             )
         }
 
-        fn execute_batch_retry(conn: &Connection, sql: &str) -> Result<(), rusqlite::Error> {
+        fn execute_batch_retry(conn: &Connection, sql: &str) -> std::result::Result<(), rusqlite::Error> {
             // SQLite can return "database is locked" during concurrent schema
             // initialization even though the operations are safe/idempotent.
             // Retry briefly instead of failing startup.
@@ -201,7 +203,7 @@ impl SqliteMemory {
             Ok(())
         }
 
-        fn memories_has_column(conn: &Connection, name: &str) -> anyhow::Result<bool> {
+        fn memories_has_column(conn: &Connection, name: &str) -> Result<bool> {
             let mut stmt = conn.prepare("PRAGMA table_info(memories)")?;
             let mut rows = stmt.query([])?;
             while let Some(row) = rows.next()? {
@@ -224,7 +226,7 @@ impl SqliteMemory {
             conn: &Connection,
             name: &str,
             alter_sql: &str,
-        ) -> anyhow::Result<()> {
+        ) -> Result<()> {
             if memories_has_column(conn, name)? {
                 return Ok(());
             }
@@ -282,7 +284,7 @@ impl SqliteMemory {
             );
             CREATE INDEX IF NOT EXISTS idx_cache_accessed ON embedding_cache(accessed_at);",
         )
-        .with_context(|| "SQLite init_schema failed: CREATE base schema")?;
+        .with_context(|| "SQLite init_schema failed: CREATE base schema".to_string())?;
 
         add_memories_column_if_missing(
             conn,
@@ -293,7 +295,7 @@ impl SqliteMemory {
             conn,
             "CREATE INDEX IF NOT EXISTS idx_memories_session ON memories(session_id);",
         )
-        .with_context(|| "SQLite init_schema failed: CREATE INDEX idx_memories_session")?;
+        .with_context(|| "SQLite init_schema failed: CREATE INDEX idx_memories_session".to_string())?;
 
         add_memories_column_if_missing(
             conn,
@@ -304,7 +306,7 @@ impl SqliteMemory {
             conn,
             "CREATE INDEX IF NOT EXISTS idx_memories_namespace ON memories(namespace);",
         )
-        .with_context(|| "SQLite init_schema failed: CREATE INDEX idx_memories_namespace")?;
+        .with_context(|| "SQLite init_schema failed: CREATE INDEX idx_memories_namespace".to_string())?;
 
         add_memories_column_if_missing(
             conn,
@@ -331,12 +333,12 @@ impl SqliteMemory {
     /// form (e.g. `slack_C123_1.2_user one`) and would be invisible to the
     /// new sanitized recall filter. Rewrite them once at startup; later runs
     /// find nothing to update because `sanitize_session_key` is idempotent.
-    fn migrate_session_ids_to_sanitized(conn: &Connection) -> anyhow::Result<()> {
+    fn migrate_session_ids_to_sanitized(conn: &Connection) -> Result<()> {
         let distinct: Vec<String> = {
             let mut stmt = conn
                 .prepare("SELECT DISTINCT session_id FROM memories WHERE session_id IS NOT NULL")?;
             let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
-            rows.collect::<Result<Vec<_>, _>>()?
+            rows.collect::<std::result::Result<Vec<_>, _>>()?
         };
 
         let mut update =
@@ -401,7 +403,7 @@ impl SqliteMemory {
     }
 
     /// Get embedding from cache, or compute + cache it
-    pub async fn get_or_compute_embedding(&self, text: &str) -> anyhow::Result<Option<Vec<f32>>> {
+    pub async fn get_or_compute_embedding(&self, text: &str) -> Result<Option<Vec<f32>>> {
         if self.embedder.dimensions() == 0 {
             return Ok(None); // Noop embedder
         }
@@ -413,7 +415,11 @@ impl SqliteMemory {
         let conn = self.conn.clone();
         let hash_c = hash.clone();
         let now_c = now.clone();
-        let cached = tokio::task::spawn_blocking(move || -> anyhow::Result<Option<Vec<f32>>> {
+        // NOTE: spawn_blocking returns `Result<T, JoinError>`; the closure returns
+        // the crate's typed `Result`, so the tail is `Result<Result<T, Error>, JoinError>`.
+        // `.map_err(Error::from)` converts the outer JoinError, and the first `?`
+        // unwraps that layer while the second unwraps the inner typed Result.
+        let cached = tokio::task::spawn_blocking(move || -> Result<Option<Vec<f32>>> {
             let conn = conn.lock();
             let mut stmt =
                 conn.prepare("SELECT embedding FROM embedding_cache WHERE content_hash = ?1")?;
@@ -441,7 +447,7 @@ impl SqliteMemory {
         let conn = self.conn.clone();
         #[allow(clippy::cast_possible_wrap)]
         let cache_max = self.cache_max as i64;
-        tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+        tokio::task::spawn_blocking(move || -> Result<()> {
             let conn = conn.lock();
             conn.execute(
                 "INSERT OR REPLACE INTO embedding_cache (content_hash, embedding, created_at, accessed_at)
@@ -468,7 +474,7 @@ impl SqliteMemory {
         conn: &Connection,
         query: &str,
         limit: usize,
-    ) -> anyhow::Result<Vec<(String, f32)>> {
+    ) -> Result<Vec<(String, f32)>> {
         // Escape FTS5 special chars and build query
         let fts_query: String = query
             .split_whitespace()
@@ -565,7 +571,7 @@ impl SqliteMemory {
         limit: usize,
         category: Option<&str>,
         session_id: Option<&str>,
-    ) -> anyhow::Result<Vec<(String, f32)>> {
+    ) -> Result<Vec<(String, f32)>> {
         let mut sql = "SELECT id, embedding FROM memories WHERE embedding IS NOT NULL".to_string();
         let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
         let mut idx = 1;
@@ -611,13 +617,13 @@ impl SqliteMemory {
         session_id: Option<&str>,
         since: Option<&str>,
         until: Option<&str>,
-    ) -> anyhow::Result<Vec<MemoryEntry>> {
+    ) -> Result<Vec<MemoryEntry>> {
         let conn = self.conn.clone();
         let sid = session_id.map(String::from);
         let since_owned = since.map(String::from);
         let until_owned = until.map(String::from);
 
-        tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<MemoryEntry>> {
+        tokio::task::spawn_blocking(move || -> Result<Vec<MemoryEntry>> {
             let conn = conn.lock();
             let since_ref = since_owned.as_deref();
             let until_ref = until_owned.as_deref();
@@ -688,7 +694,7 @@ impl Memory for SqliteMemory {
         content: &str,
         category: MemoryCategory,
         session_id: Option<&str>,
-    ) -> anyhow::Result<()> {
+    ) -> MemoryResult<()> {
         // Compute embedding (async, before blocking work)
         let embedding_bytes = self
             .get_or_compute_embedding(content)
@@ -700,7 +706,7 @@ impl Memory for SqliteMemory {
         let content = content.to_string();
         let sid = session_id.map(String::from);
 
-        tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+        tokio::task::spawn_blocking(move || -> Result<()> {
             let conn = conn.lock();
             let now = Local::now().to_rfc3339();
             let cat = Self::category_to_str(&category);
@@ -719,7 +725,7 @@ impl Memory for SqliteMemory {
             )?;
             Ok(())
         })
-        .await?
+        .await.map_err(Error::from)?.map_err(Into::into)
     }
 
     async fn recall(
@@ -729,14 +735,14 @@ impl Memory for SqliteMemory {
         session_id: Option<&str>,
         since: Option<&str>,
         until: Option<&str>,
-    ) -> anyhow::Result<Vec<MemoryEntry>> {
+    ) -> MemoryResult<Vec<MemoryEntry>> {
         // Time-only query: list by time range when no keywords.
         // Treat only a bare "*" as the same recent-entry request; keep
         // real wildcard searches such as "wild*" on the keyword path.
-        if is_recent_recall_query(query) {
-            return self
+        if is_recent_recall_query(query) {              return self
                 .recall_by_time_only(limit, session_id, since, until)
-                .await;
+                .await
+                .map_err(Into::into);
         }
 
         // Compute query embedding only when needed (skip for BM25-only mode)
@@ -755,7 +761,7 @@ impl Memory for SqliteMemory {
         let keyword_weight = self.keyword_weight;
         let search_mode = self.search_mode.clone();
 
-        tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<MemoryEntry>> {
+        tokio::task::spawn_blocking(move || -> Result<Vec<MemoryEntry>> {
             let conn = conn.lock();
             let session_ref = sid.as_deref();
             let since_ref = since_owned.as_deref();
@@ -982,14 +988,14 @@ impl Memory for SqliteMemory {
             results.truncate(limit);
             Ok(results)
         })
-        .await?
+        .await.map_err(Error::from)?.map_err(Into::into)
     }
 
-    async fn get(&self, key: &str) -> anyhow::Result<Option<MemoryEntry>> {
+    async fn get(&self, key: &str) -> MemoryResult<Option<MemoryEntry>> {
         let conn = self.conn.clone();
         let key = key.to_string();
 
-        tokio::task::spawn_blocking(move || -> anyhow::Result<Option<MemoryEntry>> {
+        tokio::task::spawn_blocking(move || -> Result<Option<MemoryEntry>> {
             let conn = conn.lock();
             let mut stmt = conn.prepare(
                 "SELECT id, key, content, category, created_at, session_id, namespace, importance, superseded_by FROM memories WHERE key = ?1",
@@ -1015,21 +1021,21 @@ impl Memory for SqliteMemory {
                 _ => Ok(None),
             }
         })
-        .await?
+        .await.map_err(Error::from)?.map_err(Into::into)
     }
 
     async fn list(
         &self,
         category: Option<&MemoryCategory>,
         session_id: Option<&str>,
-    ) -> anyhow::Result<Vec<MemoryEntry>> {
+    ) -> MemoryResult<Vec<MemoryEntry>> {
         const DEFAULT_LIST_LIMIT: i64 = 1000;
 
         let conn = self.conn.clone();
         let category = category.cloned();
         let sid = session_id.map(String::from);
 
-        tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<MemoryEntry>> {
+        tokio::task::spawn_blocking(move || -> Result<Vec<MemoryEntry>> {
             let conn = conn.lock();
             let session_ref = sid.as_deref();
             let mut results = Vec::new();
@@ -1082,26 +1088,26 @@ impl Memory for SqliteMemory {
 
             Ok(results)
         })
-        .await?
+        .await.map_err(Error::from)?.map_err(Into::into)
     }
 
-    async fn forget(&self, key: &str) -> anyhow::Result<bool> {
+    async fn forget(&self, key: &str) -> MemoryResult<bool> {
         let conn = self.conn.clone();
         let key = key.to_string();
 
-        tokio::task::spawn_blocking(move || -> anyhow::Result<bool> {
+        tokio::task::spawn_blocking(move || -> Result<bool> {
             let conn = conn.lock();
             let affected = conn.execute("DELETE FROM memories WHERE key = ?1", params![key])?;
             Ok(affected > 0)
         })
-        .await?
+        .await.map_err(Error::from)?.map_err(Into::into)
     }
 
-    async fn purge_namespace(&self, namespace: &str) -> anyhow::Result<usize> {
+    async fn purge_namespace(&self, namespace: &str) -> MemoryResult<usize> {
         let conn = self.conn.clone();
         let namespace = namespace.to_string();
 
-        tokio::task::spawn_blocking(move || -> anyhow::Result<usize> {
+        tokio::task::spawn_blocking(move || -> Result<usize> {
             let conn = conn.lock();
             let affected = conn.execute(
                 "DELETE FROM memories WHERE category = ?1",
@@ -1110,14 +1116,14 @@ impl Memory for SqliteMemory {
             #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
             Ok(affected)
         })
-        .await?
+        .await.map_err(Error::from)?.map_err(Into::into)
     }
 
-    async fn purge_session(&self, session_id: &str) -> anyhow::Result<usize> {
+    async fn purge_session(&self, session_id: &str) -> MemoryResult<usize> {
         let conn = self.conn.clone();
         let session_id = session_id.to_string();
 
-        tokio::task::spawn_blocking(move || -> anyhow::Result<usize> {
+        tokio::task::spawn_blocking(move || -> Result<usize> {
             let conn = conn.lock();
             let affected = conn.execute(
                 "DELETE FROM memories WHERE session_id = ?1",
@@ -1126,20 +1132,20 @@ impl Memory for SqliteMemory {
             #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
             Ok(affected)
         })
-        .await?
+        .await.map_err(Error::from)?.map_err(Into::into)
     }
 
-    async fn count(&self) -> anyhow::Result<usize> {
+    async fn count(&self) -> MemoryResult<usize> {
         let conn = self.conn.clone();
 
-        tokio::task::spawn_blocking(move || -> anyhow::Result<usize> {
+        tokio::task::spawn_blocking(move || -> Result<usize> {
             let conn = conn.lock();
             let count: i64 =
                 conn.query_row("SELECT COUNT(*) FROM memories", [], |row| row.get(0))?;
             #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
             Ok(count as usize)
         })
-        .await?
+        .await.map_err(Error::from)?.map_err(Into::into)
     }
 
     async fn health_check(&self) -> bool {
@@ -1160,16 +1166,16 @@ impl Memory for SqliteMemory {
     /// the number of rows that received a new embedding; returns 0 if the
     /// embedder has no dimensions (Noop) or if everything is already
     /// embedded.
-    async fn reindex(&self) -> anyhow::Result<usize> {
+    async fn reindex(&self) -> MemoryResult<usize> {
         // Step 1: Rebuild FTS5 (always safe, cheap)
         {
             let conn = self.conn.clone();
-            tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+            tokio::task::spawn_blocking(move || -> Result<()> {
                 let conn = conn.lock();
                 conn.execute_batch("INSERT INTO memories_fts(memories_fts) VALUES('rebuild');")?;
                 Ok(())
             })
-            .await??;
+            .await.map_err(Error::from)??;
         }
 
         // Step 2: Re-embed memories with NULL vectors, if embedder is configured
@@ -1185,9 +1191,9 @@ impl Memory for SqliteMemory {
             let rows = stmt.query_map([], |row| {
                 Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
             })?;
-            Ok::<_, anyhow::Error>(rows.filter_map(std::result::Result::ok).collect())
+            Ok::<_, crate::error::Error>(rows.filter_map(std::result::Result::ok).collect())
         })
-        .await??;
+        .await.map_err(Error::from)??;
 
         let mut count = 0;
         for (id, content) in &entries {
@@ -1195,7 +1201,7 @@ impl Memory for SqliteMemory {
                 let bytes = vector::vec_to_bytes(&emb);
                 let conn = self.conn.clone();
                 let id = id.clone();
-                tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+                tokio::task::spawn_blocking(move || -> Result<()> {
                     let conn = conn.lock();
                     conn.execute(
                         "UPDATE memories SET embedding = ?1 WHERE id = ?2",
@@ -1203,7 +1209,7 @@ impl Memory for SqliteMemory {
                     )?;
                     Ok(())
                 })
-                .await??;
+                .await.map_err(Error::from)??;
                 count += 1;
             }
         }
@@ -1211,11 +1217,11 @@ impl Memory for SqliteMemory {
         Ok(count)
     }
 
-    async fn export(&self, filter: &ExportFilter) -> anyhow::Result<Vec<MemoryEntry>> {
+    async fn export(&self, filter: &ExportFilter) -> MemoryResult<Vec<MemoryEntry>> {
         let conn = self.conn.clone();
         let filter = filter.clone();
 
-        tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<MemoryEntry>> {
+        tokio::task::spawn_blocking(move || -> Result<Vec<MemoryEntry>> {
             let conn = conn.lock();
             let mut sql =
                 "SELECT id, key, content, category, created_at, session_id, namespace, importance, superseded_by \
@@ -1275,7 +1281,7 @@ impl Memory for SqliteMemory {
             }
             Ok(results)
         })
-        .await?
+        .await.map_err(Error::from)?.map_err(Into::into)
     }
 
     async fn recall_namespaced(
@@ -1286,7 +1292,7 @@ impl Memory for SqliteMemory {
         session_id: Option<&str>,
         since: Option<&str>,
         until: Option<&str>,
-    ) -> anyhow::Result<Vec<MemoryEntry>> {
+    ) -> MemoryResult<Vec<MemoryEntry>> {
         let entries = self
             .recall(query, limit * 2, session_id, since, until)
             .await?;
@@ -1306,7 +1312,7 @@ impl Memory for SqliteMemory {
         session_id: Option<&str>,
         namespace: Option<&str>,
         importance: Option<f64>,
-    ) -> anyhow::Result<()> {
+    ) -> MemoryResult<()> {
         let embedding_bytes = self
             .get_or_compute_embedding(content)
             .await?
@@ -1319,7 +1325,7 @@ impl Memory for SqliteMemory {
         let ns = namespace.unwrap_or("default").to_string();
         let imp = importance.unwrap_or(0.5);
 
-        tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+        tokio::task::spawn_blocking(move || -> Result<()> {
             let conn = conn.lock();
             let now = Local::now().to_rfc3339();
             let cat = Self::category_to_str(&category);
@@ -1340,7 +1346,7 @@ impl Memory for SqliteMemory {
             )?;
             Ok(())
         })
-        .await?
+        .await.map_err(Error::from)?.map_err(Into::into)
     }
 }
 

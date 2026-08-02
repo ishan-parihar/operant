@@ -1,4 +1,4 @@
-use super::traits::{Memory, MemoryCategory, MemoryEntry};
+use super::traits::{Memory, MemoryCategory, MemoryEntry, MemoryResult};
 use async_trait::async_trait;
 
 /// Explicit no-op memory backend.
@@ -26,7 +26,7 @@ impl Memory for NoneMemory {
         _content: &str,
         _category: MemoryCategory,
         _session_id: Option<&str>,
-    ) -> anyhow::Result<()> {
+    ) -> MemoryResult<()> {
         Ok(())
     }
 
@@ -37,11 +37,11 @@ impl Memory for NoneMemory {
         _session_id: Option<&str>,
         _since: Option<&str>,
         _until: Option<&str>,
-    ) -> anyhow::Result<Vec<MemoryEntry>> {
+    ) -> MemoryResult<Vec<MemoryEntry>> {
         Ok(Vec::new())
     }
 
-    async fn get(&self, _key: &str) -> anyhow::Result<Option<MemoryEntry>> {
+    async fn get(&self, _key: &str) -> MemoryResult<Option<MemoryEntry>> {
         Ok(None)
     }
 
@@ -49,15 +49,15 @@ impl Memory for NoneMemory {
         &self,
         _category: Option<&MemoryCategory>,
         _session_id: Option<&str>,
-    ) -> anyhow::Result<Vec<MemoryEntry>> {
+    ) -> MemoryResult<Vec<MemoryEntry>> {
         Ok(Vec::new())
     }
 
-    async fn forget(&self, _key: &str) -> anyhow::Result<bool> {
+    async fn forget(&self, _key: &str) -> MemoryResult<bool> {
         Ok(false)
     }
 
-    async fn count(&self) -> anyhow::Result<usize> {
+    async fn count(&self) -> MemoryResult<usize> {
         Ok(0)
     }
 

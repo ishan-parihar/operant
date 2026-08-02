@@ -5,7 +5,7 @@
 //! authored_by, applies_to). Supports full-text search, tag filtering,
 //! and relation traversal.
 
-use anyhow::Context;
+use crate::error::{Error, MemoryContextExt as _, Result};
 use chrono::{DateTime, Utc};
 use parking_lot::Mutex;
 use rusqlite::{Connection, params};
@@ -38,14 +38,14 @@ impl NodeType {
         }
     }
 
-    pub fn parse(s: &str) -> anyhow::Result<Self> {
+    pub fn parse(s: &str) -> Result<Self> {
         match s {
             "pattern" => Ok(Self::Pattern),
             "decision" => Ok(Self::Decision),
             "lesson" => Ok(Self::Lesson),
             "expert" => Ok(Self::Expert),
             "technology" => Ok(Self::Technology),
-            other => anyhow::bail!("unknown node type: {other}"),
+            other => Err(Error::message(format!("unknown node type: {other}"))),
         }
     }
 }
@@ -72,14 +72,14 @@ impl Relation {
         }
     }
 
-    pub fn parse(s: &str) -> anyhow::Result<Self> {
+    pub fn parse(s: &str) -> Result<Self> {
         match s {
             "uses" => Ok(Self::Uses),
             "replaces" => Ok(Self::Replaces),
             "extends" => Ok(Self::Extends),
             "authored_by" => Ok(Self::AuthoredBy),
             "applies_to" => Ok(Self::AppliesTo),
-            other => anyhow::bail!("unknown relation: {other}"),
+            other => Err(Error::message(format!("unknown relation: {other}"))),
         }
     }
 }
@@ -133,7 +133,7 @@ pub struct KnowledgeGraph {
 
 impl KnowledgeGraph {
     /// Open (or create) a knowledge graph database at the given path.
-    pub fn new(db_path: &Path, max_nodes: usize) -> anyhow::Result<Self> {
+    pub fn new(db_path: &Path, max_nodes: usize) -> Result<Self> {
         if let Some(parent) = db_path.parent() {
             std::fs::create_dir_all(parent)?;
         }
@@ -209,26 +209,26 @@ impl KnowledgeGraph {
         content: &str,
         tags: &[String],
         source_project: Option<&str>,
-    ) -> anyhow::Result<String> {
+    ) -> Result<String> {
         let conn = self.conn.lock();
 
         // Enforce max_nodes limit.
         let count: usize = conn.query_row("SELECT COUNT(*) FROM nodes", [], |r| r.get(0))?;
         if count >= self.max_nodes {
-            anyhow::bail!(
+            return Err(Error::message(format!(
                 "knowledge graph node limit reached ({}/{})",
                 count,
                 self.max_nodes
-            );
+            )));
         }
 
         // Reject tags containing commas since comma is the separator in storage.
         for tag in tags {
             if tag.contains(',') {
-                anyhow::bail!(
+                return Err(Error::message(format!(
                     "tag '{}' contains a comma, which is used as the tag separator",
                     tag
-                );
+                )));
             }
         }
 
@@ -255,11 +255,11 @@ impl KnowledgeGraph {
     }
 
     /// Add a directed edge between two nodes.
-    pub fn add_edge(&self, from_id: &str, to_id: &str, relation: Relation) -> anyhow::Result<()> {
+    pub fn add_edge(&self, from_id: &str, to_id: &str, relation: Relation) -> Result<()> {
         let conn = self.conn.lock();
 
         // Verify both endpoints exist.
-        let exists = |id: &str| -> anyhow::Result<bool> {
+        let exists = |id: &str| -> Result<bool> {
             let c: usize = conn.query_row(
                 "SELECT COUNT(*) FROM nodes WHERE id = ?1",
                 params![id],
@@ -269,10 +269,10 @@ impl KnowledgeGraph {
         };
 
         if !exists(from_id)? {
-            anyhow::bail!("source node not found: {from_id}");
+            return Err(Error::message(format!("source node not found: {from_id}")));
         }
         if !exists(to_id)? {
-            anyhow::bail!("target node not found: {to_id}");
+            return Err(Error::message(format!("target node not found: {to_id}")));
         }
 
         conn.execute(
@@ -284,7 +284,7 @@ impl KnowledgeGraph {
     }
 
     /// Retrieve a node by id.
-    pub fn get_node(&self, id: &str) -> anyhow::Result<Option<KnowledgeNode>> {
+    pub fn get_node(&self, id: &str) -> Result<Option<KnowledgeNode>> {
         let conn = self.conn.lock();
         let mut stmt = conn.prepare(
             "SELECT id, node_type, title, content, tags, created_at, updated_at, source_project
@@ -299,7 +299,7 @@ impl KnowledgeGraph {
     }
 
     /// Query nodes by tags (all listed tags must be present).
-    pub fn query_by_tags(&self, tags: &[String]) -> anyhow::Result<Vec<KnowledgeNode>> {
+    pub fn query_by_tags(&self, tags: &[String]) -> Result<Vec<KnowledgeNode>> {
         let conn = self.conn.lock();
         let mut stmt = conn.prepare(
             "SELECT id, node_type, title, content, tags, created_at, updated_at, source_project
@@ -322,7 +322,7 @@ impl KnowledgeGraph {
         &self,
         query: &str,
         limit: usize,
-    ) -> anyhow::Result<Vec<SearchResult>> {
+    ) -> Result<Vec<SearchResult>> {
         let conn = self.conn.lock();
 
         // Sanitize FTS query: escape double quotes, wrap tokens in quotes.
@@ -361,7 +361,7 @@ impl KnowledgeGraph {
     }
 
     /// Find nodes directly related to the given node (both outbound and inbound edges).
-    pub fn find_related(&self, node_id: &str) -> anyhow::Result<Vec<(KnowledgeNode, Relation)>> {
+    pub fn find_related(&self, node_id: &str) -> Result<Vec<(KnowledgeNode, Relation)>> {
         let conn = self.conn.lock();
         let mut stmt = conn.prepare(
             "SELECT n.id, n.node_type, n.title, n.content, n.tags,
@@ -401,9 +401,9 @@ impl KnowledgeGraph {
         &self,
         root_id: &str,
         depth: usize,
-    ) -> anyhow::Result<(Vec<KnowledgeNode>, Vec<KnowledgeEdge>)> {
+    ) -> Result<(Vec<KnowledgeNode>, Vec<KnowledgeEdge>)> {
         if depth == 0 {
-            anyhow::bail!("subgraph depth must be greater than 0");
+            return Err(Error::message("subgraph depth must be greater than 0"));
         }
         let depth = depth.min(Self::MAX_SUBGRAPH_DEPTH);
         let conn = self.conn.lock();
@@ -457,7 +457,7 @@ impl KnowledgeGraph {
     }
 
     /// Find experts associated with the given tags via `authored_by` edges.
-    pub fn find_experts(&self, tags: &[String]) -> anyhow::Result<Vec<SearchResult>> {
+    pub fn find_experts(&self, tags: &[String]) -> Result<Vec<SearchResult>> {
         // Find nodes matching the tags, then follow authored_by edges to experts.
         let matching = self.query_by_tags(tags)?;
         let mut expert_scores: HashMap<String, f64> = HashMap::new();
@@ -493,7 +493,7 @@ impl KnowledgeGraph {
     }
 
     /// Return summary statistics for the graph.
-    pub fn stats(&self) -> anyhow::Result<GraphStats> {
+    pub fn stats(&self) -> Result<GraphStats> {
         let conn = self.conn.lock();
 
         let total_nodes: usize = conn.query_row("SELECT COUNT(*) FROM nodes", [], |r| r.get(0))?;
@@ -540,7 +540,7 @@ impl KnowledgeGraph {
 }
 
 /// Parse a database row into a `KnowledgeNode`.
-fn row_to_node(row: &rusqlite::Row<'_>) -> anyhow::Result<KnowledgeNode> {
+fn row_to_node(row: &rusqlite::Row<'_>) -> Result<KnowledgeNode> {
     let id: String = row.get(0)?;
     let node_type_str: String = row.get(1)?;
     let title: String = row.get(2)?;

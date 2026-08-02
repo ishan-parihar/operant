@@ -99,7 +99,7 @@ pub use operant_infra::stall_watchdog::StallWatchdog;
 use anyhow::{Context, Result};
 use operant_api::session_keys::sanitize_session_key;
 use operant_config::schema::Config;
-use operant_memory::{self, MEMORY_CONTEXT_CLOSE, MEMORY_CONTEXT_OPEN, Memory};
+use operant_memory::{self, Memory, MemoryResult, MEMORY_CONTEXT_CLOSE, MEMORY_CONTEXT_OPEN};
 use operant_providers::reliable::{scope_provider_fallback, take_last_provider_fallback};
 use operant_providers::{self, ChatMessage, Provider};
 use operant_runtime::agent::loop_::{
@@ -2086,7 +2086,7 @@ async fn build_memory_context_for_sessions(
 fn append_recalled_memory_entries(
     entries: &mut Vec<operant_memory::MemoryEntry>,
     seen_keys: &mut HashSet<String>,
-    recalled: Result<Vec<operant_memory::MemoryEntry>>,
+    recalled: MemoryResult<Vec<operant_memory::MemoryEntry>>,
 ) {
     if let Ok(recalled) = recalled {
         for entry in recalled {
@@ -9529,7 +9529,7 @@ BTC is currently around $65,000 based on latest tool output."#
             _content: &str,
             _category: operant_memory::MemoryCategory,
             _session_id: Option<&str>,
-        ) -> anyhow::Result<()> {
+        ) -> operant_memory::MemoryResult<()> {
             Ok(())
         }
 
@@ -9540,11 +9540,11 @@ BTC is currently around $65,000 based on latest tool output."#
             _session_id: Option<&str>,
             _since: Option<&str>,
             _until: Option<&str>,
-        ) -> anyhow::Result<Vec<operant_memory::MemoryEntry>> {
+        ) -> operant_memory::MemoryResult<Vec<operant_memory::MemoryEntry>> {
             Ok(Vec::new())
         }
 
-        async fn get(&self, _key: &str) -> anyhow::Result<Option<operant_memory::MemoryEntry>> {
+        async fn get(&self, _key: &str) -> operant_memory::MemoryResult<Option<operant_memory::MemoryEntry>> {
             Ok(None)
         }
 
@@ -9552,15 +9552,15 @@ BTC is currently around $65,000 based on latest tool output."#
             &self,
             _category: Option<&operant_memory::MemoryCategory>,
             _session_id: Option<&str>,
-        ) -> anyhow::Result<Vec<operant_memory::MemoryEntry>> {
+        ) -> operant_memory::MemoryResult<Vec<operant_memory::MemoryEntry>> {
             Ok(Vec::new())
         }
 
-        async fn forget(&self, _key: &str) -> anyhow::Result<bool> {
+        async fn forget(&self, _key: &str) -> operant_memory::MemoryResult<bool> {
             Ok(false)
         }
 
-        async fn count(&self) -> anyhow::Result<usize> {
+        async fn count(&self) -> operant_memory::MemoryResult<usize> {
             Ok(0)
         }
 
@@ -9583,7 +9583,7 @@ BTC is currently around $65,000 based on latest tool output."#
             _content: &str,
             _category: operant_memory::MemoryCategory,
             _session_id: Option<&str>,
-        ) -> anyhow::Result<()> {
+        ) -> operant_memory::MemoryResult<()> {
             Ok(())
         }
 
@@ -9594,7 +9594,7 @@ BTC is currently around $65,000 based on latest tool output."#
             _session_id: Option<&str>,
             _since: Option<&str>,
             _until: Option<&str>,
-        ) -> anyhow::Result<Vec<operant_memory::MemoryEntry>> {
+        ) -> operant_memory::MemoryResult<Vec<operant_memory::MemoryEntry>> {
             Ok(vec![operant_memory::MemoryEntry {
                 id: "entry-1".to_string(),
                 key: "memory_key_1".to_string(),
@@ -9609,7 +9609,7 @@ BTC is currently around $65,000 based on latest tool output."#
             }])
         }
 
-        async fn get(&self, _key: &str) -> anyhow::Result<Option<operant_memory::MemoryEntry>> {
+        async fn get(&self, _key: &str) -> operant_memory::MemoryResult<Option<operant_memory::MemoryEntry>> {
             Ok(None)
         }
 
@@ -9617,15 +9617,15 @@ BTC is currently around $65,000 based on latest tool output."#
             &self,
             _category: Option<&operant_memory::MemoryCategory>,
             _session_id: Option<&str>,
-        ) -> anyhow::Result<Vec<operant_memory::MemoryEntry>> {
+        ) -> operant_memory::MemoryResult<Vec<operant_memory::MemoryEntry>> {
             Ok(Vec::new())
         }
 
-        async fn forget(&self, _key: &str) -> anyhow::Result<bool> {
+        async fn forget(&self, _key: &str) -> operant_memory::MemoryResult<bool> {
             Ok(false)
         }
 
-        async fn count(&self) -> anyhow::Result<usize> {
+        async fn count(&self) -> operant_memory::MemoryResult<usize> {
             Ok(1)
         }
 

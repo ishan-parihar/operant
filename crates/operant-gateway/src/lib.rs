@@ -54,7 +54,7 @@ use operant_channels::whatsapp::WhatsAppChannel;
 use operant_config::pairing::PairingGuard;
 use operant_config::schema::Config;
 use operant_infra::session_backend::SessionBackend;
-use operant_memory::{self, Memory, MemoryCategory};
+use operant_memory::{self, Memory, MemoryCategory, MemoryResult};
 use operant_providers::{self, Provider};
 use operant_runtime::cost::CostTracker;
 use operant_runtime::observability::{Observer, set_scoped_broadcast_hook};
@@ -483,7 +483,7 @@ impl AppState {
                 _content: &str,
                 _category: operant_memory::MemoryCategory,
                 _session_id: Option<&str>,
-            ) -> anyhow::Result<()> {
+            ) -> MemoryResult<()> {
                 Ok(())
             }
             async fn recall(
@@ -493,23 +493,23 @@ impl AppState {
                 _session_id: Option<&str>,
                 _since: Option<&str>,
                 _until: Option<&str>,
-            ) -> anyhow::Result<Vec<operant_memory::MemoryEntry>> {
+            ) -> MemoryResult<Vec<operant_memory::MemoryEntry>> {
                 Ok(Vec::new())
             }
-            async fn get(&self, _key: &str) -> anyhow::Result<Option<operant_memory::MemoryEntry>> {
+            async fn get(&self, _key: &str) -> MemoryResult<Option<operant_memory::MemoryEntry>> {
                 Ok(None)
             }
             async fn list(
                 &self,
                 _category: Option<&operant_memory::MemoryCategory>,
                 _session_id: Option<&str>,
-            ) -> anyhow::Result<Vec<operant_memory::MemoryEntry>> {
+            ) -> MemoryResult<Vec<operant_memory::MemoryEntry>> {
                 Ok(Vec::new())
             }
-            async fn forget(&self, _key: &str) -> anyhow::Result<bool> {
+            async fn forget(&self, _key: &str) -> MemoryResult<bool> {
                 Ok(false)
             }
-            async fn count(&self) -> anyhow::Result<usize> {
+            async fn count(&self) -> MemoryResult<usize> {
                 Ok(0)
             }
             async fn health_check(&self) -> bool {
@@ -2606,7 +2606,7 @@ mod tests {
             _content: &str,
             _category: MemoryCategory,
             _session_id: Option<&str>,
-        ) -> anyhow::Result<()> {
+        ) -> MemoryResult<()> {
             Ok(())
         }
 
@@ -2617,11 +2617,11 @@ mod tests {
             _session_id: Option<&str>,
             _since: Option<&str>,
             _until: Option<&str>,
-        ) -> anyhow::Result<Vec<MemoryEntry>> {
+        ) -> MemoryResult<Vec<MemoryEntry>> {
             Ok(Vec::new())
         }
 
-        async fn get(&self, _key: &str) -> anyhow::Result<Option<MemoryEntry>> {
+        async fn get(&self, _key: &str) -> MemoryResult<Option<MemoryEntry>> {
             Ok(None)
         }
 
@@ -2629,15 +2629,15 @@ mod tests {
             &self,
             _category: Option<&MemoryCategory>,
             _session_id: Option<&str>,
-        ) -> anyhow::Result<Vec<MemoryEntry>> {
+        ) -> MemoryResult<Vec<MemoryEntry>> {
             Ok(Vec::new())
         }
 
-        async fn forget(&self, _key: &str) -> anyhow::Result<bool> {
+        async fn forget(&self, _key: &str) -> MemoryResult<bool> {
             Ok(false)
         }
 
-        async fn count(&self) -> anyhow::Result<usize> {
+        async fn count(&self) -> MemoryResult<usize> {
             Ok(0)
         }
 
@@ -2682,7 +2682,7 @@ mod tests {
             _content: &str,
             _category: MemoryCategory,
             _session_id: Option<&str>,
-        ) -> anyhow::Result<()> {
+        ) -> MemoryResult<()> {
             self.keys.lock().push(key.to_string());
             Ok(())
         }
@@ -2694,11 +2694,11 @@ mod tests {
             _session_id: Option<&str>,
             _since: Option<&str>,
             _until: Option<&str>,
-        ) -> anyhow::Result<Vec<MemoryEntry>> {
+        ) -> MemoryResult<Vec<MemoryEntry>> {
             Ok(Vec::new())
         }
 
-        async fn get(&self, _key: &str) -> anyhow::Result<Option<MemoryEntry>> {
+        async fn get(&self, _key: &str) -> MemoryResult<Option<MemoryEntry>> {
             Ok(None)
         }
 
@@ -2706,15 +2706,15 @@ mod tests {
             &self,
             _category: Option<&MemoryCategory>,
             _session_id: Option<&str>,
-        ) -> anyhow::Result<Vec<MemoryEntry>> {
+        ) -> MemoryResult<Vec<MemoryEntry>> {
             Ok(Vec::new())
         }
 
-        async fn forget(&self, _key: &str) -> anyhow::Result<bool> {
+        async fn forget(&self, _key: &str) -> MemoryResult<bool> {
             Ok(false)
         }
 
-        async fn count(&self) -> anyhow::Result<usize> {
+        async fn count(&self) -> MemoryResult<usize> {
             let size = self.keys.lock().len();
             Ok(size)
         }

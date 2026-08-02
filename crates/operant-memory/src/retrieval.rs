@@ -8,6 +8,7 @@
 //! Configurable via `[memory]` settings: `retrieval_stages`, `fts_early_return_score`.
 
 use super::traits::{Memory, MemoryEntry};
+use crate::error::Result;
 use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -119,7 +120,7 @@ impl RetrievalPipeline {
         namespace: Option<&str>,
         since: Option<&str>,
         until: Option<&str>,
-    ) -> anyhow::Result<Vec<MemoryEntry>> {
+    ) -> Result<Vec<MemoryEntry>> {
         let ck = Self::cache_key(query, limit, session_id, namespace);
 
         for stage in &self.config.stages {

@@ -389,21 +389,29 @@ fails. Inventory (from the 2026-08-02 audit):
 Until the OPEN rows are wired (or removed), always compile with **default
 features only**: `cargo check --workspace` / `cargo test --workspace`.
 
-### The prompt_input/ WIP (user's in-flight work)
+### The prompt_input/ decomposition (LANDED)
 
-`crates/operant-cli/src/tui/prompt_input/` contains an **uncommitted, mid-refactor
-vim_command work-in-progress** that does not compile. It is the user's work:
+`crates/operant-cli/src/tui/prompt_input/` was decomposed from a 5,305-line
+monolith into focused sub-modules (`kill_ring`, `typeahead`, `vim`; commits
+dfcefae8 + ea70322c) and compiles clean with zero warnings. Treat it as normal
+shipped code.
 
-- **Never commit, edit, or "fix" it.**
-- When building, stash it first, then restore it unchanged:
-  ```bash
-  git stash push -u -m 'wip-batch' -- crates/operant-cli/src/tui/prompt_input/
-  # ... build/test/clippy ...
-  git stash pop
-  ```
-- The clippy gate baseline includes its 4 warnings, so a stashed build still
-  passes the gate.
-- Confirm prompt_input files are back after the pop (`git status` shows them).
+### Memory error handling (typed, anyhow-free)
+
+`operant-memory` uses a **typed `Error`** (`crates/operant-memory/src/error.rs`,
+`thiserror`-style) with `Result<T>` = `Result<T, Error>` and a `MemoryContextExt`
+extension that mirrors `anyhow::Context`. `anyhow` was fully removed from the
+crate (including dev-deps). The cross-crate contract lives in `operant-api`:
+
+- `MemoryResult<T> = Result<T, MemoryError>` — the `Memory` trait seam
+  (re-exported from `operant-memory` root).
+- Backends (sqlite/qdrant/postgres/lucid/markdown/...) return the crate-local
+  typed `Result`; trait impls convert into `MemoryResult` via `From`.
+- Consumers keep `?` into `anyhow`-typed functions via `anyhow::Error::from`
+  blanket conversions (the typed error is concrete, so `?` just works).
+
+When touching memory code: return the typed `Error`, not `anyhow`; never add
+`anyhow` back as a dependency of `operant-memory`.
 
 ---
 

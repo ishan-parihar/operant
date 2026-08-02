@@ -578,7 +578,7 @@ version = "0.1.0"
         fn dimensions(&self) -> usize {
             3
         }
-        async fn embed(&self, texts: &[&str]) -> anyhow::Result<Vec<Vec<f32>>> {
+        async fn embed(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, operant_memory::Error> {
             Ok(texts
                 .iter()
                 .map(|_| {

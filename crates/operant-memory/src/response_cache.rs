@@ -5,7 +5,7 @@
 //! configurable TTL (default: 1 hour). The cache is optional and disabled by
 //! default — users opt in via `[memory] response_cache_enabled = true`.
 
-use anyhow::Result;
+use crate::error::Result;
 use chrono::{Duration, Local};
 use parking_lot::Mutex;
 use rusqlite::{Connection, params};

@@ -10,6 +10,7 @@
 
 use crate::conflict;
 use crate::importance;
+use crate::error::{Error, Result};
 use crate::traits::{Memory, MemoryCategory};
 use operant_api::provider::Provider;
 
@@ -59,7 +60,7 @@ pub async fn consolidate_turn(
     memory: &dyn Memory,
     user_message: &str,
     assistant_response: &str,
-) -> anyhow::Result<()> {
+) -> Result<()> {
     let turn_text = format!(
         "User: {}\nAssistant: {}",
         strip_media_markers(user_message),
@@ -90,7 +91,8 @@ pub async fn consolidate_turn(
             model,
             Some(CONSOLIDATION_TEMPERATURE),
         )
-        .await?;
+        .await
+        .map_err(|e| Error::message(format!("consolidation provider call failed: {e}")))?;
 
     let result: ConsolidationResult = parse_consolidation_response(&raw, &turn_text);
 

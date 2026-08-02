@@ -1,6 +1,7 @@
-use super::traits::{Memory, MemoryCategory, MemoryEntry, is_recent_recall_query};
+use super::traits::{Memory, MemoryCategory, MemoryEntry, MemoryResult, is_recent_recall_query};
 use async_trait::async_trait;
 use chrono::Local;
+use crate::error::{Error, Result};
 use std::path::{Path, PathBuf};
 use tokio::fs;
 
@@ -33,12 +34,12 @@ impl MarkdownMemory {
         self.memory_dir().join(format!("{date}.md"))
     }
 
-    async fn ensure_dirs(&self) -> anyhow::Result<()> {
+    async fn ensure_dirs(&self) -> Result<()> {
         fs::create_dir_all(self.memory_dir()).await?;
         Ok(())
     }
 
-    async fn append_to_file(&self, path: &Path, content: &str) -> anyhow::Result<()> {
+    async fn append_to_file(&self, path: &Path, content: &str) -> Result<()> {
         self.ensure_dirs().await?;
 
         let existing = if path.exists() {
@@ -99,7 +100,7 @@ impl MarkdownMemory {
             .collect()
     }
 
-    async fn read_all_entries(&self) -> anyhow::Result<Vec<MemoryEntry>> {
+    async fn read_all_entries(&self) -> Result<Vec<MemoryEntry>> {
         let mut entries = Vec::new();
 
         // Read MEMORY.md (core)
@@ -147,13 +148,13 @@ impl Memory for MarkdownMemory {
         content: &str,
         category: MemoryCategory,
         _session_id: Option<&str>,
-    ) -> anyhow::Result<()> {
+    ) -> MemoryResult<()> {
         let entry = format!("- **{key}**: {content}");
         let path = match category {
             MemoryCategory::Core => self.core_path(),
             _ => self.daily_path(),
         };
-        self.append_to_file(&path, &entry).await
+        self.append_to_file(&path, &entry).await.map_err(Into::into)
     }
 
     async fn recall(
@@ -163,19 +164,19 @@ impl Memory for MarkdownMemory {
         _session_id: Option<&str>,
         since: Option<&str>,
         until: Option<&str>,
-    ) -> anyhow::Result<Vec<MemoryEntry>> {
+    ) -> MemoryResult<Vec<MemoryEntry>> {
         let since_dt = since
             .map(chrono::DateTime::parse_from_rfc3339)
             .transpose()
-            .map_err(|e| anyhow::anyhow!("invalid 'since' date (expected RFC 3339): {e}"))?;
+            .map_err(|e| Error::message(format!("invalid 'since' date (expected RFC 3339): {e}")))?;
         let until_dt = until
             .map(chrono::DateTime::parse_from_rfc3339)
             .transpose()
-            .map_err(|e| anyhow::anyhow!("invalid 'until' date (expected RFC 3339): {e}"))?;
+            .map_err(|e| Error::message(format!("invalid 'until' date (expected RFC 3339): {e}")))?;
         if let (Some(s), Some(u)) = (&since_dt, &until_dt)
             && s >= u
         {
-            anyhow::bail!("'since' must be before 'until'");
+            return Err(Error::message("'since' must be before 'until'").into());
         }
 
         let all = self.read_all_entries().await?;
@@ -237,7 +238,7 @@ impl Memory for MarkdownMemory {
         Ok(scored)
     }
 
-    async fn get(&self, key: &str) -> anyhow::Result<Option<MemoryEntry>> {
+    async fn get(&self, key: &str) -> MemoryResult<Option<MemoryEntry>> {
         let all = self.read_all_entries().await?;
         Ok(all
             .into_iter()
@@ -248,7 +249,7 @@ impl Memory for MarkdownMemory {
         &self,
         category: Option<&MemoryCategory>,
         _session_id: Option<&str>,
-    ) -> anyhow::Result<Vec<MemoryEntry>> {
+    ) -> MemoryResult<Vec<MemoryEntry>> {
         let all = self.read_all_entries().await?;
         match category {
             Some(cat) => Ok(all.into_iter().filter(|e| &e.category == cat).collect()),
@@ -256,13 +257,13 @@ impl Memory for MarkdownMemory {
         }
     }
 
-    async fn forget(&self, _key: &str) -> anyhow::Result<bool> {
+    async fn forget(&self, _key: &str) -> MemoryResult<bool> {
         // Markdown memory is append-only by design (audit trail)
         // Return false to indicate the entry wasn't removed
         Ok(false)
     }
 
-    async fn count(&self) -> anyhow::Result<usize> {
+    async fn count(&self) -> MemoryResult<usize> {
         let all = self.read_all_entries().await?;
         Ok(all.len())
     }

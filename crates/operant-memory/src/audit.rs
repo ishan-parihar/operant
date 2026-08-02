@@ -4,7 +4,8 @@
 //! and logs all operations to a `memory_audit` table. Opt-in via
 //! `[memory] audit_enabled = true`.
 
-use super::traits::{Memory, MemoryCategory, MemoryEntry, ProceduralMessage};
+use super::traits::{Memory, MemoryCategory, MemoryEntry, MemoryResult, ProceduralMessage};
+use crate::error::Result;
 use async_trait::async_trait;
 use chrono::Local;
 use parking_lot::Mutex;
@@ -45,7 +46,7 @@ pub struct AuditedMemory<M: Memory> {
 }
 
 impl<M: Memory> AuditedMemory<M> {
-    pub fn new(inner: M, workspace_dir: &Path) -> anyhow::Result<Self> {
+    pub fn new(inner: M, workspace_dir: &Path) -> Result<Self> {
         let db_path = workspace_dir.join("memory").join("audit.db");
         if let Some(parent) = db_path.parent() {
             std::fs::create_dir_all(parent)?;
@@ -94,7 +95,7 @@ impl<M: Memory> AuditedMemory<M> {
     }
 
     /// Prune audit entries older than the given number of days.
-    pub fn prune_older_than(&self, retention_days: u32) -> anyhow::Result<u64> {
+    pub fn prune_older_than(&self, retention_days: u32) -> Result<u64> {
         let conn = self.audit_conn.lock();
         let cutoff =
             (Local::now() - chrono::Duration::days(i64::from(retention_days))).to_rfc3339();
@@ -106,7 +107,7 @@ impl<M: Memory> AuditedMemory<M> {
     }
 
     /// Count total audit entries.
-    pub fn audit_count(&self) -> anyhow::Result<usize> {
+    pub fn audit_count(&self) -> Result<usize> {
         let conn = self.audit_conn.lock();
         let count: i64 =
             conn.query_row("SELECT COUNT(*) FROM memory_audit", [], |row| row.get(0))?;
@@ -127,7 +128,7 @@ impl<M: Memory> Memory for AuditedMemory<M> {
         content: &str,
         category: MemoryCategory,
         session_id: Option<&str>,
-    ) -> anyhow::Result<()> {
+    ) -> MemoryResult<()> {
         self.log_audit(AuditOp::Store, Some(key), None, session_id, None);
         self.inner.store(key, content, category, session_id).await
     }
@@ -139,7 +140,7 @@ impl<M: Memory> Memory for AuditedMemory<M> {
         session_id: Option<&str>,
         since: Option<&str>,
         until: Option<&str>,
-    ) -> anyhow::Result<Vec<MemoryEntry>> {
+    ) -> MemoryResult<Vec<MemoryEntry>> {
         self.log_audit(
             AuditOp::Recall,
             None,
@@ -152,7 +153,7 @@ impl<M: Memory> Memory for AuditedMemory<M> {
             .await
     }
 
-    async fn get(&self, key: &str) -> anyhow::Result<Option<MemoryEntry>> {
+    async fn get(&self, key: &str) -> MemoryResult<Option<MemoryEntry>> {
         self.log_audit(AuditOp::Get, Some(key), None, None, None);
         self.inner.get(key).await
     }
@@ -161,17 +162,17 @@ impl<M: Memory> Memory for AuditedMemory<M> {
         &self,
         category: Option<&MemoryCategory>,
         session_id: Option<&str>,
-    ) -> anyhow::Result<Vec<MemoryEntry>> {
+    ) -> MemoryResult<Vec<MemoryEntry>> {
         self.log_audit(AuditOp::List, None, None, session_id, None);
         self.inner.list(category, session_id).await
     }
 
-    async fn forget(&self, key: &str) -> anyhow::Result<bool> {
+    async fn forget(&self, key: &str) -> MemoryResult<bool> {
         self.log_audit(AuditOp::Forget, Some(key), None, None, None);
         self.inner.forget(key).await
     }
 
-    async fn count(&self) -> anyhow::Result<usize> {
+    async fn count(&self) -> MemoryResult<usize> {
         self.inner.count().await
     }
 
@@ -183,7 +184,7 @@ impl<M: Memory> Memory for AuditedMemory<M> {
         &self,
         messages: &[ProceduralMessage],
         session_id: Option<&str>,
-    ) -> anyhow::Result<()> {
+    ) -> MemoryResult<()> {
         self.log_audit(
             AuditOp::StoreProcedural,
             None,
@@ -202,7 +203,7 @@ impl<M: Memory> Memory for AuditedMemory<M> {
         session_id: Option<&str>,
         since: Option<&str>,
         until: Option<&str>,
-    ) -> anyhow::Result<Vec<MemoryEntry>> {
+    ) -> MemoryResult<Vec<MemoryEntry>> {
         self.log_audit(
             AuditOp::Recall,
             None,
@@ -223,7 +224,7 @@ impl<M: Memory> Memory for AuditedMemory<M> {
         session_id: Option<&str>,
         namespace: Option<&str>,
         importance: Option<f64>,
-    ) -> anyhow::Result<()> {
+    ) -> MemoryResult<()> {
         self.log_audit(AuditOp::Store, Some(key), namespace, session_id, None);
         self.inner
             .store_with_metadata(key, content, category, session_id, namespace, importance)

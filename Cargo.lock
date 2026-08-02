@@ -4705,7 +4705,6 @@ dependencies = [
 name = "operant-memory"
 version = "0.1.4"
 dependencies = [
- "anyhow",
  "async-trait",
  "chrono",
  "operant-api",
@@ -4719,6 +4718,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "tempfile",
+ "thiserror 2.0.18",
  "tokio",
  "tracing",
  "uuid",

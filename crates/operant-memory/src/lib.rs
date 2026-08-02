@@ -28,6 +28,7 @@ pub mod conflict;
 pub mod consolidation;
 pub mod decay;
 pub mod embeddings;
+pub mod error;
 pub mod hygiene;
 pub mod importance;
 pub mod knowledge_graph;
@@ -68,15 +69,16 @@ pub use qdrant::QdrantMemory;
 pub use response_cache::ResponseCache;
 #[allow(unused_imports)]
 pub use retrieval::{RetrievalConfig, RetrievalPipeline};
+pub use error::{Error, Result};
 pub use sqlite::SqliteMemory;
 pub use traits::Memory;
 #[allow(unused_imports)]
 pub use traits::{
-    ExportFilter, MemoryCategory, MemoryEntry, ProceduralMessage, is_recent_recall_query,
-    normalize_recent_recall_query,
+    ExportFilter, MemoryCategory, MemoryEntry, MemoryResult, ProceduralMessage,
+    is_recent_recall_query, normalize_recent_recall_query,
 };
 
-use anyhow::Context;
+use crate::error::MemoryContextExt as _;
 use operant_config::schema::{EmbeddingRouteConfig, MemoryConfig, StorageProviderConfig};
 use std::path::Path;
 use std::sync::Arc;
@@ -85,7 +87,7 @@ use std::sync::Arc;
 fn build_postgres_memory(
     memory_config: &MemoryConfig,
     storage_provider: &StorageProviderConfig,
-) -> anyhow::Result<Box<dyn Memory>> {
+) -> Result<Box<dyn Memory>> {
     use postgres::PostgresMemory;
     let db_url = storage_provider
         .db_url
@@ -106,11 +108,9 @@ fn build_postgres_memory(
 fn build_postgres_memory(
     _memory_config: &MemoryConfig,
     _storage_provider: &StorageProviderConfig,
-) -> anyhow::Result<Box<dyn Memory>> {
-    anyhow::bail!(
-        "memory backend 'postgres' requested but this build was compiled without \
-         `memory-postgres`; rebuild with `--features memory-postgres`"
-    )
+) -> Result<Box<dyn Memory>> {
+    Err(Error::message("memory backend 'postgres' requested but this build was compiled without \
+         `memory-postgres`; rebuild with `--features memory-postgres`"))
 }
 
 fn create_memory_with_builders<F>(
@@ -118,9 +118,9 @@ fn create_memory_with_builders<F>(
     workspace_dir: &Path,
     mut sqlite_builder: F,
     unknown_context: &str,
-) -> anyhow::Result<Box<dyn Memory>>
+) -> Result<Box<dyn Memory>>
 where
-    F: FnMut() -> anyhow::Result<SqliteMemory>,
+    F: FnMut() -> Result<SqliteMemory>,
 {
     match classify_memory_backend(backend_name) {
         MemoryBackendKind::Sqlite => Ok(Box::new(sqlite_builder()?)),
@@ -134,10 +134,8 @@ where
             // through `create_memory_with_storage_and_routes`, which handles postgres via
             // an early return. Fail loudly if a caller ever reaches this arm, rather than
             // pretending to work with default configs that can never connect.
-            anyhow::bail!(
-                "postgres backend requires storage config; \
-                 call create_memory_with_storage_and_routes instead of create_memory_with_builders"
-            )
+            Err(Error::message("postgres backend requires storage config; \
+                 call create_memory_with_storage_and_routes instead of create_memory_with_builders"))
         }
         MemoryBackendKind::Qdrant | MemoryBackendKind::Markdown => {
             Ok(Box::new(MarkdownMemory::new(workspace_dir)))
@@ -310,7 +308,7 @@ pub fn create_memory(
     config: &MemoryConfig,
     workspace_dir: &Path,
     api_key: Option<&str>,
-) -> anyhow::Result<Box<dyn Memory>> {
+) -> Result<Box<dyn Memory>> {
     create_memory_with_storage_and_routes(config, &[], None, workspace_dir, api_key)
 }
 
@@ -320,7 +318,7 @@ pub fn create_memory_with_storage(
     storage_provider: Option<&StorageProviderConfig>,
     workspace_dir: &Path,
     api_key: Option<&str>,
-) -> anyhow::Result<Box<dyn Memory>> {
+) -> Result<Box<dyn Memory>> {
     create_memory_with_storage_and_routes(config, &[], storage_provider, workspace_dir, api_key)
 }
 
@@ -331,7 +329,7 @@ pub fn create_memory_with_storage_and_routes(
     storage_provider: Option<&StorageProviderConfig>,
     workspace_dir: &Path,
     api_key: Option<&str>,
-) -> anyhow::Result<Box<dyn Memory>> {
+) -> Result<Box<dyn Memory>> {
     let backend_name = effective_memory_backend_name(&config.backend, storage_provider);
     let backend_kind = classify_memory_backend(&backend_name);
     let resolved_embedding = resolve_embedding_config(config, embedding_routes, api_key);
@@ -379,7 +377,7 @@ pub fn create_memory_with_storage_and_routes(
         config: &MemoryConfig,
         workspace_dir: &Path,
         resolved_embedding: &ResolvedEmbeddingConfig,
-    ) -> anyhow::Result<SqliteMemory> {
+    ) -> Result<SqliteMemory> {
         let embedder: Arc<dyn embeddings::EmbeddingProvider> =
             Arc::from(embeddings::create_embedding_provider(
                 &resolved_embedding.provider,
@@ -459,11 +457,9 @@ pub fn create_memory_with_storage_and_routes(
 pub fn create_memory_for_migration(
     backend: &str,
     workspace_dir: &Path,
-) -> anyhow::Result<Box<dyn Memory>> {
+) -> Result<Box<dyn Memory>> {
     if matches!(classify_memory_backend(backend), MemoryBackendKind::None) {
-        anyhow::bail!(
-            "memory backend 'none' disables persistence; choose sqlite, lucid, or markdown before migration"
-        );
+        return Err(Error::message("memory backend 'none' disables persistence; choose sqlite, lucid, or markdown before migration"));
     }
 
     create_memory_with_builders(

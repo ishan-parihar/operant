@@ -18,11 +18,8 @@ pub use kill_ring::KillRing;
 pub use typeahead::{
     AcceptForSubmitOutcome, TypeaheadSource, TypeaheadSuggestion, compute_typeahead,
 };
-pub use vim::{
-    DotRepeatAction, VimFindKind, VimMode, VimPendingState, apply_vim_key,
-};
-use vim::{is_word_char, char_idx_to_byte};
-
+pub use vim::{DotRepeatAction, VimFindKind, VimMode, VimPendingState, apply_vim_key};
+use vim::{char_idx_to_byte, is_word_char};
 
 use ratatui::{
     buffer::Buffer,
@@ -2036,15 +2033,14 @@ pub fn render_prompt_input(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use super::vim::{ VimOperator, 
-        motion_w, motion_b, motion_e, motion_W, motion_B, motion_E,
-        motion_first_nonblank, motion_G, motion_gg, motion_find_char,
-        apply_operator_range, uppercase_region, lowercase_region,
-        vim_idle, vim_count, vim_normal, vim_g,
-        vim_operator, vim_operator_count, vim_operator_g,
+    use super::typeahead::{compute_file_suggestions, compute_slash_suggestions};
+    use super::vim::{
+        VimOperator, apply_operator_range, lowercase_region, motion_B, motion_E, motion_G,
+        motion_W, motion_b, motion_e, motion_find_char, motion_first_nonblank, motion_gg, motion_w,
+        uppercase_region, vim_count, vim_g, vim_idle, vim_normal, vim_operator, vim_operator_count,
+        vim_operator_g,
     };
-    use super::typeahead::{compute_slash_suggestions, compute_file_suggestions};
+    use super::*;
 
     // ---- VimMode --------------------------------------------------------
 
@@ -3536,4 +3532,3 @@ mod tests {
         assert_eq!(s.cursor, "@src/main.rs".len());
     }
 }
-

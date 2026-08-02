@@ -9,8 +9,10 @@
 //! a single durable memory store with concurrent writes — the SQLite backend
 //! cannot serve that use case.
 
-use super::traits::{Memory, MemoryCategory, MemoryEntry, normalize_recent_recall_query};
-use anyhow::{Context, Result};
+use super::traits::{
+    Memory, MemoryCategory, MemoryEntry, MemoryResult, normalize_recent_recall_query,
+};
+use crate::error::{Error, MemoryContextExt as _, Result};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use operant_api::session_keys::sanitize_session_key;
@@ -113,7 +115,7 @@ impl PostgresMemory {
 
         init_handle
             .join()
-            .map_err(|_| anyhow::anyhow!("PostgreSQL initializer thread panicked"))?
+            .map_err(|_| Error::message(format!("PostgreSQL initializer thread panicked")))?
     }
 
     fn init_schema(client: &mut Client, schema_ident: &str, qualified_table: &str) -> Result<()> {
@@ -279,27 +281,27 @@ where
         .context("failed to spawn PostgreSQL operation thread")?;
 
     rx.await
-        .map_err(|_| anyhow::anyhow!("PostgreSQL operation thread terminated unexpectedly"))?
+        .map_err(|_| Error::message(format!("PostgreSQL operation thread terminated unexpectedly")))?
 }
 
 fn validate_identifier(value: &str, field_name: &str) -> Result<()> {
     if value.is_empty() {
-        anyhow::bail!("{field_name} must not be empty");
+        return Err(Error::message(format!("{field_name} must not be empty")));
     }
 
     let mut chars = value.chars();
     let Some(first) = chars.next() else {
-        anyhow::bail!("{field_name} must not be empty");
+        return Err(Error::message(format!("{field_name} must not be empty")));
     };
 
     if !(first.is_ascii_alphabetic() || first == '_') {
-        anyhow::bail!("{field_name} must start with an ASCII letter or underscore; got '{value}'");
+        return Err(Error::message(format!("{field_name} must start with an ASCII letter or underscore; got '{value}'")));
     }
 
     if !chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_') {
-        anyhow::bail!(
+        return Err(Error::message(format!(
             "{field_name} can only contain ASCII letters, numbers, and underscores; got '{value}'"
-        );
+        )));
     }
 
     Ok(())
@@ -321,7 +323,7 @@ impl Memory for PostgresMemory {
         content: &str,
         category: MemoryCategory,
         session_id: Option<&str>,
-    ) -> Result<()> {
+    ) -> MemoryResult<()> {
         let client = self.client.clone();
         let qualified_table = self.qualified_table.clone();
         let key = key.to_string();
@@ -329,7 +331,7 @@ impl Memory for PostgresMemory {
         let category = Self::category_to_str(&category);
         let sid = session_id.map(str::to_string);
 
-        run_on_os_thread(move || -> Result<()> {
+        run_on_os_thread(move || -> MemoryResult<()> {
             let now = Utc::now();
             let mut client = client.lock();
             let stmt = format!(
@@ -360,7 +362,7 @@ impl Memory for PostgresMemory {
         session_id: Option<&str>,
         since: Option<&str>,
         until: Option<&str>,
-    ) -> Result<Vec<MemoryEntry>> {
+    ) -> MemoryResult<Vec<MemoryEntry>> {
         let client = self.client.clone();
         let qualified_table = self.qualified_table.clone();
         let query = normalize_recent_recall_query(query).trim().to_string();
@@ -368,7 +370,7 @@ impl Memory for PostgresMemory {
         let since_owned = since.map(str::to_string);
         let until_owned = until.map(str::to_string);
 
-        run_on_os_thread(move || -> Result<Vec<MemoryEntry>> {
+        run_on_os_thread(move || -> MemoryResult<Vec<MemoryEntry>> {
             let mut client = client.lock();
             let since_ref = since_owned.as_deref();
             let until_ref = until_owned.as_deref();
@@ -418,12 +420,12 @@ impl Memory for PostgresMemory {
         .await
     }
 
-    async fn get(&self, key: &str) -> Result<Option<MemoryEntry>> {
+    async fn get(&self, key: &str) -> MemoryResult<Option<MemoryEntry>> {
         let client = self.client.clone();
         let qualified_table = self.qualified_table.clone();
         let key = key.to_string();
 
-        run_on_os_thread(move || -> Result<Option<MemoryEntry>> {
+        run_on_os_thread(move || -> MemoryResult<Option<MemoryEntry>> {
             let mut client = client.lock();
             let stmt = format!(
                 "
@@ -444,13 +446,13 @@ impl Memory for PostgresMemory {
         &self,
         category: Option<&MemoryCategory>,
         session_id: Option<&str>,
-    ) -> Result<Vec<MemoryEntry>> {
+    ) -> MemoryResult<Vec<MemoryEntry>> {
         let client = self.client.clone();
         let qualified_table = self.qualified_table.clone();
         let category = category.map(Self::category_to_str);
         let sid = session_id.map(str::to_string);
 
-        run_on_os_thread(move || -> Result<Vec<MemoryEntry>> {
+        run_on_os_thread(move || -> MemoryResult<Vec<MemoryEntry>> {
             let mut client = client.lock();
             let stmt = format!(
                 "
@@ -472,12 +474,12 @@ impl Memory for PostgresMemory {
         .await
     }
 
-    async fn forget(&self, key: &str) -> Result<bool> {
+    async fn forget(&self, key: &str) -> MemoryResult<bool> {
         let client = self.client.clone();
         let qualified_table = self.qualified_table.clone();
         let key = key.to_string();
 
-        run_on_os_thread(move || -> Result<bool> {
+        run_on_os_thread(move || -> MemoryResult<bool> {
             let mut client = client.lock();
             let stmt = format!("DELETE FROM {qualified_table} WHERE key = $1");
             let deleted = client.execute(&stmt, &[&key])?;
@@ -486,11 +488,11 @@ impl Memory for PostgresMemory {
         .await
     }
 
-    async fn count(&self) -> Result<usize> {
+    async fn count(&self) -> MemoryResult<usize> {
         let client = self.client.clone();
         let qualified_table = self.qualified_table.clone();
 
-        run_on_os_thread(move || -> Result<usize> {
+        run_on_os_thread(move || -> MemoryResult<usize> {
             let mut client = client.lock();
             let stmt = format!("SELECT COUNT(*) FROM {qualified_table}");
             let count: i64 = client.query_one(&stmt, &[])?.get(0);

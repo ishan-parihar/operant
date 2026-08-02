@@ -1,6 +1,8 @@
 use super::embeddings::EmbeddingProvider;
-use super::traits::{Memory, MemoryCategory, MemoryEntry, is_recent_recall_query};
-use anyhow::{Context, Result};
+use super::traits::{
+    Memory, MemoryCategory, MemoryEntry, MemoryError, MemoryResult, is_recent_recall_query,
+};
+use crate::error::{Error, MemoryContextExt as _, Result};
 use async_trait::async_trait;
 use chrono::Utc;
 use operant_api::session_keys::sanitize_session_key;
@@ -81,7 +83,7 @@ impl QdrantMemory {
                 if self.embedder.dimensions() > 0 {
                     self.migrate_session_ids_to_sanitized().await?;
                 }
-                Ok::<(), anyhow::Error>(())
+                Ok::<(), crate::error::Error>(())
             })
             .await?;
         Ok(())
@@ -128,10 +130,10 @@ impl QdrantMemory {
             Ok(r) => {
                 let status = r.status();
                 let text = r.text().await.unwrap_or_default();
-                anyhow::bail!("Qdrant collection check failed ({status}): {text}");
+                return Err(Error::message(format!("Qdrant collection check failed ({status}): {text}")));
             }
             Err(e) => {
-                anyhow::bail!("Qdrant connection failed: {e}");
+                return Err(Error::message(format!("Qdrant connection failed: {e}")));
             }
         }
 
@@ -156,7 +158,7 @@ impl QdrantMemory {
         if !resp.status().is_success() {
             let status = resp.status();
             let text = resp.text().await.unwrap_or_default();
-            anyhow::bail!("Qdrant collection creation failed ({status}): {text}");
+            return Err(Error::message(format!("Qdrant collection creation failed ({status}): {text}")));
         }
 
         tracing::info!(
@@ -203,7 +205,7 @@ impl QdrantMemory {
             if !resp.status().is_success() {
                 let status = resp.status();
                 let text = resp.text().await.unwrap_or_default();
-                anyhow::bail!("Qdrant scroll failed during migration ({status}): {text}");
+                return Err(Error::message(format!("Qdrant scroll failed during migration ({status}): {text}")));
             }
 
             let page: QdrantScrollResult = resp.json().await?;
@@ -252,7 +254,7 @@ impl QdrantMemory {
             if !resp.status().is_success() {
                 let status = resp.status();
                 let text = resp.text().await.unwrap_or_default();
-                anyhow::bail!("Qdrant set payload failed during migration ({status}): {text}");
+                return Err(Error::message(format!("Qdrant set payload failed during migration ({status}): {text}")));
             }
 
             rewritten += 1;
@@ -343,7 +345,7 @@ impl Memory for QdrantMemory {
         content: &str,
         category: MemoryCategory,
         session_id: Option<&str>,
-    ) -> Result<()> {
+    ) -> MemoryResult<()> {
         self.ensure_initialized().await?;
 
         // Generate embedding for the content
@@ -351,7 +353,8 @@ impl Memory for QdrantMemory {
         let embedding = self.embedder.embed_one(&combined_text).await?;
 
         if embedding.is_empty() {
-            anyhow::bail!("Qdrant requires non-zero dimensional embeddings");
+            return Err(Error::message("Qdrant requires non-zero dimensional embeddings")
+            .into());
         }
 
         let id = Uuid::new_v4().to_string();
@@ -391,7 +394,10 @@ impl Memory for QdrantMemory {
         if !resp.status().is_success() {
             let status = resp.status();
             let text = resp.text().await.unwrap_or_default();
-            anyhow::bail!("Qdrant upsert failed ({status}): {text}");
+            return Err(Error::message(format!(
+                "Qdrant upsert failed ({status}): {text}"
+            ))
+            .into());
         }
 
         Ok(())
@@ -404,7 +410,7 @@ impl Memory for QdrantMemory {
         session_id: Option<&str>,
         since: Option<&str>,
         until: Option<&str>,
-    ) -> Result<Vec<MemoryEntry>> {
+    ) -> MemoryResult<Vec<MemoryEntry>> {
         if is_recent_recall_query(query) {
             let mut entries = self.list(None, session_id).await?;
             if let Some(s) = since {
@@ -460,10 +466,16 @@ impl Memory for QdrantMemory {
         if !resp.status().is_success() {
             let status = resp.status();
             let text = resp.text().await.unwrap_or_default();
-            anyhow::bail!("Qdrant search failed ({status}): {text}");
+            return Err(Error::message(format!(
+                "Qdrant search failed ({status}): {text}"
+            ))
+            .into());
         }
 
-        let result: QdrantSearchResult = resp.json().await?;
+        let result: QdrantSearchResult = resp
+            .json()
+            .await
+            .map_err(|e| MemoryError::from(Error::from(e)))?;
 
         let mut entries: Vec<MemoryEntry> = result
             .result
@@ -502,7 +514,7 @@ impl Memory for QdrantMemory {
         Ok(entries)
     }
 
-    async fn get(&self, key: &str) -> Result<Option<MemoryEntry>> {
+    async fn get(&self, key: &str) -> MemoryResult<Option<MemoryEntry>> {
         self.ensure_initialized().await?;
 
         // Scroll with filter for exact key match
@@ -530,10 +542,16 @@ impl Memory for QdrantMemory {
         if !resp.status().is_success() {
             let status = resp.status();
             let text = resp.text().await.unwrap_or_default();
-            anyhow::bail!("Qdrant scroll failed ({status}): {text}");
+            return Err(Error::message(format!(
+                "Qdrant scroll failed ({status}): {text}"
+            ))
+            .into());
         }
 
-        let result: QdrantScrollResult = resp.json().await?;
+        let result: QdrantScrollResult = resp
+            .json()
+            .await
+            .map_err(|e| MemoryError::from(Error::from(e)))?;
 
         let entry = result.result.points.into_iter().next().and_then(|point| {
             let payload = point.payload?;
@@ -564,7 +582,7 @@ impl Memory for QdrantMemory {
         &self,
         category: Option<&MemoryCategory>,
         session_id: Option<&str>,
-    ) -> Result<Vec<MemoryEntry>> {
+    ) -> MemoryResult<Vec<MemoryEntry>> {
         self.ensure_initialized().await?;
 
         // Build filter conditions
@@ -606,10 +624,16 @@ impl Memory for QdrantMemory {
         if !resp.status().is_success() {
             let status = resp.status();
             let text = resp.text().await.unwrap_or_default();
-            anyhow::bail!("Qdrant scroll failed ({status}): {text}");
+            return Err(Error::message(format!(
+                "Qdrant scroll failed ({status}): {text}"
+            ))
+            .into());
         }
 
-        let result: QdrantScrollResult = resp.json().await?;
+        let result: QdrantScrollResult = resp
+            .json()
+            .await
+            .map_err(|e| MemoryError::from(Error::from(e)))?;
 
         let entries = result
             .result
@@ -641,7 +665,7 @@ impl Memory for QdrantMemory {
         Ok(entries)
     }
 
-    async fn forget(&self, key: &str) -> Result<bool> {
+    async fn forget(&self, key: &str) -> MemoryResult<bool> {
         self.ensure_initialized().await?;
 
         // Delete points matching the key
@@ -668,14 +692,17 @@ impl Memory for QdrantMemory {
         if !resp.status().is_success() {
             let status = resp.status();
             let text = resp.text().await.unwrap_or_default();
-            anyhow::bail!("Qdrant delete failed ({status}): {text}");
+            return Err(Error::message(format!(
+                "Qdrant delete failed ({status}): {text}"
+            ))
+            .into());
         }
 
         // Qdrant doesn't return deleted count easily, assume success
         Ok(true)
     }
 
-    async fn count(&self) -> Result<usize> {
+    async fn count(&self) -> MemoryResult<usize> {
         self.ensure_initialized().await?;
 
         let resp = self
@@ -690,10 +717,16 @@ impl Memory for QdrantMemory {
         if !resp.status().is_success() {
             let status = resp.status();
             let text = resp.text().await.unwrap_or_default();
-            anyhow::bail!("Qdrant collection info failed ({status}): {text}");
+            return Err(Error::message(format!(
+                "Qdrant collection info failed ({status}): {text}"
+            ))
+            .into());
         }
 
-        let json: serde_json::Value = resp.json().await?;
+        let json: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|e| MemoryError::from(Error::from(e)))?;
 
         let count = json
             .get("result")

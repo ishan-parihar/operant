@@ -1,5 +1,8 @@
 use super::sqlite::SqliteMemory;
-use super::traits::{Memory, MemoryCategory, MemoryEntry, normalize_recent_recall_query};
+use super::traits::{
+    Memory, MemoryCategory, MemoryEntry, MemoryResult, normalize_recent_recall_query,
+};
+use crate::error::{Error, Result};
 use async_trait::async_trait;
 use chrono::Local;
 use parking_lot::Mutex;
@@ -239,20 +242,20 @@ impl LucidMemory {
         lucid_cmd: &str,
         args: &[String],
         timeout_window: Duration,
-    ) -> anyhow::Result<String> {
+    ) -> Result<String> {
         let mut cmd = Command::new(lucid_cmd);
         cmd.args(args);
 
         let output = timeout(timeout_window, cmd.output()).await.map_err(|_| {
-            anyhow::anyhow!(
+            Error::message(format!(
                 "lucid command timed out after {}ms",
                 timeout_window.as_millis()
-            )
+            ))
         })??;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            anyhow::bail!("lucid command failed: {stderr}");
+            return Err(Error::message(format!("lucid command failed: {stderr}")));
         }
 
         Ok(String::from_utf8_lossy(&output.stdout).to_string())
@@ -262,7 +265,7 @@ impl LucidMemory {
         &self,
         args: &[String],
         timeout_window: Duration,
-    ) -> anyhow::Result<String> {
+    ) -> Result<String> {
         Self::run_lucid_command_raw(&self.lucid_cmd, args, timeout_window).await
     }
 
@@ -296,7 +299,7 @@ impl LucidMemory {
         }
     }
 
-    async fn recall_from_lucid(&self, query: &str) -> anyhow::Result<Vec<MemoryEntry>> {
+    async fn recall_from_lucid(&self, query: &str) -> Result<Vec<MemoryEntry>> {
         let args = self.build_recall_args(query);
         let output = self.run_lucid_command(&args, self.recall_timeout).await?;
         Ok(Self::parse_lucid_context(&output))
@@ -315,7 +318,7 @@ impl Memory for LucidMemory {
         content: &str,
         category: MemoryCategory,
         session_id: Option<&str>,
-    ) -> anyhow::Result<()> {
+    ) -> MemoryResult<()> {
         self.local
             .store(key, content, category.clone(), session_id)
             .await?;
@@ -330,19 +333,19 @@ impl Memory for LucidMemory {
         session_id: Option<&str>,
         since: Option<&str>,
         until: Option<&str>,
-    ) -> anyhow::Result<Vec<MemoryEntry>> {
+    ) -> MemoryResult<Vec<MemoryEntry>> {
         let since_dt = since
             .map(chrono::DateTime::parse_from_rfc3339)
             .transpose()
-            .map_err(|e| anyhow::anyhow!("invalid 'since' date (expected RFC 3339): {e}"))?;
+            .map_err(|e| Error::message(format!("invalid 'since' date (expected RFC 3339): {e}")))?;
         let until_dt = until
             .map(chrono::DateTime::parse_from_rfc3339)
             .transpose()
-            .map_err(|e| anyhow::anyhow!("invalid 'until' date (expected RFC 3339): {e}"))?;
+            .map_err(|e| Error::message(format!("invalid 'until' date (expected RFC 3339): {e}")))?;
         if let (Some(s), Some(u)) = (&since_dt, &until_dt)
             && s >= u
         {
-            anyhow::bail!("'since' must be before 'until'");
+            return Err(Error::message("'since' must be before 'until'").into());
         }
 
         let recall_query = normalize_recent_recall_query(query);
@@ -402,7 +405,7 @@ impl Memory for LucidMemory {
         }
     }
 
-    async fn get(&self, key: &str) -> anyhow::Result<Option<MemoryEntry>> {
+    async fn get(&self, key: &str) -> MemoryResult<Option<MemoryEntry>> {
         self.local.get(key).await
     }
 
@@ -410,15 +413,15 @@ impl Memory for LucidMemory {
         &self,
         category: Option<&MemoryCategory>,
         session_id: Option<&str>,
-    ) -> anyhow::Result<Vec<MemoryEntry>> {
+    ) -> MemoryResult<Vec<MemoryEntry>> {
         self.local.list(category, session_id).await
     }
 
-    async fn forget(&self, key: &str) -> anyhow::Result<bool> {
+    async fn forget(&self, key: &str) -> MemoryResult<bool> {
         self.local.forget(key).await
     }
 
-    async fn count(&self) -> anyhow::Result<usize> {
+    async fn count(&self) -> MemoryResult<usize> {
         self.local.count().await
     }
 

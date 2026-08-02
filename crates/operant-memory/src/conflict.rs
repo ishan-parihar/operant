@@ -5,6 +5,7 @@
 //! differs, the old entry is marked as superseded.
 
 use super::traits::{Memory, MemoryCategory, MemoryEntry};
+use crate::error::Result;
 
 /// Check for conflicting memories and mark old ones as superseded.
 ///
@@ -15,7 +16,7 @@ pub async fn check_and_resolve_conflicts(
     content: &str,
     category: &MemoryCategory,
     threshold: f64,
-) -> anyhow::Result<Vec<String>> {
+) -> Result<Vec<String>> {
     // Only check conflicts for Core memories
     if !matches!(category, MemoryCategory::Core) {
         return Ok(Vec::new());
@@ -48,7 +49,7 @@ pub fn mark_superseded(
     conn: &rusqlite::Connection,
     superseded_ids: &[String],
     new_id: &str,
-) -> anyhow::Result<()> {
+) -> Result<()> {
     if superseded_ids.is_empty() {
         return Ok(());
     }

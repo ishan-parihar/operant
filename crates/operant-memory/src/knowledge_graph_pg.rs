@@ -3,7 +3,7 @@
 //! Feature-gated behind `memory-postgres`. Uses pure SQL with recursive CTEs
 //! rather than requiring the AGE extension.
 
-use anyhow::{Context, Result};
+use crate::error::{Error, MemoryContextExt as _, Result};
 use parking_lot::Mutex;
 use postgres::{Client, Row};
 use std::sync::Arc;
@@ -46,7 +46,7 @@ where
         })
         .context("failed to spawn pg knowledge graph thread")?;
     rx.await
-        .map_err(|_| anyhow::anyhow!("pg knowledge graph thread terminated unexpectedly"))?
+        .map_err(|_| Error::message(format!("pg knowledge graph thread terminated unexpectedly")))?
 }
 
 impl PgKnowledgeGraph {

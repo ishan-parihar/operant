@@ -1,3 +1,4 @@
+use crate::error::{Error, Result};
 use async_trait::async_trait;
 
 /// Trait for embedding providers — convert text to vectors
@@ -10,14 +11,14 @@ pub trait EmbeddingProvider: Send + Sync {
     fn dimensions(&self) -> usize;
 
     /// Embed a batch of texts into vectors
-    async fn embed(&self, texts: &[&str]) -> anyhow::Result<Vec<Vec<f32>>>;
+    async fn embed(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>>;
 
     /// Embed a single text
-    async fn embed_one(&self, text: &str) -> anyhow::Result<Vec<f32>> {
+    async fn embed_one(&self, text: &str) -> Result<Vec<f32>> {
         let mut results = self.embed(&[text]).await?;
         results
             .pop()
-            .ok_or_else(|| anyhow::anyhow!("Empty embedding result"))
+            .ok_or_else(|| Error::message("Empty embedding result"))
     }
 }
 
@@ -35,7 +36,7 @@ impl EmbeddingProvider for NoopEmbedding {
         0
     }
 
-    async fn embed(&self, _texts: &[&str]) -> anyhow::Result<Vec<Vec<f32>>> {
+    async fn embed(&self, _texts: &[&str]) -> Result<Vec<Vec<f32>>> {
         Ok(Vec::new())
     }
 }
@@ -103,7 +104,7 @@ impl EmbeddingProvider for OpenAiEmbedding {
         self.dims
     }
 
-    async fn embed(&self, texts: &[&str]) -> anyhow::Result<Vec<Vec<f32>>> {
+    async fn embed(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
         if texts.is_empty() {
             return Ok(Vec::new());
         }
@@ -125,21 +126,21 @@ impl EmbeddingProvider for OpenAiEmbedding {
         if !resp.status().is_success() {
             let status = resp.status();
             let text = resp.text().await.unwrap_or_default();
-            anyhow::bail!("Embedding API error {status}: {text}");
+            return Err(Error::message(format!("Embedding API error {status}: {text}")));
         }
 
         let json: serde_json::Value = resp.json().await?;
         let data = json
             .get("data")
             .and_then(|d| d.as_array())
-            .ok_or_else(|| anyhow::anyhow!("Invalid embedding response: missing 'data'"))?;
+            .ok_or_else(|| Error::message("Invalid embedding response: missing 'data'"))?;
 
         let mut embeddings = Vec::with_capacity(data.len());
         for item in data {
             let embedding = item
                 .get("embedding")
                 .and_then(|e| e.as_array())
-                .ok_or_else(|| anyhow::anyhow!("Invalid embedding item"))?;
+                .ok_or_else(|| Error::message("Invalid embedding item"))?;
 
             #[allow(clippy::cast_possible_truncation)]
             let vec: Vec<f32> = embedding
