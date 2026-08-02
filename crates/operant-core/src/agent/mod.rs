@@ -1337,14 +1337,18 @@ impl OperantAgent {
                             observed: None,
                             active: 1,
                         };
-                        let _ = self.database.save_message_full(&msg_data);
+                        if let Err(e) = self.database.save_message_full(&msg_data) {
+                            tracing::warn!(error = %e, "failed to persist assistant message");
+                        }
                     } else {
-                        let _ = self.database.save_message(
+                        if let Err(e) = self.database.save_message(
                             &session_id,
                             "assistant",
                             &effective_text,
                             &timestamp,
-                        );
+                        ) {
+                            tracing::warn!(error = %e, "failed to persist assistant message");
+                        }
                     }
                     self.database
                         .save_session(
@@ -1557,12 +1561,14 @@ impl OperantAgent {
                         }
 
                         // Persist tool result (truncated)
-                        let _ = self.database.save_message(
+                        if let Err(e) = self.database.save_message(
                             &session_id,
                             "tool",
                             &content,
                             &chrono::Utc::now().to_rfc3339(),
-                        );
+                        ) {
+                            tracing::warn!(error = %e, "failed to persist tool result");
+                        }
                         self.database
                             .save_session(
                                 &session_id,
