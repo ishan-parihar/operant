@@ -550,7 +550,7 @@ fn contains_ascii_case_insensitive(haystack: &str, needle: &str) -> bool {
 }
 
 fn strip_tags(content: &str) -> String {
-    let re = Regex::new(r"<[^>]+>").unwrap();
+    let re = Regex::new(r"<[^>]+>").expect("static regex literal is invalid — authoring bug");
     re.replace_all(content, "").to_string()
 }
 

@@ -38,8 +38,18 @@ impl NotionTool {
                 .parse()
                 .map_err(|e| anyhow::anyhow!("Invalid Notion API key header value: {e}"))?,
         );
-        headers.insert("Notion-Version", NOTION_VERSION.parse().unwrap());
-        headers.insert("Content-Type", "application/json".parse().unwrap());
+        headers.insert(
+            "Notion-Version",
+            NOTION_VERSION
+                .parse()
+                .expect("static Notion version header is valid"),
+        );
+        headers.insert(
+            "Content-Type",
+            "application/json"
+                .parse()
+                .expect("static content-type header is valid"),
+        );
         Ok(headers)
     }
 

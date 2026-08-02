@@ -1,3 +1,4 @@
+operant_memory|unused_imports|crates/operant-memory/src/snapshot.rs
 operant|clippy::incompatible_msrv|crates/operant-cli/src/tui/prompt_input/mod.rs
 operant|clippy::let_and_return|crates/operant-cli/src/tui/prompt_input/mod.rs
 operant|non_snake_case|crates/operant-cli/src/tui/prompt_input/mod.rs

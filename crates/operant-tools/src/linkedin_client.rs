@@ -225,10 +225,12 @@ impl LinkedInClient {
             && let Ok(dt) = chrono::DateTime::parse_from_rfc3339(ts)
         {
             let epoch_ms = dt.timestamp_millis();
-            body.as_object_mut().unwrap().insert(
-                "scheduledPublishOptions".to_string(),
-                json!({ "scheduledPublishTime": epoch_ms }),
-            );
+            body.as_object_mut()
+                .expect("body is a json!() object built above")
+                .insert(
+                    "scheduledPublishOptions".to_string(),
+                    json!({ "scheduledPublishTime": epoch_ms }),
+                );
             // Scheduled posts use DRAFT lifecycle
             body["lifecycleState"] = json!("DRAFT");
         }
@@ -239,17 +241,22 @@ impl LinkedInClient {
                 "title": article_title.unwrap_or(""),
             });
             if article_title.is_none() || article_title.is_some_and(|t| t.is_empty()) {
-                article.as_object_mut().unwrap().remove("title");
+                article
+                    .as_object_mut()
+                    .expect("article is a json!() object built above")
+                    .remove("title");
             }
-            body.as_object_mut().unwrap().insert(
-                "content".to_string(),
-                json!({
-                    "article": {
-                        "source": url,
-                        "title": article_title.unwrap_or("")
-                    }
-                }),
-            );
+            body.as_object_mut()
+                .expect("body is a json!() object built above")
+                .insert(
+                    "content".to_string(),
+                    json!({
+                        "article": {
+                            "source": url,
+                            "title": article_title.unwrap_or("")
+                        }
+                    }),
+                );
         }
 
         let url = format!("{}/rest/posts", LINKEDIN_API_BASE);
@@ -653,10 +660,12 @@ impl LinkedInClient {
             && let Ok(dt) = chrono::DateTime::parse_from_rfc3339(ts)
         {
             let epoch_ms = dt.timestamp_millis();
-            body.as_object_mut().unwrap().insert(
-                "scheduledPublishOptions".to_string(),
-                json!({ "scheduledPublishTime": epoch_ms }),
-            );
+            body.as_object_mut()
+                .expect("body is a json!() object built above")
+                .insert(
+                    "scheduledPublishOptions".to_string(),
+                    json!({ "scheduledPublishTime": epoch_ms }),
+                );
         }
 
         let url = format!("{LINKEDIN_API_BASE}/rest/posts");

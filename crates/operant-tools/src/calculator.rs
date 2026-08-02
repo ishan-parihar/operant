@@ -200,7 +200,10 @@ fn calc_add(args: &serde_json::Value) -> Result<String, String> {
 fn calc_subtract(args: &serde_json::Value) -> Result<String, String> {
     let values = extract_values(args, 2)?;
     let mut iter = values.iter();
-    let mut result = *iter.next().unwrap();
+    // extract_values(args, 2) guarantees at least 2 values.
+    let mut result = *iter
+        .next()
+        .expect("extract_values(args, 2) guarantees >= 2 values");
     for v in iter {
         result -= v;
     }
@@ -210,7 +213,10 @@ fn calc_subtract(args: &serde_json::Value) -> Result<String, String> {
 fn calc_divide(args: &serde_json::Value) -> Result<String, String> {
     let values = extract_values(args, 2)?;
     let mut iter = values.iter();
-    let mut result = *iter.next().unwrap();
+    // extract_values(args, 2) guarantees at least 2 values.
+    let mut result = *iter
+        .next()
+        .expect("extract_values(args, 2) guarantees >= 2 values");
     for v in iter {
         if *v == 0.0 {
             return Err("Division by zero".to_string());
@@ -327,7 +333,8 @@ fn calc_median(args: &serde_json::Value) -> Result<String, String> {
     if values.is_empty() {
         return Err("Cannot compute median of an empty array".to_string());
     }
-    values.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    // total_cmp: total order over f64 (handles NaN deterministically).
+    values.sort_by(|a, b| a.total_cmp(b));
     let len = values.len();
     if len % 2 == 0 {
         Ok(format_num(f64::midpoint(
@@ -349,7 +356,11 @@ fn calc_mode(args: &serde_json::Value) -> Result<String, String> {
         let key = v.to_bits();
         *freq.entry(key).or_insert(0) += 1;
     }
-    let max_freq = *freq.values().max().unwrap();
+    // freq is non-empty because values was checked non-empty above.
+    let max_freq = *freq
+        .values()
+        .max()
+        .expect("freq non-empty (values checked above)");
     let mut seen = std::collections::HashSet::new();
     let mut modes = Vec::new();
     for &v in &values {
@@ -421,7 +432,8 @@ fn calc_percentile(args: &serde_json::Value) -> Result<String, String> {
     if !(0..=100).contains(&p) {
         return Err("Percentile rank must be between 0 and 100".to_string());
     }
-    values.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    // total_cmp: total order over f64 (handles NaN deterministically).
+    values.sort_by(|a, b| a.total_cmp(b));
 
     let idx_f = p as f64 / 100.0 * (values.len() - 1) as f64;
     #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]

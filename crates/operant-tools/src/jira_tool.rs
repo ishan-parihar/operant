@@ -856,7 +856,10 @@ fn shape_full(raw: &Value) -> Value {
         }
     }
 
-    result.as_object_mut().unwrap().remove("renderedFields");
+    result
+        .as_object_mut()
+        .expect("result is a json!() object built above")
+        .remove("renderedFields");
     result
 }
 
@@ -982,7 +985,11 @@ fn parse_inline(text: &str, mentions: &HashMap<String, (String, String)>) -> Vec
                 if next.is_whitespace() {
                     break;
                 }
-                raw.push(chars.next().unwrap());
+                raw.push(
+                    chars
+                        .next()
+                        .expect("peek() returned Some — next() cannot fail"),
+                );
             }
             let email = clean_email(&raw);
             // Compute the end position of `email` within `raw` via pointer
