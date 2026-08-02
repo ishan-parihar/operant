@@ -586,39 +586,35 @@ impl Default for TtsSettings {
 /// Memory provider configuration.
 ///
 /// `provider` selects the long-term memory backend:
-/// - `"tdg"` (default) — Graph memory via tdg-rust (entities, relationships, temporal context)
-/// - `"builtin"` — file-backed MEMORY.md/USER.md in the working directory
-/// - `"hindsight"` — Hindsight Cloud/local API (requires `HINDSIGHT_API_KEY`)
-/// - Any other string is passed through as-is for future/custom providers.
+/// - `"agentmemory"` (default) — hybrid semantic memory via the agentmemory
+///   server (BM25 + vector + graph). Operant auto-spawns
+///   `npx @agentmemory/agentmemory` on :3111 when needed and registers its
+///   MCP tools (memory_smart_search, memory_save, ...).
+/// - `"builtin"` — file-backed MEMORY.md/USER.md in the operant home directory
+/// - Any other string falls back to `"builtin"`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct MemorySettings {
-    /// Memory provider: tdg|builtin|hindsight
+    /// Memory provider: agentmemory|builtin
     pub provider: String,
     /// Whether long-term memory is enabled at all
     pub enabled: bool,
-    /// Custom path for TDG database (default: ~/.operant/tdg/graph.db)
-    pub tdg_db_path: Option<String>,
-    /// Lean mode for TDG (reduced memory usage)
-    pub tdg_lean: Option<bool>,
-    /// Hindsight API URL (only used when provider = "hindsight")
-    pub hindsight_api_url: Option<String>,
-    /// Hindsight bank/collection identifier
-    pub hindsight_bank_id: Option<String>,
-    /// Recall budget: low|mid|high (only used when provider = "hindsight")
-    pub hindsight_budget: Option<String>,
+    /// agentmemory server base URL (default: http://localhost:3111)
+    pub agentmemory_url: Option<String>,
+    /// Optional shared secret for the agentmemory REST API
+    pub agentmemory_secret: Option<String>,
+    /// Auto-spawn `npx @agentmemory/agentmemory` when the server is unreachable
+    pub agentmemory_auto_spawn: Option<bool>,
 }
 
 impl Default for MemorySettings {
     fn default() -> Self {
         Self {
-            provider: "tdg".to_string(),
+            provider: "agentmemory".to_string(),
             enabled: true,
-            tdg_db_path: None,
-            tdg_lean: None,
-            hindsight_api_url: None,
-            hindsight_bank_id: None,
-            hindsight_budget: None,
+            agentmemory_url: None,
+            agentmemory_secret: None,
+            agentmemory_auto_spawn: Some(true),
         }
     }
 }

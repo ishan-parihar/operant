@@ -47,8 +47,6 @@ pub use super::spotify_tool::{
     SpotifyPlaylistsTool, SpotifyQueueTool, SpotifySearchTool,
 };
 pub use super::sub_agent_tool::SubAgentTool;
-#[cfg(feature = "tdg")]
-pub use super::tdg_tools::{TdgConnectTool, TdgCreateTool, TdgGetRelatedTool, TdgSearchTool};
 pub use super::terminal_tool::TerminalTool;
 pub use super::todo_tool::TodoTool;
 pub use super::tool_backend_helpers::ToolBackendTool;
@@ -89,13 +87,9 @@ pub async fn register_builtin_tools(
     registry.register(MemoryStoreTool).await?;
     registry.register(MemorySearchTool).await?;
     registry.register(MemoryRecallTool).await?;
-    // TDG tools are NOT registered here — they're registered conditionally
-    // via register_tdg_tools() only when config.memory.provider == "tdg".
-    // Previously they were registered unconditionally, meaning every agent
-    // got 4 graph-memory tools even when using the builtin file-backed
-    // memory provider. The conditional registration also fixes the
-    // dual-database bug: register_tdg_tools takes the TdgMemoryProvider's
-    // pool, so tools and provider share the same graph.db.
+    // Memory provider tools (agentmemory_*, tdg_*) are NOT registered here —
+    // they're registered conditionally when the matching memory provider is
+    // active (see register_agentmemory_tools in main.rs).
     registry.register(HttpRequestTool).await?;
     registry.register(DateTimeTool).await?;
     registry.register(TimestampTool).await?;
@@ -267,9 +261,9 @@ pub fn builtin_tool_names() -> Vec<&'static str> {
         "spotify_playlists",
         "spotify_albums",
         "spotify_library",
-        // TDG tools are NOT in builtin_tool_names — they're registered
-        // conditionally via register_tdg_tools() only when
-        // config.memory.provider == "tdg". Including them here would
+        // Memory provider tools (agentmemory_*, tdg_*) are NOT in
+        // builtin_tool_names — they're registered conditionally when the
+        // matching memory provider is active. Including them here would
         // make the test_register_all_builtin_tools count wrong.
     ]
 }

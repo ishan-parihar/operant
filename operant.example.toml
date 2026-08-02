@@ -158,20 +158,16 @@ provider = "kokoro"
 enabled = false
 
 [memory]
-# provider: tdg (default) | builtin | hindsight | local-vector | retaindb | mem0
-# - tdg:          graph memory via tdg-rust (entities, relationships, temporal context)
-# - builtin:      file-backed MEMORY.md / USER.md in working directory
-# - hindsight:    cloud/local semantic memory (HINDSIGHT_API_KEY)
-# - local-vector: fully local SQLite FTS5 store, no credentials needed
-# - retaindb:     RetainDB cloud (RETAINDB_API_KEY)
-# - mem0:         Mem0 API (MEM0_API_KEY)
-provider = "tdg"
+# provider: agentmemory (default) | builtin
+# - agentmemory: hybrid semantic memory via the agentmemory server (BM25 + vector + graph).
+#                Operant auto-spawns `npx @agentmemory/agentmemory` on :3111 when needed
+#                and registers its MCP tools (memory_smart_search, memory_save, ...).
+# - builtin:     file-backed MEMORY.md / USER.md in the operant home directory
+provider = "agentmemory"
 enabled = true
-# tdg_db_path = "~/.operant/tdg/graph.db"
-# tdg_lean = false
-# hindsight_api_url = "https://api.hindsight.vectorize.io"
-# hindsight_bank_id = "operant"
-# hindsight_budget  = "mid"   # low | mid | high
+# agentmemory_url = "http://localhost:3111"
+# agentmemory_secret = ""
+# agentmemory_auto_spawn = true
 
 [browser]
 # provider: lightpanda (default, auto-downloaded) | camofox | browserbase | browser-use | firecrawl

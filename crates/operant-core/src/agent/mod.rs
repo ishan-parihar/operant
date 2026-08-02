@@ -203,11 +203,11 @@ pub struct OperantAgent {
     memory_manager: Option<MemoryManager>,
     skill_manager: Option<SkillManager>,
     database: Arc<Database>,
-    /// TDG memory provider for graph memory hooks. When set, the agent
+    /// Memory provider for long-term memory hooks. When set, the agent
     /// calls `sync_turn(user, assistant)` after each completed turn so
-    /// the graph self-organizes (entity extraction + auto-wiring).
-    /// This is the native equivalent of the hermes-agent Python adapter's
-    /// TDG hooks — no manual tdg_create/tdg_connect needed.
+    /// the memory backend persists turn observations. This is the native
+    /// equivalent of the hermes-agent Python adapter's memory hooks — no
+    /// manual memory_* tool calls needed.
     memory_provider: Option<Arc<dyn crate::memory_provider::MemoryProvider>>,
     /// Background sync executor for memory provider operations.
     /// Single-worker FIFO executor that processes sync_turn, on_memory_write,
@@ -420,11 +420,11 @@ impl OperantAgent {
         self
     }
 
-    /// Attach a TDG memory provider for graph memory hooks. When set,
+    /// Attach a memory provider for long-term memory hooks. When set,
     /// the agent calls `sync_turn(user, assistant)` after each completed
-    /// turn so the graph self-organizes (entity extraction + auto-wiring).
+    /// turn so the memory backend persists turn observations.
     /// This is the native equivalent of the hermes-agent Python adapter's
-    /// TDG hooks.
+    /// memory hooks.
     pub fn with_memory_provider(
         mut self,
         memory_provider: Arc<dyn crate::memory_provider::MemoryProvider>,
@@ -757,7 +757,7 @@ impl OperantAgent {
     }
 
     /// Notify the memory provider of a built-in memory write.
-    /// Mirrors the write to TDG so the graph stays in sync with
+    /// Mirrors the write to the memory backend so it stays in sync with
     /// MEMORY.md / USER.md changes. Uses the background executor
     /// when available to avoid blocking the agent loop.
     pub fn notify_memory_write(&self, action: &str, target: &str, content: &str) {

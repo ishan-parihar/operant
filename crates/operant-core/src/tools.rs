@@ -40,8 +40,6 @@ pub mod session_search_tool;
 pub mod skills_tool;
 pub mod spotify_tool;
 pub mod sub_agent_tool;
-#[cfg(feature = "tdg")]
-pub mod tdg_tools;
 pub mod terminal_backend;
 pub mod terminal_tool;
 pub mod todo_tool;
@@ -94,8 +92,6 @@ pub use spotify_tool::{
     SpotifyAlbumsTool, SpotifyDevicesTool, SpotifyLibraryTool, SpotifyPlaybackTool,
     SpotifyPlaylistsTool, SpotifyQueueTool, SpotifySearchTool,
 };
-#[cfg(feature = "tdg")]
-pub use tdg_tools::register_tdg_tools;
 pub use transcription_tool::TranscriptionTool;
 pub use tts_command_provider::CommandProvider;
 pub use tts_provider::{AudioFormat, TtsError, TtsProvider};

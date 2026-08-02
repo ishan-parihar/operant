@@ -108,9 +108,6 @@ flate2 = "1.0"
 rand = "0.8"
 tempfile = "3.10"
 
-# Graph memory infrastructure
-tdg-rust = { path = "../../tdg-rust" }
-
 [workspace.lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(operant_root_crate)'] }
 

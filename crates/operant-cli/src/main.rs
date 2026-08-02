@@ -668,28 +668,9 @@ pub(crate) async fn build_registry(
     // (iter-153: EchoTool + CalculatorTool deleted — toy demo tools.
     // operant-core already has a real EchoTool in debug_helpers.rs.)
 
-    // Register TDG tools only when the TDG memory provider is active.
-    // This requires the TdgMemoryProvider to be initialized so we can
-    // share its connection pool — if TDG init failed (and we fell back
-    // to BuiltinProvider), the tools are skipped. Previously these tools
-    // were registered unconditionally for every agent.
-    #[cfg(feature = "tdg")]
-    if config.memory.enabled && config.memory.provider == "tdg" {
-        let storage_dir = operant_core::platform::operant_home();
-        match operant_core::TdgMemoryProvider::new(storage_dir) {
-            Ok(provider) => {
-                let pool = provider.pool().clone();
-                operant_core::tools::register_tdg_tools(&registry, pool).await?;
-                tracing::info!("TDG tools registered (shared pool with memory provider)");
-            }
-            Err(e) => {
-                tracing::warn!(
-                    error = %e,
-                    "TDG provider init failed — TDG tools not registered (builtin memory only)"
-                );
-            }
-        }
-    }
+    // Memory provider tools (agentmemory_*) are registered via the MCP
+    // server path (config.mcp.servers → agentmemory) and/or the agent's
+    // MemoryProvider hook — see load_memory_manager / create_runtime_agent.
 
     // Register AFT (Agent File Tools) if enabled in config.
     // AFT provides 15 IDE-grade coding tools (tree-sitter outline/zoom/
