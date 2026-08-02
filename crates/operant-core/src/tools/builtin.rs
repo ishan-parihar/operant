@@ -54,6 +54,7 @@ pub use super::transcription_tool::TranscriptionTool;
 pub use super::tts_tool::TtsTool;
 pub use super::video_analysis_tool::VideoAnalysisTool;
 pub use super::vision_tool::VisionTool;
+pub use super::igs::{WebExtractTool, WebScrapeTool};
 pub use super::web_tools::{WebFetchTool, WebSearchTool};
 pub use super::insights_tool::InsightsTool;
 pub use super::learning_mutation_tool::LearningMutationTool;
@@ -80,6 +81,10 @@ pub async fn register_builtin_tools(
     registry.register(ToolBackendTool).await?;
     registry.register(WebSearchTool).await?;
     registry.register(WebFetchTool).await?;
+    // IGS-backed web tools (web_scrape / web_extract). They self-disable
+    // via is_available() when the `igs` binary is not installed.
+    registry.register(WebScrapeTool).await?;
+    registry.register(WebExtractTool).await?;
     registry.register(XaiHttpTool).await?;
     registry.register(CodeExecutionTool).await?;
     registry.register(CronTool::new(cron_db)).await?;
@@ -243,6 +248,8 @@ pub fn builtin_tool_names() -> Vec<&'static str> {
         "vision_analyze",
         "web_fetch",
         "web_search",
+        "web_scrape",
+        "web_extract",
         "xai_http_request",
         "send_message",
         "discord",

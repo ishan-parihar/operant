@@ -123,7 +123,11 @@ event_channel_size = 100
 # disabled_tools = ["spotify_playback", "homeassistant"]
 # disabled_toolsets = ["messaging", "media", "smart_home"]
 aft_enabled = false
-igs_enabled = false
+# IGS-backed web tools (web_scrape, web_extract) + igs browser provider.
+# Install the binary: curl -sSL https://raw.githubusercontent.com/ishan-parihar/igs-rust/master/scripts/install.sh | bash
+igs_enabled = true
+# igs_binary_path = "/usr/local/bin/igs"
+# igs_timeout_secs = 60
 lifeos_enabled = false
 
 [tools.web]
@@ -170,13 +174,14 @@ enabled = true
 # agentmemory_auto_spawn = true
 
 [browser]
-# provider: lightpanda (default, auto-downloaded) | camofox | browserbase | browser-use | firecrawl
-# - lightpanda:   local binary from github.com/lightpanda-io/browser (downloaded automatically)
-# - camofox:      local anti-detection browser REST API (CAMOFOX_URL)
-# - browserbase:  cloud (BROWSERBASE_API_KEY + BROWSERBASE_PROJECT_ID)
-# - browser-use:  cloud AI agent (BROWSER_USE_API_KEY)
-# - firecrawl:    scrape API (FIRECRAWL_API_KEY)
-provider = "lightpanda"
+# provider: igs (default) | lightpanda | camofox | browserbase | browser-use | firecrawl
+# - igs:         IGS headless browser via the `igs` binary (Obscura, zero API keys)
+# - lightpanda:  local binary from github.com/lightpanda-io/browser (downloaded automatically)
+# - camofox:     local anti-detection browser REST API (CAMOFOX_URL)
+# - browserbase: cloud (BROWSERBASE_API_KEY + BROWSERBASE_PROJECT_ID)
+# - browser-use: cloud AI agent (BROWSER_USE_API_KEY)
+# - firecrawl:   scrape API (FIRECRAWL_API_KEY)
+provider = "igs"
 
 # ── Advanced sections (uncomment to configure) ───────────────────────────────
 # These are power-user features. Most users don't need them.

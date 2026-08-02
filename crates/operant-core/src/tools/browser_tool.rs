@@ -4,7 +4,8 @@
 //! It allows the agent to navigate to URLs, take snapshots, and interact with page elements.
 //!
 //! Supported providers (configured via `browser.provider` in config.toml):
-//! - `lightpanda` (default) - Local Lightpanda binary (auto-downloaded from GitHub Releases)
+//! - `igs` (default) - IGS headless browser via the `igs` binary (Obscura)
+//! - `lightpanda` - Local Lightpanda binary (auto-downloaded from GitHub Releases)
 //! - `obscura` - Local Obscura binary (auto-downloaded, supports CDP)
 //! - `camofox` - Camofox REST API (`CAMOFOX_URL`)
 //! - `browserbase` - Browserbase cloud (`BROWSERBASE_API_KEY`)
@@ -111,7 +112,8 @@ impl OperantTool for BrowserTool {
     fn description(&self) -> &str {
         "Browser automation tool for navigating and interacting with websites. \
          Supports multiple providers configured via browser.provider in config.toml:\n\
-         - lightpanda (default): Local Lightpanda binary (auto-downloaded)\n\
+         - igs (default): IGS headless browser via igs binary (Obscura)\n\
+         - lightpanda: Local Lightpanda binary (auto-downloaded)\n\
          - obscura: Local Obscura binary (auto-downloaded, supports CDP)\n\
          - camofox: Camofox REST API (CAMOFOX_URL)\n\
          - browserbase: Browserbase cloud (BROWSERBASE_API_KEY)\n\
