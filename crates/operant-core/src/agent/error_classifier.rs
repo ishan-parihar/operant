@@ -762,7 +762,7 @@ fn classify_by_status(
             should_rotate_credential: false,
         }),
 
-        s if s >= 400 && s < 500 => Some(ClassifiedError {
+        s if (400..500).contains(&s) => Some(ClassifiedError {
             reason: FailoverReason::FormatError,
             status_code: Some(status),
             message: body_lower.to_string(),

@@ -117,24 +117,22 @@ fn review_write_guard(name: &str, skill_dir: &Path, action: &str) -> ReviewGuard
     }
 
     // Block edits/patches/deletes on bundled skills
-    if is_protected_skill(name) {
-        if action == "delete" || action == "edit" || action == "patch" {
+    if is_protected_skill(name)
+        && (action == "delete" || action == "edit" || action == "patch") {
             return ReviewGuardResult::Blocked(format!(
                 "Skill '{}' is a bundled/protected skill and cannot be modified by the background review.",
                 name
             ));
         }
-    }
 
     // Block edits/patches/deletes on hub-installed skills
-    if is_hub_installed(skill_dir) {
-        if action == "delete" || action == "edit" || action == "patch" {
+    if is_hub_installed(skill_dir)
+        && (action == "delete" || action == "edit" || action == "patch") {
             return ReviewGuardResult::Blocked(format!(
                 "Skill '{}' is hub-installed and cannot be modified by the background review.",
                 name
             ));
         }
-    }
 
     // For edit/patch: require that the skill was read first
     if (action == "edit" || action == "patch") && !review_has_read(name) {

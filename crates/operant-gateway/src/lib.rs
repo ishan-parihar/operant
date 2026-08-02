@@ -774,7 +774,6 @@ async fn handle_health(State(state): State<AppState>) -> impl IntoResponse {
 /// Prometheus content type for text exposition format.
 const PROMETHEUS_CONTENT_TYPE: &str = "text/plain; version=0.0.4; charset=utf-8";
 #[allow(dead_code)]
-
 fn prometheus_disabled_hint() -> String {
     #[allow(dead_code)]
     String::from(
@@ -1841,7 +1840,6 @@ async fn handle_nextcloud_talk_webhook(
 /// Google Pub/Sub messages are typically under 10 KB.
 const GMAIL_WEBHOOK_MAX_BODY: usize = 1024 * 1024;
 #[allow(dead_code)]
-
 /// POST /webhook/gmail — incoming Gmail Pub/Sub push notification
 async fn handle_gmail_push_webhook(
     #[allow(dead_code)] State(state): State<AppState>,

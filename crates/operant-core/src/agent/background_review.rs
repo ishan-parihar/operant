@@ -551,28 +551,7 @@ pub struct BackgroundReviewSummary {
 /// - `Off`: return no actions.
 /// - `On`: generic "Memory updated" / tool messages.
 /// - `Verbose`: include compact content previews from tool-call arguments.
-///
-/// Build a compact action summary from background review messages.
-///
-/// Scans the review agent's messages for successful tool actions and
-/// surfaces a compact summary to the user. Matches hermes-agent's
-/// `summarize_background_review_actions`.
-///
-/// `notification_mode` controls display detail:
-/// - `Off`: return no actions.
-/// - `On`: generic "Memory updated" / tool messages.
-/// - `Verbose`: include compact content previews from tool-call arguments.
-#[allow(dead_code)]
-/// Build a compact action summary from background review messages.
-///
-/// Scans the review agent's messages for successful tool actions and
-/// surfaces a compact summary to the user. Matches hermes-agent's
-/// `summarize_background_review_actions`.
-///
-/// `notification_mode` controls display detail:
-/// - `Off`: return no actions.
-/// - `On`: generic "Memory updated" / tool messages.
-/// - `Verbose`: include compact content previews from tool-call arguments.
+#[expect(dead_code, reason = "surfacing hook for TUI review notifications — not yet wired (docs/DEAD_CODE_GAP_ANALYSIS.md)")]
 pub fn summarize_review_actions(
     review_messages: &[String],
     prior_messages: &[String],

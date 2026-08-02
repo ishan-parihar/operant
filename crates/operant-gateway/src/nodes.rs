@@ -33,7 +33,6 @@ use tokio::sync::{mpsc, oneshot};
 const BEARER_SUBPROTO_PREFIX: &str = "bearer.";
 
 /// The sub-protocol we support for node connections.
-
 const WS_NODE_PROTOCOL: &str = "operant.nodes.v1";
 
 /// A single capability advertised by a node.

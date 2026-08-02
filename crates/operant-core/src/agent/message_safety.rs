@@ -129,10 +129,10 @@ pub fn repair_tool_call_arguments(raw_args: &str, tool_name: &str) -> String {
     let open_curly = fixed.matches('{').count() as i32 - fixed.matches('}').count() as i32;
     let open_bracket = fixed.matches('[').count() as i32 - fixed.matches(']').count() as i32;
     if open_curly > 0 {
-        fixed.extend(std::iter::repeat('}').take(open_curly as usize));
+        fixed.extend(std::iter::repeat_n('}', open_curly as usize));
     }
     if open_bracket > 0 {
-        fixed.extend(std::iter::repeat(']').take(open_bracket as usize));
+        fixed.extend(std::iter::repeat_n(']', open_bracket as usize));
     }
 
     // 5. Remove excess closing braces/brackets (bounded to 50 iterations)
@@ -140,11 +140,14 @@ pub fn repair_tool_call_arguments(raw_args: &str, tool_name: &str) -> String {
         if serde_json::from_str::<serde_json::Value>(&fixed).is_ok() {
             break;
         }
-        if fixed.ends_with('}') && fixed.matches('}').count() > fixed.matches('{').count() {
-            fixed.pop();
-        } else if fixed.ends_with(']')
-            && fixed.matches(']').count() > fixed.matches('[').count()
-        {
+        let extra_close = if fixed.ends_with('}') {
+            fixed.matches('}').count() > fixed.matches('{').count()
+        } else if fixed.ends_with(']') {
+            fixed.matches(']').count() > fixed.matches('[').count()
+        } else {
+            false
+        };
+        if extra_close {
             fixed.pop();
         } else {
             break;

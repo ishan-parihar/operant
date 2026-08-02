@@ -103,7 +103,6 @@ struct ConnectParams {
 }
 
 /// The sub-protocol we support for the chat WebSocket.
-
 const WS_PROTOCOL: &str = "operant.v1";
 
 /// Prefix used in `Sec-WebSocket-Protocol` to carry a bearer token.
