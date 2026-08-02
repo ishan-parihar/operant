@@ -25,7 +25,10 @@ impl CommandLoggerHook {
 
     #[cfg(test)]
     pub fn entries(&self) -> Vec<String> {
-        self.log.lock().unwrap().clone()
+        self.log
+            .lock()
+            .expect("command-log mutex poisoned — programmer error")
+            .clone()
     }
 }
 
@@ -48,7 +51,10 @@ impl HookHandler for CommandLoggerHook {
             result.success,
         );
         tracing::info!(hook = "command-logger", "{}", entry);
-        self.log.lock().unwrap().push(entry);
+        self.log
+            .lock()
+            .expect("command-log mutex poisoned — programmer error")
+            .push(entry);
     }
 }
 

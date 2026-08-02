@@ -1068,7 +1068,10 @@ impl Agent {
                     }
                 }
             } else if let Some(activated_arc) = self.activated_tools.as_ref() {
-                let activated_opt = activated_arc.lock().unwrap().get_resolved(&tool_name);
+                let activated_opt = activated_arc
+                    .lock()
+                    .expect("activated-tools mutex poisoned — programmer error")
+                    .get_resolved(&tool_name);
                 if let Some(tool) = activated_opt {
                     match tool.execute(tool_args.clone()).await {
                         Ok(r) => {
@@ -1804,30 +1807,33 @@ impl Agent {
                 reasoning_content: response.reasoning_content.clone(),
             });
 
-            // Notify about each tool call
+            // Notify about each tool call (skip calls without an id — a
+            // missing id is not worth panicking the agent loop over).
             for call in &calls {
-                let call_id = call.tool_call_id.as_ref().unwrap().clone();
-                let _ = event_tx
-                    .send(TurnEvent::ToolCall {
-                        id: call_id,
-                        name: call.name.clone(),
-                        args: call.arguments.clone(),
-                    })
-                    .await;
+                if let Some(call_id) = call.tool_call_id.as_ref() {
+                    let _ = event_tx
+                        .send(TurnEvent::ToolCall {
+                            id: call_id.clone(),
+                            name: call.name.clone(),
+                            args: call.arguments.clone(),
+                        })
+                        .await;
+                }
             }
 
             let results = self.execute_tools(&calls).await;
 
-            // Notify about each tool result
+            // Notify about each tool result (skip results without an id).
             for result in &results {
-                let result_id = result.tool_call_id.as_ref().unwrap().clone();
-                let _ = event_tx
-                    .send(TurnEvent::ToolResult {
-                        id: result_id,
-                        name: result.name.clone(),
-                        output: result.output.clone(),
-                    })
-                    .await;
+                if let Some(result_id) = result.tool_call_id.as_ref() {
+                    let _ = event_tx
+                        .send(TurnEvent::ToolResult {
+                            id: result_id.clone(),
+                            name: result.name.clone(),
+                            output: result.output.clone(),
+                        })
+                        .await;
+                }
             }
 
             let formatted = self.tool_dispatcher.format_results(&results);

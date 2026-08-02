@@ -1024,7 +1024,11 @@ pub fn all_tools_with_runtime(
             let home = directories::UserDirs::new()
                 .map(|u| u.home_dir().to_path_buf())
                 .unwrap_or_else(|| std::path::PathBuf::from("."));
-            home.join(plugin_dir.strip_prefix("~/").unwrap())
+            home.join(
+                plugin_dir
+                    .strip_prefix("~/")
+                    .expect("starts_with(~/) checked above"),
+            )
         } else {
             std::path::PathBuf::from(&plugin_dir)
         };

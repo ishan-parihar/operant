@@ -222,7 +222,10 @@ impl SopEngine {
         }
 
         // Update run state
-        let run = self.active_runs.get_mut(run_id).unwrap();
+        let run = self
+            .active_runs
+            .get_mut(run_id)
+            .expect("SOP run exists (started before advance/finish)");
         run.current_step = next_step_num;
 
         let step_idx = (next_step_num - 1) as usize;
@@ -414,7 +417,10 @@ impl SopEngine {
             return Ok(self.finish_run(run_id, SopRunStatus::Completed, None));
         }
 
-        let run = self.active_runs.get_mut(run_id).unwrap();
+        let run = self
+            .active_runs
+            .get_mut(run_id)
+            .expect("SOP run exists (started before advance/finish)");
         run.current_step = next_step_num;
 
         let step_idx = (next_step_num - 1) as usize;
@@ -465,7 +471,10 @@ impl SopEngine {
             return Ok(self.finish_run(&state.run_id, SopRunStatus::Completed, None));
         }
 
-        let run = self.active_runs.get_mut(&state.run_id).unwrap();
+        let run = self
+            .active_runs
+            .get_mut(&state.run_id)
+            .expect("resumed SOP run exists in active_runs");
         run.current_step = next_step_num;
 
         let step_idx = (next_step_num - 1) as usize;
@@ -639,7 +648,10 @@ impl SopEngine {
         status: SopRunStatus,
         reason: Option<String>,
     ) -> SopRunAction {
-        let mut run = self.active_runs.remove(run_id).unwrap();
+        let mut run = self
+            .active_runs
+            .remove(run_id)
+            .expect("finishing an SOP run that was started");
         run.status = status;
         run.completed_at = Some(now_iso8601());
         let sop_name = run.sop_name.clone();

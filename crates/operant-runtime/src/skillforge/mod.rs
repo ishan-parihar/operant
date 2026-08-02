@@ -137,7 +137,11 @@ impl SkillForge {
         let mut candidates: Vec<ScoutResult> = Vec::new();
 
         for src in &self.config.sources {
-            let source: ScoutSource = src.parse().unwrap(); // Infallible
+            // ScoutSource parse is infallible (str -> enum with no format
+            // errors), so this can never fail; the expect keeps it loud.
+            let source: ScoutSource = src
+                .parse()
+                .expect("ScoutSource parse is infallible (enum conversion)");
             match source {
                 ScoutSource::GitHub => {
                     let scout = GitHubScout::new(self.config.github_token.clone());

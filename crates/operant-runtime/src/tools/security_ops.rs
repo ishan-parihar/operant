@@ -152,7 +152,10 @@ impl SecurityOpsTool {
             .ok_or_else(|| anyhow::anyhow!("Missing required 'scan_data' parameter"))?;
 
         let json_str = if scan_data.is_string() {
-            scan_data.as_str().unwrap().to_string()
+            scan_data
+                .as_str()
+                .expect("is_string() check guarantees as_str()")
+                .to_string()
         } else {
             serde_json::to_string(scan_data)?
         };

@@ -82,7 +82,10 @@ impl Tool for ModelSwitchTool {
 impl ModelSwitchTool {
     fn handle_get(&self) -> anyhow::Result<ToolResult> {
         let switch_state = get_model_switch_state();
-        let pending = switch_state.lock().unwrap().clone();
+        let pending = switch_state
+            .lock()
+            .expect("model-switch mutex poisoned — programmer error")
+            .clone();
 
         Ok(ToolResult {
             success: true,
@@ -151,7 +154,10 @@ impl ModelSwitchTool {
 
         // Set the global model switch request
         let switch_state = get_model_switch_state();
-        *switch_state.lock().unwrap() = Some((provider.to_string(), model.to_string()));
+        *switch_state
+            .lock()
+            .expect("model-switch mutex poisoned — programmer error") =
+            Some((provider.to_string(), model.to_string()));
 
         Ok(ToolResult {
             success: true,

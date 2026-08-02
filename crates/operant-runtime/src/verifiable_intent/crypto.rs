@@ -238,7 +238,9 @@ pub fn parse_sd_jwt(serialized: &str) -> Result<(&str, Vec<&str>, Option<&str>),
         ));
     }
     let issuer_jwt = parts[0];
-    let last = *parts.last().unwrap();
+    let last = *parts
+        .last()
+        .expect("parts has >= 2 entries (length-checked above)");
     let kb_jwt = if last.is_empty() { None } else { Some(last) };
 
     let disclosures = parts[1..parts.len() - 1].to_vec();
