@@ -551,7 +551,12 @@ pub struct BackgroundReviewSummary {
 /// - `Off`: return no actions.
 /// - `On`: generic "Memory updated" / tool messages.
 /// - `Verbose`: include compact content previews from tool-call arguments.
-#[expect(dead_code, reason = "surfacing hook for TUI review notifications — not yet wired (docs/DEAD_CODE_GAP_ANALYSIS.md)")]
+///
+/// NOTE: only exercised by unit tests today; the TUI surfacing hook isn't
+/// wired yet (see docs/DEAD_CODE_GAP_ANALYSIS.md). `cfg_attr(not(test), …)`
+/// keeps the lib-only build quiet without making `--all-targets` warn about
+/// an unfulfilled `#[expect]`.
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn summarize_review_actions(
     review_messages: &[String],
     prior_messages: &[String],

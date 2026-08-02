@@ -252,7 +252,6 @@ mod tests {
         apply_cache_control(&mut msgs, CacheTtl::default(), false);
 
         // System prompt should have cache_control wrapping in array format
-        let sys = &msgs[0]["system"];
         // Actually, envelope layout treats system as a regular message
         // The cache_control should be on the content part
         let content = msgs[0]["content"].as_array().expect("should be array");
