@@ -919,7 +919,9 @@ except Exception as e:
             }
         }
 
-        let engine = engine_lock.as_mut().unwrap();
+        let engine = engine_lock
+            .as_mut()
+            .expect("engine initialized before use (guarded by init check)");
 
         match engine.synthesize(&args.text, Some(voice)) {
             Ok(audio) => {

@@ -42,8 +42,9 @@ const PROTECTED_SKILL_PREFIXES: &[&str] = &[
 ];
 
 /// Characters allowed in skill names (filesystem-safe, URL-friendly).
-static VALID_NAME_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^[a-z0-9][a-z0-9._-]*$").unwrap());
+static VALID_NAME_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^[a-z0-9][a-z0-9._-]*$").expect("static regex literal is invalid — authoring bug")
+});
 
 /// Subdirectories allowed for write_file / remove_file.
 const ALLOWED_SUBDIRS: &[&str] = &["references", "templates", "scripts", "assets"];

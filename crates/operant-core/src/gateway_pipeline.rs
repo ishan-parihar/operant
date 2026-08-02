@@ -174,7 +174,10 @@ impl HookRegistry {
     /// Register a handler for a specific event. Supports wildcard matching
     /// for Command events: registering for `Command("*")` fires on all commands.
     pub async fn register(&self, event: HookEvent, handler: HookHandler) {
-        let mut handlers = self.handlers.write().unwrap();
+        let mut handlers = self
+            .handlers
+            .write()
+            .expect("handlers RwLock poisoned — programmer error");
         debug!(event = ?event, "Hook registered");
         handlers.push((event, handler));
     }
@@ -183,7 +186,10 @@ impl HookRegistry {
     /// Errors in handlers are caught and logged (never block the pipeline).
     pub async fn emit(&self, event: HookEvent, ctx: HookContext) {
         let handlers: Vec<(HookEvent, HookHandler)> = {
-            let handlers = self.handlers.read().unwrap();
+            let handlers = self
+                .handlers
+                .read()
+                .expect("handlers RwLock poisoned — programmer error");
             handlers
                 .iter()
                 .filter(|(pattern, _)| event.matches(pattern))
@@ -210,12 +216,18 @@ impl HookRegistry {
 
     /// Returns the number of registered handlers.
     pub fn len(&self) -> usize {
-        self.handlers.read().unwrap().len()
+        self.handlers
+            .read()
+            .expect("handlers RwLock poisoned — programmer error")
+            .len()
     }
 
     /// Returns true if no handlers are registered.
     pub fn is_empty(&self) -> bool {
-        self.handlers.read().unwrap().is_empty()
+        self.handlers
+            .read()
+            .expect("handlers RwLock poisoned — programmer error")
+            .is_empty()
     }
 }
 

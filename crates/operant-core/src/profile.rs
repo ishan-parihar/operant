@@ -93,7 +93,11 @@ pub fn get_default_operant_root() -> PathBuf {
         .map(|p| p.ends_with("profiles"))
         .unwrap_or(false)
     {
-        return env_path.parent().unwrap().parent().unwrap().to_path_buf();
+        return env_path
+            .parent()
+            .and_then(|p| p.parent())
+            .expect("env_path has grandparents (ends_with('profiles') checked above)")
+            .to_path_buf();
     }
 
     // Not a profile path — HERMES_HOME itself is the root
@@ -155,7 +159,8 @@ pub fn validate_profile_name(name: &str) -> Result<()> {
         return Ok(());
     }
 
-    let re = regex::Regex::new(PROFILE_ID_RE).unwrap();
+    let re = regex::Regex::new(PROFILE_ID_RE)
+        .expect("PROFILE_ID_RE is a static literal — authoring bug if invalid");
     if !re.is_match(name) {
         return Err(Error::Config(format!(
             "Invalid profile name '{}'. Must match [a-z0-9][a-z0-9_-]{{0,63}}",

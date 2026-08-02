@@ -1257,7 +1257,11 @@ impl OAuthProvider {
     pub async fn authenticate(&self) -> Result<OAuthToken> {
         // Step 1: Ensure metadata is loaded/discovered
         let metadata = if self.metadata.read().await.is_some() {
-            self.metadata.read().await.clone().unwrap()
+            self.metadata
+                .read()
+                .await
+                .clone()
+                .expect("metadata Some (guarded above)")
         } else {
             match self.discover_metadata().await {
                 Ok(meta) => {
@@ -1479,7 +1483,10 @@ impl OAuthManager {
     /// and a fresh provider is built.
     pub fn get_provider(&self, server_url: &str, config: Option<McpOAuthConfig>) -> OAuthProvider {
         let config = config.unwrap_or_default();
-        let mut entries = self.entries.lock().unwrap();
+        let mut entries = self
+            .entries
+            .lock()
+            .expect("entries mutex poisoned — programmer error");
         let url = server_url.to_string();
 
         if let Some(entry) = entries.get(&url) {
@@ -1512,7 +1519,10 @@ impl OAuthManager {
     }
 
     pub fn clear_cache(&self, server_url: &str) {
-        let mut entries = self.entries.lock().unwrap();
+        let mut entries = self
+            .entries
+            .lock()
+            .expect("entries mutex poisoned — programmer error");
         entries.remove(server_url);
         info!("MCP OAuth: cache cleared for {}", server_url);
     }
@@ -1530,7 +1540,11 @@ impl OAuthManager {
     }
 
     fn get_entry(&self, server_url: &str) -> Option<Arc<ProviderEntry>> {
-        self.entries.lock().unwrap().get(server_url).cloned()
+        self.entries
+            .lock()
+            .expect("entries mutex poisoned — programmer error")
+            .get(server_url)
+            .cloned()
     }
 
     /// Check if the tokens file on disk has been modified externally.
@@ -1542,7 +1556,10 @@ impl OAuthManager {
     pub async fn invalidate_if_disk_changed(&self, server_url: &str) -> bool {
         let url = server_url.to_string();
         let entry = {
-            let entries = self.entries.lock().unwrap();
+            let entries = self
+                .entries
+                .lock()
+                .expect("entries mutex poisoned — programmer error");
             entries.get(&url).cloned()
         };
         let entry = match entry {
@@ -1569,7 +1586,10 @@ impl OAuthManager {
     #[allow(unused_variables)]
     pub async fn handle_401(&self, server_url: &str, failed_access_token: Option<&str>) -> bool {
         let entry = {
-            let entries = self.entries.lock().unwrap();
+            let entries = self
+                .entries
+                .lock()
+                .expect("entries mutex poisoned — programmer error");
             entries.get(server_url).cloned()
         };
         let entry = match entry {

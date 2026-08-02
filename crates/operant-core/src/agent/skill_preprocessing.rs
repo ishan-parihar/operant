@@ -23,13 +23,18 @@ const DEFAULT_INLINE_SHELL_TIMEOUT: u64 = 10;
 /// Regex for template variables like `${OPERANT_SKILL_DIR}`.
 fn template_var_regex() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"\$\{(OPERANT_SKILL_DIR|OPERANT_SESSION_ID)\}").unwrap())
+    RE.get_or_init(|| {
+        Regex::new(r"\$\{(OPERANT_SKILL_DIR|OPERANT_SESSION_ID)\}")
+            .expect("static regex literal is invalid — authoring bug")
+    })
 }
 
 /// Regex for inline shell snippets like `` !`date +%Y-%m-%d` ``.
 fn inline_shell_regex() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"!`([^`\n]+)`").unwrap())
+    RE.get_or_init(|| {
+        Regex::new(r"!`([^`\n]+)`").expect("static regex literal is invalid — authoring bug")
+    })
 }
 
 /// Load the `skills` section of operant.toml (best-effort).

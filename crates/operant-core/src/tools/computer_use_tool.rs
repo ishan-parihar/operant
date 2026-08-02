@@ -152,7 +152,13 @@ impl ComputerUseTool {
             }
         });
         writer
-            .write_all(format!("{}\n", serde_json::to_string(&init).unwrap()).as_bytes())
+            .write_all(
+                format!(
+                    "{}\n",
+                    serde_json::to_string(&init).expect("json!() value is always serializable")
+                )
+                .as_bytes(),
+            )
             .await
             .map_err(|e| format!("Write error: {}", e))?;
 
@@ -164,7 +170,13 @@ impl ComputerUseTool {
 
         let notif = json!({"jsonrpc": "2.0", "method": "notifications/initialized"});
         writer
-            .write_all(format!("{}\n", serde_json::to_string(&notif).unwrap()).as_bytes())
+            .write_all(
+                format!(
+                    "{}\n",
+                    serde_json::to_string(&notif).expect("json!() value is always serializable")
+                )
+                .as_bytes(),
+            )
             .await
             .map_err(|e| format!("Write error: {}", e))?;
 
@@ -173,7 +185,14 @@ impl ComputerUseTool {
             "params": {"name": action, "arguments": tool_args}
         });
         writer
-            .write_all(format!("{}\n", serde_json::to_string(&tool_call).unwrap()).as_bytes())
+            .write_all(
+                format!(
+                    "{}\n",
+                    serde_json::to_string(&tool_call)
+                        .expect("json!() value is always serializable")
+                )
+                .as_bytes(),
+            )
             .await
             .map_err(|e| format!("Write error: {}", e))?;
 

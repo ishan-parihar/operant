@@ -13,7 +13,9 @@ use std::sync::LazyLock;
 use crate::client::{Message, Role};
 
 /// Regex to strip trailing commas before `}` or `]` in JSON.
-static TRAILING_COMMA_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r",\s*([}\]])").unwrap());
+static TRAILING_COMMA_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r",\s*([}\]])").expect("static regex literal is invalid — authoring bug")
+});
 
 // ---------------------------------------------------------------------------
 // Surrogate sanitization
@@ -261,7 +263,7 @@ pub fn close_interrupted_tool_sequence(
     if messages.is_empty() {
         return false;
     }
-    let last = messages.last().unwrap();
+    let last = messages.last().expect("messages non-empty (guarded above)");
     if last.role != Role::Tool {
         return false;
     }
@@ -318,10 +320,16 @@ pub fn drop_thinking_only_and_merge_users(messages: &[Message]) -> Vec<Message> 
     // Pass 2: Merge consecutive user messages
     let mut merged: Vec<Message> = Vec::with_capacity(cleaned.len());
     for msg in cleaned.drain(..) {
-        if msg.role == Role::User && !merged.is_empty() && merged.last().unwrap().role == Role::User
+        if msg.role == Role::User
+            && !merged.is_empty()
+            && merged
+                .last()
+                .expect("merged non-empty (guarded above)")
+                .role
+                == Role::User
         {
             // Merge into the previous user message
-            let prev = merged.last_mut().unwrap();
+            let prev = merged.last_mut().expect("merged non-empty (guarded above)");
             if prev.content.is_empty() {
                 prev.content = msg.content;
             } else if !msg.content.is_empty() {

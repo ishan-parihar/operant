@@ -18,6 +18,14 @@ pub struct KanbanDiagnostics {
 }
 
 impl KanbanDiagnostics {
+    /// Lock the SQLite connection, converting mutex poisoning into a
+    /// recoverable error instead of panicking (same pattern as database.rs).
+    fn lock_conn(&self) -> Result<std::sync::MutexGuard<'_, Connection>, Error> {
+        self.conn
+            .lock()
+            .map_err(|_| Error::Agent("diagnostics db mutex poisoned".to_string()))
+    }
+
     pub fn new(conn: Arc<Mutex<Connection>>) -> Self {
         Self { conn }
     }
@@ -33,7 +41,7 @@ impl KanbanDiagnostics {
 
     /// Tasks in 'running' status with no heartbeat for >5 minutes
     fn check_stale_tasks(&self) -> Result<Vec<DiagnosticIssue>, Error> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
         let cutoff = chrono::Utc::now().timestamp() - 300; // 5 min
         let mut stmt = conn.prepare(
             "SELECT id, title, last_heartbeat_at FROM tasks WHERE status = 'running' AND (last_heartbeat_at IS NULL OR last_heartbeat_at < ?1)"
@@ -69,7 +77,7 @@ impl KanbanDiagnostics {
 
     /// Runs where status='running' but parent task is not running
     fn check_zombie_runs(&self) -> Result<Vec<DiagnosticIssue>, Error> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
         let mut stmt = conn
             .prepare(
                 "SELECT r.id, r.task_id, t.title FROM task_runs r
@@ -107,7 +115,7 @@ impl KanbanDiagnostics {
 
     /// Links pointing to non-existent tasks
     fn check_orphan_links(&self) -> Result<Vec<DiagnosticIssue>, Error> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
         let mut stmt = conn
             .prepare(
                 "SELECT parent_id, child_id FROM task_links WHERE

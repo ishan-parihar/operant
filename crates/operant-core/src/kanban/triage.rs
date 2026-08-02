@@ -27,9 +27,17 @@ impl TriageSpecifier {
         Self { db }
     }
 
+    /// Lock the SQLite connection, converting mutex poisoning into a
+    /// recoverable error instead of panicking (same pattern as database.rs).
+    fn lock_conn(&self) -> Result<std::sync::MutexGuard<'_, Connection>, Error> {
+        self.db
+            .lock()
+            .map_err(|_| Error::Agent("triage db mutex poisoned".to_string()))
+    }
+
     /// Gather full context for a task
     pub fn build_context(&self, task_id: &str) -> Result<TriageContext, Error> {
-        let conn = self.db.lock().unwrap();
+        let conn = self.lock_conn()?;
 
         // Get task
         let task = conn

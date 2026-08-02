@@ -70,7 +70,11 @@ impl CommandProvider {
 
         let mut result = self.command_template.clone();
         for cap in re.captures_iter(&self.command_template) {
-            let name = cap.get(1).or_else(|| cap.get(2)).unwrap().as_str();
+            let name = cap
+                .get(1)
+                .or_else(|| cap.get(2))
+                .expect("placeholder regex guarantees group 1 or 2")
+                .as_str();
             let value = placeholders.get(name).cloned().unwrap_or_default();
             // Escape single quotes for shell safety
             let escaped = value.replace('\'', "'\\''");

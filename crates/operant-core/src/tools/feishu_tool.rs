@@ -40,7 +40,9 @@ fn auth_cache() -> &'static Mutex<Option<(String, Instant)>> {
 async fn get_tenant_token() -> Result<String, String> {
     // Fast path – cached token still valid.
     {
-        let guard = auth_cache().lock().unwrap();
+        let guard = auth_cache()
+            .lock()
+            .expect("auth_cache mutex poisoned — programmer error");
         if let Some((token, expiry)) = guard.as_ref() {
             if Instant::now() < *expiry {
                 return Ok(token.clone());
@@ -88,7 +90,9 @@ async fn get_tenant_token() -> Result<String, String> {
     // Token lifetime is 7200 s; we cache for 7000 s for safety.
     let ttl = Duration::from_secs(7000);
     {
-        let mut guard = auth_cache().lock().unwrap();
+        let mut guard = auth_cache()
+            .lock()
+            .expect("auth_cache mutex poisoned — programmer error");
         *guard = Some((token.clone(), Instant::now() + ttl));
     }
 

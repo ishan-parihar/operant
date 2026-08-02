@@ -19,6 +19,14 @@ pub struct NotifyManager {
 }
 
 impl NotifyManager {
+    /// Lock the SQLite connection, converting mutex poisoning into a
+    /// recoverable error instead of panicking (same pattern as database.rs).
+    fn lock_conn(&self) -> Result<std::sync::MutexGuard<'_, Connection>, Error> {
+        self.conn
+            .lock()
+            .map_err(|_| Error::Agent("notify db mutex poisoned".to_string()))
+    }
+
     pub fn new(conn: Arc<Mutex<Connection>>) -> Self {
         Self { conn }
     }
@@ -30,7 +38,7 @@ impl NotifyManager {
         chat_id: &str,
         user_id: Option<&str>,
     ) -> Result<(), Error> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
         let now = chrono::Utc::now().timestamp();
         conn.execute(
             "INSERT OR REPLACE INTO kanban_notify_subs (task_id, platform, chat_id, thread_id, user_id, created_at, last_event_id)
@@ -41,7 +49,7 @@ impl NotifyManager {
     }
 
     pub fn unsubscribe(&self, task_id: &str, platform: &str, chat_id: &str) -> Result<(), Error> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
         conn.execute(
             "DELETE FROM kanban_notify_subs WHERE task_id = ?1 AND platform = ?2 AND chat_id = ?3",
             params![task_id, platform, chat_id],
@@ -51,7 +59,7 @@ impl NotifyManager {
     }
 
     pub fn list_subscriptions(&self, task_id: &str) -> Result<Vec<NotifySubscription>, Error> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
         let mut stmt = conn.prepare(
             "SELECT task_id, platform, chat_id, thread_id, user_id, created_at, last_event_id FROM kanban_notify_subs WHERE task_id = ?1"
         ).map_err(|e| Error::Agent(format!("Failed to prepare: {}", e)))?;

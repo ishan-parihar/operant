@@ -54,7 +54,7 @@ impl KanbanTool {
                 let result = json!({
                     "tasks": tasks,
                 });
-                Ok(serde_json::to_string_pretty(&result).unwrap())
+                Ok(serde_json::to_string_pretty(&result).expect("kanban result is serializable"))
             }
             "show" => {
                 let tid = args
@@ -75,7 +75,7 @@ impl KanbanTool {
                     "runs": self.db.list_runs(&tid)?,
                     "worker_context": self.db.build_worker_context(&tid)?,
                 });
-                Ok(serde_json::to_string_pretty(&result).unwrap())
+                Ok(serde_json::to_string_pretty(&result).expect("kanban result is serializable"))
             }
             "complete" => {
                 let tid = args

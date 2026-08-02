@@ -158,7 +158,10 @@ impl OperantTool for SessionSearchTool {
         }
 
         // Search mode
-        let query_str = query.unwrap();
+        let query_str = query
+            .as_ref()
+            .expect("query is Some (empty/None handled above)")
+            .clone();
         info!("Searching sessions for: {}", query_str);
 
         self.search(&query_str, limit)

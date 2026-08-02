@@ -201,7 +201,7 @@ impl CheckpointManager {
             .current_dir(&working_path)
             .output();
 
-        if add_result.is_err() || !add_result.unwrap().status.success() {
+        if !matches!(add_result, Ok(ref output) if output.status.success()) {
             debug!("Git add failed, skipping checkpoint");
             return false;
         }
@@ -227,7 +227,7 @@ impl CheckpointManager {
             .current_dir(&working_path)
             .output();
 
-        if commit_result.is_err() || !commit_result.unwrap().status.success() {
+        if !matches!(commit_result, Ok(ref output) if output.status.success()) {
             debug!("Git commit failed, skipping checkpoint");
             return false;
         }

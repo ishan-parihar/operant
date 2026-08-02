@@ -80,8 +80,11 @@ impl ToolSchema {
             if let Some(required) = self.parameters.get("required").and_then(|r| r.as_array()) {
                 if required.len() == 1 {
                     if let Some(req_key) = required[0].as_str() {
-                        let str_val = args.as_str().unwrap().to_string();
-                        *args = json!({ req_key: str_val });
+                        // Coerce gracefully: only treat args as a string when
+                        // it actually is one (no panicking on mismatched input).
+                        if let Some(str_val) = args.as_str() {
+                            *args = json!({ req_key: str_val });
+                        }
                     }
                 }
             }
@@ -227,7 +230,7 @@ impl ToolSchema {
 
                         // 2c. Type coercion for primitive types (string -> integer, string -> array)
                         if val.is_string() {
-                            let s = val.as_str().unwrap();
+                            let s = val.as_str().expect("is_string() check guarantees as_str()");
                             // Try to coerce string to integer if expected type is integer
                             if expected_types.contains(&"integer")
                                 || expected_types.contains(&"number")

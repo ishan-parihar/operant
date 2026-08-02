@@ -132,7 +132,9 @@ fn handle_watch(path: &str) -> ToolResult {
         Err(e) => return ToolResult::error("file_state", format!("Watch failed: {}", e)),
     };
 
-    let mut states = FILE_STATES.lock().unwrap();
+    let mut states = FILE_STATES
+        .lock()
+        .expect("FILE_STATES mutex poisoned — programmer error");
     states.insert(path.to_string(), snapshot);
 
     ToolResult::success(
@@ -146,7 +148,9 @@ fn handle_watch(path: &str) -> ToolResult {
 }
 
 fn handle_diff(path: &str) -> ToolResult {
-    let states = FILE_STATES.lock().unwrap();
+    let states = FILE_STATES
+        .lock()
+        .expect("FILE_STATES mutex poisoned — programmer error");
     let stored = match states.get(path) {
         Some(s) => s.clone(),
         None => {

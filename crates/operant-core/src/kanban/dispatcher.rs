@@ -14,8 +14,16 @@ impl Dispatcher {
         Self { db: conn }
     }
 
+    /// Lock the SQLite connection, converting mutex poisoning into a
+    /// recoverable error instead of panicking (same pattern as database.rs).
+    fn lock_conn(&self) -> Result<std::sync::MutexGuard<'_, Connection>, Error> {
+        self.db
+            .lock()
+            .map_err(|_| Error::Agent("dispatcher db mutex poisoned".to_string()))
+    }
+
     pub fn pending_tasks(&self, limit: usize) -> Result<Vec<(String, String, Option<i32>)>, Error> {
-        let conn = self.db.lock().unwrap();
+        let conn = self.lock_conn()?;
         let mut stmt = conn
             .prepare(
                 "SELECT id, title, max_runtime_seconds FROM tasks
@@ -38,10 +46,10 @@ impl Dispatcher {
     }
 
     pub fn claim_task(&self, task_id: &str, worker: &str) -> Result<i64, Error> {
-        let conn = self.db.lock().unwrap();
+        let conn = self.lock_conn()?;
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap()
+            .expect("system clock before UNIX_EPOCH — invariant violation")
             .as_secs() as i64;
         conn.execute(
             "INSERT INTO task_runs (task_id, profile, status, claim_lock, started_at)
@@ -68,10 +76,10 @@ impl Dispatcher {
         outcome: &str,
         summary: Option<&str>,
     ) -> Result<(), Error> {
-        let conn = self.db.lock().unwrap();
+        let conn = self.lock_conn()?;
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap()
+            .expect("system clock before UNIX_EPOCH — invariant violation")
             .as_secs() as i64;
         conn.execute(
             "UPDATE tasks SET status = 'done', completed_at = ?1, current_run_id = NULL WHERE id = ?2",
@@ -89,10 +97,10 @@ impl Dispatcher {
     }
 
     pub fn fail_run(&self, task_id: &str, run_id: i64, error_msg: &str) -> Result<(), Error> {
-        let conn = self.db.lock().unwrap();
+        let conn = self.lock_conn()?;
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap()
+            .expect("system clock before UNIX_EPOCH — invariant violation")
             .as_secs() as i64;
         conn.execute(
             "UPDATE tasks SET status = 'todo', current_run_id = NULL, consecutive_failures = consecutive_failures + 1, last_failure_error = ?1 WHERE id = ?2",
@@ -111,10 +119,10 @@ impl Dispatcher {
     }
 
     pub fn gc(&self, older_than_days: i64) -> Result<(usize, usize, usize), Error> {
-        let conn = self.db.lock().unwrap();
+        let conn = self.lock_conn()?;
         let cutoff = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap()
+            .expect("system clock before UNIX_EPOCH — invariant violation")
             .as_secs() as i64
             - older_than_days * 86400;
         let removed_runs = conn.execute(

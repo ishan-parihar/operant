@@ -107,7 +107,7 @@ impl CronScheduler {
 
         let output = Command::new("sh")
             .arg("-c")
-            .arg(script.unwrap())
+            .arg(script.expect("script is Some (is_err() handled above)"))
             .output()
             .await;
 

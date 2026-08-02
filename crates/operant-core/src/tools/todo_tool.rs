@@ -104,7 +104,9 @@ impl OperantTool for TodoTool {
 
         // Replace the entire list for this session
         {
-            let mut store = TODO_STORE.lock().unwrap();
+            let mut store = TODO_STORE
+                .lock()
+                .expect("TODO_STORE mutex poisoned — programmer error");
             store.insert(session_id.clone(), todos);
         }
 

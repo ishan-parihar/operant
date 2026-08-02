@@ -801,7 +801,8 @@ impl McpStdioClient {
                                 "message": "sampling not supported by this client"
                             }
                         });
-                        let mut err_line = serde_json::to_string(&error_response).unwrap();
+                        let mut err_line = serde_json::to_string(&error_response)
+                            .expect("error_response is serializable");
                         err_line.push('\n');
                         let _ = io.stdin.write_all(err_line.as_bytes()).await;
                         let _ = io.stdin.flush().await;
@@ -819,7 +820,8 @@ impl McpStdioClient {
                                 "message": "elicitation not supported by this client"
                             }
                         });
-                        let mut err_line = serde_json::to_string(&error_response).unwrap();
+                        let mut err_line = serde_json::to_string(&error_response)
+                            .expect("error_response is serializable");
                         err_line.push('\n');
                         let _ = io.stdin.write_all(err_line.as_bytes()).await;
                         let _ = io.stdin.flush().await;

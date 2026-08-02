@@ -38,11 +38,15 @@ impl SpotifyClient {
         let mut h = reqwest::header::HeaderMap::new();
         h.insert(
             reqwest::header::AUTHORIZATION,
-            format!("Bearer {}", token).parse().unwrap(),
+            format!("Bearer {}", token)
+                .parse()
+                .expect("Bearer header is valid header syntax"),
         );
         h.insert(
             reqwest::header::CONTENT_TYPE,
-            "application/json".parse().unwrap(),
+            "application/json"
+                .parse()
+                .expect("application/json is valid header syntax"),
         );
         h
     }
