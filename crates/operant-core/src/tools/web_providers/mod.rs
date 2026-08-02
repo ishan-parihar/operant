@@ -1,10 +1,12 @@
 mod ddg;
 mod exa;
+mod igs;
 mod searxng;
 mod tavily;
 
 pub use ddg::DDGProvider;
 pub use exa::ExaProvider;
+pub use igs::IgsSearchProvider;
 pub use searxng::SearXNGProvider;
 pub use tavily::TavilyProvider;
 
