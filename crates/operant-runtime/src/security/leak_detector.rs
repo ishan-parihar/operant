@@ -10,6 +10,14 @@ use regex::Regex;
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
+/// Compile a regex from a static literal pattern. All patterns in this module
+/// are authored and reviewed as literals, so `Regex::new` cannot fail at
+/// runtime; the `expect` keeps an authoring-time mistake loud without 22
+/// `unwrap()` sites tripping `clippy::unwrap_used` if enabled.
+fn rx(pattern: &'static str) -> Regex {
+    Regex::new(pattern).expect("static regex literal is invalid — authoring bug")
+}
+
 /// Minimum token length considered for high-entropy detection.
 const ENTROPY_TOKEN_MIN_LEN: usize = 24;
 
@@ -80,45 +88,27 @@ impl LeakDetector {
         let regexes = API_KEY_PATTERNS.get_or_init(|| {
             vec![
                 // Stripe
+                (rx(r"sk_(live|test)_[a-zA-Z0-9]{24,}"), "Stripe secret key"),
                 (
-                    Regex::new(r"sk_(live|test)_[a-zA-Z0-9]{24,}").unwrap(),
-                    "Stripe secret key",
-                ),
-                (
-                    Regex::new(r"pk_(live|test)_[a-zA-Z0-9]{24,}").unwrap(),
+                    rx(r"pk_(live|test)_[a-zA-Z0-9]{24,}"),
                     "Stripe publishable key",
                 ),
                 // OpenAI
                 (
-                    Regex::new(r"sk-[a-zA-Z0-9]{20,}T3BlbkFJ[a-zA-Z0-9]{20,}").unwrap(),
+                    rx(r"sk-[a-zA-Z0-9]{20,}T3BlbkFJ[a-zA-Z0-9]{20,}"),
                     "OpenAI API key",
                 ),
-                (
-                    Regex::new(r"sk-[a-zA-Z0-9]{48,}").unwrap(),
-                    "OpenAI-style API key",
-                ),
+                (rx(r"sk-[a-zA-Z0-9]{48,}"), "OpenAI-style API key"),
                 // Anthropic
-                (
-                    Regex::new(r"sk-ant-[a-zA-Z0-9-_]{32,}").unwrap(),
-                    "Anthropic API key",
-                ),
+                (rx(r"sk-ant-[a-zA-Z0-9-_]{32,}"), "Anthropic API key"),
                 // Google
-                (
-                    Regex::new(r"AIza[a-zA-Z0-9_-]{35}").unwrap(),
-                    "Google API key",
-                ),
+                (rx(r"AIza[a-zA-Z0-9_-]{35}"), "Google API key"),
                 // GitHub
-                (
-                    Regex::new(r"gh[pousr]_[a-zA-Z0-9]{36,}").unwrap(),
-                    "GitHub token",
-                ),
-                (
-                    Regex::new(r"github_pat_[a-zA-Z0-9_]{22,}").unwrap(),
-                    "GitHub PAT",
-                ),
+                (rx(r"gh[pousr]_[a-zA-Z0-9]{36,}"), "GitHub token"),
+                (rx(r"github_pat_[a-zA-Z0-9_]{22,}"), "GitHub PAT"),
                 // Generic
                 (
-                    Regex::new(r#"api[_-]?key[=:]\s*['"]*[a-zA-Z0-9_-]{20,}"#).unwrap(),
+                    rx(r#"api[_-]?key[=:]\s*['"]*[a-zA-Z0-9_-]{20,}"#),
                     "Generic API key",
                 ),
             ]
@@ -144,15 +134,9 @@ impl LeakDetector {
         static AWS_PATTERNS: OnceLock<Vec<(Regex, &'static str)>> = OnceLock::new();
         let regexes = AWS_PATTERNS.get_or_init(|| {
             vec![
+                (rx(r"AKIA[A-Z0-9]{16}"), "AWS Access Key ID"),
                 (
-                    Regex::new(r"AKIA[A-Z0-9]{16}").unwrap(),
-                    "AWS Access Key ID",
-                ),
-                (
-                    Regex::new(
-                        r#"aws[_-]?secret[_-]?access[_-]?key[=:]\s*['"]*[a-zA-Z0-9/+=]{40}"#,
-                    )
-                    .unwrap(),
+                    rx(r#"aws[_-]?secret[_-]?access[_-]?key[=:]\s*['"]*[a-zA-Z0-9/+=]{40}"#),
                     "AWS Secret Access Key",
                 ),
             ]
@@ -179,15 +163,15 @@ impl LeakDetector {
         let regexes = SECRET_PATTERNS.get_or_init(|| {
             vec![
                 (
-                    Regex::new(r#"(?i)password[=:]\s*['"]*[^\s'"]{8,}"#).unwrap(),
+                    rx(r#"(?i)password[=:]\s*['"]*[^\s'"]{8,}"#),
                     "Password in config",
                 ),
                 (
-                    Regex::new(r#"(?i)secret[=:]\s*['"]*[a-zA-Z0-9_-]{16,}"#).unwrap(),
+                    rx(r#"(?i)secret[=:]\s*['"]*[a-zA-Z0-9_-]{16,}"#),
                     "Secret value",
                 ),
                 (
-                    Regex::new(r#"(?i)token[=:]\s*['"]*[a-zA-Z0-9_.-]{20,}"#).unwrap(),
+                    rx(r#"(?i)token[=:]\s*['"]*[a-zA-Z0-9_.-]{20,}"#),
                     "Token value",
                 ),
             ]
@@ -246,7 +230,7 @@ impl LeakDetector {
         static JWT_PATTERN: OnceLock<Regex> = OnceLock::new();
         let regex = JWT_PATTERN.get_or_init(|| {
             // JWT: three base64url-encoded parts separated by dots
-            Regex::new(r"eyJ[a-zA-Z0-9_-]*\.eyJ[a-zA-Z0-9_-]*\.[a-zA-Z0-9_-]*").unwrap()
+            rx(r"eyJ[a-zA-Z0-9_-]*\.eyJ[a-zA-Z0-9_-]*\.[a-zA-Z0-9_-]*")
         });
 
         if regex.is_match(content) {
@@ -266,21 +250,15 @@ impl LeakDetector {
         let regexes = DB_PATTERNS.get_or_init(|| {
             vec![
                 (
-                    Regex::new(r"postgres(ql)?://[^:]+:[^@]+@[^\s]+").unwrap(),
+                    rx(r"postgres(ql)?://[^:]+:[^@]+@[^\s]+"),
                     "PostgreSQL connection URL",
                 ),
+                (rx(r"mysql://[^:]+:[^@]+@[^\s]+"), "MySQL connection URL"),
                 (
-                    Regex::new(r"mysql://[^:]+:[^@]+@[^\s]+").unwrap(),
-                    "MySQL connection URL",
-                ),
-                (
-                    Regex::new(r"mongodb(\+srv)?://[^:]+:[^@]+@[^\s]+").unwrap(),
+                    rx(r"mongodb(\+srv)?://[^:]+:[^@]+@[^\s]+"),
                     "MongoDB connection URL",
                 ),
-                (
-                    Regex::new(r"redis://[^:]+:[^@]+@[^\s]+").unwrap(),
-                    "Redis connection URL",
-                ),
+                (rx(r"redis://[^:]+:[^@]+@[^\s]+"), "Redis connection URL"),
             ]
         });
 
@@ -314,17 +292,15 @@ impl LeakDetector {
         // that look like high-entropy tokens when `/` is included in the token
         // character set (#4604).
         static URL_PATTERN: OnceLock<Regex> = OnceLock::new();
-        let url_re = URL_PATTERN.get_or_init(|| Regex::new(r"https?://\S+").unwrap());
+        let url_re = URL_PATTERN.get_or_init(|| rx(r"https?://\S+"));
         static MEDIA_MARKER_PATTERN: OnceLock<Regex> = OnceLock::new();
-        let media_re = MEDIA_MARKER_PATTERN.get_or_init(|| {
-            Regex::new(r"\[(IMAGE|VIDEO|VOICE|AUDIO|DOCUMENT|FILE):[^\]]*\]").unwrap()
-        });
+        let media_re = MEDIA_MARKER_PATTERN
+            .get_or_init(|| rx(r"\[(IMAGE|VIDEO|VOICE|AUDIO|DOCUMENT|FILE):[^\]]*\]"));
         // Tool receipts (zc-receipt-...) are runtime-generated HMAC tokens that
         // intentionally appear in output. Strip them before entropy scanning so
         // they are not redacted as leaked credentials. See #4830.
         static RECEIPT_PATTERN: OnceLock<Regex> = OnceLock::new();
-        let receipt_re =
-            RECEIPT_PATTERN.get_or_init(|| Regex::new(r"zc-receipt-\d+-[A-Za-z0-9_-]+").unwrap());
+        let receipt_re = RECEIPT_PATTERN.get_or_init(|| rx(r"zc-receipt-\d+-[A-Za-z0-9_-]+"));
         let content_stripped = url_re.replace_all(content, "");
         let content_without_urls = media_re.replace_all(&content_stripped, "");
         let content_without_receipts = receipt_re.replace_all(&content_without_urls, "");

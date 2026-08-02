@@ -14,6 +14,12 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::sync::OnceLock;
 
+/// Compile a regex from a static literal pattern (see leak_detector.rs rx()).
+/// All patterns are authored literals, so `Regex::new` cannot fail at runtime.
+fn rx(pattern: &'static str) -> Regex {
+    Regex::new(pattern).expect("static regex literal is invalid — authoring bug")
+}
+
 /// Pattern detection result.
 #[derive(Debug, Clone)]
 pub enum GuardResult {
@@ -136,15 +142,12 @@ impl PromptGuard {
         static SYSTEM_OVERRIDE_PATTERNS: OnceLock<Vec<Regex>> = OnceLock::new();
         let regexes = SYSTEM_OVERRIDE_PATTERNS.get_or_init(|| {
             vec![
-                Regex::new(
-                    r"(?i)ignore\s+((all\s+)?(previous|above|prior)|all)\s+(instructions?|prompts?|commands?)",
-                )
-                .unwrap(),
-                Regex::new(r"(?i)disregard\s+(previous|all|above|prior)").unwrap(),
-                Regex::new(r"(?i)forget\s+(previous|all|everything|above)").unwrap(),
-                Regex::new(r"(?i)new\s+(instructions?|rules?|system\s+prompt)").unwrap(),
-                Regex::new(r"(?i)override\s+(system|instructions?|rules?)").unwrap(),
-                Regex::new(r"(?i)reset\s+(instructions?|context|system)").unwrap(),
+                rx(r"(?i)ignore\s+((all\s+)?(previous|above|prior)|all)\s+(instructions?|prompts?|commands?)"),
+                rx(r"(?i)disregard\s+(previous|all|above|prior)"),
+                rx(r"(?i)forget\s+(previous|all|everything|above)"),
+                rx(r"(?i)new\s+(instructions?|rules?|system\s+prompt)"),
+                rx(r"(?i)override\s+(system|instructions?|rules?)"),
+                rx(r"(?i)reset\s+(instructions?|context|system)"),
             ]
         });
 
@@ -162,14 +165,10 @@ impl PromptGuard {
         static ROLE_CONFUSION_PATTERNS: OnceLock<Vec<Regex>> = OnceLock::new();
         let regexes = ROLE_CONFUSION_PATTERNS.get_or_init(|| {
             vec![
-                Regex::new(
-                    r"(?i)(you\s+are\s+now|act\s+as|pretend\s+(you're|to\s+be))\s+(a|an|the)?",
-                )
-                .unwrap(),
-                Regex::new(r"(?i)(your\s+new\s+role|you\s+have\s+become|you\s+must\s+be)").unwrap(),
-                Regex::new(r"(?i)from\s+now\s+on\s+(you\s+are|act\s+as|pretend)").unwrap(),
-                Regex::new(r"(?i)(assistant|AI|system|model):\s*\[?(system|override|new\s+role)")
-                    .unwrap(),
+                rx(r"(?i)(you\s+are\s+now|act\s+as|pretend\s+(you're|to\s+be))\s+(a|an|the)?"),
+                rx(r"(?i)(your\s+new\s+role|you\s+have\s+become|you\s+must\s+be)"),
+                rx(r"(?i)from\s+now\s+on\s+(you\s+are|act\s+as|pretend)"),
+                rx(r"(?i)(assistant|AI|system|model):\s*\[?(system|override|new\s+role)"),
             ]
         });
 
@@ -207,10 +206,10 @@ impl PromptGuard {
         static SECRET_PATTERNS: OnceLock<Vec<Regex>> = OnceLock::new();
         let regexes = SECRET_PATTERNS.get_or_init(|| {
             vec![
-                Regex::new(r"(?i)(list|show|print|display|reveal|tell\s+me)\s+(all\s+)?(secrets?|credentials?|passwords?|tokens?|keys?)").unwrap(),
-                Regex::new(r"(?i)(what|show)\s+(are|is|me)\s+(all\s+)?(your|the)\s+(api\s+)?(keys?|secrets?|credentials?)").unwrap(),
-                Regex::new(r"(?i)contents?\s+of\s+(vault|secrets?|credentials?)").unwrap(),
-                Regex::new(r"(?i)(dump|export)\s+(vault|secrets?|credentials?)").unwrap(),
+                rx(r"(?i)(list|show|print|display|reveal|tell\s+me)\s+(all\s+)?(secrets?|credentials?|passwords?|tokens?|keys?)"),
+                rx(r"(?i)(what|show)\s+(are|is|me)\s+(all\s+)?(your|the)\s+(api\s+)?(keys?|secrets?|credentials?)"),
+                rx(r"(?i)contents?\s+of\s+(vault|secrets?|credentials?)"),
+                rx(r"(?i)(dump|export)\s+(vault|secrets?|credentials?)"),
             ]
         });
 
@@ -266,16 +265,16 @@ impl PromptGuard {
         let regexes = JAILBREAK_PATTERNS.get_or_init(|| {
             vec![
                 // DAN (Do Anything Now) and variants
-                Regex::new(r"(?i)\bDAN\b.*mode").unwrap(),
-                Regex::new(r"(?i)do\s+anything\s+now").unwrap(),
+                rx(r"(?i)\bDAN\b.*mode"),
+                rx(r"(?i)do\s+anything\s+now"),
                 // Developer/debug mode
-                Regex::new(r"(?i)enter\s+(developer|debug|admin)\s+mode").unwrap(),
-                Regex::new(r"(?i)enable\s+(developer|debug|admin)\s+mode").unwrap(),
+                rx(r"(?i)enter\s+(developer|debug|admin)\s+mode"),
+                rx(r"(?i)enable\s+(developer|debug|admin)\s+mode"),
                 // Hypothetical/fictional framing
-                Regex::new(r"(?i)in\s+this\s+hypothetical").unwrap(),
-                Regex::new(r"(?i)imagine\s+you\s+(have\s+no|don't\s+have)\s+(restrictions?|rules?|limits?)").unwrap(),
+                rx(r"(?i)in\s+this\s+hypothetical"),
+                rx(r"(?i)imagine\s+you\s+(have\s+no|don't\s+have)\s+(restrictions?|rules?|limits?)"),
                 // Base64/encoding tricks
-                Regex::new(r"(?i)decode\s+(this|the\s+following)\s+(base64|hex|rot13)").unwrap(),
+                rx(r"(?i)decode\s+(this|the\s+following)\s+(base64|hex|rot13)"),
             ]
         });
 
