@@ -766,9 +766,9 @@ impl MemoryManager {
 // (iter-148: uuid_simple deleted — use uuid::Uuid::new_v4() instead,
 // already in deps. Was a hand-rolled time-based pseudo-UUID.)
 
-/// Returns the active memory provider name from config (`"tdg"`, `"builtin"`,
-/// or `"disabled"` when memory is turned off). Other provider names that were
-/// removed in iter-30 will be silently downgraded to `"builtin"` by
+/// Returns the active memory provider name from config (`"agentmemory"`,
+/// `"builtin"`, or `"disabled"` when memory is turned off). Other provider
+/// names that were removed will be silently downgraded to `"builtin"` by
 /// `build_memory_provider`.
 pub fn resolve_memory_provider() -> String {
     use crate::config::runtime_config;

@@ -154,7 +154,6 @@ browser-native = ["operant-tools/browser-native"]
 plugins-wasm = ["dep:operant-plugins"]
 memory-postgres = ["operant-memory/memory-postgres"]
 rag-pdf = ["operant-tools/rag-pdf"]
-tdg = ["operant-core/tdg"]
 anthropic = ["operant-core/anthropic"]  # cfg-gate for AnthropicModelClient import in main.rs
 
 # CI meta-feature

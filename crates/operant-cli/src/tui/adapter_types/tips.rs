@@ -11,7 +11,7 @@ pub fn select_tip(seed: u64) -> Option<String> {
         "Type /steer while the agent is working to redirect it in real time.",
         "Press Ctrl+A to open the model picker without typing /model.",
         "Use /skills to browse installed skills, or install one with: operant skills install <url>",
-        "The agent remembers across sessions via TDG graph memory — use /journey to see what it knows.",
+        "The agent remembers across sessions via agentmemory — use /journey to see what it knows.",
         "Press Ctrl+T to see active subagent tasks.",
         "Use /context to check how much of your context window is used.",
         "Type ! before a message to run it as a shell command (bash prefix mode).",
