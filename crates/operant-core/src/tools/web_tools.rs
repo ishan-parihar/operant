@@ -10,7 +10,8 @@ use serde_json::Value;
 use crate::config::runtime_config;
 use crate::schema::ToolSchema;
 use crate::tools::web_providers::{
-    DDGProvider, ExaProvider, SearXNGProvider, TavilyProvider, WebSearchProvider,
+    DDGProvider, ExaProvider, IgsSearchProvider, SearXNGProvider, TavilyProvider,
+    WebSearchProvider, WebSearchResult,
 };
 use crate::tools::{OperantTool, ToolContext, ToolResult};
 
@@ -50,37 +51,67 @@ impl OperantTool for WebSearchTool {
             .unwrap_or(settings.default_results)
             .min(settings.max_results);
 
-        let provider: Box<dyn WebSearchProvider> = match settings.preferred_provider.as_str() {
-            "tavily" => {
-                let key = settings.tavily_api_key.clone().unwrap_or_default();
-                Box::new(TavilyProvider::new(key))
+        // The IGS engine is preferred when the binary is installed: it
+        // aggregates Tavily/Firecrawl + DuckDuckGo with JS rendering. When
+        // `igs` is missing (or returns nothing — its upstream needs a key),
+        // we fall back to the configured provider / DuckDuckGo.
+        let igs_available = runtime_config().tools.igs_enabled
+            && crate::tools::igs::find_igs_binary().is_some();
+        let want_igs = settings.preferred_provider == "igs" || igs_available;
+
+        let provider: Box<dyn WebSearchProvider> = if want_igs && igs_available {
+            Box::new(IgsSearchProvider)
+        } else {
+            match settings.preferred_provider.as_str() {
+                "tavily" => {
+                    let key = settings.tavily_api_key.clone().unwrap_or_default();
+                    Box::new(TavilyProvider::new(key))
+                }
+                "exa" => {
+                    let key = settings.exa_api_key.clone().unwrap_or_default();
+                    Box::new(ExaProvider::new(key))
+                }
+                "searxng" => {
+                    let base = settings.searxng_base_url.clone().unwrap_or_default();
+                    Box::new(SearXNGProvider::new(base))
+                }
+                _ => Box::new(DDGProvider::new(
+                    settings.search_url.clone(),
+                    settings.user_agent.clone(),
+                )),
             }
-            "exa" => {
-                let key = settings.exa_api_key.clone().unwrap_or_default();
-                Box::new(ExaProvider::new(key))
-            }
-            "searxng" => {
-                let base = settings.searxng_base_url.clone().unwrap_or_default();
-                Box::new(SearXNGProvider::new(base))
-            }
-            _ => Box::new(DDGProvider::new(
-                settings.search_url.clone(),
-                settings.user_agent.clone(),
-            )),
         };
 
-        match provider.search(&args.query, num_results).await {
-            Ok(results) => ToolResult::success(
-                "web_search",
-                serde_json::json!({
-                    "query": args.query,
-                    "num_results": results.len(),
-                    "results": results,
-                    "provider": provider.name(),
-                }),
-            ),
-            Err(e) => ToolResult::error("web_search", format!("Search failed: {e}")),
-        }
+        let mut used_provider = provider.name().to_string();
+        let results = match provider.search(&args.query, num_results).await {
+            Ok(results) if !results.is_empty() => results,
+            // igs returned zero results (upstream key missing) — fall back
+            // to DuckDuckGo so search still works out of the box.
+            _ if used_provider == "igs" => {
+                tracing::warn!("igs search returned no results — falling back to DuckDuckGo");
+                let ddg = DDGProvider::new(settings.search_url.clone(), settings.user_agent.clone());
+                match ddg.search(&args.query, num_results).await {
+                    Ok(results) => {
+                        used_provider = ddg.name().to_string();
+                        results
+                    }
+                    Err(e) => return ToolResult::error("web_search", format!("Search failed: {e}")),
+                }
+            }
+            Ok(results) => results,
+            Err(e) => return ToolResult::error("web_search", format!("Search failed: {e}")),
+        };
+
+        let serialized: Vec<WebSearchResult> = results;
+        ToolResult::success(
+            "web_search",
+            serde_json::json!({
+                "query": args.query,
+                "num_results": serialized.len(),
+                "results": serialized,
+                "provider": used_provider,
+            }),
+        )
     }
 }
 

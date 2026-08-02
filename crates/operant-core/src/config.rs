@@ -713,6 +713,8 @@ pub struct WebToolSettings {
     pub user_agent: String,
     pub default_results: usize,
     pub max_results: usize,
+    /// Preferred web search provider: igs (default — requires the `igs`
+    /// binary, falls back to duckduckgo) | tavily | exa | searxng | duckduckgo
     pub preferred_provider: String,
     pub tavily_api_key: Option<String>,
     pub exa_api_key: Option<String>,
@@ -728,7 +730,7 @@ impl Default for WebToolSettings {
             user_agent: "Mozilla/5.0 (compatible; OperantAgent/0.1)".to_string(),
             default_results: 10,
             max_results: 20,
-            preferred_provider: "duckduckgo".to_string(),
+            preferred_provider: "igs".to_string(),
             tavily_api_key: None,
             exa_api_key: None,
             searxng_base_url: None,

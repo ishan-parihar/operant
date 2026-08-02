@@ -137,6 +137,8 @@ fetch_timeout_secs = 30
 user_agent = "Mozilla/5.0 (compatible; HermesAgent/0.1)"
 default_results = 10
 max_results = 20
+# preferred_provider: igs (default — uses `igs` binary, falls back to duckduckgo) | tavily | exa | searxng | duckduckgo
+preferred_provider = "igs"
 
 [tools.http]
 timeout_secs = 30

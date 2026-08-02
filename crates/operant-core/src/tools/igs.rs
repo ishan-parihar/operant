@@ -147,22 +147,70 @@ pub async fn scrape_url(url: &str) -> Result<String> {
     .await
 }
 
-/// Search the web via `igs web search`.
-pub async fn web_search_igs(query: &str, limit: usize) -> Result<String> {
+/// Parse an `igs web search --format json` response into structured results.
+/// Defensive against shape drift: accepts `results` / `memories` / `data`
+/// arrays, and individual items with `title`/`url` + `content`/`snippet`/`text`.
+pub fn parse_search_results(value: &Value, limit: usize) -> Vec<crate::tools::web_providers::WebSearchResult> {
+    use crate::tools::web_providers::WebSearchResult;
+
+    let items = value
+        .get("results")
+        .or_else(|| value.get("memories"))
+        .or_else(|| value.get("data"))
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+
+    let mut out = Vec::with_capacity(items.len().min(limit));
+    for item in items.iter().take(limit) {
+        let title = item
+            .get("title")
+            .or_else(|| item.get("name"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let url = item
+            .get("url")
+            .or_else(|| item.get("link"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let snippet = item
+            .get("content")
+            .or_else(|| item.get("snippet"))
+            .or_else(|| item.get("text"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        if !title.trim().is_empty() || !url.trim().is_empty() {
+            out.push(WebSearchResult { title, url, snippet });
+        }
+    }
+    out
+}
+
+/// Search the web via `igs web search` (structured results).
+///
+/// Note: `igs web search` routes through Tavily/Firecrawl and needs the
+/// corresponding upstream key; with no key it returns zero results. Callers
+/// (e.g. `WebSearchTool`) should fall back to DuckDuckGo when this returns
+/// an empty vec or an error.
+pub async fn web_search_igs(query: &str, limit: usize) -> Result<Vec<crate::tools::web_providers::WebSearchResult>> {
     let cli = IgsCli::new()
         .ok_or_else(|| Error::Agent(IGS_INSTALL_HINT.to_string()))?;
-    cli.run_extract(
-        &[
+    let raw = cli
+        .run_json(&[
             "web",
             "search",
             "--query",
             query,
-            "--limit",
+            "--max-results",
             &limit.to_string(),
-        ],
-        &["results"],
-    )
-    .await
+        ])
+        .await?;
+    let value: Value = serde_json::from_str(&raw)
+        .map_err(|e| Error::Agent(format!("igs web search returned non-JSON output: {e}")))?;
+    Ok(parse_search_results(&value, limit))
 }
 
 /// Run a `igs browser` subcommand (goto, markdown, click, fill, scroll, ...).
@@ -350,6 +398,32 @@ mod tests {
     fn first_text_field_none_on_numbers() {
         let value = serde_json::json!({ "x": [1, 2, 3] });
         assert_eq!(first_text_field(&value), None);
+    }
+
+    #[test]
+    fn parse_search_results_handles_igs_shape() {
+        let value = serde_json::json!({
+            "results": [
+                {"title": "Tokio docs", "url": "https://tokio.rs", "content": "async runtime"},
+                {"name": "Only title", "url": "https://example.org"},
+                {"title": "", "url": "", "content": "skipped (no id)"}
+            ],
+            "count": 3
+        });
+        let results = parse_search_results(&value, 10);
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].title, "Tokio docs");
+        assert_eq!(results[0].url, "https://tokio.rs");
+        assert_eq!(results[0].snippet, "async runtime");
+        assert_eq!(results[1].title, "Only title");
+    }
+
+    #[test]
+    fn parse_search_results_limits_and_handles_empty() {
+        let value = serde_json::json!({ "results": [{"title": "a", "url": "u"}, {"title": "b", "url": "u"}] });
+        assert_eq!(parse_search_results(&value, 1).len(), 1);
+        assert!(parse_search_results(&serde_json::json!({ "results": [] }), 5).is_empty());
+        assert!(parse_search_results(&serde_json::json!({ "data": [{"title": "x", "url": "y"}] }), 5).len() == 1);
     }
 
     #[test]
