@@ -1421,10 +1421,326 @@ pub async fn handle_claude_code_hook(
     Json(serde_json::json!({ "ok": true }))
 }
 
+/// Build the main API router with all routes.
+pub fn router(
+    config: operant_config::schema::Config,
+    pairing: std::sync::Arc<operant_config::pairing::PairingGuard>,
+    shutdown_rx: tokio::sync::watch::Receiver<bool>,
+    event_tx: tokio::sync::broadcast::Sender<serde_json::Value>,
+    external_event_tx: Option<tokio::sync::broadcast::Sender<serde_json::Value>>,
+    reload_tx: Option<tokio::sync::watch::Sender<bool>>,
+    canvas_store: Option<crate::tools::CanvasStore>,
+) -> axum::Router<super::AppState> {
+    
+    use axum::Router;
+    
+    
+    
+    
+
+    // Build the AppState from the config
+    let state = super::AppState::new(
+        config.clone(),
+        pairing,
+        shutdown_rx,
+        event_tx,
+        external_event_tx,
+        reload_tx,
+        canvas_store,
+    );
+
+    
+
+    Router::new()
+        .nest("/api", build_api_routes())
+        .with_state(state)
+}
+
+fn build_api_routes() -> axum::Router<super::AppState> {
+    use axum::{
+        Router,
+        routing::{delete, get, patch, post},
+    };
+
+    Router::new()
+        // Health
+        .route("/health", get(handle_api_health))
+        // Status
+        .route("/status", get(handle_api_status))
+        // Tools
+        .route("/tools", get(handle_api_tools))
+        // Cron
+        .route("/cron", get(handle_api_cron_list))
+        .route("/cron", post(handle_api_cron_add))
+        .route("/cron/:id", get(handle_api_cron_get))
+        .route("/cron/:id", patch(handle_api_cron_patch))
+        .route("/cron/:id", delete(handle_api_cron_delete))
+        .route("/cron/:id/run", post(handle_api_cron_run))
+        .route("/cron/:id/runs", get(handle_api_cron_runs))
+        .route("/cron/settings", get(handle_api_cron_settings_get))
+        .route("/cron/settings", patch(handle_api_cron_settings_patch))
+        // Integrations
+        .route("/integrations", get(handle_api_integrations))
+        .route(
+            "/integrations/settings",
+            get(handle_api_integrations_settings),
+        )
+        .route(
+            "/integrations/settings",
+            patch(handle_api_integrations_settings),
+        )
+        // Doctor
+        .route("/doctor", get(handle_api_doctor))
+        // Memory
+        .route("/memory", get(handle_api_memory_list))
+        .route("/memory", post(handle_api_memory_store))
+        .route("/memory/:key", delete(handle_api_memory_delete))
+        // Cost
+        .route("/cost", get(handle_api_cost))
+        // CLI tools
+        .route("/cli/tools", get(handle_api_cli_tools))
+        // Channels
+        .route("/channels", get(handle_api_channels))
+        // Webhooks
+        .route("/webhooks/github", post(handle_api_github_webhook))
+        .route("/webhooks/gmail", post(handle_api_gmail_webhook))
+        .route("/webhooks/gmail/push", post(handle_api_gmail_push))
+        .route("/webhooks/linq", post(handle_api_linq_webhook))
+        .route(
+            "/webhooks/nextcloud-talk",
+            post(handle_api_nextcloud_talk_webhook),
+        )
+        .route("/webhooks/wati", post(handle_api_wati_webhook))
+        // Pairing
+        .route("/pair", post(handle_api_pair))
+        .route("/pair", get(handle_api_pair_status))
+        .route("/pair/code", post(handle_api_pair_generate_code))
+        // Hardware
+        .route("/hardware", get(handle_api_hardware))
+        // OpenAPI
+        .route("/openapi.json", get(handle_api_openapi))
+        // Prometheus metrics
+        .route("/metrics", get(handle_metrics))
+}
+
+pub fn cron_router(config: operant_config::schema::Config) -> axum::Router {
+    use crate::{
+        GatewayRateLimiter, IdempotencyStore, auth_rate_limit::AuthRateLimiter,
+        nodes::NodeRegistry, session_queue::SessionActorQueue, sse::EventBuffer,
+    };
+    use axum::{Router, routing::post};
+    use operant_runtime::observability::NoopObserver;
+    use parking_lot::Mutex as ParkingMutex;
+    use std::{
+        collections::HashMap,
+        sync::Arc,
+        time::Duration,
+    };
+    use tokio::sync::broadcast;
+
+    // Build minimal state using mock provider/memory
+    let pairing = std::sync::Arc::new(operant_config::pairing::PairingGuard::new(
+        config.gateway.require_pairing,
+        &config.gateway.paired_tokens,
+    ));
+
+    // Define local mock types
+    struct MockProvider;
+    #[async_trait::async_trait]
+    impl operant_providers::Provider for MockProvider {
+        async fn chat_with_system(
+            &self,
+            _system_prompt: Option<&str>,
+            _message: &str,
+            _model: &str,
+            _temperature: Option<f64>,
+        ) -> anyhow::Result<String> {
+            Ok("ok".to_string())
+        }
+    }
+
+    struct MockMemory;
+    #[async_trait::async_trait]
+    impl operant_memory::Memory for MockMemory {
+        fn name(&self) -> &str {
+            "mock"
+        }
+        async fn store(
+            &self,
+            _key: &str,
+            _content: &str,
+            _category: operant_memory::MemoryCategory,
+            _session_id: Option<&str>,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+        async fn recall(
+            &self,
+            _query: &str,
+            _limit: usize,
+            _session_id: Option<&str>,
+            _since: Option<&str>,
+            _until: Option<&str>,
+        ) -> anyhow::Result<Vec<operant_memory::MemoryEntry>> {
+            Ok(Vec::new())
+        }
+        async fn get(&self, _key: &str) -> anyhow::Result<Option<operant_memory::MemoryEntry>> {
+            Ok(None)
+        }
+        async fn list(
+            &self,
+            _category: Option<&operant_memory::MemoryCategory>,
+            _session_id: Option<&str>,
+        ) -> anyhow::Result<Vec<operant_memory::MemoryEntry>> {
+            Ok(Vec::new())
+        }
+        async fn forget(&self, _key: &str) -> anyhow::Result<bool> {
+            Ok(false)
+        }
+        async fn count(&self) -> anyhow::Result<usize> {
+            Ok(0)
+        }
+        async fn health_check(&self) -> bool {
+            true
+        }
+    }
+
+    let state = AppState {
+        config: Arc::new(ParkingMutex::new(config)),
+        provider: Arc::new(MockProvider),
+        model: String::new(),
+        temperature: 0.0,
+        mem: Arc::new(MockMemory),
+        auto_save: false,
+        webhook_secret_hash: None,
+        pairing,
+        trust_forwarded_headers: false,
+        rate_limiter: Arc::new(GatewayRateLimiter::new(100, 100, 100)),
+        auth_limiter: Arc::new(AuthRateLimiter::new()),
+        idempotency_store: Arc::new(IdempotencyStore::new(Duration::from_secs(300), 1000)),
+        whatsapp: None,
+        whatsapp_app_secret: None,
+        linq: None,
+        linq_signing_secret: None,
+        nextcloud_talk: None,
+        nextcloud_talk_webhook_secret: None,
+        wati: None,
+        gmail_push: None,
+        observer: Arc::new(NoopObserver),
+        tools_registry: Arc::new(Vec::new()),
+        cost_tracker: None,
+        event_tx: broadcast::channel(16).0,
+        event_buffer: Arc::new(EventBuffer::new(16)),
+        shutdown_tx: tokio::sync::watch::channel(false).0,
+        node_registry: Arc::new(NodeRegistry::new(16)),
+        session_backend: None,
+        session_queue: Arc::new(SessionActorQueue::new(8, 30, 600)),
+        device_registry: None,
+        pending_pairings: None,
+        path_prefix: String::new(),
+        web_dist_dir: None,
+        canvas_store: operant_runtime::tools::CanvasStore::new(),
+        cancel_tokens: Arc::new(std::sync::Mutex::new(HashMap::new())),
+        reload_tx: None,
+        #[cfg(feature = "webauthn")]
+        webauthn: None,
+    };
+
+    Router::new()
+        .route("/api/cron", post(handle_api_cron_add))
+        .route("/api/cron/:id/run", post(handle_api_cron_run))
+        .with_state(state)
+}
+
+// Stubs for missing handlers - to be implemented
+async fn handle_api_github_webhook() -> impl axum::response::IntoResponse {
+    (
+        axum::http::StatusCode::NOT_IMPLEMENTED,
+        "GitHub webhook not implemented",
+    )
+}
+
+async fn handle_api_gmail_webhook() -> impl axum::response::IntoResponse {
+    (
+        axum::http::StatusCode::NOT_IMPLEMENTED,
+        "Gmail webhook not implemented",
+    )
+}
+
+async fn handle_api_gmail_push() -> impl axum::response::IntoResponse {
+    (
+        axum::http::StatusCode::NOT_IMPLEMENTED,
+        "Gmail push not implemented",
+    )
+}
+
+async fn handle_api_linq_webhook() -> impl axum::response::IntoResponse {
+    (
+        axum::http::StatusCode::NOT_IMPLEMENTED,
+        "Linq webhook not implemented",
+    )
+}
+
+async fn handle_api_nextcloud_talk_webhook() -> impl axum::response::IntoResponse {
+    (
+        axum::http::StatusCode::NOT_IMPLEMENTED,
+        "Nextcloud Talk webhook not implemented",
+    )
+}
+
+async fn handle_api_wati_webhook() -> impl axum::response::IntoResponse {
+    (
+        axum::http::StatusCode::NOT_IMPLEMENTED,
+        "Wati webhook not implemented",
+    )
+}
+
+async fn handle_api_pair() -> impl axum::response::IntoResponse {
+    (
+        axum::http::StatusCode::NOT_IMPLEMENTED,
+        "Pair endpoint not implemented",
+    )
+}
+
+async fn handle_api_pair_status() -> impl axum::response::IntoResponse {
+    (
+        axum::http::StatusCode::NOT_IMPLEMENTED,
+        "Pair status not implemented",
+    )
+}
+
+async fn handle_api_pair_generate_code() -> impl axum::response::IntoResponse {
+    (
+        axum::http::StatusCode::NOT_IMPLEMENTED,
+        "Generate pair code not implemented",
+    )
+}
+
+async fn handle_api_hardware() -> impl axum::response::IntoResponse {
+    (
+        axum::http::StatusCode::NOT_IMPLEMENTED,
+        "Hardware info not implemented",
+    )
+}
+
+async fn handle_api_openapi() -> impl axum::response::IntoResponse {
+    (
+        axum::http::StatusCode::NOT_IMPLEMENTED,
+        "OpenAPI spec not implemented",
+    )
+}
+
+async fn handle_metrics() -> impl axum::response::IntoResponse {
+    (
+        axum::http::StatusCode::NOT_IMPLEMENTED,
+        "Metrics not implemented",
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{AppState, GatewayRateLimiter, IdempotencyStore, nodes};
+    use crate::AppState;
     use async_trait::async_trait;
     use axum::response::IntoResponse;
     use http_body_util::BodyExt;
@@ -1433,7 +1749,7 @@ mod tests {
     use operant_memory::{Memory, MemoryCategory, MemoryEntry};
     use operant_providers::Provider;
     use operant_runtime::security::pairing::PairingGuard;
-    use parking_lot::Mutex;
+    
     use std::sync::Arc;
     use std::time::Duration;
 
@@ -1515,7 +1831,7 @@ mod tests {
         use parking_lot::Mutex as ParkingMutex;
         use std::{
             collections::HashMap,
-            sync::{Arc, Mutex},
+            sync::Arc,
             time::Duration,
         };
         use tokio::sync::broadcast;
@@ -2328,320 +2644,4 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
-}
-
-/// Build the main API router with all routes.
-pub fn router(
-    config: operant_config::schema::Config,
-    pairing: std::sync::Arc<operant_config::pairing::PairingGuard>,
-    shutdown_rx: tokio::sync::watch::Receiver<bool>,
-    event_tx: tokio::sync::broadcast::Sender<serde_json::Value>,
-    external_event_tx: Option<tokio::sync::broadcast::Sender<serde_json::Value>>,
-    reload_tx: Option<tokio::sync::watch::Sender<bool>>,
-    canvas_store: Option<crate::tools::CanvasStore>,
-) -> axum::Router<super::AppState> {
-    
-    use axum::Router;
-    
-    
-    
-    
-
-    // Build the AppState from the config
-    let state = super::AppState::new(
-        config.clone(),
-        pairing,
-        shutdown_rx,
-        event_tx,
-        external_event_tx,
-        reload_tx,
-        canvas_store,
-    );
-
-    
-
-    Router::new()
-        .nest("/api", build_api_routes())
-        .with_state(state)
-}
-
-fn build_api_routes() -> axum::Router<super::AppState> {
-    use axum::{
-        Router,
-        routing::{delete, get, patch, post},
-    };
-
-    Router::new()
-        // Health
-        .route("/health", get(handle_api_health))
-        // Status
-        .route("/status", get(handle_api_status))
-        // Tools
-        .route("/tools", get(handle_api_tools))
-        // Cron
-        .route("/cron", get(handle_api_cron_list))
-        .route("/cron", post(handle_api_cron_add))
-        .route("/cron/:id", get(handle_api_cron_get))
-        .route("/cron/:id", patch(handle_api_cron_patch))
-        .route("/cron/:id", delete(handle_api_cron_delete))
-        .route("/cron/:id/run", post(handle_api_cron_run))
-        .route("/cron/:id/runs", get(handle_api_cron_runs))
-        .route("/cron/settings", get(handle_api_cron_settings_get))
-        .route("/cron/settings", patch(handle_api_cron_settings_patch))
-        // Integrations
-        .route("/integrations", get(handle_api_integrations))
-        .route(
-            "/integrations/settings",
-            get(handle_api_integrations_settings),
-        )
-        .route(
-            "/integrations/settings",
-            patch(handle_api_integrations_settings),
-        )
-        // Doctor
-        .route("/doctor", get(handle_api_doctor))
-        // Memory
-        .route("/memory", get(handle_api_memory_list))
-        .route("/memory", post(handle_api_memory_store))
-        .route("/memory/:key", delete(handle_api_memory_delete))
-        // Cost
-        .route("/cost", get(handle_api_cost))
-        // CLI tools
-        .route("/cli/tools", get(handle_api_cli_tools))
-        // Channels
-        .route("/channels", get(handle_api_channels))
-        // Webhooks
-        .route("/webhooks/github", post(handle_api_github_webhook))
-        .route("/webhooks/gmail", post(handle_api_gmail_webhook))
-        .route("/webhooks/gmail/push", post(handle_api_gmail_push))
-        .route("/webhooks/linq", post(handle_api_linq_webhook))
-        .route(
-            "/webhooks/nextcloud-talk",
-            post(handle_api_nextcloud_talk_webhook),
-        )
-        .route("/webhooks/wati", post(handle_api_wati_webhook))
-        // Pairing
-        .route("/pair", post(handle_api_pair))
-        .route("/pair", get(handle_api_pair_status))
-        .route("/pair/code", post(handle_api_pair_generate_code))
-        // Hardware
-        .route("/hardware", get(handle_api_hardware))
-        // OpenAPI
-        .route("/openapi.json", get(handle_api_openapi))
-        // Prometheus metrics
-        .route("/metrics", get(handle_metrics))
-}
-
-pub fn cron_router(config: operant_config::schema::Config) -> axum::Router {
-    use crate::{
-        GatewayRateLimiter, IdempotencyStore, auth_rate_limit::AuthRateLimiter,
-        nodes::NodeRegistry, session_queue::SessionActorQueue, sse::EventBuffer,
-    };
-    use axum::{Router, routing::post};
-    use operant_runtime::observability::NoopObserver;
-    use parking_lot::Mutex as ParkingMutex;
-    use std::{
-        collections::HashMap,
-        sync::Arc,
-        time::Duration,
-    };
-    use tokio::sync::broadcast;
-
-    // Build minimal state using mock provider/memory
-    let pairing = std::sync::Arc::new(operant_config::pairing::PairingGuard::new(
-        config.gateway.require_pairing,
-        &config.gateway.paired_tokens,
-    ));
-
-    // Define local mock types
-    struct MockProvider;
-    #[async_trait::async_trait]
-    impl operant_providers::Provider for MockProvider {
-        async fn chat_with_system(
-            &self,
-            _system_prompt: Option<&str>,
-            _message: &str,
-            _model: &str,
-            _temperature: Option<f64>,
-        ) -> anyhow::Result<String> {
-            Ok("ok".to_string())
-        }
-    }
-
-    struct MockMemory;
-    #[async_trait::async_trait]
-    impl operant_memory::Memory for MockMemory {
-        fn name(&self) -> &str {
-            "mock"
-        }
-        async fn store(
-            &self,
-            _key: &str,
-            _content: &str,
-            _category: operant_memory::MemoryCategory,
-            _session_id: Option<&str>,
-        ) -> anyhow::Result<()> {
-            Ok(())
-        }
-        async fn recall(
-            &self,
-            _query: &str,
-            _limit: usize,
-            _session_id: Option<&str>,
-            _since: Option<&str>,
-            _until: Option<&str>,
-        ) -> anyhow::Result<Vec<operant_memory::MemoryEntry>> {
-            Ok(Vec::new())
-        }
-        async fn get(&self, _key: &str) -> anyhow::Result<Option<operant_memory::MemoryEntry>> {
-            Ok(None)
-        }
-        async fn list(
-            &self,
-            _category: Option<&operant_memory::MemoryCategory>,
-            _session_id: Option<&str>,
-        ) -> anyhow::Result<Vec<operant_memory::MemoryEntry>> {
-            Ok(Vec::new())
-        }
-        async fn forget(&self, _key: &str) -> anyhow::Result<bool> {
-            Ok(false)
-        }
-        async fn count(&self) -> anyhow::Result<usize> {
-            Ok(0)
-        }
-        async fn health_check(&self) -> bool {
-            true
-        }
-    }
-
-    let state = AppState {
-        config: Arc::new(ParkingMutex::new(config)),
-        provider: Arc::new(MockProvider),
-        model: String::new(),
-        temperature: 0.0,
-        mem: Arc::new(MockMemory),
-        auto_save: false,
-        webhook_secret_hash: None,
-        pairing,
-        trust_forwarded_headers: false,
-        rate_limiter: Arc::new(GatewayRateLimiter::new(100, 100, 100)),
-        auth_limiter: Arc::new(AuthRateLimiter::new()),
-        idempotency_store: Arc::new(IdempotencyStore::new(Duration::from_secs(300), 1000)),
-        whatsapp: None,
-        whatsapp_app_secret: None,
-        linq: None,
-        linq_signing_secret: None,
-        nextcloud_talk: None,
-        nextcloud_talk_webhook_secret: None,
-        wati: None,
-        gmail_push: None,
-        observer: Arc::new(NoopObserver),
-        tools_registry: Arc::new(Vec::new()),
-        cost_tracker: None,
-        event_tx: broadcast::channel(16).0,
-        event_buffer: Arc::new(EventBuffer::new(16)),
-        shutdown_tx: tokio::sync::watch::channel(false).0,
-        node_registry: Arc::new(NodeRegistry::new(16)),
-        session_backend: None,
-        session_queue: Arc::new(SessionActorQueue::new(8, 30, 600)),
-        device_registry: None,
-        pending_pairings: None,
-        path_prefix: String::new(),
-        web_dist_dir: None,
-        canvas_store: operant_runtime::tools::CanvasStore::new(),
-        cancel_tokens: Arc::new(std::sync::Mutex::new(HashMap::new())),
-        reload_tx: None,
-        #[cfg(feature = "webauthn")]
-        webauthn: None,
-    };
-
-    Router::new()
-        .route("/api/cron", post(handle_api_cron_add))
-        .route("/api/cron/:id/run", post(handle_api_cron_run))
-        .with_state(state)
-}
-
-// Stubs for missing handlers - to be implemented
-async fn handle_api_github_webhook() -> impl axum::response::IntoResponse {
-    (
-        axum::http::StatusCode::NOT_IMPLEMENTED,
-        "GitHub webhook not implemented",
-    )
-}
-
-async fn handle_api_gmail_webhook() -> impl axum::response::IntoResponse {
-    (
-        axum::http::StatusCode::NOT_IMPLEMENTED,
-        "Gmail webhook not implemented",
-    )
-}
-
-async fn handle_api_gmail_push() -> impl axum::response::IntoResponse {
-    (
-        axum::http::StatusCode::NOT_IMPLEMENTED,
-        "Gmail push not implemented",
-    )
-}
-
-async fn handle_api_linq_webhook() -> impl axum::response::IntoResponse {
-    (
-        axum::http::StatusCode::NOT_IMPLEMENTED,
-        "Linq webhook not implemented",
-    )
-}
-
-async fn handle_api_nextcloud_talk_webhook() -> impl axum::response::IntoResponse {
-    (
-        axum::http::StatusCode::NOT_IMPLEMENTED,
-        "Nextcloud Talk webhook not implemented",
-    )
-}
-
-async fn handle_api_wati_webhook() -> impl axum::response::IntoResponse {
-    (
-        axum::http::StatusCode::NOT_IMPLEMENTED,
-        "Wati webhook not implemented",
-    )
-}
-
-async fn handle_api_pair() -> impl axum::response::IntoResponse {
-    (
-        axum::http::StatusCode::NOT_IMPLEMENTED,
-        "Pair endpoint not implemented",
-    )
-}
-
-async fn handle_api_pair_status() -> impl axum::response::IntoResponse {
-    (
-        axum::http::StatusCode::NOT_IMPLEMENTED,
-        "Pair status not implemented",
-    )
-}
-
-async fn handle_api_pair_generate_code() -> impl axum::response::IntoResponse {
-    (
-        axum::http::StatusCode::NOT_IMPLEMENTED,
-        "Generate pair code not implemented",
-    )
-}
-
-async fn handle_api_hardware() -> impl axum::response::IntoResponse {
-    (
-        axum::http::StatusCode::NOT_IMPLEMENTED,
-        "Hardware info not implemented",
-    )
-}
-
-async fn handle_api_openapi() -> impl axum::response::IntoResponse {
-    (
-        axum::http::StatusCode::NOT_IMPLEMENTED,
-        "OpenAPI spec not implemented",
-    )
-}
-
-async fn handle_metrics() -> impl axum::response::IntoResponse {
-    (
-        axum::http::StatusCode::NOT_IMPLEMENTED,
-        "Metrics not implemented",
-    )
 }

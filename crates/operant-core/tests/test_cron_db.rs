@@ -147,7 +147,7 @@ fn rewrite_pruned_skill_dropped() {
     assert_eq!(report.drops[0].dropped_skill, "dead-skill");
 
     let jobs = db.list_jobs(true).unwrap();
-    assert!(jobs[0].skills.as_ref().map_or(true, |s| s.is_empty()));
+    assert!(jobs[0].skills.as_ref().is_none_or(|s| s.is_empty()));
     assert!(jobs[0].skill.is_none(), "skill should be None after all skills pruned");
 }
 
@@ -191,7 +191,7 @@ fn rewrite_prune_all_from_multi_skill_job() {
     assert_eq!(report.drops.len(), 3);
 
     let jobs = db.list_jobs(true).unwrap();
-    assert!(jobs[0].skills.as_ref().map_or(true, |s| s.is_empty()));
+    assert!(jobs[0].skills.as_ref().is_none_or(|s| s.is_empty()));
     assert!(jobs[0].skill.is_none(), "skill should be None after all pruned");
 }
 
@@ -256,7 +256,7 @@ fn rewrite_multiple_jobs() {
     for job in &jobs {
         let skills = job.skills.as_ref().unwrap();
         assert!(
-            skills.len() <= 1 && skills.first().map_or(true, |s| s == "web-quality"),
+            skills.len() <= 1 && skills.first().is_none_or(|s| s == "web-quality"),
             "Expected only web-quality, got {:?}",
             skills
         );
