@@ -281,7 +281,18 @@ mod tests {
                 ToolContext::default(),
             )
             .await;
-        assert!(!result.success); // browser not available in test env
+        // scroll must pass argument validation regardless of provider.
+        // Success depends on environment: when the `igs` binary is installed
+        // the scroll actually executes (and may succeed); otherwise the tool
+        // degrades to a graceful "binary not found" error. Either way it must
+        // never fail argument validation.
+        if !result.success {
+            let error = result.error.unwrap_or_default();
+            assert!(
+                !error.contains("Unknown command") && !error.contains("Missing"),
+                "scroll failed argument validation instead of executing: {error}"
+            );
+        }
     }
 
     #[tokio::test]
