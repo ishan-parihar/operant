@@ -43,6 +43,7 @@ pub mod accessibility;
 pub mod acp;
 pub mod aft_bridge;
 pub mod agent;
+pub mod agent_memory;
 pub mod approval;
 pub mod browser_provider;
 pub mod client;
@@ -98,6 +99,7 @@ pub use agent::{AgentConfig, AgentEvent, FallbackModelClient, OperantAgent};
 pub use approval::{
     ApprovalContext, ApprovalGuard, ApprovalMode, ApprovalVerdict, RiskLevel, check_tool_approval,
 };
+pub use agent_memory::AgentMemoryProvider;
 pub use browser_provider::{
     BrowserProvider, BrowserUseProvider, BrowserbaseProvider, CamofoxProvider, FirecrawlProvider,
     LightpandaProvider, build_browser_provider,

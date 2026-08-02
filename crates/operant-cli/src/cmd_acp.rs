@@ -103,17 +103,20 @@ async fn execute_acp_command_inner(
     let agent_config = crate::agent_config(&config, &config.agent, None);
 
     let memory_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-    let memory_manager = crate::load_memory_manager(memory_dir)
+    let (memory_manager, memory_provider) = crate::load_memory_manager(memory_dir)
         .await
         .map_err(|e| format!("Memory init error: {}", e))?;
 
-    let agent = operant_core::agent::OperantAgent::new(
+    let mut agent = operant_core::agent::OperantAgent::new(
         agent_config,
         Box::new(operant_core::agent::clients::openai::OpenAIModelClient::new(raw_client)),
         registry,
         database,
     )
     .with_memory_manager(memory_manager);
+    if let Some(provider) = memory_provider {
+        agent = agent.with_memory_provider(provider);
+    }
 
     let response = agent
         .run(command.to_string())

@@ -15,7 +15,6 @@ use operant_core::gateway::{
     WhatsAppAdapter,
 };
 use operant_core::gateway_pipeline::{MessagePipeline, PipelineAction};
-use operant_core::memory_provider::{MemoryProvider, build_memory_provider};
 
 use crate::gateway_commands::{
     CommandContext, handle_command, resolve_command, telegram_bot_commands,
@@ -54,9 +53,13 @@ fn pid_file_path() -> std::path::PathBuf {
     operant_core::platform::operant_home().join("gateway.pid")
 }
 /// Message handler that processes incoming gateway messages through the Operant agent.
+///
+/// Long-term memory is handled by the agent itself: `OperantAgent` now
+/// carries a `MemoryProvider` (attached in `create_runtime_agent`), so
+/// prefetch injection and sync_turn happen inside `run()` — this handler
+/// no longer needs its own provider copy (audit gap F1, docs/AUDIT_2026-08-02.md).
 struct GatewayMessageHandler {
     agent: Arc<OperantAgent>,
-    memory_provider: Arc<dyn MemoryProvider>,
     /// Tracks the currently-active session ID so we only reload
     /// conversation history when switching sessions (not on every
     /// message within the same session). This preserves prompt prefix
@@ -176,16 +179,9 @@ impl MessageHandler for GatewayMessageHandler {
             );
         }
 
-        // Prefetch relevant memories from the configured provider
-        let memory_context = self.memory_provider.prefetch(&message.content).await;
-        let query = if memory_context.is_empty() {
-            message.content.clone()
-        } else {
-            format!(
-                "[retrieved_memory]\n{}\n\n[/retrieved_memory]\n\n{}",
-                memory_context, message.content
-            )
-        };
+        // Long-term memory recall is injected by the agent itself inside
+        // run() (build_messages → provider.prefetch under <memory_context>).
+        let query = message.content.clone();
 
         let user_content = message.content.clone();
 
@@ -237,11 +233,8 @@ impl MessageHandler for GatewayMessageHandler {
                     response.content
                 };
 
-                // Sync this turn to the memory provider
-                let _ = self
-                    .memory_provider
-                    .sync_turn(&user_content, &content)
-                    .await;
+                // Turn persistence to long-term memory happens inside
+                // agent.run() via the agent's memory provider (sync_turn).
 
                 // Save user message and assistant response to DB
                 let _ = self
@@ -502,15 +495,8 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
     let agent = Arc::new(agent.with_permissions(permission_tx));
     let cron_agent = agent.clone();
 
-    // Initialize memory provider from config
-    let mem_cfg = runtime_config().memory;
-    let storage_dir = operant_core::platform::operant_home();
-    let memory_provider =
-        if mem_cfg.enabled && mem_cfg.provider != "builtin" && mem_cfg.provider != "disabled" {
-            build_memory_provider(&mem_cfg.provider, storage_dir)
-        } else {
-            build_memory_provider("builtin", storage_dir)
-        };
+    // Long-term memory is handled by the agent (attached in
+    // create_runtime_agent above) — no separate provider instance here.
 
     // Create bridge state channel for TUI status updates
     let (bridge_state_tx, _bridge_state_rx) =
@@ -521,7 +507,6 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
 
     let handler = Arc::new(GatewayMessageHandler {
         agent,
-        memory_provider,
         current_session_id: tokio::sync::Mutex::new(None),
         gateway: tokio::sync::Mutex::new(None),
         bridge_state_tx,

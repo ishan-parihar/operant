@@ -1739,10 +1739,19 @@ impl OperantAgent {
         // just splits into frozen vs volatile, which captures ~80% of
         // the cache benefit with ~10% of the complexity.
 
-        // Build the frozen prefix (base system prompt + skills).
-        // Uses the shared helper to avoid duplicating the prefix logic
-        // with spawn_background_review's cache parity path.
-        messages.push(Message::system(self.build_frozen_prefix()));
+        // Build the frozen prefix (base system prompt + skills + memory
+        // provider status line). Uses the shared helper to avoid
+        // duplicating the prefix logic with spawn_background_review's
+        // cache parity path.
+        let mut frozen_prefix = self.build_frozen_prefix();
+        if let Some(provider) = &self.memory_provider {
+            let block = provider.system_prompt_block();
+            if !block.trim().is_empty() {
+                frozen_prefix.push_str("\n\n");
+                frozen_prefix.push_str(block.trim());
+            }
+        }
+        messages.push(Message::system(frozen_prefix));
 
         // Volatile suffix: memory context + workspace context. These
         // change each turn, so they're a separate message that doesn't
@@ -1755,6 +1764,34 @@ impl OperantAgent {
                 volatile_suffix.push_str("\n\n<long_term_memory>\n");
                 volatile_suffix.push_str(memory_context);
                 volatile_suffix.push_str("\n</long_term_memory>");
+            }
+        }
+
+        // Memory provider: per-turn semantic recall (prefetch).
+        // Runs with an 8s timeout — matches hermes-agent's prefetch
+        // timeout pattern. Results land under <memory_context> tags
+        // (distinct from the file-backed <long_term_memory> block).
+        if let Some(provider) = &self.memory_provider {
+            let last_user = {
+                let conv = self.conversation.read().await;
+                conv.iter()
+                    .rev()
+                    .find(|m| m.role == Role::User)
+                    .map(|m| m.content.clone())
+            };
+            if let Some(query) = last_user {
+                let provider_context = tokio::time::timeout(
+                    Duration::from_secs(8),
+                    provider.prefetch(&query),
+                )
+                .await
+                .unwrap_or_default();
+                let provider_context = provider_context.trim();
+                if !provider_context.is_empty() {
+                    volatile_suffix.push_str("\n\n<memory_context>\n");
+                    volatile_suffix.push_str(provider_context);
+                    volatile_suffix.push_str("\n</memory_context>");
+                }
             }
         }
 
