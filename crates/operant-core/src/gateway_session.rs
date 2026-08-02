@@ -527,6 +527,14 @@ pub struct PersistentSessionStore {
 }
 
 impl PersistentSessionStore {
+    /// Lock the SQLite connection, converting mutex poisoning into a
+    /// recoverable error instead of panicking (see database.rs lock_conn).
+    fn lock_conn(&self) -> Result<std::sync::MutexGuard<'_, Connection>, Error> {
+        self.conn
+            .lock()
+            .map_err(|_| Error::Agent("session store mutex poisoned".to_string()))
+    }
+
     /// Open (or create) the session database at `db_path`.
     pub fn open(db_path: &str) -> Result<Self, Error> {
         let conn = Connection::open(db_path)
@@ -630,12 +638,12 @@ impl PersistentSessionStore {
 
     /// Update the store configuration at runtime.
     pub fn set_config(&self, config: SessionStoreConfig) {
-        *self.config.write().unwrap() = config;
+        *self.config.write().expect("session entries/config write lock poisoned — programmer error") = config;
     }
 
     /// Load all sessions from the database into the in-memory cache.
     fn load_from_db(&self) -> Result<(), Error> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
         let mut stmt = conn
             .prepare(
                 "SELECT session_key, session_id, created_at, updated_at, origin, display_name,
@@ -684,7 +692,7 @@ impl PersistentSessionStore {
             })
             .map_err(|e| Error::Agent(format!("Failed to query sessions: {}", e)))?;
 
-        let mut entries = self.entries.write().unwrap();
+        let mut entries = self.entries.write().expect("session entries/config write lock poisoned — programmer error");
         for entry in rows.flatten() {
             entries.insert(entry.session_key.clone(), entry);
         }
@@ -693,7 +701,7 @@ impl PersistentSessionStore {
 
     /// Persist a single entry to the database.
     fn save_entry(&self, entry: &SessionEntry) -> Result<(), Error> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
         let origin_json = entry
             .origin
             .as_ref()
@@ -778,7 +786,7 @@ impl PersistentSessionStore {
         source: &SessionSource,
         force_new: bool,
     ) -> Result<SessionEntry, Error> {
-        let config = self.config.read().unwrap().clone();
+        let config = self.config.read().expect("session entries/config read lock poisoned — programmer error").clone();
         let session_key = build_session_key(
             source,
             config.group_sessions_per_user,
@@ -788,7 +796,7 @@ impl PersistentSessionStore {
 
         // Check existing session
         if !force_new {
-            let entries = self.entries.read().unwrap();
+            let entries = self.entries.read().expect("session entries/config read lock poisoned — programmer error");
             if let Some(entry) = entries.get(&session_key) {
                 // Auto-reset suspended sessions
                 if entry.suspended {
@@ -801,7 +809,7 @@ impl PersistentSessionStore {
                     entry.updated_at = now;
                     drop(entries);
                     self.save_entry(&entry)?;
-                    let mut entries = self.entries.write().unwrap();
+                    let mut entries = self.entries.write().expect("session entries/config write lock poisoned — programmer error");
                     entries.insert(session_key, entry.clone());
                     return Ok(entry);
                 }
@@ -823,7 +831,7 @@ impl PersistentSessionStore {
                 entry.updated_at = now;
                 drop(entries);
                 self.save_entry(&entry)?;
-                let mut entries = self.entries.write().unwrap();
+                let mut entries = self.entries.write().expect("session entries/config write lock poisoned — programmer error");
                 entries.insert(session_key, entry.clone());
                 return Ok(entry);
             }
@@ -847,14 +855,14 @@ impl PersistentSessionStore {
         };
 
         self.save_entry(&entry)?;
-        let mut entries = self.entries.write().unwrap();
+        let mut entries = self.entries.write().expect("session entries/config write lock poisoned — programmer error");
         entries.insert(session_key, entry.clone());
         Ok(entry)
     }
 
     /// Reset a session, creating a new session ID.
     pub fn reset_session(&self, session_key: &str) -> Result<Option<SessionEntry>, Error> {
-        let entries = self.entries.read().unwrap();
+        let entries = self.entries.read().expect("session entries/config read lock poisoned — programmer error");
         let entry = entries.get(session_key).cloned();
         drop(entries);
 
@@ -902,7 +910,7 @@ impl PersistentSessionStore {
         };
 
         self.save_entry(&new_entry)?;
-        let mut entries = self.entries.write().unwrap();
+        let mut entries = self.entries.write().expect("session entries/config write lock poisoned — programmer error");
         entries.insert(session_key.to_string(), new_entry.clone());
         Ok(new_entry)
     }
@@ -913,7 +921,7 @@ impl PersistentSessionStore {
         session_key: &str,
         target_session_id: &str,
     ) -> Result<Option<SessionEntry>, Error> {
-        let entries = self.entries.read().unwrap();
+        let entries = self.entries.read().expect("session entries/config read lock poisoned — programmer error");
         let old_entry = entries.get(session_key).cloned();
         drop(entries);
 
@@ -940,14 +948,14 @@ impl PersistentSessionStore {
         };
 
         self.save_entry(&new_entry)?;
-        let mut entries = self.entries.write().unwrap();
+        let mut entries = self.entries.write().expect("session entries/config write lock poisoned — programmer error");
         entries.insert(session_key.to_string(), new_entry.clone());
         Ok(Some(new_entry))
     }
 
     /// Mark a session as suspended (from /stop).
     pub fn suspend_session(&self, session_key: &str) -> bool {
-        let mut entries = self.entries.write().unwrap();
+        let mut entries = self.entries.write().expect("session entries/config write lock poisoned — programmer error");
         if let Some(entry) = entries.get_mut(session_key) {
             entry.suspended = true;
             let entry = entry.clone();
@@ -960,7 +968,7 @@ impl PersistentSessionStore {
 
     /// Mark a session as resume-pending after a restart interruption.
     pub fn mark_resume_pending(&self, session_key: &str, reason: &str) -> bool {
-        let mut entries = self.entries.write().unwrap();
+        let mut entries = self.entries.write().expect("session entries/config write lock poisoned — programmer error");
         if let Some(entry) = entries.get_mut(session_key) {
             if entry.suspended {
                 return false;
@@ -978,7 +986,7 @@ impl PersistentSessionStore {
 
     /// Clear resume-pending flag after a successful resumed turn.
     pub fn clear_resume_pending(&self, session_key: &str) -> bool {
-        let mut entries = self.entries.write().unwrap();
+        let mut entries = self.entries.write().expect("session entries/config write lock poisoned — programmer error");
         if let Some(entry) = entries.get_mut(session_key) {
             if !entry.resume_pending {
                 return false;
@@ -996,7 +1004,7 @@ impl PersistentSessionStore {
 
     /// Update session activity timestamp.
     pub fn update_activity(&self, session_key: &str) -> Result<(), Error> {
-        let mut entries = self.entries.write().unwrap();
+        let mut entries = self.entries.write().expect("session entries/config write lock poisoned — programmer error");
         if let Some(entry) = entries.get_mut(session_key) {
             entry.updated_at = now_rfc3339();
             let entry = entry.clone();
@@ -1017,7 +1025,7 @@ impl PersistentSessionStore {
         cache_write: u64,
         cost_usd: f64,
     ) -> Result<(), Error> {
-        let mut entries = self.entries.write().unwrap();
+        let mut entries = self.entries.write().expect("session entries/config write lock poisoned — programmer error");
         if let Some(entry) = entries.get_mut(session_key) {
             entry.input_tokens += input_tokens;
             entry.output_tokens += output_tokens;
@@ -1036,14 +1044,14 @@ impl PersistentSessionStore {
 
     /// Look up a session entry by session key.
     pub fn get_entry(&self, session_key: &str) -> Option<SessionEntry> {
-        self.entries.read().unwrap().get(session_key).cloned()
+        self.entries.read().expect("session entries/config read lock poisoned — programmer error").get(session_key).cloned()
     }
 
     /// Look up a session entry by session ID.
     pub fn lookup_by_session_id(&self, session_id: &str) -> Option<SessionEntry> {
         self.entries
             .read()
-            .unwrap()
+            .expect("session entries read lock poisoned — programmer error")
             .values()
             .find(|e| e.session_id == session_id)
             .cloned()
@@ -1051,7 +1059,7 @@ impl PersistentSessionStore {
 
     /// List all sessions, optionally filtered by activity.
     pub fn list_sessions(&self, active_minutes: Option<u64>) -> Vec<SessionEntry> {
-        let entries = self.entries.read().unwrap();
+        let entries = self.entries.read().expect("session entries/config read lock poisoned — programmer error");
         let mut result: Vec<SessionEntry> = if let Some(minutes) = active_minutes {
             let cutoff = SystemTime::now() - Duration::from_secs(minutes * 60);
             let cutoff_str = system_time_to_rfc3339(cutoff);
@@ -1069,20 +1077,20 @@ impl PersistentSessionStore {
 
     /// Remove a session entry.
     pub fn close_session(&self, session_key: &str) -> Result<(), Error> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
         conn.execute(
             "DELETE FROM gateway_sessions WHERE session_key = ?1",
             params![session_key],
         )
         .map_err(|e| Error::Agent(format!("Failed to close session: {}", e)))?;
         drop(conn);
-        self.entries.write().unwrap().remove(session_key);
+        self.entries.write().expect("session entries/config write lock poisoned — programmer error").remove(session_key);
         Ok(())
     }
 
     /// Total number of sessions.
     pub fn session_count(&self) -> usize {
-        self.entries.read().unwrap().len()
+        self.entries.read().expect("session entries/config read lock poisoned — programmer error").len()
     }
 
     /// Total number of sessions (alias for backward compatibility).
@@ -1092,7 +1100,7 @@ impl PersistentSessionStore {
 
     /// List active sessions as `PlatformSession` for backward compatibility.
     pub fn list_active_sessions(&self, platform: Option<&str>) -> Vec<PlatformSession> {
-        let entries = self.entries.read().unwrap();
+        let entries = self.entries.read().expect("session entries/config read lock poisoned — programmer error");
         entries
             .values()
             .filter(|e| {
@@ -1125,7 +1133,7 @@ impl PersistentSessionStore {
     pub fn get_session(&self, session_id: &str) -> Option<PlatformSession> {
         self.entries
             .read()
-            .unwrap()
+            .expect("session entries read lock poisoned — programmer error")
             .values()
             .find(|e| e.session_id == session_id)
             .map(|e| PlatformSession {
@@ -1157,7 +1165,7 @@ impl PersistentSessionStore {
     ) -> Option<PlatformSession> {
         self.entries
             .read()
-            .unwrap()
+            .expect("session entries read lock poisoned — programmer error")
             .values()
             .find(|e| {
                 e.platform.as_deref() == Some(platform)
@@ -1230,7 +1238,7 @@ impl PersistentSessionStore {
         channel_id: &str,
         _updates: &[(String, String)],
     ) -> bool {
-        let mut entries = self.entries.write().unwrap();
+        let mut entries = self.entries.write().expect("session entries/config write lock poisoned — programmer error");
         if let Some(entry) = entries.values_mut().find(|e| {
             e.platform.as_deref() == Some(platform)
                 && e.origin
@@ -1250,7 +1258,7 @@ impl PersistentSessionStore {
 
     /// Check if any sessions exist.
     pub fn has_any_sessions(&self) -> bool {
-        !self.entries.read().unwrap().is_empty()
+        !self.entries.read().expect("session entries/config read lock poisoned — programmer error").is_empty()
     }
 
     // ── Reset policy evaluation ──
@@ -1273,11 +1281,20 @@ impl PersistentSessionStore {
 
         if matches!(policy.mode, ResetMode::Daily | ResetMode::Both) {
             let now_dt: DateTime<Utc> = now.into();
-            let today_reset = now_dt
+            // at_hour comes from config; guard against out-of-range values
+            // (0–23) instead of panicking — an invalid hour just skips the
+            // daily reset this cycle (graceful degradation).
+            let Some(today_reset) = now_dt
                 .date_naive()
                 .and_hms_opt(policy.at_hour, 0, 0)
-                .unwrap()
-                .and_utc();
+            else {
+                tracing::warn!(
+                    "invalid daily-reset hour {} in session reset policy; skipping daily reset",
+                    policy.at_hour
+                );
+                return None;
+            };
+            let today_reset = today_reset.and_utc();
             let reset_time = if now_dt.time().hour() < policy.at_hour {
                 today_reset - chrono::Duration::days(1)
             } else {
@@ -1294,8 +1311,8 @@ impl PersistentSessionStore {
 
     /// Check if a session is expired (for background expiry watcher).
     pub fn is_session_expired(&self, session_key: &str) -> bool {
-        let config = self.config.read().unwrap().clone();
-        let entries = self.entries.read().unwrap();
+        let config = self.config.read().expect("session entries/config read lock poisoned — programmer error").clone();
+        let entries = self.entries.read().expect("session entries/config read lock poisoned — programmer error");
         if let Some(entry) = entries.get(session_key) {
             self.should_reset(entry, &config.reset_policy).is_some()
         } else {
@@ -1308,7 +1325,7 @@ impl PersistentSessionStore {
         let cutoff = SystemTime::now() - Duration::from_secs(max_age_seconds);
         let cutoff_str = system_time_to_rfc3339(cutoff);
         let mut count = 0;
-        let mut entries = self.entries.write().unwrap();
+        let mut entries = self.entries.write().expect("session entries/config write lock poisoned — programmer error");
         for entry in entries.values_mut() {
             if entry.resume_pending || entry.suspended {
                 continue;
@@ -1331,7 +1348,7 @@ impl PersistentSessionStore {
         let cutoff = SystemTime::now() - Duration::from_secs(max_age_days as u64 * 86400);
         let cutoff_str = system_time_to_rfc3339(cutoff);
         let mut removed = Vec::new();
-        let mut entries = self.entries.write().unwrap();
+        let mut entries = self.entries.write().expect("session entries/config write lock poisoned — programmer error");
         for (key, entry) in entries.iter() {
             if entry.suspended {
                 continue;
@@ -1346,12 +1363,24 @@ impl PersistentSessionStore {
         let count = removed.len() as u32;
         if !removed.is_empty() {
             drop(entries);
-            let conn = self.conn.lock().unwrap();
-            for key in &removed {
-                let _ = conn.execute(
-                    "DELETE FROM gateway_sessions WHERE session_key = ?1",
-                    params![key],
-                );
+            // Best-effort DB cleanup: this fn returns a count (not Result), so
+            // a poisoned mutex or failed DELETE degrades gracefully — the
+            // in-memory cache is already pruned, and stale rows are harmless.
+            match self.lock_conn() {
+                Ok(conn) => {
+                    for key in &removed {
+                        let _ = conn.execute(
+                            "DELETE FROM gateway_sessions WHERE session_key = ?1",
+                            params![key],
+                        );
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "prune_old_entries: DB cleanup skipped (mutex poisoned): {}",
+                        e
+                    );
+                }
             }
         }
         count
