@@ -362,19 +362,31 @@ pub fn run_platform_checks(
     let igs_present = config.tools.igs_enabled
         && operant_core::tools::igs::find_igs_binary().is_some();
 
-    // Simplified port: list main tool categories and check their requirements
+    // Simplified port: list main tool categories and check their requirements.
+    // `is_configured` covers keyless backends (igs, builtin memory); `required_envs`
+    // still counts as available for users of the legacy API-key providers, so
+    // neither source regresses (e.g. Tavily key without igs binary).
     let tool_categories: Vec<(&str, Vec<&str>, bool)> = vec![
         ("terminal", vec![], true),
         ("file", vec![], true),
-        // web + search are covered by igs (keyless) or Tavily/Exa keys
-        ("web", vec![], igs_present),
-        ("search", vec![], igs_present),
-        // memory is covered by the builtin MEMORY.md backend + agentmemory
-        // (auto-spawned, keyless) — legacy HONCHO/MEM0 keys are optional
-        ("memory", vec![], true),
+        // web/search: igs (keyless) OR Tavily/Exa keys
+        ("web", vec!["TAVILY_API_KEY", "EXA_API_KEY"], igs_present),
+        ("search", vec!["TAVILY_API_KEY", "EXA_API_KEY"], igs_present),
+        // memory: builtin MEMORY.md + agentmemory (auto-spawned, keyless) are
+        // always available; HONCHO/MEM0 keys remain an optional upgrade
+        ("memory", vec!["HONCHO_API_KEY", "MEM0_API_KEY"], true),
         ("cron", vec![], true),
-        // browser is covered by igs (keyless) or any cloud provider key
-        ("browser", vec![], igs_present),
+        // browser: igs (keyless) OR any cloud-provider key
+        (
+            "browser",
+            vec![
+                "BROWSERBASE_API_KEY",
+                "BROWSER_USE_API_KEY",
+                "FIRECRAWL_API_KEY",
+                "CAMOFOX_URL",
+            ],
+            igs_present,
+        ),
         ("vision", vec![], config.vision.provider.is_some()),
         ("tts", vec![], config.tts.enabled),
     ];

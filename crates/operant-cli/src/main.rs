@@ -1224,6 +1224,17 @@ fn tui_available() -> bool {
     std::io::stdin().is_terminal() && std::io::stdout().is_terminal()
 }
 
+/// Emit a one-line stderr notice when rich_output is configured but the TUI
+/// can't run (no TTY). Uses eprintln (not tracing) because with rich_output
+/// the log sink swallows trace output — and this is a UX-visible change.
+fn warn_tui_fallback(rich_output: bool) {
+    if rich_output {
+        eprintln!(
+            "warning: no TTY detected — falling back to non-interactive mode (set tui.rich_output=false to silence)"
+        );
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -1322,11 +1333,7 @@ async fn main() -> Result<()> {
                 .run()
                 .await?;
             } else {
-                if loaded.config.tui.rich_output {
-                    // eprintln (not tracing) — with rich_output the log sink
-                    // swallows trace output, and this is a UX-visible change.
-                    eprintln!("warning: no TTY detected — falling back to non-interactive mode (set tui.rich_output=false to silence)");
-                }
+                warn_tui_fallback(loaded.config.tui.rich_output);
                 run_non_tui(&loaded.config, system.as_deref(), query, *record_trajectory).await?;
             }
         }
@@ -1343,9 +1350,7 @@ async fn main() -> Result<()> {
                 .run()
                 .await?;
             } else {
-                if loaded.config.tui.rich_output {
-                    eprintln!("warning: no TTY detected — falling back to non-interactive mode (set tui.rich_output=false to silence)");
-                }
+                warn_tui_fallback(loaded.config.tui.rich_output);
                 chat_non_tui(&loaded.config, system.as_deref()).await?;
             }
         }
