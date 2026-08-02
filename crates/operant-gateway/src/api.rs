@@ -2358,11 +2358,11 @@ pub fn router(
         canvas_store,
     );
 
-    let app = Router::new()
-        .nest("/api", build_api_routes())
-        .with_state(state);
+    
 
-    app
+    Router::new()
+        .nest("/api", build_api_routes())
+        .with_state(state)
 }
 
 fn build_api_routes() -> axum::Router<super::AppState> {

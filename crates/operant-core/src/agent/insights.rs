@@ -235,7 +235,7 @@ fn compute_overview(sessions: &[SessionRow]) -> OverviewStats {
     let total_input: i64 = sessions.iter().map(|s| s.input_tokens).sum();
     let total_output: i64 = sessions.iter().map(|s| s.output_tokens).sum();
     let total_tokens = total_input + total_output;
-    let total_cost: f64 = sessions.iter().map(|s| estimate_session_cost(s)).sum();
+    let total_cost: f64 = sessions.iter().map(estimate_session_cost).sum();
 
     OverviewStats {
         total_sessions: n,

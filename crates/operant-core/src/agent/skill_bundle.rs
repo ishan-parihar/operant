@@ -64,8 +64,7 @@ fn bundles_dir() -> PathBuf {
 fn slugify(name: &str) -> String {
     let slug = name
         .to_lowercase()
-        .replace('_', "-")
-        .replace(' ', "-")
+        .replace(['_', ' '], "-")
         .chars()
         .filter(|c| c.is_alphanumeric() || *c == '-')
         .collect::<String>();

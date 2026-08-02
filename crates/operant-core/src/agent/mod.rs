@@ -2290,7 +2290,7 @@ If nothing needs updating, say 'Nothing to save.' and stop.\n\n{}",
                             "success": false,
                             "error": format!("Tool '{}' is not allowed in background review. Only memory and skill tools are permitted.", tool_name)
                         });
-                        review_messages.push(Message::tool(tool_id, &error_result.to_string()));
+                        review_messages.push(Message::tool(tool_id, error_result.to_string()));
                         continue;
                     }
 
@@ -2342,7 +2342,7 @@ If nothing needs updating, say 'Nothing to save.' and stop.\n\n{}",
                                 "success": false,
                                 "error": format!("Tool execution failed: {}", e)
                             });
-                            review_messages.push(Message::tool(tool_id, &error_result.to_string()));
+                            review_messages.push(Message::tool(tool_id, error_result.to_string()));
                         }
                     }
                 }

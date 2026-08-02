@@ -422,7 +422,7 @@ pub fn build_learning_graph(skills_dir: &Path, memory_dir: &Path) -> LearningGra
             if path
                 .file_name()
                 .and_then(|n| n.to_str())
-                .map_or(false, |n| n.starts_with('.'))
+                .is_some_and(|n| n.starts_with('.'))
             {
                 continue;
             }

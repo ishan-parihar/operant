@@ -12,8 +12,10 @@ use serde_json::{Value, json};
 
 /// Cache TTL options.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Default)]
 pub enum CacheTtl {
     /// 5-minute cache (default for Anthropic).
+    #[default]
     FiveMinutes,
     /// 1-hour cache (longer-lived).
     OneHour,
@@ -29,11 +31,6 @@ impl CacheTtl {
     }
 }
 
-impl Default for CacheTtl {
-    fn default() -> Self {
-        Self::FiveMinutes
-    }
-}
 
 /// Build a `cache_control` marker JSON for the given TTL.
 fn build_marker(ttl: CacheTtl) -> Value {
@@ -88,7 +85,7 @@ fn can_carry_marker_envelope(msg: &Value) -> bool {
         None => false,
         Some(Value::String(s)) if s.is_empty() => false,
         Some(Value::String(_)) => true,
-        Some(Value::Array(arr)) => !arr.is_empty() && arr.last().map_or(false, |l| l.is_object()),
+        Some(Value::Array(arr)) => !arr.is_empty() && arr.last().is_some_and(|l| l.is_object()),
         _ => false,
     }
 }
