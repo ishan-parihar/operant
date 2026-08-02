@@ -648,6 +648,7 @@ impl BrowserProvider for FirecrawlProvider {
 
 pub fn build_browser_provider(name: &str) -> std::sync::Arc<dyn BrowserProvider> {
     match name {
+        "igs" => std::sync::Arc::new(crate::tools::igs::IgsBrowserProvider),
         "camofox" => std::sync::Arc::new(CamofoxProvider::new()),
         "browserbase" => std::sync::Arc::new(BrowserbaseProvider::new()),
         "browser-use" | "browser_use" => std::sync::Arc::new(BrowserUseProvider::new()),
@@ -665,6 +666,12 @@ mod tests {
     fn test_default_is_lightpanda() {
         let p = build_browser_provider("lightpanda");
         assert_eq!(p.name(), "lightpanda");
+    }
+
+    #[test]
+    fn test_igs_provider_maps_to_igs() {
+        let p = build_browser_provider("igs");
+        assert_eq!(p.name(), "igs");
     }
 
     #[test]

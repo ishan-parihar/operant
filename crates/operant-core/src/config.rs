@@ -517,10 +517,27 @@ pub struct ToolSettings {
     /// When false (default), only the basic built-in file tools are
     /// available.
     pub aft_enabled: bool,
-    #[serde(default)]
+    /// Whether to register the IGS-backed web tools (web_scrape,
+    /// web_extract) and the `igs` browser provider. Requires the `igs`
+    /// binary (see igs.rs IGS_INSTALL_HINT). Defaults to true.
+    #[serde(default = "default_true")]
     pub igs_enabled: bool,
+    /// Optional explicit path to the `igs` binary (default: PATH lookup).
+    #[serde(default)]
+    pub igs_binary_path: Option<PathBuf>,
+    /// Timeout (seconds) for a single `igs` invocation (5..=600).
+    #[serde(default = "default_igs_timeout")]
+    pub igs_timeout_secs: u64,
     #[serde(default)]
     pub lifeos_enabled: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_igs_timeout() -> u64 {
+    60
 }
 
 impl Default for ToolSettings {
@@ -537,7 +554,9 @@ impl Default for ToolSettings {
             disabled_tools: Vec::new(),
             disabled_toolsets: Vec::new(),
             aft_enabled: false,
-            igs_enabled: false,
+            igs_enabled: true,
+            igs_binary_path: None,
+            igs_timeout_secs: 60,
             lifeos_enabled: false,
         }
     }
@@ -622,7 +641,8 @@ impl Default for MemorySettings {
 /// Browser provider configuration.
 ///
 /// `provider` selects the browser backend:
-/// - `"lightpanda"` (default) — local binary, auto-downloaded from GitHub Releases
+/// - `"igs"` (default) — IGS headless browser via the `igs` binary (Obscura)
+/// - `"lightpanda"` — local binary, auto-downloaded from GitHub Releases
 /// - `"camofox"` — local anti-detection browser REST API (`CAMOFOX_URL`)
 /// - `"browserbase"` — Browserbase cloud (`BROWSERBASE_API_KEY` + `BROWSERBASE_PROJECT_ID`)
 /// - `"browser-use"` — Browser Use cloud agent (`BROWSER_USE_API_KEY`)
@@ -637,7 +657,7 @@ pub struct BrowserSettings {
 impl Default for BrowserSettings {
     fn default() -> Self {
         Self {
-            provider: "lightpanda".to_string(),
+            provider: "igs".to_string(),
         }
     }
 }
