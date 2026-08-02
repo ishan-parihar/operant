@@ -71,7 +71,7 @@ pub(crate) use tui::settings_screen;
 pub(crate) use tui::theme_screen;
 
 use std::fs::OpenOptions;
-use std::io::{self, Write};
+use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -1213,6 +1213,17 @@ async fn test_tool(config: &AppConfig, tool_name: &str, args: Option<&str>) -> R
     Ok(())
 }
 
+/// Whether the interactive TUI can run in the current environment.
+///
+/// The TUI enters raw mode + alternate screen via crossterm, which requires
+/// a real terminal on stdin/stdout. When operant is invoked from a script,
+/// CI, or piped input (stdout is not a TTY), raw-mode setup fails with
+/// "No such device or address (os error 6)" — so we degrade to non-TUI mode
+/// instead of crashing with a cryptic error. (audit 2026-08-02)
+fn tui_available() -> bool {
+    std::io::stdin().is_terminal() && std::io::stdout().is_terminal()
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -1299,7 +1310,7 @@ async fn main() -> Result<()> {
             let query = query
                 .as_ref()
                 .context("No query provided. Use --query or start chat mode.")?;
-            if loaded.config.tui.rich_output {
+            if loaded.config.tui.rich_output && tui_available() {
                 TuiApp::enter(
                     loaded.config.clone(),
                     system.clone(),
@@ -1311,11 +1322,16 @@ async fn main() -> Result<()> {
                 .run()
                 .await?;
             } else {
+                if loaded.config.tui.rich_output {
+                    // eprintln (not tracing) — with rich_output the log sink
+                    // swallows trace output, and this is a UX-visible change.
+                    eprintln!("warning: no TTY detected — falling back to non-interactive mode (set tui.rich_output=false to silence)");
+                }
                 run_non_tui(&loaded.config, system.as_deref(), query, *record_trajectory).await?;
             }
         }
         Some(Commands::Chat { system }) => {
-            if loaded.config.tui.rich_output {
+            if loaded.config.tui.rich_output && tui_available() {
                 TuiApp::enter(
                     loaded.config.clone(),
                     system.clone(),
@@ -1327,6 +1343,9 @@ async fn main() -> Result<()> {
                 .run()
                 .await?;
             } else {
+                if loaded.config.tui.rich_output {
+                    eprintln!("warning: no TTY detected — falling back to non-interactive mode (set tui.rich_output=false to silence)");
+                }
                 chat_non_tui(&loaded.config, system.as_deref()).await?;
             }
         }
