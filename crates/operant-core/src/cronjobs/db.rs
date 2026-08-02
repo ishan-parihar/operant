@@ -96,6 +96,14 @@ pub struct CronDb {
 }
 
 impl CronDb {
+    /// Lock the SQLite connection, converting mutex poisoning into a
+    /// recoverable error instead of panicking (same pattern as database.rs).
+    fn lock_conn(&self) -> Result<std::sync::MutexGuard<'_, Connection>, Error> {
+        self.conn
+            .lock()
+            .map_err(|_| Error::Agent("cron db mutex poisoned".to_string()))
+    }
+
     pub fn init(path: PathBuf) -> Result<Self, Error> {
         let conn = Connection::open(path)
             .map_err(|e| Error::Agent(format!("Failed to open cron database: {}", e)))?;
@@ -109,7 +117,7 @@ impl CronDb {
     }
 
     fn setup_schema(&self) -> Result<(), Error> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
 
         let schema = r#"
             CREATE TABLE IF NOT EXISTS cron_jobs (
@@ -156,7 +164,7 @@ impl CronDb {
     }
 
     pub fn create_job(&self, p: CreateJobParams) -> Result<String, Error> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
         let id = format!(
             "cron_{}",
             uuid::Uuid::new_v4().to_string()[..8].replace('-', "")
@@ -188,7 +196,7 @@ impl CronDb {
     }
 
     pub fn list_jobs(&self, include_disabled: bool) -> Result<Vec<CronJob>, Error> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
         let query = if include_disabled {
             "SELECT * FROM cron_jobs"
         } else {
@@ -254,7 +262,7 @@ impl CronDb {
     }
 
     pub fn get_job(&self, id: &str) -> Result<Option<CronJob>, Error> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
         let mut stmt = conn
             .prepare("SELECT * FROM cron_jobs WHERE id = ?1")
             .map_err(|e| Error::Agent(format!("Failed to prepare get_job: {}", e)))?;
@@ -315,7 +323,7 @@ impl CronDb {
         id: &str,
         updates: HashMap<String, Option<serde_json::Value>>,
     ) -> Result<Option<CronJob>, Error> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
 
         if updates.is_empty() {
             return self.get_job(id);
@@ -430,7 +438,7 @@ impl CronDb {
         delivery_error: Option<String>,
         next_run_at: Option<String>,
     ) -> Result<(), Error> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
 
         conn.execute(
             "UPDATE cron_jobs SET
@@ -456,7 +464,7 @@ impl CronDb {
     }
 
     pub fn set_next_run(&self, id: &str, next_run_at: Option<String>) -> Result<(), Error> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
         conn.execute(
             "UPDATE cron_jobs SET next_run_at = ?1 WHERE id = ?2",
             params![next_run_at, id],
@@ -466,7 +474,7 @@ impl CronDb {
     }
 
     pub fn delete_job(&self, id: &str) -> Result<bool, Error> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
         let affected = conn
             .execute("DELETE FROM cron_jobs WHERE id = ?1", params![id])
             .map_err(|e| Error::Agent(format!("Failed to delete cron job: {}", e)))?;
@@ -478,7 +486,7 @@ impl CronDb {
     /// Used by the curator to protect cron-dependent skills from inactivity
     /// archival and to identify which jobs need rewriting after consolidation.
     pub fn referenced_skill_names(&self) -> Result<std::collections::HashSet<String>, Error> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
         let mut stmt = conn
             .prepare("SELECT skill, skills FROM cron_jobs")
             .map_err(|e| {
@@ -534,7 +542,7 @@ impl CronDb {
         // are rewritten atomically (no partial rewrites on failure). This is fine
         // for CLI (short-lived) but could be relaxed in daemon mode if contention
         // becomes an issue — e.g. by batching into per-job transactions.
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
         let mut report = CronRewriteReport::default();
 
         // Load all jobs
@@ -638,7 +646,7 @@ impl CronDb {
     }
 
     pub fn get_due_jobs(&self) -> Result<Vec<CronJob>, Error> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
         let now = chrono::Utc::now().to_rfc3339();
 
         let mut stmt = conn

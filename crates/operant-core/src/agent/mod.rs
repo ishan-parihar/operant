@@ -435,7 +435,10 @@ impl OperantAgent {
         // Create a background sync executor for this provider.
         // Single-worker FIFO ensures sync_turn, on_memory_write, and
         // other background writes happen in order without blocking the agent loop.
-        *self.memory_sync_executor.lock().unwrap() = Some(
+        *self
+            .memory_sync_executor
+            .lock()
+            .expect("memory_sync_executor mutex poisoned — programmer error") = Some(
             crate::memory_provider::MemorySyncExecutor::new(memory_provider.clone()),
         );
         self.memory_provider = Some(memory_provider);
@@ -724,7 +727,10 @@ impl OperantAgent {
         };
         // Route through the executor when available for FIFO ordering.
         {
-            let exec_guard = self.memory_sync_executor.lock().unwrap();
+            let exec_guard = self
+                .memory_sync_executor
+                .lock()
+                .expect("memory_sync_executor mutex poisoned — programmer error");
             if let Some(executor) = exec_guard.as_ref() {
                 executor.submit_session_end(&snapshot);
             } else if let Some(provider) = &self.memory_provider {
@@ -803,7 +809,11 @@ impl OperantAgent {
     /// Call this during agent shutdown to avoid losing in-flight writes.
     /// Takes `&self` (not `&mut self`) so it works through `Arc<OperantAgent>`.
     pub async fn shutdown_memory_executor(&self) {
-        let executor = self.memory_sync_executor.lock().unwrap().take();
+        let executor = self
+            .memory_sync_executor
+            .lock()
+            .expect("memory_sync_executor mutex poisoned — programmer error")
+            .take();
         if let Some(executor) = executor {
             executor.shutdown().await;
         }
@@ -825,14 +835,17 @@ impl OperantAgent {
     pub fn set_model(&self, model: impl Into<String>) {
         let new_model = model.into();
         tracing::info!(model = %new_model, "Agent model override set at runtime");
-        *self.model_override.write().unwrap() = Some(new_model);
+        *self
+            .model_override
+            .write()
+            .expect("model_override RwLock poisoned — programmer error") = Some(new_model);
     }
 
     /// Get the current model name (effective model = override or config).
     pub fn model(&self) -> String {
         self.model_override
             .read()
-            .unwrap()
+            .expect("model_override RwLock poisoned — programmer error")
             .as_ref()
             .map(|m| m.clone())
             .unwrap_or_else(|| self.config.model.clone())
@@ -1689,7 +1702,10 @@ impl OperantAgent {
             // future !Send, which breaks tokio::spawn.
             let (should_review_skills, should_review_memory) = {
                 let skill_manage_called = tool_names.iter().any(|n| n == "skill_manage");
-                let mut evo = self.evolution_state.lock().unwrap();
+                let mut evo = self
+                    .evolution_state
+                    .lock()
+                    .expect("evolution_state mutex poisoned — programmer error");
 
                 let trigger = turn_finalizer::check_and_advance_evolution_triggers(
                     &mut evo,
@@ -3069,7 +3085,10 @@ If nothing needs updating, say 'Nothing to save.' and stop.\n\n{}",
 
         if pending.len() == 1 {
             // Single tool — no concurrency overhead
-            let (idx, tool_call, args) = pending.into_iter().next().unwrap();
+            let (idx, tool_call, args) = pending
+                .into_iter()
+                .next()
+                .expect("pending non-empty in single-tool branch");
             let name = tool_call.function.name.clone();
             let result = timeout(
                 self.config.tool_timeout,

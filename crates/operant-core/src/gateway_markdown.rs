@@ -45,16 +45,19 @@ impl MarkdownConverter {
     /// sentinel-bounded placeholders. The optional language tag (e.g.
     /// `rust`) is discarded.
     fn extract_code_blocks(&mut self, text: &str) -> String {
-        static RE: LazyLock<Regex> =
-            LazyLock::new(|| Regex::new(r"```(\w*)\n([\s\S]*?)```").unwrap());
+        static RE: LazyLock<Regex> = LazyLock::new(|| rx(r"```(\w*)\n([\s\S]*?)```"));
         let mut result = String::with_capacity(text.len());
         let mut last = 0;
         for caps in RE.captures_iter(text) {
-            let m = caps.get(0).unwrap();
+            let m = caps.get(0).expect("regex matched — group 0 always present");
             // Push the text between the previous match and this one.
             result.push_str(&text[last..m.start()]);
             // Store the raw content and emit a placeholder.
-            let content = caps.get(2).unwrap().as_str().to_string();
+            let content = caps
+                .get(2)
+                .expect("code-block regex defines group 2")
+                .as_str()
+                .to_string();
             let idx = self.code_blocks.len();
             self.code_blocks.push(content);
             result.push_str(&make_placeholder("CODE_BLOCK", idx));
@@ -67,13 +70,17 @@ impl MarkdownConverter {
     /// Extract inline code spans (`` `code` ``) and replace them with
     /// sentinel-bounded placeholders.
     fn extract_inline_code(&mut self, text: &str) -> String {
-        static RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"`([^`]+?)`").unwrap());
+        static RE: LazyLock<Regex> = LazyLock::new(|| rx(r"`([^`]+?)`"));
         let mut result = String::with_capacity(text.len());
         let mut last = 0;
         for caps in RE.captures_iter(text) {
-            let m = caps.get(0).unwrap();
+            let m = caps.get(0).expect("regex matched — group 0 always present");
             result.push_str(&text[last..m.start()]);
-            let content = caps.get(1).unwrap().as_str().to_string();
+            let content = caps
+                .get(1)
+                .expect("inline-code regex defines group 1")
+                .as_str()
+                .to_string();
             let idx = self.inline_codes.len();
             self.inline_codes.push(content);
             result.push_str(&make_placeholder("INLINE_CODE", idx));
@@ -106,15 +113,20 @@ impl MarkdownConverter {
 // Markdown → Telegram HTML conversions (operates on already-extracted text)
 // ---------------------------------------------------------------------------
 
-static BOLD_ITALIC_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\*\*\*(.+?)\*\*\*").unwrap());
-static BOLD_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\*\*(.+?)\*\*").unwrap());
-static ITALIC_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\*(.+?)\*").unwrap());
-static STRIKETHROUGH_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"~~(.+?)~~").unwrap());
-static LINK_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\[(.+?)\]\((.+?)\)").unwrap());
-static HEADER_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?m)^#{1,6}\s+(.*?)$").unwrap());
-static BLOCKQUOTE_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?m)^&gt;\s?(.*?)$").unwrap());
+/// Compile a regex from a static literal pattern (see approval.rs rx()).
+/// The `expect` keeps authoring-time mistakes loud while avoiding `unwrap()`
+/// sites that would trip `clippy::unwrap_used` if enabled.
+fn rx(pattern: &'static str) -> Regex {
+    Regex::new(pattern).expect("static regex literal is invalid — authoring bug")
+}
+
+static BOLD_ITALIC_RE: LazyLock<Regex> = LazyLock::new(|| rx(r"\*\*\*(.+?)\*\*\*"));
+static BOLD_RE: LazyLock<Regex> = LazyLock::new(|| rx(r"\*\*(.+?)\*\*"));
+static ITALIC_RE: LazyLock<Regex> = LazyLock::new(|| rx(r"\*(.+?)\*"));
+static STRIKETHROUGH_RE: LazyLock<Regex> = LazyLock::new(|| rx(r"~~(.+?)~~"));
+static LINK_RE: LazyLock<Regex> = LazyLock::new(|| rx(r"\[(.+?)\]\((.+?)\)"));
+static HEADER_RE: LazyLock<Regex> = LazyLock::new(|| rx(r"(?m)^#{1,6}\s+(.*?)$"));
+static BLOCKQUOTE_RE: LazyLock<Regex> = LazyLock::new(|| rx(r"(?m)^&gt;\s?(.*?)$"));
 
 /// Escape `&`, `<`, `>`, `"`, and `'` to their HTML entity equivalents.
 fn escape_html(text: &str) -> String {

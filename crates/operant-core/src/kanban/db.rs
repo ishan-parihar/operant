@@ -136,6 +136,16 @@ pub struct KanbanDb {
 }
 
 impl KanbanDb {
+    /// Lock the SQLite connection, converting mutex poisoning into a
+    /// recoverable error instead of panicking (same pattern as database.rs).
+    fn lock_conn(&self) -> Result<std::sync::MutexGuard<'_, Connection>, Error> {
+        self.conn
+            .lock()
+            .map_err(|_| Error::Agent("kanban db mutex poisoned".to_string()))
+    }
+}
+
+impl KanbanDb {
     pub fn init(path: PathBuf) -> Result<Self, Error> {
         let conn = Connection::open(path)
             .map_err(|e| Error::Agent(format!("Failed to open kanban database: {}", e)))?;
@@ -153,7 +163,7 @@ impl KanbanDb {
     }
 
     fn setup_schema(&self) -> Result<(), Error> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
 
         let schema = r#"
             CREATE TABLE IF NOT EXISTS tasks (
@@ -272,7 +282,7 @@ impl KanbanDb {
     }
 
     pub fn get_task(&self, id: &str) -> Result<Option<Task>, Error> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
         let mut stmt = conn
             .prepare("SELECT * FROM tasks WHERE id = ?1")
             .map_err(|e| Error::Agent(format!("Failed to prepare get_task: {}", e)))?;
@@ -319,7 +329,7 @@ impl KanbanDb {
     }
 
     pub fn list_tasks(&self) -> Result<Vec<Task>, Error> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
         let mut stmt = conn
             .prepare("SELECT * FROM tasks ORDER BY created_at DESC")
             .map_err(|e| Error::Agent(format!("Failed to prepare list_tasks: {}", e)))?;
@@ -370,7 +380,7 @@ impl KanbanDb {
     }
 
     pub fn create_task(&self, p: CreateTaskParams<'_>) -> Result<String, Error> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
 
         if let Some(key) = p.idempotency_key {
             let existing: Option<String> = conn
@@ -421,7 +431,7 @@ impl KanbanDb {
         created_cards: Option<&[String]>,
         expected_run_id: Option<i64>,
     ) -> Result<bool, Error> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
 
         if let Some(run_id) = expected_run_id {
             let current_run: Option<i64> = conn
@@ -475,7 +485,7 @@ impl KanbanDb {
         reason: &str,
         expected_run_id: Option<i64>,
     ) -> Result<bool, Error> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
 
         if let Some(run_id) = expected_run_id {
             let current_run: Option<i64> = conn
@@ -519,7 +529,7 @@ impl KanbanDb {
         note: Option<&str>,
         expected_run_id: Option<i64>,
     ) -> Result<bool, Error> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
 
         if let Some(run_id) = expected_run_id {
             let current_run: Option<i64> = conn
@@ -561,7 +571,7 @@ impl KanbanDb {
     }
 
     pub fn add_comment(&self, tid: &str, author: &str, body: &str) -> Result<i64, Error> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
         conn.execute(
             "INSERT INTO task_comments (task_id, author, body, created_at) VALUES (?1, ?2, ?3, ?4)",
             params![tid, author, body, chrono::Utc::now().timestamp()],
@@ -572,7 +582,7 @@ impl KanbanDb {
     }
 
     pub fn link_tasks(&self, parent_id: &str, child_id: &str) -> Result<(), Error> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
         conn.execute(
             "INSERT INTO task_links (parent_id, child_id) VALUES (?1, ?2)",
             params![parent_id, child_id],
@@ -582,7 +592,7 @@ impl KanbanDb {
     }
 
     pub fn unlink_tasks(&self, parent_id: &str, child_id: &str) -> Result<(), Error> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
         conn.execute(
             "DELETE FROM task_links WHERE parent_id = ?1 AND child_id = ?2",
             params![parent_id, child_id],
@@ -592,7 +602,7 @@ impl KanbanDb {
     }
 
     pub fn add_assignee(&self, task_id: &str, assignee: &str) -> Result<(), Error> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
         conn.execute(
             "INSERT OR IGNORE INTO task_assignees (task_id, assignee) VALUES (?1, ?2)",
             params![task_id, assignee],
@@ -602,7 +612,7 @@ impl KanbanDb {
     }
 
     pub fn remove_assignee(&self, task_id: &str, assignee: &str) -> Result<(), Error> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
         conn.execute(
             "DELETE FROM task_assignees WHERE task_id = ?1 AND assignee = ?2",
             params![task_id, assignee],
@@ -612,7 +622,7 @@ impl KanbanDb {
     }
 
     pub fn list_assignees(&self, task_id: &str) -> Result<Vec<String>, Error> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
         let mut stmt = conn
             .prepare("SELECT assignee FROM task_assignees WHERE task_id = ?1 ORDER BY assignee ASC")
             .map_err(|e| Error::Agent(format!("Failed to prepare list_assignees: {}", e)))?;
@@ -629,7 +639,7 @@ impl KanbanDb {
     }
 
     pub fn list_comments(&self, tid: &str) -> Result<Vec<Comment>, Error> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
         let mut stmt = conn.prepare("SELECT id, task_id, author, body, created_at FROM task_comments WHERE task_id = ?1 ORDER BY created_at ASC")
             .map_err(|e| Error::Agent(format!("Failed to prepare list_comments: {}", e)))?;
 
@@ -653,7 +663,7 @@ impl KanbanDb {
     }
 
     pub fn list_events(&self, tid: &str) -> Result<Vec<Event>, Error> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
         let mut stmt = conn.prepare("SELECT id, task_id, kind, payload, created_at, run_id FROM task_events WHERE task_id = ?1 ORDER BY created_at ASC")
             .map_err(|e| Error::Agent(format!("Failed to prepare list_events: {}", e)))?;
 
@@ -682,7 +692,7 @@ impl KanbanDb {
     }
 
     pub fn list_runs(&self, tid: &str) -> Result<Vec<Run>, Error> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
         let mut stmt = conn
             .prepare("SELECT * FROM task_runs WHERE task_id = ?1 ORDER BY started_at ASC")
             .map_err(|e| Error::Agent(format!("Failed to prepare list_runs: {}", e)))?;
@@ -722,7 +732,7 @@ impl KanbanDb {
     }
 
     pub fn parent_ids(&self, tid: &str) -> Result<Vec<String>, Error> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
         let mut stmt = conn
             .prepare("SELECT parent_id FROM task_links WHERE child_id = ?1")
             .map_err(|e| Error::Agent(format!("Failed to prepare parent_ids: {}", e)))?;
@@ -739,7 +749,7 @@ impl KanbanDb {
     }
 
     pub fn child_ids(&self, tid: &str) -> Result<Vec<String>, Error> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
         let mut stmt = conn
             .prepare("SELECT child_id FROM task_links WHERE parent_id = ?1")
             .map_err(|e| Error::Agent(format!("Failed to prepare child_ids: {}", e)))?;
