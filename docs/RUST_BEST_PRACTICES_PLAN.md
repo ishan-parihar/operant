@@ -15,8 +15,8 @@ provider (see `AUDIT_2026-08-02.md` §7). The gaps are **not** in the loop itsel
 
 | Metric | Current | Target |
 |--------|---------|--------|
-| Production `unwrap()` (excl. test modules) | **~440** (core: 268, runtime: 141, tools: 18, mem: 6, gw: 4, cfg: 3) | 0 (enforced) |
-| Production `expect()` | **~310** (gw: 100, core: 86, tools: 78, cfg: 44, mem: 4) | 0 (enforced) |
+| Production `unwrap()` (excl. test modules) | **0** across all 6 lib crates ✅ (was ~440: core 268, runtime 141, tools 18, mem 6, gw 4, cfg 3) | 0 (enforced — Phase 8) |
+| Production `expect()` | **~310** (gw: 100, core: 86, tools: 78, cfg: 44, mem: 4) | 0 (enforced — Phase 2b/8) |
 | Production `panic!` | 0 (all 5 sites are in test modules) ✅ | 0 |
 | Clippy warnings (lib targets) | **20** (core: 14, gateway: 6) | 0 (CI gate) |
 | `#![deny(missing_docs)]` | **0** crates | all lib crates |
@@ -95,8 +95,8 @@ provider (see `AUDIT_2026-08-02.md` §7). The gaps are **not** in the loop itsel
 | Phase 1 — 20 lib clippy warnings | ✅ DONE | core + gateway lib targets 0 warnings; `--all-targets` also clean (commits b00b2d1, add4a48). |
 | Phase 2 — core unwraps | ✅ **0/268** | database, gateway_session, approval, skill_usage, kanban/*, cronjobs, gateway_markdown, schema, profile, mcp, mcp_oauth, agent/mod, tools/* — all prod unwraps eliminated (b7ebc77, fdf3ec6, 04805ca, 0181db7, 217cf30, 782b9b8). |
 | Phase 2b — expect-site checklist | ⏳ pending | See §3 Phase 2 sub-commit 5 note below — when `#![deny(clippy::expect_used)]` lands, these justified expects need `#[expect]` escapes: gateway_session.rs (~27), database.rs `conn()` (1), approval.rs `rx()` (1), gateway_markdown.rs `rx()` + captures (~9), agent/mod.rs locks (~8), plus the per-site expects added in 782b9b8. |
-| Phase 3 — runtime unwraps | ⛔ not started | operant-runtime: cron/store 131, webauthn 90, cron/scheduler 86, delegate 84, file_read 81, sop/engine 67, agent/loop_ 63, skills/audit 58. |
-| Phase 4 — tools/memory/gateway/config unwraps | ⛔ not started | tools 18/78, memory 6/4, gateway 4/100, config 3/44. |
+| Phase 3 — runtime unwraps | ✅ **0/141** | security/leak_detector + prompt_guard static-regex unwraps -> rx() helpers (f2c1558); sop/engine, trust/types, identity, doctor, crypto, security_ops, tools/mod, skillforge, model_switch, command_logger, tool_execution, agent/agent, loop_ -> justified expect or graceful if-let (cca00d5). prometheus.rs (25 expects) behind broken observability feature — OPEN. |
+| Phase 4 — tools/memory/gateway/config unwraps | ✅ **0/31** | calculator NaN-safe total_cmp sort, jira/linkedin/notion guarded json!, tool_search/web_search locks+regexes, git_operations while-let walk, memory consolidation/snapshot, gateway api_config/sse, config policy (06a5289). Also caught turn_context.rs evolution_state lock in core (missed in Phase 2 sweep). |
 | Phase 5 — anyhow → thiserror | ⛔ not started | memory + gateway lib deps. |
 | Phase 6 — missing_docs | ⛔ not started | `#![deny(missing_docs)]` on config/memory/tool-call-parser first. |
 | Phase 7 — hermes parity (tool planning, telemetry, eval) | ⛔ not started | design review first. |
@@ -146,13 +146,13 @@ Apply `cargo clippy --fix` + manual review for the mechanical lints in `operant-
 4. remaining core files (`skills.rs`, `profile.rs`, `config.rs`, `kanban/`, `patch_tool.rs`, `file_state.rs`)
 5. Add `#![deny(clippy::unwrap_used)]` + `#![deny(clippy::expect_used)]` to `operant-core/src/lib.rs` at the end (with `#[expect]` justification escapes) so the count cannot regress. **Expect escapes needed at these sites (from Phase 2 work):** gateway_session.rs read/write expects (~27), database.rs `conn()` accessor, approval.rs `rx()`, gateway_markdown.rs `rx()` + capture-group expects, agent/mod.rs lock expects (~8), skill_usage.rs (~9), mcp_oauth.rs (~7), file_state/feishu/todo/notify/diagnostics/triage/dispatcher lock expects, computer_use/kanban_tool/mcp serde expects. Do NOT add `#[expect]` before the deny lands (restriction lint not enabled yet → unfulfilled-expectation warnings).
 
-### Phase 3 — unwrap()/expect() remediation in operant-runtime (~2 hr)
+### Phase 3 — unwrap()/expect() remediation in operant-runtime ✅ DONE
 
-Same strategy on the runtime hotspots (cron/store 131, webauthn 90, cron/scheduler 86, delegate 84, file_read 81, sop/engine 67, agent/loop_ 63, skills/audit 58). Add `deny` attrs on completion.
+**Note:** the plan's original hotspot counts (cron/store 131, webauthn 90, …) were gross counts *including* test modules; the production-only reality was 65 unwraps + 40 expects. All eliminated: static-literal regex unwraps → `rx()` helpers (leak_detector, prompt_guard, loop_), lock-invariant + guarded-by-check sites → justified `expect`, data-dependent `tool_call_id` sites → graceful `if let`. prometheus.rs (~25 expects) remains behind the broken `observability-prometheus` feature (never compiled in default features) — tracked OPEN in the `--all-features` inventory.
 
-### Phase 4 — unwrap()/expect() in the remaining crates (~1 hr)
+### Phase 4 — unwrap()/expect() in the remaining crates ✅ DONE
 
-`operant-tools` (18 unwrap, 78 expect), `operant-memory` (6/4), `operant-gateway` (4/100 — 100 expects to convert), `operant-config` (3/44). Add deny attrs.
+`operant-tools` (18 unwrap → 0; used `f64::total_cmp` for NaN-safe sort in calculator per Ch.1), `operant-memory` (6 → 0), `operant-gateway` (4 → 0), `operant-config` (3 → 0). The gateway's 100 expects remain (Phase 2b). One missed core site (turn_context.rs `evolution_state` lock) found by rigorous test-boundary scan and fixed in the Phase 4 commit.
 
 ### Phase 5 — Library error hierarchy: anyhow → thiserror (~1 hr)
 
