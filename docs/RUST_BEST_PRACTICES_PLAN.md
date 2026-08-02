@@ -87,6 +87,29 @@ provider (see `AUDIT_2026-08-02.md` §7). The gaps are **not** in the loop itsel
 
 ---
 
+## 2.7 Progress Tracker (updated 2026-08-03)
+
+| Phase | Status | Notes |
+|-------|--------|-------|
+| Phase 0 — clippy gate | ✅ DONE | `scripts/clippy-warning-gate.sh` + `.ci/clippy-allowlist.txt` (4 entries, all in the user's `prompt_input` WIP). CI wiring deferred per user (workflows out of scope). |
+| Phase 1 — 20 lib clippy warnings | ✅ DONE | core + gateway lib targets 0 warnings; `--all-targets` also clean (commits b00b2d1, add4a48). |
+| Phase 2 — core unwraps | ✅ **0/268** | database, gateway_session, approval, skill_usage, kanban/*, cronjobs, gateway_markdown, schema, profile, mcp, mcp_oauth, agent/mod, tools/* — all prod unwraps eliminated (b7ebc77, fdf3ec6, 04805ca, 0181db7, 217cf30, 782b9b8). |
+| Phase 2b — expect-site checklist | ⏳ pending | See §3 Phase 2 sub-commit 5 note below — when `#![deny(clippy::expect_used)]` lands, these justified expects need `#[expect]` escapes: gateway_session.rs (~27), database.rs `conn()` (1), approval.rs `rx()` (1), gateway_markdown.rs `rx()` + captures (~9), agent/mod.rs locks (~8), plus the per-site expects added in 782b9b8. |
+| Phase 3 — runtime unwraps | ⛔ not started | operant-runtime: cron/store 131, webauthn 90, cron/scheduler 86, delegate 84, file_read 81, sop/engine 67, agent/loop_ 63, skills/audit 58. |
+| Phase 4 — tools/memory/gateway/config unwraps | ⛔ not started | tools 18/78, memory 6/4, gateway 4/100, config 3/44. |
+| Phase 5 — anyhow → thiserror | ⛔ not started | memory + gateway lib deps. |
+| Phase 6 — missing_docs | ⛔ not started | `#![deny(missing_docs)]` on config/memory/tool-call-parser first. |
+| Phase 7 — hermes parity (tool planning, telemetry, eval) | ⛔ not started | design review first. |
+| Phase 8 — enforcement | ⛔ not started | `lint-checks.sh` wrapping gate + fmt --check + deny audit. |
+
+**`--all-features` broken inventory (verified 2026-08-03):** `operant-runtime`
+observability (otel/prometheus, deps never declared, 1,669 LOC) and
+`operant-hardware` `hardware` feature (`include_str!` firmware/ dir never
+committed) — both still OPEN. Fixed: tools `probe`, core `anthropic` (Send),
+gateway `schema-export` (feature-gated import).
+
+---
+
 ## 3. Fix Plan (prioritized, incremental, commit-per-phase)
 
 ### Phase 0 — Stop the bleeding: green CI gate (highest priority, ~30 min)
@@ -121,7 +144,7 @@ Apply `cargo clippy --fix` + manual review for the mechanical lints in `operant-
 2. `operant-core/src/gateway_session.rs` (86) + `approval.rs` (63)
 3. `operant-core/src/memory.rs` (33) + `skill_usage.rs` (40) + `skills_guard.rs` (34)
 4. remaining core files (`skills.rs`, `profile.rs`, `config.rs`, `kanban/`, `patch_tool.rs`, `file_state.rs`)
-5. Add `#![deny(clippy::unwrap_used)]` + `#![deny(clippy::expect_used)]` to `operant-core/src/lib.rs` at the end (with `#[expect]` justification escapes) so the count cannot regress.
+5. Add `#![deny(clippy::unwrap_used)]` + `#![deny(clippy::expect_used)]` to `operant-core/src/lib.rs` at the end (with `#[expect]` justification escapes) so the count cannot regress. **Expect escapes needed at these sites (from Phase 2 work):** gateway_session.rs read/write expects (~27), database.rs `conn()` accessor, approval.rs `rx()`, gateway_markdown.rs `rx()` + capture-group expects, agent/mod.rs lock expects (~8), skill_usage.rs (~9), mcp_oauth.rs (~7), file_state/feishu/todo/notify/diagnostics/triage/dispatcher lock expects, computer_use/kanban_tool/mcp serde expects. Do NOT add `#[expect]` before the deny lands (restriction lint not enabled yet → unfulfilled-expectation warnings).
 
 ### Phase 3 — unwrap()/expect() remediation in operant-runtime (~2 hr)
 
