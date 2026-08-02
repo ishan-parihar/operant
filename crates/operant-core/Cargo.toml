@@ -65,7 +65,7 @@ tempfile = { workspace = true }
 image = { workspace = true }
 
 [features]
-default = []
+default = ["agentmemory"]
 anthropic = []
 # agentmemory — hybrid semantic memory via the agentmemory server (REST + MCP)
 agentmemory = []

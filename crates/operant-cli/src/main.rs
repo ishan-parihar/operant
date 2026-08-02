@@ -90,6 +90,7 @@ use operant_core::config::{
 };
 use operant_core::mcp::McpManager;
 use operant_core::memory::MemoryManager;
+use operant_core::memory_provider::MemoryProvider;
 use operant_core::skills::SkillManager;
 use operant_core::tools::{ToolContext, ToolRegistry};
 use serde_json::Value;
@@ -705,6 +706,49 @@ pub(crate) async fn build_registry(
         }
     }
 
+    // Register the agentmemory MCP server so the full 53-tool memory
+    // surface (memory_smart_search, memory_save, memory_sessions, ...) is
+    // available to the agent whenever the agentmemory provider is active.
+    // Skipped when the user already configured an "agentmemory" server.
+    if config.memory.enabled && config.memory.provider == "agentmemory" {
+        let already = mcp_manager.contains("agentmemory").await;
+        let configured = config
+            .mcp
+            .servers
+            .iter()
+            .any(|s| s.name == "agentmemory" && s.enabled);
+        if !already && !configured {
+            let server_url = config
+                .memory
+                .agentmemory_url
+                .clone()
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or_else(|| "http://localhost:3111".to_string());
+            let mut env = std::collections::HashMap::new();
+            env.insert("AGENTMEMORY_URL".to_string(), server_url);
+            match mcp_manager
+                .add_stdio_server(
+                    "agentmemory".to_string(),
+                    "npx".to_string(),
+                    vec!["-y".to_string(), "@agentmemory/mcp".to_string()],
+                    env,
+                )
+                .await
+            {
+                Ok(()) => {
+                    mcp_manager.sync_tools_to_registry(&registry).await;
+                    tracing::info!("agentmemory MCP server registered (memory tools available)");
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        "agentmemory MCP server registration failed (non-fatal)"
+                    );
+                }
+            }
+        }
+    }
+
     let disabled_tools: std::collections::HashSet<String> =
         config.tools.disabled_tools.iter().cloned().collect();
     let disabled_toolsets: std::collections::HashSet<String> =
@@ -776,6 +820,10 @@ struct AgentCore {
     registry: ToolRegistry,
     agent_config: AgentConfig,
     memory_manager: MemoryManager,
+    /// Long-term memory provider (agentmemory/builtin). Attached to the
+    /// agent so sync_turn/prefetch/session hooks actually fire — this was
+    /// previously built-and-dropped (see docs/AUDIT_2026-08-02.md F1).
+    memory_provider: Option<Arc<dyn MemoryProvider>>,
     skill_manager: SkillManager,
 }
 
@@ -801,7 +849,7 @@ async fn build_agent_core(
     )
     .await?;
     let agent_config = agent_config(config, behavior, system_prompt);
-    let memory_manager = load_repo_memory_manager().await?;
+    let (memory_manager, memory_provider) = load_repo_memory_manager().await?;
 
     let mut skill_manager = SkillManager::new(skills_dir.to_path_buf());
     if let Err(e) = skill_manager.load_all() {
@@ -817,6 +865,7 @@ async fn build_agent_core(
         registry,
         agent_config,
         memory_manager,
+        memory_provider,
         skill_manager,
     })
 }
@@ -858,7 +907,7 @@ pub(crate) async fn create_runtime_agent(
             tracing::info!("Ctrl-C received — triggering agent interrupt flag");
             handler_flag.trigger();
         });
-        OperantAgent::with_events(
+        let mut agent = OperantAgent::with_events(
             core.agent_config,
             model_client,
             core.registry,
@@ -867,7 +916,13 @@ pub(crate) async fn create_runtime_agent(
         )
         .with_memory_manager(core.memory_manager)
         .with_skill_manager(core.skill_manager)
-        .with_interrupt_flag(flag)
+        .with_interrupt_flag(flag);
+        // Attach the long-term memory provider so turn/session hooks fire
+        // (sync_turn, prefetch, on_session_end, ...). Closes audit gap F1.
+        if let Some(provider) = core.memory_provider {
+            agent = agent.with_memory_provider(provider);
+        }
+        agent
     })
 }
 
@@ -902,7 +957,7 @@ pub(crate) async fn create_agent_without_events(
             tracing::info!("Ctrl-C received — triggering agent interrupt flag");
             handler_flag.trigger();
         });
-        OperantAgent::new(
+        let mut agent = OperantAgent::new(
             core.agent_config,
             model_client,
             core.registry,
@@ -910,37 +965,51 @@ pub(crate) async fn create_agent_without_events(
         )
         .with_memory_manager(core.memory_manager)
         .with_skill_manager(core.skill_manager)
-        .with_interrupt_flag(flag)
+        .with_interrupt_flag(flag);
+        // Attach the long-term memory provider so turn/session hooks fire
+        // (sync_turn, prefetch, on_session_end, ...). Closes audit gap F1.
+        if let Some(provider) = core.memory_provider {
+            agent = agent.with_memory_provider(provider);
+        }
+        agent
     })
 }
 
-async fn load_repo_memory_manager() -> Result<MemoryManager> {
+async fn load_repo_memory_manager(
+) -> Result<(MemoryManager, Option<Arc<dyn MemoryProvider>>)> {
     let storage_dir = operant_core::platform::operant_home();
     load_memory_manager(storage_dir).await
 }
 
-pub(crate) async fn load_memory_manager(storage_dir: PathBuf) -> Result<MemoryManager> {
+/// Load the file-backed MemoryManager and, when a non-builtin provider is
+/// configured, build + background-initialize it and return it so the agent
+/// can attach it (previously the provider was dropped — audit gap F1).
+pub(crate) async fn load_memory_manager(
+    storage_dir: PathBuf,
+) -> Result<(MemoryManager, Option<Arc<dyn MemoryProvider>>)> {
     let memory_manager = MemoryManager::with_storage_dir(storage_dir.clone());
     memory_manager
         .load_from_disk()
         .await
         .context("Failed to load long-term memory")?;
 
-    // If configured provider is not "builtin", initialise it now.
-    // The provider is available via operant_core::memory_provider::build_memory_provider.
     let cfg = operant_core::config::runtime_config();
     if cfg.memory.enabled && cfg.memory.provider != "builtin" && cfg.memory.provider != "disabled" {
         let provider =
             operant_core::memory_provider::build_memory_provider(&cfg.memory.provider, storage_dir);
-        // Initialize in the background; failures are non-fatal.
+        let name = provider.name().to_string();
+        let init = provider.clone();
+        // Initialize in the background (spawns/warms the agentmemory server);
+        // failures are non-fatal.
         tokio::spawn(async move {
-            if let Err(e) = provider.initialize("main").await {
-                tracing::warn!(provider = %provider.name(), error = %e, "Memory provider init failed");
+            if let Err(e) = init.initialize("main").await {
+                tracing::warn!(provider = %name, error = %e, "Memory provider init failed");
             }
         });
+        Ok((memory_manager, Some(provider)))
+    } else {
+        Ok((memory_manager, None))
     }
-
-    Ok(memory_manager)
 }
 
 async fn run_non_tui(
@@ -1469,7 +1538,10 @@ mod tests {
         // read the file.
         seed.flush_if_dirty().await.unwrap();
 
-        let loaded = load_memory_manager(dir.clone()).await.unwrap();
+        let (loaded, provider) = load_memory_manager(dir.clone()).await.unwrap();
+        // With the default config, provider may be Some(agentmemory) or None
+        // (builtin/disabled) — both are valid; the manager must still load.
+        assert!(provider.is_none() || provider.unwrap().name() == "agentmemory");
 
         assert_eq!(loaded.search("Loaded memory").await.len(), 1);
 
