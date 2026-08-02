@@ -271,56 +271,83 @@ impl SkillUsageTracker {
     /// Load telemetry from disk (creates empty if missing).
     pub fn load(&self) -> Result<()> {
         let telemetry = UsageTelemetry::load(&self.file_path)?;
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self
+            .inner
+            .lock()
+            .expect("skill usage mutex poisoned — programmer error");
         *inner = telemetry;
         Ok(())
     }
 
     /// Save telemetry to disk.
     pub fn save(&self) -> Result<()> {
-        let inner = self.inner.lock().unwrap();
+        let inner = self
+            .inner
+            .lock()
+            .expect("skill usage mutex poisoned — programmer error");
         inner.save(&self.file_path)
     }
 
     /// Get all records.
     pub fn all_records(&self) -> Vec<UsageRecord> {
-        let inner = self.inner.lock().unwrap();
+        let inner = self
+            .inner
+            .lock()
+            .expect("skill usage mutex poisoned — programmer error");
         inner.all_records().to_vec()
     }
 
     /// Get agent-created records only.
     pub fn agent_created_records(&self) -> Vec<UsageRecord> {
-        let inner = self.inner.lock().unwrap();
+        let inner = self
+            .inner
+            .lock()
+            .expect("skill usage mutex poisoned — programmer error");
         inner.agent_created_records().into_iter().cloned().collect()
     }
 
     /// List active (non-archived/non-retired) records.
     pub fn list_active(&self) -> Vec<UsageRecord> {
-        let inner = self.inner.lock().unwrap();
+        let inner = self
+            .inner
+            .lock()
+            .expect("skill usage mutex poisoned — programmer error");
         inner.list_active().into_iter().cloned().collect()
     }
 
     /// Set pinned status for a skill.
     pub fn set_pinned(&self, name: &str, pinned: bool) -> Result<()> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self
+            .inner
+            .lock()
+            .expect("skill usage mutex poisoned — programmer error");
         inner.set_pinned(name, pinned)
     }
 
     /// Mark a skill as agent-created.
     pub fn mark_agent_created(&self, name: &str) {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self
+            .inner
+            .lock()
+            .expect("skill usage mutex poisoned — programmer error");
         inner.mark_agent_created(name);
     }
 
     /// Remove a record by name.
     pub fn remove(&self, name: &str) {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self
+            .inner
+            .lock()
+            .expect("skill usage mutex poisoned — programmer error");
         inner.remove(name);
     }
 
     /// Set the lifecycle state for a skill.
     pub fn set_state(&self, name: &str, state: LifecycleState) -> Result<()> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self
+            .inner
+            .lock()
+            .expect("skill usage mutex poisoned — programmer error");
         inner.set_state(name, state)
     }
 }
