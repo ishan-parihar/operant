@@ -1,3 +1,4 @@
+#![deny(missing_docs)]
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
 //! Per-platform tool policy.
@@ -17,6 +18,21 @@
 //! - A configured entry is an **allow-list** of toolset tokens / tool names
 //!   for that platform; tokens are canonicalized so `"browser-use"`,
 //!   `"browser_use"`, and `"browser"` are interchangeable.
+//!
+//! ## Security note (read before relying on the allow-list)
+//!
+//! This is a *convenience* policy layer, not a hard security boundary:
+//!
+//! - A token that matches **no** tool or group falls back to **all tools**
+//!   (never silently strips the whole registry on a typo). A misspelled
+//!   platform key or token therefore disables the restriction rather than
+//!   breaking the platform — treat a non-empty config that yields "all" as
+//!   a misconfiguration (a `tracing::warn` is emitted per unknown token).
+//! - A bare token is expanded as a **name prefix group** (`"browser"` →
+//!   `browser_*`), so it matches every tool whose name starts with the token.
+//!   A short token such as `"web"` will match `web_search`, `web_extract`,
+//!   and any future `web*` tool. Prefer distinct, longer tokens to keep the
+//!   allow-list precise, or accept the group semantics.
 
 use std::collections::{HashMap, HashSet};
 
@@ -28,7 +44,7 @@ pub fn normalize_platform_key(platform: &str) -> String {
         "local" => "cli".to_string(),
         "tg" => "telegram".to_string(),
         "dc" => "discord".to_string(),
-        "api" | "http" => "api_server".to_string(),
+        "api" | "http" | "gateway" | "webhook" => "api_server".to_string(),
         "sms" => "sms_twilio".to_string(),
         other => other.to_string(),
     }
@@ -177,7 +193,22 @@ pub fn resolve_platform_tool_names(
     }
 
     if all_requested || names.is_empty() {
-        // Fallback: empty config (or explicit `all`) → every tool.
+        // Fallback: empty config (or explicit `all`) → every tool. A non-empty
+        // platform entry whose tokens matched nothing is a misconfiguration:
+        // warn loudly (the per-token warn above already fires, this is the
+        // aggregate) so the operator does not mistake "all tools" for their
+        // intended allow-list.
+        let key = normalize_platform_key(platform);
+        let entry_matched_nothing = toolsets.get(&key).is_some_and(|entry| {
+            !entry.is_empty() && entry.iter().all(|t| t.trim() != "all" && t.trim() != "*")
+        });
+        if entry_matched_nothing && !all_requested {
+            tracing::warn!(
+                platform = %platform,
+                "platform_toolsets entry matched no tools — falling back to ALL tools; \
+                 check token spelling (this is NOT a security boundary)"
+            );
+        }
         return all_names.iter().map(|n| (*n).to_string()).collect();
     }
 
