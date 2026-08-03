@@ -15,6 +15,7 @@ operant-memory.workspace = true
 operant-tools.workspace = true
 operant-macros.workspace = true
 operant-tool-call-parser.workspace = true
+operant-tool-planning.workspace = true
 anyhow = "1.0"
 async-trait = "0.1"
 base64 = "0.22"

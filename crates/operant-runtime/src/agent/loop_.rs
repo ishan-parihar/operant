@@ -3409,6 +3409,32 @@ pub async fn process_message(
         }
     }
 
+    // ── Per-platform tool policy (gateway/non-CLI path) ──────────
+    // When `gateway.platform_toolsets` is configured for the `api_server`
+    // platform (this function is the gateway daemon / webhook path), narrow
+    // the registry to the allow-list. Empty config → all tools (legacy
+    // behavior), so this is a strict no-op unless explicitly configured.
+    let all_names: Vec<String> = tools_registry
+        .iter()
+        .map(|t| t.name().to_string())
+        .collect();
+    let allowed: Vec<String> = operant_tool_planning::resolve_platform_tool_names(
+        &config.gateway.platform_toolsets,
+        "api_server",
+        &all_names.iter().map(String::as_str).collect::<Vec<_>>(),
+    );
+    if allowed.len() < all_names.len() {
+        let allowed_set: std::collections::HashSet<&str> =
+            allowed.iter().map(String::as_str).collect();
+        let before = tools_registry.len();
+        tools_registry.retain(|tool| allowed_set.contains(tool.name()));
+        tracing::info!(
+            "Platform tool policy (api_server): {}/{} tools exposed",
+            tools_registry.len(),
+            before
+        );
+    }
+
     let provider_name = config.providers.fallback.as_deref().unwrap_or("openrouter");
     let model_name = match fallback_provider_pm
         .and_then(|e| e.model.as_deref())

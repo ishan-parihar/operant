@@ -16,6 +16,7 @@ members = [
     "crates/operant-runtime",
     "crates/operant-hardware",
     "crates/operant-tool-call-parser",
+    "crates/operant-tool-planning",
     "crates/robot-kit",
 ]
 
@@ -41,6 +42,7 @@ operant-tools = { path = "crates/operant-tools" }
 operant-runtime = { path = "crates/operant-runtime" }
 operant-hardware = { path = "crates/operant-hardware" }
 operant-tool-call-parser = { path = "crates/operant-tool-call-parser" }
+operant-tool-planning = { path = "crates/operant-tool-planning" }
 operant-robot-kit = { path = "crates/robot-kit" }
 
 # Async runtime

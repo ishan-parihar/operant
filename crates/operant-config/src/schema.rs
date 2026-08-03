@@ -2419,6 +2419,18 @@ pub struct GatewayConfig {
     #[serde(default)]
     pub web_dist_dir: Option<String>,
 
+    /// Per-platform tool allow-lists, keyed by normalized platform key
+    /// (`cli`, `telegram`, `discord`, `slack`, `api_server`, …). Each value
+    /// is a list of toolset tokens / tool names (aliases are canonicalized:
+    /// `browser-use`, `browser_use`, `browser` are interchangeable).
+    ///
+    /// Default empty → all tools are exposed on every platform (legacy
+    /// behavior). When a platform has an entry, only the listed tools (plus
+    /// any tools whose names start with a listed token) are sent to the LLM
+    /// for that platform's sessions. See `operant-tool-planning`.
+    #[serde(default)]
+    pub platform_toolsets: HashMap<String, Vec<String>>,
+
     /// TLS configuration for the gateway server (`[gateway.tls]`).
     #[serde(default)]
     #[nested]
@@ -2481,6 +2493,7 @@ impl Default for GatewayConfig {
             pairing_dashboard: PairingDashboardConfig::default(),
             web_dist_dir: None,
             tls: None,
+            platform_toolsets: HashMap::new(),
         }
     }
 }
@@ -14522,6 +14535,7 @@ bot_token = "xoxb-tok"
             pairing_dashboard: PairingDashboardConfig::default(),
             web_dist_dir: None,
             tls: None,
+            platform_toolsets: HashMap::new(),
         };
         let toml_str = toml::to_string(&g).unwrap();
         let parsed: GatewayConfig = toml::from_str(&toml_str).unwrap();
