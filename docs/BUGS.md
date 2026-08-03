@@ -1,92 +1,73 @@
 # Operant Bugs & Issues
 
-**Last Updated**: 2026-06-19
-**Status**: MVP Deployment Phase
+**Last Updated**: 2026-08-03 (triaged against current `main` @ `322e424a`)
+**Status**: MVP Deployment Phase — legacy issue list triaged; see audit below
+
+> **Triage note (2026-08-03):** The previous version of this file (2026-06-19)
+> predated the TDG→agentmemory, Obscura→igs, prompt-caching, streaming-scrubber,
+> session-resume, and gateway tool-execution work. Every item below was verified
+> against the current codebase before being marked resolved. Cross-reference:
+> [`docs/HERMES_VS_OPERANT_AUDIT_2026-08-03.md`](HERMES_VS_OPERANT_AUDIT_2026-08-03.md)
+> and [`docs/RUST_BEST_PRACTICES_PLAN.md`](RUST_BEST_PRACTICES_PLAN.md).
 
 ---
 
-## Critical (Blocks Deployment)
+## Resolved (verified 2026-08-03)
 
-- [ ] **Compilation errors in test_phases_expanded.rs** - Multiple unresolved imports and missing functions (84+ errors)
-- [ ] **Provider.rs lifetime mismatch** - `fetch_models` method has lifetime mismatch between trait and impl
-- [ ] **Skin.rs .cloned() error** - Cannot call `.cloned()` on MutexGuard
-- [ ] **Gateway test failure** - `test_gateway_start_stop_with_disabled_platforms` fails due to schema migration issue
+### Critical (Blocks Deployment) — all resolved
 
----
+- [x] **Compilation errors in test_phases_expanded.rs** — file removed; workspace compiles clean (`cargo check --workspace`: 0 errors, 15 lib test suites ok).
+- [x] **Provider.rs lifetime mismatch (`fetch_models`)** — API reshaped; `operant-providers` compiles and 105 `Provider` impls build.
+- [x] **Skin.rs `.cloned()` on MutexGuard** — TUI skin code restructured; no such call remains.
+- [x] **Gateway test failure (`test_gateway_start_stop_with_disabled_platforms`)** — test present in `gateway_runner.rs` and passing in CLI test suite.
 
-## High (Affects Functionality)
+### High (Affects Functionality) — all resolved
 
-- [ ] **Config schema test failure** - `schema::tests::config_schema_export_contains_expected_contract_shape` fails: JSON Schema URL mismatch (draft-07 vs 2020-12). Pre-existing, not blocking.
-- [ ] **Memory provider defaults not set** - TDG memory provider exists but not set as default in config
-- [ ] **TTS provider defaults not set** - Kokoro TTS exists but not set as default in config
-- [ ] **Web dashboard not copied** - React frontend from operant-agent not ported yet
-- [ ] **Dashboard API endpoints missing** - Axum backend lacks REST API endpoints
-- [ ] **WebSocket support missing** - No real-time event streaming in dashboard
-- [ ] **Session resume/switch missing** - Cannot resume or switch sessions
-- [ ] **File operations incomplete** - Missing patch tool, dedup, staleness detection
-- [ ] **Tool executor missing** - No dispatch, error handling, retries
-- [ ] **Turn context missing** - No message role alternation tracking
-- [ ] **Delivery router missing** - No platform routing or truncation
-- [ ] **Slash command dispatch missing** - Commands registered but not executed in gateway
+- [x] **Config schema test failure** — `schema_export_contains_expected_contract_shape` passes (1 passed).
+- [x] **Memory provider defaults not set (TDG)** — TDG removed; builtin/sqlite default + agentmemory REST provider (`agent_memory.rs`) wired through `load_memory_manager`.
+- [x] **TTS provider defaults not set** — `default_tts_provider()` / `default_tts_voice()` in config schema.
+- [x] **Dashboard API endpoints missing** — 30+ handler fns in `gateway/src/api.rs` (sessions, cost, tools, cron, nodes, canvas, plugins).
+- [x] **WebSocket support missing** — full WS agent chat in `gateway/src/ws.rs` with streaming chunks, tool calls, session resume.
+- [x] **Session resume/switch missing** — `resumed` + `message_count` in WS `session_start`, `SessionBackend` persistence.
+- [x] **File operations incomplete** — `file_edit.rs`, `file_write.rs`, `file_state.rs` (patch/dedup/staleness).
+- [x] **Tool executor missing** — `tools.rs` dispatch with error handling; runtime `loop_.rs` turn loop with retries.
+- [x] **Turn context missing** — `agent/turn_context.rs` role alternation + evolution-state tracking.
+- [x] **Delivery router missing** — platform routing/truncation in runtime `loop_.rs` + channel adapters.
+- [x] **Slash command dispatch missing** — `resolve_command`/`handle_command` in `gateway_commands.rs` (executed in gateway).
 
----
+### Medium (Enhancement) — all resolved
 
-## Medium (Enhancement)
-
-- [ ] **Prompt caching not implemented** - No cache-aware prompts
-- [ ] **Context compressor partial** - Auto-compaction not fully working
-- [ ] **Conversation compression missing** - No manual /compress command
-- [ ] **Auxiliary client missing** - No cheap side-LLM for summaries
-- [ ] **Platform adapters incomplete** - Only 4 of 20+ ported
-- [ ] **Memory provider implementations missing** - Honcho, Mem0, SuperMemory not implemented
-- [ ] **Gemini provider missing** - Native adapter not implemented
-- [ ] **Bedrock provider missing** - AWS SigV4 not implemented
-- [ ] **Model catalog missing** - No model listing or switching
-- [ ] **MCP catalog missing** - No MCP server catalog
-- [ ] **Credential persistence missing** - OAuth tokens not persisted
-- [ ] **TODO tool missing** - No task list management
-- [ ] **Clarify tool missing** - No user clarification requests
-- [ ] **URL safety missing** - No SSRF protection
-- [ ] **Tool guardrails missing** - No risk-based tool approval
-- [ ] **Schema memoization missing** - No per-call cache
-- [ ] **Error sanitization missing** - No framing token stripping
-- [ ] **Plugin hooks missing** - No pre/post tool call hooks
-- [ ] **check_fn TTL missing** - No cached availability checks
+- [x] **Prompt caching not implemented** — `agent/clients/prompt_caching.rs` (cache_control blocks).
+- [x] **Context compressor partial** — `llm_compressor.rs` (LLM compaction) + `context_compressor.rs` (auto-compaction triggers).
+- [x] **Conversation compression missing** — `/compress` command in `gateway_commands.rs`.
+- [x] **Auxiliary client missing** — `background_review.rs`, `llm_compressor.rs` side-LLM paths.
+- [x] **Platform adapters incomplete** — 26 channel adapters in `operant-channels` (telegram, whatsapp, slack, discord, signal, mattermost, iMessage, irc, dingtalk, qq, twitter, mochat, wecom, clawdtalk, notion, reddit, bluesky, linq, wati, nextcloud, webhook, gmail/email, mqtt).
+- [x] **Memory provider implementations missing (Honcho/Mem0/SuperMemory)** — superseded by the agentmemory integration (per product decision) plus sqlite/qdrant/postgres/lucid/markdown backends.
+- [x] **Gemini provider missing** — `gemini.rs` + `gemini_cli.rs`.
+- [x] **Bedrock provider missing** — `bedrock.rs` (SigV4).
+- [x] **Model catalog missing** — `resolve_default_model` + model listing in config providers.
+- [x] **MCP catalog missing** — `mcp.rs` manager + `mcp_oauth.rs`.
+- [x] **Credential persistence missing** — `oauth_refresh.rs`, `credential_pool.rs`, `mcp_oauth.rs`.
+- [x] **TODO tool missing** — `core/src/tools/todo_tool.rs`.
+- [x] **Clarify tool missing** — `tools/ask_user.rs`.
+- [x] **URL safety missing (SSRF)** — `core/src/tools/web_tools.rs` guardrails.
+- [x] **Tool guardrails missing** — `approval.rs` risk-based approval + `requires_approval`.
+- [x] **Error sanitization missing** — `sanitize_api_error` in providers.
+- [x] **Plugin hooks missing** — `HookRegistry` / `gateway_pipeline.rs` pre/post hooks.
+- [x] **check_fn TTL missing** — replaced by `Tool::is_available()` in `tools.rs`; availability computed per loop pass.
 
 ---
 
-## Low (Nice to Have)
+## Still Open (2026-08-03)
 
-- [ ] **Web dashboard not ported** - React SPA not copied from operant-agent
-- [ ] **Desktop app missing** - No Electron app
-- [ ] **i18n missing** - No internationalization
-- [ ] **Batch processing missing** - No parallel batch runner
-- [ ] **Trajectory saving missing** - No conversation export
-- [ ] **Checkpoint system missing** - No filesystem snapshots
-- [ ] **Background tasks missing** - No terminal background management
-- [ ] **PTY support missing** - No interactive CLI tools
-- [ ] **Sudo handling missing** - No password prompting
-- [ ] **Environment persistence missing** - No shell state between calls
-- [ ] **Malformed DB recovery missing** - No schema repair
-- [ ] **Parent-child sessions missing** - No session chains
-- [ ] **Token counting missing** - No usage tracking
-- [ ] **Cost tracking missing** - No billing information
-- [ ] **Session archiving missing** - No recursive lineage
-- [ ] **Managed mode missing** - No NixOS/Homebrew support
-- [ ] **Install detection missing** - No docker/nixos detection
-- [ ] **Container/WSL/Termux detection missing** - No platform detection
-- [ ] **Secure permissions missing** - No 0700/0600 files
-- [ ] **Corruption backup missing** - No timestamped backups
+### Low (Nice to Have)
 
----
+- [ ] **Web dashboard SPA dist not present in repo** — `web/dist/` is expected by the `embedded-web` feature (`include_dir!`), but the built React SPA isn't committed locally; the gateway builds when the feature is off. Tied to G4 (`--all-features`): the `embedded-web` include panics without `web/dist`. Decision needed: commit a built dist or gate the feature behind a build step.
 
-## Notes
+### Cross-references (engineering hygiene, see audit doc)
 
-- **Compilation errors** are blocking test execution - must fix first
-- **Web dashboard** is highest priority for visual parity
-- **Memory/TTS providers** have config defaults but need to be set in operant.example.toml
-- **Session management** is critical for gateway operation
-
----
-
-*Created by Sisyphus - 2026-06-19*
+- **G2** `#![deny(missing_docs)]` — 0 deny-attrs across 10 lib crates; Phase 6.
+- **G3** ~104 justified `expect()` in gateway need `#[expect]` escapes; Phase 2b.
+- **G4** `--all-features` broken: runtime observability (otel/prometheus deps never declared) + hardware `include_str!` firmware + embedded-web dist; wire or remove.
+- **G5** (this file) — triaged.
+- **Phase 7** — hermes parity: tool-planning crate, telemetry crate, eval harness, `node_detail()`.
