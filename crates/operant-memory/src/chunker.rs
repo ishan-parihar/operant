@@ -8,8 +8,11 @@ use std::rc::Rc;
 /// A single chunk of text with metadata.
 #[derive(Debug, Clone)]
 pub struct Chunk {
+    /// Ordinal position of this chunk in the document (0-based).
     pub index: usize,
+    /// The chunk body (heading prefix included when present).
     pub content: String,
+    /// The markdown heading this chunk belongs to, if any.
     pub heading: Option<Rc<str>>,
 }
 

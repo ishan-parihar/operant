@@ -15,6 +15,7 @@ pub struct MarkdownMemory {
 }
 
 impl MarkdownMemory {
+    /// Construct a markdown backend rooted at `workspace_dir`.
     pub fn new(workspace_dir: &Path) -> Self {
         Self {
             workspace_dir: workspace_dir.to_path_buf(),

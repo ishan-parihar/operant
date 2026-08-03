@@ -116,7 +116,7 @@ impl From<Error> for operant_api::memory_traits::MemoryError {
 
 /// Convert a `MemoryError` from the trait seam back into the crate's typed
 /// error, so `?` works when calling `Memory` trait methods from crate-internal
-/// functions that return [`Result`](crate::Result).
+/// functions that return [`Result`].
 impl From<operant_api::memory_traits::MemoryError> for Error {
     fn from(value: operant_api::memory_traits::MemoryError) -> Self {
         match value {

@@ -52,6 +52,7 @@ pub struct RetrievalPipeline {
 }
 
 impl RetrievalPipeline {
+    /// Construct a pipeline over `memory` with the given stage config.
     pub fn new(memory: Arc<dyn Memory>, config: RetrievalConfig) -> Self {
         Self {
             memory,

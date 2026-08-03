@@ -57,9 +57,13 @@ pub fn bytes_to_vec(bytes: &[u8]) -> Vec<f32> {
 /// A scored result for hybrid merging
 #[derive(Debug, Clone)]
 pub struct ScoredResult {
+    /// Entry id (dedup key across sources).
     pub id: String,
+    /// Normalized vector (cosine) score, when the entry came from vector search.
     pub vector_score: Option<f32>,
+    /// Normalized keyword (BM25) score, when the entry came from keyword search.
     pub keyword_score: Option<f32>,
+    /// Weighted fusion of the available scores.
     pub final_score: f32,
 }
 

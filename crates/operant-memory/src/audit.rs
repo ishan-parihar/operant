@@ -16,11 +16,17 @@ use std::sync::Arc;
 /// Audit log entry operations.
 #[derive(Debug, Clone, Copy)]
 pub enum AuditOp {
+    /// A `store` call was made.
     Store,
+    /// A `recall` (or namespaced recall) call was made.
     Recall,
+    /// A `get` call was made.
     Get,
+    /// A `list` call was made.
     List,
+    /// A `forget` call was made.
     Forget,
+    /// A `store_procedural` call was made.
     StoreProcedural,
 }
 
@@ -46,6 +52,8 @@ pub struct AuditedMemory<M: Memory> {
 }
 
 impl<M: Memory> AuditedMemory<M> {
+    /// Create an audited wrapper, opening (and schema-initializing) the
+    /// audit database under `workspace_dir/memory/audit.db`.
     pub fn new(inner: M, workspace_dir: &Path) -> Result<Self> {
         let db_path = workspace_dir.join("memory").join("audit.db");
         if let Some(parent) = db_path.parent() {

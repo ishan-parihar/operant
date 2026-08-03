@@ -8,14 +8,20 @@
 //! This crate has no dependency on agent state, memory, providers, or channels.
 //! It is pure text transformation.
 
+#![deny(missing_docs)]
+
 use regex::Regex;
 use std::sync::LazyLock;
 
 /// A single parsed tool call extracted from LLM output.
 #[derive(Debug, Clone)]
 pub struct ParsedToolCall {
+    /// Canonical (alias-mapped) tool name, e.g. `file_read` or `shell`.
     pub name: String,
+    /// Tool arguments as a JSON value (object for named params).
     pub arguments: serde_json::Value,
+    /// Provider-assigned tool call id, when present (used for native
+    /// assistant-history round-trips on strict providers).
     pub tool_call_id: Option<String>,
 }
 
@@ -75,6 +81,9 @@ fn parse_tool_call_id(
         .map(ToString::to_string)
 }
 
+/// Recursively canonicalize a JSON value for tool-signature comparisons:
+/// object keys are sorted so structurally-equal payloads serialize
+/// identically regardless of insertion order.
 pub fn canonicalize_json_for_tool_signature(value: &serde_json::Value) -> serde_json::Value {
     match value {
         serde_json::Value::Object(map) => {
@@ -1472,6 +1481,11 @@ pub fn strip_tool_result_blocks(text: &str) -> String {
     result.trim().to_string()
 }
 
+/// Detect when `response` resembles a tool-call payload (XML tags, JSON
+/// `tool_calls`, markdown fences, `TOOL_CALL` blocks, `<FunctionCall>`) but
+/// `parsed_calls` is empty — i.e. the LLM intended a tool call that the
+/// parser could not extract. Returns a diagnostic message, or `None` when
+/// nothing looks like a tool payload.
 pub fn detect_tool_call_parse_issue(
     response: &str,
     parsed_calls: &[ParsedToolCall],
@@ -1508,6 +1522,11 @@ pub fn detect_tool_call_parse_issue(
     }
 }
 
+/// Build a native OpenAI-style assistant message JSON string carrying the
+/// parsed `tool_calls` (and optional `reasoning_content`), for round-trip
+/// into provider histories. Returns `None` when `tool_calls` is empty:
+/// strict validators (DeepSeek V4, NVIDIA NIM) reject `tool_calls: []`,
+/// so callers must fall back to a plain text assistant message.
 pub fn build_native_assistant_history_from_parsed_calls(
     text: &str,
     tool_calls: &[ParsedToolCall],

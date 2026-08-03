@@ -54,6 +54,12 @@ fn strip_media_markers(text: &str) -> String {
     RE.replace_all(text, "[media attachment]").into_owned()
 }
 
+/// Run two-phase LLM-driven consolidation on a conversation turn.
+///
+/// Writes a history entry to the Daily category, then (when the model
+/// identified new facts) a Core memory update with importance scoring and
+/// conflict checking. Designed to be called fire-and-forget via
+/// `tokio::spawn`.
 pub async fn consolidate_turn(
     provider: &dyn Provider,
     model: &str,

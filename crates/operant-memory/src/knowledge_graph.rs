@@ -20,14 +20,20 @@ use uuid::Uuid;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum NodeType {
+    /// Reusable solution pattern.
     Pattern,
+    /// A recorded decision and its rationale.
     Decision,
+    /// A lesson learned.
     Lesson,
+    /// An expert (person or source) who authored knowledge.
     Expert,
+    /// A technology / library / tool.
     Technology,
 }
 
 impl NodeType {
+    /// Canonical snake_case string for storage and serialization.
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Pattern => "pattern",
@@ -38,6 +44,7 @@ impl NodeType {
         }
     }
 
+    /// Parse a snake_case string back into a [`NodeType`].
     pub fn parse(s: &str) -> Result<Self> {
         match s {
             "pattern" => Ok(Self::Pattern),
@@ -54,14 +61,20 @@ impl NodeType {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Relation {
+    /// `from` uses `to`.
     Uses,
+    /// `from` replaces `to`.
     Replaces,
+    /// `from` extends `to`.
     Extends,
+    /// `from` was authored by `to`.
     AuthoredBy,
+    /// `from` applies to `to`.
     AppliesTo,
 }
 
 impl Relation {
+    /// Canonical snake_case string for storage and serialization.
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Uses => "uses",
@@ -72,6 +85,7 @@ impl Relation {
         }
     }
 
+    /// Parse a snake_case string back into a [`Relation`].
     pub fn parse(s: &str) -> Result<Self> {
         match s {
             "uses" => Ok(Self::Uses),
@@ -87,37 +101,54 @@ impl Relation {
 /// A node in the knowledge graph.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KnowledgeNode {
+    /// Unique node id (UUID).
     pub id: String,
+    /// The kind of knowledge captured.
     pub node_type: NodeType,
+    /// Short human-readable title.
     pub title: String,
+    /// Body text of the knowledge.
     pub content: String,
+    /// Tag list (comma-free; comma is the storage separator).
     pub tags: Vec<String>,
+    /// Creation timestamp.
     pub created_at: DateTime<Utc>,
+    /// Last-update timestamp.
     pub updated_at: DateTime<Utc>,
+    /// Optional originating project for provenance.
     pub source_project: Option<String>,
 }
 
 /// A directed edge in the knowledge graph.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KnowledgeEdge {
+    /// Source node id.
     pub from_id: String,
+    /// Target node id.
     pub to_id: String,
+    /// Relationship kind.
     pub relation: Relation,
 }
 
 /// A search result with relevance score.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchResult {
+    /// The matched node.
     pub node: KnowledgeNode,
+    /// Relevance score (higher is better).
     pub score: f64,
 }
 
 /// Summary statistics for the knowledge graph.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GraphStats {
+    /// Total node count.
     pub total_nodes: usize,
+    /// Total edge count.
     pub total_edges: usize,
+    /// Node counts grouped by type key (snake_case).
     pub nodes_by_type: HashMap<String, usize>,
+    /// Top 10 most frequent tags, descending.
     pub top_tags: Vec<(String, usize)>,
 }
 

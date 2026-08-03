@@ -1,3 +1,5 @@
+#![deny(missing_docs)]
+
 //! Memory subsystem: backends, embeddings, consolidation, retrieval.
 //!
 //! ## Reserved Key Prefixes
@@ -21,32 +23,58 @@ pub const MEMORY_CONTEXT_OPEN: &str = "[Memory context]";
 /// Closing delimiter for recalled memory injected into provider context.
 pub const MEMORY_CONTEXT_CLOSE: &str = "[/Memory context]";
 
+/// Audit-trail decorator backend (logs all operations to SQLite).
+#[allow(unused_imports)]
 pub mod audit;
+/// Memory backend kind / profile metadata and classification.
 pub mod backend;
+/// Line-based markdown chunking for long-document ingestion.
 pub mod chunker;
+/// Conflict detection and resolution between overlapping memories.
 pub mod conflict;
+/// LLM-driven consolidation of turns into history entries + core facts.
 pub mod consolidation;
+/// Memory decay / forgetfulness scheduling.
 pub mod decay;
+/// Embedding providers and factory.
 pub mod embeddings;
+/// Typed error type and context helpers.
 pub mod error;
+/// SQLite-backed hygiene / retention pass.
 pub mod hygiene;
+/// Heuristic importance scoring for memory entries.
 pub mod importance;
+/// Knowledge-graph node/edge types.
 pub mod knowledge_graph;
 #[cfg(feature = "memory-postgres")]
+/// Postgres-backed knowledge graph (feature-gated).
 pub mod knowledge_graph_pg;
+/// Lucid-memory bridge backend.
 pub mod lucid;
+/// Markdown-file backend.
 pub mod markdown;
+/// Namespace-scoped wrapper around another backend.
 pub mod namespaced;
+/// No-op backend (memory disabled).
 pub mod none;
+/// Policy enforcer for memory operations.
 pub mod policy;
 #[cfg(feature = "memory-postgres")]
+/// PostgreSQL backend (feature-gated).
 pub mod postgres;
+/// Qdrant vector-database backend.
 pub mod qdrant;
+/// LLM response cache.
 pub mod response_cache;
+/// Multi-stage retrieval pipeline.
 pub mod retrieval;
+/// Snapshot export / hydration (`MEMORY_SNAPSHOT.md`).
 pub mod snapshot;
+/// SQLite backend with vector search.
 pub mod sqlite;
+/// Core `Memory` trait and shared types.
 pub mod traits;
+/// Vector math: cosine similarity, serialization, hybrid merge.
 pub mod vector;
 
 #[allow(unused_imports)]
@@ -150,6 +178,8 @@ where
     }
 }
 
+/// Resolve the effective backend name: a `[storage.provider.config]`
+/// provider override wins over the `[memory] backend` key.
 pub fn effective_memory_backend_name(
     memory_backend: &str,
     storage_provider: Option<&StorageProviderConfig>,
@@ -454,6 +484,8 @@ pub fn create_memory_with_storage_and_routes(
     )
 }
 
+/// Factory for migration tooling: build a backend (rejecting `none`)
+/// using default SQLite construction.
 pub fn create_memory_for_migration(
     backend: &str,
     workspace_dir: &Path,

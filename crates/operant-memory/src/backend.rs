@@ -1,22 +1,38 @@
+/// The kind of memory backend selected in configuration.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum MemoryBackendKind {
+    /// SQLite with vector search (default, recommended).
     Sqlite,
+    /// Lucid memory bridge over SQLite fallback.
     Lucid,
+    /// Remote PostgreSQL storage.
     Postgres,
+    /// Qdrant vector database.
     Qdrant,
+    /// Plain markdown files.
     Markdown,
+    /// No persistent memory.
     None,
+    /// Unrecognized backend key (extension point).
     Unknown,
 }
 
 #[allow(clippy::struct_excessive_bools)]
+/// Static metadata describing a selectable memory backend for onboarding
+/// and config validation.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub struct MemoryBackendProfile {
+    /// Canonical config key, e.g. `sqlite`.
     pub key: &'static str,
+    /// Human-readable label shown in onboarding.
     pub label: &'static str,
+    /// Whether auto-save defaults to on for this backend.
     pub auto_save_default: bool,
+    /// Whether the backend reuses the SQLite hygiene/decay machinery.
     pub uses_sqlite_hygiene: bool,
+    /// Whether the backend is built on SQLite under the hood.
     pub sqlite_based: bool,
+    /// Whether the backend requires an optional external dependency.
     pub optional_dependency: bool,
 }
 
@@ -91,14 +107,17 @@ const SELECTABLE_MEMORY_BACKENDS: [MemoryBackendProfile; 5] = [
     NONE_PROFILE,
 ];
 
+/// The memory backends offered to the user in onboarding, in display order.
 pub fn selectable_memory_backends() -> &'static [MemoryBackendProfile] {
     &SELECTABLE_MEMORY_BACKENDS
 }
 
+/// The config key of the default memory backend (SQLite).
 pub fn default_memory_backend_key() -> &'static str {
     SQLITE_PROFILE.key
 }
 
+/// Classify a backend config key into a [`MemoryBackendKind`].
 pub fn classify_memory_backend(backend: &str) -> MemoryBackendKind {
     match backend {
         "sqlite" => MemoryBackendKind::Sqlite,
@@ -111,6 +130,8 @@ pub fn classify_memory_backend(backend: &str) -> MemoryBackendKind {
     }
 }
 
+/// Look up the [`MemoryBackendProfile`] for a backend config key; unknown
+/// keys resolve to the custom extension-point profile.
 pub fn memory_backend_profile(backend: &str) -> MemoryBackendProfile {
     match classify_memory_backend(backend) {
         MemoryBackendKind::Sqlite => SQLITE_PROFILE,

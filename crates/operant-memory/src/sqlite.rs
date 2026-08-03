@@ -49,6 +49,8 @@ pub struct SqliteMemory {
 }
 
 impl SqliteMemory {
+    /// Open (or create) the default `brain.db` with a keyword-only
+    /// no-op embedder and default weights.
     pub fn new(workspace_dir: &Path) -> Result<Self> {
         Self::with_embedder(
             workspace_dir,

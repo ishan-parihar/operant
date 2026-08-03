@@ -9,6 +9,7 @@ use async_trait::async_trait;
 pub struct NoneMemory;
 
 impl NoneMemory {
+    /// Construct the no-op backend.
     pub fn new() -> Self {
         Self
     }

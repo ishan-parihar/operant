@@ -13,6 +13,7 @@ pub struct PolicyEnforcer {
 }
 
 impl PolicyEnforcer {
+    /// Construct an enforcer from the config's policy section.
     pub fn new(config: &MemoryPolicyConfig) -> Self {
         Self {
             config: config.clone(),
@@ -80,9 +81,22 @@ impl PolicyEnforcer {
 /// Policy violation errors.
 #[derive(Debug, Clone)]
 pub enum PolicyViolation {
+    /// Write attempted to a namespace marked read-only.
     ReadOnlyNamespace(String),
-    NamespaceQuotaExceeded { max: usize, current: usize },
-    CategoryQuotaExceeded { max: usize, current: usize },
+    /// Namespace entry count is at its configured maximum.
+    NamespaceQuotaExceeded {
+        /// Configured maximum.
+        max: usize,
+        /// Current entry count.
+        current: usize,
+    },
+    /// Category entry count is at its configured maximum.
+    CategoryQuotaExceeded {
+        /// Configured maximum.
+        max: usize,
+        /// Current entry count.
+        current: usize,
+    },
 }
 
 impl std::fmt::Display for PolicyViolation {

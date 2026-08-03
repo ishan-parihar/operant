@@ -12,6 +12,9 @@ use std::time::{Duration, Instant};
 use tokio::process::Command;
 use tokio::time::timeout;
 
+/// Lucid-memory bridge: SQLite as authoritative store with optional sync
+/// to a local `lucid` CLI for semantic recall, with failure cooldown and
+/// local-hit short-circuiting.
 pub struct LucidMemory {
     local: SqliteMemory,
     lucid_cmd: String,
@@ -34,6 +37,8 @@ impl LucidMemory {
     const DEFAULT_LOCAL_HIT_THRESHOLD: usize = 3;
     const DEFAULT_FAILURE_COOLDOWN_MS: u64 = 15_000;
 
+    /// Construct a bridge with defaults (env-tunable: `OPERANT_LUCID_CMD`,
+    /// `OPERANT_LUCID_BUDGET`, timeouts).
     pub fn new(workspace_dir: &Path, local: SqliteMemory) -> Self {
         let lucid_cmd = std::env::var("OPERANT_LUCID_CMD")
             .unwrap_or_else(|_| Self::DEFAULT_LUCID_CMD.to_string());

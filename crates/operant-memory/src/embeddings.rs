@@ -24,6 +24,8 @@ pub trait EmbeddingProvider: Send + Sync {
 
 // ── Noop provider (keyword-only fallback) ────────────────────
 
+/// Keyword-only fallback embedding provider: returns no vectors, so the
+/// backend degrades to pure keyword search.
 pub struct NoopEmbedding;
 
 #[async_trait]
@@ -43,6 +45,8 @@ impl EmbeddingProvider for NoopEmbedding {
 
 // ── OpenAI-compatible embedding provider ─────────────────────
 
+/// OpenAI-compatible embeddings client (also covers OpenRouter and any
+/// `custom:` base URL).
 pub struct OpenAiEmbedding {
     base_url: String,
     api_key: String,
@@ -51,6 +55,7 @@ pub struct OpenAiEmbedding {
 }
 
 impl OpenAiEmbedding {
+    /// Construct a client against `base_url` (trailing slash stripped).
     pub fn new(base_url: &str, api_key: &str, model: &str, dims: usize) -> Self {
         Self {
             base_url: base_url.trim_end_matches('/').to_string(),
@@ -157,6 +162,9 @@ impl EmbeddingProvider for OpenAiEmbedding {
 
 // ── Factory ──────────────────────────────────────────────────
 
+/// Factory: resolve a provider key (`openai`, `openrouter`, `custom:<url>`)
+/// into a boxed [`EmbeddingProvider`]; anything else falls back to
+/// [`NoopEmbedding`].
 pub fn create_embedding_provider(
     provider: &str,
     api_key: Option<&str>,
