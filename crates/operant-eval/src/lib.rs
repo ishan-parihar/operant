@@ -8,8 +8,8 @@
 //! benchmark suite.
 //!
 //! This crate ships the **pure-function core** — task loading, the
-//! subsequence/keyword verifier, and the text reporter — all testable with a
-//! mock trace and no model endpoint. The endpoint-driven runner (driving the
+//! subsequence/forbidden-action/keyword verifier, and the text reporter — all
+//! testable with a mock trace and no model endpoint. The endpoint-driven runner (driving the
 //! real agent loop) is intentionally left to the integration layer so the
 //! default dev loop stays fast; see `docs/PHASE7_PARITY_DESIGN.md` C3.
 //!

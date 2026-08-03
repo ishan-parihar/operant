@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 /// prompt: "Read README.md then fix the typo in line 3."
 /// golden_actions: ["file_read", "file_edit"]
 /// expect_keywords: ["fixed"]
+/// forbid_actions: ["terminal"]  # optional negative constraint
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EvalTask {
@@ -25,6 +26,10 @@ pub struct EvalTask {
     /// Empty = no keyword constraint.
     #[serde(default)]
     pub expect_keywords: Vec<String>,
+    /// Tool names the agent must **not** call. Any call to a forbidden tool
+    /// fails the task. Empty = no restriction.
+    #[serde(default)]
+    pub forbid_actions: Vec<String>,
 }
 
 impl EvalTask {
@@ -99,5 +104,14 @@ mod tests {
         let (tasks, errors) = EvalTask::load_from_dir(std::path::Path::new("/no/such/dir"));
         assert!(tasks.is_empty());
         assert_eq!(errors.len(), 1);
+    }
+
+    #[test]
+    fn golden_tasks_dir_loads_cleanly() {
+        // Guard the shipped tasks/*.yaml against schema drift.
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tasks");
+        let (tasks, errors) = EvalTask::load_from_dir(&dir);
+        assert!(errors.is_empty(), "golden tasks failed to load: {errors:?}");
+        assert!(!tasks.is_empty());
     }
 }
