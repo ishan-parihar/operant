@@ -96,6 +96,12 @@ channel-webhook = []
 channel-whatsapp-cloud = []
 channel-acp-server = []
 channel-mqtt = ["dep:rumqttc"]
+# INERT: these 8 adapters reference vendor SDKs (matrix-sdk, nostr-sdk,
+# wa-rs, prost, cpal, …) that are not declared as deps and are not reachable
+# from the CLI. The modules stay in-tree behind the undeclared `channels-vendor`
+# cfg (registered in build.rs); enabling these features alone will NOT make
+# the channels work — they only compile once the SDK deps are wired and the
+# cfg is set. See the build.rs rationale comment and scripts/gate-vendor-channels.py.
 channel-nostr = []
 channel-voice-call = []
 channel-lark = []
