@@ -4711,6 +4711,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "operant-eval"
+version = "0.1.4"
+dependencies = [
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "tempfile",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "operant-gateway"
 version = "0.1.4"
 dependencies = [
