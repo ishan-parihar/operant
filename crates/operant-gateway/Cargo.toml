@@ -111,8 +111,10 @@ channel-discord = ["operant-channels/channel-discord"]
 channel-slack = ["operant-channels/channel-slack"]
 channel-webhook = ["operant-channels/channel-webhook"]
 channel-mqtt = ["operant-channels/channel-mqtt"]
-webauthn = []
+webauthn = ["operant-runtime/webauthn"]
 plugins-wasm = ["dep:operant-plugins"]
-observability-prometheus = []
+# Forward the runtime observability backends so the gateway's cfg-gated
+# `/metrics` handler can downcast the observer it is handed.
+observability-prometheus = ["operant-runtime/observability-prometheus"]
 embedded-web = ["dep:include_dir"]
 schema-export = ["operant-config/schema-export", "dep:schemars"]

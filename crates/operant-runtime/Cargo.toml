@@ -69,16 +69,29 @@ fluent-syntax = "0.12"
 dialoguer = { version = "0.11", features = ["fuzzy-select"] }
 unic-langid = "0.9"
 
+# Observability backends (feature-gated — see `[features]`)
+prometheus = { version = "0.14", optional = true }
+opentelemetry = { version = "0.27", optional = true }
+opentelemetry-otlp = { version = "0.27", default-features = false, features = ["http-proto", "reqwest-client", "trace", "metrics"], optional = true }
+opentelemetry_sdk = { version = "0.27", features = ["rt-tokio"], optional = true }
+
+# Sandbox + plugin + RAG backends (feature-gated — see `[features]`)
+operant-plugins = { workspace = true, optional = true }
+pdf-extract = { version = "0.10", optional = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+landlock = { version = "0.4", optional = true }
+
 [features]
 default = ["schema-export"]
 schema-export = ["operant-config/schema-export"]
 browser-native = []
-rag-pdf = []
-sandbox-landlock = []
+rag-pdf = ["dep:pdf-extract", "operant-tools/rag-pdf"]
+sandbox-landlock = ["dep:landlock"]
 sandbox-bubblewrap = []
-observability-otel = []
-observability-prometheus = []
-plugins-wasm = []
+observability-otel = ["dep:opentelemetry", "dep:opentelemetry-otlp", "dep:opentelemetry_sdk"]
+observability-prometheus = ["dep:prometheus"]
+plugins-wasm = ["dep:operant-plugins"]
 webauthn = []
 runtime-wasm = []
 

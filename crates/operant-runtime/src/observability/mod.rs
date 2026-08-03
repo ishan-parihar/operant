@@ -268,8 +268,8 @@ mod tests {
         assert_eq!(create_observer(&cfg).name(), expected);
     }
 
-    #[test]
-    fn factory_otel_returns_otel() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn factory_otel_returns_otel() {
         let cfg = ObservabilityConfig {
             backend: "otel".into(),
             otel_endpoint: Some("http://127.0.0.1:19999".into()),
@@ -284,8 +284,8 @@ mod tests {
         assert_eq!(create_observer(&cfg).name(), expected);
     }
 
-    #[test]
-    fn factory_opentelemetry_alias() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn factory_opentelemetry_alias() {
         let cfg = ObservabilityConfig {
             backend: "opentelemetry".into(),
             otel_endpoint: Some("http://127.0.0.1:19999".into()),
@@ -300,8 +300,8 @@ mod tests {
         assert_eq!(create_observer(&cfg).name(), expected);
     }
 
-    #[test]
-    fn factory_otlp_alias() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn factory_otlp_alias() {
         let cfg = ObservabilityConfig {
             backend: "otlp".into(),
             otel_endpoint: Some("http://127.0.0.1:19999".into()),

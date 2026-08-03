@@ -4,14 +4,14 @@ use opentelemetry::trace::{Span, SpanKind, Status, Tracer};
 use opentelemetry::{KeyValue, global};
 use opentelemetry_otlp::{WithExportConfig, WithHttpConfig};
 use opentelemetry_sdk::metrics::SdkMeterProvider;
-use opentelemetry_sdk::trace::SdkTracerProvider;
+use opentelemetry_sdk::trace::TracerProvider;
 use std::any::Any;
 use std::collections::HashMap;
 use std::time::SystemTime;
 
 /// OpenTelemetry-backed observer — exports traces and metrics via OTLP.
 pub struct OtelObserver {
-    tracer_provider: SdkTracerProvider,
+    tracer_provider: TracerProvider,
     meter_provider: SdkMeterProvider,
 
     // Metrics instruments
@@ -59,13 +59,11 @@ impl OtelObserver {
             .build()
             .map_err(|e| format!("Failed to create OTLP span exporter: {e}"))?;
 
-        let tracer_provider = SdkTracerProvider::builder()
-            .with_batch_exporter(span_exporter)
-            .with_resource(
-                opentelemetry_sdk::Resource::builder()
-                    .with_service_name(service_name.to_string())
-                    .build(),
-            )
+        let tracer_provider = TracerProvider::builder()
+            .with_batch_exporter(span_exporter, opentelemetry_sdk::runtime::Tokio)
+            .with_resource(opentelemetry_sdk::Resource::new_with_defaults([
+                KeyValue::new("service.name", service_name.to_string()),
+            ]))
             .build();
 
         global::set_tracer_provider(tracer_provider.clone());
@@ -81,16 +79,17 @@ impl OtelObserver {
             .build()
             .map_err(|e| format!("Failed to create OTLP metric exporter: {e}"))?;
 
-        let metric_reader =
-            opentelemetry_sdk::metrics::PeriodicReader::builder(metric_exporter).build();
+        let metric_reader = opentelemetry_sdk::metrics::PeriodicReader::builder(
+            metric_exporter,
+            opentelemetry_sdk::runtime::Tokio,
+        )
+        .build();
 
         let meter_provider = opentelemetry_sdk::metrics::SdkMeterProvider::builder()
             .with_reader(metric_reader)
-            .with_resource(
-                opentelemetry_sdk::Resource::builder()
-                    .with_service_name(service_name.to_string())
-                    .build(),
-            )
+            .with_resource(opentelemetry_sdk::Resource::new_with_defaults([
+                KeyValue::new("service.name", service_name.to_string()),
+            ]))
             .build();
 
         let meter_provider_clone = meter_provider.clone();
@@ -496,8 +495,10 @@ impl Observer for OtelObserver {
     }
 
     fn flush(&self) {
-        if let Err(e) = self.tracer_provider.force_flush() {
-            tracing::warn!("OTel trace flush failed: {e}");
+        for result in self.tracer_provider.force_flush() {
+            if let Err(e) = result {
+                tracing::warn!("OTel trace flush failed: {e}");
+            }
         }
         if let Err(e) = self.meter_provider.force_flush() {
             tracing::warn!("OTel metric flush failed: {e}");
@@ -518,11 +519,16 @@ mod tests {
     use super::*;
     use std::time::Duration;
 
-    // Note: OtelObserver::new() requires an OTLP endpoint.
-    // In tests we verify the struct creation fails gracefully
-    // when no collector is available, and test the observer interface
-    // by constructing with a known-unreachable endpoint (spans/metrics
-    // are buffered and exported asynchronously, so recording never panics).
+    // Note: OtelObserver::new() requires an OTLP endpoint AND a live Tokio
+    // reactor (the batch span processor / periodic reader spawn background
+    // tasks on it), so every test runs under `#[tokio::test]` with a
+    // multi-thread runtime. The current-thread default would deadlock:
+    // synchronous `flush()` blocks the only thread while the batch worker
+    // (a `tokio::spawn`ed task) can never be polled.
+    // In tests we verify the struct creation fails gracefully when no
+    // collector is available, and test the observer interface by
+    // constructing with a known-unreachable endpoint (spans/metrics are
+    // buffered and exported asynchronously, so recording never panics).
 
     fn test_observer() -> OtelObserver {
         // Create with a dummy endpoint — exports will silently fail
@@ -531,14 +537,14 @@ mod tests {
             .expect("observer creation should not fail with valid endpoint format")
     }
 
-    #[test]
-    fn otel_observer_name() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn otel_observer_name() {
         let obs = test_observer();
         assert_eq!(obs.name(), "otel");
     }
 
-    #[test]
-    fn records_all_events_without_panic() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn records_all_events_without_panic() {
         let obs = test_observer();
         obs.record_event(&ObserverEvent::AgentStart {
             provider: "openrouter".into(),
@@ -598,8 +604,8 @@ mod tests {
         });
     }
 
-    #[test]
-    fn records_all_metrics_without_panic() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn records_all_metrics_without_panic() {
         let obs = test_observer();
         obs.record_metric(&ObserverMetric::RequestLatency(Duration::from_secs(2)));
         obs.record_metric(&ObserverMetric::TokensUsed(500));
@@ -608,8 +614,8 @@ mod tests {
         obs.record_metric(&ObserverMetric::QueueDepth(42));
     }
 
-    #[test]
-    fn flush_does_not_panic() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn flush_does_not_panic() {
         let obs = test_observer();
         obs.record_event(&ObserverEvent::HeartbeatTick);
         obs.flush();
@@ -617,8 +623,8 @@ mod tests {
 
     // ── §8.2 OTel export failure resilience tests ────────────
 
-    #[test]
-    fn otel_records_error_event_without_panic() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn otel_records_error_event_without_panic() {
         let obs = test_observer();
         // Simulate an error event — should not panic even with unreachable endpoint
         obs.record_event(&ObserverEvent::Error {
@@ -627,8 +633,8 @@ mod tests {
         });
     }
 
-    #[test]
-    fn otel_records_llm_failure_without_panic() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn otel_records_llm_failure_without_panic() {
         let obs = test_observer();
         obs.record_event(&ObserverEvent::LlmResponse {
             provider: "openrouter".into(),
@@ -641,8 +647,8 @@ mod tests {
         });
     }
 
-    #[test]
-    fn otel_flush_idempotent_with_unreachable_endpoint() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn otel_flush_idempotent_with_unreachable_endpoint() {
         let obs = test_observer();
         // Multiple flushes should not panic even when endpoint is unreachable
         obs.flush();
@@ -650,8 +656,8 @@ mod tests {
         obs.flush();
     }
 
-    #[test]
-    fn otel_records_zero_duration_metrics() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn otel_records_zero_duration_metrics() {
         let obs = test_observer();
         obs.record_metric(&ObserverMetric::RequestLatency(Duration::ZERO));
         obs.record_metric(&ObserverMetric::TokensUsed(0));
@@ -659,8 +665,8 @@ mod tests {
         obs.record_metric(&ObserverMetric::QueueDepth(0));
     }
 
-    #[test]
-    fn otel_hand_events_do_not_panic() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn otel_hand_events_do_not_panic() {
         let obs = test_observer();
         obs.record_event(&ObserverEvent::HandStarted {
             hand_name: "review".into(),
@@ -677,8 +683,8 @@ mod tests {
         });
     }
 
-    #[test]
-    fn otel_hand_metrics_do_not_panic() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn otel_hand_metrics_do_not_panic() {
         let obs = test_observer();
         obs.record_metric(&ObserverMetric::HandRunDuration {
             hand_name: "review".into(),
@@ -694,8 +700,8 @@ mod tests {
         });
     }
 
-    #[test]
-    fn otel_observer_creation_with_valid_endpoint_succeeds() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn otel_observer_creation_with_valid_endpoint_succeeds() {
         // Even though endpoint is unreachable, creation should succeed
         let result = OtelObserver::new(Some("http://127.0.0.1:12345"), Some("operant-test"), None);
         assert!(
@@ -704,8 +710,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn otel_observer_creation_with_headers_succeeds() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn otel_observer_creation_with_headers_succeeds() {
         let mut headers = HashMap::new();
         headers.insert("Authorization".to_string(), "Bearer sk-test".to_string());
         headers.insert("X-Custom".to_string(), "value".to_string());
@@ -716,8 +722,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn otel_observer_with_headers_records_events() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn otel_observer_with_headers_records_events() {
         let mut headers = HashMap::new();
         headers.insert("Authorization".to_string(), "Bearer sk-test".to_string());
         let obs = OtelObserver::new(Some("http://127.0.0.1:19999"), Some("test"), Some(headers))
@@ -738,8 +744,8 @@ mod tests {
         });
     }
 
-    #[test]
-    fn otel_observer_with_empty_headers_succeeds() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn otel_observer_with_empty_headers_succeeds() {
         let result = OtelObserver::new(
             Some("http://127.0.0.1:12345"),
             Some("test"),

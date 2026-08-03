@@ -12,10 +12,12 @@ use std::path::PathBuf;
 
 use super::AppState;
 
-#[cfg(feature = "embedded-web")]
+#[cfg(all(feature = "embedded-web", embedded_web_dist_available))]
 use include_dir::{Dir, include_dir};
 
-#[cfg(feature = "embedded-web")]
+// Only embedded when the compiled frontend actually exists (see build.rs);
+// otherwise the runtime filesystem fallback below serves the dashboard.
+#[cfg(all(feature = "embedded-web", embedded_web_dist_available))]
 static EMBEDDED_WEB_DIST: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../../web/dist");
 
 /// Serve static files from `/_app/*` path
@@ -26,7 +28,7 @@ pub async fn handle_static(State(state): State<AppState>, uri: Uri) -> Response 
         .unwrap_or(uri.path())
         .trim_start_matches('/');
 
-    #[cfg(feature = "embedded-web")]
+    #[cfg(all(feature = "embedded-web", embedded_web_dist_available))]
     if let Some(resp) = serve_embedded_file(path) {
         return resp;
     }
@@ -73,7 +75,7 @@ pub async fn handle_spa_fallback(State(state): State<AppState>) -> Response {
 }
 
 async fn load_index_html_bytes(dist_dir: Option<&PathBuf>) -> Option<Vec<u8>> {
-    #[cfg(feature = "embedded-web")]
+    #[cfg(all(feature = "embedded-web", embedded_web_dist_available))]
     if let Some(file) = EMBEDDED_WEB_DIST.get_file("index.html") {
         return Some(file.contents().to_vec());
     }
@@ -124,7 +126,7 @@ async fn serve_fs_file(dist_dir: Option<&PathBuf>, path: &str) -> Response {
     }
 }
 
-#[cfg(feature = "embedded-web")]
+#[cfg(all(feature = "embedded-web", embedded_web_dist_available))]
 fn serve_embedded_file(path: &str) -> Option<Response> {
     if path.contains("..") {
         return Some((StatusCode::BAD_REQUEST, "Invalid path").into_response());

@@ -30,7 +30,7 @@ pub mod estop;
 #[cfg(target_os = "linux")]
 pub mod firejail;
 pub mod iam_policy;
-#[cfg(feature = "sandbox-landlock")]
+#[cfg(all(feature = "sandbox-landlock", target_os = "linux"))]
 pub mod landlock;
 pub mod leak_detector;
 pub mod nevis;
