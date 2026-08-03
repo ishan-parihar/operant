@@ -106,10 +106,14 @@ provider (see `AUDIT_2026-08-02.md` §7). The gaps are **not** in the loop itsel
 **`--all-features` inventory — ALL FIXED (2026-08-03):** runtime observability
 (otel/prometheus wired to real deps in eb76a5a7), hardware `hardware`
 (firmware/ assets committed + vendor-SDK modules gated behind the undeclared
-`hardware-vendor` cfg in e32da964), plus tools `probe`, core `anthropic` (Send),
-gateway `schema-export` (feature-gated import). `cargo check --workspace
---all-features` is now validated green (0 errors / 0 warnings); AGENTS.md
-Local Compilation Protocol updated accordingly (c677831c).
+`hardware-vendor` cfg in e32da964), channels (9 never-wired vendor adapters —
+lark/line/matrix/nostr/voice-call/voice-wake/wechat/whatsapp-web/storage —
+gated behind the undeclared `channels-vendor` cfg in fad71b09, including the
+35 orchestrator body gates re-mapped to `all(feature, feature = "channels-vendor")`,
+plus the cmd_curator `_api_key` shadowing fix), plus tools `probe`, core
+`anthropic` (Send), gateway `schema-export` (feature-gated import). `cargo
+check --workspace --all-features` is now validated green (0 errors / 0 warnings);
+AGENTS.md Local Compilation Protocol updated accordingly (c677831c).
 
 ---
 
