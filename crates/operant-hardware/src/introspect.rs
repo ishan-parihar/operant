@@ -17,7 +17,7 @@ pub struct IntrospectResult {
 
 /// Introspect a device by its serial path (e.g. /dev/ttyACM0, /dev/tty.usbmodem*).
 /// Attempts to correlate with USB devices from discovery.
-#[cfg(feature = "hardware")]
+#[cfg(feature = "hardware-vendor")]
 pub fn introspect_device(path: &str) -> Result<IntrospectResult> {
     let devices = discover::list_usb_devices()?;
 
@@ -61,9 +61,9 @@ pub fn introspect_device(path: &str) -> Result<IntrospectResult> {
 }
 
 /// Get memory map: via probe-rs when probe feature on and Nucleo, else static or stub.
-#[cfg(feature = "hardware")]
+#[cfg(feature = "hardware-vendor")]
 fn memory_map_for_board(board_name: Option<&str>) -> String {
-    #[cfg(feature = "probe")]
+    #[cfg(feature = "hardware-vendor")]
     if let Some(board) = board_name {
         let chip = match board {
             "nucleo-f401re" => "STM32F401RETx",

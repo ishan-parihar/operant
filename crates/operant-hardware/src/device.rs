@@ -484,8 +484,8 @@ impl DeviceRegistry {
     /// 4. Return the populated registry.
     ///
     /// Returns an empty registry when no devices are found or the `hardware`
-    /// feature is disabled.
-    #[cfg(feature = "hardware")]
+    /// cfg is disabled.
+    #[cfg(feature = "hardware-vendor")]
     pub async fn discover() -> Self {
         use super::{
             discover::scan_serial_devices,
@@ -561,7 +561,7 @@ impl DeviceRegistry {
     ///
     /// Pass `new_port` when the OS assigned a different path after reboot;
     /// pass `None` to reuse the device's current path.
-    #[cfg(feature = "hardware")]
+    #[cfg(feature = "hardware-vendor")]
     pub async fn reconnect(&mut self, alias: &str, new_port: Option<&str>) -> anyhow::Result<()> {
         use super::serial::{DEFAULT_BAUD, HardwareSerialTransport};
 

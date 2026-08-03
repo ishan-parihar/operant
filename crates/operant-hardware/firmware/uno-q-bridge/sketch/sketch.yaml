@@ -1,0 +1,8 @@
+profiles:
+  uno-q:
+    fqbn: arduino:avr:uno
+    compile:
+      libraries:
+        - Arduino_JSON
+    upload:
+      tool: arduino-app-cli

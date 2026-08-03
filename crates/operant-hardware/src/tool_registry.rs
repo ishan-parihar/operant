@@ -77,8 +77,8 @@ impl ToolRegistry {
             tools.insert(name, tool);
         }
 
-        // pico_flash — hardware feature only (needs UF2 assets embedded at compile time)
-        #[cfg(feature = "hardware")]
+        // pico_flash — hardware-vendor cfg only (needs UF2 assets embedded at compile time)
+        #[cfg(feature = "hardware-vendor")]
         {
             let tool: Box<dyn Tool> =
                 Box::new(super::pico_flash::PicoFlashTool::new(devices.clone()));
@@ -103,9 +103,9 @@ impl ToolRegistry {
             }
         }
 
-        // Aardvark I2C / SPI / GPIO tools + datasheet tool (hardware feature only,
+        // Aardvark I2C / SPI / GPIO tools + datasheet tool (hardware-vendor cfg only,
         // and only when at least one Aardvark adapter is present at startup).
-        #[cfg(feature = "hardware")]
+        #[cfg(feature = "hardware-vendor")]
         {
             let has_aardvark = {
                 let reg = devices.read().await;

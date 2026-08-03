@@ -10,37 +10,43 @@ pub mod protocol;
 pub mod registry;
 pub mod transport;
 
+// Vendor-SDK modules (nusb, probe-rs, tokio-serial, aardvark-sys, rppal, the
+// pico .uf2 blob) have never been wired into this workspace — they are gated
+// behind the *undeclared* `hardware-vendor` cfg (registered in build.rs) so
+// `--all-features` stays green while the code remains in-tree for future
+// wiring. `hardware` itself only enables the firmware-embedded / self-
+// contained modules that compile with declared deps.
 #[cfg(all(
-    feature = "hardware",
+    feature = "hardware-vendor",
     any(target_os = "linux", target_os = "macos", target_os = "windows")
 ))]
 pub mod discover;
 
 #[cfg(all(
-    feature = "hardware",
+    feature = "hardware-vendor",
     any(target_os = "linux", target_os = "macos", target_os = "windows")
 ))]
 pub mod introspect;
 
-#[cfg(feature = "hardware")]
+#[cfg(feature = "hardware-vendor")]
 pub mod serial;
 
-#[cfg(feature = "hardware")]
+#[cfg(feature = "hardware-vendor")]
 pub mod uf2;
 
-#[cfg(feature = "hardware")]
+#[cfg(feature = "hardware-vendor")]
 pub mod pico_flash;
 
 #[cfg(feature = "hardware")]
 pub mod pico_code;
 
 /// Aardvark USB adapter transport (I2C / SPI / GPIO via aardvark-sys).
-#[cfg(feature = "hardware")]
+#[cfg(feature = "hardware-vendor")]
 pub mod aardvark;
 
 /// Tools backed by the Aardvark transport (i2c_scan, i2c_read, i2c_write,
 /// spi_transfer, gpio_aardvark).
-#[cfg(feature = "hardware")]
+#[cfg(feature = "hardware-vendor")]
 pub mod aardvark_tools;
 
 /// Datasheet management — search, download, and manage device datasheets.
@@ -49,12 +55,12 @@ pub mod aardvark_tools;
 pub mod datasheet;
 
 /// Interactive hardware onboarding wizard UI.
-#[cfg(feature = "hardware")]
+#[cfg(feature = "hardware-vendor")]
 pub mod wizard;
 
 /// Raspberry Pi self-discovery and native GPIO tools.
-/// Only compiled on Linux with the `peripheral-rpi` feature.
-#[cfg(all(feature = "peripheral-rpi", target_os = "linux"))]
+/// Only compiled on Linux with the `hardware-vendor` cfg.
+#[cfg(all(feature = "hardware-vendor", target_os = "linux"))]
 pub mod rpi;
 
 pub mod util;
@@ -65,12 +71,12 @@ pub mod manifest;
 pub mod subprocess;
 pub mod tool_registry;
 
-#[cfg(feature = "hardware")]
+#[cfg(feature = "hardware-vendor")]
 #[allow(unused_imports)]
 pub use aardvark::AardvarkTransport;
 
 use crate::device::DeviceRegistry;
-#[cfg(feature = "hardware")]
+#[cfg(feature = "hardware-vendor")]
 use anyhow::Result;
 #[allow(unused_imports)]
 pub use tool_registry::{ToolError, ToolRegistry};
@@ -194,7 +200,7 @@ pub fn load_hardware_context_from_dir(hw_dir: &std::path::Path, aliases: &[&str]
 /// `/proc/cpuinfo`) identifies a Raspberry Pi, the four built-in GPIO/info
 /// tools are added to `tools` and the board description is appended to
 /// `context_files_prompt` so the LLM knows it is running on the device.
-#[cfg(all(feature = "peripheral-rpi", target_os = "linux"))]
+#[cfg(all(feature = "hardware-vendor", target_os = "linux"))]
 fn inject_rpi_context(
     tools: &mut Vec<Box<dyn operant_api::tool::Tool>>,
     context_files_prompt: &mut String,
@@ -244,8 +250,8 @@ fn inject_rpi_context(
 /// Without the feature: loads plugin tools from `~/.operant/tools/` only,
 /// with an empty device registry (GPIO tools will report "no device found"
 /// if called, which is correct).
-#[cfg(feature = "hardware")]
-#[allow(unused_mut)] // tools and context_files_prompt are mutated on Linux+peripheral-rpi
+#[cfg(feature = "hardware-vendor")]
+#[allow(unused_mut)] // tools and context_files_prompt are mutated on Linux+rpi
 pub async fn boot(
     peripherals: &operant_config::schema::PeripheralsConfig,
 ) -> anyhow::Result<HardwareBootResult> {
@@ -360,7 +366,7 @@ pub async fn boot(
         tracing::info!("Hardware context files loaded");
     }
     // RPi self-discovery: detect board model and inject GPIO tools + prompt context.
-    #[cfg(all(feature = "peripheral-rpi", target_os = "linux"))]
+    #[cfg(all(feature = "hardware-vendor", target_os = "linux"))]
     inject_rpi_context(&mut tools, &mut context_files_prompt);
     Ok(HardwareBootResult {
         tools,
@@ -369,9 +375,9 @@ pub async fn boot(
     })
 }
 
-/// Fallback when the `hardware` feature is disabled — plugins only.
-#[cfg(not(feature = "hardware"))]
-#[allow(unused_mut)] // tools and context_files_prompt are mutated on Linux+peripheral-rpi
+/// Fallback when the `hardware-vendor` cfg is off — plugins only.
+#[cfg(not(feature = "hardware-vendor"))]
+#[allow(unused_mut)] // tools and context_files_prompt are mutated on Linux+rpi
 pub async fn boot(
     _peripherals: &operant_config::schema::PeripheralsConfig,
 ) -> anyhow::Result<HardwareBootResult> {
@@ -391,7 +397,7 @@ pub async fn boot(
     // No discovered devices in no-hardware fallback; still load global files.
     let mut context_files_prompt = load_hardware_context_prompt(&[]);
     // RPi self-discovery: detect board model and inject GPIO tools + prompt context.
-    #[cfg(all(feature = "peripheral-rpi", target_os = "linux"))]
+    #[cfg(all(feature = "hardware-vendor", target_os = "linux"))]
     inject_rpi_context(&mut tools, &mut context_files_prompt);
     Ok(HardwareBootResult {
         tools,
@@ -412,10 +418,10 @@ pub struct DiscoveredDevice {
 /// Auto-discover connected hardware devices.
 /// Returns an empty vec on platforms without hardware support.
 pub fn discover_hardware() -> Vec<DiscoveredDevice> {
-    // USB/serial discovery is behind the "hardware" feature gate and only
+    // USB/serial discovery is behind the "hardware-vendor" cfg gate and only
     // available on platforms where nusb supports device enumeration.
     #[cfg(all(
-        feature = "hardware",
+        feature = "hardware-vendor",
         any(target_os = "linux", target_os = "macos", target_os = "windows")
     ))]
     {
@@ -478,7 +484,7 @@ pub fn config_from_wizard_choice(choice: usize, devices: &[DiscoveredDevice]) ->
         _ => HardwareConfig::default(), // software only
     }
 }
-#[cfg(feature = "hardware")]
+#[cfg(feature = "hardware-vendor")]
 pub fn run_discover() -> Result<()> {
     let devices = discover::list_usb_devices()?;
 
@@ -507,10 +513,9 @@ pub fn run_discover() -> Result<()> {
 }
 
 #[cfg(all(
-    feature = "hardware",
+    feature = "hardware-vendor",
     any(target_os = "linux", target_os = "macos", target_os = "windows")
 ))]
-#[cfg(feature = "hardware")]
 pub fn run_introspect(path: &str) -> Result<()> {
     let result = introspect::introspect_device(path)?;
 
@@ -533,12 +538,11 @@ pub fn run_introspect(path: &str) -> Result<()> {
 }
 
 #[cfg(all(
-    feature = "hardware",
+    feature = "hardware-vendor",
     any(target_os = "linux", target_os = "macos", target_os = "windows")
 ))]
-#[cfg(feature = "hardware")]
 pub fn run_info(chip: &str) -> Result<()> {
-    #[cfg(feature = "probe")]
+    #[cfg(feature = "hardware-vendor")]
     {
         match info_via_probe(chip) {
             Ok(()) => Ok(()),
@@ -554,7 +558,7 @@ pub fn run_info(chip: &str) -> Result<()> {
         }
     }
 
-    #[cfg(not(feature = "probe"))]
+    #[cfg(not(feature = "hardware-vendor"))]
     {
         println!("Chip info via USB requires the 'probe' feature.");
         println!();
@@ -569,8 +573,7 @@ pub fn run_info(chip: &str) -> Result<()> {
 }
 
 #[cfg(all(
-    feature = "hardware",
-    feature = "probe",
+    feature = "hardware-vendor",
     any(target_os = "linux", target_os = "macos", target_os = "windows")
 ))]
 fn info_via_probe(chip: &str) -> anyhow::Result<()> {

@@ -22,7 +22,7 @@ pub struct SerialDeviceInfo {
 
 /// Enumerate serial ports that correspond to known USB devices.
 /// Returns empty when hardware feature is disabled or enumeration fails.
-#[cfg(feature = "hardware")]
+#[cfg(feature = "hardware-vendor")]
 pub fn scan_serial_devices() -> Vec<SerialDeviceInfo> {
     let mut result = Vec::new();
     let Ok(ports) = tokio_serial::available_ports() else {
@@ -66,7 +66,7 @@ pub struct UsbDeviceInfo {
 }
 
 /// Enumerate all connected USB devices and enrich with board registry lookup.
-#[cfg(feature = "hardware")]
+#[cfg(feature = "hardware-vendor")]
 pub fn list_usb_devices() -> Result<Vec<UsbDeviceInfo>> {
     let mut devices = Vec::new();
 

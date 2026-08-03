@@ -1,0 +1,14 @@
+# Operant Uno Q bridge app manifest.
+# See https://docs.arduino.cc/uno-q/ for the app.yaml schema.
+name: operant-bridge
+version: "0.1.0"
+description: "Operant bridge app for Arduino Uno Q"
+author: "Operant"
+licenses:
+  - MIT
+dependencies:
+  hardware:
+    - arduino:avr
+  libraries:
+    - name: Arduino_JSON
+      version: "0.1.0"

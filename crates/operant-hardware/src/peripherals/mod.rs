@@ -5,14 +5,17 @@
 
 pub mod traits;
 
-#[cfg(feature = "hardware")]
+// Vendor-SDK modules (tokio-serial) are gated behind the undeclared
+// `hardware-vendor` cfg — see build.rs. Firmware-embedded peripherals
+// (arduino_flash, uno_q_setup, etc.) compile under `hardware` alone.
+#[cfg(feature = "hardware-vendor")]
 pub mod serial;
 
 #[cfg(feature = "hardware")]
 pub mod arduino_flash;
 #[cfg(feature = "hardware")]
 pub mod arduino_upload;
-#[cfg(feature = "hardware")]
+#[cfg(feature = "hardware-vendor")]
 pub mod capabilities_tool;
 #[cfg(feature = "hardware")]
 pub mod nucleo_flash;
@@ -21,16 +24,16 @@ pub mod uno_q_bridge;
 #[cfg(feature = "hardware")]
 pub mod uno_q_setup;
 
-#[cfg(all(feature = "peripheral-rpi", target_os = "linux"))]
+#[cfg(all(feature = "hardware-vendor", target_os = "linux"))]
 pub mod rpi;
 
-#[cfg(any(feature = "hardware", feature = "peripheral-rpi"))]
+#[cfg(any(feature = "hardware", feature = "hardware-vendor"))]
 pub use traits::Peripheral;
 
 use anyhow::Result;
 use operant_api::tool::Tool;
 use operant_config::schema::{PeripheralBoardConfig, PeripheralsConfig};
-#[cfg(feature = "hardware")]
+#[cfg(feature = "hardware-vendor")]
 use operant_tools::hardware_memory_map::HardwareMemoryMapTool;
 
 /// List configured boards from config (no connection yet).
@@ -42,8 +45,8 @@ pub fn list_configured_boards(config: &PeripheralsConfig) -> Vec<&PeripheralBoar
 }
 
 /// Create and connect peripherals from config, returning their tools.
-/// Returns empty vec if peripherals disabled or hardware feature off.
-#[cfg(feature = "hardware")]
+/// Returns empty vec if peripherals disabled or hardware cfg off.
+#[cfg(feature = "hardware-vendor")]
 pub async fn create_peripheral_tools(config: &PeripheralsConfig) -> Result<Vec<Box<dyn Tool>>> {
     if !config.enabled || config.boards.is_empty() {
         return Ok(Vec::new());
@@ -63,7 +66,7 @@ pub async fn create_peripheral_tools(config: &PeripheralsConfig) -> Result<Vec<B
         }
 
         // Native transport: RPi GPIO (Linux only)
-        #[cfg(all(feature = "peripheral-rpi", target_os = "linux"))]
+        #[cfg(all(feature = "hardware-vendor", target_os = "linux"))]
         if board.transport == "native"
             && (board.board == "rpi-gpio" || board.board == "raspberry-pi")
         {
@@ -134,7 +137,7 @@ pub async fn create_peripheral_tools(config: &PeripheralsConfig) -> Result<Vec<B
     Ok(tools)
 }
 
-#[cfg(not(feature = "hardware"))]
+#[cfg(not(feature = "hardware-vendor"))]
 #[allow(clippy::unused_async)]
 pub async fn create_peripheral_tools(_config: &PeripheralsConfig) -> Result<Vec<Box<dyn Tool>>> {
     Ok(Vec::new())
@@ -142,8 +145,8 @@ pub async fn create_peripheral_tools(_config: &PeripheralsConfig) -> Result<Vec<
 
 /// Create probe-rs / static board info tools (hardware_board_info, hardware_memory_map,
 /// hardware_memory_read). These use USB/probe-rs or static datasheet data — they never
-/// open a serial port, so they are safe to register regardless of the `hardware` feature.
-#[cfg(feature = "hardware")]
+/// open a serial port, so they are safe to register regardless of the `hardware` cfg.
+#[cfg(any(feature = "hardware", feature = "hardware-vendor"))]
 pub fn create_board_info_tools(config: &PeripheralsConfig) -> Vec<Box<dyn Tool>> {
     if !config.enabled || config.boards.is_empty() {
         return Vec::new();
@@ -160,7 +163,7 @@ pub fn create_board_info_tools(config: &PeripheralsConfig) -> Vec<Box<dyn Tool>>
     ]
 }
 
-#[cfg(not(feature = "hardware"))]
+#[cfg(not(any(feature = "hardware", feature = "hardware-vendor")))]
 pub fn create_board_info_tools(_config: &PeripheralsConfig) -> Vec<Box<dyn Tool>> {
     Vec::new()
 }
