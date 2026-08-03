@@ -121,7 +121,10 @@ impl TurnDiagnostics {
     ///
     /// Ported from hermes-agent's `_format_turn_completion_explanation`.
     /// Returns `None` for healthy `TextResponse` exits (no explanation needed).
-    #[allow(dead_code)] // Prepared for UI integration — will surface turn-exit reasons
+    #[expect(
+        dead_code,
+        reason = "Prepared for UI integration; will surface turn-exit reasons"
+    )]
     pub fn explanation(&self) -> Option<String> {
         match self.exit_reason {
             TurnExitReason::TextResponse => None,
@@ -155,7 +158,6 @@ impl TurnDiagnostics {
 /// When `write_file` or `patch` calls fail during a turn, this function
 /// detects them and produces a human-readable footer to append to the
 /// assistant response, preventing over-claiming.
-#[allow(dead_code)]
 pub fn file_mutation_verifier_footer(messages: &[Message]) -> Option<String> {
     let mut failed_writes: Vec<String> = Vec::new();
 

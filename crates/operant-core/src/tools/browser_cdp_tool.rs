@@ -10,7 +10,10 @@ pub struct BrowserCdpTool;
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "serde-argument struct: fields deserialized from tool-call JSON; optional fields kept for schema parity"
+)]
 struct BrowserCdpArgs {
     method: String,
     #[serde(default)]

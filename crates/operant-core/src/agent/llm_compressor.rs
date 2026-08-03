@@ -112,7 +112,10 @@ pub struct CompressionResult {
     /// Number of tokens after compression.
     pub tokens_after: usize,
     /// The summary text that was generated.
-    #[allow(dead_code)]
+    #[expect(
+        dead_code,
+        reason = "exposed for tests/inspection of the compression outcome"
+    )]
     pub summary_text: String,
     /// Number of turns that were summarized.
     pub turns_summarized: usize,

@@ -326,7 +326,10 @@ pub struct CheckpointTool;
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "serde-argument struct: fields deserialized from tool-call JSON; optional fields kept for schema parity"
+)]
 struct CheckpointArgs {
     /// Action: 'ensure' (create checkpoint), 'list' (show checkpoints), 'restore' (revert), 'diff' (show changes)
     action: String,

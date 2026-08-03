@@ -25,7 +25,10 @@ pub struct ToolBackendTool;
 
 #[derive(JsonSchema, Deserialize)]
 #[serde(rename_all = "camelCase")]
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "serde-argument struct: fields deserialized from tool-call JSON; optional fields kept for schema parity"
+)]
 struct ToolBackendArgs {
     tool_name: String,
     backend: Option<String>,

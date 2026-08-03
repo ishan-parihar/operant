@@ -85,7 +85,6 @@ pub struct SessionHighlight {
 /// Internal session summary from the database.
 #[derive(Debug, Clone)]
 struct SessionRow {
-    #[allow(dead_code)]
     id: String,
     model: Option<String>,
     source: Option<String>,

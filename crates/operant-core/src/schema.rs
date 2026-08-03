@@ -299,7 +299,7 @@ mod tests {
 
     #[derive(JsonSchema)]
     #[serde(rename_all = "camelCase")]
-    #[allow(dead_code)]
+    #[expect(dead_code, reason = "test-only schema struct")]
     struct TestParams {
         query: String,
         limit: Option<i32>,
@@ -345,7 +345,7 @@ mod tests {
         // Test with integer and array fields
         #[derive(JsonSchema)]
         #[serde(rename_all = "camelCase")]
-        #[allow(dead_code)]
+        #[expect(dead_code, reason = "test-only schema struct")]
         struct CoercionParams {
             query: String,
             limit: Option<i32>,
@@ -375,7 +375,7 @@ mod tests {
         // 3. String -> integer with "number" type (not just "integer")
         #[derive(JsonSchema)]
         #[serde(rename_all = "camelCase")]
-        #[allow(dead_code)]
+        #[expect(dead_code, reason = "test-only schema struct")]
         struct NumberParams {
             query: String,
             threshold: Option<f64>,

@@ -21,7 +21,7 @@ pub enum CacheTtl {
 }
 
 impl CacheTtl {
-    #[allow(dead_code)]
+    #[expect(dead_code, reason = "reserved for TTL introspection/debugging")]
     fn as_str(&self) -> &'static str {
         match self {
             CacheTtl::FiveMinutes => "5m",

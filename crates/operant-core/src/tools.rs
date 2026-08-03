@@ -459,7 +459,7 @@ mod tests {
 
     #[derive(JsonSchema, Deserialize)]
     #[serde(rename_all = "camelCase")]
-    #[allow(dead_code)]
+    #[expect(dead_code, reason = "test-only argument struct")]
     struct TestArgs {
         query: String,
         limit: Option<i32>,

@@ -22,7 +22,10 @@ struct OsvQueryResponse {
 }
 
 #[derive(Debug, Deserialize)]
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "deserialize-only response struct from the OSV API"
+)]
 struct OsvVulnerability {
     id: String,
     summary: Option<String>,

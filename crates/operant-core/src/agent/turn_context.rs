@@ -33,7 +33,13 @@ pub struct TurnContext {
     /// Resolved session ID (persistent or freshly generated).
     pub session_id: String,
     /// Whether the user message was already in the conversation (dedup).
-    #[allow(dead_code)] // Used by build_turn_context; read in tests
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "written by build_turn_context; read only by tests"
+        )
+    )]
     pub already_added: bool,
     /// Working message list for this turn (loop appends to it).
     pub messages: Vec<Message>,

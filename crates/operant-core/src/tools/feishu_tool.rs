@@ -154,7 +154,10 @@ async fn feishu_request(method: &str, path: &str, body: Option<Value>) -> Result
 
 /// Arguments for [`FeishuDocTool`].
 #[derive(Debug, Deserialize, JsonSchema)]
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "serde-argument struct: fields deserialized from tool-call JSON; optional fields kept for schema parity"
+)]
 struct FeishuDocArgs {
     /// The Feishu document ID (e.g. the `xxx` in a doc token).
     document_id: String,
@@ -238,7 +241,10 @@ impl OperantTool for FeishuDocTool {
 /// Arguments for [`FeishuDriveTool`].
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "serde-argument struct: fields deserialized from tool-call JSON; optional fields kept for schema parity"
+)]
 struct FeishuDriveArgs {
     /// Action: `list_comments`, `list_comment_replies`, `reply_comment`, or
     /// `add_comment`.

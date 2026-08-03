@@ -277,7 +277,7 @@ fn find_free_port() -> u16 {
         .port()
 }
 
-#[allow(dead_code)]
+#[expect(dead_code, reason = "reserved for TTY-only OAuth flows")]
 fn is_interactive() -> bool {
     use std::io::IsTerminal;
     std::io::stdin().is_terminal()

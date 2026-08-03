@@ -51,7 +51,10 @@ pub enum SubAgentRole {
 
 /// A single task in batch mode
 #[derive(Debug, Deserialize, JsonSchema)]
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "serde-argument struct: fields deserialized from tool-call JSON; optional fields kept for schema parity"
+)]
 struct DelegationTask {
     /// The focused task instruction for the child agent
     goal: String,
@@ -65,7 +68,10 @@ struct DelegationTask {
 
 /// Arguments for delegated sub-agent work.
 #[derive(Debug, Deserialize, JsonSchema)]
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "serde-argument struct: fields deserialized from tool-call JSON; optional fields kept for schema parity"
+)]
 struct SubAgentArgs {
     /// The focused task instruction for the child agent (single mode)
     #[serde(default, alias = "task")]

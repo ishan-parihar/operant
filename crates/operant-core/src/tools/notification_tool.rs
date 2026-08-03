@@ -11,7 +11,10 @@ pub struct NotificationTool;
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "serde-argument struct: fields deserialized from tool-call JSON; optional fields kept for schema parity"
+)]
 struct NotifyArgs {
     message: String,
     title: Option<String>,
@@ -63,7 +66,10 @@ pub struct ApprovalTool;
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "serde-argument struct: fields deserialized from tool-call JSON; optional fields kept for schema parity"
+)]
 struct ApprovalRequestArgs {
     request: String,
     reason: Option<String>,

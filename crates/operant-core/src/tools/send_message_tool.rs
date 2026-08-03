@@ -26,7 +26,10 @@ pub struct SendMessageTool;
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "serde-argument struct: fields deserialized from tool-call JSON; optional fields kept for schema parity"
+)]
 struct SendMessageArgs {
     /// Action: "send" (deliver a message) or "list" (show configured platforms)
     action: String,

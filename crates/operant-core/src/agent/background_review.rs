@@ -255,7 +255,6 @@ and stop — but don't reach for that conclusion as a default.";
 
 /// Controls how background review actions are surfaced to the user.
 /// Matches hermes-agent's `memory_notifications` setting.
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum NotificationMode {
     /// Show no actions (silent review).
