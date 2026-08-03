@@ -4943,6 +4943,7 @@ dependencies = [
  "operant-plugins",
  "operant-providers",
  "operant-tool-call-parser",
+ "operant-tool-planning",
  "operant-tools",
  "parking_lot",
  "pdf-extract",
@@ -4985,6 +4986,16 @@ name = "operant-tool-call-parser"
 version = "0.1.4"
 dependencies = [
  "regex",
+ "serde",
+ "serde_json",
+ "tracing",
+]
+
+[[package]]
+name = "operant-tool-planning"
+version = "0.1.4"
+dependencies = [
+ "operant-api",
  "serde",
  "serde_json",
  "tracing",
