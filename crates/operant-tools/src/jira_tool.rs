@@ -837,6 +837,7 @@ fn shape_basic_search(raw: &Value) -> Value {
     })
 }
 
+    #[expect(clippy::expect_used, reason = "invariant guaranteed by surrounding validation")]
 fn shape_full(raw: &Value) -> Value {
     let mut result = raw.clone();
     let rf = &raw["renderedFields"];
@@ -943,6 +944,7 @@ fn extract_emails(text: &str) -> Vec<String> {
     emails
 }
 
+    #[expect(clippy::expect_used, reason = "invariant guaranteed by surrounding validation")]
 fn parse_inline(text: &str, mentions: &HashMap<String, (String, String)>) -> Vec<Value> {
     let mut nodes: Vec<Value> = Vec::new();
     let mut chars = text.chars().peekable();

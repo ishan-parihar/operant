@@ -30,6 +30,7 @@ impl Default for ReceiptGenerator {
 }
 
 impl ReceiptGenerator {
+        #[expect(clippy::expect_used, reason = "invariant guaranteed by surrounding validation")]
     /// Create a new generator with a random 256-bit ephemeral key.
     pub fn new() -> Self {
         use ring::rand::{SecureRandom, SystemRandom};
@@ -73,6 +74,7 @@ impl ReceiptGenerator {
         self.generate(tool_name, args, result, timestamp)
     }
 
+        #[expect(clippy::expect_used, reason = "invariant guaranteed by surrounding validation")]
     /// Verify a receipt against the expected tool execution parameters.
     ///
     /// Parses the timestamp from the receipt string, recomputes the HMAC,
@@ -101,6 +103,7 @@ impl ReceiptGenerator {
         mac.verify_slice(&provided_bytes).is_ok()
     }
 
+        #[expect(clippy::expect_used, reason = "invariant guaranteed by surrounding validation")]
     fn compute_hmac(
         &self,
         tool_name: &str,

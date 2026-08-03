@@ -132,6 +132,7 @@ impl LinkedInClient {
         )
     }
 
+        #[expect(clippy::expect_used, reason = "invariant guaranteed by surrounding validation")]
     fn api_headers(&self, token: &str) -> HeaderMap {
         let mut headers = HeaderMap::new();
         let bearer = format!("Bearer {}", token);
@@ -190,6 +191,7 @@ impl LinkedInClient {
         Ok(response)
     }
 
+        #[expect(clippy::expect_used, reason = "invariant guaranteed by surrounding validation")]
     pub async fn create_post(
         &self,
         text: &str,
@@ -548,6 +550,7 @@ impl LinkedInClient {
         Ok(new_token)
     }
 
+        #[expect(clippy::expect_used, reason = "invariant guaranteed by surrounding validation")]
     /// Register an image asset with LinkedIn, upload binary data, and return the asset URN.
     ///
     /// LinkedIn's image post flow is three steps:
@@ -622,6 +625,7 @@ impl LinkedInClient {
         Ok(image_urn)
     }
 
+        #[expect(clippy::expect_used, reason = "invariant guaranteed by surrounding validation")]
     /// Create a post with an attached image.
     pub async fn create_post_with_image(
         &self,

@@ -41,6 +41,7 @@ impl MarkdownConverter {
         }
     }
 
+        #[expect(clippy::expect_used, reason = "invariant guaranteed by surrounding validation")]
     /// Extract fenced code blocks (` ``` … ``` `) and replace them with
     /// sentinel-bounded placeholders. The optional language tag (e.g.
     /// `rust`) is discarded.
@@ -67,6 +68,7 @@ impl MarkdownConverter {
         result
     }
 
+        #[expect(clippy::expect_used, reason = "invariant guaranteed by surrounding validation")]
     /// Extract inline code spans (`` `code` ``) and replace them with
     /// sentinel-bounded placeholders.
     fn extract_inline_code(&mut self, text: &str) -> String {
@@ -113,6 +115,7 @@ impl MarkdownConverter {
 // Markdown → Telegram HTML conversions (operates on already-extracted text)
 // ---------------------------------------------------------------------------
 
+    #[expect(clippy::expect_used, reason = "infallible once-init / static init")]
 /// Compile a regex from a static literal pattern (see approval.rs rx()).
 /// The `expect` keeps authoring-time mistakes loud while avoiding `unwrap()`
 /// sites that would trip `clippy::unwrap_used` if enabled.

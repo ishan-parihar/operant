@@ -2,6 +2,7 @@
 //!
 //! These are cross-cutting utilities used by multiple channel implementations.
 
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 pub mod debounce;
 pub mod session_backend;
 pub mod session_sqlite;

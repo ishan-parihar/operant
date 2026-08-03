@@ -14,6 +14,7 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::sync::OnceLock;
 
+    #[expect(clippy::expect_used, reason = "infallible once-init / static init")]
 /// Compile a regex from a static literal pattern (see leak_detector.rs rx()).
 /// All patterns are authored literals, so `Regex::new` cannot fail at runtime.
 fn rx(pattern: &'static str) -> Regex {

@@ -16,6 +16,7 @@
 //! To add a new provider, implement [`Provider`] in a new submodule and register it
 //! in [`create_provider_with_url`]. See `AGENTS.md` §7.1 for the full change playbook.
 
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 pub mod anthropic;
 pub mod auth;
 pub mod azure_openai;
@@ -1201,6 +1202,7 @@ pub fn create_provider_with_url(
     create_provider_with_url_and_options(name, api_key, api_url, &ProviderRuntimeOptions::default())
 }
 
+    #[expect(clippy::expect_used, reason = "invariant guaranteed by surrounding validation")]
 /// Factory: create provider with optional base URL and runtime options.
 #[allow(clippy::too_many_lines)]
 fn create_provider_with_url_and_options(
@@ -4463,6 +4465,7 @@ mod tests {
         assert!(options.extra_headers.is_empty());
     }
 
+        #[expect(clippy::unwrap_used, reason = "invariant guaranteed by surrounding validation")]
     #[test]
     fn provider_runtime_options_extra_headers_passed_through() {
         let mut extra_headers = std::collections::HashMap::new();

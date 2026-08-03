@@ -1,3 +1,4 @@
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 #![allow(dead_code)] // Gateway module: webhook handlers, admin functions, and structs prepared for future use
 
 //! Axum-based HTTP gateway with proper HTTP/1.1 compliance, body limits, and timeouts.

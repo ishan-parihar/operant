@@ -11,6 +11,7 @@
 //! - **Sense**: LIDAR, motion sensors, ultrasonic distance
 //! - **Emote**: LED matrix expressions and sound effects
 
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 #![allow(missing_docs)]
 
 pub mod config;

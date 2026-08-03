@@ -724,6 +724,7 @@ fn infer_provider_from_model(model: &str) -> Option<String> {
     None
 }
 
+    #[expect(clippy::expect_used, reason = "infallible once-init / static init")]
 /// Mask API keys in a JSON string before printing. Replaces the value of any
 /// key named `api_key`, `token`, `secret`, `password`, etc. with `***`.
 fn mask_api_keys(s: &str) -> String {
@@ -926,6 +927,7 @@ async fn handle_vim(_config: &AppConfig, state: Option<String>) -> Result<()> {
     Ok(())
 }
 
+    #[expect(clippy::unwrap_used, reason = "invariant guaranteed by surrounding validation")]
 /// `operant tui keybindings` — open the user keybindings file in $EDITOR.
 async fn handle_keybindings(_config: &AppConfig) -> Result<()> {
     let kb_path =

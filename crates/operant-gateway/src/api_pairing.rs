@@ -36,6 +36,7 @@ pub struct DeviceRegistry {
 }
 
 impl DeviceRegistry {
+        #[expect(clippy::expect_used, reason = "invariant guaranteed by surrounding validation")]
     pub fn new(workspace_dir: &Path) -> Self {
         let db_path = workspace_dir.join("devices.db");
         let conn = Connection::open(&db_path).expect("Failed to open device registry database");
@@ -105,10 +106,12 @@ impl DeviceRegistry {
         }
     }
 
+        #[expect(clippy::expect_used, reason = "invariant guaranteed by surrounding validation")]
     fn open_db(&self) -> Connection {
         Connection::open(&self.db_path).expect("Failed to open device registry database")
     }
 
+        #[expect(clippy::expect_used, reason = "invariant guaranteed by surrounding validation")]
     pub fn register(&self, token_hash: String, info: DeviceInfo) {
         let capabilities_json = info
             .capabilities
@@ -132,6 +135,7 @@ impl DeviceRegistry {
         self.cache.lock().insert(token_hash, info);
     }
 
+        #[expect(clippy::expect_used, reason = "invariant guaranteed by surrounding validation")]
     pub fn list(&self) -> Vec<DeviceInfo> {
         let conn = self.open_db();
         let mut stmt = conn

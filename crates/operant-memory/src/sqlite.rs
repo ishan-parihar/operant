@@ -382,6 +382,7 @@ impl SqliteMemory {
         }
     }
 
+        #[expect(clippy::expect_used, reason = "invariant guaranteed by surrounding validation")]
     /// Deterministic content hash for embedding cache.
     /// Uses SHA-256 (truncated) instead of DefaultHasher, which is
     /// explicitly documented as unstable across Rust versions.

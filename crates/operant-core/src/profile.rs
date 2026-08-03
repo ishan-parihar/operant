@@ -65,6 +65,7 @@ pub fn get_operant_home() -> PathBuf {
     platform::operant_home()
 }
 
+    #[expect(clippy::expect_used, reason = "invariant guaranteed by surrounding validation")]
 /// Get the default operant root (before profile resolution).
 ///
 /// In standard deployments this is `~/.operant`.
@@ -153,6 +154,7 @@ pub fn normalize_profile_name(name: &str) -> Result<String> {
     Ok(trimmed.to_lowercase())
 }
 
+    #[expect(clippy::expect_used, reason = "infallible once-init / static init")]
 /// Validate a profile name.
 pub fn validate_profile_name(name: &str) -> Result<()> {
     if name == "default" {

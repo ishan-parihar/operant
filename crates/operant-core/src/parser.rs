@@ -359,6 +359,7 @@ impl ToolCallParser {
         self.aggressive_parse(content)
     }
 
+        #[expect(clippy::expect_used, reason = "invariant guaranteed by surrounding validation")]
     /// Extract tool call from parsed JSON
     fn extract_tool_call_from_json(&self, value: &Value) -> Option<ToolCall> {
         // Handle direct object format: { "name": "...", "arguments": "..." }

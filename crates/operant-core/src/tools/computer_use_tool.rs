@@ -130,6 +130,7 @@ impl ComputerUseTool {
             .to_string()
     }
 
+        #[expect(clippy::expect_used, reason = "invariant guaranteed by surrounding validation")]
     async fn call_mcp_tool(action: &str, tool_args: Value) -> std::result::Result<Value, String> {
         let mut child = Command::new("cua-driver")
             .arg("mcp")

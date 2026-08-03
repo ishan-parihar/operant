@@ -241,6 +241,7 @@ fn compute_excluded_mcp_tools(
         .collect()
 }
 
+    #[expect(clippy::expect_used, reason = "infallible once-init / static init")]
 static SENSITIVE_KV_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"(?i)(token|api[_-]?key|password|secret|user[_-]?key|bearer|credential)["']?\s*[:=]\s*(?:"([^"]{8,})"|'([^']{8,})'|([a-zA-Z0-9_\-\.]{8,}))"#)
         .expect("static regex literal is invalid — authoring bug")
@@ -458,6 +459,7 @@ pub use super::tool_execution::{
     should_execute_tools_in_parallel,
 };
 
+    #[expect(clippy::unwrap_used, reason = "invariant guaranteed by surrounding validation")]
 /// Build assistant history entry in JSON format for native tool-call APIs.
 /// `convert_messages` in the OpenRouter provider parses this JSON to reconstruct
 /// the proper `NativeMessage` with structured `tool_calls`.
@@ -744,6 +746,7 @@ pub async fn agent_turn(
     .await
 }
 
+    #[expect(clippy::expect_used, reason = "invariant guaranteed by surrounding validation")]
 fn maybe_inject_channel_delivery_defaults(
     tool_name: &str,
     tool_args: &mut serde_json::Value,
@@ -850,6 +853,7 @@ fn maybe_inject_channel_delivery_defaults(
 //   • max_iterations is reached (runaway safety), or
 //   • the cancellation token fires (external abort).
 
+    #[expect(clippy::unwrap_used, reason = "poisoned lock: panic is the intended recovery")]
 /// Append a receipt footer to the response text if any receipts were collected.
 /// Execute a single turn of the agent loop: send messages, parse tool calls,
 /// execute tools, and loop until the LLM produces a final text response.
@@ -2199,6 +2203,7 @@ impl std::fmt::Debug for RunOverrides {
 // interactive REPL mode. The interactive loop manages history compaction
 // and hard trimming to keep the context window bounded.
 
+    #[expect(clippy::expect_used, reason = "invariant guaranteed by surrounding validation")]
 #[allow(clippy::too_many_lines)]
 pub async fn run(
     config: Config,

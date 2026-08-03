@@ -534,6 +534,7 @@ fn split_unquoted_segments(command: &str) -> Vec<String> {
     segments
 }
 
+    #[expect(clippy::expect_used, reason = "infallible once-init / static init")]
 /// Detect a single unquoted `&` operator (background/chain). `&&` is allowed.
 ///
 /// Strip fd-merge redirect patterns (`N>&M`, `N<&M`, `>&N`, `<&N`, `N>&-`, etc.)
@@ -649,6 +650,7 @@ fn contains_unquoted_char(command: &str, target: char) -> bool {
     false
 }
 
+    #[expect(clippy::expect_used, reason = "infallible once-init / static init")]
 /// Returns true if `command` contains an unquoted `>` that is NOT a safe
 /// stderr form (`2>/dev/null`, `2>&1`).
 fn contains_unsafe_output_redirect(command: &str) -> bool {
@@ -677,6 +679,7 @@ fn contains_unsafe_output_redirect(command: &str) -> bool {
     contains_unquoted_char(&safe, '>')
 }
 
+    #[expect(clippy::expect_used, reason = "infallible once-init / static init")]
 /// Returns true if `command` contains an unquoted `<` that is NOT a heredoc (`<<`)
 /// or a safe input redirect from `/dev/*`.
 fn contains_unquoted_input_redirect(command: &str) -> bool {

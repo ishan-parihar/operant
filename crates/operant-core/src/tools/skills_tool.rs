@@ -41,6 +41,7 @@ const PROTECTED_SKILL_PREFIXES: &[&str] = &[
     "claw-dev",
 ];
 
+    #[expect(clippy::expect_used, reason = "infallible once-init / static init")]
 /// Characters allowed in skill names (filesystem-safe, URL-friendly).
 static VALID_NAME_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^[a-z0-9][a-z0-9._-]*$").expect("static regex literal is invalid — authoring bug")

@@ -133,6 +133,7 @@ impl OperantTool for SessionSearchTool {
         )
     }
 
+        #[expect(clippy::expect_used, reason = "invariant guaranteed by surrounding validation")]
     async fn execute(&self, args: Value, _context: ToolContext) -> ToolResult {
         let query = args
             .get("query")

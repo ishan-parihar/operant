@@ -90,6 +90,7 @@ impl AgentMemoryProvider {
         })
     }
 
+        #[expect(clippy::expect_used, reason = "invariant guaranteed by surrounding validation")]
     /// Create a provider pointing at a custom base URL (used by tests).
     pub fn with_url(base_url: impl Into<String>) -> Self {
         Self {

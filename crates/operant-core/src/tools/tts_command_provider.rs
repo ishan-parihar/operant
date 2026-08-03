@@ -63,6 +63,7 @@ impl CommandProvider {
         &self.output_format
     }
 
+        #[expect(clippy::expect_used, reason = "invariant guaranteed by surrounding validation")]
     fn render_template(&self, placeholders: &HashMap<String, String>) -> Result<String, TtsError> {
         // Match {name} or {{name}} but not escaped {{}}
         let re = Regex::new(r"\{\{(\w+)\}\}|\{(\w+)\}")

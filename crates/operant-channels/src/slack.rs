@@ -3445,6 +3445,7 @@ impl Channel for SlackChannel {
         Ok(Some(lazy_id))
     }
 
+        #[expect(clippy::expect_used, reason = "poisoned lock: panic is the intended recovery")]
     async fn update_draft(
         &self,
         recipient: &str,
@@ -3560,6 +3561,7 @@ impl Channel for SlackChannel {
         Ok(())
     }
 
+        #[expect(clippy::expect_used, reason = "poisoned lock: panic is the intended recovery")]
     async fn finalize_draft(
         &self,
         recipient: &str,
@@ -3637,6 +3639,7 @@ impl Channel for SlackChannel {
         self.send(&msg).await
     }
 
+        #[expect(clippy::expect_used, reason = "poisoned lock: panic is the intended recovery")]
     async fn cancel_draft(&self, recipient: &str, message_id: &str) -> anyhow::Result<()> {
         self.last_draft_edit
             .lock()

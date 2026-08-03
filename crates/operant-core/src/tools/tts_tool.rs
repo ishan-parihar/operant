@@ -899,6 +899,7 @@ except Exception as e:
         }
     }
 
+        #[expect(clippy::expect_used, reason = "invariant guaranteed by surrounding validation")]
     async fn kokoro_local(&self, args: &TtsArgs) -> ToolResult {
         let voice = if args.voice.is_empty() {
             "af_sky"

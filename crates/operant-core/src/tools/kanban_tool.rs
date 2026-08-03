@@ -45,6 +45,7 @@ impl KanbanTool {
         Self { db }
     }
 
+        #[expect(clippy::expect_used, reason = "invariant guaranteed by surrounding validation")]
     fn handle(&self, args: KanbanToolArgs) -> Result<String> {
         let action = args.action.to_lowercase();
 

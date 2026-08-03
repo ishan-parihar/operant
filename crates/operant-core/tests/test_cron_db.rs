@@ -1,6 +1,7 @@
 //! Integration tests for [`CronDb::referenced_skill_names`] and
 //! [`CronDb::rewrite_skill_refs`].
 
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 use operant_core::cronjobs::{CreateJobParams, CronDb};
 use std::collections::HashMap;
 use tempfile::TempDir;

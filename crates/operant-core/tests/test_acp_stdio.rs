@@ -3,6 +3,7 @@
 //! Tests the full parse → dispatch → serialize cycle through the public API,
 //! simulating what happens over stdio without needing actual pipe I/O.
 
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 use operant_core::acp::{AcpHandler, AgentState};
 use std::sync::Arc;
 

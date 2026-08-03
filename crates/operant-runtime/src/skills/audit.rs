@@ -436,6 +436,7 @@ fn shebang_interpreter(line: &str) -> Option<&str> {
     Some(first_basename)
 }
 
+    #[expect(clippy::expect_used, reason = "infallible once-init / static init")]
 fn extract_markdown_links(content: &str) -> Vec<String> {
     static MARKDOWN_LINK_RE: OnceLock<Regex> = OnceLock::new();
     let regex = MARKDOWN_LINK_RE.get_or_init(|| {

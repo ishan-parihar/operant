@@ -2,6 +2,7 @@
 //!
 //! See `docs/hardware-peripherals-design.md` for the full design.
 
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 pub mod device;
 pub mod gpio;
 pub mod peripherals;

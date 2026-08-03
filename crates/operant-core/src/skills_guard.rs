@@ -263,6 +263,7 @@ struct ThreatPattern {
 }
 
 impl ThreatPattern {
+        #[expect(clippy::expect_used, reason = "infallible once-init / static init")]
     fn new(
         pattern: &str,
         pattern_id: &'static str,

@@ -1426,6 +1426,7 @@ static WHISPER_HALLUCINATIONS: LazyLock<std::collections::HashSet<&'static str>>
         set
     });
 
+    #[expect(clippy::expect_used, reason = "infallible once-init / static init")]
 /// Regex pattern for repetitive hallucinations
 static HALLUCINATION_REPEAT_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^(?:thank you|thanks|bye|you|ok|okay|the end|\.|\s|,|!)+$")

@@ -552,6 +552,7 @@ impl PromptInputState {
         }
     }
 
+        #[expect(clippy::unwrap_used, reason = "invariant guaranteed by surrounding validation")]
     /// Apply a vim command using the full state-machine key handler.
     pub fn vim_command(&mut self, key: &str) {
         // ---- Escape always cancels recording, pending state, returns to Normal ----

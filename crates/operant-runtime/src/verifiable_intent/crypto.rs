@@ -228,6 +228,7 @@ pub fn serialize_sd_jwt(issuer_jwt: &str, disclosures: &[String], kb_jwt: Option
     result
 }
 
+    #[expect(clippy::expect_used, reason = "invariant guaranteed by surrounding validation")]
 /// Parse a serialized SD-JWT into (issuer_jwt, disclosures, optional_kb_jwt).
 pub fn parse_sd_jwt(serialized: &str) -> Result<(&str, Vec<&str>, Option<&str>), ViError> {
     let parts: Vec<&str> = serialized.split('~').collect();

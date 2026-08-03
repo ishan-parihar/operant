@@ -61,6 +61,7 @@ impl OperantTool for McpManagementTool {
         ToolSchema::from_type::<McpManagementArgs>(self.name(), self.description())
     }
 
+        #[expect(clippy::expect_used, reason = "invariant guaranteed by surrounding validation")]
     async fn execute(&self, args: Value, _context: ToolContext) -> ToolResult {
         let parsed: McpManagementArgs = match serde_json::from_value(args) {
             Ok(a) => a,

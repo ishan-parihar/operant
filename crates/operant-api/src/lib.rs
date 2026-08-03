@@ -14,6 +14,7 @@
 //! - [`runtime_traits::RuntimeAdapter`] — execution environment adapters
 //! - [`peripherals_traits::Peripheral`] — hardware board integrations
 
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 pub mod agent;
 pub mod channel;
 pub mod media;

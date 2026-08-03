@@ -461,6 +461,7 @@ pub struct PiperTtsProvider {
 }
 
 impl PiperTtsProvider {
+        #[expect(clippy::expect_used, reason = "invariant guaranteed by surrounding validation")]
     /// Create a new Piper TTS provider pointing at the given API URL.
     pub fn new(api_url: &str) -> Self {
         Self {

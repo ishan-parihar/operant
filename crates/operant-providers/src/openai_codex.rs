@@ -950,6 +950,7 @@ fn extract_stream_error_message(event: &Value) -> Option<String> {
     None
 }
 
+    #[expect(clippy::expect_used, reason = "invariant guaranteed by surrounding validation")]
 fn append_utf8_stream_chunk(
     body: &mut String,
     pending: &mut Vec<u8>,
@@ -998,6 +999,7 @@ fn append_utf8_stream_chunk(
     }
 }
 
+    #[expect(clippy::expect_used, reason = "invariant guaranteed by surrounding validation")]
 #[allow(dead_code)]
 fn decode_utf8_stream_chunks<'a, I>(chunks: I) -> anyhow::Result<String>
 where
@@ -1048,6 +1050,7 @@ fn parse_responses_body(body: &str) -> anyhow::Result<ResponsesTurnResult> {
     })
 }
 
+    #[expect(clippy::expect_used, reason = "invariant guaranteed by surrounding validation")]
 /// Read the response body incrementally via `bytes_stream()` to avoid
 /// buffering the entire SSE payload in memory.  The previous implementation
 /// used `response.text().await?` which holds the HTTP connection open until

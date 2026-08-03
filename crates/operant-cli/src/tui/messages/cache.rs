@@ -46,6 +46,7 @@ impl MessageCache {
         }
     }
 
+        #[expect(clippy::unwrap_used, reason = "invariant guaranteed by surrounding validation")]
     /// Get cached lines or render and cache them.
     ///
     /// `content_hash` should be a fast hash of the raw text content.

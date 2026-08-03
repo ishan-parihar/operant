@@ -111,6 +111,13 @@ tempfile = "3.10"
 [workspace.lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(operant_root_crate)'] }
 
+# NOTE: manifest-level clippy denies (`unwrap_used`/`expect_used`) cannot be
+# used here — this environment's cargo build rejects `lints` manifest keys
+# ("unused manifest key: package.lints"). Enforcement lives in
+# scripts/clippy-warning-gate.sh via explicit `-D clippy::unwrap_used` and
+# `-D clippy::expect_used` flags; justified sites carry `#[expect(...)]`
+# attributes with reasons (see docs/RUST_BEST_PRACTICES_PLAN.md Phase 2b).
+
 [profile.release]
 lto = true
 strip = true

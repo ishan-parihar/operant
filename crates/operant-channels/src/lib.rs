@@ -1,5 +1,6 @@
 //! Channel implementations and orchestration for messaging platform integrations.
 
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 #![cfg_attr(feature = "channel-matrix", recursion_limit = "256")]
 
 pub mod orchestrator;

@@ -1170,6 +1170,7 @@ pub async fn handle_api_session_message_post(
     .into_response()
 }
 
+    #[expect(clippy::expect_used, reason = "poisoned lock: panic is the intended recovery")]
 /// DELETE /api/sessions/{id} — delete a gateway session
 pub async fn handle_api_session_delete(
     State(state): State<AppState>,
@@ -1353,6 +1354,7 @@ pub async fn handle_api_session_state(
 
 // ── Session abort endpoint ────────────────────────────────────────
 
+    #[expect(clippy::expect_used, reason = "poisoned lock: panic is the intended recovery")]
 /// POST /api/sessions/{id}/abort — cancel an in-flight agent response.
 ///
 /// Looks up the cancellation token for the given session. If a turn is

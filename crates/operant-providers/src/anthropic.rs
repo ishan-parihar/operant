@@ -370,6 +370,7 @@ impl AnthropicProvider {
         })
     }
 
+        #[expect(clippy::unwrap_used, reason = "invariant guaranteed by surrounding validation")]
     fn convert_messages(messages: &[ChatMessage]) -> (Option<SystemPrompt>, Vec<NativeMessage>) {
         let mut system_text = None;
         let mut native_messages = Vec::new();
@@ -581,6 +582,7 @@ impl AnthropicProvider {
         )
     }
 
+        #[expect(clippy::expect_used, reason = "invariant guaranteed by surrounding validation")]
     /// Build a streaming request body from a `NativeChatRequest`.
     fn build_streaming_request(request: &NativeChatRequest<'_>) -> serde_json::Value {
         let mut body =

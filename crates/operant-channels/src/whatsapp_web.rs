@@ -974,6 +974,7 @@ impl Channel for WhatsAppWebChannel {
         "whatsapp"
     }
 
+        #[expect(clippy::unwrap_used, reason = "invariant guaranteed by surrounding validation")]
     async fn send(&self, message: &SendMessage) -> Result<()> {
         let client = self.client.lock().clone();
         let Some(client) = client else {

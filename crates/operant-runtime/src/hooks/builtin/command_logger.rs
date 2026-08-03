@@ -42,6 +42,7 @@ impl HookHandler for CommandLoggerHook {
         -50
     }
 
+        #[expect(clippy::expect_used, reason = "poisoned lock: panic is the intended recovery")]
     async fn on_after_tool_call(&self, tool: &str, result: &ToolResult, duration: Duration) {
         let entry = format!(
             "[{}] {} ({}ms) success={}",

@@ -1,3 +1,4 @@
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 #![deny(missing_docs)]
 
 //! Memory subsystem: backends, embeddings, consolidation, retrieval.

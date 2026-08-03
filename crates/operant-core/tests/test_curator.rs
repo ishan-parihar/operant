@@ -3,6 +3,7 @@
 //! Tests backup/archive/restore operations, state serialization,
 //! and the curator engine lifecycle.
 
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;

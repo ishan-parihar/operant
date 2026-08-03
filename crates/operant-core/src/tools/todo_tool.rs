@@ -67,6 +67,7 @@ impl OperantTool for TodoTool {
         ToolSchema::from_type::<TodoArgs>("todo", "Manage task list")
     }
 
+        #[expect(clippy::expect_used, reason = "poisoned lock: panic is the intended recovery")]
     async fn execute(&self, args: Value, _context: ToolContext) -> ToolResult {
         let args: TodoArgs = match serde_json::from_value(args) {
             Ok(a) => a,

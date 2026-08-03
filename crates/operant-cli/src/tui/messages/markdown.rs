@@ -21,11 +21,13 @@ static SYNTAX_SET: LazyLock<SyntaxSet> = LazyLock::new(SyntaxSet::load_defaults_
 /// inline code blocks and diff hunks read as one design system.
 static THEME_SET: LazyLock<ThemeSet> = LazyLock::new(ThemeSet::load_defaults);
 
+    #[expect(clippy::expect_used, reason = "infallible once-init / static init")]
 /// Regex pattern to detect URLs (http://, https://, ftp://, www.)
 static URL_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?:https?|ftp)://\S+|www\.\S+").expect("Invalid URL regex pattern")
 });
 
+    #[expect(clippy::expect_used, reason = "infallible once-init / static init")]
 /// Regex pattern to detect email addresses
 static EMAIL_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}")
@@ -95,6 +97,7 @@ fn resolve_syntax(lang: &str) -> Option<&'static syntect::parsing::SyntaxReferen
     ss.find_syntax_by_name(lang)
 }
 
+    #[expect(clippy::expect_used, reason = "invariant guaranteed by surrounding validation")]
 /// Highlight a single line of source code in the given language, returning
 /// ratatui Spans. Falls back to a single plain-white span on the yellow code
 /// base style if the language is unknown or syntect fails.

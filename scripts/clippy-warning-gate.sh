@@ -63,7 +63,14 @@ echo "[clippy-gate] collecting warnings..."
 # docs/RUST_BEST_PRACTICES_PLAN.md §"--all-features is broken"), so gating on
 # --all-features would block on pre-existing compile errors, not new warnings.
 # Re-enable --all-features as those features are wired back up.
-cargo clippy --workspace --all-targets --message-format=json "${EXTRA_ARGS[@]}" > "${tmp_json}"
+#
+# Production code must not call `.unwrap()`/`.expect()` (rust-best-practices
+# ch.4). Manifest-level workspace lints are unusable here (this environment's
+# cargo rejects `lints` manifest keys), so the denies are applied explicitly;
+# justified sites carry `#[expect(clippy::unwrap_used/expect_used)]` with a
+# reason, and test targets are exempted via cfg_attr(test) allows / headers.
+cargo clippy --workspace --all-targets --message-format=json \
+  -- -D clippy::unwrap_used -D clippy::expect_used "${EXTRA_ARGS[@]}" > "${tmp_json}"
 
 jq -r '
   select(.reason == "compiler-message")

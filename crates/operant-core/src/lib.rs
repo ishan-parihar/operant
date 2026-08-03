@@ -39,6 +39,7 @@
 //! └─────────────────────────────────────────────────────────────┘
 //! ```
 
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 pub mod accessibility;
 pub mod acp;
 pub mod aft_bridge;

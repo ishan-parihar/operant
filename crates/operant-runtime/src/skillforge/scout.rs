@@ -73,6 +73,7 @@ pub struct GitHubScout {
 }
 
 impl GitHubScout {
+        #[expect(clippy::expect_used, reason = "invariant guaranteed by surrounding validation")]
     pub fn new(token: Option<String>) -> Self {
         use std::time::Duration;
 

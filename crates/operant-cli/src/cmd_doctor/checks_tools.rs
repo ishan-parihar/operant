@@ -48,6 +48,7 @@ fn cmd_check(cmd: &str) -> bool {
         .unwrap_or(false)
 }
 
+    #[expect(clippy::expect_used, reason = "invariant guaranteed by surrounding validation")]
 /// Return the operant-rs project root (parent of `crates/operant-cli/`).
 fn project_root() -> &'static Path {
     // CARGO_MANIFEST_DIR = .../operant-rs/crates/operant-cli

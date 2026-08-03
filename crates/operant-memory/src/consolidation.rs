@@ -36,6 +36,7 @@ const CONSOLIDATION_SYSTEM_PROMPT: &str = r#"You are a memory consolidation engi
 Respond ONLY with valid JSON: {"history_entry": "...", "memory_update": "..." or null}
 Do not include any text outside the JSON object."#;
 
+    #[expect(clippy::expect_used, reason = "infallible once-init / static init")]
 /// Run two-phase LLM-driven consolidation on a conversation turn.
 ///
 /// Phase 1: Write a history entry to the Daily memory category.

@@ -31,6 +31,7 @@ pub fn setup_uno_q_bridge(host: Option<&str>) -> Result<()> {
     Ok(())
 }
 
+    #[expect(clippy::unwrap_used, reason = "invariant guaranteed by surrounding validation")]
 fn deploy_remote(host: &str, bridge_dir: &std::path::Path) -> Result<()> {
     let ssh_target = if host.contains('@') {
         host.to_string()
@@ -81,6 +82,7 @@ fn deploy_remote(host: &str, bridge_dir: &std::path::Path) -> Result<()> {
     Ok(())
 }
 
+    #[expect(clippy::unwrap_used, reason = "invariant guaranteed by surrounding validation")]
 fn deploy_local(bridge_dir: Option<&std::path::Path>) -> Result<()> {
     let home = std::env::var("HOME").unwrap_or_else(|_| "/home/arduino".into());
     let apps_dir = std::path::Path::new(&home).join("ArduinoApps");

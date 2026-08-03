@@ -1,3 +1,4 @@
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 #![allow(unexpected_cfgs)] // operant_root_crate is set by workspace-level cfg for integration tests
 
 //! Agent runtime — orchestration, security, observability, cron, SOP, skills, hardware, and more.

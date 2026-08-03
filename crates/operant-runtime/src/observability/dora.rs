@@ -79,6 +79,7 @@ impl DoraCollector {
         }
     }
 
+        #[expect(clippy::expect_used, reason = "poisoned lock: panic is the intended recovery")]
     /// Record a completed deployment (success or failure).
     ///
     /// `lead_time` is the duration from commit to deploy completion.
@@ -99,6 +100,7 @@ impl DoraCollector {
         self.record_deployment(false, None);
     }
 
+        #[expect(clippy::expect_used, reason = "poisoned lock: panic is the intended recovery")]
     /// Record a recovery from a failed deployment.
     pub fn record_recovery(&self, duration: Duration) {
         let mut state = self.inner.write().expect("DORA lock poisoned");
@@ -131,6 +133,7 @@ impl DoraCollector {
         self.snapshot_window(WINDOW_30D)
     }
 
+        #[expect(clippy::expect_used, reason = "poisoned lock: panic is the intended recovery")]
     fn snapshot_window(&self, window: Duration) -> DoraSnapshot {
         let state = self.inner.read().expect("DORA lock poisoned");
         let cutoff =

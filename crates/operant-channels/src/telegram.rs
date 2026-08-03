@@ -774,6 +774,7 @@ impl TelegramChannel {
         }
     }
 
+        #[expect(clippy::unwrap_used, reason = "invariant guaranteed by surrounding validation")]
     /// Check whether a voice reply should be queued for the given recipient and
     /// content. Shared between `send()` and `finalize_draft()` so the TTS
     /// voice-reply path works regardless of `stream_mode`.
@@ -1929,6 +1930,7 @@ Allowlist Telegram username (without '@') or numeric user ID.",
         Ok(format!("data:image/jpeg;base64,{}", b64))
     }
 
+        #[expect(clippy::unwrap_used, reason = "invariant guaranteed by surrounding validation")]
     /// Convert Markdown to Telegram HTML format.
     /// Telegram HTML supports: <b>, <i>, <u>, <s>, <code>, <pre>, <a href="...">
     /// This mirrors OpenClaw's markdownToTelegramHtml approach.

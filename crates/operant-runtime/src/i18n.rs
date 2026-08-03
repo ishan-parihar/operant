@@ -131,6 +131,7 @@ fn format_cli_string_with_args(
     format_ftl_message(include_str!("../locales/en/cli.ftl"), "en", key, args)
 }
 
+    #[expect(clippy::unwrap_used, reason = "invariant guaranteed by surrounding validation")]
 fn format_ftl_messages(ftl_source: &str, locale: &str) -> HashMap<String, String> {
     let resource =
         FluentResource::try_new(ftl_source.to_string()).unwrap_or_else(|(resource, _)| resource);
@@ -159,6 +160,7 @@ fn format_ftl_messages(ftl_source: &str, locale: &str) -> HashMap<String, String
     map
 }
 
+    #[expect(clippy::unwrap_used, reason = "invariant guaranteed by surrounding validation")]
 fn format_ftl_message(
     ftl_source: &str,
     locale: &str,

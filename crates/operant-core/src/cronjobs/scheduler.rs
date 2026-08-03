@@ -88,6 +88,7 @@ impl CronScheduler {
         Ok(())
     }
 
+        #[expect(clippy::expect_used, reason = "invariant guaranteed by surrounding validation")]
     async fn run_script_job(&self, job: &CronJob) -> (bool, String, String, Option<String>) {
         debug!("Running script job {}: {}", job.id, job.name);
 

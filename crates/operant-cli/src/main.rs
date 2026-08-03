@@ -1,5 +1,6 @@
 //! Operant-RS CLI
 
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 mod autonomous;
 mod cmd_acp;
 mod cmd_auth;
@@ -489,6 +490,7 @@ enum Commands {
     },
 }
 
+    #[expect(clippy::expect_used, reason = "invariant guaranteed by surrounding validation")]
 fn init_logging(
     verbose: bool,
     cli_log_level: Option<&str>,

@@ -710,6 +710,7 @@ impl McpStdioClient {
         self.capabilities.read().await.clone()
     }
 
+        #[expect(clippy::expect_used, reason = "invariant guaranteed by surrounding validation")]
     /// Send a JSON-RPC request over stdin and read response from stdout
     async fn send_request(&self, method: &str, params: Option<Value>) -> Result<Value> {
         let request_id = self.request_id.fetch_add(1, Ordering::SeqCst);

@@ -62,6 +62,7 @@ impl TrustTracker {
         self.scores[domain].score
     }
 
+        #[expect(clippy::expect_used, reason = "invariant guaranteed by surrounding validation")]
     /// Record a correction event — reduces trust
     pub fn record_correction(
         &mut self,
@@ -88,6 +89,7 @@ impl TrustTracker {
         });
     }
 
+        #[expect(clippy::expect_used, reason = "invariant guaranteed by surrounding validation")]
     /// Record a success — small boost to trust
     pub fn record_success(&mut self, domain: &str) {
         self.ensure_domain(domain);

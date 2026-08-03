@@ -1,5 +1,6 @@
 //! Tool implementations for agent-callable capabilities.
 
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 pub mod microsoft365;
 pub mod util_helpers;
 

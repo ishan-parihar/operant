@@ -785,6 +785,7 @@ fn normalize_cached_channel_turns(turns: Vec<ChatMessage>) -> Vec<ChatMessage> {
     normalized
 }
 
+    #[expect(clippy::unwrap_used, reason = "infallible once-init / static init")]
 /// Remove `<tool_result …>…</tool_result>` blocks (and a leading `[Tool results]`
 /// header, if present) from a conversation-history entry so that stale tool
 /// output is never presented to the LLM without the corresponding `<tool_call>`.
@@ -5716,6 +5717,7 @@ pub async fn doctor_channels(config: Config) -> Result<()> {
     Ok(())
 }
 
+    #[expect(clippy::unwrap_used, reason = "invariant guaranteed by surrounding validation")]
 /// Start all configured channels and route messages to the agent
 #[allow(clippy::too_many_lines)]
 pub async fn start_channels(

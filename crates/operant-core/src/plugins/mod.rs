@@ -96,6 +96,7 @@ impl PluginRegistry {
         }
     }
 
+        #[expect(clippy::expect_used, reason = "poisoned lock: panic is the intended recovery")]
     fn register(&self, cmd: PluginCommand) {
         let mut map = self
             .commands
@@ -111,6 +112,7 @@ impl PluginRegistry {
         map.insert(cmd.name.clone(), cmd);
     }
 
+        #[expect(clippy::expect_used, reason = "poisoned lock: panic is the intended recovery")]
     fn handle(&self, name: &str, args: &str) -> Option<String> {
         let map = self
             .commands
@@ -119,6 +121,7 @@ impl PluginRegistry {
         map.get(name).map(|cmd| cmd.invoke(args))
     }
 
+        #[expect(clippy::expect_used, reason = "poisoned lock: panic is the intended recovery")]
     fn list(&self) -> Vec<PluginCommand> {
         let map = self
             .commands
@@ -127,6 +130,7 @@ impl PluginRegistry {
         map.values().cloned().collect()
     }
 
+        #[expect(clippy::expect_used, reason = "poisoned lock: panic is the intended recovery")]
     fn contains(&self, name: &str) -> bool {
         let map = self
             .commands
@@ -192,6 +196,7 @@ pub fn is_plugin_command(name: &str) -> bool {
     global_registry().contains(name)
 }
 
+    #[expect(clippy::expect_used, reason = "poisoned lock: panic is the intended recovery")]
 /// Resolve a raw text string to a plugin command name + arguments.
 ///
 /// Expects text to start with `/`.  Extracts the first space-delimited token

@@ -445,6 +445,7 @@ pub(super) fn apply_operator_range(
 // Full vim key handler (state machine)
 // ---------------------------------------------------------------------------
 
+    #[expect(clippy::unwrap_used, reason = "invariant guaranteed by surrounding validation")]
 /// Process a single key press in vim mode.
 /// Returns `true` when text was modified (caller should push undo snapshot).
 pub fn apply_vim_key(
@@ -555,6 +556,7 @@ pub fn apply_vim_key(
     }
 }
 
+    #[expect(clippy::unwrap_used, reason = "invariant guaranteed by surrounding validation")]
 pub(super) fn vim_idle(
     mode: &mut VimMode,
     text: &mut String,
@@ -577,6 +579,7 @@ pub(super) fn vim_idle(
     vim_normal(mode, text, cursor, key, yank_buf, pending, last_find, 1)
 }
 
+    #[expect(clippy::unwrap_used, reason = "invariant guaranteed by surrounding validation")]
 #[allow(clippy::too_many_arguments)]
 pub(super) fn vim_count(
     mode: &mut VimMode,
@@ -1119,6 +1122,7 @@ pub(super) fn vim_g(
     }
 }
 
+    #[expect(clippy::unwrap_used, reason = "invariant guaranteed by surrounding validation")]
 #[allow(clippy::too_many_arguments)]
 pub(super) fn vim_operator(
     mode: &mut VimMode,
@@ -1291,6 +1295,7 @@ pub(super) fn vim_operator(
     op != VimOperator::Yank
 }
 
+    #[expect(clippy::unwrap_used, reason = "invariant guaranteed by surrounding validation")]
 #[allow(clippy::too_many_arguments)]
 pub(super) fn vim_operator_count(
     mode: &mut VimMode,

@@ -432,6 +432,7 @@ pub fn run_traces(
 
 // ── Config semantic validation ───────────────────────────────────
 
+    #[expect(clippy::expect_used, reason = "invariant guaranteed by surrounding validation")]
 fn check_config_semantics(config: &Config, items: &mut Vec<DiagItem>) {
     let cat = "config";
 

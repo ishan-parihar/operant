@@ -581,6 +581,7 @@ fn relativize_path(line: &str, workspace_prefix: &str) -> String {
     line.to_string()
 }
 
+    #[expect(clippy::expect_used, reason = "invariant guaranteed by surrounding validation")]
 /// Parse content output line and determine whether it is a real match line.
 ///
 /// Supported formats:
@@ -607,6 +608,7 @@ fn parse_content_line(line: &str) -> Option<(&str, bool)> {
     None
 }
 
+    #[expect(clippy::expect_used, reason = "infallible once-init / static init")]
 /// Parse count output line in `path:count` format.
 fn parse_count_line(line: &str) -> Option<(&str, usize)> {
     static COUNT_RE: OnceLock<regex::Regex> = OnceLock::new();

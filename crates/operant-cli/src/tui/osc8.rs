@@ -23,6 +23,7 @@ const OSC8_OPEN_PREFIX: &str = "\x1b]8;;";
 const OSC8_ST: &str = "\x1b\\";
 const OSC8_CLOSE: &str = "\x1b]8;;\x1b\\";
 
+    #[expect(clippy::expect_used, reason = "invariant guaranteed by surrounding validation")]
 static URL_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
         r#"(?:https?|ftp)://[A-Za-z0-9\-._~:/?#\[\]@!$&'()*+,;=%]+|www\.[A-Za-z0-9\-]+\.[A-Za-z0-9\-._~:/?#\[\]@!$&'()*+,;=%]+"#,

@@ -8,6 +8,7 @@
 //! This crate has no dependency on agent state, memory, providers, or channels.
 //! It is pure text transformation.
 
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 #![deny(missing_docs)]
 
 use regex::Regex;
@@ -198,10 +199,12 @@ fn is_xml_meta_tag(tag: &str) -> bool {
     )
 }
 
+    #[expect(clippy::unwrap_used, reason = "infallible once-init / static init")]
 /// Match opening XML tags: `<tag_name>`.  Does NOT use backreferences.
 static XML_OPEN_TAG_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"<([a-zA-Z_][a-zA-Z0-9_-]*)>").unwrap());
 
+    #[expect(clippy::unwrap_used, reason = "infallible once-init / static init")]
 /// MiniMax XML invoke format:
 /// `<invoke name="shell"><parameter name="command">pwd</parameter></invoke>`
 static MINIMAX_INVOKE_RE: LazyLock<Regex> = LazyLock::new(|| {
@@ -209,6 +212,7 @@ static MINIMAX_INVOKE_RE: LazyLock<Regex> = LazyLock::new(|| {
         .unwrap()
 });
 
+    #[expect(clippy::unwrap_used, reason = "invariant guaranteed by surrounding validation")]
 static MINIMAX_PARAMETER_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
         r#"(?is)<parameter\b[^>]*\bname\s*=\s*(?:"([^"]+)"|'([^']+)')[^>]*>(.*?)</parameter>"#,
@@ -216,6 +220,7 @@ static MINIMAX_PARAMETER_RE: LazyLock<Regex> = LazyLock::new(|| {
     .unwrap()
 });
 
+    #[expect(clippy::unwrap_used, reason = "invariant guaranteed by surrounding validation")]
 /// Extracts all `<tag>…</tag>` pairs from `input`, returning `(tag_name, inner_content)`.
 /// Handles matching closing tags without regex backreferences.
 fn extract_xml_pairs(input: &str) -> Vec<(&str, &str)> {
@@ -540,6 +545,7 @@ fn find_json_end(input: &str) -> Option<usize> {
     None
 }
 
+    #[expect(clippy::unwrap_used, reason = "infallible once-init / static init")]
 /// Parse XML attribute-style tool calls from response text.
 /// This handles MiniMax and similar providers that output:
 /// ```xml
@@ -596,6 +602,7 @@ fn parse_xml_attribute_tool_calls(response: &str) -> Vec<ParsedToolCall> {
     calls
 }
 
+    #[expect(clippy::unwrap_used, reason = "infallible once-init / static init")]
 /// Parse Perl/hash-ref style tool calls from response text.
 /// This handles formats like:
 /// ```text
@@ -681,6 +688,7 @@ fn parse_perl_style_tool_calls(response: &str) -> Vec<ParsedToolCall> {
     calls
 }
 
+    #[expect(clippy::unwrap_used, reason = "infallible once-init / static init")]
 /// Parse FunctionCall-style tool calls from response text.
 /// This handles formats like:
 /// ```text
@@ -1030,6 +1038,7 @@ fn parse_glm_shortened_body(body: &str) -> Option<ParsedToolCall> {
 // response body, because that would enable prompt-injection attacks where
 // malicious content in emails/files/web pages mimics a tool call.
 
+    #[expect(clippy::unwrap_used, reason = "invariant guaranteed by surrounding validation")]
 /// Parse tool calls from an LLM response that uses XML-style function calling.
 ///
 /// Expected format (common with system-prompt-guided tool use):
@@ -1458,6 +1467,7 @@ pub fn strip_think_tags(s: &str) -> String {
     result.trim().to_string()
 }
 
+    #[expect(clippy::unwrap_used, reason = "infallible once-init / static init")]
 /// Strip prompt-guided tool artifacts from visible output while preserving
 /// raw model text in history for future turns.
 pub fn strip_tool_result_blocks(text: &str) -> String {
@@ -1522,6 +1532,7 @@ pub fn detect_tool_call_parse_issue(
     }
 }
 
+    #[expect(clippy::unwrap_used, reason = "invariant guaranteed by surrounding validation")]
 /// Build a native OpenAI-style assistant message JSON string carrying the
 /// parsed `tool_calls` (and optional `reasoning_content`), for round-trip
 /// into provider histories. Returns `None` when `tool_calls` is empty:

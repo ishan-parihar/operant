@@ -636,6 +636,7 @@ impl PersistentSessionStore {
         Ok(store)
     }
 
+        #[expect(clippy::expect_used, reason = "poisoned lock: panic is the intended recovery")]
     /// Update the store configuration at runtime.
     pub fn set_config(&self, config: SessionStoreConfig) {
         *self
@@ -644,6 +645,7 @@ impl PersistentSessionStore {
             .expect("session entries/config write lock poisoned — programmer error") = config;
     }
 
+        #[expect(clippy::expect_used, reason = "poisoned lock: panic is the intended recovery")]
     /// Load all sessions from the database into the in-memory cache.
     fn load_from_db(&self) -> Result<(), Error> {
         let conn = self.lock_conn()?;
@@ -784,6 +786,7 @@ impl PersistentSessionStore {
 
     // ── Core session lifecycle ──
 
+        #[expect(clippy::expect_used, reason = "poisoned lock: panic is the intended recovery")]
     /// Get or create a session for a given source.
     ///
     /// Evaluates reset policy to determine if the existing session is stale.
@@ -882,6 +885,7 @@ impl PersistentSessionStore {
         Ok(entry)
     }
 
+        #[expect(clippy::expect_used, reason = "poisoned lock: panic is the intended recovery")]
     /// Reset a session, creating a new session ID.
     pub fn reset_session(&self, session_key: &str) -> Result<Option<SessionEntry>, Error> {
         let entries = self
@@ -908,6 +912,7 @@ impl PersistentSessionStore {
         }
     }
 
+        #[expect(clippy::expect_used, reason = "poisoned lock: panic is the intended recovery")]
     fn reset_session_inner(
         &self,
         session_key: &str,
@@ -943,6 +948,7 @@ impl PersistentSessionStore {
         Ok(new_entry)
     }
 
+        #[expect(clippy::expect_used, reason = "poisoned lock: panic is the intended recovery")]
     /// Switch a session key to point at an existing session ID.
     pub fn switch_session(
         &self,
@@ -987,6 +993,7 @@ impl PersistentSessionStore {
         Ok(Some(new_entry))
     }
 
+        #[expect(clippy::expect_used, reason = "poisoned lock: panic is the intended recovery")]
     /// Mark a session as suspended (from /stop).
     pub fn suspend_session(&self, session_key: &str) -> bool {
         let mut entries = self
@@ -1003,6 +1010,7 @@ impl PersistentSessionStore {
         false
     }
 
+        #[expect(clippy::expect_used, reason = "poisoned lock: panic is the intended recovery")]
     /// Mark a session as resume-pending after a restart interruption.
     pub fn mark_resume_pending(&self, session_key: &str, reason: &str) -> bool {
         let mut entries = self
@@ -1024,6 +1032,7 @@ impl PersistentSessionStore {
         false
     }
 
+        #[expect(clippy::expect_used, reason = "poisoned lock: panic is the intended recovery")]
     /// Clear resume-pending flag after a successful resumed turn.
     pub fn clear_resume_pending(&self, session_key: &str) -> bool {
         let mut entries = self
@@ -1045,6 +1054,7 @@ impl PersistentSessionStore {
         false
     }
 
+        #[expect(clippy::expect_used, reason = "poisoned lock: panic is the intended recovery")]
     /// Update session activity timestamp.
     pub fn update_activity(&self, session_key: &str) -> Result<(), Error> {
         let mut entries = self
@@ -1061,6 +1071,7 @@ impl PersistentSessionStore {
         Err(Error::Agent(format!("Session not found: {}", session_key)))
     }
 
+        #[expect(clippy::expect_used, reason = "poisoned lock: panic is the intended recovery")]
     /// Update session token counts.
     pub fn update_tokens(
         &self,
@@ -1091,6 +1102,7 @@ impl PersistentSessionStore {
         Err(Error::Agent(format!("Session not found: {}", session_key)))
     }
 
+        #[expect(clippy::expect_used, reason = "poisoned lock: panic is the intended recovery")]
     /// Look up a session entry by session key.
     pub fn get_entry(&self, session_key: &str) -> Option<SessionEntry> {
         self.entries
@@ -1100,6 +1112,7 @@ impl PersistentSessionStore {
             .cloned()
     }
 
+        #[expect(clippy::expect_used, reason = "poisoned lock: panic is the intended recovery")]
     /// Look up a session entry by session ID.
     pub fn lookup_by_session_id(&self, session_id: &str) -> Option<SessionEntry> {
         self.entries
@@ -1110,6 +1123,7 @@ impl PersistentSessionStore {
             .cloned()
     }
 
+        #[expect(clippy::expect_used, reason = "poisoned lock: panic is the intended recovery")]
     /// List all sessions, optionally filtered by activity.
     pub fn list_sessions(&self, active_minutes: Option<u64>) -> Vec<SessionEntry> {
         let entries = self
@@ -1131,6 +1145,7 @@ impl PersistentSessionStore {
         result
     }
 
+        #[expect(clippy::expect_used, reason = "poisoned lock: panic is the intended recovery")]
     /// Remove a session entry.
     pub fn close_session(&self, session_key: &str) -> Result<(), Error> {
         let conn = self.lock_conn()?;
@@ -1147,6 +1162,7 @@ impl PersistentSessionStore {
         Ok(())
     }
 
+        #[expect(clippy::expect_used, reason = "poisoned lock: panic is the intended recovery")]
     /// Total number of sessions.
     pub fn session_count(&self) -> usize {
         self.entries
@@ -1160,6 +1176,7 @@ impl PersistentSessionStore {
         self.session_count()
     }
 
+        #[expect(clippy::expect_used, reason = "poisoned lock: panic is the intended recovery")]
     /// List active sessions as `PlatformSession` for backward compatibility.
     pub fn list_active_sessions(&self, platform: Option<&str>) -> Vec<PlatformSession> {
         let entries = self
@@ -1194,6 +1211,7 @@ impl PersistentSessionStore {
             .collect()
     }
 
+        #[expect(clippy::expect_used, reason = "poisoned lock: panic is the intended recovery")]
     /// Get a session by its ID (legacy `PlatformSession` API).
     pub fn get_session(&self, session_id: &str) -> Option<PlatformSession> {
         self.entries
@@ -1221,6 +1239,7 @@ impl PersistentSessionStore {
             })
     }
 
+        #[expect(clippy::expect_used, reason = "poisoned lock: panic is the intended recovery")]
     /// Find a session matching platform + user + channel (legacy API).
     pub fn find_session(
         &self,
@@ -1295,6 +1314,7 @@ impl PersistentSessionStore {
         self.create_session(platform, "__shared__", channel_id)
     }
 
+        #[expect(clippy::expect_used, reason = "poisoned lock: panic is the intended recovery")]
     /// Update session metadata (legacy API).
     pub fn update_session_metadata(
         &self,
@@ -1324,6 +1344,7 @@ impl PersistentSessionStore {
         }
     }
 
+        #[expect(clippy::expect_used, reason = "poisoned lock: panic is the intended recovery")]
     /// Check if any sessions exist.
     pub fn has_any_sessions(&self) -> bool {
         !self
@@ -1378,6 +1399,7 @@ impl PersistentSessionStore {
         None
     }
 
+        #[expect(clippy::expect_used, reason = "poisoned lock: panic is the intended recovery")]
     /// Check if a session is expired (for background expiry watcher).
     pub fn is_session_expired(&self, session_key: &str) -> bool {
         let config = self
@@ -1396,6 +1418,7 @@ impl PersistentSessionStore {
         }
     }
 
+        #[expect(clippy::expect_used, reason = "poisoned lock: panic is the intended recovery")]
     /// Mark recently-active sessions as resumable after an unexpected exit.
     pub fn suspend_recently_active(&self, max_age_seconds: u64) -> u32 {
         let cutoff = SystemTime::now() - Duration::from_secs(max_age_seconds);
@@ -1419,6 +1442,7 @@ impl PersistentSessionStore {
         count
     }
 
+        #[expect(clippy::expect_used, reason = "poisoned lock: panic is the intended recovery")]
     /// Prune old entries older than max_age_days.
     pub fn prune_old_entries(&self, max_age_days: u32) -> u32 {
         if max_age_days == 0 {

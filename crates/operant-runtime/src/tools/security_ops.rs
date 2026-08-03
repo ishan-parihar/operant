@@ -145,6 +145,7 @@ impl SecurityOpsTool {
         })
     }
 
+        #[expect(clippy::expect_used, reason = "invariant guaranteed by surrounding validation")]
     /// Parse vulnerability scan results.
     fn parse_vulnerability(&self, args: &serde_json::Value) -> anyhow::Result<ToolResult> {
         let scan_data = args

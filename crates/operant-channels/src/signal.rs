@@ -114,6 +114,7 @@ impl SignalChannel {
         self
     }
 
+        #[expect(clippy::expect_used, reason = "invariant guaranteed by surrounding validation")]
     fn http_client(&self) -> Client {
         let builder = Client::builder().connect_timeout(Duration::from_secs(10));
         let builder = operant_config::schema::apply_channel_proxy_to_builder(

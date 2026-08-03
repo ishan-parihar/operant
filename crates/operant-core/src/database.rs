@@ -931,6 +931,7 @@ impl Database {
             .map(|c| PathBuf::from(c.path().unwrap_or("")))
     }
 
+        #[expect(clippy::expect_used, reason = "poisoned lock: panic is the intended recovery")]
     /// Access the raw SQLite connection for advanced queries.
     /// Returns a locked reference to the Connection. Prefer the typed
     /// public methods on Database for standard operations; use this

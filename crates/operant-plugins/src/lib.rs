@@ -3,6 +3,7 @@
 //! Plugins are WebAssembly modules loaded via Extism that can extend
 //! Operant with custom tools and channels. Enable with `--features plugins-wasm`.
 
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 pub mod error;
 pub mod host;
 pub mod runtime;
