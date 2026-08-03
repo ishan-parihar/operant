@@ -40,14 +40,15 @@ Total: 19 tool args structs
 
 Total: 20 TUI infrastructure items
 
-## Category 2: WIRE UP (Functional Gaps) — 4 items
+## Category 2: WIRE UP (Functional Gaps) — 4 items → 0 remaining
 
-These are ported from hermes-agent but not yet connected.
+Ported from hermes-agent. All four resolved in Phase 10 (8797c093): verified
+live in production and the stale `#[allow(dead_code)]` suppressions removed.
 
-- turn_finalizer.rs: file_mutation_verifier_footer (1)
-- background_review.rs: NotificationMode enum (1)
-- insights.rs: SessionRow.id field (1)
-- llm_compressor.rs: summary_text field (1)
+- turn_finalizer.rs: file_mutation_verifier_footer (1) ✅ WIRED — called at agent/mod.rs:1655
+- background_review.rs: NotificationMode enum (1) ✅ WIRED — compared in summarize_review_actions
+- insights.rs: SessionRow.id field (1) ✅ WIRED — read by compute_tool_breakdown_from_db (insights.rs:375)
+- llm_compressor.rs: summary_text field (1) ✅ TEST SEAM — carries `#[expect(dead_code, reason = "exposed for tests/inspection of the compression outcome")]`
 
 ## Category 3: REMOVE (YAGNI) — 20 items
 

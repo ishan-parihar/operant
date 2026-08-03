@@ -142,9 +142,9 @@ The `LearningMutationTool` in `tools/learning_mutation_tool.rs` wraps `delete_no
 | File | Items | Purpose | Status |
 |------|-------|---------|--------|
 | `turn_finalizer.rs` | 1 item | Turn finalization logic | ✅ Wired up (check_and_advance_evolution_triggers called in run()) |
-| `background_review.rs` | 2 items | Background code review | ✅ Wired up (spawn_background_review called at line 1684) |
+| `background_review.rs` | 2 items | Background code review + `NotificationMode` enum | ✅ Wired up (spawn_background_review at line 1684; NotificationMode compared in summarize_review_actions) |
 | `llm_compressor.rs` | 1 item | LLM compression | ✅ Wired up (compress_context_overflow called in run()) |
-| `turn_context.rs` | 1 item | `NotificationMode` enum | ✅ Used by background_review |
+| `turn_context.rs` | 1 item | `already_added` field | ✅ Test seam — write-only in lib, read only by tests; `cfg_attr(not(test), expect(dead_code))` since Phase 10 |
 | `insights.rs` | 1 item | Insights extraction | ✅ Wired up (InsightsTool registered in builtin.rs as session_insights) |
 | `message_safety.rs` | 2 items | `sanitize_surrogates`, `sanitize_messages_surrogates` | ✅ Keep — API parity with hermes-agent |
 | `mod.rs` | 3 items | Test helpers | ✅ Keep — legitimate test utilities |

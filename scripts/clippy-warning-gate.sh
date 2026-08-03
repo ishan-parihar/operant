@@ -58,18 +58,20 @@ tmp_stale="$(mktemp)"
 trap 'rm -f "${tmp_json}" "${tmp_seen}" "${tmp_allow}" "${tmp_new}" "${tmp_stale}"' EXIT
 
 echo "[clippy-gate] collecting warnings..."
-# NOTE: intentionally runs WITHOUT --all-features. Several workspace features
-# have never compiled (undeclared deps / missing include_str! assets — see
-# docs/RUST_BEST_PRACTICES_PLAN.md §"--all-features is broken"), so gating on
-# --all-features would block on pre-existing compile errors, not new warnings.
-# Re-enable --all-features as those features are wired back up.
+# Runs WITH --all-features: the workspace feature inventory is fully fixed
+# (2026-08-03 — observability/hardware/channels vendor modules, tools probe,
+# core anthropic, gateway schema-export all compile green; see the
+# "--all-features" inventory note in docs/RUST_BEST_PRACTICES_PLAN.md).
+# Gating on --all-features keeps feature-gated unwrap/expect regressions
+# (e.g. the plugins-wasm strip_prefix expect, fixed 2026-08-03) from
+# slipping past the gate under default features alone.
 #
 # Production code must not call `.unwrap()`/`.expect()` (rust-best-practices
 # ch.4). Manifest-level workspace lints are unusable here (this environment's
 # cargo rejects `lints` manifest keys), so the denies are applied explicitly;
 # justified sites carry `#[expect(clippy::unwrap_used/expect_used)]` with a
 # reason, and test targets are exempted via cfg_attr(test) allows / headers.
-cargo clippy --workspace --all-targets --message-format=json \
+cargo clippy --workspace --all-targets --all-features --message-format=json \
   -- -D clippy::unwrap_used -D clippy::expect_used "${EXTRA_ARGS[@]}" > "${tmp_json}"
 
 jq -r '

@@ -478,13 +478,20 @@ async fn handle_socket(
                         .voice_duplex
                         .as_ref()
                         .is_some_and(|v| v.enabled);
-                    if duplex_enabled {
-                        if let Some(voice_event) = crate::voice_duplex::try_parse_voice_event(&msg) {
-                            if let Some(error_frame) = crate::voice_duplex::handle_voice_event(voice_event) {
-                                let _ = sender.send(Message::Text(error_frame.to_string().into())).await;
-                            }
-                            continue;
+                    // `continue` runs whenever a voice event parsed (even with
+                    // no error frame), so only the outer pair collapses.
+                    if duplex_enabled
+                        && let Some(voice_event) =
+                            crate::voice_duplex::try_parse_voice_event(&msg)
+                    {
+                        if let Some(error_frame) =
+                            crate::voice_duplex::handle_voice_event(voice_event)
+                        {
+                            let _ = sender
+                                .send(Message::Text(error_frame.to_string().into()))
+                                .await;
                         }
+                        continue;
                     }
                 }
 

@@ -61,8 +61,9 @@ where
             let _ = tx.send(f());
         })
         .context("failed to spawn pg knowledge graph thread")?;
-    rx.await
-        .map_err(|_| Error::message(format!("pg knowledge graph thread terminated unexpectedly")))?
+    rx.await.map_err(|_| {
+        Error::message("pg knowledge graph thread terminated unexpectedly".to_string())
+    })?
 }
 
 impl PgKnowledgeGraph {

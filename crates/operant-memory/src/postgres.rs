@@ -120,7 +120,7 @@ impl PostgresMemory {
 
         init_handle
             .join()
-            .map_err(|_| Error::message(format!("PostgreSQL initializer thread panicked")))?
+            .map_err(|_| Error::message("PostgreSQL initializer thread panicked".to_string()))?
     }
 
     fn init_schema(client: &mut Client, schema_ident: &str, qualified_table: &str) -> Result<()> {
@@ -288,9 +288,7 @@ where
         .context("failed to spawn PostgreSQL operation thread")?;
 
     rx.await.map_err(|_| {
-        Error::message(format!(
-            "PostgreSQL operation thread terminated unexpectedly"
-        ))
+        Error::message("PostgreSQL operation thread terminated unexpectedly".to_string())
     })?
 }
 
