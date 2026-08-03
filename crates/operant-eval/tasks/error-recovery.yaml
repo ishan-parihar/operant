@@ -1,0 +1,6 @@
+id: error-recovery
+prompt: "Use the tool `definitely_not_a_tool` to list files; if that fails, fall back to listing with the correct tool."
+golden_actions:
+  - list_files
+expect_keywords:
+  - failed

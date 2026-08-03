@@ -1,0 +1,16 @@
+[package]
+name = "operant-eval"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Golden-task eval verifier/reporter for agent-loop regression catching."
+publish = false
+
+[dependencies]
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+serde_yaml = "0.9"
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

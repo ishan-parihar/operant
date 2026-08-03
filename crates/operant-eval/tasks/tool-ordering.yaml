@@ -1,0 +1,7 @@
+id: tool-ordering
+prompt: "Read README.md, then fix the typo on line 3."
+golden_actions:
+  - file_read
+  - file_edit
+expect_keywords:
+  - fixed
