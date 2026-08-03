@@ -129,6 +129,43 @@ pub struct MutationResult {
     pub message: String,
 }
 
+/// Snapshot of a single graph node's current contents (read-before-edit).
+///
+/// Mirrors hermes-agent's `learning_mutations.py` per-node inspection so the
+/// agent can see exactly what it is about to overwrite.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NodeDetail {
+    /// Stable node ID (`<skill-name>` or `memory:<source>:<index>`).
+    pub id: String,
+    /// Display title (first heading for skills, first line for memories).
+    pub title: String,
+    /// Full body text (SKILL.md content or the memory chunk).
+    pub body: String,
+    /// Tags / metadata: category (+ created_by) for skills, source for memories.
+    pub tags: Vec<String>,
+    /// Last-modified timestamp (Unix seconds) of the backing file, if known.
+    pub mtime: Option<i64>,
+    /// Related references: declared `related_skills` for skills, source file
+    /// name for memories.
+    pub sources: Vec<String>,
+}
+
+/// Fetch the current contents of a graph node (read-before-edit).
+///
+/// Skills resolve to `SKILL.md` in `skills_dir`; memories resolve to the
+/// chunk at `memory:<source>:<index>` in `MEMORY.md` / `USER.md`. Returns
+/// `None` when the node does not exist.
+///
+/// Shares the exact parse helpers the mutators use (`parse_skill_frontmatter`,
+/// `parse_memory_id`, `read_memory_chunks`) so reads and writes never drift.
+pub fn node_detail(node_id: &str, skills_dir: &Path, memory_dir: &Path) -> Option<NodeDetail> {
+    if node_id.starts_with("memory:") {
+        node_detail_memory(node_id, memory_dir)
+    } else {
+        node_detail_skill(node_id, skills_dir)
+    }
+}
+
 /// Delete a node from the learning graph.
 ///
 /// - Skills: archive the skill directory (recoverable via curator restore).
@@ -156,6 +193,80 @@ pub fn edit_node(
     } else {
         edit_skill_node(node_id, content, skills_dir)
     }
+}
+
+// ---------------------------------------------------------------------------
+// Node detail (read-before-edit)
+// ---------------------------------------------------------------------------
+
+fn node_detail_skill(name: &str, skills_dir: &Path) -> Option<NodeDetail> {
+    let skill_md = skills_dir.join(name).join("SKILL.md");
+    if !skill_md.exists() {
+        return None;
+    }
+    let body = std::fs::read_to_string(&skill_md).ok()?;
+    let (category, created_by, _use_count, _pinned, related_skills) =
+        parse_skill_frontmatter(&skill_md);
+    let mtime = file_mtime(&skill_md);
+
+    let mut tags: Vec<String> = Vec::new();
+    if !category.is_empty() && category != "general" {
+        tags.push(category);
+    }
+    if !created_by.is_empty() && created_by != "user" {
+        tags.push(created_by);
+    }
+
+    Some(NodeDetail {
+        id: name.to_string(),
+        title: first_heading(&body).unwrap_or_else(|| name.to_string()),
+        body: body.trim_end().to_string(),
+        tags,
+        mtime,
+        sources: related_skills,
+    })
+}
+
+fn node_detail_memory(node_id: &str, memory_dir: &Path) -> Option<NodeDetail> {
+    let (source, index) = parse_memory_id(node_id)?;
+    let file_name = memory_file_name(source)?;
+    let path = memory_dir.join(file_name);
+    if !path.exists() {
+        return None;
+    }
+    let chunks = read_memory_chunks(&path);
+    let body = chunks.get(index)?.clone();
+
+    Some(NodeDetail {
+        id: node_id.to_string(),
+        title: first_heading(&body).unwrap_or_else(|| format!("{} #{}", file_name, index)),
+        body: body.trim_end().to_string(),
+        tags: vec![source.to_string()],
+        mtime: file_mtime(&path),
+        sources: vec![file_name.to_string()],
+    })
+}
+
+/// First markdown heading (`# ...`) in a body, used as a display title.
+///
+/// Matches the graph builder's label logic: only heading lines qualify, and
+/// all leading `#` are stripped so `## Sub` and `# Sub` both read as `Sub`.
+/// Returns `None` for bodies with no heading (e.g. raw memory chunks).
+fn first_heading(body: &str) -> Option<String> {
+    body.lines()
+        .map(|line| line.trim())
+        .find(|line| line.starts_with('#'))
+        .map(|line| line.trim_start_matches('#').trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+/// Unix-seconds mtime of a file, if available.
+fn file_mtime(path: &Path) -> Option<i64> {
+    path.metadata()
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs() as i64)
 }
 
 // ---------------------------------------------------------------------------
@@ -871,6 +982,91 @@ mod tests {
         assert!(result.message.contains("Empty"));
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_node_detail_skill() {
+        let skills = tmp_dir("detail_skill");
+        let skill_dir = skills.join("my-skill");
+        fs::create_dir_all(&skill_dir).unwrap();
+        fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: my-skill\ncategory: coding\nrelated_skills:\n  - debugging\n---\n# My Skill\n\nSome body text.\n",
+        )
+        .unwrap();
+
+        let memory = tmp_dir("detail_skill_mem");
+        let detail = node_detail("my-skill", &skills, &memory).expect("skill detail");
+
+        assert_eq!(detail.id, "my-skill");
+        assert_eq!(detail.title, "My Skill");
+        assert!(detail.body.contains("Some body text."));
+        assert!(detail.tags.contains(&"coding".to_string()));
+        assert_eq!(detail.sources, vec!["debugging"]);
+        assert!(detail.mtime.is_some());
+
+        let _ = fs::remove_dir_all(&skills);
+        let _ = fs::remove_dir_all(&memory);
+    }
+
+    #[test]
+    fn test_node_detail_memory() {
+        let skills = tmp_dir("detail_mem_skills");
+        let memory = tmp_dir("detail_mem");
+        fs::write(
+            memory.join("MEMORY.md"),
+            "# Fact one\n\nAlpha content.\n§\n# Fact two\n",
+        )
+        .unwrap();
+
+        let detail = node_detail("memory:memory:0", &skills, &memory).expect("memory detail");
+        assert_eq!(detail.id, "memory:memory:0");
+        assert_eq!(detail.title, "Fact one");
+        assert!(detail.body.contains("Alpha content."));
+        assert_eq!(detail.tags, vec!["memory"]);
+        assert_eq!(detail.sources, vec!["MEMORY.md"]);
+
+        let _ = fs::remove_dir_all(&skills);
+        let _ = fs::remove_dir_all(&memory);
+    }
+
+    #[test]
+    fn test_node_detail_memory_profile_source() {
+        let skills = tmp_dir("detail_prof_skills");
+        let memory = tmp_dir("detail_prof");
+        fs::write(memory.join("USER.md"), "# User fact\n§\n# Another\n").unwrap();
+
+        let detail = node_detail("memory:profile:1", &skills, &memory).expect("profile detail");
+        assert_eq!(detail.title, "Another");
+        assert_eq!(detail.sources, vec!["USER.md"]);
+
+        let _ = fs::remove_dir_all(&skills);
+        let _ = fs::remove_dir_all(&memory);
+    }
+
+    #[test]
+    fn test_node_detail_not_found() {
+        let skills = tmp_dir("detail_missing_skills");
+        let memory = tmp_dir("detail_missing_mem");
+
+        assert!(node_detail("no-such-skill", &skills, &memory).is_none());
+        assert!(node_detail("memory:memory:7", &skills, &memory).is_none());
+        assert!(node_detail("memory:unknown:0", &skills, &memory).is_none());
+
+        let _ = fs::remove_dir_all(&skills);
+        let _ = fs::remove_dir_all(&memory);
+    }
+
+    #[test]
+    fn test_node_detail_memory_out_of_range() {
+        let skills = tmp_dir("detail_oob_skills");
+        let memory = tmp_dir("detail_oob_mem");
+        fs::write(memory.join("MEMORY.md"), "only one\n").unwrap();
+
+        assert!(node_detail("memory:memory:1", &skills, &memory).is_none());
+
+        let _ = fs::remove_dir_all(&skills);
+        let _ = fs::remove_dir_all(&memory);
     }
 
     #[test]

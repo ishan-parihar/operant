@@ -8,7 +8,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use crate::agent::learning_graph::{delete_node, edit_node};
+use crate::agent::learning_graph::{delete_node, edit_node, node_detail};
 use crate::tools::{OperantTool, ToolContext, ToolResult};
 
 /// Arguments for the `learning_manage` tool.
@@ -125,10 +125,28 @@ impl OperantTool for LearningMutationTool {
             }
         };
 
-        let payload = json!({
+        // Read-before-edit: surface the node's current contents so the agent
+        // sees exactly what it is about to change (hermes-parity C4).
+        let previous = if parsed.action.as_str() == "edit" {
+            node_detail(&parsed.node_id, &self.skills_dir, &self.memory_dir)
+        } else {
+            None
+        };
+
+        let mut payload = json!({
             "ok": result.ok,
             "message": result.message
         });
+        if let Some(detail) = previous {
+            payload["previous"] = json!({
+                "id": detail.id,
+                "title": detail.title,
+                "body": detail.body,
+                "tags": detail.tags,
+                "mtime": detail.mtime,
+                "sources": detail.sources,
+            });
+        }
         if result.ok {
             ToolResult::success("learning_manage", payload)
         } else {
