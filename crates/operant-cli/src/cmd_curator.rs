@@ -235,8 +235,9 @@ async fn cmd_run(
             let model_client: Arc<dyn operant_core::agent::ModelClient> = match provider.as_str() {
                 #[cfg(feature = "anthropic")]
                 "anthropic" => {
-                    let client =
-                        operant_core::agent::clients::anthropic::AnthropicModelClient::new(api_key);
+                    let client = operant_core::agent::clients::anthropic::AnthropicModelClient::new(
+                        _api_key,
+                    );
                     Arc::new(client)
                 }
                 _ => {

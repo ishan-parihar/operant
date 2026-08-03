@@ -41,9 +41,9 @@ pub use crate::gmail_push::GmailPushChannel;
 pub use crate::imessage::IMessageChannel;
 #[cfg(feature = "channel-irc")]
 pub use crate::irc::IrcChannel;
-#[cfg(feature = "channel-lark")]
+#[cfg(feature = "channels-vendor")]
 pub use crate::lark::LarkChannel;
-#[cfg(feature = "channel-line")]
+#[cfg(feature = "channels-vendor")]
 pub use crate::line::LineChannel;
 #[cfg(feature = "channel-linq")]
 pub use crate::linq::LinqChannel;
@@ -53,7 +53,7 @@ pub use crate::mattermost::MattermostChannel;
 pub use crate::mochat::MochatChannel;
 #[cfg(feature = "channel-nextcloud")]
 pub use crate::nextcloud_talk::NextcloudTalkChannel;
-#[cfg(feature = "channel-nostr")]
+#[cfg(feature = "channels-vendor")]
 pub use crate::nostr::NostrChannel;
 #[cfg(feature = "channel-notion")]
 pub use crate::notion::NotionChannel;
@@ -68,14 +68,14 @@ pub use crate::transcription;
 pub use crate::tts::{TtsManager, TtsProvider};
 #[cfg(feature = "channel-twitter")]
 pub use crate::twitter::TwitterChannel;
-#[cfg(feature = "channel-voice-call")]
+#[cfg(feature = "channels-vendor")]
 pub use crate::voice_call::VoiceCallChannel;
-#[cfg(feature = "voice-wake")]
+#[cfg(feature = "channels-vendor")]
 pub use crate::voice_wake::VoiceWakeChannel;
 #[cfg(feature = "channel-wati")]
 pub use crate::wati::WatiChannel;
 pub use crate::webhook::WebhookChannel;
-#[cfg(feature = "channel-wechat")]
+#[cfg(feature = "channels-vendor")]
 pub use crate::wechat::WeChatChannel;
 #[cfg(feature = "channel-wecom")]
 pub use crate::wecom::WeComChannel;
@@ -85,11 +85,11 @@ pub use operant_api::channel::{Channel, ChannelMessage, SendMessage};
 // Local channel types (in misc, not operant-channels)
 pub use crate::cli::CliChannel;
 pub use crate::link_enricher;
-#[cfg(feature = "channel-matrix")]
+#[cfg(feature = "channels-vendor")]
 pub use crate::matrix::MatrixChannel;
 #[cfg(feature = "channel-telegram")]
 pub use crate::telegram::TelegramChannel;
-#[cfg(feature = "whatsapp-web")]
+#[cfg(feature = "channels-vendor")]
 pub use crate::whatsapp_web::WhatsAppWebChannel;
 pub use operant_infra::debounce::MessageDebouncer;
 pub use operant_infra::session_backend::SessionBackend;
@@ -99,7 +99,7 @@ pub use operant_infra::stall_watchdog::StallWatchdog;
 use anyhow::{Context, Result};
 use operant_api::session_keys::sanitize_session_key;
 use operant_config::schema::Config;
-use operant_memory::{self, Memory, MemoryResult, MEMORY_CONTEXT_CLOSE, MEMORY_CONTEXT_OPEN};
+use operant_memory::{self, MEMORY_CONTEXT_CLOSE, MEMORY_CONTEXT_OPEN, Memory, MemoryResult};
 use operant_providers::reliable::{scope_provider_fallback, take_last_provider_fallback};
 use operant_providers::{self, ChatMessage, Provider};
 use operant_runtime::agent::loop_::{
@@ -785,7 +785,7 @@ fn normalize_cached_channel_turns(turns: Vec<ChatMessage>) -> Vec<ChatMessage> {
     normalized
 }
 
-    #[expect(clippy::unwrap_used, reason = "infallible once-init / static init")]
+#[expect(clippy::unwrap_used, reason = "infallible once-init / static init")]
 /// Remove `<tool_result …>…</tool_result>` blocks (and a leading `[Tool results]`
 /// header, if present) from a conversation-history entry so that stale tool
 /// output is never presented to the LLM without the corresponding `<tool_call>`.
@@ -4523,7 +4523,7 @@ fn build_channel_by_id(config: &Config, channel_id: &str) -> Result<Arc<dyn Chan
             anyhow::bail!("Signal channel requires the `channel-signal` feature");
         }
         "matrix" => {
-            #[cfg(feature = "channel-matrix")]
+            #[cfg(all(feature = "channel-matrix", feature = "channels-vendor"))]
             {
                 let mx = config
                     .channels
@@ -4541,13 +4541,13 @@ fn build_channel_by_id(config: &Config, channel_id: &str) -> Result<Arc<dyn Chan
                         .with_workspace_dir(config.workspace_dir.clone()),
                 ))
             }
-            #[cfg(not(feature = "channel-matrix"))]
+            #[cfg(not(all(feature = "channel-matrix", feature = "channels-vendor")))]
             {
                 anyhow::bail!("Matrix channel requires the `channel-matrix` feature");
             }
         }
         "whatsapp" | "whatsapp-web" | "whatsapp_web" => {
-            #[cfg(feature = "whatsapp-web")]
+            #[cfg(all(feature = "whatsapp-web", feature = "channels-vendor"))]
             {
                 let wa = config
                     .channels
@@ -4571,7 +4571,7 @@ fn build_channel_by_id(config: &Config, channel_id: &str) -> Result<Arc<dyn Chan
                     wa.self_chat_mode,
                 )))
             }
-            #[cfg(not(feature = "whatsapp-web"))]
+            #[cfg(not(all(feature = "whatsapp-web", feature = "channels-vendor")))]
             {
                 anyhow::bail!("WhatsApp channel requires the `whatsapp-web` feature");
             }
@@ -4594,7 +4594,7 @@ fn build_channel_by_id(config: &Config, channel_id: &str) -> Result<Arc<dyn Chan
             anyhow::bail!("QQ channel requires the `channel-qq` feature");
         }
         "lark" => {
-            #[cfg(feature = "channel-lark")]
+            #[cfg(all(feature = "channel-lark", feature = "channels-vendor"))]
             {
                 let lk = config
                     .channels
@@ -4603,13 +4603,13 @@ fn build_channel_by_id(config: &Config, channel_id: &str) -> Result<Arc<dyn Chan
                     .context("Lark channel is not configured")?;
                 Ok(Arc::new(LarkChannel::from_lark_config(lk)))
             }
-            #[cfg(not(feature = "channel-lark"))]
+            #[cfg(not(all(feature = "channel-lark", feature = "channels-vendor")))]
             {
                 anyhow::bail!("Lark channel requires the `channel-lark` feature");
             }
         }
         "feishu" => {
-            #[cfg(feature = "channel-lark")]
+            #[cfg(all(feature = "channel-lark", feature = "channels-vendor"))]
             {
                 if let Some(ref fs) = config.channels.feishu {
                     return Ok(Arc::new(LarkChannel::from_feishu_config(fs)));
@@ -4622,7 +4622,7 @@ fn build_channel_by_id(config: &Config, channel_id: &str) -> Result<Arc<dyn Chan
                     .context("Feishu channel is not configured")?;
                 Ok(Arc::new(LarkChannel::from_config(lk)))
             }
-            #[cfg(not(feature = "channel-lark"))]
+            #[cfg(not(all(feature = "channel-lark", feature = "channels-vendor")))]
             {
                 anyhow::bail!("Feishu channel requires the `channel-lark` feature");
             }
@@ -4663,7 +4663,7 @@ fn build_channel_by_id(config: &Config, channel_id: &str) -> Result<Arc<dyn Chan
         "wecom" => {
             anyhow::bail!("WeCom channel requires the `channel-wecom` feature");
         }
-        #[cfg(feature = "channel-wechat")]
+        #[cfg(all(feature = "channel-wechat", feature = "channels-vendor"))]
         "wechat" => {
             let wc = config
                 .channels
@@ -4680,7 +4680,7 @@ fn build_channel_by_id(config: &Config, channel_id: &str) -> Result<Arc<dyn Chan
                 .with_workspace_dir(config.workspace_dir.clone()),
             ))
         }
-        #[cfg(not(feature = "channel-wechat"))]
+        #[cfg(not(all(feature = "channel-wechat", feature = "channels-vendor")))]
         "wechat" => {
             anyhow::bail!("WeChat channel requires the `channel-wechat` feature");
         }
@@ -4857,7 +4857,7 @@ fn build_channel_by_id(config: &Config, channel_id: &str) -> Result<Arc<dyn Chan
             anyhow::bail!("iMessage channel requires the `channel-imessage` feature");
         }
         "line" => {
-            #[cfg(feature = "channel-line")]
+            #[cfg(all(feature = "channel-line", feature = "channels-vendor"))]
             {
                 let ln = config
                     .channels
@@ -4866,13 +4866,13 @@ fn build_channel_by_id(config: &Config, channel_id: &str) -> Result<Arc<dyn Chan
                     .context("LINE channel is not configured")?;
                 Ok(Arc::new(LineChannel::from_config(ln)))
             }
-            #[cfg(not(feature = "channel-line"))]
+            #[cfg(not(all(feature = "channel-line", feature = "channels-vendor")))]
             {
                 anyhow::bail!("LINE channel requires the `channel-line` feature");
             }
         }
         "voice-call" => {
-            #[cfg(feature = "channel-voice-call")]
+            #[cfg(all(feature = "channel-voice-call", feature = "channels-vendor"))]
             {
                 let vc = config
                     .channels
@@ -4881,7 +4881,7 @@ fn build_channel_by_id(config: &Config, channel_id: &str) -> Result<Arc<dyn Chan
                     .context("Voice Call channel is not configured")?;
                 Ok(Arc::new(VoiceCallChannel::new(vc.clone())))
             }
-            #[cfg(not(feature = "channel-voice-call"))]
+            #[cfg(not(all(feature = "channel-voice-call", feature = "channels-vendor")))]
             {
                 anyhow::bail!("Voice Call channel requires the `channel-voice-call` feature");
             }
@@ -5097,7 +5097,7 @@ fn collect_configured_channels(
         }
     }
 
-    #[cfg(feature = "channel-matrix")]
+    #[cfg(all(feature = "channel-matrix", feature = "channels-vendor"))]
     if let Some(ref mx) = config.channels.matrix {
         if mx.enabled {
             let state_dir = config
@@ -5124,7 +5124,7 @@ fn collect_configured_channels(
         }
     }
 
-    #[cfg(not(feature = "channel-matrix"))]
+    #[cfg(not(all(feature = "channel-matrix", feature = "channels-vendor")))]
     if config.channels.matrix.is_some() {
         tracing::warn!(
             "Matrix channel is configured but this build was compiled without `channel-matrix`; skipping Matrix {}.",
@@ -5155,7 +5155,7 @@ fn collect_configured_channels(
         }
     }
 
-    #[cfg(feature = "whatsapp-web")]
+    #[cfg(all(feature = "whatsapp-web", feature = "channels-vendor"))]
     if let Some(ref wa) = config.channels.whatsapp {
         if wa.enabled {
             if wa.is_ambiguous_config() {
@@ -5191,7 +5191,7 @@ fn collect_configured_channels(
                 }
                 "web" => {
                     // Web mode: requires session_path
-                    #[cfg(feature = "whatsapp-web")]
+                    #[cfg(all(feature = "whatsapp-web", feature = "channels-vendor"))]
                     if wa.is_web_config() {
                         channels.push(ConfiguredChannel {
                             display_name: "WhatsApp",
@@ -5216,7 +5216,7 @@ fn collect_configured_channels(
                     } else {
                         tracing::warn!("WhatsApp Web configured but session_path not set");
                     }
-                    #[cfg(not(feature = "whatsapp-web"))]
+                    #[cfg(not(all(feature = "whatsapp-web", feature = "channels-vendor")))]
                     {
                         tracing::warn!(
                             "WhatsApp Web backend requires 'whatsapp-web' feature. Build/run with --features whatsapp-web"
@@ -5353,7 +5353,7 @@ fn collect_configured_channels(
         }
     }
 
-    #[cfg(feature = "channel-lark")]
+    #[cfg(all(feature = "channel-lark", feature = "channels-vendor"))]
     if let Some(ref lk) = config.channels.lark {
         if lk.enabled {
             if lk.use_feishu {
@@ -5387,7 +5387,7 @@ fn collect_configured_channels(
         }
     }
 
-    #[cfg(feature = "channel-lark")]
+    #[cfg(all(feature = "channel-lark", feature = "channels-vendor"))]
     if let Some(ref fs) = config.channels.feishu {
         if fs.enabled {
             channels.push(ConfiguredChannel {
@@ -5402,14 +5402,14 @@ fn collect_configured_channels(
         }
     }
 
-    #[cfg(not(feature = "channel-lark"))]
+    #[cfg(not(all(feature = "channel-lark", feature = "channels-vendor")))]
     if config.channels.lark.is_some() || config.channels.feishu.is_some() {
         tracing::warn!(
             "Lark/Feishu channel is configured but this build was compiled without `channel-lark`; skipping Lark/Feishu health check."
         );
     }
 
-    #[cfg(feature = "channel-line")]
+    #[cfg(all(feature = "channel-line", feature = "channels-vendor"))]
     if let Some(ref ln) = config.channels.line {
         if ln.enabled {
             channels.push(ConfiguredChannel {
@@ -5423,7 +5423,7 @@ fn collect_configured_channels(
         }
     }
 
-    #[cfg(not(feature = "channel-line"))]
+    #[cfg(not(all(feature = "channel-line", feature = "channels-vendor")))]
     if config.channels.line.is_some() {
         tracing::warn!(
             "LINE channel is configured but this build was compiled without `channel-line`; skipping LINE health check."
@@ -5512,7 +5512,7 @@ fn collect_configured_channels(
         }
     }
 
-    #[cfg(feature = "channel-wechat")]
+    #[cfg(all(feature = "channel-wechat", feature = "channels-vendor"))]
     if let Some(ref wechat) = config.channels.wechat {
         if wechat.enabled {
             match WeChatChannel::new(
@@ -5538,7 +5538,7 @@ fn collect_configured_channels(
         }
     }
 
-    #[cfg(not(feature = "channel-wechat"))]
+    #[cfg(not(all(feature = "channel-wechat", feature = "channels-vendor")))]
     if let Some(ref wechat) = config.channels.wechat
         && wechat.enabled
     {
@@ -5613,7 +5613,7 @@ fn collect_configured_channels(
         });
     }
 
-    #[cfg(feature = "voice-wake")]
+    #[cfg(all(feature = "voice-wake", feature = "channels-vendor"))]
     if let Some(ref vw) = config.channels.voice_wake {
         channels.push(ConfiguredChannel {
             display_name: "VoiceWake",
@@ -5624,7 +5624,7 @@ fn collect_configured_channels(
         });
     }
 
-    #[cfg(feature = "channel-voice-call")]
+    #[cfg(all(feature = "channel-voice-call", feature = "channels-vendor"))]
     if let Some(ref vc) = config.channels.voice_call {
         if vc.enabled {
             channels.push(ConfiguredChannel {
@@ -5662,7 +5662,7 @@ pub async fn doctor_channels(config: Config) -> Result<()> {
     #[allow(unused_mut)]
     let mut channels = collect_configured_channels(&config, "health check", &[]);
 
-    #[cfg(feature = "channel-nostr")]
+    #[cfg(all(feature = "channel-nostr", feature = "channels-vendor"))]
     if let Some(ref ns) = config.channels.nostr {
         channels.push(ConfiguredChannel {
             display_name: "Nostr",
@@ -5717,7 +5717,10 @@ pub async fn doctor_channels(config: Config) -> Result<()> {
     Ok(())
 }
 
-    #[expect(clippy::unwrap_used, reason = "invariant guaranteed by surrounding validation")]
+#[expect(
+    clippy::unwrap_used,
+    reason = "invariant guaranteed by surrounding validation"
+)]
 /// Start all configured channels and route messages to the agent
 #[allow(clippy::too_many_lines)]
 pub async fn start_channels(
@@ -6082,7 +6085,7 @@ pub async fn start_channels(
             .map(|configured| configured.channel)
             .collect();
 
-    #[cfg(feature = "channel-nostr")]
+    #[cfg(all(feature = "channel-nostr", feature = "channels-vendor"))]
     if let Some(ref ns) = config.channels.nostr {
         channels.push(Arc::new(
             NostrChannel::new(&ns.private_key, ns.relays.clone(), &ns.allowed_pubkeys).await?,
@@ -6500,7 +6503,7 @@ pub async fn deliver_announcement(
             );
             operant_api::channel::Channel::send(&ch, &make_msg(&safe_output)).await?;
         }
-        #[cfg(feature = "channel-wechat")]
+        #[cfg(all(feature = "channel-wechat", feature = "channels-vendor"))]
         "wechat" => {
             let wc = config
                 .channels
@@ -6516,7 +6519,7 @@ pub async fn deliver_announcement(
             .with_workspace_dir(config.workspace_dir.clone());
             operant_api::channel::Channel::send(&ch, &make_msg(&safe_output)).await?;
         }
-        #[cfg(not(feature = "channel-wechat"))]
+        #[cfg(not(all(feature = "channel-wechat", feature = "channels-vendor")))]
         "wechat" => {
             anyhow::bail!("WeChat channel requires the `channel-wechat` feature");
         }
@@ -9546,7 +9549,10 @@ BTC is currently around $65,000 based on latest tool output."#
             Ok(Vec::new())
         }
 
-        async fn get(&self, _key: &str) -> operant_memory::MemoryResult<Option<operant_memory::MemoryEntry>> {
+        async fn get(
+            &self,
+            _key: &str,
+        ) -> operant_memory::MemoryResult<Option<operant_memory::MemoryEntry>> {
             Ok(None)
         }
 
@@ -9611,7 +9617,10 @@ BTC is currently around $65,000 based on latest tool output."#
             }])
         }
 
-        async fn get(&self, _key: &str) -> operant_memory::MemoryResult<Option<operant_memory::MemoryEntry>> {
+        async fn get(
+            &self,
+            _key: &str,
+        ) -> operant_memory::MemoryResult<Option<operant_memory::MemoryEntry>> {
             Ok(None)
         }
 
@@ -12441,7 +12450,7 @@ This is an example JSON object for profile settings."#;
         );
     }
 
-    #[cfg(feature = "channel-voice-call")]
+    #[cfg(all(feature = "channel-voice-call", feature = "channels-vendor"))]
     #[test]
     fn collect_configured_channels_skips_disabled_voice_call() {
         let mut config = Config::default();
@@ -13574,7 +13583,7 @@ This is an example JSON object for profile settings."#;
         }
     }
 
-    #[cfg(feature = "channel-voice-call")]
+    #[cfg(all(feature = "channel-voice-call", feature = "channels-vendor"))]
     #[test]
     fn build_channel_by_id_unconfigured_voice_call_returns_error() {
         let config = Config::default();
@@ -13590,7 +13599,7 @@ This is an example JSON object for profile settings."#;
         }
     }
 
-    #[cfg(feature = "channel-voice-call")]
+    #[cfg(all(feature = "channel-voice-call", feature = "channels-vendor"))]
     #[test]
     fn build_channel_by_id_configured_voice_call_succeeds() {
         let mut config = Config::default();
