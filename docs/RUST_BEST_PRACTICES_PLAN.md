@@ -94,20 +94,22 @@ provider (see `AUDIT_2026-08-02.md` §7). The gaps are **not** in the loop itsel
 | Phase 0 — clippy gate | ✅ DONE | `scripts/clippy-warning-gate.sh` + `.ci/clippy-allowlist.txt` (4 entries, all in the user's `prompt_input` WIP). CI wiring deferred per user (workflows out of scope). |
 | Phase 1 — 20 lib clippy warnings | ✅ DONE | core + gateway lib targets 0 warnings; `--all-targets` also clean (commits b00b2d1, add4a48). |
 | Phase 2 — core unwraps | ✅ **0/268** | database, gateway_session, approval, skill_usage, kanban/*, cronjobs, gateway_markdown, schema, profile, mcp, mcp_oauth, agent/mod, tools/* — all prod unwraps eliminated (b7ebc77, fdf3ec6, 04805ca, 0181db7, 217cf30, 782b9b8). |
-| Phase 2b — expect-site checklist | ⏳ pending | See §3 Phase 2 sub-commit 5 note below — when `#![deny(clippy::expect_used)]` lands, these justified expects need `#[expect]` escapes: gateway_session.rs (~27), database.rs `conn()` (1), approval.rs `rx()` (1), gateway_markdown.rs `rx()` + captures (~9), agent/mod.rs locks (~8), plus the per-site expects added in 782b9b8. |
+| Phase 2b — expect-site checklist | ✅ DONE (0f4f3af0) | `unwrap_used`/`expect_used` denied in gate via `-D` flags (manifest lints unusable in this cargo build — see gate comment). 277 `#[expect]` escapes applied by `scripts/expect-annotate.py` (idempotent, per-category reasons); test targets exempted via `cfg_attr(test, allow)` + `tests/` headers. G2/G3 closed. |
 | Phase 3 — runtime unwraps | ✅ **0/141** | security/leak_detector + prompt_guard static-regex unwraps -> rx() helpers (f2c1558); sop/engine, trust/types, identity, doctor, crypto, security_ops, tools/mod, skillforge, model_switch, command_logger, tool_execution, agent/agent, loop_ -> justified expect or graceful if-let (cca00d5). prometheus.rs (25 expects) behind broken observability feature — OPEN. |
 | Phase 4 — tools/memory/gateway/config unwraps | ✅ **0/31** | calculator NaN-safe total_cmp sort, jira/linkedin/notion guarded json!, tool_search/web_search locks+regexes, git_operations while-let walk, memory consolidation/snapshot, gateway api_config/sse, config policy (06a5289). Also caught turn_context.rs evolution_state lock in core (missed in Phase 2 sweep). |
 | Phase 5 — anyhow → typed errors | ✅ **DONE** | **operant-memory** (2cfaa97e): typed `Error` + `MemoryContextExt` in `src/error.rs`, `MemoryResult<T> = Result<T, MemoryError>` seam in operant-api (Message/Io/Serde/Backend), anyhow removed incl. dev-deps. **operant-gateway**: new `src/error.rs` — typed `Error` (Message/Io/AddrParse/Backend/NeedsOnboarding) + `GatewayContextExt` + `Result<T, E = Error>` alias (defaulted second param preserves two-arg axum usages); tls.rs (5 fns), ws.rs `resolve_session_cwd`, lib.rs chat-dispatch/persist/serve all typed; needs_onboarding marker upgraded from fragile substring match to typed `Error::NeedsOnboarding` variant; boundary seams (Tool/Channel/Provider trait contracts + config `map_prop_error`) kept on anyhow with justification comments; 201 gateway tests pass. |
 | Phase 6 — missing_docs | ⛔ not started | `#![deny(missing_docs)]` on config/memory/tool-call-parser first. 0 deny-attrs across all 10 lib crates today. |
-| Phase 7 — hermes parity (tool planning, telemetry, eval) | ⛔ not started | design review first. Refresh audit (2026-08-03) confirms loop parity; remaining capability gaps are tool-planning crate, telemetry crate, eval harness, node_detail(). |
+| Phase 7 — hermes parity (tool planning, telemetry, eval) | 🔶 design review done | `docs/PHASE7_PARITY_DESIGN.md` covers C1 (tool-planning crate design), C2 (metrics bridge observer — observability substance shipped in Phase 2a), C3 (eval harness), C4 (node_detail). C4 smallest (~1–2h), C1 ~0.5–1d, C3 deferred until a real model endpoint. |
 | Phase 9 — audit refresh | ✅ DONE | `docs/HERMES_VS_OPERANT_AUDIT_2026-08-03.md` supersedes the stale July audit (prompt caching + streaming scrubber now implemented; TDG→agentmemory + Obscura→igs migrations done). Gaps G1–G6 recorded; BUGS.md triage (G5) pending. |
-| Phase 8 — enforcement | ⛔ not started | `lint-checks.sh` wrapping gate + fmt --check + deny audit. |
+| Phase 8 — enforcement | ✅ DONE (85407388) | `scripts/lint-checks.sh` wraps `cargo fmt --check` + clippy gate (`-D unwrap/expect`) + deny-attr audit + gate-flag presence. All 4 checks pass. CI wiring left out of scope per user. |
 
-**`--all-features` broken inventory (verified 2026-08-03):** `operant-runtime`
-observability (otel/prometheus, deps never declared, 1,669 LOC) and
-`operant-hardware` `hardware` feature (`include_str!` firmware/ dir never
-committed) — both still OPEN. Fixed: tools `probe`, core `anthropic` (Send),
-gateway `schema-export` (feature-gated import).
+**`--all-features` inventory — ALL FIXED (2026-08-03):** runtime observability
+(otel/prometheus wired to real deps in eb76a5a7), hardware `hardware`
+(firmware/ assets committed + vendor-SDK modules gated behind the undeclared
+`hardware-vendor` cfg in e32da964), plus tools `probe`, core `anthropic` (Send),
+gateway `schema-export` (feature-gated import). `cargo check --workspace
+--all-features` is now validated green (0 errors / 0 warnings); AGENTS.md
+Local Compilation Protocol updated accordingly (c677831c).
 
 ---
 
