@@ -11,6 +11,7 @@
 
 pub mod acp;
 pub mod api;
+pub mod error;
 pub mod api_config;
 pub mod api_onboard;
 pub mod api_pairing;
@@ -34,7 +35,7 @@ pub mod voice_duplex;
 pub mod ws;
 pub mod ws_approval;
 
-use anyhow::{Context, Result};
+use crate::error::{Error, GatewayContextExt as _, Result};
 use axum::{
     Router,
     body::Bytes,
@@ -591,7 +592,7 @@ pub async fn run_gateway(
         // Generate and display paircode if not paired
         let paircode = pairing
             .generate_new_pairing_code()
-            .ok_or_else(|| anyhow::anyhow!("Failed to generate pairing code"))?;
+            .ok_or_else(|| Error::message("Failed to generate pairing code"))?;
         tracing::info!("🔐 Gateway requires pairing. Paircode: {}", paircode);
     }
 
@@ -898,7 +899,11 @@ async fn persist_pairing_tokens(config: Arc<Mutex<Config>>, pairing: &PairingGua
     updated_cfg
         .save()
         .await
-        .context("Failed to persist paired tokens to config.toml")?;
+        // `Config::save` returns `anyhow::Result` (operant-config boundary),
+        // which the generic GatewayContextExt blanket impl cannot cover —
+        // `anyhow::Error` deliberately does not implement `std::error::Error`.
+        // Convert explicitly, preserving the context on the Backend seam.
+        .map_err(|e| Error::Backend(e.context("Failed to persist paired tokens to config.toml")))?;
 
     // Keep shared runtime config in sync with persisted tokens.
     *config.lock() = updated_cfg;
@@ -923,25 +928,24 @@ struct GatewayChatOutcome {
 /// dispatch with this marker instead of calling the provider with an
 /// empty model id. Mirrors `agent::Agent::from_config` (#6099) at
 /// request-time so `/onboard` stays reachable.
-fn needs_onboarding_for(model: &str) -> Option<anyhow::Error> {
+fn needs_onboarding_for(model: &str) -> Option<Error> {
     if model.trim().is_empty() {
-        Some(anyhow::anyhow!(
-            "needs_onboarding: gateway has no model configured. Complete \
-             browser onboarding at /onboard, or set [providers.models.<name>] \
-             model = \"...\" before sending messages."
-        ))
+        Some(Error::NeedsOnboarding)
     } else {
         None
     }
 }
 
-/// True when `e` carries the marker produced by `needs_onboarding_for`.
-/// Used by chat-dispatch error paths to map the marker to a 503
-/// `needs_onboarding` HTTP response or a more accurate channel-side
-/// reply, instead of the generic 500 / "sorry" catch-all.
-fn is_needs_onboarding_err(e: &anyhow::Error) -> bool {
-    #[allow(dead_code)]
-    e.to_string().contains("needs_onboarding")
+/// True when `e` is the typed [`Error::NeedsOnboarding`] variant produced
+/// by [`needs_onboarding_for`]. Used by chat-dispatch error paths to map
+/// the marker to a 503 `needs_onboarding` HTTP response or a more accurate
+/// channel-side reply, instead of the generic 500 / "sorry" catch-all.
+///
+/// Typed-variant matching (instead of a substring probe) means unrelated
+/// errors can never be misclassified, and a wrapped onboarding marker is
+/// caught by the compiler instead of silently degrading to a 500.
+fn is_needs_onboarding_err(e: &Error) -> bool {
+    matches!(e, Error::NeedsOnboarding)
 }
 
 /// Reply text sent over a channel SDK when chat dispatch refuses
@@ -964,7 +968,7 @@ async fn run_gateway_chat_with_tools(
     #[allow(dead_code)] state: &AppState,
     message: &str,
     session_id: Option<&str>,
-) -> anyhow::Result<GatewayChatOutcome> {
+) -> Result<GatewayChatOutcome> {
     if let Some(err) = needs_onboarding_for(&state.model) {
         return Err(err);
     }
@@ -3845,22 +3849,31 @@ mod tests {
 
     #[test]
     fn is_needs_onboarding_err_ignores_unrelated_errors() {
-        let err = anyhow::anyhow!("upstream timeout: provider returned 504");
+        let err = Error::message("upstream timeout: provider returned 504");
         assert!(
             !is_needs_onboarding_err(&err),
             "unrelated errors must not be misclassified as needs_onboarding"
         );
-        let err = anyhow::anyhow!("invalid api key");
+        let err = Error::message("invalid api key");
         assert!(!is_needs_onboarding_err(&err));
     }
 
     #[test]
-    fn is_needs_onboarding_err_detects_via_substring() {
-        // Defends the contract that the substring marker is the
-        // detection key — not the exact string. Wrappers (e.g.
-        // anyhow::Error::context) must not break the check.
-        let err = anyhow::anyhow!("provider call failed").context("needs_onboarding: empty model");
-        assert!(is_needs_onboarding_err(&err));
+    fn is_needs_onboarding_err_detects_only_typed_variant() {
+        // Typed-variant matching replaced the substring heuristic: an
+        // error whose text merely contains "needs_onboarding" (e.g. a
+        // wrapped backend failure) must NOT be classified — only the
+        // exact typed variant produced by needs_onboarding_for is.
+        let wrapped = Error::Backend(anyhow::anyhow!("provider call failed"));
+        assert!(
+            !is_needs_onboarding_err(&wrapped),
+            "backend-wrapped errors must not be misclassified via text"
+        );
+        let marker = needs_onboarding_for("").expect("empty model produces marker");
+        assert!(
+            is_needs_onboarding_err(&marker),
+            "the typed NeedsOnboarding variant must be detected"
+        );
     }
 
     #[test]

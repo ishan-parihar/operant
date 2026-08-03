@@ -293,6 +293,10 @@ fn error_response(err: ConfigApiError) -> Response {
 /// Wrap an `anyhow::Error` from `Config::set_prop` / `get_prop` into a
 /// `ConfigApiError`. Path-not-found errors get the specific code; everything
 /// else falls through to ValidationFailed.
+///
+/// `anyhow` is the `operant-config` boundary contract; this is the one
+/// gateway seam that *consumes* it, so it stays. See `crate::error` for the
+/// typed error design used everywhere else in this crate.
 fn map_prop_error(err: anyhow::Error, path: &str) -> ConfigApiError {
     let msg = err.to_string();
     if msg.starts_with("Unknown property") {

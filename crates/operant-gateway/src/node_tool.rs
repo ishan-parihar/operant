@@ -75,6 +75,9 @@ impl Tool for NodeTool {
     }
 
     async fn execute(&self, args: serde_json::Value) -> anyhow::Result<ToolResult> {
+        // `anyhow` is the `operant-api` `Tool` trait contract; it stays at
+        // this boundary and wraps into the crate's typed `Error::Backend`
+        // upstream. See `crate::error` for the typed error design.
         // Check if this capability requires approval
         if requires_approval(&self.capability_name) {
             let approved = args

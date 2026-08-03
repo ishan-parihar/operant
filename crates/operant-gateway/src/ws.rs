@@ -614,12 +614,13 @@ async fn handle_socket(
 fn resolve_session_cwd(
     requested_cwd: Option<&str>,
     default_workspace: &Path,
-) -> anyhow::Result<PathBuf> {
+) -> crate::error::Result<PathBuf> {
     let cwd = requested_cwd
         .map(PathBuf::from)
         .unwrap_or_else(|| default_workspace.to_path_buf());
-    std::fs::canonicalize(&cwd)
-        .map_err(|e| anyhow::anyhow!("cwd is not a usable directory ({}): {e}", cwd.display()))
+    std::fs::canonicalize(&cwd).map_err(|e| {
+        crate::error::Error::message(format!("cwd is not a usable directory ({}): {e}", cwd.display()))
+    })
 }
 
 fn needs_onboarding_ws_error(config: &operant_config::schema::Config) -> Option<serde_json::Value> {

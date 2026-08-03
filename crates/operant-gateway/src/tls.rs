@@ -4,7 +4,7 @@
 //! optionally requiring client certificates verified against a trusted CA
 //! with optional certificate pinning (SHA-256 fingerprint matching).
 
-use anyhow::{Context, Result};
+use crate::error::{Error, GatewayContextExt as _, Result};
 use operant_config::schema::{GatewayClientAuthConfig, GatewayTlsConfig};
 use rustls::RootCertStore;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
@@ -171,7 +171,7 @@ fn load_certs(path: &str) -> Result<Vec<CertificateDer<'static>>> {
         .collect::<std::result::Result<Vec<_>, _>>()
         .with_context(|| format!("failed to parse PEM certificates from {path}"))?;
     if certs.is_empty() {
-        anyhow::bail!("no certificates found in {path}");
+        return Err(Error::message(format!("no certificates found in {path}")));
     }
     Ok(certs)
 }
@@ -183,7 +183,7 @@ fn load_private_key(path: &str) -> Result<PrivateKeyDer<'static>> {
     let mut reader = std::io::BufReader::new(file);
     let key = rustls_pemfile::private_key(&mut reader)
         .with_context(|| format!("failed to parse private key from {path}"))?
-        .ok_or_else(|| anyhow::anyhow!("no private key found in {path}"))?;
+        .ok_or_else(|| Error::message(format!("no private key found in {path}")))?;
     Ok(key)
 }
 

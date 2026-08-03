@@ -93,7 +93,7 @@ runtime = channel/gateway agents).
 
 | # | Gap | Evidence | Effort |
 |---|-----|----------|--------|
-| G1 | **Gateway still uses `anyhow` in lib code** (Phase 5 half-done — memory done, gateway pending) | `anyhow = "1.0"` in `operant-gateway/Cargo.toml`; 11 `anyhow::Result` sites across 7 files | ~1 hr |
+| G1 | ~~Gateway anyhow in lib code~~ — **RESOLVED** (Phase 5 done) | gateway's own paths now typed (`src/error.rs`; tls.rs, ws.rs, lib.rs chat-dispatch/persist/serve). Remaining anyhow is boundary-only: Tool/Channel/Provider trait contracts (operant-api) + config `map_prop_error` seam, each with a justification comment. Root fix (typed trait contracts, mirroring hermes' `ToolError`) is Phase 7. Note: needs_onboarding marker upgraded substring→typed variant; verified no other producer of the string exists, so the 503 mapping is preserved. | ✅ |
 | G2 | **No `#![deny(...)]` enforcement anywhere** — 0 deny-attrs in all 10 lib crates (missing_docs, unwrap_used, expect_used) | grep across lib.rs files | ~2 hr incl. escapes |
 | G3 | **~104 justified `expect()` in gateway** need `#[expect]` escapes before `expect_used` deny can land | grep | part of G2 |
 | G4 | **`--all-features` still broken**: runtime observability (otel/prometheus, deps never declared, 1,669 LOC) + hardware `hardware` feature (`include_str!` firmware) | verified inventory | wire or remove |

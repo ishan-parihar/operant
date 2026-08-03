@@ -61,6 +61,9 @@ impl WsApprovalChannel {
 
 #[async_trait]
 impl Channel for WsApprovalChannel {
+    // `anyhow` is the `operant-api` `Channel` trait contract; it stays at
+    // this boundary and wraps into the crate's typed `Error::Backend`
+    // upstream. See `crate::error` for the typed error design.
     fn name(&self) -> &str {
         "ws"
     }
