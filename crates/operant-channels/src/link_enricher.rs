@@ -24,7 +24,7 @@ impl Default for LinkEnricherConfig {
     }
 }
 
-    #[expect(clippy::expect_used, reason = "infallible once-init / static init")]
+#[expect(clippy::expect_used, reason = "infallible once-init / static init")]
 /// URL regex: matches `http://` and `https://` URLs, stopping at whitespace, angle
 /// brackets, or double-quotes.
 static URL_RE: LazyLock<Regex> =

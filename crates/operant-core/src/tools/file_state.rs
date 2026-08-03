@@ -126,7 +126,10 @@ fn handle_check(path: &str) -> ToolResult {
     )
 }
 
-    #[expect(clippy::expect_used, reason = "poisoned lock: panic is the intended recovery")]
+#[expect(
+    clippy::expect_used,
+    reason = "poisoned lock: panic is the intended recovery"
+)]
 fn handle_watch(path: &str) -> ToolResult {
     let snapshot = match get_file_metadata(path) {
         Ok(s) => s,
@@ -148,7 +151,10 @@ fn handle_watch(path: &str) -> ToolResult {
     )
 }
 
-    #[expect(clippy::expect_used, reason = "poisoned lock: panic is the intended recovery")]
+#[expect(
+    clippy::expect_used,
+    reason = "poisoned lock: panic is the intended recovery"
+)]
 fn handle_diff(path: &str) -> ToolResult {
     let states = FILE_STATES
         .lock()

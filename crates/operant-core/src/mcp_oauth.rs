@@ -264,7 +264,10 @@ fn server_hash(url: &str) -> String {
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(result)
 }
 
-    #[expect(clippy::expect_used, reason = "invariant guaranteed by surrounding validation")]
+#[expect(
+    clippy::expect_used,
+    reason = "invariant guaranteed by surrounding validation"
+)]
 /// Find an available TCP port on localhost.
 fn find_free_port() -> u16 {
     let listener = TcpListener::bind("127.0.0.1:0").expect("Failed to bind to 127.0.0.1:0");
@@ -630,7 +633,10 @@ impl TokenStorage {
 // PKCE Helpers
 // ---------------------------------------------------------------------------
 
-    #[expect(clippy::expect_used, reason = "invariant guaranteed by surrounding validation")]
+#[expect(
+    clippy::expect_used,
+    reason = "invariant guaranteed by surrounding validation"
+)]
 /// Generate a PKCE code verifier (128 random bytes, base64url-encoded).
 fn generate_code_verifier() -> String {
     let mut bytes = vec![0u8; 64];
@@ -1244,7 +1250,10 @@ impl OAuthProvider {
 
     // -- Full authentication flow -----------------------------------------
 
-        #[expect(clippy::expect_used, reason = "poisoned lock: panic is the intended recovery")]
+    #[expect(
+        clippy::expect_used,
+        reason = "poisoned lock: panic is the intended recovery"
+    )]
     /// Execute the full PKCE authorization code flow.
     ///
     /// 1. Discovers or loads OAuth metadata
@@ -1480,7 +1489,10 @@ impl OAuthManager {
         }
     }
 
-        #[expect(clippy::expect_used, reason = "poisoned lock: panic is the intended recovery")]
+    #[expect(
+        clippy::expect_used,
+        reason = "poisoned lock: panic is the intended recovery"
+    )]
     /// Get or create a cached `OAuthProvider` for the given server URL.
     ///
     /// If the URL changes for a cached entry, the old entry is discarded
@@ -1522,7 +1534,10 @@ impl OAuthManager {
         provider.get_valid_token().await.ok()
     }
 
-        #[expect(clippy::expect_used, reason = "poisoned lock: panic is the intended recovery")]
+    #[expect(
+        clippy::expect_used,
+        reason = "poisoned lock: panic is the intended recovery"
+    )]
     pub fn clear_cache(&self, server_url: &str) {
         let mut entries = self
             .entries
@@ -1544,7 +1559,10 @@ impl OAuthManager {
         provider.refresh_token().await
     }
 
-        #[expect(clippy::expect_used, reason = "poisoned lock: panic is the intended recovery")]
+    #[expect(
+        clippy::expect_used,
+        reason = "poisoned lock: panic is the intended recovery"
+    )]
     fn get_entry(&self, server_url: &str) -> Option<Arc<ProviderEntry>> {
         self.entries
             .lock()
@@ -1553,7 +1571,10 @@ impl OAuthManager {
             .cloned()
     }
 
-        #[expect(clippy::expect_used, reason = "poisoned lock: panic is the intended recovery")]
+    #[expect(
+        clippy::expect_used,
+        reason = "poisoned lock: panic is the intended recovery"
+    )]
     /// Check if the tokens file on disk has been modified externally.
     ///
     /// If the mtime has changed, forces the provider to re-read from disk
@@ -1590,7 +1611,10 @@ impl OAuthManager {
         false
     }
 
-        #[expect(clippy::expect_used, reason = "poisoned lock: panic is the intended recovery")]
+    #[expect(
+        clippy::expect_used,
+        reason = "poisoned lock: panic is the intended recovery"
+    )]
     #[allow(unused_variables)]
     pub async fn handle_401(&self, server_url: &str, failed_access_token: Option<&str>) -> bool {
         let entry = {

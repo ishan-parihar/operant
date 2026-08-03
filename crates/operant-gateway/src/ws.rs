@@ -206,7 +206,10 @@ pub async fn handle_ws_chat(
 /// Gateway session key prefix to avoid collisions with channel sessions.
 const GW_SESSION_PREFIX: &str = "gw_";
 
-    #[expect(clippy::expect_used, reason = "poisoned lock: panic is the intended recovery")]
+#[expect(
+    clippy::expect_used,
+    reason = "poisoned lock: panic is the intended recovery"
+)]
 async fn handle_socket(
     socket: WebSocket,
     state: AppState,
@@ -620,7 +623,10 @@ fn resolve_session_cwd(
         .map(PathBuf::from)
         .unwrap_or_else(|| default_workspace.to_path_buf());
     std::fs::canonicalize(&cwd).map_err(|e| {
-        crate::error::Error::message(format!("cwd is not a usable directory ({}): {e}", cwd.display()))
+        crate::error::Error::message(format!(
+            "cwd is not a usable directory ({}): {e}",
+            cwd.display()
+        ))
     })
 }
 
@@ -643,7 +649,10 @@ fn event_matches_session(event: &serde_json::Value, session_id: &str) -> bool {
     }
 }
 
-    #[expect(clippy::expect_used, reason = "poisoned lock: panic is the intended recovery")]
+#[expect(
+    clippy::expect_used,
+    reason = "poisoned lock: panic is the intended recovery"
+)]
 /// Process a single chat message through the agent and send the response.
 ///
 /// Uses [`Agent::turn_streamed`] so that intermediate text chunks, tool calls,

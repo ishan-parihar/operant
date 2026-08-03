@@ -33,7 +33,10 @@ impl EventBuffer {
         }
     }
 
-        #[expect(clippy::expect_used, reason = "poisoned lock: panic is the intended recovery")]
+    #[expect(
+        clippy::expect_used,
+        reason = "poisoned lock: panic is the intended recovery"
+    )]
     /// Push an event into the buffer, evicting the oldest if at capacity.
     pub fn push(&self, event: serde_json::Value) {
         let mut buf = self
@@ -46,7 +49,10 @@ impl EventBuffer {
         buf.push_back(event);
     }
 
-        #[expect(clippy::expect_used, reason = "poisoned lock: panic is the intended recovery")]
+    #[expect(
+        clippy::expect_used,
+        reason = "poisoned lock: panic is the intended recovery"
+    )]
     /// Return a snapshot of all buffered events (oldest first).
     pub fn snapshot(&self) -> Vec<serde_json::Value> {
         self.inner

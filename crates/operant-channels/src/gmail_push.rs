@@ -178,7 +178,10 @@ pub struct GmailPushChannel {
 }
 
 impl GmailPushChannel {
-        #[expect(clippy::expect_used, reason = "invariant guaranteed by surrounding validation")]
+    #[expect(
+        clippy::expect_used,
+        reason = "invariant guaranteed by surrounding validation"
+    )]
     pub fn new(config: GmailPushConfig) -> Self {
         let http = Client::builder()
             .timeout(Duration::from_secs(30))

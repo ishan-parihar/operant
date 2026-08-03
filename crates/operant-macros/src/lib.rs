@@ -115,7 +115,10 @@ fn has_serde_skip(field: &syn::Field) -> bool {
         integration
     )
 )]
-    #[expect(clippy::expect_used, reason = "invariant guaranteed by surrounding validation")]
+#[expect(
+    clippy::expect_used,
+    reason = "invariant guaranteed by surrounding validation"
+)]
 pub fn derive_configurable(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     let struct_name = &input.ident;

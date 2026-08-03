@@ -1228,7 +1228,10 @@ pub async fn handle_options_config(headers: HeaderMap) -> Response {
     schema_response("operant_config_schema_full")
 }
 
-    #[expect(clippy::expect_used, reason = "invariant guaranteed by surrounding validation")]
+#[expect(
+    clippy::expect_used,
+    reason = "invariant guaranteed by surrounding validation"
+)]
 /// OPTIONS /api/config/prop?path=providers.fallback — per-field schema fragment.
 ///
 /// Returns 404 with `path_not_found` if the path doesn't resolve against the
@@ -1298,7 +1301,10 @@ pub async fn handle_options_prop(
     response
 }
 
-    #[expect(clippy::expect_used, reason = "invariant guaranteed by surrounding validation")]
+#[expect(
+    clippy::expect_used,
+    reason = "invariant guaranteed by surrounding validation"
+)]
 fn schema_response(_label: &'static str) -> Response {
     let (body, etag) = cached_schema();
     let mut response = (StatusCode::OK, axum::Json(body.clone())).into_response();

@@ -1,7 +1,7 @@
 use super::traits::{Memory, MemoryCategory, MemoryEntry, MemoryResult, is_recent_recall_query};
+use crate::error::{Error, Result};
 use async_trait::async_trait;
 use chrono::Local;
-use crate::error::{Error, Result};
 use std::path::{Path, PathBuf};
 use tokio::fs;
 
@@ -169,11 +169,15 @@ impl Memory for MarkdownMemory {
         let since_dt = since
             .map(chrono::DateTime::parse_from_rfc3339)
             .transpose()
-            .map_err(|e| Error::message(format!("invalid 'since' date (expected RFC 3339): {e}")))?;
+            .map_err(|e| {
+                Error::message(format!("invalid 'since' date (expected RFC 3339): {e}"))
+            })?;
         let until_dt = until
             .map(chrono::DateTime::parse_from_rfc3339)
             .transpose()
-            .map_err(|e| Error::message(format!("invalid 'until' date (expected RFC 3339): {e}")))?;
+            .map_err(|e| {
+                Error::message(format!("invalid 'until' date (expected RFC 3339): {e}"))
+            })?;
         if let (Some(s), Some(u)) = (&since_dt, &until_dt)
             && s >= u
         {

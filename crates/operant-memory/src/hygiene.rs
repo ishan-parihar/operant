@@ -1,5 +1,5 @@
-use crate::policy::PolicyEnforcer;
 use crate::error::Result;
+use crate::policy::PolicyEnforcer;
 use chrono::{DateTime, Duration, Local, NaiveDate, Utc};
 use operant_config::schema::MemoryConfig;
 use rusqlite::{Connection, params};

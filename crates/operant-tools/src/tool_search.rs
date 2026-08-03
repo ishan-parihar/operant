@@ -60,7 +60,10 @@ impl Tool for ToolSearchTool {
         })
     }
 
-        #[expect(clippy::expect_used, reason = "poisoned lock: panic is the intended recovery")]
+    #[expect(
+        clippy::expect_used,
+        reason = "poisoned lock: panic is the intended recovery"
+    )]
     async fn execute(&self, args: serde_json::Value) -> anyhow::Result<ToolResult> {
         let query = args
             .get("query")
@@ -142,7 +145,10 @@ impl Tool for ToolSearchTool {
 }
 
 impl ToolSearchTool {
-        #[expect(clippy::expect_used, reason = "poisoned lock: panic is the intended recovery")]
+    #[expect(
+        clippy::expect_used,
+        reason = "poisoned lock: panic is the intended recovery"
+    )]
     fn select_tools(&self, names: &[&str]) -> anyhow::Result<ToolResult> {
         let mut output = String::from("<functions>\n");
         let mut not_found = Vec::new();

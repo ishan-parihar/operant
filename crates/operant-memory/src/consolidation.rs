@@ -9,8 +9,8 @@
 //! semantic extraction, similar to Nanobot's `save_memory` tool call pattern.
 
 use crate::conflict;
-use crate::importance;
 use crate::error::{Error, Result};
+use crate::importance;
 use crate::traits::{Memory, MemoryCategory};
 use operant_api::provider::Provider;
 
@@ -36,7 +36,7 @@ const CONSOLIDATION_SYSTEM_PROMPT: &str = r#"You are a memory consolidation engi
 Respond ONLY with valid JSON: {"history_entry": "...", "memory_update": "..." or null}
 Do not include any text outside the JSON object."#;
 
-    #[expect(clippy::expect_used, reason = "infallible once-init / static init")]
+#[expect(clippy::expect_used, reason = "infallible once-init / static init")]
 /// Run two-phase LLM-driven consolidation on a conversation turn.
 ///
 /// Phase 1: Write a history entry to the Daily memory category.

@@ -67,7 +67,10 @@ impl Tool for PicoFlashTool {
         })
     }
 
-        #[expect(clippy::unwrap_used, reason = "invariant guaranteed by surrounding validation")]
+    #[expect(
+        clippy::unwrap_used,
+        reason = "invariant guaranteed by surrounding validation"
+    )]
     async fn execute(&self, args: serde_json::Value) -> anyhow::Result<ToolResult> {
         // ── 1. Require explicit confirmation ──────────────────────────────
         let confirmed = args

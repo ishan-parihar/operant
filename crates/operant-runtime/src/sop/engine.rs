@@ -188,7 +188,10 @@ impl SopEngine {
         Ok(action)
     }
 
-        #[expect(clippy::expect_used, reason = "invariant guaranteed by surrounding validation")]
+    #[expect(
+        clippy::expect_used,
+        reason = "invariant guaranteed by surrounding validation"
+    )]
     /// Report the result of the current step and advance the run.
     /// Returns the next action to take.
     pub fn advance_step(&mut self, run_id: &str, result: SopStepResult) -> Result<SopRunAction> {
@@ -372,7 +375,10 @@ impl SopEngine {
         self.resolve_deterministic_action(&sop, &run_id, &step, input)
     }
 
-        #[expect(clippy::expect_used, reason = "invariant guaranteed by surrounding validation")]
+    #[expect(
+        clippy::expect_used,
+        reason = "invariant guaranteed by surrounding validation"
+    )]
     /// Advance a deterministic run with the output of the current step.
     /// The output is piped as input to the next step.
     pub fn advance_deterministic_step(
@@ -432,7 +438,10 @@ impl SopEngine {
         self.resolve_deterministic_action(&sop, &run_id_owned, &step, step_output)
     }
 
-        #[expect(clippy::expect_used, reason = "invariant guaranteed by surrounding validation")]
+    #[expect(
+        clippy::expect_used,
+        reason = "invariant guaranteed by surrounding validation"
+    )]
     /// Resume a deterministic run from persisted state.
     pub fn resume_deterministic_run(
         &mut self,
@@ -645,7 +654,10 @@ impl SopEngine {
             .find(|r| r.sop_name == sop_name)
     }
 
-        #[expect(clippy::expect_used, reason = "invariant guaranteed by surrounding validation")]
+    #[expect(
+        clippy::expect_used,
+        reason = "invariant guaranteed by surrounding validation"
+    )]
     pub fn finish_run(
         &mut self,
         run_id: &str,

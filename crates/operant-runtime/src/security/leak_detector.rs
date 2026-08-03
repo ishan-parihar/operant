@@ -10,7 +10,7 @@ use regex::Regex;
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
-    #[expect(clippy::expect_used, reason = "infallible once-init / static init")]
+#[expect(clippy::expect_used, reason = "infallible once-init / static init")]
 /// Compile a regex from a static literal pattern. All patterns in this module
 /// are authored and reviewed as literals, so `Regex::new` cannot fail at
 /// runtime; the `expect` keeps an authoring-time mistake loud without 22

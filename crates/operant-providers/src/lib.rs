@@ -1202,7 +1202,10 @@ pub fn create_provider_with_url(
     create_provider_with_url_and_options(name, api_key, api_url, &ProviderRuntimeOptions::default())
 }
 
-    #[expect(clippy::expect_used, reason = "invariant guaranteed by surrounding validation")]
+#[expect(
+    clippy::expect_used,
+    reason = "invariant guaranteed by surrounding validation"
+)]
 /// Factory: create provider with optional base URL and runtime options.
 #[allow(clippy::too_many_lines)]
 fn create_provider_with_url_and_options(
@@ -2888,6 +2891,9 @@ mod tests {
 
     #[test]
     fn resolve_provider_credential_bedrock_returns_bearer_token_from_env() {
+        // Acquire the shared env lock — this test mutates process env and must
+        // not race other env-mutating tests running in parallel.
+        let _env_lock = env_lock();
         let _bedrock_guard = EnvGuard::set("BEDROCK_API_KEY", Some("bedrock-bearer-token"));
 
         assert_eq!(
@@ -4465,7 +4471,10 @@ mod tests {
         assert!(options.extra_headers.is_empty());
     }
 
-        #[expect(clippy::unwrap_used, reason = "invariant guaranteed by surrounding validation")]
+    #[expect(
+        clippy::unwrap_used,
+        reason = "invariant guaranteed by surrounding validation"
+    )]
     #[test]
     fn provider_runtime_options_extra_headers_passed_through() {
         let mut extra_headers = std::collections::HashMap::new();

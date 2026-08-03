@@ -711,7 +711,10 @@ fn non_empty_list_at(value: &Value, path: &[&str]) -> Option<Vec<String>> {
     }
 }
 
-    #[expect(clippy::expect_used, reason = "invariant guaranteed by surrounding validation")]
+#[expect(
+    clippy::expect_used,
+    reason = "invariant guaranteed by surrounding validation"
+)]
 /// Convert AIEOS identity to a system prompt string.
 ///
 /// Formats the AIEOS data into a structured markdown prompt compatible

@@ -33,7 +33,10 @@ impl SpotifyClient {
         })
     }
 
-        #[expect(clippy::expect_used, reason = "invariant guaranteed by surrounding validation")]
+    #[expect(
+        clippy::expect_used,
+        reason = "invariant guaranteed by surrounding validation"
+    )]
     fn headers(&self) -> reqwest::header::HeaderMap {
         let token = spotify_token().unwrap_or_default();
         let mut h = reqwest::header::HeaderMap::new();

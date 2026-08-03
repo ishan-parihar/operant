@@ -72,7 +72,10 @@ impl NotionChannel {
         }
     }
 
-        #[expect(clippy::unwrap_used, reason = "invariant guaranteed by surrounding validation")]
+    #[expect(
+        clippy::unwrap_used,
+        reason = "invariant guaranteed by surrounding validation"
+    )]
     /// Build the standard Notion API headers (Authorization, version, content-type).
     fn headers(&self) -> Result<reqwest::header::HeaderMap> {
         let mut headers = reqwest::header::HeaderMap::new();

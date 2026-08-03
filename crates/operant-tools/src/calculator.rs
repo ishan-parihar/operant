@@ -197,7 +197,10 @@ fn calc_add(args: &serde_json::Value) -> Result<String, String> {
     Ok(format_num(values.iter().sum()))
 }
 
-    #[expect(clippy::expect_used, reason = "invariant guaranteed by surrounding validation")]
+#[expect(
+    clippy::expect_used,
+    reason = "invariant guaranteed by surrounding validation"
+)]
 fn calc_subtract(args: &serde_json::Value) -> Result<String, String> {
     let values = extract_values(args, 2)?;
     let mut iter = values.iter();
@@ -211,7 +214,10 @@ fn calc_subtract(args: &serde_json::Value) -> Result<String, String> {
     Ok(format_num(result))
 }
 
-    #[expect(clippy::expect_used, reason = "invariant guaranteed by surrounding validation")]
+#[expect(
+    clippy::expect_used,
+    reason = "invariant guaranteed by surrounding validation"
+)]
 fn calc_divide(args: &serde_json::Value) -> Result<String, String> {
     let values = extract_values(args, 2)?;
     let mut iter = values.iter();
@@ -348,7 +354,10 @@ fn calc_median(args: &serde_json::Value) -> Result<String, String> {
     }
 }
 
-    #[expect(clippy::expect_used, reason = "invariant guaranteed by surrounding validation")]
+#[expect(
+    clippy::expect_used,
+    reason = "invariant guaranteed by surrounding validation"
+)]
 fn calc_mode(args: &serde_json::Value) -> Result<String, String> {
     let values = extract_values(args, 1)?;
     if values.is_empty() {

@@ -269,7 +269,10 @@ impl ModelClient for AnthropicModelClient {
         }
     }
 
-        #[expect(clippy::unwrap_used, reason = "poisoned lock: panic is the intended recovery")]
+    #[expect(
+        clippy::unwrap_used,
+        reason = "poisoned lock: panic is the intended recovery"
+    )]
     async fn chat(&self, request: ChatRequest) -> Result<ChatResponse> {
         let body = self.convert_request(&request);
         // Clone the key into an owned String FIRST: `RwLockReadGuard` is not

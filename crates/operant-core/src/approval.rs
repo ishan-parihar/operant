@@ -251,7 +251,7 @@ const HARDLINE_BLOCKLIST: &[HardlineEntry] = &[
 // Dangerous Pattern Detection (Layer 2)
 // ============================================================================
 
-    #[expect(clippy::expect_used, reason = "infallible once-init / static init")]
+#[expect(clippy::expect_used, reason = "infallible once-init / static init")]
 /// Compile a regex from a static literal pattern.
 ///
 /// All patterns in this module are authored and reviewed as literals, so

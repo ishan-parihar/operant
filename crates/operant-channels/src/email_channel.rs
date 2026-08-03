@@ -557,7 +557,10 @@ impl Channel for EmailChannel {
         "email"
     }
 
-        #[expect(clippy::expect_used, reason = "invariant guaranteed by surrounding validation")]
+    #[expect(
+        clippy::expect_used,
+        reason = "invariant guaranteed by surrounding validation"
+    )]
     async fn send(&self, message: &SendMessage) -> Result<()> {
         // Use explicit subject if provided, otherwise fall back to legacy parsing or default
         let default_subject = self.config.default_subject.as_str();

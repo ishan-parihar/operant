@@ -423,7 +423,10 @@ impl OperantAgent {
         self
     }
 
-        #[expect(clippy::expect_used, reason = "poisoned lock: panic is the intended recovery")]
+    #[expect(
+        clippy::expect_used,
+        reason = "poisoned lock: panic is the intended recovery"
+    )]
     /// Attach a memory provider for long-term memory hooks. When set,
     /// the agent calls `sync_turn(user, assistant)` after each completed
     /// turn so the memory backend persists turn observations.
@@ -711,7 +714,10 @@ impl OperantAgent {
         self.conversation.read().await.clone()
     }
 
-        #[expect(clippy::expect_used, reason = "poisoned lock: panic is the intended recovery")]
+    #[expect(
+        clippy::expect_used,
+        reason = "poisoned lock: panic is the intended recovery"
+    )]
     /// Clear conversation history and reset per-session state.
     /// Called on /new, /reset, and session switches.
     pub async fn clear_history(&self) {
@@ -806,7 +812,10 @@ impl OperantAgent {
         }
     }
 
-        #[expect(clippy::expect_used, reason = "poisoned lock: panic is the intended recovery")]
+    #[expect(
+        clippy::expect_used,
+        reason = "poisoned lock: panic is the intended recovery"
+    )]
     /// Gracefully shut down the memory sync executor.
     /// Drains pending jobs (up to 5s) then abandons remaining work.
     /// Call this during agent shutdown to avoid losing in-flight writes.
@@ -827,7 +836,10 @@ impl OperantAgent {
         &self.database
     }
 
-        #[expect(clippy::expect_used, reason = "poisoned lock: panic is the intended recovery")]
+    #[expect(
+        clippy::expect_used,
+        reason = "poisoned lock: panic is the intended recovery"
+    )]
     /// Update the model at runtime. Used by the gateway to apply
     /// per-session model overrides via /model command. (iter-162 —
     /// closes ponytail-audit gap B36: 'model_override is read but
@@ -845,7 +857,10 @@ impl OperantAgent {
             .expect("model_override RwLock poisoned — programmer error") = Some(new_model);
     }
 
-        #[expect(clippy::expect_used, reason = "poisoned lock: panic is the intended recovery")]
+    #[expect(
+        clippy::expect_used,
+        reason = "poisoned lock: panic is the intended recovery"
+    )]
     /// Get the current model name (effective model = override or config).
     pub fn model(&self) -> String {
         self.model_override
@@ -992,7 +1007,10 @@ impl OperantAgent {
         }
     }
 
-        #[expect(clippy::expect_used, reason = "poisoned lock: panic is the intended recovery")]
+    #[expect(
+        clippy::expect_used,
+        reason = "poisoned lock: panic is the intended recovery"
+    )]
     /// Run the agent with a user query
     #[instrument(skip(self), fields(model = % self.config.model))]
     pub async fn run(&self, user_query: String) -> Result<Message> {
@@ -2859,7 +2877,10 @@ If nothing needs updating, say 'Nothing to save.' and stop.\n\n{}",
         Ok((content, reasoning, tool_calls))
     }
 
-        #[expect(clippy::expect_used, reason = "invariant guaranteed by surrounding validation")]
+    #[expect(
+        clippy::expect_used,
+        reason = "invariant guaranteed by surrounding validation"
+    )]
     /// Execute tools and handle self-healing
     async fn execute_tools(&self, tool_calls: Vec<ToolCall>) -> Result<Vec<ToolResult>> {
         // ── Concurrent tool execution (iter-56) ──────────────────────────

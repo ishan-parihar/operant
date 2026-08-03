@@ -141,10 +141,7 @@ impl SqliteMemory {
     }
 
     /// Open SQLite connection, optionally with a timeout (for locked/slow storage).
-    fn open_connection(
-        db_path: &Path,
-        open_timeout_secs: Option<u64>,
-    ) -> Result<Connection> {
+    fn open_connection(db_path: &Path, open_timeout_secs: Option<u64>) -> Result<Connection> {
         let path_buf = db_path.to_path_buf();
 
         let conn = if let Some(secs) = open_timeout_secs {
@@ -158,7 +155,10 @@ impl SqliteMemory {
                 Ok(Ok(c)) => c,
                 Ok(Err(e)) => return Err(e).context("SQLite failed to open database"),
                 Err(mpsc::RecvTimeoutError::Timeout) => {
-                    return Err(Error::message(format!("SQLite connection open timed out after {} seconds", capped)));
+                    return Err(Error::message(format!(
+                        "SQLite connection open timed out after {} seconds",
+                        capped
+                    )));
                 }
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
                     return Err(Error::message("SQLite open thread exited unexpectedly"));
@@ -182,7 +182,10 @@ impl SqliteMemory {
             )
         }
 
-        fn execute_batch_retry(conn: &Connection, sql: &str) -> std::result::Result<(), rusqlite::Error> {
+        fn execute_batch_retry(
+            conn: &Connection,
+            sql: &str,
+        ) -> std::result::Result<(), rusqlite::Error> {
             // SQLite can return "database is locked" during concurrent schema
             // initialization even though the operations are safe/idempotent.
             // Retry briefly instead of failing startup.
@@ -297,7 +300,9 @@ impl SqliteMemory {
             conn,
             "CREATE INDEX IF NOT EXISTS idx_memories_session ON memories(session_id);",
         )
-        .with_context(|| "SQLite init_schema failed: CREATE INDEX idx_memories_session".to_string())?;
+        .with_context(|| {
+            "SQLite init_schema failed: CREATE INDEX idx_memories_session".to_string()
+        })?;
 
         add_memories_column_if_missing(
             conn,
@@ -308,7 +313,9 @@ impl SqliteMemory {
             conn,
             "CREATE INDEX IF NOT EXISTS idx_memories_namespace ON memories(namespace);",
         )
-        .with_context(|| "SQLite init_schema failed: CREATE INDEX idx_memories_namespace".to_string())?;
+        .with_context(|| {
+            "SQLite init_schema failed: CREATE INDEX idx_memories_namespace".to_string()
+        })?;
 
         add_memories_column_if_missing(
             conn,
@@ -382,7 +389,10 @@ impl SqliteMemory {
         }
     }
 
-        #[expect(clippy::expect_used, reason = "invariant guaranteed by surrounding validation")]
+    #[expect(
+        clippy::expect_used,
+        reason = "invariant guaranteed by surrounding validation"
+    )]
     /// Deterministic content hash for embedding cache.
     /// Uses SHA-256 (truncated) instead of DefaultHasher, which is
     /// explicitly documented as unstable across Rust versions.
@@ -473,11 +483,7 @@ impl SqliteMemory {
     }
 
     /// FTS5 BM25 keyword search
-    pub fn fts5_search(
-        conn: &Connection,
-        query: &str,
-        limit: usize,
-    ) -> Result<Vec<(String, f32)>> {
+    pub fn fts5_search(conn: &Connection, query: &str, limit: usize) -> Result<Vec<(String, f32)>> {
         // Escape FTS5 special chars and build query
         let fts_query: String = query
             .split_whitespace()
@@ -742,7 +748,8 @@ impl Memory for SqliteMemory {
         // Time-only query: list by time range when no keywords.
         // Treat only a bare "*" as the same recent-entry request; keep
         // real wildcard searches such as "wild*" on the keyword path.
-        if is_recent_recall_query(query) {              return self
+        if is_recent_recall_query(query) {
+            return self
                 .recall_by_time_only(limit, session_id, since, until)
                 .await
                 .map_err(Into::into);
@@ -1103,7 +1110,9 @@ impl Memory for SqliteMemory {
             let affected = conn.execute("DELETE FROM memories WHERE key = ?1", params![key])?;
             Ok(affected > 0)
         })
-        .await.map_err(Error::from)?.map_err(Into::into)
+        .await
+        .map_err(Error::from)?
+        .map_err(Into::into)
     }
 
     async fn purge_namespace(&self, namespace: &str) -> MemoryResult<usize> {
@@ -1119,7 +1128,9 @@ impl Memory for SqliteMemory {
             #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
             Ok(affected)
         })
-        .await.map_err(Error::from)?.map_err(Into::into)
+        .await
+        .map_err(Error::from)?
+        .map_err(Into::into)
     }
 
     async fn purge_session(&self, session_id: &str) -> MemoryResult<usize> {
@@ -1135,7 +1146,9 @@ impl Memory for SqliteMemory {
             #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
             Ok(affected)
         })
-        .await.map_err(Error::from)?.map_err(Into::into)
+        .await
+        .map_err(Error::from)?
+        .map_err(Into::into)
     }
 
     async fn count(&self) -> MemoryResult<usize> {
@@ -1148,7 +1161,9 @@ impl Memory for SqliteMemory {
             #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
             Ok(count as usize)
         })
-        .await.map_err(Error::from)?.map_err(Into::into)
+        .await
+        .map_err(Error::from)?
+        .map_err(Into::into)
     }
 
     async fn health_check(&self) -> bool {
@@ -1178,7 +1193,8 @@ impl Memory for SqliteMemory {
                 conn.execute_batch("INSERT INTO memories_fts(memories_fts) VALUES('rebuild');")?;
                 Ok(())
             })
-            .await.map_err(Error::from)??;
+            .await
+            .map_err(Error::from)??;
         }
 
         // Step 2: Re-embed memories with NULL vectors, if embedder is configured
@@ -1196,7 +1212,8 @@ impl Memory for SqliteMemory {
             })?;
             Ok::<_, crate::error::Error>(rows.filter_map(std::result::Result::ok).collect())
         })
-        .await.map_err(Error::from)??;
+        .await
+        .map_err(Error::from)??;
 
         let mut count = 0;
         for (id, content) in &entries {
@@ -1212,7 +1229,8 @@ impl Memory for SqliteMemory {
                     )?;
                     Ok(())
                 })
-                .await.map_err(Error::from)??;
+                .await
+                .map_err(Error::from)??;
                 count += 1;
             }
         }

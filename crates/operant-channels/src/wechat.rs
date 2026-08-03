@@ -436,7 +436,10 @@ fn build_base_info() -> serde_json::Value {
     })
 }
 
-    #[expect(clippy::unwrap_used, reason = "invariant guaranteed by surrounding validation")]
+#[expect(
+    clippy::unwrap_used,
+    reason = "invariant guaranteed by surrounding validation"
+)]
 fn markdown_to_plain_text(text: &str) -> String {
     // TODO: Cache these Regex values instead of compiling them on every send path.
     let code_block_re = regex::Regex::new(r"```[^\n]*\n?([\s\S]*?)```").unwrap();
@@ -502,7 +505,10 @@ fn render_login_qr(code: &str) -> anyhow::Result<String> {
         .build())
 }
 
-    #[expect(clippy::unwrap_used, reason = "invariant guaranteed by surrounding validation")]
+#[expect(
+    clippy::unwrap_used,
+    reason = "invariant guaranteed by surrounding validation"
+)]
 /// Build common request headers for iLink API.
 fn build_headers(token: Option<&str>) -> reqwest::header::HeaderMap {
     let mut headers = reqwest::header::HeaderMap::new();
@@ -626,7 +632,10 @@ impl WeChatChannel {
         self
     }
 
-        #[expect(clippy::unwrap_used, reason = "poisoned lock: panic is the intended recovery")]
+    #[expect(
+        clippy::unwrap_used,
+        reason = "poisoned lock: panic is the intended recovery"
+    )]
     /// Load persisted token and cursor from state_dir.
     fn load_persisted_state(&mut self) {
         let account_path = self.state_dir.join("account.json");
@@ -1248,7 +1257,10 @@ impl WeChatChannel {
         ))
     }
 
-        #[expect(clippy::unwrap_used, reason = "invariant guaranteed by surrounding validation")]
+    #[expect(
+        clippy::unwrap_used,
+        reason = "invariant guaranteed by surrounding validation"
+    )]
     /// Perform QR-code login flow. Returns (bot_token, account_id, user_id).
     async fn qr_login(&self) -> anyhow::Result<(String, String, Option<String>)> {
         let mut qr_refresh_count = 0u32;

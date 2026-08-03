@@ -114,7 +114,10 @@ impl UsageTelemetry {
         self.records.iter_mut().find(|r| r.name == name)
     }
 
-        #[expect(clippy::expect_used, reason = "invariant guaranteed by surrounding validation")]
+    #[expect(
+        clippy::expect_used,
+        reason = "invariant guaranteed by surrounding validation"
+    )]
     /// Ensure a record exists, creating a default one if needed.
     fn ensure_record(&mut self, name: &str) -> &mut UsageRecord {
         if !self.records.iter().any(|r| r.name == name) {
@@ -269,7 +272,10 @@ impl SkillUsageTracker {
         }
     }
 
-        #[expect(clippy::expect_used, reason = "poisoned lock: panic is the intended recovery")]
+    #[expect(
+        clippy::expect_used,
+        reason = "poisoned lock: panic is the intended recovery"
+    )]
     /// Load telemetry from disk (creates empty if missing).
     pub fn load(&self) -> Result<()> {
         let telemetry = UsageTelemetry::load(&self.file_path)?;
@@ -281,7 +287,10 @@ impl SkillUsageTracker {
         Ok(())
     }
 
-        #[expect(clippy::expect_used, reason = "poisoned lock: panic is the intended recovery")]
+    #[expect(
+        clippy::expect_used,
+        reason = "poisoned lock: panic is the intended recovery"
+    )]
     /// Save telemetry to disk.
     pub fn save(&self) -> Result<()> {
         let inner = self
@@ -291,7 +300,10 @@ impl SkillUsageTracker {
         inner.save(&self.file_path)
     }
 
-        #[expect(clippy::expect_used, reason = "poisoned lock: panic is the intended recovery")]
+    #[expect(
+        clippy::expect_used,
+        reason = "poisoned lock: panic is the intended recovery"
+    )]
     /// Get all records.
     pub fn all_records(&self) -> Vec<UsageRecord> {
         let inner = self
@@ -301,7 +313,10 @@ impl SkillUsageTracker {
         inner.all_records().to_vec()
     }
 
-        #[expect(clippy::expect_used, reason = "poisoned lock: panic is the intended recovery")]
+    #[expect(
+        clippy::expect_used,
+        reason = "poisoned lock: panic is the intended recovery"
+    )]
     /// Get agent-created records only.
     pub fn agent_created_records(&self) -> Vec<UsageRecord> {
         let inner = self
@@ -311,7 +326,10 @@ impl SkillUsageTracker {
         inner.agent_created_records().into_iter().cloned().collect()
     }
 
-        #[expect(clippy::expect_used, reason = "poisoned lock: panic is the intended recovery")]
+    #[expect(
+        clippy::expect_used,
+        reason = "poisoned lock: panic is the intended recovery"
+    )]
     /// List active (non-archived/non-retired) records.
     pub fn list_active(&self) -> Vec<UsageRecord> {
         let inner = self
@@ -321,7 +339,10 @@ impl SkillUsageTracker {
         inner.list_active().into_iter().cloned().collect()
     }
 
-        #[expect(clippy::expect_used, reason = "poisoned lock: panic is the intended recovery")]
+    #[expect(
+        clippy::expect_used,
+        reason = "poisoned lock: panic is the intended recovery"
+    )]
     /// Set pinned status for a skill.
     pub fn set_pinned(&self, name: &str, pinned: bool) -> Result<()> {
         let mut inner = self
@@ -331,7 +352,10 @@ impl SkillUsageTracker {
         inner.set_pinned(name, pinned)
     }
 
-        #[expect(clippy::expect_used, reason = "poisoned lock: panic is the intended recovery")]
+    #[expect(
+        clippy::expect_used,
+        reason = "poisoned lock: panic is the intended recovery"
+    )]
     /// Mark a skill as agent-created.
     pub fn mark_agent_created(&self, name: &str) {
         let mut inner = self
@@ -341,7 +365,10 @@ impl SkillUsageTracker {
         inner.mark_agent_created(name);
     }
 
-        #[expect(clippy::expect_used, reason = "poisoned lock: panic is the intended recovery")]
+    #[expect(
+        clippy::expect_used,
+        reason = "poisoned lock: panic is the intended recovery"
+    )]
     /// Remove a record by name.
     pub fn remove(&self, name: &str) {
         let mut inner = self
@@ -351,7 +378,10 @@ impl SkillUsageTracker {
         inner.remove(name);
     }
 
-        #[expect(clippy::expect_used, reason = "poisoned lock: panic is the intended recovery")]
+    #[expect(
+        clippy::expect_used,
+        reason = "poisoned lock: panic is the intended recovery"
+    )]
     /// Set the lifecycle state for a skill.
     pub fn set_state(&self, name: &str, state: LifecycleState) -> Result<()> {
         let mut inner = self

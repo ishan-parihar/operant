@@ -6,5 +6,7 @@ fn main() {
     // the (intentional) undeclared feature while the code stays in-tree for
     // future wiring. `probe` / `peripheral-rpi` are likewise legacy cfgs kept
     // for reference only.
-    println!("cargo:rustc-check-cfg=cfg(feature, values(\"hardware\", \"hardware-vendor\", \"probe\", \"peripheral-rpi\"))");
+    println!(
+        "cargo:rustc-check-cfg=cfg(feature, values(\"hardware\", \"hardware-vendor\", \"probe\", \"peripheral-rpi\"))"
+    );
 }

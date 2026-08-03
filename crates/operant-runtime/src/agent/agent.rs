@@ -902,7 +902,10 @@ impl Agent {
         Ok(prepared.messages)
     }
 
-        #[expect(clippy::expect_used, reason = "poisoned lock: panic is the intended recovery")]
+    #[expect(
+        clippy::expect_used,
+        reason = "poisoned lock: panic is the intended recovery"
+    )]
     async fn execute_tool_call(&self, call: &ParsedToolCall) -> ToolExecutionResult {
         let start = Instant::now();
 
@@ -1859,7 +1862,10 @@ impl Agent {
         self.turn(message).await
     }
 
-        #[expect(clippy::expect_used, reason = "invariant guaranteed by surrounding validation")]
+    #[expect(
+        clippy::expect_used,
+        reason = "invariant guaranteed by surrounding validation"
+    )]
     pub async fn run_interactive(&mut self) -> Result<()> {
         println!("🦀 Operant Interactive Mode");
         println!("Type /quit to exit.\n");

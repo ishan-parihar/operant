@@ -38,6 +38,11 @@ pub struct PostgresMemory {
 }
 
 impl PostgresMemory {
+    /// Connect to PostgreSQL and ensure the storage schema/table exist.
+    ///
+    /// `db_url` is a libpq-style connection string (e.g.
+    /// `postgres://user:pass@host:5432/db`). Optionally enables the `pgvector`
+    /// extension when `pgvector_enabled` is `Some(true)`.
     pub fn new(
         db_url: &str,
         schema: &str,
@@ -265,7 +270,7 @@ impl PostgresMemory {
 /// which conflicts with `tokio::task::spawn_blocking` threads that are still
 /// associated with the Tokio runtime's blocking pool. Plain OS threads have no
 /// runtime context, so the nested `block_on` succeeds.
-async fn run_on_os_thread<F, T>(f: F) -> Result<T>
+async fn run_on_os_thread<F, T>(f: F) -> MemoryResult<T>
 where
     F: FnOnce() -> Result<T> + Send + 'static,
     T: Send + 'static,
@@ -275,13 +280,18 @@ where
     std::thread::Builder::new()
         .name("postgres-memory-op".to_string())
         .spawn(move || {
-            let result = f();
+            // Convert the crate-local error into the public seam type on the
+            // worker thread so the channel carries MemoryResult end-to-end.
+            let result: MemoryResult<T> = f().map_err(Into::into);
             let _ = tx.send(result);
         })
         .context("failed to spawn PostgreSQL operation thread")?;
 
-    rx.await
-        .map_err(|_| Error::message(format!("PostgreSQL operation thread terminated unexpectedly")))?
+    rx.await.map_err(|_| {
+        Error::message(format!(
+            "PostgreSQL operation thread terminated unexpectedly"
+        ))
+    })?
 }
 
 fn validate_identifier(value: &str, field_name: &str) -> Result<()> {
@@ -295,7 +305,9 @@ fn validate_identifier(value: &str, field_name: &str) -> Result<()> {
     };
 
     if !(first.is_ascii_alphabetic() || first == '_') {
-        return Err(Error::message(format!("{field_name} must start with an ASCII letter or underscore; got '{value}'")));
+        return Err(Error::message(format!(
+            "{field_name} must start with an ASCII letter or underscore; got '{value}'"
+        )));
     }
 
     if !chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_') {
@@ -331,7 +343,7 @@ impl Memory for PostgresMemory {
         let category = Self::category_to_str(&category);
         let sid = session_id.map(str::to_string);
 
-        run_on_os_thread(move || -> MemoryResult<()> {
+        run_on_os_thread(move || -> Result<()> {
             let now = Utc::now();
             let mut client = client.lock();
             let stmt = format!(
@@ -370,7 +382,7 @@ impl Memory for PostgresMemory {
         let since_owned = since.map(str::to_string);
         let until_owned = until.map(str::to_string);
 
-        run_on_os_thread(move || -> MemoryResult<Vec<MemoryEntry>> {
+        run_on_os_thread(move || -> Result<Vec<MemoryEntry>> {
             let mut client = client.lock();
             let since_ref = since_owned.as_deref();
             let until_ref = until_owned.as_deref();
@@ -425,7 +437,7 @@ impl Memory for PostgresMemory {
         let qualified_table = self.qualified_table.clone();
         let key = key.to_string();
 
-        run_on_os_thread(move || -> MemoryResult<Option<MemoryEntry>> {
+        run_on_os_thread(move || -> Result<Option<MemoryEntry>> {
             let mut client = client.lock();
             let stmt = format!(
                 "
@@ -452,7 +464,7 @@ impl Memory for PostgresMemory {
         let category = category.map(Self::category_to_str);
         let sid = session_id.map(str::to_string);
 
-        run_on_os_thread(move || -> MemoryResult<Vec<MemoryEntry>> {
+        run_on_os_thread(move || -> Result<Vec<MemoryEntry>> {
             let mut client = client.lock();
             let stmt = format!(
                 "
@@ -479,7 +491,7 @@ impl Memory for PostgresMemory {
         let qualified_table = self.qualified_table.clone();
         let key = key.to_string();
 
-        run_on_os_thread(move || -> MemoryResult<bool> {
+        run_on_os_thread(move || -> Result<bool> {
             let mut client = client.lock();
             let stmt = format!("DELETE FROM {qualified_table} WHERE key = $1");
             let deleted = client.execute(&stmt, &[&key])?;
@@ -492,7 +504,7 @@ impl Memory for PostgresMemory {
         let client = self.client.clone();
         let qualified_table = self.qualified_table.clone();
 
-        run_on_os_thread(move || -> MemoryResult<usize> {
+        run_on_os_thread(move || -> Result<usize> {
             let mut client = client.lock();
             let stmt = format!("SELECT COUNT(*) FROM {qualified_table}");
             let count: i64 = client.query_one(&stmt, &[])?.get(0);

@@ -146,17 +146,18 @@ mod tests {
             "no such file",
         ))
         .context("open db");
-        assert!(matches!(err, Err(Error::Message(m)) if m.contains("open db") && m.contains("no such file")));
+        assert!(
+            matches!(err, Err(Error::Message(m)) if m.contains("open db") && m.contains("no such file"))
+        );
     }
 
     #[test]
     fn with_context_on_result_is_lazy() {
         let calls = std::cell::Cell::new(0);
-        let err: crate::Result<()> = Err(Error::message("inner"))
-            .with_context(|| {
-                calls.set(1);
-                "outer".to_string()
-            });
+        let err: crate::Result<()> = Err(Error::message("inner")).with_context(|| {
+            calls.set(1);
+            "outer".to_string()
+        });
         assert!(err.is_err());
         assert_eq!(calls.get(), 1, "closure must be evaluated");
     }
@@ -181,15 +182,20 @@ mod tests {
     fn backend_errors_roundtrip_as_boxed_seam_variant() {
         // A backend-specific error (io::Error is available without extra deps)
         // must cross the seam as `Backend`, preserving the source for downcast.
-        let typed = Error::Io(std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "backend"));
+        let typed = Error::Io(std::io::Error::new(
+            std::io::ErrorKind::UnexpectedEof,
+            "backend",
+        ));
         let seam: SeamError = typed.into();
         assert!(matches!(&seam, SeamError::Io(_)));
         let back: Error = seam.into();
         assert!(matches!(&back, Error::Io(_)));
 
         // A truly foreign error type takes the boxed Backend path.
-        let foreign: Box<dyn std::error::Error + Send + Sync> =
-            Box::new(std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "foreign"));
+        let foreign: Box<dyn std::error::Error + Send + Sync> = Box::new(std::io::Error::new(
+            std::io::ErrorKind::UnexpectedEof,
+            "foreign",
+        ));
         let seam: SeamError = Error::Boxed(foreign).into();
         assert!(matches!(&seam, SeamError::Backend(_)));
     }

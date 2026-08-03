@@ -37,7 +37,10 @@ pub struct ToolExecutionOutcome {
 
 // ── Single tool execution ────────────────────────────────────────────────
 
-    #[expect(clippy::expect_used, reason = "poisoned lock: panic is the intended recovery")]
+#[expect(
+    clippy::expect_used,
+    reason = "poisoned lock: panic is the intended recovery"
+)]
 pub async fn execute_one_tool(
     call_name: &str,
     call_arguments: serde_json::Value,

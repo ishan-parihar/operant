@@ -266,11 +266,7 @@ impl LucidMemory {
         Ok(String::from_utf8_lossy(&output.stdout).to_string())
     }
 
-    async fn run_lucid_command(
-        &self,
-        args: &[String],
-        timeout_window: Duration,
-    ) -> Result<String> {
+    async fn run_lucid_command(&self, args: &[String], timeout_window: Duration) -> Result<String> {
         Self::run_lucid_command_raw(&self.lucid_cmd, args, timeout_window).await
     }
 
@@ -342,11 +338,15 @@ impl Memory for LucidMemory {
         let since_dt = since
             .map(chrono::DateTime::parse_from_rfc3339)
             .transpose()
-            .map_err(|e| Error::message(format!("invalid 'since' date (expected RFC 3339): {e}")))?;
+            .map_err(|e| {
+                Error::message(format!("invalid 'since' date (expected RFC 3339): {e}"))
+            })?;
         let until_dt = until
             .map(chrono::DateTime::parse_from_rfc3339)
             .transpose()
-            .map_err(|e| Error::message(format!("invalid 'until' date (expected RFC 3339): {e}")))?;
+            .map_err(|e| {
+                Error::message(format!("invalid 'until' date (expected RFC 3339): {e}"))
+            })?;
         if let (Some(s), Some(u)) = (&since_dt, &until_dt)
             && s >= u
         {

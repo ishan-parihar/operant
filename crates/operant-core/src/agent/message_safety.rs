@@ -12,7 +12,7 @@ use std::sync::LazyLock;
 
 use crate::client::{Message, Role};
 
-    #[expect(clippy::expect_used, reason = "infallible once-init / static init")]
+#[expect(clippy::expect_used, reason = "infallible once-init / static init")]
 /// Regex to strip trailing commas before `}` or `]` in JSON.
 static TRAILING_COMMA_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r",\s*([}\]])").expect("static regex literal is invalid — authoring bug")
@@ -249,7 +249,10 @@ pub fn repair_message_sequence(messages: &mut Vec<Message>) -> usize {
 // Close interrupted tool sequence
 // ---------------------------------------------------------------------------
 
-    #[expect(clippy::expect_used, reason = "invariant guaranteed by surrounding validation")]
+#[expect(
+    clippy::expect_used,
+    reason = "invariant guaranteed by surrounding validation"
+)]
 /// Append a synthetic assistant turn when an interrupted tail is a tool result.
 ///
 /// A turn cut short by Ctrl-C can leave the transcript ending on a raw
@@ -296,7 +299,10 @@ fn is_thinking_only(msg: &Message) -> bool {
         && msg.reasoning.is_some()
 }
 
-    #[expect(clippy::expect_used, reason = "invariant guaranteed by surrounding validation")]
+#[expect(
+    clippy::expect_used,
+    reason = "invariant guaranteed by surrounding validation"
+)]
 /// Drop thinking-only assistant messages and merge consecutive user messages.
 ///
 /// Ported from hermes-agent's `drop_thinking_only_and_merge_users`.

@@ -112,7 +112,10 @@ pub struct WebhookAuditHook {
 }
 
 impl WebhookAuditHook {
-        #[expect(clippy::expect_used, reason = "invariant guaranteed by surrounding validation")]
+    #[expect(
+        clippy::expect_used,
+        reason = "invariant guaranteed by surrounding validation"
+    )]
     pub fn new(config: WebhookAuditConfig) -> Self {
         // Warn if enabled but no URL configured.
         if config.enabled && config.url.is_empty() {

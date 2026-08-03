@@ -172,10 +172,9 @@ impl Memory for NamespacedMemory {
         } else {
             return Err(Error::message(format!(
                 "Cannot purge namespace '{}' from isolation context '{}'",
-                namespace,
-                self.namespace
+                namespace, self.namespace
             ))
-            .into())
+            .into());
         }
     }
 

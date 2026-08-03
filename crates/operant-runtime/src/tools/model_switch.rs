@@ -80,7 +80,10 @@ impl Tool for ModelSwitchTool {
 }
 
 impl ModelSwitchTool {
-        #[expect(clippy::expect_used, reason = "poisoned lock: panic is the intended recovery")]
+    #[expect(
+        clippy::expect_used,
+        reason = "poisoned lock: panic is the intended recovery"
+    )]
     fn handle_get(&self) -> anyhow::Result<ToolResult> {
         let switch_state = get_model_switch_state();
         let pending = switch_state
@@ -98,7 +101,10 @@ impl ModelSwitchTool {
         })
     }
 
-        #[expect(clippy::expect_used, reason = "poisoned lock: panic is the intended recovery")]
+    #[expect(
+        clippy::expect_used,
+        reason = "poisoned lock: panic is the intended recovery"
+    )]
     fn handle_set(&self, args: &serde_json::Value) -> anyhow::Result<ToolResult> {
         let provider = args.get("provider").and_then(|v| v.as_str());
 

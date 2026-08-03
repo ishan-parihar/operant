@@ -415,7 +415,10 @@ impl App {
 
     // Process mouse events (trackpad scroll, text selection, etc.).
 
-        #[expect(clippy::unwrap_used, reason = "invariant guaranteed by surrounding validation")]
+    #[expect(
+        clippy::unwrap_used,
+        reason = "invariant guaranteed by surrounding validation"
+    )]
     /// Detect if a click is a double-click based on timing and position.
     /// Returns true if the click is within ~500ms and ~5px of the last click.
     pub fn handle_mouse_event(&mut self, mouse_event: MouseEvent) {

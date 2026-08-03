@@ -154,7 +154,7 @@ pub fn contains_image_markers(messages: &[ChatMessage]) -> bool {
     count_image_markers(messages) > 0
 }
 
-    #[expect(clippy::unwrap_used, reason = "infallible once-init / static init")]
+#[expect(clippy::unwrap_used, reason = "infallible once-init / static init")]
 /// Replace media markers (`[IMAGE:...]`, `[PHOTO:...]`, `[DOCUMENT:...]`,
 /// `[FILE:...]`, `[VIDEO:...]`, `[VOICE:...]`, `[AUDIO:...]`) with
 /// `[media attachment]`. Match is case-insensitive to align with the channel

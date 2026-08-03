@@ -29,14 +29,14 @@ use crate::tools::{OperantTool, ToolContext, ToolResult};
 // Validation regular expressions (compiled once at module load)
 // ---------------------------------------------------------------------------
 
-    #[expect(clippy::expect_used, reason = "infallible once-init / static init")]
+#[expect(clippy::expect_used, reason = "infallible once-init / static init")]
 /// Matches valid Home Assistant entity_id format: `domain.entity`
 /// Examples: `light.living_room`, `sensor.temperature_1`, `climate.thermostat`
 static ENTITY_ID_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^[a-z_][a-z0-9_]*\.[a-z0-9_]+$").expect("Failed to compile entity_id regex")
 });
 
-    #[expect(clippy::expect_used, reason = "infallible once-init / static init")]
+#[expect(clippy::expect_used, reason = "infallible once-init / static init")]
 /// Matches valid domain or service name: lowercase ASCII, digits, underscores.
 /// Prevents path-traversal payloads like `../../api/config` in URL segments.
 static SERVICE_NAME_RE: LazyLock<Regex> = LazyLock::new(|| {
@@ -76,7 +76,10 @@ fn get_config() -> (String, String) {
     (url.trim_end_matches('/').to_string(), token)
 }
 
-    #[expect(clippy::expect_used, reason = "invariant guaranteed by surrounding validation")]
+#[expect(
+    clippy::expect_used,
+    reason = "invariant guaranteed by surrounding validation"
+)]
 /// Build authorization headers for the Home Assistant REST API.
 ///
 /// Returns a `HeaderMap` with:

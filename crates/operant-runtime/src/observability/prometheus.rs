@@ -53,7 +53,10 @@ impl Default for PrometheusObserver {
 }
 
 impl PrometheusObserver {
-        #[expect(clippy::expect_used, reason = "invariant guaranteed by surrounding validation")]
+    #[expect(
+        clippy::expect_used,
+        reason = "invariant guaranteed by surrounding validation"
+    )]
     pub fn new() -> Self {
         let registry = Registry::new();
 

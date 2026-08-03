@@ -31,7 +31,10 @@ pub enum ServiceSubcommand {
 
 const SERVICE_NAME: &str = "operant";
 
-    #[expect(clippy::unwrap_used, reason = "invariant guaranteed by surrounding validation")]
+#[expect(
+    clippy::unwrap_used,
+    reason = "invariant guaranteed by surrounding validation"
+)]
 pub fn handle_service_command(
     _config: &AppConfig,
     cmd: ServiceSubcommand,

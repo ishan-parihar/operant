@@ -411,7 +411,10 @@ fn build_session_context(platform: &str, channel_id: &str, app_config: &AppConfi
     ctx
 }
 
-    #[expect(clippy::unwrap_used, reason = "invariant guaranteed by surrounding validation")]
+#[expect(
+    clippy::unwrap_used,
+    reason = "invariant guaranteed by surrounding validation"
+)]
 /// Start the gateway with the provided application configuration.
 ///
 /// Constructs a `GatewayConfig` from `app_config.gateway.*` fields,

@@ -248,8 +248,7 @@ impl KnowledgeGraph {
         if count >= self.max_nodes {
             return Err(Error::message(format!(
                 "knowledge graph node limit reached ({}/{})",
-                count,
-                self.max_nodes
+                count, self.max_nodes
             )));
         }
 
@@ -349,11 +348,7 @@ impl KnowledgeGraph {
     }
 
     /// Full-text search across node titles, content, and tags.
-    pub fn query_by_similarity(
-        &self,
-        query: &str,
-        limit: usize,
-    ) -> Result<Vec<SearchResult>> {
+    pub fn query_by_similarity(&self, query: &str, limit: usize) -> Result<Vec<SearchResult>> {
         let conn = self.conn.lock();
 
         // Sanitize FTS query: escape double quotes, wrap tokens in quotes.

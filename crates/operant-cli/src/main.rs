@@ -490,7 +490,10 @@ enum Commands {
     },
 }
 
-    #[expect(clippy::expect_used, reason = "invariant guaranteed by surrounding validation")]
+#[expect(
+    clippy::expect_used,
+    reason = "invariant guaranteed by surrounding validation"
+)]
 fn init_logging(
     verbose: bool,
     cli_log_level: Option<&str>,

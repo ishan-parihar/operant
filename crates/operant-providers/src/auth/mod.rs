@@ -470,7 +470,10 @@ async fn refresh_gemini_access_token_with_retries(
     Err(last_error.unwrap_or_else(|| anyhow::anyhow!("Gemini token refresh failed")))
 }
 
-    #[expect(clippy::expect_used, reason = "poisoned lock: panic is the intended recovery")]
+#[expect(
+    clippy::expect_used,
+    reason = "poisoned lock: panic is the intended recovery"
+)]
 fn refresh_lock_for_profile(profile_id: &str) -> Arc<tokio::sync::Mutex<()>> {
     static LOCKS: OnceLock<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>> = OnceLock::new();
 

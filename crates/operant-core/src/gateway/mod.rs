@@ -240,7 +240,10 @@ impl SessionStore {
         }
     }
 
-        #[expect(clippy::expect_used, reason = "poisoned lock: panic is the intended recovery")]
+    #[expect(
+        clippy::expect_used,
+        reason = "poisoned lock: panic is the intended recovery"
+    )]
     /// Create a new session and return it
     pub fn create_session(
         &self,
@@ -265,14 +268,20 @@ impl SessionStore {
         Ok(session)
     }
 
-        #[expect(clippy::expect_used, reason = "poisoned lock: panic is the intended recovery")]
+    #[expect(
+        clippy::expect_used,
+        reason = "poisoned lock: panic is the intended recovery"
+    )]
     /// Get a session by its ID
     pub fn get_session(&self, session_id: &str) -> Option<PlatformSession> {
         let sessions = self.sessions.read().expect("Session store lock poisoned");
         sessions.get(session_id).cloned()
     }
 
-        #[expect(clippy::expect_used, reason = "poisoned lock: panic is the intended recovery")]
+    #[expect(
+        clippy::expect_used,
+        reason = "poisoned lock: panic is the intended recovery"
+    )]
     /// Find a session matching platform + user + channel
     pub fn find_session(
         &self,
@@ -291,7 +300,10 @@ impl SessionStore {
             .cloned()
     }
 
-        #[expect(clippy::expect_used, reason = "poisoned lock: panic is the intended recovery")]
+    #[expect(
+        clippy::expect_used,
+        reason = "poisoned lock: panic is the intended recovery"
+    )]
     /// Update the last_active timestamp for a session
     pub fn update_activity(&self, session_id: &str) -> Result<()> {
         let mut sessions = self.sessions.write().expect("Session store lock poisoned");
@@ -306,7 +318,10 @@ impl SessionStore {
         }
     }
 
-        #[expect(clippy::expect_used, reason = "poisoned lock: panic is the intended recovery")]
+    #[expect(
+        clippy::expect_used,
+        reason = "poisoned lock: panic is the intended recovery"
+    )]
     /// Remove a session
     pub fn close_session(&self, session_id: &str) -> Result<()> {
         let mut sessions = self.sessions.write().expect("Session store lock poisoned");
@@ -314,7 +329,10 @@ impl SessionStore {
         Ok(())
     }
 
-        #[expect(clippy::expect_used, reason = "poisoned lock: panic is the intended recovery")]
+    #[expect(
+        clippy::expect_used,
+        reason = "poisoned lock: panic is the intended recovery"
+    )]
     /// List all active sessions, optionally filtered by platform
     pub fn list_active_sessions(&self, platform: Option<&str>) -> Vec<PlatformSession> {
         let sessions = self.sessions.read().expect("Session store lock poisoned");
@@ -328,14 +346,20 @@ impl SessionStore {
         }
     }
 
-        #[expect(clippy::expect_used, reason = "poisoned lock: panic is the intended recovery")]
+    #[expect(
+        clippy::expect_used,
+        reason = "poisoned lock: panic is the intended recovery"
+    )]
     /// Total number of sessions
     pub fn get_session_count(&self) -> usize {
         let sessions = self.sessions.read().expect("Session store lock poisoned");
         sessions.len()
     }
 
-        #[expect(clippy::expect_used, reason = "poisoned lock: panic is the intended recovery")]
+    #[expect(
+        clippy::expect_used,
+        reason = "poisoned lock: panic is the intended recovery"
+    )]
     /// Find a session by its Operant session ID
     pub fn get_operant_session(&self, operant_session_id: &str) -> Option<PlatformSession> {
         let sessions = self.sessions.read().expect("Session store lock poisoned");
@@ -345,7 +369,10 @@ impl SessionStore {
             .cloned()
     }
 
-        #[expect(clippy::expect_used, reason = "poisoned lock: panic is the intended recovery")]
+    #[expect(
+        clippy::expect_used,
+        reason = "poisoned lock: panic is the intended recovery"
+    )]
     /// Update metadata fields on a session identified by platform + user + channel.
     /// Returns Ok(true) if session was found and updated, Ok(false) otherwise.
     pub fn update_session_metadata(
@@ -423,7 +450,10 @@ impl ChannelDirectory {
         }
     }
 
-        #[expect(clippy::expect_used, reason = "poisoned lock: panic is the intended recovery")]
+    #[expect(
+        clippy::expect_used,
+        reason = "poisoned lock: panic is the intended recovery"
+    )]
     /// Register a new channel
     pub fn register_channel(
         &self,
@@ -453,14 +483,20 @@ impl ChannelDirectory {
         Ok(())
     }
 
-        #[expect(clippy::expect_used, reason = "poisoned lock: panic is the intended recovery")]
+    #[expect(
+        clippy::expect_used,
+        reason = "poisoned lock: panic is the intended recovery"
+    )]
     /// Get channel info by ID
     pub fn get_channel(&self, channel_id: &str) -> Option<ChannelInfo> {
         let channels = self.channels.read().expect("Channel store lock poisoned");
         channels.get(channel_id).cloned()
     }
 
-        #[expect(clippy::expect_used, reason = "poisoned lock: panic is the intended recovery")]
+    #[expect(
+        clippy::expect_used,
+        reason = "poisoned lock: panic is the intended recovery"
+    )]
     /// Remove a channel
     pub fn remove_channel(&self, channel_id: &str) -> Result<()> {
         let mut channels = self.channels.write().expect("Channel store lock poisoned");
@@ -468,7 +504,10 @@ impl ChannelDirectory {
         Ok(())
     }
 
-        #[expect(clippy::expect_used, reason = "poisoned lock: panic is the intended recovery")]
+    #[expect(
+        clippy::expect_used,
+        reason = "poisoned lock: panic is the intended recovery"
+    )]
     /// List channels, optionally filtered by platform
     pub fn list_channels(&self, platform: Option<&str>) -> Vec<ChannelInfo> {
         let channels = self.channels.read().expect("Channel store lock poisoned");
@@ -482,7 +521,10 @@ impl ChannelDirectory {
         }
     }
 
-        #[expect(clippy::expect_used, reason = "poisoned lock: panic is the intended recovery")]
+    #[expect(
+        clippy::expect_used,
+        reason = "poisoned lock: panic is the intended recovery"
+    )]
     /// Check if a user is admin of a channel
     pub fn is_admin(&self, channel_id: &str, user_id: &str) -> bool {
         let channels = self.channels.read().expect("Channel store lock poisoned");
@@ -2381,7 +2423,10 @@ impl PlatformAdapter for WebhookAdapter {
         })
     }
 
-        #[expect(clippy::expect_used, reason = "invariant guaranteed by surrounding validation")]
+    #[expect(
+        clippy::expect_used,
+        reason = "invariant guaranteed by surrounding validation"
+    )]
     async fn start_with_channel(
         &self,
         message_tx: mpsc::UnboundedSender<IncomingMessage>,

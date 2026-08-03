@@ -32,7 +32,10 @@ fn auth_cache() -> &'static Mutex<Option<(String, Instant)>> {
     AUTH_CACHE.get_or_init(|| Mutex::new(None))
 }
 
-    #[expect(clippy::expect_used, reason = "poisoned lock: panic is the intended recovery")]
+#[expect(
+    clippy::expect_used,
+    reason = "poisoned lock: panic is the intended recovery"
+)]
 /// Obtain a Feishu/Lark tenant access token.
 ///
 /// Reads `LARK_APP_ID` and `LARK_APP_SECRET` from the environment, fetches a

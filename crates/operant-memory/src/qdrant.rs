@@ -130,7 +130,9 @@ impl QdrantMemory {
             Ok(r) => {
                 let status = r.status();
                 let text = r.text().await.unwrap_or_default();
-                return Err(Error::message(format!("Qdrant collection check failed ({status}): {text}")));
+                return Err(Error::message(format!(
+                    "Qdrant collection check failed ({status}): {text}"
+                )));
             }
             Err(e) => {
                 return Err(Error::message(format!("Qdrant connection failed: {e}")));
@@ -158,7 +160,9 @@ impl QdrantMemory {
         if !resp.status().is_success() {
             let status = resp.status();
             let text = resp.text().await.unwrap_or_default();
-            return Err(Error::message(format!("Qdrant collection creation failed ({status}): {text}")));
+            return Err(Error::message(format!(
+                "Qdrant collection creation failed ({status}): {text}"
+            )));
         }
 
         tracing::info!(
@@ -205,7 +209,9 @@ impl QdrantMemory {
             if !resp.status().is_success() {
                 let status = resp.status();
                 let text = resp.text().await.unwrap_or_default();
-                return Err(Error::message(format!("Qdrant scroll failed during migration ({status}): {text}")));
+                return Err(Error::message(format!(
+                    "Qdrant scroll failed during migration ({status}): {text}"
+                )));
             }
 
             let page: QdrantScrollResult = resp.json().await?;
@@ -254,7 +260,9 @@ impl QdrantMemory {
             if !resp.status().is_success() {
                 let status = resp.status();
                 let text = resp.text().await.unwrap_or_default();
-                return Err(Error::message(format!("Qdrant set payload failed during migration ({status}): {text}")));
+                return Err(Error::message(format!(
+                    "Qdrant set payload failed during migration ({status}): {text}"
+                )));
             }
 
             rewritten += 1;
@@ -353,8 +361,7 @@ impl Memory for QdrantMemory {
         let embedding = self.embedder.embed_one(&combined_text).await?;
 
         if embedding.is_empty() {
-            return Err(Error::message("Qdrant requires non-zero dimensional embeddings")
-            .into());
+            return Err(Error::message("Qdrant requires non-zero dimensional embeddings").into());
         }
 
         let id = Uuid::new_v4().to_string();
@@ -394,10 +401,7 @@ impl Memory for QdrantMemory {
         if !resp.status().is_success() {
             let status = resp.status();
             let text = resp.text().await.unwrap_or_default();
-            return Err(Error::message(format!(
-                "Qdrant upsert failed ({status}): {text}"
-            ))
-            .into());
+            return Err(Error::message(format!("Qdrant upsert failed ({status}): {text}")).into());
         }
 
         Ok(())
@@ -466,10 +470,7 @@ impl Memory for QdrantMemory {
         if !resp.status().is_success() {
             let status = resp.status();
             let text = resp.text().await.unwrap_or_default();
-            return Err(Error::message(format!(
-                "Qdrant search failed ({status}): {text}"
-            ))
-            .into());
+            return Err(Error::message(format!("Qdrant search failed ({status}): {text}")).into());
         }
 
         let result: QdrantSearchResult = resp
@@ -542,10 +543,7 @@ impl Memory for QdrantMemory {
         if !resp.status().is_success() {
             let status = resp.status();
             let text = resp.text().await.unwrap_or_default();
-            return Err(Error::message(format!(
-                "Qdrant scroll failed ({status}): {text}"
-            ))
-            .into());
+            return Err(Error::message(format!("Qdrant scroll failed ({status}): {text}")).into());
         }
 
         let result: QdrantScrollResult = resp
@@ -624,10 +622,7 @@ impl Memory for QdrantMemory {
         if !resp.status().is_success() {
             let status = resp.status();
             let text = resp.text().await.unwrap_or_default();
-            return Err(Error::message(format!(
-                "Qdrant scroll failed ({status}): {text}"
-            ))
-            .into());
+            return Err(Error::message(format!("Qdrant scroll failed ({status}): {text}")).into());
         }
 
         let result: QdrantScrollResult = resp
@@ -692,10 +687,7 @@ impl Memory for QdrantMemory {
         if !resp.status().is_success() {
             let status = resp.status();
             let text = resp.text().await.unwrap_or_default();
-            return Err(Error::message(format!(
-                "Qdrant delete failed ({status}): {text}"
-            ))
-            .into());
+            return Err(Error::message(format!("Qdrant delete failed ({status}): {text}")).into());
         }
 
         // Qdrant doesn't return deleted count easily, assume success

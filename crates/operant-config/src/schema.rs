@@ -6942,6 +6942,7 @@ pub struct ChannelsConfig {
     #[nested]
     #[display_name = "Nostr"]
     #[description = "Decentralized DMs (NIP-04)"]
+    /// Nostr channel configuration (decentralized DMs, NIP-04).
     pub nostr: Option<NostrConfig>,
     /// ClawdTalk voice channel configuration.
     #[nested]
@@ -9247,6 +9248,7 @@ impl ChannelConfig for NostrConfig {
 }
 
 #[cfg(feature = "channel-nostr")]
+/// Default public Nostr relay URLs used when the user omits `channels.nostr.relays`.
 pub fn default_nostr_relays() -> Vec<String> {
     vec![
         "wss://relay.damus.io".to_string(),

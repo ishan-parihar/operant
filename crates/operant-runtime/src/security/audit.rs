@@ -168,7 +168,10 @@ impl AuditEvent {
     }
 }
 
-    #[expect(clippy::expect_used, reason = "invariant guaranteed by surrounding validation")]
+#[expect(
+    clippy::expect_used,
+    reason = "invariant guaranteed by surrounding validation"
+)]
 /// Compute the SHA-256 entry hash: `H(prev_hash || content_json)`.
 ///
 /// `content_json` is the canonical JSON of the event *without* the chain fields

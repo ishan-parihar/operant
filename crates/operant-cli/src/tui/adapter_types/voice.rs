@@ -74,7 +74,10 @@ impl VoiceRecorder {
         false
     }
 
-        #[expect(clippy::unwrap_used, reason = "invariant guaranteed by surrounding validation")]
+    #[expect(
+        clippy::unwrap_used,
+        reason = "invariant guaranteed by surrounding validation"
+    )]
     /// Start recording audio. Sends `RecordingStarted` to `tx` on success.
     ///
     /// On the first call, this lazily creates the underlying AudioRecorder
@@ -116,7 +119,10 @@ impl VoiceRecorder {
         }
     }
 
-        #[expect(clippy::unwrap_used, reason = "invariant guaranteed by surrounding validation")]
+    #[expect(
+        clippy::unwrap_used,
+        reason = "invariant guaranteed by surrounding validation"
+    )]
     /// Stop recording, transcribe the captured audio, and send a
     /// `Transcription` event with the transcript text.
     ///

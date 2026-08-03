@@ -1603,7 +1603,10 @@ mod inbound {
         matches!(kind, MediaCategory::Voice) && matches!(transcription, Some(t) if t.enabled)
     }
 
-        #[expect(clippy::expect_used, reason = "invariant guaranteed by surrounding validation")]
+    #[expect(
+        clippy::expect_used,
+        reason = "invariant guaranteed by surrounding validation"
+    )]
     /// Common path for both "this event carries media" and "this event is a
     /// reply to one that did" — downloads, persists to workspace, appends a
     /// `[IMAGE:path]` / `[Document:...] path` marker to `content`, and runs
@@ -2092,7 +2095,10 @@ mod outbound {
         Ok(MarkerTarget::Local(target_canon))
     }
 
-        #[expect(clippy::expect_used, reason = "invariant guaranteed by surrounding validation")]
+    #[expect(
+        clippy::expect_used,
+        reason = "invariant guaranteed by surrounding validation"
+    )]
     fn marker_http_client() -> &'static reqwest::Client {
         static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
         CLIENT.get_or_init(|| {
@@ -2262,7 +2268,10 @@ mod outbound {
         })
     }
 
-        #[expect(clippy::expect_used, reason = "invariant guaranteed by surrounding validation")]
+    #[expect(
+        clippy::expect_used,
+        reason = "invariant guaranteed by surrounding validation"
+    )]
     pub(super) async fn send(outbox: &Outbox<'_>, message: &SendMessage) -> Result<OwnedEventId> {
         let room =
             resolve_joined_room(outbox.client, outbox.alias_cache, &message.recipient).await?;

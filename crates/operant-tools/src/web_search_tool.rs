@@ -549,7 +549,7 @@ fn contains_ascii_case_insensitive(haystack: &str, needle: &str) -> bool {
         .any(|window| window.eq_ignore_ascii_case(needle.as_bytes()))
 }
 
-    #[expect(clippy::expect_used, reason = "infallible once-init / static init")]
+#[expect(clippy::expect_used, reason = "infallible once-init / static init")]
 fn strip_tags(content: &str) -> String {
     let re = Regex::new(r"<[^>]+>").expect("static regex literal is invalid — authoring bug");
     re.replace_all(content, "").to_string()

@@ -87,7 +87,6 @@ impl<T> GatewayContextExt<T> for Option<T> {
     }
 }
 
-
 /// Convenience alias used throughout the crate.
 ///
 /// The second type parameter defaults to [`Error`] (mirroring
@@ -116,7 +115,9 @@ mod tests {
             "no such file",
         ))
         .context("open cert");
-        assert!(matches!(err, Err(Error::Message(m)) if m.contains("open cert") && m.contains("no such file")));
+        assert!(
+            matches!(err, Err(Error::Message(m)) if m.contains("open cert") && m.contains("no such file"))
+        );
     }
 
     #[test]

@@ -130,7 +130,10 @@ pub struct ToolResult {
 }
 
 impl ToolResult {
-        #[expect(clippy::expect_used, reason = "invariant guaranteed by surrounding validation")]
+    #[expect(
+        clippy::expect_used,
+        reason = "invariant guaranteed by surrounding validation"
+    )]
     /// Create a successful result
     pub fn success<T: Serialize>(tool_call_id: impl Into<String>, content: T) -> Self {
         let content =
@@ -144,7 +147,10 @@ impl ToolResult {
         }
     }
 
-        #[expect(clippy::expect_used, reason = "invariant guaranteed by surrounding validation")]
+    #[expect(
+        clippy::expect_used,
+        reason = "invariant guaranteed by surrounding validation"
+    )]
     /// Create a successful result with tool name
     pub fn success_with_name<T: Serialize>(
         name: impl Into<String>,

@@ -11,23 +11,39 @@ use tokio::sync::oneshot;
 
 pub use super::knowledge_graph::{NodeType, Relation};
 
+/// A single knowledge-graph node persisted in PostgreSQL.
 #[derive(Debug, Clone)]
 pub struct PgNode {
+    /// Surrogate key assigned by the database.
     pub id: i64,
+    /// Human-readable node name.
     pub name: String,
+    /// Node kind (pattern, decision, lesson, …).
     pub node_type: NodeType,
+    /// Free-form node body text.
     pub content: String,
+    /// Search tags used by `query_by_tags`.
     pub tags: Vec<String>,
 }
 
+/// A directed relationship between two persisted nodes.
 #[derive(Debug, Clone)]
 pub struct PgEdge {
+    /// Source node id (`kg_nodes.id`).
     pub source_id: i64,
+    /// Target node id (`kg_nodes.id`).
     pub target_id: i64,
+    /// Relationship kind.
     pub relation: Relation,
+    /// Edge weight for similarity ranking.
     pub weight: f64,
 }
 
+/// PostgreSQL-backed knowledge graph (feature `memory-postgres`).
+///
+/// Uses plain SQL with recursive CTEs rather than the AGE extension. All
+/// blocking `postgres` calls run on OS threads to avoid nested Tokio runtime
+/// panics (see [`run_on_os_thread`]).
 pub struct PgKnowledgeGraph {
     client: Arc<Mutex<Client>>,
     schema: String,
@@ -50,6 +66,7 @@ where
 }
 
 impl PgKnowledgeGraph {
+    /// Connect a knowledge graph to the given schema, creating its tables.
     pub fn new(client: Arc<Mutex<Client>>, schema: &str) -> Result<Self> {
         let graph = Self {
             client,
@@ -144,6 +161,7 @@ impl PgKnowledgeGraph {
         }
     }
 
+    /// Insert a node and return its assigned id.
     pub async fn add_node(
         &self,
         name: &str,
@@ -164,6 +182,7 @@ impl PgKnowledgeGraph {
         }).await
     }
 
+    /// Insert a directed edge and return its assigned id.
     pub async fn add_edge(
         &self,
         source_id: i64,
@@ -181,6 +200,7 @@ impl PgKnowledgeGraph {
         }).await
     }
 
+    /// Fetch a single node by id, or `None` when it does not exist.
     pub async fn get_node(&self, id: i64) -> Result<Option<PgNode>> {
         let client = self.client.clone();
         let schema = self.schema.clone();
@@ -191,6 +211,7 @@ impl PgKnowledgeGraph {
         }).await
     }
 
+    /// Return up to `limit` nodes whose tags overlap the given set.
     pub async fn query_by_tags(&self, tags: &[String], limit: usize) -> Result<Vec<PgNode>> {
         let client = self.client.clone();
         let schema = self.schema.clone();
@@ -204,6 +225,8 @@ impl PgKnowledgeGraph {
         }).await
     }
 
+    /// Return up to `limit` nodes whose name/content matches the query via
+    /// PostgreSQL full-text search (`to_tsvector` / `plainto_tsquery`).
     pub async fn query_by_similarity(&self, query: &str, limit: usize) -> Result<Vec<PgNode>> {
         let client = self.client.clone();
         let schema = self.schema.clone();
@@ -217,6 +240,8 @@ impl PgKnowledgeGraph {
         }).await
     }
 
+    /// Return up to `limit` nodes connected to `node_id` by an edge in either
+    /// direction (union of outgoing and incoming neighbors).
     pub async fn find_related(&self, node_id: i64, limit: usize) -> Result<Vec<PgNode>> {
         let client = self.client.clone();
         let schema = self.schema.clone();
@@ -229,6 +254,7 @@ impl PgKnowledgeGraph {
         }).await
     }
 
+    /// Return all nodes reachable from `root_id` within `max_depth` hops.
     pub async fn get_subgraph(&self, root_id: i64, max_depth: u32) -> Result<Vec<PgNode>> {
         let client = self.client.clone();
         let schema = self.schema.clone();
@@ -241,6 +267,7 @@ impl PgKnowledgeGraph {
         }).await
     }
 
+    /// Return `(node_count, edge_count)` for the graph.
     pub async fn stats(&self) -> Result<(i64, i64)> {
         let client = self.client.clone();
         let schema = self.schema.clone();

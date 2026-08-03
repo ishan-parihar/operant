@@ -74,7 +74,10 @@ pub struct NodeTransport {
 }
 
 impl NodeTransport {
-        #[expect(clippy::expect_used, reason = "invariant guaranteed by surrounding validation")]
+    #[expect(
+        clippy::expect_used,
+        reason = "invariant guaranteed by surrounding validation"
+    )]
     pub fn new(shared_secret: String) -> Self {
         Self {
             http: reqwest::Client::builder()

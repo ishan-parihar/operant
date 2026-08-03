@@ -20,7 +20,7 @@ const INLINE_SHELL_MAX_OUTPUT: usize = 4000;
 /// Default timeout for inline shell execution (seconds).
 const DEFAULT_INLINE_SHELL_TIMEOUT: u64 = 10;
 
-    #[expect(clippy::expect_used, reason = "infallible once-init / static init")]
+#[expect(clippy::expect_used, reason = "infallible once-init / static init")]
 /// Regex for template variables like `${OPERANT_SKILL_DIR}`.
 fn template_var_regex() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
@@ -30,7 +30,7 @@ fn template_var_regex() -> &'static Regex {
     })
 }
 
-    #[expect(clippy::expect_used, reason = "infallible once-init / static init")]
+#[expect(clippy::expect_used, reason = "infallible once-init / static init")]
 /// Regex for inline shell snippets like `` !`date +%Y-%m-%d` ``.
 fn inline_shell_regex() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();

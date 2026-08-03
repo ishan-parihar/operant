@@ -29,7 +29,7 @@ impl NotionTool {
         }
     }
 
-        #[expect(clippy::expect_used, reason = "infallible once-init / static init")]
+    #[expect(clippy::expect_used, reason = "infallible once-init / static init")]
     /// Build the standard Notion API headers (Authorization, version, content-type).
     fn headers(&self) -> anyhow::Result<reqwest::header::HeaderMap> {
         let mut headers = reqwest::header::HeaderMap::new();

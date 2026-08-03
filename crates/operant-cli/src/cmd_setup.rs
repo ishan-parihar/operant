@@ -754,7 +754,10 @@ fn step_fallback_and_strategy(
     Ok(())
 }
 
-    #[expect(clippy::unwrap_used, reason = "invariant guaranteed by surrounding validation")]
+#[expect(
+    clippy::unwrap_used,
+    reason = "invariant guaranteed by surrounding validation"
+)]
 /// Configure auxiliary models for specialized tasks.
 fn step_auxiliary_models(config: &mut AppConfig) -> Result<()> {
     if !prompt_yes_no("Configure auxiliary models for specialized tasks?", false)? {

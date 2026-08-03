@@ -11,7 +11,7 @@ use std::sync::LazyLock;
 /// used when callers omit the parameter.
 pub const DEFAULT_MAX_HISTORY_MESSAGES: usize = 50;
 
-    #[expect(clippy::expect_used, reason = "infallible once-init / static init")]
+#[expect(clippy::expect_used, reason = "infallible once-init / static init")]
 static LOCAL_IMAGE_PATH_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"/[^\s<>'"`\]\)]+?\.(?i:png|jpe?g|webp|gif|bmp)"#).expect("valid image path regex")
 });

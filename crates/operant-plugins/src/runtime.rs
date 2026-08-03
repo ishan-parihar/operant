@@ -61,7 +61,10 @@ struct PluginToolResult {
 
 // ── Host function implementations ─────────────────────────────────
 
-    #[expect(clippy::unwrap_used, reason = "poisoned lock: panic is the intended recovery")]
+#[expect(
+    clippy::unwrap_used,
+    reason = "poisoned lock: panic is the intended recovery"
+)]
 fn handle_http_request(
     plugin: &mut CurrentPlugin,
     inputs: &[Val],
@@ -142,7 +145,10 @@ fn handle_http_request(
     Ok(())
 }
 
-    #[expect(clippy::unwrap_used, reason = "poisoned lock: panic is the intended recovery")]
+#[expect(
+    clippy::unwrap_used,
+    reason = "poisoned lock: panic is the intended recovery"
+)]
 fn handle_env_read(
     plugin: &mut CurrentPlugin,
     inputs: &[Val],

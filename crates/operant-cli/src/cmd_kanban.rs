@@ -885,7 +885,10 @@ async fn cmd_triage(
     Ok(())
 }
 
-    #[expect(clippy::unwrap_used, reason = "poisoned lock: panic is the intended recovery")]
+#[expect(
+    clippy::unwrap_used,
+    reason = "poisoned lock: panic is the intended recovery"
+)]
 async fn cmd_reclaim(config: &AppConfig, board_slug: &str, id: &str) -> Result<()> {
     let db = open_db(config, board_slug)?;
     let conn = db.conn();
@@ -900,7 +903,10 @@ async fn cmd_reclaim(config: &AppConfig, board_slug: &str, id: &str) -> Result<(
     Ok(())
 }
 
-    #[expect(clippy::unwrap_used, reason = "poisoned lock: panic is the intended recovery")]
+#[expect(
+    clippy::unwrap_used,
+    reason = "poisoned lock: panic is the intended recovery"
+)]
 async fn cmd_reassign(
     config: &AppConfig,
     board_slug: &str,
@@ -920,7 +926,10 @@ async fn cmd_reassign(
     Ok(())
 }
 
-    #[expect(clippy::unwrap_used, reason = "poisoned lock: panic is the intended recovery")]
+#[expect(
+    clippy::unwrap_used,
+    reason = "poisoned lock: panic is the intended recovery"
+)]
 async fn cmd_edit(
     config: &AppConfig,
     board_slug: &str,

@@ -23,7 +23,10 @@ impl KillRing {
         }
     }
 
-        #[expect(clippy::unwrap_used, reason = "invariant guaranteed by surrounding validation")]
+    #[expect(
+        clippy::unwrap_used,
+        reason = "invariant guaranteed by surrounding validation"
+    )]
     /// Add a kill entry. If the last operation was a kill, append to the most recent entry
     /// instead of creating a new one (for combining consecutive kills).
     pub fn push(&mut self, text: String) {

@@ -39,7 +39,10 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> io::Result<()> {
     Ok(())
 }
 
-    #[expect(clippy::unwrap_used, reason = "invariant guaranteed by surrounding validation")]
+#[expect(
+    clippy::unwrap_used,
+    reason = "invariant guaranteed by surrounding validation"
+)]
 async fn cmd_create(_config: &AppConfig, output: Option<PathBuf>) -> Result<()> {
     let secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -68,7 +71,10 @@ async fn cmd_create(_config: &AppConfig, output: Option<PathBuf>) -> Result<()> 
     Ok(())
 }
 
-    #[expect(clippy::unwrap_used, reason = "invariant guaranteed by surrounding validation")]
+#[expect(
+    clippy::unwrap_used,
+    reason = "invariant guaranteed by surrounding validation"
+)]
 async fn cmd_list(_config: &AppConfig) -> Result<()> {
     let cwd = std::env::current_dir()?;
     let mut found = false;

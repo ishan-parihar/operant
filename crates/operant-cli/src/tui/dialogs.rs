@@ -243,7 +243,10 @@ impl PermissionRequest {
         ]
     }
 
-        #[expect(clippy::unwrap_used, reason = "invariant guaranteed by surrounding validation")]
+    #[expect(
+        clippy::unwrap_used,
+        reason = "invariant guaranteed by surrounding validation"
+    )]
     /// Bash options: 4 standard + optional 5th prefix-based rule.
     pub fn bash_options(suggested_prefix: Option<&str>) -> Vec<PermissionOption> {
         let mut opts = Self::default_options();

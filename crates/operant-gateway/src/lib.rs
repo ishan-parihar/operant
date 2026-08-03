@@ -12,7 +12,6 @@
 
 pub mod acp;
 pub mod api;
-pub mod error;
 pub mod api_config;
 pub mod api_onboard;
 pub mod api_pairing;
@@ -23,6 +22,7 @@ pub mod api_plugins;
 pub mod api_webauthn;
 pub mod auth_rate_limit;
 pub mod canvas;
+pub mod error;
 pub mod hardware_context;
 pub mod node_tool;
 pub mod nodes;

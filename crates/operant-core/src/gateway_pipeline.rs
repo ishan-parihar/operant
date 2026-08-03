@@ -171,7 +171,10 @@ impl HookRegistry {
         }
     }
 
-        #[expect(clippy::expect_used, reason = "poisoned lock: panic is the intended recovery")]
+    #[expect(
+        clippy::expect_used,
+        reason = "poisoned lock: panic is the intended recovery"
+    )]
     /// Register a handler for a specific event. Supports wildcard matching
     /// for Command events: registering for `Command("*")` fires on all commands.
     pub async fn register(&self, event: HookEvent, handler: HookHandler) {
@@ -183,7 +186,10 @@ impl HookRegistry {
         handlers.push((event, handler));
     }
 
-        #[expect(clippy::expect_used, reason = "poisoned lock: panic is the intended recovery")]
+    #[expect(
+        clippy::expect_used,
+        reason = "poisoned lock: panic is the intended recovery"
+    )]
     /// Emit an event to all matching handlers. Handlers run sequentially.
     /// Errors in handlers are caught and logged (never block the pipeline).
     pub async fn emit(&self, event: HookEvent, ctx: HookContext) {
@@ -216,7 +222,10 @@ impl HookRegistry {
         }
     }
 
-        #[expect(clippy::expect_used, reason = "poisoned lock: panic is the intended recovery")]
+    #[expect(
+        clippy::expect_used,
+        reason = "poisoned lock: panic is the intended recovery"
+    )]
     /// Returns the number of registered handlers.
     pub fn len(&self) -> usize {
         self.handlers
@@ -225,7 +234,10 @@ impl HookRegistry {
             .len()
     }
 
-        #[expect(clippy::expect_used, reason = "poisoned lock: panic is the intended recovery")]
+    #[expect(
+        clippy::expect_used,
+        reason = "poisoned lock: panic is the intended recovery"
+    )]
     /// Returns true if no handlers are registered.
     pub fn is_empty(&self) -> bool {
         self.handlers

@@ -3,7 +3,10 @@
 use super::*;
 
 impl App {
-        #[expect(clippy::unwrap_used, reason = "invariant guaranteed by surrounding validation")]
+    #[expect(
+        clippy::unwrap_used,
+        reason = "invariant guaranteed by surrounding validation"
+    )]
     pub(super) fn flush_streamed_assistant_message(&mut self) {
         if self.streaming_text.trim().is_empty() && self.streaming_thinking.trim().is_empty() {
             self.streaming_text.clear();

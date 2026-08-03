@@ -85,6 +85,7 @@ pub use backend::{
     MemoryBackendKind, MemoryBackendProfile, classify_memory_backend, default_memory_backend_key,
     memory_backend_profile, selectable_memory_backends,
 };
+pub use error::{Error, Result};
 pub use lucid::LucidMemory;
 pub use markdown::MarkdownMemory;
 pub use namespaced::NamespacedMemory;
@@ -98,7 +99,6 @@ pub use qdrant::QdrantMemory;
 pub use response_cache::ResponseCache;
 #[allow(unused_imports)]
 pub use retrieval::{RetrievalConfig, RetrievalPipeline};
-pub use error::{Error, Result};
 pub use sqlite::SqliteMemory;
 pub use traits::Memory;
 #[allow(unused_imports)]
@@ -138,8 +138,10 @@ fn build_postgres_memory(
     _memory_config: &MemoryConfig,
     _storage_provider: &StorageProviderConfig,
 ) -> Result<Box<dyn Memory>> {
-    Err(Error::message("memory backend 'postgres' requested but this build was compiled without \
-         `memory-postgres`; rebuild with `--features memory-postgres`"))
+    Err(Error::message(
+        "memory backend 'postgres' requested but this build was compiled without \
+         `memory-postgres`; rebuild with `--features memory-postgres`",
+    ))
 }
 
 fn create_memory_with_builders<F>(
@@ -163,8 +165,10 @@ where
             // through `create_memory_with_storage_and_routes`, which handles postgres via
             // an early return. Fail loudly if a caller ever reaches this arm, rather than
             // pretending to work with default configs that can never connect.
-            Err(Error::message("postgres backend requires storage config; \
-                 call create_memory_with_storage_and_routes instead of create_memory_with_builders"))
+            Err(Error::message(
+                "postgres backend requires storage config; \
+                 call create_memory_with_storage_and_routes instead of create_memory_with_builders",
+            ))
         }
         MemoryBackendKind::Qdrant | MemoryBackendKind::Markdown => {
             Ok(Box::new(MarkdownMemory::new(workspace_dir)))
@@ -487,12 +491,11 @@ pub fn create_memory_with_storage_and_routes(
 
 /// Factory for migration tooling: build a backend (rejecting `none`)
 /// using default SQLite construction.
-pub fn create_memory_for_migration(
-    backend: &str,
-    workspace_dir: &Path,
-) -> Result<Box<dyn Memory>> {
+pub fn create_memory_for_migration(backend: &str, workspace_dir: &Path) -> Result<Box<dyn Memory>> {
     if matches!(classify_memory_backend(backend), MemoryBackendKind::None) {
-        return Err(Error::message("memory backend 'none' disables persistence; choose sqlite, lucid, or markdown before migration"));
+        return Err(Error::message(
+            "memory backend 'none' disables persistence; choose sqlite, lucid, or markdown before migration",
+        ));
     }
 
     create_memory_with_builders(

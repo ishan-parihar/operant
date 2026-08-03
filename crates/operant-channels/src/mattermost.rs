@@ -214,7 +214,10 @@ impl Channel for MattermostChannel {
         "mattermost"
     }
 
-        #[expect(clippy::unwrap_used, reason = "invariant guaranteed by surrounding validation")]
+    #[expect(
+        clippy::unwrap_used,
+        reason = "invariant guaranteed by surrounding validation"
+    )]
     async fn send(&self, message: &SendMessage) -> Result<()> {
         // Mattermost supports threading via 'root_id'.
         // We pack 'channel_id:root_id' into recipient if it's a thread.
@@ -352,7 +355,10 @@ impl Channel for MattermostChannel {
             .unwrap_or(false)
     }
 
-        #[expect(clippy::unwrap_used, reason = "invariant guaranteed by surrounding validation")]
+    #[expect(
+        clippy::unwrap_used,
+        reason = "invariant guaranteed by surrounding validation"
+    )]
     async fn start_typing(&self, recipient: &str) -> Result<()> {
         // Cancel any existing typing loop before starting a new one.
         self.stop_typing(recipient).await?;
