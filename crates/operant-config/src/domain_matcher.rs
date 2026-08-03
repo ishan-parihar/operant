@@ -1,3 +1,6 @@
+//! Wildcard domain matching for sensitive-domain gating (banking, medical,
+//! government, identity providers) enforced before tool web calls.
+
 use anyhow::{Result, bail};
 use std::collections::BTreeSet;
 
@@ -35,12 +38,14 @@ const DOMAIN_CATEGORIES: &[(&str, &[&str])] = &[
     ("identity_providers", IDENTITY_PROVIDER_DOMAINS),
 ];
 
+/// Matches hostnames against gated-domain patterns (with `*` wildcards).
 #[derive(Debug, Clone, Default)]
 pub struct DomainMatcher {
     patterns: Vec<String>,
 }
 
 impl DomainMatcher {
+    /// Build a matcher from explicit domain patterns and/or category presets.
     pub fn new(gated_domains: &[String], categories: &[String]) -> Result<Self> {
         let mut set = BTreeSet::new();
 
@@ -57,10 +62,12 @@ impl DomainMatcher {
         })
     }
 
+    /// Return the compiled list of normalized match patterns.
     pub fn patterns(&self) -> &[String] {
         &self.patterns
     }
 
+    /// Return `true` when the given hostname matches any gated pattern.
     pub fn is_gated(&self, domain: &str) -> bool {
         let Some(normalized_domain) = normalize_domain(domain) else {
             return false;
@@ -71,6 +78,7 @@ impl DomainMatcher {
             .any(|pattern| domain_matches_pattern(pattern, &normalized_domain))
     }
 
+    /// Expand named domain categories (e.g. `banking`) into their pattern lists.
     pub fn expand_categories(categories: &[String]) -> Result<Vec<String>> {
         let mut expanded = Vec::new();
         for category in categories {
@@ -91,6 +99,7 @@ impl DomainMatcher {
         Ok(expanded)
     }
 
+    /// Validate a single domain pattern without building a matcher.
     pub fn validate_pattern(pattern: &str) -> Result<()> {
         let _ = normalize_pattern(pattern)?;
         Ok(())

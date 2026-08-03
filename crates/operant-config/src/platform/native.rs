@@ -11,6 +11,7 @@ impl Default for NativeRuntime {
 }
 
 impl NativeRuntime {
+    /// Create a native runtime (full host access).
     pub fn new() -> Self {
         Self
     }

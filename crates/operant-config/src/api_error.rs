@@ -69,6 +69,7 @@ pub enum ConfigApiCode {
 }
 
 impl ConfigApiCode {
+    /// Return the stable snake_case string form of this code.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::PathNotFound => "path_not_found",
@@ -128,6 +129,7 @@ pub struct ConfigApiError {
 }
 
 impl ConfigApiError {
+    /// Construct an error from a code and human-readable message.
     pub fn new(code: ConfigApiCode, message: impl Into<String>) -> Self {
         Self {
             code,
@@ -137,11 +139,13 @@ impl ConfigApiError {
         }
     }
 
+    /// Attach the offending property path to the error.
     pub fn with_path(mut self, path: impl Into<String>) -> Self {
         self.path = Some(path.into());
         self
     }
 
+    /// Attach the JSON Patch operation index that caused the error.
     pub fn with_op_index(mut self, index: usize) -> Self {
         self.op_index = Some(index);
         self

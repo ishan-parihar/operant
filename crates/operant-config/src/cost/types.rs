@@ -63,8 +63,11 @@ impl TokenUsage {
 /// Time period for cost aggregation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum UsagePeriod {
+    /// Aggregate over the current session.
     Session,
+    /// Aggregate over the current day.
     Day,
+    /// Aggregate over the current month.
     Month,
 }
 
@@ -97,14 +100,20 @@ pub enum BudgetCheck {
     Allowed,
     /// Warning threshold exceeded but request can proceed
     Warning {
+        /// Current spend in USD.
         current_usd: f64,
+        /// Warning threshold limit in USD.
         limit_usd: f64,
+        /// Period the budget applies to.
         period: UsagePeriod,
     },
     /// Budget exceeded, request blocked
     Exceeded {
+        /// Current spend in USD.
         current_usd: f64,
+        /// Hard budget limit in USD.
         limit_usd: f64,
+        /// Period the budget applies to.
         period: UsagePeriod,
     },
 }

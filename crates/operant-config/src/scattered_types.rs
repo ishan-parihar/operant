@@ -14,12 +14,18 @@ use std::fmt;
 #[cfg_attr(feature = "schema-export", derive(schemars::JsonSchema))]
 #[serde(rename_all = "lowercase")]
 pub enum ThinkingLevel {
+    /// No reasoning effort; fastest, least capable.
     Off,
+    /// Minimal reasoning effort.
     Minimal,
+    /// Low reasoning effort.
     Low,
     #[default]
+    /// Default reasoning effort.
     Medium,
+    /// High reasoning effort.
     High,
+    /// Maximum reasoning effort; slowest but most capable.
     Max,
 }
 
@@ -28,6 +34,7 @@ impl HasPropKind for ThinkingLevel {
 }
 
 impl ThinkingLevel {
+    /// Parse a thinking level from a case-insensitive string (`"off"`, `"low"`, ...).
     pub fn from_str_insensitive(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
             "off" | "none" => Some(Self::Off),
@@ -46,6 +53,7 @@ impl ThinkingLevel {
 #[cfg_attr(feature = "schema-export", derive(schemars::JsonSchema))]
 #[prefix = "agent.thinking"]
 pub struct ThinkingConfig {
+    /// Reasoning level applied to messages that do not request one explicitly.
     #[serde(default)]
     pub default_level: ThinkingLevel,
 }
@@ -71,13 +79,18 @@ fn default_collapse() -> bool {
 #[derive(Debug, Clone, Serialize, Deserialize, Configurable)]
 #[cfg_attr(feature = "schema-export", derive(schemars::JsonSchema))]
 #[prefix = "agent.history-pruning"]
+/// Prunes older turns from conversation history before it reaches the provider.
 pub struct HistoryPrunerConfig {
+    /// Whether history pruning is enabled. Default: `false`.
     #[serde(default)]
     pub enabled: bool,
+    /// Token ceiling above which older turns are pruned. Default: `8192`.
     #[serde(default = "default_max_tokens")]
     pub max_tokens: usize,
+    /// Number of most-recent turns always kept. Default: `4`.
     #[serde(default = "default_keep_recent")]
     pub keep_recent: usize,
+    /// Collapse prior tool results to a single line to save tokens. Default: `true`.
     #[serde(default = "default_collapse")]
     pub collapse_tool_results: bool,
 }
@@ -100,13 +113,18 @@ fn default_cost_optimized_hint() -> String {
 #[derive(Debug, Clone, Serialize, Deserialize, Configurable)]
 #[cfg_attr(feature = "schema-export", derive(schemars::JsonSchema))]
 #[prefix = "agent.auto-classify"]
+/// Auto-classifies request complexity into routing hints for the model router.
 pub struct AutoClassifyConfig {
+    /// Prompt hint applied when a request is classified simple.
     #[serde(default)]
     pub simple_hint: Option<String>,
+    /// Prompt hint applied when a request is classified standard.
     #[serde(default)]
     pub standard_hint: Option<String>,
+    /// Prompt hint applied when a request is classified complex.
     #[serde(default)]
     pub complex_hint: Option<String>,
+    /// Hint applied when the cost-optimized route is selected. Default: `"cost-optimized"`.
     #[serde(default = "default_cost_optimized_hint")]
     pub cost_optimized_hint: String,
 }
@@ -132,11 +150,15 @@ fn default_eval_max_retries() -> u32 {
 #[derive(Debug, Clone, Serialize, Deserialize, Configurable)]
 #[cfg_attr(feature = "schema-export", derive(schemars::JsonSchema))]
 #[prefix = "agent.eval"]
+/// Quality evaluation of model responses before they are returned.
 pub struct EvalConfig {
+    /// Whether response evaluation is enabled. Default: `false`.
     #[serde(default)]
     pub enabled: bool,
+    /// Minimum quality score (0.0–1.0) a response must reach to pass. Default: `0.5`.
     #[serde(default = "default_min_quality_score")]
     pub min_quality_score: f64,
+    /// Maximum evaluation retries before accepting the response. Default: `1`.
     #[serde(default = "default_eval_max_retries")]
     pub max_retries: u32,
 }
@@ -185,29 +207,42 @@ fn default_tool_result_retrim_chars() -> usize {
 #[derive(Debug, Clone, Serialize, Deserialize, Configurable)]
 #[cfg_attr(feature = "schema-export", derive(schemars::JsonSchema))]
 #[prefix = "agent.context-compression"]
+/// Compresses context windows before the provider call to stay under limits.
 pub struct ContextCompressionConfig {
+    /// Whether context compression is enabled. Default: `true`.
     #[serde(default = "default_cc_enabled")]
     pub enabled: bool,
+    /// Fraction of the context window at which compression triggers. Default: `0.50`.
     #[serde(default = "default_threshold_ratio")]
     pub threshold_ratio: f64,
+    /// Leading turns protected from compression. Default: `3`.
     #[serde(default = "default_protect_first_n")]
     pub protect_first_n: usize,
+    /// Trailing turns protected from compression. Default: `4`.
     #[serde(default = "default_protect_last_n")]
     pub protect_last_n: usize,
+    /// Maximum compression passes per turn. Default: `3`.
     #[serde(default = "default_cc_max_passes")]
     pub max_passes: u32,
+    /// Character ceiling for generated summaries. Default: `4000`.
     #[serde(default = "default_summary_max_chars")]
     pub summary_max_chars: usize,
+    /// Character ceiling for source excerpts kept alongside summaries. Default: `50000`.
     #[serde(default = "default_source_max_chars")]
     pub source_max_chars: usize,
+    /// Timeout (seconds) for a single compression pass. Default: `60`.
     #[serde(default = "default_cc_timeout_secs")]
     pub timeout_secs: u64,
+    /// Model used to generate summaries; `None` reuses the route model.
     #[serde(default)]
     pub summary_model: Option<String>,
+    /// Identifier policy applied when renaming identifiers in summaries. Default: `"strict"`.
     #[serde(default = "default_identifier_policy")]
     pub identifier_policy: String,
+    /// Character budget for re-trimming tool results after compression. Default: `2000`.
     #[serde(default = "default_tool_result_retrim_chars")]
     pub tool_result_retrim_chars: usize,
+    /// Tool-result keys exempt from re-trimming.
     #[serde(default)]
     pub tool_result_trim_exempt: Vec<String>,
 }
@@ -291,17 +326,24 @@ fn default_browser_task_timeout() -> u64 {
 #[derive(Debug, Clone, Serialize, Deserialize, Configurable)]
 #[cfg_attr(feature = "schema-export", derive(schemars::JsonSchema))]
 #[prefix = "browser-delegate"]
+/// Drives a headless browser CLI for the browser-delegation tool.
 pub struct BrowserDelegateConfig {
+    /// Whether browser delegation is enabled. Default: `false`.
     #[serde(default)]
     pub enabled: bool,
+    /// Browser CLI binary used for delegation. Default: `"claude"`.
     #[serde(default = "default_browser_cli")]
     pub cli_binary: String,
+    /// Chrome profile directory for persistent sessions; empty when unused.
     #[serde(default)]
     pub chrome_profile_dir: String,
+    /// Domains the delegate is allowed to visit.
     #[serde(default)]
     pub allowed_domains: Vec<String>,
+    /// Domains the delegate must never visit.
     #[serde(default)]
     pub blocked_domains: Vec<String>,
+    /// Per-task timeout (seconds). Default: `120`.
     #[serde(default = "default_browser_task_timeout")]
     pub task_timeout_secs: u64,
 }
@@ -340,15 +382,21 @@ fn default_success_boost() -> f64 {
 #[derive(Debug, Clone, Serialize, Deserialize, Configurable)]
 #[cfg_attr(feature = "schema-export", derive(schemars::JsonSchema))]
 #[prefix = "trust"]
+/// Scoring model for tool trust (used to gate/prioritize tool use).
 pub struct TrustConfig {
+    /// Initial trust score for new tools. Default: `0.8`.
     #[serde(default = "default_initial_score")]
     pub initial_score: f64,
+    /// Half-life (days) for trust-score decay. Default: `30.0`.
     #[serde(default = "default_decay_half_life")]
     pub decay_half_life_days: f64,
+    /// Score threshold below which a tool is considered regressed. Default: `0.5`.
     #[serde(default = "default_regression_threshold")]
     pub regression_threshold: f64,
+    /// Score penalty applied when a correction follows a tool use. Default: `0.05`.
     #[serde(default = "default_correction_penalty")]
     pub correction_penalty: f64,
+    /// Score boost applied on successful tool use. Default: `0.01`.
     #[serde(default = "default_success_boost")]
     pub success_boost: f64,
 }
@@ -395,33 +443,48 @@ fn default_max_attachment_bytes() -> usize {
 #[derive(Debug, Clone, Serialize, Deserialize, operant_macros::Configurable)]
 #[cfg_attr(feature = "schema-export", derive(schemars::JsonSchema))]
 #[prefix = "channels.email"]
+/// Email channel (IMAP/SMTP) configuration.
 pub struct EmailConfig {
+    /// Whether the email channel is enabled. Default: `false`.
     #[serde(default)]
     pub enabled: bool,
+    /// IMAP host for inbound mail.
     pub imap_host: String,
+    /// IMAP port. Default: `993`.
     #[serde(default = "default_imap_port")]
     pub imap_port: u16,
+    /// IMAP folder to poll. Default: `"INBOX"`.
     #[serde(default = "default_imap_folder")]
     pub imap_folder: String,
+    /// SMTP host for outbound mail.
     pub smtp_host: String,
+    /// SMTP port. Default: `465`.
     #[serde(default = "default_smtp_port")]
     pub smtp_port: u16,
+    /// Whether SMTP uses TLS. Default: `true`.
     #[serde(default = "default_true")]
     pub smtp_tls: bool,
+    /// IMAP/SMTP username.
     pub username: String,
+    /// IMAP/SMTP password (secret).
     #[secret]
     pub password: String,
+    /// From-address used on outbound mail.
     pub from_address: String,
+    /// IMAP IDLE keep-alive timeout (seconds). Default: `1740`.
     #[serde(default = "default_idle_timeout")]
     pub idle_timeout_secs: u64,
     /// Polling interval used when the IMAP server does not advertise the IDLE
     /// capability (RFC 2177). Ignored when IDLE is available.
     #[serde(default = "default_poll_interval_secs")]
     pub poll_interval_secs: u64,
+    /// Senders allowed to trigger agent turns; empty allows all.
     #[serde(default)]
     pub allowed_senders: Vec<String>,
+    /// Default subject for outbound mail. Default: `"Operant Message"`.
     #[serde(default = "default_subject")]
     pub default_subject: String,
+    /// Maximum accepted attachment size (bytes). Default: `25 MiB`.
     #[serde(default = "default_max_attachment_bytes")]
     pub max_attachment_bytes: usize,
 }
@@ -464,19 +527,27 @@ fn default_label_filter() -> Vec<String> {
 #[derive(Debug, Clone, Serialize, Deserialize, operant_macros::Configurable)]
 #[cfg_attr(feature = "schema-export", derive(schemars::JsonSchema))]
 #[prefix = "channels.gmail"]
+/// Gmail Pub/Sub push notification channel configuration.
 pub struct GmailPushConfig {
+    /// Whether the Gmail channel is enabled. Default: `false`.
     #[serde(default)]
     pub enabled: bool,
+    /// Pub/Sub topic receiving Gmail push notifications.
     pub topic: String,
+    /// Gmail labels that are forwarded. Default: `["INBOX"]`.
     #[serde(default = "default_label_filter")]
     pub label_filter: Vec<String>,
+    /// OAuth token for Gmail API access (secret).
     #[serde(default)]
     #[secret]
     pub oauth_token: String,
+    /// Senders allowed to trigger agent turns; empty allows all.
     #[serde(default)]
     pub allowed_senders: Vec<String>,
+    /// Webhook URL receiving push payloads.
     #[serde(default)]
     pub webhook_url: String,
+    /// Shared secret used to sign webhook payloads.
     #[serde(default)]
     pub webhook_secret: String,
 }
@@ -507,15 +578,22 @@ impl Default for GmailPushConfig {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, operant_macros::Configurable)]
 #[cfg_attr(feature = "schema-export", derive(schemars::JsonSchema))]
 #[prefix = "channels.clawdtalk"]
+/// ClawdTalk telephony channel configuration.
 pub struct ClawdTalkConfig {
+    /// Whether the ClawdTalk channel is enabled. Default: `false`.
     #[serde(default)]
     pub enabled: bool,
+    /// ClawdTalk API key (secret).
     #[secret]
     pub api_key: String,
+    /// ClawdTalk connection identifier.
     pub connection_id: String,
+    /// Source number for outbound messages.
     pub from_number: String,
+    /// Destinations allowed to trigger agent turns; empty allows all.
     #[serde(default)]
     pub allowed_destinations: Vec<String>,
+    /// Optional webhook signing secret (secret).
     #[serde(default)]
     #[secret]
     pub webhook_secret: Option<String>,
@@ -536,8 +614,11 @@ impl ChannelConfig for ClawdTalkConfig {
 #[serde(rename_all = "lowercase")]
 pub enum VoiceProvider {
     #[default]
+    /// Twilio telephony provider.
     Twilio,
+    /// Telnyx telephony provider.
     Telnyx,
+    /// Plivo telephony provider.
     Plivo,
 }
 
@@ -565,24 +646,36 @@ fn default_max_call_duration() -> u64 {
 #[derive(Debug, Clone, Serialize, Deserialize, Configurable)]
 #[cfg_attr(feature = "schema-export", derive(schemars::JsonSchema))]
 #[prefix = "channels.voice-call"]
+/// Voice-call channel (Twilio/Telnyx/Plivo) configuration.
 pub struct VoiceCallConfig {
+    /// Whether the voice-call channel is enabled. Default: `false`.
     #[serde(default)]
     pub enabled: bool,
+    /// Telephony provider. Default: `twilio`.
     #[serde(default)]
     pub provider: VoiceProvider,
+    /// Provider account identifier.
     pub account_id: String,
+    /// Provider authentication token (secret).
     pub auth_token: String,
+    /// Source number for outbound calls.
     pub from_number: String,
+    /// Local port for inbound call webhooks. Default: `8090`.
     #[serde(default = "default_webhook_port")]
     pub webhook_port: u16,
+    /// Require explicit approval before placing outbound calls. Default: `true`.
     #[serde(default = "default_true")]
     pub require_outbound_approval: bool,
+    /// Record and log call transcriptions. Default: `true`.
     #[serde(default = "default_true")]
     pub transcription_logging: bool,
+    /// TTS voice identifier; `None` uses the provider default.
     #[serde(default)]
     pub tts_voice: Option<String>,
+    /// Maximum call duration (seconds). Default: `3600`.
     #[serde(default = "default_max_call_duration")]
     pub max_call_duration_secs: u64,
+    /// Public base URL for call webhooks; `None` derives from the gateway host.
     #[serde(default)]
     pub webhook_base_url: Option<String>,
 }

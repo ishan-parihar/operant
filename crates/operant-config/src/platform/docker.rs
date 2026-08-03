@@ -10,6 +10,7 @@ pub struct DockerRuntime {
 }
 
 impl DockerRuntime {
+    /// Create a Docker runtime from its configuration.
     pub fn new(config: DockerRuntimeConfig) -> Self {
         Self { config }
     }

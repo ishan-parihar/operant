@@ -1,3 +1,5 @@
+//! Provider section (`[providers]`) types: model profiles, routing, fallback.
+
 use operant_macros::Configurable;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -30,11 +32,13 @@ pub struct ProvidersConfig {
 }
 
 impl ProvidersConfig {
+    /// Resolve the fallback provider entry by name, if configured.
     pub fn fallback_provider(&self) -> Option<&ModelProviderConfig> {
         self.fallback
             .as_deref()
             .and_then(|name| self.models.get(name))
     }
+    /// Mutably resolve the fallback provider entry by name, if configured.
     pub fn fallback_provider_mut(&mut self) -> Option<&mut ModelProviderConfig> {
         let name = self.fallback.clone()?;
         self.models.get_mut(&name)

@@ -492,6 +492,8 @@ pub struct OnboardStateConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, Configurable)]
 #[cfg_attr(feature = "schema-export", derive(schemars::JsonSchema))]
 #[prefix = "workspace"]
+/// Multi-workspace profile configuration: each named engagement gets its own
+/// memory, secrets, and audit directories.
 pub struct WorkspaceConfig {
     /// Turn on multi-workspace profiles — each named engagement gets its own memory, secrets, and audit directories so work for one client/project never bleeds into another. Leave off for single-workspace mode where everything lives under `~/.operant/workspace`.
     #[serde(default)]
@@ -847,9 +849,13 @@ fn default_max_tool_iterations() -> usize {
 #[cfg_attr(feature = "schema-export", derive(schemars::JsonSchema))]
 pub enum HardwareTransport {
     #[default]
+    /// No hardware transport.
     None,
+    /// Native host device access.
     Native,
+    /// Serial-port transport.
     Serial,
+    /// Probe-based discovery transport.
     Probe,
 }
 
@@ -2982,6 +2988,7 @@ pub struct WebFetchConfig {
 #[serde(rename_all = "lowercase")]
 pub enum FirecrawlMode {
     #[default]
+    /// Scrape a single page via the `/scrape` endpoint.
     Scrape,
     /// Reserved for future multi-page crawl support. Accepted in config
     /// deserialization to avoid breaking existing files, but not yet
@@ -4318,28 +4325,34 @@ impl Default for ProxyConfig {
 }
 
 impl ProxyConfig {
+    /// All service keys the proxy can be scoped to.
     pub fn supported_service_keys() -> &'static [&'static str] {
         SUPPORTED_PROXY_SERVICE_KEYS
     }
 
+    /// All service selectors the proxy can be scoped to.
     pub fn supported_service_selectors() -> &'static [&'static str] {
         SUPPORTED_PROXY_SERVICE_SELECTORS
     }
 
+    /// `true` when any of `http_proxy` / `https_proxy` / `all_proxy` is set.
     pub fn has_any_proxy_url(&self) -> bool {
         normalize_proxy_url_option(self.http_proxy.as_deref()).is_some()
             || normalize_proxy_url_option(self.https_proxy.as_deref()).is_some()
             || normalize_proxy_url_option(self.all_proxy.as_deref()).is_some()
     }
 
+    /// The `services` list after normalization (trim, dedupe, lowercase).
     pub fn normalized_services(&self) -> Vec<String> {
         normalize_service_list(self.services.clone())
     }
 
+    /// The `no_proxy` list after normalization (trim, dedupe, lowercase).
     pub fn normalized_no_proxy(&self) -> Vec<String> {
         normalize_no_proxy_list(self.no_proxy.clone())
     }
 
+    /// Validate proxy URLs and service selectors, bailing on invalid values.
     pub fn validate(&self) -> Result<()> {
         for (field, value) in [
             ("http_proxy", self.http_proxy.as_deref()),
@@ -4377,6 +4390,7 @@ impl ProxyConfig {
         Ok(())
     }
 
+    /// `true` when this proxy config applies to the given service key.
     pub fn should_apply_to_service(&self, service_key: &str) -> bool {
         if !self.enabled {
             return false;
@@ -4398,6 +4412,7 @@ impl ProxyConfig {
         }
     }
 
+    /// Apply proxy settings to a `reqwest` builder for the given service.
     pub fn apply_to_reqwest_builder(
         &self,
         mut builder: reqwest::ClientBuilder,
@@ -4457,6 +4472,7 @@ impl ProxyConfig {
         builder
     }
 
+    /// Export proxy settings into the process environment (`HTTP_PROXY`, ...).
     pub fn apply_to_process_env(&self) {
         set_proxy_env_pair("HTTP_PROXY", self.http_proxy.as_deref());
         set_proxy_env_pair("HTTPS_PROXY", self.https_proxy.as_deref());
@@ -4469,6 +4485,7 @@ impl ProxyConfig {
         set_proxy_env_pair("NO_PROXY", no_proxy_joined.as_deref());
     }
 
+    /// Clear proxy environment variables previously set via [`ProxyConfig::apply_to_process_env`].
     pub fn clear_process_env() {
         clear_proxy_env_pair("HTTP_PROXY");
         clear_proxy_env_pair("HTTPS_PROXY");
@@ -4718,6 +4735,7 @@ fn set_runtime_proxy_cached_client(cache_key: String, client: reqwest::Client) {
     }
 }
 
+/// Store the runtime proxy configuration, invalidating the client cache.
 pub fn set_runtime_proxy_config(config: ProxyConfig) {
     match runtime_proxy_state().write() {
         Ok(mut guard) => {
@@ -4731,6 +4749,7 @@ pub fn set_runtime_proxy_config(config: ProxyConfig) {
     clear_runtime_proxy_client_cache();
 }
 
+/// Return the current runtime proxy configuration (defaults when unset).
 pub fn runtime_proxy_config() -> ProxyConfig {
     match runtime_proxy_state().read() {
         Ok(guard) => guard.clone(),
@@ -4738,6 +4757,7 @@ pub fn runtime_proxy_config() -> ProxyConfig {
     }
 }
 
+/// Apply the runtime proxy configuration to a `reqwest` builder.
 pub fn apply_runtime_proxy_to_builder(
     builder: reqwest::ClientBuilder,
     service_key: &str,
@@ -4745,6 +4765,7 @@ pub fn apply_runtime_proxy_to_builder(
     runtime_proxy_config().apply_to_reqwest_builder(builder, service_key)
 }
 
+/// Build (and cache) a proxied `reqwest` client for the given service.
 pub fn build_runtime_proxy_client(service_key: &str) -> reqwest::Client {
     let cache_key = runtime_proxy_cache_key(service_key, None, None);
     if let Some(client) = runtime_proxy_cached_client(&cache_key) {
@@ -4760,6 +4781,7 @@ pub fn build_runtime_proxy_client(service_key: &str) -> reqwest::Client {
     client
 }
 
+/// Build (and cache) a proxied `reqwest` client with explicit timeouts.
 pub fn build_runtime_proxy_client_with_timeouts(
     service_key: &str,
     timeout_secs: u64,
@@ -5779,6 +5801,7 @@ fn default_runtime_trace_max_entries() -> usize {
 #[derive(Debug, Clone, Serialize, Deserialize, Configurable)]
 #[cfg_attr(feature = "schema-export", derive(schemars::JsonSchema))]
 #[prefix = "hooks"]
+/// Lifecycle hook configuration for tool-invocation side effects.
 pub struct HooksConfig {
     /// Enable lifecycle hook execution.
     ///
@@ -5787,6 +5810,7 @@ pub struct HooksConfig {
     pub enabled: bool,
     #[serde(default)]
     #[nested]
+    /// Builtin hook handlers (command logger, webhook audit, ...).
     pub builtin: BuiltinHooksConfig,
 }
 
@@ -5802,6 +5826,7 @@ impl Default for HooksConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, Default, Configurable)]
 #[cfg_attr(feature = "schema-export", derive(schemars::JsonSchema))]
 #[prefix = "hooks.builtin"]
+/// Toggles for the builtin hook handlers.
 pub struct BuiltinHooksConfig {
     /// Enable the command-logger hook (logs tool calls for auditing).
     pub command_logger: bool,
@@ -6523,14 +6548,22 @@ pub struct CronJobDecl {
 pub enum CronScheduleDecl {
     /// Classic cron expression.
     Cron {
+        /// Cron expression in standard five-field form.
         expr: String,
+        /// Optional timezone for the expression (IANA name).
         #[serde(default)]
         tz: Option<String>,
     },
     /// Interval in milliseconds.
-    Every { every_ms: u64 },
+    Every {
+        /// Repeat interval in milliseconds.
+        every_ms: u64,
+    },
     /// One-shot at an RFC 3339 timestamp.
-    At { at: String },
+    At {
+        /// RFC 3339 timestamp of the single run.
+        at: String,
+    },
 }
 
 /// Delivery configuration for declarative cron jobs.
@@ -6639,6 +6672,7 @@ impl Default for TunnelConfig {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, Configurable)]
 #[cfg_attr(feature = "schema-export", derive(schemars::JsonSchema))]
 #[prefix = "tunnel.cloudflare"]
+/// Cloudflare Tunnel configuration (quick tunnel via `cloudflared`).
 pub struct CloudflareTunnelConfig {
     /// Cloudflare Tunnel token (from Zero Trust dashboard)
     #[serde(default)]
@@ -6649,6 +6683,7 @@ pub struct CloudflareTunnelConfig {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, Configurable)]
 #[cfg_attr(feature = "schema-export", derive(schemars::JsonSchema))]
 #[prefix = "tunnel.tailscale"]
+/// Tailscale Serve/Funnel tunnel configuration.
 pub struct TailscaleTunnelConfig {
     /// Use Tailscale Funnel (public internet) vs Serve (tailnet only)
     #[serde(default)]
@@ -6661,6 +6696,7 @@ pub struct TailscaleTunnelConfig {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, Configurable)]
 #[cfg_attr(feature = "schema-export", derive(schemars::JsonSchema))]
 #[prefix = "tunnel.ngrok"]
+/// ngrok tunnel configuration.
 pub struct NgrokTunnelConfig {
     /// ngrok auth token
     #[serde(default)]
@@ -6718,6 +6754,7 @@ impl Default for OpenVpnTunnelConfig {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, Configurable)]
 #[cfg_attr(feature = "schema-export", derive(schemars::JsonSchema))]
 #[prefix = "tunnel.pinggy"]
+/// Pinggy tunnel configuration.
 pub struct PinggyTunnelConfig {
     /// Pinggy access token (optional — free tier works without one).
     #[serde(default)]
@@ -6731,6 +6768,7 @@ pub struct PinggyTunnelConfig {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, Configurable)]
 #[cfg_attr(feature = "schema-export", derive(schemars::JsonSchema))]
 #[prefix = "tunnel.custom"]
+/// Custom command-driven tunnel configuration.
 pub struct CustomTunnelConfig {
     /// Command template to start the tunnel. Use {port} and {host} placeholders.
     /// Example: "bore local {port} --to bore.pub"
@@ -7116,6 +7154,7 @@ impl ChannelsConfig {
         ]
     }
 
+    /// All channel configs (including webhook) as `(handle, enabled)` pairs.
     pub fn channels(&self) -> Vec<(Box<dyn super::traits::ConfigHandle>, bool)> {
         let mut ret = self.channels_except_webhook();
         ret.push((
@@ -7640,6 +7679,7 @@ impl ChannelConfig for MatrixConfig {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, Configurable)]
 #[cfg_attr(feature = "schema-export", derive(schemars::JsonSchema))]
 #[prefix = "channels.signal"]
+/// Signal messenger channel configuration (via signal-cli HTTP daemon).
 pub struct SignalConfig {
     /// Whether this channel is active (must be explicitly enabled). Default: false.
     #[serde(default)]
@@ -7812,6 +7852,7 @@ impl ChannelConfig for WhatsAppConfig {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, Configurable)]
 #[cfg_attr(feature = "schema-export", derive(schemars::JsonSchema))]
 #[prefix = "channels.linq"]
+/// Linq SMS channel configuration.
 pub struct LinqConfig {
     /// Whether this channel is active (must be explicitly enabled). Default: false.
     #[serde(default)]
@@ -8135,7 +8176,9 @@ fn default_irc_port() -> u16 {
 #[serde(rename_all = "lowercase")]
 pub enum LarkReceiveMode {
     #[default]
+    /// Persistent WebSocket long-connection; no public URL required.
     Websocket,
+    /// HTTP callback server; requires a public HTTPS endpoint.
     Webhook,
 }
 
@@ -9224,23 +9267,32 @@ pub fn default_nostr_relays() -> Vec<String> {
 #[cfg_attr(feature = "schema-export", derive(schemars::JsonSchema))]
 #[prefix = "notion"]
 pub struct NotionConfig {
+    /// Whether the Notion integration is enabled. Default: `false`.
     #[serde(default)]
     pub enabled: bool,
+    /// Notion integration API key (secret).
     #[serde(default)]
     #[secret]
     pub api_key: String,
+    /// Notion database ID the agent polls for tasks.
     #[serde(default)]
     pub database_id: String,
+    /// Poll interval in seconds. Default: `5`.
     #[serde(default = "default_notion_poll_interval")]
     pub poll_interval_secs: u64,
+    /// Database property holding task status. Default: `"Status"`.
     #[serde(default = "default_notion_status_prop")]
     pub status_property: String,
+    /// Database property receiving task inputs. Default: `"Input"`.
     #[serde(default = "default_notion_input_prop")]
     pub input_property: String,
+    /// Database property receiving task results. Default: `"Result"`.
     #[serde(default = "default_notion_result_prop")]
     pub result_property: String,
+    /// Maximum concurrent task executions. Default: `1`.
     #[serde(default = "default_notion_max_concurrent")]
     pub max_concurrent: usize,
+    /// Recover stale in-flight tasks on startup. Default: `false`.
     #[serde(default = "default_notion_recover_stale")]
     pub recover_stale: bool,
 }
@@ -9387,6 +9439,7 @@ impl Default for CloudOpsConfig {
 }
 
 impl CloudOpsConfig {
+    /// Validate the cloud-ops config, bailing on empty required fields when enabled.
     pub fn validate(&self) -> Result<()> {
         if self.enabled {
             if self.default_cloud.trim().is_empty() {
@@ -9797,6 +9850,7 @@ async fn load_persisted_workspace_dirs(
     Ok(Some((config_dir.clone(), config_dir.join("workspace"))))
 }
 
+/// Persist the active workspace's config-dir marker file to disk.
 pub async fn persist_active_workspace_config_dir(config_dir: &Path) -> Result<()> {
     persist_active_workspace_config_dir_in(config_dir, &default_config_dir()?).await
 }
@@ -9872,6 +9926,8 @@ async fn persist_active_workspace_config_dir_in(
     Ok(())
 }
 
+/// Resolve the `(config_dir, workspace_dir)` pair for a workspace directory,
+/// preferring a local `config.toml` next to the workspace when present.
 pub fn resolve_config_dir_for_workspace(workspace_dir: &Path) -> (PathBuf, PathBuf) {
     let workspace_config_dir = workspace_dir.to_path_buf();
     if workspace_config_dir.join("config.toml").exists() {
@@ -10216,6 +10272,7 @@ impl Config {
             .collect()
     }
 
+    /// Load the on-disk config, or initialize a fresh default config when none exists.
     pub async fn load_or_init() -> Result<Self> {
         let (default_operant_dir, default_workspace_dir) = default_config_and_workspace_dirs()?;
 
@@ -11768,6 +11825,7 @@ impl Config {
         Ok(resolved)
     }
 
+    /// Persist this config to disk, encrypting secrets and syncing to disk.
     pub async fn save(&self) -> Result<()> {
         // Encrypt secrets before serialization
         let mut config_to_save = self.clone();

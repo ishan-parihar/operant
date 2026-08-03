@@ -12,9 +12,13 @@ pub struct SecretFieldInfo {
 /// Runtime type classification for config property values.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PropKind {
+    /// A string field.
     String,
+    /// A boolean field.
     Bool,
+    /// An integer field.
     Integer,
+    /// A float field.
     Float,
     /// An enum or other serde-serializable type (parsed as TOML string).
     Enum,
@@ -39,6 +43,7 @@ pub enum PropKind {
 /// Scalars have explicit impls; the blanket impl catches everything
 /// else as `PropKind::Enum`.
 pub trait HasPropKind {
+    /// The runtime property-kind classification for this type.
     const PROP_KIND: PropKind;
 }
 
@@ -99,6 +104,7 @@ pub struct PropFieldInfo {
 }
 
 impl PropFieldInfo {
+    /// `true` when this field is an enum-typed property with known variants.
     pub fn is_enum(&self) -> bool {
         self.enum_variants.is_some()
     }
@@ -137,6 +143,7 @@ pub enum MapKeyKind {
     feature = "schema-export",
     derive(serde::Serialize, schemars::JsonSchema)
 )]
+/// Metadata describing an addable map/list section for the dashboard `+ Add` UI.
 pub struct MapKeySection {
     /// Dotted section path, e.g. `providers.models`, `mcp.servers`.
     pub path: &'static str,
@@ -176,7 +183,9 @@ pub struct NestedOptionEntry {
 /// integration is "active" iff a named bool field on the struct is `true`.
 #[derive(Debug, Clone, Copy)]
 pub struct IntegrationDescriptor {
+    /// Display name of the integration.
     pub display_name: &'static str,
+    /// One-line summary of the integration.
     pub description: &'static str,
     /// Free-form category label (e.g. `"ToolsAutomation"`). The
     /// integrations registry maps this string to its own
@@ -198,8 +207,11 @@ pub trait ChannelConfig {
 
 // Maybe there should be a `&self` as parameter for custom channel/info or what...
 
+/// Runtime handle describing a config section (name + description).
 pub trait ConfigHandle {
+    /// Human-readable name of the section.
     fn name(&self) -> &'static str;
+    /// Short description of the section.
     fn desc(&self) -> &'static str;
 }
 
@@ -207,11 +219,14 @@ pub trait ConfigHandle {
 /// (e.g. `[configured]` / `[not set]`) that backends render next to the label.
 #[derive(Debug, Clone)]
 pub struct SelectItem {
+    /// Label rendered for the option.
     pub label: String,
+    /// Optional status badge (`[configured]` / `[not set]`).
     pub badge: Option<String>,
 }
 
 impl SelectItem {
+    /// Build an item with no badge.
     pub fn new(label: impl Into<String>) -> Self {
         Self {
             label: label.into(),
@@ -219,6 +234,7 @@ impl SelectItem {
         }
     }
 
+    /// Build an item with a status badge.
     pub fn with_badge(label: impl Into<String>, badge: impl Into<String>) -> Self {
         Self {
             label: label.into(),
@@ -232,7 +248,9 @@ impl SelectItem {
 /// the backend's back key (Esc on ratatui / dialoguer). Callers rewind.
 #[derive(Debug, Clone)]
 pub enum Answer<T> {
+    /// The user supplied a concrete value.
     Value(T),
+    /// The user pressed the back key; callers rewind to the previous prompt.
     Back,
 }
 
@@ -251,8 +269,10 @@ pub enum Answer<T> {
 /// calls `config.set_prop` unless the new value differs from `current`.
 #[async_trait::async_trait]
 pub trait OnboardUi: Send {
+    /// Ask a yes/no question with a default; returns the user's choice.
     async fn confirm(&mut self, prompt: &str, default: bool) -> anyhow::Result<Answer<bool>>;
 
+    /// Ask for free-form text; `current` pre-populates the default value.
     async fn string(
         &mut self,
         prompt: &str,
@@ -268,6 +288,7 @@ pub trait OnboardUi: Send {
         has_current: bool,
     ) -> anyhow::Result<Answer<Option<String>>>;
 
+    /// Ask the user to pick one of `items`; `current` pre-selects an index.
     async fn select(
         &mut self,
         prompt: &str,
@@ -275,6 +296,7 @@ pub trait OnboardUi: Send {
         current: Option<usize>,
     ) -> anyhow::Result<Answer<usize>>;
 
+    /// Open an editor pre-filled with `initial` text; returns the edited result.
     async fn editor(&mut self, hint: &str, initial: &str) -> anyhow::Result<Answer<String>>;
 
     /// Announce a new section or subsection. `level == 1` = section
@@ -283,7 +305,10 @@ pub trait OnboardUi: Send {
     /// prompt remains anchored to its phase — rendered like Markdown
     /// headings. `level == 1` resets any prior subsection.
     fn heading(&mut self, level: u8, text: &str);
+    /// Display a non-blocking informational note.
     fn note(&mut self, msg: &str);
+    /// Display a status/state line.
     fn status(&mut self, msg: &str);
+    /// Display a warning message.
     fn warn(&mut self, msg: &str);
 }

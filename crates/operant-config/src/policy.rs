@@ -9,15 +9,20 @@ pub use crate::autonomy::AutonomyLevel;
 /// Risk score for shell command execution.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CommandRiskLevel {
+    /// Read-only or benign command.
     Low,
+    /// State-changing command (git commit, npm install, ...).
     Medium,
+    /// Destructive or exfiltration-capable command (rm, curl, ssh, ...).
     High,
 }
 
 /// Classifies whether a tool operation is read-only or side-effecting.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToolOperation {
+    /// Read-only operation with no side effects (bypasses autonomy/rate gates).
     Read,
+    /// Side-effecting operation (requires non-readonly autonomy and action budget).
     Act,
 }
 
@@ -35,6 +40,7 @@ impl Default for ActionTracker {
 }
 
 impl ActionTracker {
+    /// Create an empty sliding-window tracker.
     pub fn new() -> Self {
         Self {
             actions: Mutex::new(Vec::new()),
@@ -164,18 +170,31 @@ impl Default for PerSenderTracker {
 /// Security policy enforced on all tool executions
 #[derive(Debug, Clone)]
 pub struct SecurityPolicy {
+    /// Autonomy level governing approval requirements.
     pub autonomy: AutonomyLevel,
+    /// Workspace root that relative paths resolve against.
     pub workspace_dir: PathBuf,
+    /// Restrict file access to the workspace and allowed roots.
     pub workspace_only: bool,
+    /// Allowlisted shell command names/paths (wildcard `*` opts out).
     pub allowed_commands: Vec<String>,
+    /// Path prefixes that are always blocked.
     pub forbidden_paths: Vec<String>,
+    /// Additional absolute roots permitted outside the workspace.
     pub allowed_roots: Vec<PathBuf>,
+    /// Per-sender action budget per hour.
     pub max_actions_per_hour: u32,
+    /// Maximum agent spend in cents per day.
     pub max_cost_per_day_cents: u32,
+    /// Require explicit approval for medium-risk commands under Supervised.
     pub require_approval_for_medium_risk: bool,
+    /// Block high-risk commands unless explicitly allowlisted.
     pub block_high_risk_commands: bool,
+    /// Environment variables passed through to shell tool executions.
     pub shell_env_passthrough: Vec<String>,
+    /// Per-command timeout in seconds.
     pub shell_timeout_secs: u64,
+    /// Rate-limit tracker shared across senders.
     pub tracker: PerSenderTracker,
 }
 
@@ -1574,6 +1593,8 @@ impl SecurityPolicy {
         )
     }
 
+    /// `true` when `resolved` is an Operant runtime config/state file that
+    /// the agent must not modify directly.
     pub fn is_runtime_config_path(&self, resolved: &Path) -> bool {
         let Some(config_dir) = self.runtime_config_dir() else {
             return false;
@@ -1596,6 +1617,7 @@ impl SecurityPolicy {
             || file_name.starts_with(".active_workspace.toml.tmp-")
     }
 
+    /// Message explaining that a runtime config/state file is off-limits.
     pub fn runtime_config_violation_message(&self, resolved: &Path) -> String {
         format!(
             "Refusing to modify Operant runtime config/state file: {}. Use dedicated config tools or edit it manually outside the agent loop.",
@@ -1603,6 +1625,7 @@ impl SecurityPolicy {
         )
     }
 
+    /// Message explaining a path escape violation with remediation guidance.
     pub fn resolved_path_violation_message(&self, resolved: &Path) -> String {
         let guidance = if self.allowed_roots.is_empty() {
             "Add the directory to [autonomy].allowed_roots (for example: allowed_roots = [\"/absolute/path\"]), or move the file into the workspace."

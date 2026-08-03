@@ -35,6 +35,8 @@ use toml_edit::DocumentMut;
 
 use super::schema::ModelProviderConfig;
 
+/// Current on-disk config schema version. Bump when props are renamed,
+/// moved, or removed (see module docs).
 pub const CURRENT_SCHEMA_VERSION: u32 = 2;
 
 /// Top-level keys from V1 that are consumed by V1Compat during migration.
@@ -62,6 +64,7 @@ pub const V1_LEGACY_KEYS: &[&str] = &[
 /// captured here.
 #[derive(Deserialize)]
 pub struct V1Compat {
+    /// Current-version fields consumed by the flattened `Config` deserialization.
     #[serde(flatten)]
     pub config: super::schema::Config,
 

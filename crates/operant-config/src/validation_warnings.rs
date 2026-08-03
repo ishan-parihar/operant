@@ -41,6 +41,7 @@ pub struct ValidationWarning {
 }
 
 impl ValidationWarning {
+    /// Construct a warning from its code, message, and dotted property path.
     pub fn new(
         code: impl Into<String>,
         message: impl Into<String>,

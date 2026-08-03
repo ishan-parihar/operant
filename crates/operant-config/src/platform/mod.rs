@@ -1,4 +1,8 @@
+//! Runtime adapters (native / docker) implementing `RuntimeAdapter`.
+
+/// Docker container runtime adapter.
 pub mod docker;
+/// Native host runtime adapter.
 pub mod native;
 
 pub use docker::DockerRuntime;
@@ -7,6 +11,7 @@ pub use operant_api::runtime_traits::RuntimeAdapter;
 
 use crate::schema::RuntimeConfig;
 
+/// Instantiate the runtime adapter named by `config.kind` (`native` or `docker`).
 pub fn create_runtime(config: &RuntimeConfig) -> anyhow::Result<Box<dyn RuntimeAdapter>> {
     match config.kind.as_str() {
         "native" => Ok(Box::new(NativeRuntime::new())),
