@@ -650,19 +650,34 @@ impl Database {
         content: &str,
         timestamp: &str,
     ) -> Result<()> {
-        let conn = self.lock_conn()?;
-        conn.execute(
+        let mut conn = self.lock_conn()?;
+        let tx = conn
+            .transaction()
+            .map_err(|e| Error::Agent(format!("Failed to start transaction: {}", e)))?;
+        tx.execute(
             "INSERT INTO messages (session_id, role, content, timestamp) VALUES (?1, ?2, ?3, ?4)",
             params![session_id, role, content, timestamp],
         )
         .map_err(|e| Error::Agent(format!("Failed to save message: {}", e)))?;
+        // Mirror hermes append_message: increment the session's message_count
+        // on every append.
+        tx.execute(
+            "UPDATE sessions SET message_count = message_count + 1 WHERE id = ?1",
+            params![session_id],
+        )
+        .map_err(|e| Error::Agent(format!("Failed to update session message_count: {}", e)))?;
+        tx.commit()
+            .map_err(|e| Error::Agent(format!("Failed to commit message: {}", e)))?;
         Ok(())
     }
 
     /// Save a message with full Python-compatible fields.
     pub fn save_message_full(&self, message: &MessageData) -> Result<()> {
-        let conn = self.lock_conn()?;
-        conn.execute(
+        let mut conn = self.lock_conn()?;
+        let tx = conn
+            .transaction()
+            .map_err(|e| Error::Agent(format!("Failed to start transaction: {}", e)))?;
+        tx.execute(
             "INSERT INTO messages (
                 session_id, role, content, tool_call_id, tool_calls, tool_name,
                 timestamp, token_count, finish_reason, reasoning, reasoning_content,
@@ -692,6 +707,32 @@ impl Database {
             ],
         )
         .map_err(|e| Error::Agent(format!("Failed to save message: {}", e)))?;
+        // Mirror hermes append_message: message_count += 1 on every append, and
+        // tool_call_count += num_tool_calls when the message carries tool calls.
+        let num_tool_calls = match message
+            .tool_calls
+            .as_ref()
+            .and_then(|json| serde_json::from_str::<serde_json::Value>(json).ok())
+        {
+            Some(v) => v.as_array().map_or(0, |arr| arr.len() as i64),
+            None => 0,
+        };
+        if num_tool_calls > 0 {
+            tx.execute(
+                "UPDATE sessions SET message_count = message_count + 1,
+                       tool_call_count = tool_call_count + ?1 WHERE id = ?2",
+                params![num_tool_calls, message.session_id],
+            )
+            .map_err(|e| Error::Agent(format!("Failed to update session counters: {}", e)))?;
+        } else {
+            tx.execute(
+                "UPDATE sessions SET message_count = message_count + 1 WHERE id = ?1",
+                params![message.session_id],
+            )
+            .map_err(|e| Error::Agent(format!("Failed to update message_count: {}", e)))?;
+        }
+        tx.commit()
+            .map_err(|e| Error::Agent(format!("Failed to commit message: {}", e)))?;
         Ok(())
     }
 
@@ -2036,6 +2077,43 @@ mod tests {
         // Count
         let count = db.get_session_count().unwrap();
         assert!(count >= 1);
+    }
+
+    #[test]
+    fn test_session_message_counters_increment() {
+        let db = test_db();
+        let session_id = "counter-session";
+
+        db.save_session(
+            session_id,
+            Some("counters"),
+            "test",
+            "2024-01-01T00:00:00Z",
+            "2024-01-01T00:00:00Z",
+        )
+        .unwrap();
+
+        db.save_message(session_id, "user", "hello", "2024-01-01T00:00:01Z")
+            .unwrap();
+        db.save_message(session_id, "assistant", "hi", "2024-01-01T00:00:02Z")
+            .unwrap();
+
+        let mut msg = MessageData {
+            session_id: session_id.to_string(),
+            role: "assistant".to_string(),
+            content: Some("tool call".to_string()),
+            timestamp: "2024-01-01T00:00:03Z".to_string(),
+            tool_calls: Some(r#"[{"id":"call_1"},{"id":"call_2"}]"#.to_string()),
+            ..Default::default()
+        };
+        db.save_message_full(&msg).unwrap();
+
+        let sessions = db.get_recent_sessions(50).unwrap();
+        let found = sessions.iter().find(|s| s.id == session_id).unwrap();
+        assert_eq!(
+            found.message_count, 3,
+            "message_count must increment per append (hermes parity)"
+        );
     }
 
     #[test]
