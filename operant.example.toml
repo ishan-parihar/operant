@@ -39,6 +39,10 @@ session_reset = "never"
 #   { model = "gpt-4o-mini" },
 #   { model = "gpt-3.5-turbo", max_retries = 2 },
 # ]
+# Turns between self-improvement memory reviews (0 = disabled, default 10)
+memory_nudge_interval = 10
+# Iterations between self-improvement skill nudges (0 = disabled, default 10)
+creation_nudge_interval = 10
 
 [autonomous]
 interval_secs = 300

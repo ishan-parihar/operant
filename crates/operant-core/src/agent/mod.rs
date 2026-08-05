@@ -118,8 +118,8 @@ impl From<&BehaviorSettings> for AgentConfig {
             fallback_on_errors: settings.fallback_on_errors,
             approval_mode: "smart".to_string(),
             record_trajectories: false,
-            skill_nudge_interval: 10,
-            memory_review_interval: 5,
+            skill_nudge_interval: settings.creation_nudge_interval,
+            memory_review_interval: settings.memory_nudge_interval,
             max_retries: 3,
         }
     }
@@ -184,6 +184,14 @@ pub enum AgentEvent {
         description: String,
         danger_explanation: String,
         input_preview: Option<String>,
+    },
+    /// Background self-evolution review completed (memory review or skill
+    /// nudge). Emitted from the spawned review task so the CLI/TUI can
+    /// surface the summary to the user — mirrors hermes-agent's
+    /// `💾 Self-improvement review: {summary}` print.
+    BackgroundReview {
+        /// The review summary text.
+        summary: String,
     },
 }
 
@@ -1062,6 +1070,59 @@ impl OperantAgent {
         if let Some(provider) = &self.memory_provider {
             provider.on_turn_start(iteration + 1, &user_query);
         }
+
+        // ── Self-evolution: memory review (per-turn cadence) ────────────
+        // Bump the memory turn counter once per user turn and check whether
+        // a background memory review should fire. Mirrors hermes-agent's
+        // turn_context.py which bumps `_turns_since_memory` once per turn
+        // (NOT per iteration) and gates on the memory tool being available
+        // plus a memory provider being present (`"memory" in
+        // valid_tool_names and agent._memory_store` in hermes) — so we never
+        // spawn a review when nothing can persist it.
+        //
+        // Scope the MutexGuard so it's dropped before the .await below.
+        let should_review_memory = {
+            let memory_tool_active = !self
+                .registry
+                .get_available_schemas_filtered(&[
+                    "memory_store".to_string(),
+                    "memory_search".to_string(),
+                    "memory_recall".to_string(),
+                ])
+                .await
+                .is_empty();
+            let memory_provider_present = self.memory_provider.is_some();
+            let memory_active = memory_tool_active && memory_provider_present;
+
+            if !memory_active {
+                false
+            } else {
+                let mut evo = self
+                    .evolution_state
+                    .lock()
+                    .expect("evolution_state mutex poisoned — programmer error");
+                let trigger = turn_finalizer::advance_memory_trigger(&mut evo);
+                if trigger.should_review_memory {
+                    info!(
+                        turns = trigger.turns_since_memory,
+                        interval = self.config.memory_review_interval,
+                        "Memory review triggered — spawning background review"
+                    );
+                }
+                // Persist evolution counters so the next run() can hydrate.
+                if self.persistent_session_id.is_some() {
+                    for (key, val) in evo.persist_counters() {
+                        let _ = self.database.set_session_metadata(&session_id, key, &val);
+                    }
+                }
+                trigger.should_review_memory
+            }
+        }; // MutexGuard dropped here — safe to .await
+        if should_review_memory {
+            self.spawn_background_review(&messages, &session_id, false, true)
+                .await;
+        }
+
         let mut retry_state = turn_retry_state::TurnRetryState::new(Some(self.config.max_retries));
 
         // Reset provider registry to primary at turn start.
@@ -1710,44 +1771,34 @@ impl OperantAgent {
                 obs.record_event(&ObserverEvent::TurnComplete);
             }
 
-            // ── Self-evolution: skill nudge + memory review + background review ──
-            // After each completed iteration, bump the skill counter and
-            // memory turn counter, then check if a background review should
-            // be triggered. This matches hermes-agent's turn_finalizer.py
-            // logic where _iters_since_skill and _turns_since_memory are
-            // checked after the tool-calling loop completes.
+            // ── Self-evolution: skill nudge (per-iteration cadence) ──
+            // After each completed iteration, bump the skill counter and check
+            // if a skill-review should fire. Mirrors hermes-agent's
+            // turn_finalizer.py logic where _iters_since_skill is checked after
+            // the tool-calling loop — bumped per *iteration*, NOT per turn.
+            // (Memory review is on a separate per-turn cadence handled at the
+            // turn boundary above.)
             //
             // When skill_manage is called, the skill counter resets immediately
-            // so the nudge window restarts from zero. Memory review fires
-            // on a separate turn-based cadence.
+            // so the nudge window restarts from zero.
             //
             // Scope the MutexGuard so it's dropped before the .await below.
             // A std::sync::MutexGuard held across an await point makes the
             // future !Send, which breaks tokio::spawn.
-            let (should_review_skills, should_review_memory) = {
+            let should_review_skills = {
                 let skill_manage_called = tool_names.iter().any(|n| n == "skill_manage");
                 let mut evo = self
                     .evolution_state
                     .lock()
                     .expect("evolution_state mutex poisoned — programmer error");
 
-                let trigger = turn_finalizer::check_and_advance_evolution_triggers(
-                    &mut evo,
-                    skill_manage_called,
-                );
+                let trigger = turn_finalizer::advance_skill_trigger(&mut evo, skill_manage_called);
 
                 if trigger.should_review_skills {
                     info!(
                         iters = trigger.iters_since_skill,
                         interval = self.config.skill_nudge_interval,
                         "Skill nudge triggered — spawning background review"
-                    );
-                }
-                if trigger.should_review_memory {
-                    info!(
-                        turns = trigger.turns_since_memory,
-                        interval = self.config.memory_review_interval,
-                        "Memory review triggered — spawning background review"
                     );
                 }
 
@@ -1759,16 +1810,11 @@ impl OperantAgent {
                     }
                 }
 
-                (trigger.should_review_skills, trigger.should_review_memory)
+                trigger.should_review_skills
             }; // MutexGuard dropped here — safe to .await
-            if should_review_skills || should_review_memory {
-                self.spawn_background_review(
-                    &messages,
-                    &session_id,
-                    should_review_skills,
-                    should_review_memory,
-                )
-                .await;
+            if should_review_skills {
+                self.spawn_background_review(&messages, &session_id, true, false)
+                    .await;
             }
 
             // ── /steer directive drain (iter-65) ──────────────────────────
@@ -2192,6 +2238,7 @@ impl OperantAgent {
 
         let registry_for_review = self.registry.clone();
         let callback = self.background_review_callback.clone();
+        let event_tx = self.event_tx.clone();
 
         // ── Prompt cache parity (Phase 2) ─────────────────────────
         // When the review runs on the SAME model (not routed), share the
@@ -2450,8 +2497,16 @@ If nothing needs updating, say 'Nothing to save.' and stop.\n\n{}",
                     "Background review completed with updates"
                 );
                 // Deliver via callback (TUI/Gateway wired via with_background_review_callback)
+                // AND via AgentEvent so TUI/CLI surfaces it without needing the callback wired.
                 if let Some(ref cb) = callback {
-                    cb(notification);
+                    cb(notification.clone());
+                }
+                if let Some(ref tx) = event_tx {
+                    let _ = tx
+                        .send(AgentEvent::BackgroundReview {
+                            summary: notification,
+                        })
+                        .await;
                 }
             } else {
                 debug!(

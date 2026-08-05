@@ -1096,6 +1096,9 @@ async fn chat_non_tui(config: &AppConfig, system_prompt: Option<&str>) -> Result
                 } => {
                     eprintln!("  Tool Error {}: {}", name, error);
                 }
+                AgentEvent::BackgroundReview { summary } => {
+                    println!("  \u{1f4be} Self-improvement review: {summary}");
+                }
                 _ => {}
             }
         }

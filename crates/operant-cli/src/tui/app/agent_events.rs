@@ -346,6 +346,10 @@ impl App {
                 // task. This event is a duplicate — skip it.
                 let _ = (tool_name, description);
             }
+
+            AgentEvent::BackgroundReview { summary } => {
+                self.push_system_message(summary, SystemMessageStyle::Info);
+            }
         }
     }
 }

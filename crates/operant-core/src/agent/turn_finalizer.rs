@@ -260,7 +260,17 @@ pub struct EvolutionTriggerResult {
 /// the counters and spawning the review daemon.
 ///
 /// Ported from hermes-agent's `turn_finalizer._check_evolution_triggers`.
-pub fn check_and_advance_evolution_triggers(
+/// Advance the skill-evolution counter and check its nudge threshold.
+///
+/// Called once per **iteration** of the tool loop (NOT per turn) — this
+/// mirrors hermes-agent, which bumps `_iters_since_skill` once per API
+/// iteration. The memory counter is untouched here; it is advanced by
+/// [`advance_memory_trigger`] at the turn boundary instead.
+///
+/// This function is pure (no side effects beyond mutating `evo`),
+/// making it easy to test. The caller is responsible for persisting
+/// the counters and spawning the review daemon.
+pub fn advance_skill_trigger(
     evo: &mut SelfEvolutionState,
     skill_manage_called: bool,
 ) -> EvolutionTriggerResult {
@@ -270,31 +280,73 @@ pub fn check_and_advance_evolution_triggers(
     } else {
         evo.bump_skill_counter();
     }
-    // Memory counter increments every completed turn regardless.
-    evo.bump_memory_counter();
 
     let should_review_skills = evo.should_review_skills();
-    let should_review_memory = evo.should_review_memory();
 
-    // Capture counter values BEFORE reset so the caller can log the
+    // Capture counter value BEFORE reset so the caller can log the
     // threshold value that triggered the review (matches hermes-agent's
     // log pattern where the counter is read before reset).
     let iters_at_fire = evo.iters_since_skill;
-    let turns_at_fire = evo.turns_since_memory_review;
 
-    // Reset counters that fired so the next window starts fresh.
+    // Reset the counter that fired so the next window starts fresh.
     if should_review_skills {
         evo.reset_skill_counter();
     }
+
+    EvolutionTriggerResult {
+        should_review_skills,
+        should_review_memory: false,
+        iters_since_skill: iters_at_fire,
+        turns_since_memory: evo.turns_since_memory_review,
+    }
+}
+
+/// Advance the memory-evolution counter and check its review threshold.
+///
+/// Called once per **user turn** at the turn boundary (NOT per iteration) —
+/// this mirrors hermes-agent's `turn_context.py` which bumps
+/// `_turns_since_memory` once per turn. The skill counter is untouched
+/// here; it is advanced by [`advance_skill_trigger`] per iteration.
+///
+/// This function is pure (no side effects beyond mutating `evo`),
+/// making it easy to test. The caller is responsible for persisting
+/// the counters and spawning the review daemon.
+pub fn advance_memory_trigger(evo: &mut SelfEvolutionState) -> EvolutionTriggerResult {
+    // Memory counter increments once per completed turn regardless.
+    evo.bump_memory_counter();
+
+    let should_review_memory = evo.should_review_memory();
+
+    // Capture counter value BEFORE reset so the caller can log the
+    // threshold value that triggered the review.
+    let turns_at_fire = evo.turns_since_memory_review;
+
+    // Reset the counter that fired so the next window starts fresh.
     if should_review_memory {
         evo.reset_memory_counter();
     }
 
     EvolutionTriggerResult {
-        should_review_skills,
+        should_review_skills: false,
         should_review_memory,
-        iters_since_skill: iters_at_fire,
+        iters_since_skill: evo.iters_since_skill,
         turns_since_memory: turns_at_fire,
+    }
+}
+
+/// Check and advance evolution counters after a completed turn.
+#[cfg(test)]
+pub fn check_and_advance_evolution_triggers(
+    evo: &mut SelfEvolutionState,
+    skill_manage_called: bool,
+) -> EvolutionTriggerResult {
+    let skill = advance_skill_trigger(evo, skill_manage_called);
+    let memory = advance_memory_trigger(evo);
+    EvolutionTriggerResult {
+        should_review_skills: skill.should_review_skills,
+        should_review_memory: memory.should_review_memory,
+        iters_since_skill: skill.iters_since_skill,
+        turns_since_memory: memory.turns_since_memory,
     }
 }
 
@@ -313,10 +365,9 @@ mod tests {
     #[test]
     fn test_evolution_trigger_no_fire() {
         let mut evo = make_evo(10, 5);
-        let result = check_and_advance_evolution_triggers(&mut evo, false);
+        let result = advance_memory_trigger(&mut evo);
         assert!(!result.should_review_skills);
         assert!(!result.should_review_memory);
-        assert_eq!(result.iters_since_skill, 1);
         assert_eq!(result.turns_since_memory, 1);
     }
 
@@ -325,11 +376,11 @@ mod tests {
         let mut evo = make_evo(3, 10);
         // Bump 2 times → no fire yet
         for _ in 0..2 {
-            let result = check_and_advance_evolution_triggers(&mut evo, false);
+            let result = advance_skill_trigger(&mut evo, false);
             assert!(!result.should_review_skills);
         }
         // 3rd bump → fires at threshold
-        let result = check_and_advance_evolution_triggers(&mut evo, false);
+        let result = advance_skill_trigger(&mut evo, false);
         assert!(result.should_review_skills);
         assert!(!result.should_review_memory);
         // iters_since_skill should be the threshold value (3), not 0
@@ -341,14 +392,35 @@ mod tests {
         let mut evo = make_evo(100, 3);
         // Bump 2 times → no fire yet
         for _ in 0..2 {
-            let result = check_and_advance_evolution_triggers(&mut evo, false);
+            let result = advance_memory_trigger(&mut evo);
             assert!(!result.should_review_memory);
         }
         // 3rd bump → fires at threshold
-        let result = check_and_advance_evolution_triggers(&mut evo, false);
+        let result = advance_memory_trigger(&mut evo);
         assert!(result.should_review_memory);
         assert!(!result.should_review_skills);
         assert_eq!(result.turns_since_memory, 3);
+    }
+
+    #[test]
+    fn test_evolution_cadence_isolation() {
+        // The two counters must advance independently: skill bumps do NOT
+        // move the memory counter and vice-versa. This is the load-bearing
+        // hermes parity — memory cadence is per-turn, skill is per-iteration.
+        let mut evo = make_evo(10, 10);
+        for _ in 0..7 {
+            advance_skill_trigger(&mut evo, false);
+        }
+        assert_eq!(evo.iters_since_skill, 7);
+        // Memory counter untouched by skill bumps.
+        assert_eq!(evo.turns_since_memory_review, 0);
+
+        let result = advance_memory_trigger(&mut evo);
+        assert!(!result.should_review_memory);
+        // Memory counter advanced by exactly one turn.
+        assert_eq!(result.turns_since_memory, 1);
+        // Skill counter untouched by the memory bump.
+        assert_eq!(evo.iters_since_skill, 7);
     }
 
     #[test]
@@ -356,11 +428,11 @@ mod tests {
         let mut evo = make_evo(5, 10);
         // Bump 4 times
         for _ in 0..4 {
-            check_and_advance_evolution_triggers(&mut evo, false);
+            advance_skill_trigger(&mut evo, false);
         }
         assert_eq!(evo.iters_since_skill, 4);
         // skill_manage resets the counter
-        check_and_advance_evolution_triggers(&mut evo, true);
+        advance_skill_trigger(&mut evo, true);
         assert_eq!(evo.iters_since_skill, 0);
         assert!(!evo.should_review_skills());
     }
@@ -368,16 +440,18 @@ mod tests {
     #[test]
     fn test_evolution_disabled_when_zero() {
         let mut evo = make_evo(0, 0);
-        let result = check_and_advance_evolution_triggers(&mut evo, false);
-        assert!(!result.should_review_skills);
-        assert!(!result.should_review_memory);
+        let skill = advance_skill_trigger(&mut evo, false);
+        assert!(!skill.should_review_skills);
+        let memory = advance_memory_trigger(&mut evo);
+        assert!(!memory.should_review_memory);
     }
 
     #[test]
     fn test_evolution_both_fire() {
         let mut evo = make_evo(1, 1);
-        let result = check_and_advance_evolution_triggers(&mut evo, false);
-        assert!(result.should_review_skills);
-        assert!(result.should_review_memory);
+        let skill = advance_skill_trigger(&mut evo, false);
+        assert!(skill.should_review_skills);
+        let memory = advance_memory_trigger(&mut evo);
+        assert!(memory.should_review_memory);
     }
 }

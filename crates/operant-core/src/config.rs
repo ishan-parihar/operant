@@ -177,10 +177,28 @@ pub struct BehaviorSettings {
     /// Default: `true`. Set to `false` to disable fallback behavior entirely.
     #[serde(default = "default_fallback_on_errors")]
     pub fallback_on_errors: bool,
+
+    /// Turns between memory reviews (0 = disabled). Mirrors hermes-agent's
+    /// `memory_nudge_interval` (default 10).
+    #[serde(default = "default_memory_nudge_interval")]
+    pub memory_nudge_interval: usize,
+
+    /// Iterations between skill nudges (0 = disabled). Mirrors hermes-agent's
+    /// `creation_nudge_interval` (default 10).
+    #[serde(default = "default_creation_nudge_interval")]
+    pub creation_nudge_interval: usize,
 }
 
 fn default_fallback_on_errors() -> bool {
     true
+}
+
+fn default_memory_nudge_interval() -> usize {
+    10
+}
+
+fn default_creation_nudge_interval() -> usize {
+    10
 }
 
 impl Default for BehaviorSettings {
@@ -202,6 +220,8 @@ impl Default for BehaviorSettings {
             max_consecutive_tool_only: 90,
             fallback_models: Vec::new(),
             fallback_on_errors: true,
+            memory_nudge_interval: 10,
+            creation_nudge_interval: 10,
         }
     }
 }

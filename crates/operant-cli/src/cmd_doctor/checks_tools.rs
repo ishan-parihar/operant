@@ -559,15 +559,28 @@ pub fn run_platform_checks(
             }
         }
         Some(other) => {
-            // Generic check
-            let generic_var = format!("{}_API_KEY", other.to_uppercase().replace('-', "_"));
-            if env_var(&generic_var).is_some() {
-                check_ok(&format!("{other} provider"), "(configured)");
-            } else {
-                check_warn(
-                    &format!("{other} provider"),
-                    &format!("(not configured — set {generic_var} in .env)"),
+            // Legacy/removed providers silently downgrade to builtin at runtime
+            // (build_memory_provider). Don't falsely instruct setting a dead API key.
+            let legacy = matches!(
+                other,
+                "tdg" | "hindsight" | "retaindb" | "local-vector" | "mem0"
+            );
+            if legacy {
+                check_ok(
+                    &format!("{other} provider (legacy/removed)"),
+                    "(using built-in memory — remove this key from config to avoid confusion)",
                 );
+            } else {
+                // Generic check
+                let generic_var = format!("{}_API_KEY", other.to_uppercase().replace('-', "_"));
+                if env_var(&generic_var).is_some() {
+                    check_ok(&format!("{other} provider"), "(configured)");
+                } else {
+                    check_warn(
+                        &format!("{other} provider"),
+                        &format!("(not configured — set {generic_var} in .env)"),
+                    );
+                }
             }
         }
     }
