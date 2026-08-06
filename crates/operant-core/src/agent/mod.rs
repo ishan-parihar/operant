@@ -11,7 +11,7 @@ pub mod insights;
 pub mod iteration_budget;
 pub mod learn_prompt;
 pub mod learning_graph;
-pub(crate) mod llm_compressor;
+pub mod llm_compressor;
 pub mod message_safety;
 pub mod provider_registry;
 pub mod skill_bundle;
@@ -287,6 +287,11 @@ pub struct OperantAgent {
     /// `background_review_callback` pattern. The TUI/Gateway wires this
     /// to surface "Self-improvement review: ..." messages to the user.
     background_review_callback: Option<Arc<dyn Fn(String) + Send + Sync>>,
+    /// Last model-reported prompt-token count for the current context.
+    /// Source of truth for compression gates: hermes keys its
+    /// ContextEngine.should_compress off real API usage, not a char/4 guess.
+    /// Atomic so the streaming path can update it lock-free.
+    last_prompt_tokens: std::sync::atomic::AtomicUsize,
 }
 
 /// Strip `<memory-context>` / `<long_term_memory>` XML tags from streaming
@@ -320,6 +325,10 @@ pub struct ToolPermissionRequest {
     pub danger_explanation: String,
     pub input_preview: Option<String>,
     pub response_tx: tokio::sync::oneshot::Sender<ToolPermissionResponse>,
+}
+
+fn prefer_reported(reported: usize, heuristic: usize) -> usize {
+    if reported > 0 { reported } else { heuristic }
 }
 
 impl OperantAgent {
@@ -367,6 +376,7 @@ impl OperantAgent {
             rotation_count: Arc::new(std::sync::RwLock::new(0)),
             provider_registry: None,
             background_review_callback: None,
+            last_prompt_tokens: std::sync::atomic::AtomicUsize::new(0),
         }
     }
 
@@ -415,6 +425,7 @@ impl OperantAgent {
             rotation_count: Arc::new(std::sync::RwLock::new(0)),
             provider_registry: None,
             background_review_callback: None,
+            last_prompt_tokens: std::sync::atomic::AtomicUsize::new(0),
         }
     }
 
@@ -1950,7 +1961,7 @@ impl OperantAgent {
         let reserve = 4096; // tokens reserved for the model's response
         let effective_budget = budget.saturating_sub(reserve);
 
-        let estimated_tokens = crate::context_management::estimate_total_tokens(&messages);
+        let estimated_tokens = self.estimate_current_tokens(&messages);
         let preflight_threshold = budget * PREFLIGHT_THRESHOLD_PERCENT as usize / 100;
         if estimated_tokens > preflight_threshold {
             info!(
@@ -2540,9 +2551,7 @@ If nothing needs updating, say 'Nothing to save.' and stop.\n\n{}",
             // Check whether LLM compression is warranted (cheap, no await)
             {
                 let guard = compressor.lock().await;
-                if !guard
-                    .should_compress(crate::context_management::estimate_total_tokens(&messages))
-                {
+                if !guard.should_compress(self.estimate_current_tokens(&messages)) {
                     // Under threshold — deterministic fallback
                     let budget = self.config.context_window;
                     return crate::context_management::manage_context(messages, budget, 4096);
@@ -2585,11 +2594,27 @@ If nothing needs updating, say 'Nothing to save.' and stop.\n\n{}",
         &self.client
     }
 
+    /// Token estimate for the compression gate. Prefers the model-reported
+    /// prompt-token count from the last request (source of truth, matching
+    /// hermes context_engine), falling back to the char/4 heuristic when no
+    /// request has completed yet this session.
+    fn estimate_current_tokens(&self, messages: &[Message]) -> usize {
+        prefer_reported(
+            self.last_prompt_tokens
+                .load(std::sync::atomic::Ordering::Relaxed),
+            crate::context_management::estimate_total_tokens(messages),
+        )
+    }
+
     /// Emit `AgentEvent::Usage`/`AgentEvent::Cost` for a completed request
     /// and accumulate the session-level cost total. Shared by
     /// `process_response` (non-streaming) and `process_stream` (streaming,
     /// iter-247) now that both paths can produce a `Usage`.
     async fn emit_usage_and_cost(&self, usage: &Usage) {
+        self.last_prompt_tokens.store(
+            usage.prompt_tokens.try_into().unwrap_or(0),
+            std::sync::atomic::Ordering::Relaxed,
+        );
         self.emit(AgentEvent::Usage {
             input_tokens: usage.prompt_tokens,
             output_tokens: usage.completion_tokens,
@@ -3622,6 +3647,14 @@ pub mod clients;
 mod tests {
     use super::*;
     use serial_test::serial;
+
+    #[test]
+    fn estimate_current_tokens_prefers_reported_usage() {
+        // heuristic is used when the model has not reported usage yet
+        assert_eq!(prefer_reported(0, 120), 120);
+        // real reported prompt-token count wins over the heuristic
+        assert_eq!(prefer_reported(5_000, 120), 5_000);
+    }
 
     #[serial]
     #[tokio::test]

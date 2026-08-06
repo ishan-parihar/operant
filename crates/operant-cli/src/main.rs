@@ -898,6 +898,7 @@ pub(crate) async fn create_runtime_agent(
         .unwrap_or_else(|| "openai".to_string());
     let model_client = create_model_client(&provider, config);
 
+    let context_window = core.agent_config.context_window;
     Ok({
         let flag = operant_core::interrupt::InterruptFlag::new();
         // Spawn a Ctrl-C handler that triggers the flag. The agent loop
@@ -921,7 +922,11 @@ pub(crate) async fn create_runtime_agent(
         )
         .with_memory_manager(core.memory_manager)
         .with_skill_manager(core.skill_manager)
-        .with_interrupt_flag(flag);
+        .with_interrupt_flag(flag)
+        .with_llm_compressor(operant_core::agent::llm_compressor::LlmCompressorConfig {
+            context_window,
+            ..Default::default()
+        });
         // Attach the long-term memory provider so turn/session hooks fire
         // (sync_turn, prefetch, on_session_end, ...). Closes audit gap F1.
         if let Some(provider) = core.memory_provider {
@@ -952,6 +957,7 @@ pub(crate) async fn create_agent_without_events(
         .unwrap_or_else(|| "openai".to_string());
     let model_client = create_model_client(&provider, config);
 
+    let context_window = core.agent_config.context_window;
     Ok({
         let flag = operant_core::interrupt::InterruptFlag::new();
         let handler_flag = flag.clone();
@@ -970,7 +976,11 @@ pub(crate) async fn create_agent_without_events(
         )
         .with_memory_manager(core.memory_manager)
         .with_skill_manager(core.skill_manager)
-        .with_interrupt_flag(flag);
+        .with_interrupt_flag(flag)
+        .with_llm_compressor(operant_core::agent::llm_compressor::LlmCompressorConfig {
+            context_window,
+            ..Default::default()
+        });
         // Attach the long-term memory provider so turn/session hooks fire
         // (sync_turn, prefetch, on_session_end, ...). Closes audit gap F1.
         if let Some(provider) = core.memory_provider {
@@ -996,6 +1006,11 @@ pub(crate) async fn load_memory_manager(
         .load_from_disk()
         .await
         .context("Failed to load long-term memory")?;
+
+    // Route the memory tools (memory_store/search/recall) through this injected
+    // manager so tool-writes land in the store that gets injected into the
+    // prompt (hermes parity — one coherent memory surface).
+    operant_core::tools::memory_tools::set_active_memory_manager(memory_manager.clone()).await;
 
     let cfg = operant_core::config::runtime_config();
     if cfg.memory.enabled && cfg.memory.provider != "builtin" && cfg.memory.provider != "disabled" {
