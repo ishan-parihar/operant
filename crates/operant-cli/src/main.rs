@@ -932,6 +932,7 @@ pub(crate) async fn create_runtime_agent(
         if let Some(provider) = core.memory_provider {
             agent = agent.with_memory_provider(provider);
         }
+        agent = attach_credential_pool(agent, &provider, config);
         agent
     })
 }
@@ -986,8 +987,45 @@ pub(crate) async fn create_agent_without_events(
         if let Some(provider) = core.memory_provider {
             agent = agent.with_memory_provider(provider);
         }
+        agent = attach_credential_pool(agent, &provider, config);
         agent
     })
+}
+
+/// Build and attach a credential pool when configured, seeded from the
+/// active provider's env var plus `client.additional_api_keys` (hermes's
+/// `load_pool` rotation vector). Without this, `try_rotate_credential`
+/// always sees `None` and multi-key rotation is dead even when enabled.
+fn attach_credential_pool(agent: OperantAgent, provider: &str, config: &AppConfig) -> OperantAgent {
+    if !config.credential_pool.enabled {
+        return agent;
+    }
+    let mut pool = operant_core::credential_pool::CredentialPool::new(provider);
+    pool.seed_from_env(&crate::cmd_auth::provider_env_var(provider));
+    for key in &config.client.additional_api_keys {
+        if !key.trim().is_empty() {
+            pool.add(operant_core::credential_pool::PooledCredential::new(
+                &format!("additional-{}", key.len()),
+                operant_core::credential_pool::AuthType::ApiKey,
+                key,
+                "config (client.additional_api_keys)",
+            ));
+        }
+    }
+    let strategy = config
+        .credential_pool
+        .strategies
+        .get(provider)
+        .or(config.credential_pool.strategy.as_ref());
+    if let Some(strategy) = strategy {
+        pool.set_strategy(operant_core::credential_pool::PoolStrategy::parse_strategy(strategy));
+    }
+    if pool.has_credentials() {
+        tracing::info!(provider = %provider, creds = pool.len(), "Attached credential pool");
+        agent.with_credential_pool(std::sync::Arc::new(pool))
+    } else {
+        agent
+    }
 }
 
 async fn load_repo_memory_manager() -> Result<(MemoryManager, Option<Arc<dyn MemoryProvider>>)> {

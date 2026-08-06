@@ -92,9 +92,10 @@ pub async fn register_builtin_tools(
     registry.register(MemoryStoreTool).await?;
     registry.register(MemorySearchTool).await?;
     registry.register(MemoryRecallTool).await?;
-    // Memory provider tools (agentmemory_*, tdg_*) are NOT registered here —
-    // they're registered conditionally when the matching memory provider is
-    // active (see register_agentmemory_tools in main.rs).
+    // Memory provider tools (agentmemory_*, tdg_*) are NOT registered here.
+    // The agent-visible memory tools (memory_store / memory_search / memory_recall)
+    // route through the ACTIVE_MEMORY_MANAGER global hook set by the CLI, so tool
+    // writes reach the injected MemoryManager store.
     registry.register(HttpRequestTool).await?;
     registry.register(DateTimeTool).await?;
     registry.register(TimestampTool).await?;
