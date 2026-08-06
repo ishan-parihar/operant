@@ -1135,6 +1135,12 @@ impl OperantAgent {
         }
 
         let mut retry_state = turn_retry_state::TurnRetryState::new(Some(self.config.max_retries));
+        // Empty-content retry counter. Mirrors hermes-agent's
+        // `empty_content_retries` / hermes-agent-ultra's inner_empty loop:
+        // when the model returns no visible text, no reasoning, and no tool
+        // calls, nudge it to continue instead of silently accepting an empty
+        // reply as the final answer.
+        let mut empty_content_retries: usize = 0;
 
         // Reset provider registry to primary at turn start.
         // Matches hermes-agent's restore_primary_runtime() pattern —
@@ -1390,6 +1396,45 @@ impl OperantAgent {
                 Ok((response_text, reasoning_text, tool_calls)) => {
                     // Reset retry state on successful LLM response.
                     retry_state.reset_on_success();
+
+                    // ── Empty-content recovery (hermes parity) ─────────────
+                    // If the model produced no visible text, no reasoning, and
+                    // no tool calls, it has emitted an empty turn (free-tier
+                    // providers do this intermittently). Rather than surfacing
+                    // an empty reply as the final answer, retry up to
+                    // max_retries times with the empty assistant turn appended
+                    // to the conversation, exactly like hermes-agent's
+                    // conversation_loop.py empty-retry loop and
+                    // hermes-agent-ultra's methods_run_stream.rs inner_empty
+                    // loop.
+                    let has_visible_text = !response_text.trim().is_empty();
+                    let has_reasoning = !reasoning_text.trim().is_empty();
+                    if tool_calls.is_empty()
+                        && !has_visible_text
+                        && !has_reasoning
+                        && empty_content_retries < self.config.max_retries
+                    {
+                        empty_content_retries += 1;
+                        warn!(
+                            "Empty assistant response — retrying ({}/{})",
+                            empty_content_retries, self.config.max_retries
+                        );
+                        self.emit(AgentEvent::Content {
+                            text: format!(
+                                "Empty assistant response — retrying ({}/{})",
+                                empty_content_retries, self.config.max_retries
+                            ),
+                        })
+                        .await;
+                        // Append the empty assistant turn so the model sees its
+                        // own empty reply and is nudged to actually respond.
+                        messages.push(Message::assistant(""));
+                        self.add_message(Message::assistant("")).await;
+                        // Refund the consumed iteration — the LLM call was
+                        // wasted on an empty turn.
+                        self.iteration_budget.refund();
+                        continue;
+                    }
                     // Add assistant message to conversation
                     // When tool calls are present, any text before them is typically
                     // model thinking/planning that shouldn't be shown to the user.

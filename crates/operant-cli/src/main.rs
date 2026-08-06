@@ -925,6 +925,8 @@ pub(crate) async fn create_runtime_agent(
         .with_interrupt_flag(flag)
         .with_llm_compressor(operant_core::agent::llm_compressor::LlmCompressorConfig {
             context_window,
+            enabled: config.agent.context_compression,
+            threshold_percent: config.agent.context_compression_threshold,
             ..Default::default()
         });
         // Attach the long-term memory provider so turn/session hooks fire
@@ -980,6 +982,8 @@ pub(crate) async fn create_agent_without_events(
         .with_interrupt_flag(flag)
         .with_llm_compressor(operant_core::agent::llm_compressor::LlmCompressorConfig {
             context_window,
+            enabled: config.agent.context_compression,
+            threshold_percent: config.agent.context_compression_threshold,
             ..Default::default()
         });
         // Attach the long-term memory provider so turn/session hooks fire
@@ -1018,7 +1022,9 @@ fn attach_credential_pool(agent: OperantAgent, provider: &str, config: &AppConfi
         .get(provider)
         .or(config.credential_pool.strategy.as_ref());
     if let Some(strategy) = strategy {
-        pool.set_strategy(operant_core::credential_pool::PoolStrategy::parse_strategy(strategy));
+        pool.set_strategy(operant_core::credential_pool::PoolStrategy::parse_strategy(
+            strategy,
+        ));
     }
     if pool.has_credentials() {
         tracing::info!(provider = %provider, creds = pool.len(), "Attached credential pool");

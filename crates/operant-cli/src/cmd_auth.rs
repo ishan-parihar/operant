@@ -526,7 +526,7 @@ fn key_hint(key: &str, n: usize) -> String {
 /// Resolve the canonical environment variable name for a provider.
 ///
 /// Falls back to `"{PROVIDER}_API_KEY"` (uppercased) for unknown providers.
-fn provider_env_var(provider: &str) -> String {
+pub(crate) fn provider_env_var(provider: &str) -> String {
     for (name, var, _, _) in PROVIDER_ENV_VARS {
         if name.eq_ignore_ascii_case(provider) {
             return var.to_string();
