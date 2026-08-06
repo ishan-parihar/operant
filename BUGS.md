@@ -35,6 +35,13 @@ Free-tier providers intermittently return empty assistant responses (no text, no
 - **Fix**: shared attach helper in both agent factories — seeds from provider env var + `client.additional_api_keys`, attaches when `config.credential_pool.enabled` and pool non-empty.
 - **Live-verified**: "Attached credential pool, provider: openai, creds: 2" + "Credential rotated — client API key updated, rotation_count: 1" on auth failure.
 
+## Round 4 (2026-08-06)
+
+### R4-1 — Empty-response retry ladder (FIXED 7960e614)
+Free-tier providers intermittently return empty assistant responses (no text, no reasoning, no tool calls). Operant silently accepted these as final answers instead of retrying.
+- **Fix**: `empty_content_retries` counter in the per-iteration tool loop (mod.rs:1137); retries up to `max_retries` by appending the empty turn as a nudge (hermes-agent `conversation_loop.py` empty-retry parity).
+- **Live-verified**: `WARN Empty assistant response — retrying (1/3)` fired on a real empty turn from free-tier model; task recovered.
+
 ## Known/Deferred
 
 ### Bug #1 — Session aggregate counters dead (FIXED 9eb8f4a4)
