@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use crate::schema::ToolSchema;
+use crate::security::ssrf_verdict;
 use crate::tools::{OperantTool, ToolContext, ToolResult};
 
 const DEFAULT_XAI_BASE_URL: &str = "https://api.x.ai";
@@ -57,6 +58,14 @@ impl OperantTool for XaiHttpTool {
             let path = args.url.trim_start_matches('/');
             format!("{}/{}", base, path)
         };
+
+        // SSRF protection: block private/internal addresses (cloud metadata,
+        // localhost, RFC 1918, CGNAT, metadata hostnames). Fail-closed on DNS
+        // errors — same guard as http_request / web_fetch / web_scrape.
+        let (safe, block_msg) = ssrf_verdict(&full_url).await;
+        if !safe {
+            return ToolResult::error("xai_http_request", block_msg);
+        }
 
         let method = args.method.as_deref().unwrap_or("GET").to_uppercase();
 
@@ -158,14 +167,14 @@ mod tests {
             "method": "POST"
         });
         let result = tool.execute(args, ToolContext::default()).await;
-        // Will likely fail with connection error, but args should parse fine
-        // and the URL should include the base
+        // Args parse fine and the URL is built from the base. The request
+        // must never reach the network: 0.0.0.0 is an unspecified address
+        // which the SSRF guard blocks pre-flight (fail-closed).
         assert!(!result.success);
-        // Check that it failed on connection, not on args
+        let err = result.error.as_ref().unwrap();
         assert!(
-            result.error.as_ref().unwrap().contains("Request failed")
-                || result.error.as_ref().unwrap().contains("error")
-                || result.error.as_ref().unwrap().contains("connect")
+            err.contains("URL blocked") || err.contains("URL safety check failed"),
+            "expected SSRF pre-flight block, got: {err}"
         );
     }
 }

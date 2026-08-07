@@ -10,6 +10,7 @@ use std::collections::HashMap;
 
 use crate::config::runtime_config;
 use crate::schema::ToolSchema;
+use crate::security::ssrf_verdict;
 use crate::tools::{OperantTool, ToolContext, ToolResult};
 
 /// Tool for making HTTP requests
@@ -57,6 +58,16 @@ impl OperantTool for HttpRequestTool {
             return ToolResult::error("http_request", "Only HTTP and HTTPS URLs are supported");
         }
 
+        // SSRF protection: block requests to private/loopback/link-local
+        // addresses (cloud metadata 169.254.169.254, localhost, RFC 1918,
+        // CGNAT, etc.) — same guard as vision_tool / web_fetch. Prevents
+        // the agent from exfiltrating cloud credentials or hitting internal
+        // services. Fail-closed: DNS errors also block the request.
+        let (safe, block_msg) = ssrf_verdict(&args.url).await;
+        if !safe {
+            return ToolResult::error("http_request", block_msg);
+        }
+
         let timeout = std::time::Duration::from_secs(
             args.timeout
                 .unwrap_or(runtime_config().tools.http.timeout_secs),
@@ -97,10 +108,8 @@ impl OperantTool for HttpRequestTool {
         }
 
         // Add body for methods that support it
-        if let Some(ref body) = args.body {
-            if !body.is_empty() {
-                request = request.body(body.clone());
-            }
+        if let Some(body) = args.body.filter(|body| !body.is_empty()) {
+            request = request.body(body);
         }
 
         let start = std::time::Instant::now();
@@ -208,5 +217,40 @@ mod tests {
             .execute(json!({"url": 123}), ToolContext::default())
             .await;
         assert!(!result.success);
+    }
+
+    #[tokio::test]
+    async fn test_http_request_blocks_cloud_metadata_ip() {
+        // SSRF: AWS/GCP/Azure metadata endpoint (169.254.169.254) must be blocked.
+        let tool = HttpRequestTool;
+        let result = tool
+            .execute(json!({"url": "http://169.254.169.254/latest/meta-data/"}), ToolContext::default())
+            .await;
+        assert!(!result.success);
+        let err = result.error.unwrap_or_default();
+        assert!(err.contains("SSRF"), "unexpected error: {err}");
+    }
+
+    #[tokio::test]
+    async fn test_http_request_blocks_loopback() {
+        let tool = HttpRequestTool;
+        let result = tool
+            .execute(json!({"url": "http://127.0.0.1:8080/admin"}), ToolContext::default())
+            .await;
+        assert!(!result.success);
+        let err = result.error.unwrap_or_default();
+        assert!(err.contains("SSRF"), "unexpected error: {err}");
+    }
+
+    #[tokio::test]
+    async fn test_http_request_blocks_metadata_hostname() {
+        // Always-blocked hostname list fires without DNS resolution.
+        let tool = HttpRequestTool;
+        let result = tool
+            .execute(json!({"url": "http://metadata.google.internal/computeMetadata/v1/"}), ToolContext::default())
+            .await;
+        assert!(!result.success);
+        let err = result.error.unwrap_or_default();
+        assert!(err.contains("SSRF"), "unexpected error: {err}");
     }
 }

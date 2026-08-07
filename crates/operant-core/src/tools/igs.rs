@@ -23,6 +23,7 @@ use std::time::Duration;
 use crate::config::runtime_config;
 use crate::error::{Error, Result};
 use crate::schema::ToolSchema;
+use crate::security::ssrf_verdict;
 use crate::tools::{OperantTool, ToolContext, ToolResult};
 
 /// Default timeout for a single `igs` invocation.
@@ -269,6 +270,13 @@ impl OperantTool for WebScrapeTool {
         if args.url.trim().is_empty() {
             return ToolResult::error("web_scrape", "url is required");
         }
+        // SSRF protection: block private/internal addresses (cloud metadata,
+        // localhost, RFC 1918, CGNAT, metadata hostnames) before handing the
+        // URL to the IGS engine. Fail-closed on DNS errors.
+        let (safe, block_msg) = ssrf_verdict(&args.url).await;
+        if !safe {
+            return ToolResult::error("web_scrape", block_msg);
+        }
         match scrape_url(&args.url).await {
             Ok(markdown) => ToolResult::success(
                 "web_scrape",
@@ -320,6 +328,12 @@ impl OperantTool for WebExtractTool {
         };
         if args.url.trim().is_empty() {
             return ToolResult::error("web_extract", "url is required");
+        }
+        // SSRF protection: block private/internal addresses (cloud metadata,
+        // localhost, RFC 1918, CGNAT, metadata hostnames). Fail-closed on DNS errors.
+        let (safe, block_msg) = ssrf_verdict(&args.url).await;
+        if !safe {
+            return ToolResult::error("web_extract", block_msg);
         }
         // igs web scrape already returns the cleaned main content as
         // markdown — the extract view is the same pipeline.

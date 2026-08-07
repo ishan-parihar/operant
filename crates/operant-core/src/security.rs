@@ -89,6 +89,24 @@ pub async fn check_url_safety(url: &str) -> Result<bool> {
     Ok(true)
 }
 
+/// Combined SSRF verdict: `(allowed, message)`.
+///
+/// Returns `(true, "")` when the URL is safe, or `(false, message)` when
+/// the URL is blocked (private/internal address) OR the safety check itself
+/// failed (fail-closed on DNS errors). Convenience wrapper so tools can
+/// guard with a single `if !safe { return Err(msg) }` without threading
+/// `Result` through their own error types.
+pub async fn ssrf_verdict(url: &str) -> (bool, String) {
+    match check_url_safety(url).await {
+        Ok(true) => (true, String::new()),
+        Ok(false) => (
+            false,
+            "URL blocked: points to private/internal address (SSRF protection)".to_string(),
+        ),
+        Err(e) => (false, format!("URL safety check failed: {e}")),
+    }
+}
+
 /// `true` when *ip* belongs to a private, internal, or blocked range.
 fn is_blocked_ip(ip: IpAddr) -> bool {
     match ip {

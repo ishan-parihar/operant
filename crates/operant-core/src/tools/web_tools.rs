@@ -9,6 +9,7 @@ use serde_json::Value;
 
 use crate::config::runtime_config;
 use crate::schema::ToolSchema;
+use crate::security::ssrf_verdict;
 use crate::tools::web_providers::{
     DDGProvider, ExaProvider, IgsSearchProvider, SearXNGProvider, TavilyProvider,
     WebSearchProvider, WebSearchResult,
@@ -163,10 +164,11 @@ impl OperantTool for WebFetchTool {
                 }
                 // SSRF protection: block requests to private/loopback/link-local
                 // addresses (e.g. 169.254.169.254 AWS metadata, localhost, 10.x,
-                // 192.168.x, 127.x). This prevents the agent from exfiltrating
-                // cloud credentials or hitting internal services.
-                if let Some(err_msg) = check_ssrf(&url) {
-                    return ToolResult::error("web_fetch", err_msg);
+                // 192.168.x, 127.x, CGNAT, metadata hostnames). Resolves the
+                // hostname and checks each address — fail-closed on DNS errors.
+                let (safe, block_msg) = ssrf_verdict(&args.url).await;
+                if !safe {
+                    return ToolResult::error("web_fetch", block_msg);
                 }
             }
             Err(e) => return ToolResult::error("web_fetch", format!("Invalid URL: {}", e)),
@@ -211,10 +213,8 @@ impl OperantTool for WebFetchTool {
         }
 
         // Add body for POST/PUT/PATCH
-        if let Some(ref body) = args.body {
-            if !body.is_empty() {
-                request = request.body(body.clone());
-            }
+        if let Some(body) = args.body.filter(|body| !body.is_empty()) {
+            request = request.body(body);
         }
 
         match request.send().await {
@@ -428,49 +428,6 @@ fn html_decode(s: &str) -> String {
         .replace("&nbsp;", " ")
 }
 
-/// Check if a URL points to a private/loopback/link-local address.
-///
-/// Returns `Some(reason)` if the URL should be blocked, `None` if it's safe.
-fn check_ssrf(url: &reqwest::Url) -> Option<String> {
-    let host = url.host_str()?;
-
-    if host == "localhost" || host.ends_with(".localhost") {
-        return Some(format!("SSRF blocked: '{}' resolves to loopback.", host));
-    }
-
-    if let Ok(ip) = host.parse::<std::net::IpAddr>() {
-        if ip.is_loopback() {
-            return Some(format!("SSRF blocked: {} is loopback.", ip));
-        }
-        match ip {
-            std::net::IpAddr::V4(v4) => {
-                if v4.is_link_local() {
-                    return Some(format!(
-                        "SSRF blocked: {} is link-local (e.g. cloud metadata).",
-                        v4
-                    ));
-                }
-                if v4.is_private() {
-                    return Some(format!("SSRF blocked: {} is private (RFC 1918).", v4));
-                }
-                if v4.octets()[0] == 100 && (v4.octets()[1] & 0xc0) == 64 {
-                    return Some(format!("SSRF blocked: {} is CGNAT (100.64/10).", v4));
-                }
-            }
-            std::net::IpAddr::V6(v6) => {
-                if v6.is_loopback() {
-                    return Some(format!("SSRF blocked: {} is loopback.", v6));
-                }
-                let seg = v6.segments()[0];
-                if (seg & 0xfe00) == 0xfc00 {
-                    return Some(format!("SSRF blocked: {} is unique-local (fc00::/7).", v6));
-                }
-            }
-        }
-    }
-
-    None
-}
 
 #[cfg(test)]
 mod tests {
@@ -507,6 +464,33 @@ mod tests {
             .execute(json!({"url": ""}), ToolContext::default())
             .await;
         assert!(!result.success);
+    }
+
+    #[tokio::test]
+    async fn test_web_fetch_blocks_cloud_metadata() {
+        // SSRF: 169.254.169.254 (cloud metadata) must be rejected before any fetch.
+        let tool = WebFetchTool;
+        let result = tool
+            .execute(
+                json!({"url": "http://169.254.169.254/latest/meta-data/"}),
+                ToolContext::default(),
+            )
+            .await;
+        assert!(!result.success);
+        let err = result.error.unwrap_or_default();
+        assert!(err.contains("SSRF"), "unexpected error: {err}");
+    }
+
+    #[tokio::test]
+    async fn test_web_fetch_blocks_private_range() {
+        // RFC 1918 private ranges must be rejected.
+        let tool = WebFetchTool;
+        let result = tool
+            .execute(json!({"url": "http://10.0.0.1/internal"}), ToolContext::default())
+            .await;
+        assert!(!result.success);
+        let err = result.error.unwrap_or_default();
+        assert!(err.contains("SSRF"), "unexpected error: {err}");
     }
 
     #[test]
