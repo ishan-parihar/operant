@@ -73,7 +73,16 @@ impl OperantTool for HttpRequestTool {
                 .unwrap_or(runtime_config().tools.http.timeout_secs),
         );
 
-        let client = match reqwest::Client::builder().timeout(timeout).build() {
+        // Redirects are disabled: the SSRF guard validates the initial URL
+        // only, and following a redirect could silently land on a private/
+        // metadata address (classic SSRF redirect bypass). The 3xx response
+        // is returned to the model, which can re-issue the request against
+        // the Location header if appropriate.
+        let client = match reqwest::Client::builder()
+            .timeout(timeout)
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+        {
             Ok(c) => c,
             Err(e) => {
                 return ToolResult::error(
@@ -224,7 +233,10 @@ mod tests {
         // SSRF: AWS/GCP/Azure metadata endpoint (169.254.169.254) must be blocked.
         let tool = HttpRequestTool;
         let result = tool
-            .execute(json!({"url": "http://169.254.169.254/latest/meta-data/"}), ToolContext::default())
+            .execute(
+                json!({"url": "http://169.254.169.254/latest/meta-data/"}),
+                ToolContext::default(),
+            )
             .await;
         assert!(!result.success);
         let err = result.error.unwrap_or_default();
@@ -235,7 +247,10 @@ mod tests {
     async fn test_http_request_blocks_loopback() {
         let tool = HttpRequestTool;
         let result = tool
-            .execute(json!({"url": "http://127.0.0.1:8080/admin"}), ToolContext::default())
+            .execute(
+                json!({"url": "http://127.0.0.1:8080/admin"}),
+                ToolContext::default(),
+            )
             .await;
         assert!(!result.success);
         let err = result.error.unwrap_or_default();
@@ -247,7 +262,10 @@ mod tests {
         // Always-blocked hostname list fires without DNS resolution.
         let tool = HttpRequestTool;
         let result = tool
-            .execute(json!({"url": "http://metadata.google.internal/computeMetadata/v1/"}), ToolContext::default())
+            .execute(
+                json!({"url": "http://metadata.google.internal/computeMetadata/v1/"}),
+                ToolContext::default(),
+            )
             .await;
         assert!(!result.success);
         let err = result.error.unwrap_or_default();

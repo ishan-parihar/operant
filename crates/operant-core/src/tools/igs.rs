@@ -402,6 +402,35 @@ impl crate::browser_provider::BrowserProvider for IgsBrowserProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+
+    #[tokio::test]
+    async fn test_web_scrape_blocks_cloud_metadata() {
+        // The SSRF guard fires before scrape_url touches the igs binary, so
+        // this works even when igs is not installed.
+        let result = WebScrapeTool
+            .execute(
+                json!({"url": "http://169.254.169.254/latest/meta-data/"}),
+                ToolContext::default(),
+            )
+            .await;
+        assert!(!result.success);
+        let err = result.error.unwrap_or_default();
+        assert!(err.contains("SSRF"), "unexpected error: {err}");
+    }
+
+    #[tokio::test]
+    async fn test_web_extract_blocks_cloud_metadata() {
+        let result = WebExtractTool
+            .execute(
+                json!({"url": "http://169.254.169.254/latest/meta-data/"}),
+                ToolContext::default(),
+            )
+            .await;
+        assert!(!result.success);
+        let err = result.error.unwrap_or_default();
+        assert!(err.contains("SSRF"), "unexpected error: {err}");
+    }
 
     #[test]
     fn first_text_field_finds_first_string() {

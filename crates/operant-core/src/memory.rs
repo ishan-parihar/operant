@@ -1251,14 +1251,20 @@ mod tests {
         manager.flush_if_dirty().await.unwrap();
 
         assert!(manager.remove_block("drop").await);
-        assert!(!manager.remove_block("missing").await, "unknown id is a no-op");
+        assert!(
+            !manager.remove_block("missing").await,
+            "unknown id is a no-op"
+        );
         assert!(manager.get("drop").await.is_none());
         assert!(manager.get("keep").await.is_some());
 
         manager.flush_if_dirty().await.unwrap();
         let store = MemoryStore::new(dir.clone());
         let loaded = store.read_memories().unwrap();
-        assert!(!loaded.contains_key("drop"), "removed block must not persist");
+        assert!(
+            !loaded.contains_key("drop"),
+            "removed block must not persist"
+        );
         assert!(loaded.contains_key("keep"));
 
         cleanup(&dir);

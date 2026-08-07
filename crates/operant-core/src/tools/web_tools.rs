@@ -174,10 +174,15 @@ impl OperantTool for WebFetchTool {
             Err(e) => return ToolResult::error("web_fetch", format!("Invalid URL: {}", e)),
         }
 
+        // Redirects are disabled: the SSRF guard validates the initial URL
+        // only, and following a redirect could silently land on a private/
+        // metadata address (classic SSRF redirect bypass). The 3xx response
+        // is returned to the model, which can re-issue against Location.
         let client = match reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(
                 args.timeout.unwrap_or(settings.fetch_timeout_secs),
             ))
+            .redirect(reqwest::redirect::Policy::none())
             .build()
         {
             Ok(c) => c,
@@ -428,7 +433,6 @@ fn html_decode(s: &str) -> String {
         .replace("&nbsp;", " ")
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -486,11 +490,32 @@ mod tests {
         // RFC 1918 private ranges must be rejected.
         let tool = WebFetchTool;
         let result = tool
-            .execute(json!({"url": "http://10.0.0.1/internal"}), ToolContext::default())
+            .execute(
+                json!({"url": "http://10.0.0.1/internal"}),
+                ToolContext::default(),
+            )
             .await;
         assert!(!result.success);
         let err = result.error.unwrap_or_default();
         assert!(err.contains("SSRF"), "unexpected error: {err}");
+    }
+
+    #[tokio::test]
+    async fn test_web_fetch_allows_public_ip() {
+        // Guard must NOT over-block: a public literal IP passes the pre-flight
+        // check (no DNS needed). The subsequent request will fail to connect
+        // (8.8.8.8:80 refuses) — the point is it must fail on CONNECT, not on
+        // the SSRF guard.
+        let tool = WebFetchTool;
+        let result = tool
+            .execute(json!({"url": "http://8.8.8.8/"}), ToolContext::default())
+            .await;
+        assert!(!result.success);
+        let err = result.error.unwrap_or_default();
+        assert!(
+            !err.contains("SSRF"),
+            "public IP should pass the guard, got: {err}"
+        );
     }
 
     #[test]

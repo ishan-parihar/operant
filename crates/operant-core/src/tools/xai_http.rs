@@ -69,8 +69,12 @@ impl OperantTool for XaiHttpTool {
 
         let method = args.method.as_deref().unwrap_or("GET").to_uppercase();
 
+        // Redirects are disabled: the SSRF guard validates the initial URL
+        // only, and following a redirect could silently land on a private/
+        // metadata address (classic SSRF redirect bypass).
         let client = match reqwest::Client::builder()
             .timeout(Duration::from_secs(30))
+            .redirect(reqwest::redirect::Policy::none())
             .build()
         {
             Ok(c) => c,
