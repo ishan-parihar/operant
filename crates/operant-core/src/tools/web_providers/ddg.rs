@@ -24,7 +24,9 @@ impl WebSearchProvider for DDGProvider {
     }
 
     async fn search(&self, query: &str, num_results: usize) -> Result<Vec<WebSearchResult>> {
-        let encoded: String = query.split(' ').collect::<Vec<_>>().join("+");
+        // Percent-encode the query so `&`/`?`/`#`/CJK in the search term
+        // cannot inject extra params or mangle the URL.
+        let encoded = super::urlencode(query);
         let url = self.search_url.replace("{query}", &encoded);
         let client = reqwest::Client::builder()
             .user_agent(&self.user_agent)

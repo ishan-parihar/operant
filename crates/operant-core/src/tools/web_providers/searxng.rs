@@ -22,7 +22,7 @@ impl WebSearchProvider for SearXNGProvider {
         let url = format!(
             "{}/search?format=json&q={}",
             self.base_url,
-            urlencoding(query)
+            super::urlencode(query)
         );
         let client = reqwest::Client::new();
         let resp = client.get(&url).send().await?;
@@ -42,10 +42,6 @@ impl WebSearchProvider for SearXNGProvider {
     }
 }
 
-fn urlencoding(s: &str) -> String {
-    s.split(' ').collect::<Vec<_>>().join("+")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -54,11 +50,5 @@ mod tests {
     fn test_searxng_provider_name() {
         let provider = SearXNGProvider::new("https://searxng.example.com".to_string());
         assert_eq!(provider.name(), "searxng");
-    }
-
-    #[test]
-    fn test_urlencoding() {
-        assert_eq!(urlencoding("hello world"), "hello+world");
-        assert_eq!(urlencoding("test"), "test");
     }
 }

@@ -58,7 +58,15 @@ impl OperantTool for WebSearchTool {
         // we fall back to the configured provider / DuckDuckGo.
         let igs_available =
             runtime_config().tools.igs_enabled && crate::tools::igs::find_igs_binary().is_some();
-        let want_igs = settings.preferred_provider == "igs" || igs_available;
+        // Explicit user config wins: only prefer IGS when it's the configured
+        // provider (or config is unset/"auto"). Previously `|| igs_available`
+        // silently overrode an explicit tavily/exa/searxng choice whenever the
+        // igs binary happened to be installed — hermes resolves the explicit
+        // web.search_backend config first and only auto-selects when unset.
+        let want_igs = match settings.preferred_provider.as_str() {
+            "igs" | "auto" | "" => igs_available,
+            _ => false,
+        };
 
         let provider: Box<dyn WebSearchProvider> = if want_igs && igs_available {
             Box::new(IgsSearchProvider)
