@@ -63,10 +63,7 @@ impl OperantTool for WebSearchTool {
         // silently overrode an explicit tavily/exa/searxng choice whenever the
         // igs binary happened to be installed — hermes resolves the explicit
         // web.search_backend config first and only auto-selects when unset.
-        let want_igs = match settings.preferred_provider.as_str() {
-            "igs" | "auto" | "" => igs_available,
-            _ => false,
-        };
+        let want_igs = should_prefer_igs(&settings.preferred_provider, igs_available);
 
         let provider: Box<dyn WebSearchProvider> = if want_igs && igs_available {
             Box::new(IgsSearchProvider)
@@ -441,10 +438,52 @@ fn html_decode(s: &str) -> String {
         .replace("&nbsp;", " ")
 }
 
+/// Decide whether to prefer the IGS engine for web search.
+///
+/// Explicit user config wins: IGS is preferred only when the configured
+/// provider is `igs`/`auto`/unset (compared case-insensitively, trimmed).
+/// Any explicit non-igs provider (tavily, exa, searxng, …) returns `false`
+/// even when the igs binary is installed — mirroring hermes's
+/// `web_search_registry._resolve(explicit, capability)`, which honors the
+/// configured backend before auto-selecting among available ones.
+///
+/// `igs_available` still gates the result: even a configured `igs`
+/// preference yields `false` when the binary is missing.
+fn should_prefer_igs(preferred: &str, igs_available: bool) -> bool {
+    if !igs_available {
+        return false;
+    }
+    matches!(
+        preferred.trim().to_ascii_lowercase().as_str(),
+        "igs" | "auto" | ""
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn test_should_prefer_igs_matrix() {
+        // Explicit non-igs providers must win even when igs is installed.
+        for pref in ["tavily", "exa", "searxng", "unknown"] {
+            assert!(
+                !should_prefer_igs(pref, true),
+                "explicit '{pref}' must not be overridden by igs availability"
+            );
+        }
+        // igs / auto / unset prefer igs when available.
+        for pref in ["igs", "auto", ""] {
+            assert!(should_prefer_igs(pref, true), "'{pref}' should prefer igs");
+        }
+        // Case + whitespace tolerance.
+        assert!(should_prefer_igs("  IGS ", true));
+        assert!(should_prefer_igs("Auto", true));
+        // Missing binary always wins regardless of preference.
+        assert!(!should_prefer_igs("igs", false));
+        assert!(!should_prefer_igs("tavily", false));
+    }
 
     #[test]
     fn test_web_search_schema() {
