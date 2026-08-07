@@ -25,6 +25,7 @@ use serde_json::Value;
 
 use crate::accessibility;
 use crate::error::Result;
+use crate::security::ssrf_verdict;
 use crate::tools::{OperantTool, ToolContext, ToolResult, ToolSchema};
 
 pub struct BrowserTool;
@@ -157,6 +158,22 @@ impl OperantTool for BrowserTool {
             }
         }
 
+        // SSRF protection for URL-fetching commands: `navigate` (and
+        // `snapshot`, which reloads the current page URL) pass the URL to
+        // local browser binaries (lightpanda/obscura/igs) that fetch it
+        // directly. Without a guard, the agent could be prompted to
+        // navigate to cloud metadata (169.254.169.254), localhost, or
+        // internal services. Hermes guards every browser navigation with
+        // tools/url_safety.is_safe_url (fail-closed).
+        if matches!(args.command.as_str(), "navigate" | "snapshot")
+            && let Some(url) = args.url.as_deref()
+        {
+            let (safe, block_msg) = ssrf_verdict(url).await;
+            if !safe {
+                return ToolResult::error(self.name(), block_msg);
+            }
+        }
+
         let cmd_args = serde_json::json!({
             "url": args.url,
             "selector": args.selector,
@@ -212,6 +229,58 @@ mod tests {
             .await;
         assert!(!result.success);
         assert!(result.error.unwrap_or_default().contains("Missing 'url'"));
+    }
+
+    #[tokio::test]
+    async fn test_browser_navigate_blocks_cloud_metadata() {
+        // SSRF: navigate to the AWS/GCP metadata endpoint must be rejected
+        // before any provider (local binary or cloud API) is contacted.
+        let tool = BrowserTool::new();
+        let result = tool
+            .execute(
+                serde_json::json!({
+                    "command": "navigate",
+                    "url": "http://169.254.169.254/latest/meta-data/"
+                }),
+                ToolContext::default(),
+            )
+            .await;
+        assert!(!result.success);
+        let err = result.error.unwrap_or_default();
+        assert!(err.contains("SSRF"), "unexpected error: {err}");
+    }
+
+    #[tokio::test]
+    async fn test_browser_navigate_blocks_loopback() {
+        let tool = BrowserTool::new();
+        let result = tool
+            .execute(
+                serde_json::json!({ "command": "navigate", "url": "http://127.0.0.1:8080/admin" }),
+                ToolContext::default(),
+            )
+            .await;
+        assert!(!result.success);
+        let err = result.error.unwrap_or_default();
+        assert!(err.contains("SSRF"), "unexpected error: {err}");
+    }
+
+    #[tokio::test]
+    async fn test_browser_snapshot_blocks_metadata_hostname() {
+        // snapshot re-navigates the current URL — the always-blocked metadata
+        // hostname must be caught without DNS resolution.
+        let tool = BrowserTool::new();
+        let result = tool
+            .execute(
+                serde_json::json!({
+                    "command": "snapshot",
+                    "url": "http://metadata.google.internal/computeMetadata/v1/"
+                }),
+                ToolContext::default(),
+            )
+            .await;
+        assert!(!result.success);
+        let err = result.error.unwrap_or_default();
+        assert!(err.contains("SSRF"), "unexpected error: {err}");
     }
 
     #[tokio::test]
