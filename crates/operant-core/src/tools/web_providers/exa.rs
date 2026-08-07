@@ -29,6 +29,17 @@ impl WebSearchProvider for ExaProvider {
             }))
             .send()
             .await?;
+        if !resp.status().is_success() {
+            // Surface auth/rate-limit failures clearly instead of letting the
+            // error body parse as results (mirrors hermes raise_for_status).
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(Error::Provider {
+                status: status.as_u16(),
+                body: format!("Exa search failed (HTTP {}): {}", status, body),
+                retry_after: None,
+            });
+        }
         let data: serde_json::Value = resp.json().await?;
         let results = data["results"]
             .as_array()

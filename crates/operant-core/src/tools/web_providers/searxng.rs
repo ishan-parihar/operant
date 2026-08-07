@@ -26,6 +26,13 @@ impl WebSearchProvider for SearXNGProvider {
         );
         let client = reqwest::Client::new();
         let resp = client.get(&url).send().await?;
+        if !resp.status().is_success() {
+            return Err(crate::error::Error::Provider {
+                status: resp.status().as_u16(),
+                body: format!("SearXNG search failed (HTTP {})", resp.status()),
+                retry_after: None,
+            });
+        }
         let data: serde_json::Value = resp.json().await?;
         let results = data["results"]
             .as_array()

@@ -32,6 +32,13 @@ impl WebSearchProvider for DDGProvider {
             .user_agent(&self.user_agent)
             .build()?;
         let resp = client.get(&url).send().await?;
+        if !resp.status().is_success() {
+            return Err(crate::error::Error::Provider {
+                status: resp.status().as_u16(),
+                body: format!("DuckDuckGo search failed (HTTP {})", resp.status()),
+                retry_after: None,
+            });
+        }
         let html = resp.text().await?;
         let raw = parse_ddg_lite_results(&html, num_results);
         Ok(raw
