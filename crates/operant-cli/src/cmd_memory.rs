@@ -102,9 +102,18 @@ pub async fn handle_memory_command(_config: &AppConfig, cmd: MemorySubcommand) -
     }
 }
 
-/// Build a memory manager backed by `~/.operant/memory`.
+/// Build a memory manager backed by the operant home root
+/// (`~/.operant/MEMORY.md` / `USER.md`).
+///
+/// This MUST be the same store the agent's memory tools use — the agent
+/// builds its `MemoryManager` with `operant_home()` in
+/// `load_repo_memory_manager` (main.rs). This command previously pointed at
+/// `~/.operant/memory/`, a phantom directory: `operant memory
+/// list/search/store` operated on a store the agent never read, so
+/// memories written by the agent were invisible to the CLI and vice-versa
+/// (audit R5-1).
 fn memory_manager() -> Result<MemoryManager> {
-    let dir = operant_home().join("memory");
+    let dir = operant_home();
     std::fs::create_dir_all(&dir)
         .with_context(|| format!("Failed to create memory directory: {}", dir.display()))?;
     Ok(MemoryManager::with_storage_dir(dir))
@@ -228,6 +237,12 @@ async fn cmd_store(
     let mut block = MemoryBlock::new(key, &block_type, value);
     block = block.importance(imp.min(100));
     mm.store(block).await;
+    // `store` only marks the manager dirty (batch-write optimization); the
+    // process exits right after this command, so flush synchronously or the
+    // write is silently lost (audit R5-1b).
+    mm.save_to_disk()
+        .await
+        .context("Failed to save memory to disk")?;
 
     println!(
         "Memory stored: {} (type: {}, importance: {})",
@@ -274,7 +289,7 @@ async fn cmd_stats() -> Result<()> {
     println!("  Total sessions:      {}", sessions.len());
     println!("  Total memory entries: {}", all_memories.len());
 
-    let dir = operant_home().join("memory");
+    let dir = operant_home();
     let memory_path = dir.join("MEMORY.md");
     let user_path = dir.join("USER.md");
 
@@ -374,6 +389,10 @@ async fn cmd_import(source: &str) -> Result<()> {
     );
     let block = MemoryBlock::new(&block_id, "import", &content);
     mm.store(block).await;
+    // Flush synchronously — `store` only marks dirty (audit R5-1b).
+    mm.save_to_disk()
+        .await
+        .context("Failed to save memory to disk")?;
 
     println!("Imported memory from '{}'", source);
     Ok(())
@@ -450,8 +469,21 @@ async fn cmd_prune(older_than_days: Option<u64>) -> Result<()> {
             block.block_type, block.id, block.importance, block.created_at
         );
     }
+
+    // Actually prune (previously a preview-only no-op — audit R5-1d).
+    let mut removed = 0usize;
+    for block in &to_prune {
+        if mm.remove_block(&block.id).await {
+            removed += 1;
+        }
+    }
+    if removed > 0 {
+        mm.save_to_disk()
+            .await
+            .context("Failed to save memory to disk")?;
+    }
     println!();
-    println!("Use `operant memory clear` with confirmation to remove all memories.");
+    println!("Pruned {} memory block(s).", removed);
 
     Ok(())
 }

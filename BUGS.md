@@ -50,3 +50,36 @@ Free-tier providers intermittently return empty assistant responses (no text, no
 
 ### Bug #2 — `session_events` table fully dead (YAGNI-flagged)
 `record_event` on `session_events` has zero runtime callers; never read by CLI; hermes has no such table. Dead scaffolding — removal skipped pending user direction.
+
+## Round 5 (2026-08-08) — R5 memory-store split-brain (FIXED)
+
+### R5-1 — CLI `memory` subcommands point at a phantom store (FIXED)
+The agent's memory tools persist to `~/.operant/MEMORY.md`/`USER.md` (`load_repo_memory_manager` → `storage_dir = operant_home()`), but the CLI `operant memory *` commands built their `MemoryManager` with `operant_home().join("memory")` (`~/.operant/memory/`) — a directory the agent never reads. Result: `operant memory list/search/get/stats` saw nothing the agent stored, and `operant memory store` wrote into the void. Three divergent locations existed for one concept (agent → root `MEMORY.md`, CLI → `~/.operant/memory/`, doctor → `~/.operant/memories/`).
+- **Fix (R5-1)**: `cmd_memory.rs::memory_manager()` now uses `operant_home()` — the same store as the agent. `cmd_stats` file-size check fixed to the same dir.
+- **Live-verified**: `operant memory search teal` and `operant memory get live_test_color` now return the agent-stored entries; `operant memory stats` reports the real store (212 entries, 44 KB).
+
+### R5-1b — CLI `memory store`/`import` silently dropped writes (FIXED)
+`MemoryManager::store()` marks the manager dirty instead of writing synchronously (batch-write optimization for distillation loops). The CLI write commands called `store()` and then the process exited — the dirty flag was never flushed, so the write was lost. Only `delete`/`clear` flushed.
+- **Fix**: `cmd_store` and `cmd_import` now call `save_to_disk()` after mutating (matches the agent's `memory_store` tool which already flushes).
+- **Live-verified**: `operant memory store cli_roundtrip_key ...` → entry present in `~/.operant/MEMORY.md` (`grep` count 1).
+
+### R5-1c — CLI `memory prune` was a preview-only no-op (FIXED)
+`operant memory prune` printed candidates and then instructed the user to use `clear` — it never pruned, contradicting its stated purpose.
+- **Fix**: added `MemoryManager::remove_block(id)` (marks dirty, mirrors `store`); `cmd_prune` now removes eligible blocks and flushes. Unit test `test_remove_block_removes_and_flushes` added.
+
+### R5-2 — Doctor probed a phantom `memories/` subdir (FIXED)
+`operant doctor` checked `~/.operant/memories/MEMORY.md` and warned "memories/ not found" even when the agent's real store at `~/.operant/MEMORY.md` was healthy.
+- **Fix**: `checks_config.rs` probes root `MEMORY.md`/`USER.md` directly; removed `memories` from the subdir existence loop.
+- **Live-verified**: doctor now reports `✓ MEMORY.md exists (44179 chars)` / `✓ USER.md exists`.
+
+### R5-3 — Audit verdict: operant-runtime `RuntimeAgent` stack is dead-linked legacy (FLAGGED)
+`crates/operant-runtime/src/agent/` (`agent.rs`, `loop_.rs`, `classifier`, `context_analyzer`, `context_compressor`, `memory_loader`, `loop_detector`, `history_pruner`, `dispatcher`) has **zero non-test callers** across all crates; the CLI/TUI/gateway use `operant-core::OperantAgent`. `operant-runtime` is pulled in only as an optional dep via the default `agent-runtime` feature (its personality/tools/security/cron submodules ARE used by the gateway). This is legacy scaffolding — not a live divergence, since the shipped binary never executes it. Recommendation: remove the dead agent modules (keep the gateway-used submodules) in a dedicated cleanup round. Its unit tests (including a well-tested `loop_detector`) are the only thing exercising the code today.
+
+### R5-5 — Pre-existing workspace clippy debt (DEFERRED, not from this round)
+`cargo clippy --all-targets -- -D warnings` fails on ~40 pre-existing lints in untouched files (`collapsible_if` in `accessibility.rs`/`background_review.rs`/`insights.rs`/`message_safety.rs`/`turn_context.rs`/`turn_finalizer.rs`/`mod.rs`/`fallback.rs`; `needless_mut` in `database.rs:2101`; `sort_by_key` + `manual_div_ceil` in `insights.rs`/`llm_compressor.rs`; `format_push_string` in `gemini_oauth.rs:274`). The R5 round fixed the one lint blocking the touched path (`question_mark` in `operant-tool-call-parser/src/lib.rs:922`). None of the R5 files carry lints. A dedicated lint-cleanup round (like the `#[expect(dead_code)]` migration already in-flight in the working tree) should sweep the rest.
+
+### R5-4 — Live core-loop validation (PASSED)
+Ran the shipped binary (v0.1.4) against `~/.operant/operant.toml` (kilo.ai gateway, `nvidia/nemotron-3-ultra-550b-a55b:free`, 128k window, free-tier rate limits): a 4-iteration / 3-tool-turn task exercised `file_read` + `memory_store` + `memory_recall` end-to-end.
+- **Verified**: file read correct; memory entry persisted to `~/.operant/MEMORY.md` and recalled by key; assistant+tool messages persisted to `database.db` (`sess_2bb86894…`); turn diagnostics logged (`Turn ended: reason=text_response … api_calls=4/12 … tool_turns=3`).
+- Rate limiter (`check_rate_limit`), streaming usage halves, credential-pool attach, empty-response retry ladder, and evolution-trigger split (R1) all confirmed present in the exercised path.
+- **Not live-tested**: LLM-compressor overflow path (requires context >80% of the 128k window on the free tier; gate verified by code review — `should_compress` checks `config.enabled`, and unit test `prefer_reported` covers the real-usage gate).

@@ -242,7 +242,7 @@ pub fn run_config_checks(config: &AppConfig, issues: &mut Vec<String>) {
         );
     }
 
-    for subdir in &["cron", "sessions", "logs", "skills", "memories"] {
+    for subdir in &["cron", "sessions", "logs", "skills"] {
         let sub_path = hh.join(subdir);
         if sub_path.exists() {
             check_ok(&format!("{}/{}/ exists", dhh, subdir), "");
@@ -285,37 +285,31 @@ pub fn run_config_checks(config: &AppConfig, issues: &mut Vec<String>) {
         );
     }
 
-    let memories_dir = hh.join("memories");
-    if memories_dir.exists() {
-        check_ok(&format!("{}/memories/ directory exists", dhh), "");
-
-        let memory_file = memories_dir.join("MEMORY.md");
-        if memory_file.exists() {
-            let size = std::fs::read_to_string(&memory_file)
-                .map(|s| s.trim().len())
-                .unwrap_or(0);
-            check_ok(&format!("MEMORY.md exists ({} chars)", size), "");
-        } else {
-            check_info(
-                "MEMORY.md not created yet (will be created when the agent first writes a memory)",
-            );
-        }
-
-        let user_file = memories_dir.join("USER.md");
-        if user_file.exists() {
-            let size = std::fs::read_to_string(&user_file)
-                .map(|s| s.trim().len())
-                .unwrap_or(0);
-            check_ok(&format!("USER.md exists ({} chars)", size), "");
-        } else {
-            check_info(
-                "USER.md not created yet (will be created when the agent first writes a memory)",
-            );
-        }
+    // Built-in memory lives at the operant home ROOT (MEMORY.md / USER.md),
+    // matching the agent's `load_repo_memory_manager` storage dir. The doctor
+    // previously probed a phantom `memories/` subdir, so it always warned even
+    // when the agent's real memory store was healthy (audit R5-2).
+    let memory_file = hh.join("MEMORY.md");
+    if memory_file.exists() {
+        let size = std::fs::read_to_string(&memory_file)
+            .map(|s| s.trim().len())
+            .unwrap_or(0);
+        check_ok(&format!("MEMORY.md exists ({} chars)", size), "");
     } else {
-        check_warn(
-            &format!("{}/memories/ not found", dhh),
-            "(will be created on first use)",
+        check_info(
+            "MEMORY.md not created yet (will be created when the agent first writes a memory)",
+        );
+    }
+
+    let user_file = hh.join("USER.md");
+    if user_file.exists() {
+        let size = std::fs::read_to_string(&user_file)
+            .map(|s| s.trim().len())
+            .unwrap_or(0);
+        check_ok(&format!("USER.md exists ({} chars)", size), "");
+    } else {
+        check_info(
+            "USER.md not created yet (will be created when the agent first writes a memory)",
         );
     }
 

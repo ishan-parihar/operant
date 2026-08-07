@@ -732,6 +732,20 @@ impl MemoryManager {
         self.sessions.write().await.remove(session_id);
     }
 
+    /// Remove a single memory block by ID.
+    ///
+    /// Marks the manager dirty (mirrors [`Self::store`]); callers that need
+    /// synchronous persistence (e.g. CLI `memory prune`) should call
+    /// `save_to_disk()` afterwards. Returns whether a block was actually
+    /// removed.
+    pub async fn remove_block(&self, id: &str) -> bool {
+        let removed = self.long_term.write().await.remove(id).is_some();
+        if removed && self.storage_dir.is_some() {
+            self.dirty.store(true, Ordering::Release);
+        }
+        removed
+    }
+
     /// Build context from memory (for injection into prompts)
     pub async fn build_memory_context(&self, max_tokens: usize) -> String {
         let important_memories = self.get_important(70).await;
@@ -1216,6 +1230,36 @@ mod tests {
         for i in 0..10 {
             assert!(loaded.contains_key(&format!("block_{i}")));
         }
+
+        cleanup(&dir);
+    }
+
+    #[tokio::test]
+    async fn test_remove_block_removes_and_flushes() {
+        // `remove_block` (added for `operant memory prune`) must remove the
+        // block from the in-memory store, mark the manager dirty, and survive
+        // a flush to disk (audit R5-1d).
+        let dir = test_dir("remove_block");
+        let manager = MemoryManager::with_storage_dir(dir.clone());
+
+        manager
+            .store(MemoryBlock::new("keep", "fact", "keep me"))
+            .await;
+        manager
+            .store(MemoryBlock::new("drop", "fact", "drop me"))
+            .await;
+        manager.flush_if_dirty().await.unwrap();
+
+        assert!(manager.remove_block("drop").await);
+        assert!(!manager.remove_block("missing").await, "unknown id is a no-op");
+        assert!(manager.get("drop").await.is_none());
+        assert!(manager.get("keep").await.is_some());
+
+        manager.flush_if_dirty().await.unwrap();
+        let store = MemoryStore::new(dir.clone());
+        let loaded = store.read_memories().unwrap();
+        assert!(!loaded.contains_key("drop"), "removed block must not persist");
+        assert!(loaded.contains_key("keep"));
 
         cleanup(&dir);
     }
