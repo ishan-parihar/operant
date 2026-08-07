@@ -32,6 +32,7 @@ pub struct AppConfig {
     pub credential_pool: CredentialPoolSettings,
     pub terminal_backend: TerminalBackend,
     pub auxiliary_models: AuxiliaryModels,
+    pub checkpoints: CheckpointsSettings,
     pub database_path: PathBuf,
 }
 
@@ -59,6 +60,7 @@ impl Default for AppConfig {
             vision: VisionSettings::default(),
             credential_pool: CredentialPoolSettings::default(),
             terminal_backend: TerminalBackend::Local,
+            checkpoints: CheckpointsSettings::default(),
             auxiliary_models: AuxiliaryModels::default(),
             database_path,
         }
@@ -467,6 +469,36 @@ impl Default for PluginSettings {
     fn default() -> Self {
         Self {
             plugin_dirs: vec![platform::operant_home().join("plugins")],
+        }
+    }
+}
+
+/// Checkpoint (filesystem snapshot) settings.
+///
+/// Checkpoints are opt-in: when `enabled`, the agent snapshots working
+/// directories into an isolated shadow git store under `base_dir` before
+/// mutating operations, and the `checkpoint` tool becomes functional. Hermes
+/// parity: hermes gates checkpoints behind a `checkpoints` config flag and
+/// stores snapshots in an isolated git store so no git state leaks into the
+/// user's project repository.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CheckpointsSettings {
+    /// Whether filesystem checkpoints are enabled.
+    pub enabled: bool,
+    /// Base directory for the checkpoint shadow store.
+    /// Defaults to `~/.operant/checkpoints`.
+    pub base_dir: Option<PathBuf>,
+    /// Maximum snapshots kept per working directory.
+    pub max_snapshots: usize,
+}
+
+impl Default for CheckpointsSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            base_dir: None,
+            max_snapshots: 20,
         }
     }
 }

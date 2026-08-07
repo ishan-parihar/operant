@@ -1,6 +1,15 @@
 //! Code execution tool
 //!
-//! Provides secure code execution in a sandboxed environment.
+//! Executes user-supplied code (python / javascript / rust / shell) on the
+//! **local host** with a hard timeout and `kill_on_drop` (no orphaned
+//! processes). This is NOT a sandbox: code runs with the operant process's own
+//! permissions and filesystem/network access.
+//!
+//! Mitigations: the tool call passes through the agent's approval gate
+//! (`code_execution` is in the interactive permission list) and the run is
+//! time-boxed. Hermes runs code execution inside a real sandboxed subprocess
+//! (AF_UNIX transport, env hardening, docker/modal/vercel backends) — see
+//! BUGS.md R12-1; full sandbox parity is future work.
 
 use async_trait::async_trait;
 use schemars::JsonSchema;

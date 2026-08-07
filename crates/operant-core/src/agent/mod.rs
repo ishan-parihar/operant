@@ -3184,7 +3184,9 @@ If nothing needs updating, say 'Nothing to save.' and stop.\n\n{}",
                         "bash" | "terminal" | "execute_command" => {
                             "This runs a shell command on your system".to_string()
                         }
-                        "code_execution" => "This executes code in a sandbox".to_string(),
+                        "code_execution" => {
+                            "This runs code on your system with the operant process's permissions (not sandboxed)".to_string()
+                        }
                         "file_read" => "This reads a file from your system".to_string(),
                         "file_write" => "This writes content to a file".to_string(),
                         "file_edit" | "patch" => "This modifies an existing file".to_string(),

@@ -1,7 +1,17 @@
-//! Checkpoint Tool - Filesystem Snapshots via Git
+//! Checkpoint Tool - Filesystem Snapshots via an isolated shadow git store
 //!
-//! Provides transparent filesystem snapshots before file-mutating operations.
-//! This tool is infrastructure that can be called by the agent to manage checkpoints.
+//! Provides transparent filesystem snapshots before file-mutating operations
+//! and a `checkpoint` tool for explicit ensure/list/restore/diff.
+//!
+//! Hermes parity (`hermes-agent/tools/checkpoint_manager.py`): every snapshot
+//! is committed to a private store under `~/.operant/checkpoints/store/<hash>`
+//! using `GIT_DIR` + `GIT_WORK_TREE` + `GIT_INDEX_FILE`, so **no git state
+//! ever leaks into the user's project repository**. Any directory can be
+//! checkpointed — a project git repo is not required — and the user's git
+//! identity is never consulted (snapshots use an internal identity).
+//!
+//! Checkpoints are opt-in via `[checkpoints] enabled = true` in config; when
+//! disabled the manager is inert (the tool returns a clear error).
 
 use async_trait::async_trait;
 use schemars::JsonSchema;
@@ -76,7 +86,9 @@ pub struct Checkpoint {
 
 /// Checkpoint manager for creating and managing filesystem snapshots
 pub struct CheckpointManager {
-    config: CheckpointConfig,
+    /// Interior mutability so the process-global manager can be configured
+    /// from `&self` (it lives in a `OnceLock`).
+    config: std::sync::Mutex<CheckpointConfig>,
     checkpointed_dirs: std::sync::Mutex<std::collections::HashSet<String>>,
 }
 
@@ -90,24 +102,28 @@ impl CheckpointManager {
     /// Create a new checkpoint manager
     pub fn new() -> Self {
         Self {
-            config: CheckpointConfig::default(),
+            config: std::sync::Mutex::new(CheckpointConfig::default()),
             checkpointed_dirs: std::sync::Mutex::new(std::collections::HashSet::new()),
         }
     }
 
     /// Configure the checkpoint manager
-    pub fn configure(&mut self, config: CheckpointConfig) {
-        self.config = config;
+    pub fn configure(&self, config: CheckpointConfig) {
+        if let Ok(mut guard) = self.config.lock() {
+            *guard = config;
+        }
     }
 
     /// Enable or disable checkpoints
-    pub fn set_enabled(&mut self, enabled: bool) {
-        self.config.enabled = enabled;
+    pub fn set_enabled(&self, enabled: bool) {
+        if let Ok(mut guard) = self.config.lock() {
+            guard.enabled = enabled;
+        }
     }
 
     /// Check if checkpoints are enabled
     pub fn is_enabled(&self) -> bool {
-        self.config.enabled
+        self.config.lock().map(|g| g.enabled).unwrap_or(false)
     }
 
     /// Reset per-turn deduplication
@@ -119,9 +135,14 @@ impl CheckpointManager {
 
     /// Take a checkpoint of the given directory
     pub fn ensure_checkpoint(&self, working_dir: &str) -> bool {
-        if !self.config.enabled {
+        let config_guard = match self.config.lock() {
+            Ok(g) => g,
+            Err(_) => return false,
+        };
+        if !config_guard.enabled {
             return false;
         }
+        drop(config_guard);
 
         // Check git availability
         if Command::new("git").arg("--version").output().is_err() {
@@ -157,93 +178,95 @@ impl CheckpointManager {
         self.take_checkpoint(working_dir, "auto checkpoint")
     }
 
-    /// Internal: take a checkpoint
+    /// Internal: take a checkpoint into the shadow store.
+    ///
+    /// Hermes parity (`checkpoint_manager.py`): snapshots are committed to an
+    /// isolated git store via `GIT_DIR` + `GIT_WORK_TREE` + `GIT_INDEX_FILE`,
+    /// so no git state leaks into the user's project directory (the old
+    /// implementation ran `git add`/`git commit` inside the user's repo — see
+    /// BUGS.md R12-2). Works in any directory — a project git repo is not
+    /// required, and the user's git identity is never consulted.
     fn take_checkpoint(&self, working_dir: &str, reason: &str) -> bool {
-        let store_dir = self.config.base_dir.join("store");
-
-        // Create store directory if needed
-        if let Err(e) = std::fs::create_dir_all(&store_dir) {
-            warn!("Failed to create checkpoint store: {}", e);
+        let workdir = PathBuf::from(working_dir);
+        if !workdir.is_dir() {
             return false;
         }
 
-        // Run git commands to create checkpoint
-        // Note: This is a simplified version. Full implementation would use
-        // GIT_DIR, GIT_WORK_TREE, and GIT_INDEX_FILE environment variables
-        // to isolate the checkpoint repository from the main project.
-
-        let working_path = PathBuf::from(working_dir);
-        if !working_path.exists() {
+        let base_dir = self
+            .config
+            .lock()
+            .map(|g| g.base_dir.clone())
+            .unwrap_or_default();
+        let store = base_dir.join("store").join(store_name(working_dir));
+        if let Err(e) = ensure_store(&store) {
+            warn!("{e}");
             return false;
         }
 
-        // Check if directory has changes
-        let status = Command::new("git")
-            .args(["status", "--porcelain"])
-            .current_dir(&working_path)
-            .output();
+        let env = git_shadow_env(&store, &workdir, &store.join("index"));
+        let env_iter = env.iter().map(|(k, v)| (k.as_str(), v.as_str()));
 
-        match status {
-            Ok(output) if output.stdout.is_empty() => {
-                debug!("Checkpoint skipped: no changes in {}", working_dir);
-                return false;
-            }
-            Err(e) => {
-                warn!("Git status failed: {}", e);
-                return false;
-            }
-            _ => {}
-        }
-
-        // Add all files to staging
+        // Stage all files into the shadow index (user repo untouched)
         let add_result = Command::new("git")
             .args(["add", "-A"])
-            .current_dir(&working_path)
+            .envs(env_iter)
             .output();
-
         if !matches!(add_result, Ok(ref output) if output.status.success()) {
-            debug!("Git add failed, skipping checkpoint");
+            debug!("Checkpoint git add failed for {}", working_dir);
             return false;
         }
 
-        // Check if there are staged changes
+        // Nothing staged → no changes
         let diff_result = Command::new("git")
             .args(["diff", "--cached", "--quiet"])
-            .current_dir(&working_path)
+            .envs(env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
             .output();
-
-        match diff_result {
-            Ok(output) if output.status.success() => {
-                debug!("Checkpoint skipped: nothing to commit");
-                return false;
-            }
-            Err(_) => {}
-            _ => {}
-        }
-
-        // Create commit
-        let commit_result = Command::new("git")
-            .args(["commit", "-m", reason])
-            .current_dir(&working_path)
-            .output();
-
-        if !matches!(commit_result, Ok(ref output) if output.status.success()) {
-            debug!("Git commit failed, skipping checkpoint");
+        if matches!(diff_result, Ok(ref output) if output.status.success()) {
+            debug!("Checkpoint skipped: no changes in {}", working_dir);
             return false;
         }
 
-        info!("Checkpoint taken in {}: {}", working_dir, reason);
-        true
+        // Commit with an internal identity — the shadow store is private, so
+        // the user's git identity is neither required nor consulted.
+        let commit_result = Command::new("git")
+            .args(["commit", "-q", "-m", reason])
+            .envs(git_identity_env())
+            .envs(env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
+            .output();
+
+        match commit_result {
+            Ok(ref output) if output.status.success() => {
+                info!("Checkpoint taken in {}: {}", working_dir, reason);
+                true
+            }
+            Ok(ref output) => {
+                debug!(
+                    "Git commit failed for {}: {}",
+                    working_dir,
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                false
+            }
+            Err(e) => {
+                debug!("Git commit failed for {}: {}", working_dir, e);
+                false
+            }
+        }
     }
 
     /// List available checkpoints for a directory
     pub fn list_checkpoints(&self, working_dir: &str) -> Vec<Checkpoint> {
-        let working_path = PathBuf::from(working_dir);
+        let workdir = PathBuf::from(working_dir);
+        let store = self.store_path(working_dir);
+        if !store.join("HEAD").exists() {
+            return Vec::new();
+        }
+        let env = git_shadow_env(&store, &workdir, &store.join("index"));
 
-        // Get commit log
+        // Get commit log from the shadow store
         let log_output = Command::new("git")
             .args(["log", "--format=%H|%h|%aI|%s", "-n", "20"])
-            .current_dir(&working_path)
+            .envs(env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
             .output();
 
         match log_output {
@@ -273,20 +296,28 @@ impl CheckpointManager {
         }
     }
 
-    /// Restore files to a checkpoint state
+    /// Restore files to a checkpoint state (writes into the working directory)
     pub fn restore(
         &self,
         working_dir: &str,
         commit_hash: &str,
         file_path: Option<&str>,
     ) -> Result<String> {
-        let working_path = PathBuf::from(working_dir);
+        let workdir = PathBuf::from(working_dir);
+        let store = self.store_path(working_dir);
+        if !store.join("HEAD").exists() {
+            return Err(Error::Agent(format!(
+                "No checkpoint store for {}",
+                working_dir
+            )));
+        }
+        let env = git_shadow_env(&store, &workdir, &store.join("index"));
 
         let target = file_path.unwrap_or(".");
 
         let output = Command::new("git")
             .args(["checkout", commit_hash, "--", target])
-            .current_dir(&working_path)
+            .envs(env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
             .output()
             .map_err(|e| Error::Agent(format!("Failed to restore: {}", e)))?;
 
@@ -302,13 +333,21 @@ impl CheckpointManager {
         ))
     }
 
-    /// Show diff between a checkpoint and current state
+    /// Show diff between a checkpoint and the current working tree
     pub fn diff(&self, working_dir: &str, commit_hash: &str) -> Result<String> {
-        let working_path = PathBuf::from(working_dir);
+        let workdir = PathBuf::from(working_dir);
+        let store = self.store_path(working_dir);
+        if !store.join("HEAD").exists() {
+            return Err(Error::Agent(format!(
+                "No checkpoint store for {}",
+                working_dir
+            )));
+        }
+        let env = git_shadow_env(&store, &workdir, &store.join("index"));
 
         let output = Command::new("git")
             .args(["diff", commit_hash, "--", "."])
-            .current_dir(&working_path)
+            .envs(env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
             .output()
             .map_err(|e| Error::Agent(format!("Failed to diff: {}", e)))?;
 
@@ -319,6 +358,90 @@ impl CheckpointManager {
 
         Ok(String::from_utf8_lossy(&output.stdout).to_string())
     }
+}
+
+impl CheckpointManager {
+    /// Stable shadow-store path for a working directory.
+    fn store_path(&self, working_dir: &str) -> PathBuf {
+        self.config
+            .lock()
+            .map(|g| g.base_dir.join("store").join(store_name(working_dir)))
+            .unwrap_or_default()
+    }
+}
+
+/// Stable 16-hex store name for a working directory.
+fn store_name(working_dir: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(working_dir.as_bytes());
+    let digest = hasher.finalize();
+    hex::encode(&digest[..8])
+}
+
+/// Shadow-store environment (hermes parity): git operations run against the
+/// private store with the user's directory as work tree, so no refs, index,
+/// or objects ever touch the user's repository.
+fn git_shadow_env(store: &Path, workdir: &Path, index_file: &Path) -> Vec<(String, String)> {
+    vec![
+        ("GIT_DIR".to_string(), store.to_string_lossy().to_string()),
+        (
+            "GIT_WORK_TREE".to_string(),
+            workdir.to_string_lossy().to_string(),
+        ),
+        (
+            "GIT_INDEX_FILE".to_string(),
+            index_file.to_string_lossy().to_string(),
+        ),
+        ("GIT_CONFIG_GLOBAL".to_string(), "/dev/null".to_string()),
+        ("GIT_CONFIG_SYSTEM".to_string(), "/dev/null".to_string()),
+        ("GIT_CONFIG_NOSYSTEM".to_string(), "1".to_string()),
+    ]
+}
+
+/// Internal identity for shadow-store commits (user git config not required).
+fn git_identity_env() -> Vec<(String, String)> {
+    vec![
+        ("GIT_AUTHOR_NAME".to_string(), "operant".to_string()),
+        ("GIT_AUTHOR_EMAIL".to_string(), "operant@local".to_string()),
+        ("GIT_COMMITTER_NAME".to_string(), "operant".to_string()),
+        (
+            "GIT_COMMITTER_EMAIL".to_string(),
+            "operant@local".to_string(),
+        ),
+    ]
+}
+
+/// Ensure the shadow store (bare repo) exists for a working directory.
+fn ensure_store(store: &Path) -> std::result::Result<(), String> {
+    if store.join("HEAD").exists() {
+        return Ok(());
+    }
+    std::fs::create_dir_all(store)
+        .map_err(|e| format!("Failed to create checkpoint store: {}", e))?;
+    let out = Command::new("git")
+        .args(["init", "-q", "--bare"])
+        .arg(store)
+        .output()
+        .map_err(|e| format!("git init failed: {}", e))?;
+    if !out.status.success() {
+        return Err(format!(
+            "git init failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        ));
+    }
+
+    // Default excludes for the shadow store: never snapshot the user's own
+    // `.git` (would otherwise be added as a gitlink) or common heavy dirs.
+    let exclude = store.join("info").join("exclude");
+    if !exclude.exists() {
+        let _ = std::fs::create_dir_all(store.join("info"));
+        let _ = std::fs::write(
+            &exclude,
+            ".git\nnode_modules/\ntarget/\n__pycache__/\n.venv/\nvenv/\n",
+        );
+    }
+    Ok(())
 }
 
 /// Checkpoint tool - provides checkpoint management as a callable tool
@@ -410,7 +533,7 @@ impl OperantTool for CheckpointTool {
                 } else {
                     ToolResult::error(
                         "checkpoint_ensure",
-                        "Failed to create checkpoint (may be disabled or no changes)",
+                        "Failed to create checkpoint (checkpoints may be disabled in config — set [checkpoints] enabled = true — or there were no changes to snapshot)",
                     )
                 }
             }
@@ -565,5 +688,63 @@ mod tests {
             )
             .await;
         assert!(!result.success);
+    }
+
+    #[test]
+    fn test_store_name_is_stable_and_distinct() {
+        let a = store_name("/tmp/proj");
+        let b = store_name("/tmp/proj");
+        assert_eq!(a, b);
+        assert_eq!(a.len(), 16);
+        assert_ne!(store_name("/tmp/proj"), store_name("/tmp/proj2"));
+    }
+
+    #[test]
+    fn test_checkpoints_disabled_by_default() {
+        let mgr = CheckpointManager::new();
+        assert!(!mgr.is_enabled());
+        assert!(!mgr.ensure_checkpoint("."));
+    }
+
+    #[test]
+    fn test_shadow_checkpoint_roundtrip() {
+        use std::process::Command as StdCommand;
+        // git must be available; otherwise skip
+        if StdCommand::new("git").arg("--version").output().is_err() {
+            return;
+        }
+
+        let tmp = std::env::temp_dir().join(format!("operant_ckpt_{}", uuid::Uuid::new_v4()));
+        let base =
+            std::env::temp_dir().join(format!("operant_ckpt_store_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        std::fs::write(tmp.join("a.txt"), "hello").unwrap();
+
+        let mgr = CheckpointManager::new();
+        mgr.configure(CheckpointConfig {
+            base_dir: base.clone(),
+            enabled: true,
+            ..Default::default()
+        });
+        let dir = tmp.to_str().unwrap();
+
+        // First snapshot captures a.txt
+        assert!(mgr.ensure_checkpoint(dir));
+        // No git state leaks into the working directory
+        assert!(!tmp.join(".git").exists());
+        assert_eq!(mgr.list_checkpoints(dir).len(), 1);
+
+        // Mutate, second snapshot, then restore the first
+        std::fs::write(tmp.join("a.txt"), "changed").unwrap();
+        mgr.new_turn(); // clear per-turn dedup
+        assert!(mgr.ensure_checkpoint(dir));
+        let cps = mgr.list_checkpoints(dir);
+        assert_eq!(cps.len(), 2);
+
+        mgr.restore(dir, &cps[1].hash, Some("a.txt")).unwrap();
+        assert_eq!(std::fs::read_to_string(tmp.join("a.txt")).unwrap(), "hello");
+
+        let _ = std::fs::remove_dir_all(&tmp);
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

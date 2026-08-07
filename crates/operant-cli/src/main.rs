@@ -934,6 +934,7 @@ pub(crate) async fn create_runtime_agent(
         if let Some(provider) = core.memory_provider {
             agent = agent.with_memory_provider(provider);
         }
+        configure_checkpoints(config);
         agent = attach_credential_pool(agent, &provider, config);
         agent
     })
@@ -991,6 +992,7 @@ pub(crate) async fn create_agent_without_events(
         if let Some(provider) = core.memory_provider {
             agent = agent.with_memory_provider(provider);
         }
+        configure_checkpoints(config);
         agent = attach_credential_pool(agent, &provider, config);
         agent
     })
@@ -1000,6 +1002,27 @@ pub(crate) async fn create_agent_without_events(
 /// active provider's env var plus `client.additional_api_keys` (hermes's
 /// `load_pool` rotation vector). Without this, `try_rotate_credential`
 /// always sees `None` and multi-key rotation is dead even when enabled.
+/// Wire the global checkpoint manager from config. Checkpoints are opt-in
+/// (`[checkpoints] enabled = true`); when enabled, snapshots land in an
+/// isolated shadow store under `~/.operant/checkpoints` (hermes parity) so the
+/// user's git repositories are never modified.
+fn configure_checkpoints(config: &AppConfig) {
+    let settings = &config.checkpoints;
+    let base_dir = settings.base_dir.clone().unwrap_or_else(|| {
+        dirs::home_dir()
+            .map(|h| h.join(".operant").join("checkpoints"))
+            .unwrap_or_else(|| std::path::PathBuf::from("/tmp/operant-checkpoints"))
+    });
+    operant_core::tools::get_checkpoint_manager().configure(
+        operant_core::tools::CheckpointConfig {
+            base_dir,
+            max_snapshots: settings.max_snapshots,
+            enabled: settings.enabled,
+            ..Default::default()
+        },
+    );
+}
+
 fn attach_credential_pool(agent: OperantAgent, provider: &str, config: &AppConfig) -> OperantAgent {
     if !config.credential_pool.enabled {
         return agent;
