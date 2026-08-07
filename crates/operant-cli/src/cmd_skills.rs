@@ -475,9 +475,14 @@ async fn install_skill(
             };
             anyhow::bail!(
                 "Installation blocked by security scan: {}\n\
-                 {} findings ({} high, {} medium, {} low).{}",
+                 {} findings ({} critical, {} high, {} medium, {} low).{}",
                 reason,
                 scan_result.findings.len(),
+                scan_result
+                    .findings
+                    .iter()
+                    .filter(|f| f.severity == operant_core::skills_guard::Severity::Critical)
+                    .count(),
                 scan_result
                     .findings
                     .iter()
