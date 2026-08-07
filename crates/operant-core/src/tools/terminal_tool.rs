@@ -59,7 +59,10 @@ impl OperantTool for TerminalTool {
         let env_vars = args.env_vars.unwrap_or_default();
         let use_shell = args.use_shell.unwrap_or(false);
 
-        let backend = terminal_backend::create_backend(&runtime_config());
+        let backend = match terminal_backend::create_backend(&runtime_config()) {
+            Ok(b) => b,
+            Err(e) => return ToolResult::error("terminal", format!("{}", e)),
+        };
 
         let output: CommandOutput = match backend
             .execute_command(
@@ -190,7 +193,8 @@ mod tests {
     #[tokio::test]
     async fn test_backend_factory_local() {
         let config = crate::config::AppConfig::default();
-        let backend = terminal_backend::create_backend(&config);
+        let backend = terminal_backend::create_backend(&config)
+            .expect("default config selects the local backend");
         assert_eq!(backend.name(), "local");
         assert!(backend.is_available());
     }

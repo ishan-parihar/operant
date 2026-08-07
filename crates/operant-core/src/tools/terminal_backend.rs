@@ -13,7 +13,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
-use tracing::{debug, warn};
+use tracing::debug;
 
 use crate::config::{AppConfig, TerminalBackend as BackendKind};
 use crate::platform;
@@ -202,10 +202,10 @@ impl DockerBackend {
     /// Locate the docker CLI binary.
     fn find_docker() -> String {
         // Check HERMES_DOCKER_BINARY env var first
-        if let Ok(override_path) = std::env::var("HERMES_DOCKER_BINARY") {
-            if !override_path.is_empty() {
-                return override_path;
-            }
+        if let Ok(override_path) = std::env::var("HERMES_DOCKER_BINARY")
+            && !override_path.is_empty()
+        {
+            return override_path;
         }
 
         // Check common locations
@@ -436,30 +436,11 @@ impl TerminalBackend for SshBackend {
         timeout: Duration,
         max_output: usize,
     ) -> anyhow::Result<CommandOutput> {
-        let mut remote_cmd = String::new();
-
-        // Set working directory
-        if let Some(dir) = cwd {
-            remote_cmd.push_str(&format!("cd {} && ", dir.to_string_lossy()));
-        }
-
-        // Export environment variables
-        for (k, v) in env_vars {
-            remote_cmd.push_str(&format!("export {}=\"{}\" && ", k, v));
-        }
-
-        if use_shell {
-            let shell = platform::detect_shell();
-            remote_cmd.push_str(&format!(
-                "{} {} {}",
-                shell.path.to_string_lossy(),
-                shell.args_pattern.join(" "),
-                shell_words::quote(command)
-            ));
-        } else {
-            remote_cmd.push_str(command);
-        }
-
+        // Build the remote command with every model-controlled component
+        // shell-quoted (hermes `shlex.quote` parity) so `$()`, backticks, or
+        // `;` inside a working_dir or env value cannot inject into the remote
+        // shell.
+        let remote_cmd = Self::build_remote_command(command, cwd, env_vars, use_shell)?;
         let remote_cmd_arg = format!("bash -c {}", shell_words::quote(&remote_cmd));
 
         let extra_args = vec![remote_cmd_arg];
@@ -516,9 +497,9 @@ impl TerminalBackend for SshBackend {
 // ---------------------------------------------------------------------------
 
 /// Create the appropriate backend based on app config.
-pub fn create_backend(config: &AppConfig) -> Box<dyn TerminalBackend> {
+pub fn create_backend(config: &AppConfig) -> anyhow::Result<Box<dyn TerminalBackend>> {
     match &config.terminal_backend {
-        BackendKind::Local => Box::new(LocalBackend),
+        BackendKind::Local => Ok(Box::new(LocalBackend)),
         BackendKind::Docker => {
             let docker_config = DockerConfig {
                 image: config
@@ -535,7 +516,7 @@ pub fn create_backend(config: &AppConfig) -> Box<dyn TerminalBackend> {
                 cwd: "/root".to_string(),
                 ..Default::default()
             };
-            Box::new(DockerBackend::new(docker_config))
+            Ok(Box::new(DockerBackend::new(docker_config)))
         }
         BackendKind::Ssh => {
             let ssh_config = SshConfig {
@@ -544,14 +525,157 @@ pub fn create_backend(config: &AppConfig) -> Box<dyn TerminalBackend> {
                 port: config.tools.terminal.ssh.port,
                 key_path: config.tools.terminal.ssh.key_path.clone(),
             };
-            Box::new(SshBackend::new(ssh_config))
+            Ok(Box::new(SshBackend::new(ssh_config)))
         }
         other => {
-            warn!(
-                "Terminal backend '{}' not yet implemented in Rust, falling back to local",
+            // Fail closed instead of silently downgrading to unsandboxed local
+            // execution: a hermes-style `terminal_backend = "modal"` config must
+            // not run commands on the host just because the Rust port does not
+            // implement that backend yet (hermes implements modal/vercel/daytona).
+            anyhow::bail!(
+                "Terminal backend '{}' is not implemented in the Rust port — refusing to fall back to unsandboxed local execution. Use \"local\", \"docker\", or \"ssh\".",
                 other
-            );
-            Box::new(LocalBackend)
+            )
         }
+    }
+}
+
+impl SshBackend {
+    /// Build the remote shell command string.
+    ///
+    /// Every model-controlled component is neutralized before reaching the
+    /// remote shell — hermes parity with `shlex.quote` (see
+    /// `hermes-agent/tools/terminal_tool.py::_validate_workdir` and
+    /// `hermes-agent/tools/environments/ssh.py`):
+    ///
+    /// - `cwd` is shell-quoted (a `;`/`$()`/backtick payload would otherwise
+    ///   be executed by the remote shell)
+    /// - env values are shell-quoted (double-quoting alone leaves `$()`,
+    ///   backticks, and `\` active)
+    /// - env names are validated against `[A-Za-z_][A-Za-z0-9_]*` (an unquoted
+    ///   name could inject separators)
+    ///
+    /// The command itself is shell-quoted when `use_shell` is set.
+    fn build_remote_command(
+        command: &str,
+        cwd: Option<&Path>,
+        env_vars: &HashMap<String, String>,
+        use_shell: bool,
+    ) -> anyhow::Result<String> {
+        let mut remote_cmd = String::new();
+
+        // Working directory — shell-quoted (hermes `shlex.quote` parity).
+        if let Some(dir) = cwd {
+            remote_cmd.push_str(&format!(
+                "cd {} && ",
+                shell_words::quote(&dir.to_string_lossy())
+            ));
+        }
+
+        // Environment variables — validate the name, shell-quote the value.
+        for (k, v) in env_vars {
+            if !is_valid_env_name(k) {
+                anyhow::bail!("Invalid environment variable name: {:?}", k);
+            }
+            remote_cmd.push_str(&format!("export {}={} && ", k, shell_words::quote(v)));
+        }
+
+        if use_shell {
+            let shell = platform::detect_shell();
+            remote_cmd.push_str(&format!(
+                "{} {} {}",
+                shell.path.to_string_lossy(),
+                shell.args_pattern.join(" "),
+                shell_words::quote(command)
+            ));
+        } else {
+            remote_cmd.push_str(command);
+        }
+
+        Ok(remote_cmd)
+    }
+}
+
+/// Validate a shell environment variable name (`[A-Za-z_][A-Za-z0-9_]*`).
+fn is_valid_env_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    match chars.next() {
+        Some(c) if c.is_ascii_alphabetic() || c == '_' => {}
+        _ => return false,
+    }
+    chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn env(k: &str, v: &str) -> HashMap<String, String> {
+        let mut m = HashMap::new();
+        m.insert(k.to_string(), v.to_string());
+        m
+    }
+
+    #[test]
+    fn ssh_env_values_are_shell_quoted() {
+        let cmd = SshBackend::build_remote_command(
+            "echo hi",
+            None,
+            &env("API_KEY", "$(rm -rf /tmp/x) && touch /tmp/y"),
+            false,
+        )
+        .unwrap();
+        // shell_words::quote single-quotes the value — no expansion remotely.
+        assert!(cmd.contains("export API_KEY='$(rm -rf /tmp/x) && touch /tmp/y'"));
+        assert!(!cmd.contains("export API_KEY=\"$(rm"));
+    }
+
+    #[test]
+    fn ssh_cwd_is_shell_quoted() {
+        let cmd = SshBackend::build_remote_command(
+            "pwd",
+            Some(Path::new("/tmp; touch /tmp/pwn")),
+            &HashMap::new(),
+            false,
+        )
+        .unwrap();
+        assert!(cmd.contains("cd '/tmp; touch /tmp/pwn'"));
+    }
+
+    #[test]
+    fn ssh_env_name_injection_is_rejected() {
+        let bad = env("X; touch /tmp/pwn", "1");
+        assert!(SshBackend::build_remote_command("true", None, &bad, false).is_err());
+        let bad_digit = env("1BAD", "1");
+        assert!(SshBackend::build_remote_command("true", None, &bad_digit, false).is_err());
+    }
+
+    #[test]
+    fn create_backend_refuses_unimplemented_backends() {
+        for kind in [
+            crate::config::TerminalBackend::Modal,
+            crate::config::TerminalBackend::Daytona,
+            crate::config::TerminalBackend::VercelSandbox,
+            crate::config::TerminalBackend::Singularity,
+        ] {
+            let mut config = crate::config::AppConfig::default();
+            config.terminal_backend = kind.clone();
+            match create_backend(&config) {
+                Ok(_) => panic!("backend {} should be refused, not silently local", kind),
+                Err(e) => {
+                    let msg = e.to_string();
+                    assert!(
+                        msg.contains("not implemented"),
+                        "expected fail-closed message, got: {msg}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn create_backend_default_is_local() {
+        let backend = create_backend(&crate::config::AppConfig::default()).unwrap();
+        assert_eq!(backend.name(), "local");
     }
 }
