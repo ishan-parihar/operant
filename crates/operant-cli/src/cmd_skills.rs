@@ -465,10 +465,17 @@ async fn install_skill(
             }
         }
         Some(false) => {
+            // Dangerous verdicts from community/trusted sources cannot be
+            // force-overridden (skills_guard hermes parity) — only advertise
+            // --force when the block is actually overridable.
+            let force_hint = if reason.contains("--force does not override") {
+                String::new()
+            } else {
+                "\nTo install anyway, re-run with --force.".to_string()
+            };
             anyhow::bail!(
                 "Installation blocked by security scan: {}\n\
-                 {} findings ({} high, {} medium, {} low).\n\
-                 To install anyway, re-run with --force.",
+                 {} findings ({} high, {} medium, {} low).{}",
                 reason,
                 scan_result.findings.len(),
                 scan_result
@@ -486,6 +493,7 @@ async fn install_skill(
                     .iter()
                     .filter(|f| f.severity == operant_core::skills_guard::Severity::Low)
                     .count(),
+                force_hint,
             );
         }
         None => {

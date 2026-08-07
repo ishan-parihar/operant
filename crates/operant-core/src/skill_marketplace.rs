@@ -128,14 +128,15 @@ impl SkillMarketplace {
     /// Fetch the registry index, using the cache if fresh.
     pub async fn fetch_index(&self) -> anyhow::Result<Vec<SkillRegistryEntry>> {
         // Try the cache first.
-        if let Some(cached) = self.load_cache() {
-            if cached.source_url == self.registry_url && !is_expired(cached.fetched_at, CACHE_TTL) {
-                tracing::debug!(
-                    entries = cached.entries.len(),
-                    "Skill registry: using cached index"
-                );
-                return Ok(cached.entries);
-            }
+        if let Some(cached) = self.load_cache()
+            && cached.source_url == self.registry_url
+            && !is_expired(cached.fetched_at, CACHE_TTL)
+        {
+            tracing::debug!(
+                entries = cached.entries.len(),
+                "Skill registry: using cached index"
+            );
+            return Ok(cached.entries);
         }
 
         // Cache miss or stale — fetch fresh.
@@ -282,10 +283,10 @@ impl SkillMarketplace {
             let _ = std::fs::create_dir_all(parent);
         }
         let tmp = self.cache_path.with_extension("json.tmp");
-        if let Ok(json) = serde_json::to_string_pretty(cached) {
-            if std::fs::write(&tmp, &json).is_ok() {
-                let _ = std::fs::rename(&tmp, &self.cache_path);
-            }
+        if let Ok(json) = serde_json::to_string_pretty(cached)
+            && std::fs::write(&tmp, &json).is_ok()
+        {
+            let _ = std::fs::rename(&tmp, &self.cache_path);
         }
     }
 }
@@ -391,7 +392,7 @@ fn scan_downloaded_skill(name: &str, content: &str) -> anyhow::Result<()> {
                 .map(|f| format!("{}: {}", f.pattern_id, f.description))
                 .collect();
             anyhow::bail!(
-                "skills_guard BLOCKED installation of '{}': {} finding(s). Use --force to override. Findings: {}",
+                "skills_guard BLOCKED installation of '{}': {} finding(s). Dangerous verdicts cannot be overridden. Findings: {}",
                 name,
                 result.findings.len(),
                 findings.join("; ")

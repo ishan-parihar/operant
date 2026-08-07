@@ -13,8 +13,8 @@
 //! | Level | Description |
 //! |-------|-------------|
 //! | `builtin` | Ships with Operant. Never scanned, always trusted. |
-//! | `trusted` | openai/skills and anthropics/skills only. Caution verdicts allowed. |
-//! | `community` | Everything else. Any findings = blocked unless `--force`. |
+//! | `trusted` | openai/skills and anthropics/skills only. Caution verdicts allowed; dangerous blocks, not force-overridable. |
+//! | `community` | Everything else. Any findings = blocked (dangerous verdicts cannot be overridden even with `--force`). |
 //! | `agent-created` | Agent-generated skills. Ask on dangerous, allow otherwise. |
 //!
 //! ## Usage
@@ -1363,12 +1363,30 @@ pub fn should_allow_install(result: &ScanResult, force: bool) -> (Option<bool>, 
             ),
         ),
         Verdict::Block => {
-            if force {
+            // Hermes parity: a dangerous verdict from a community or trusted
+            // source can never be force-installed. `--force` only overrides
+            // non-dangerous blocks and confirmation (ask) decisions — see
+            // hermes-agent/tools/skills_guard.py::should_allow_install.
+            let dangerous_hard_block = result.scan_verdict == ScanVerdict::Dangerous
+                && matches!(
+                    result.trust_level,
+                    TrustLevel::Community | TrustLevel::Trusted
+                );
+            if force && !dangerous_hard_block {
                 (
                     Some(true),
                     format!(
                         "Force-installed despite {:?} verdict ({} findings)",
                         result.scan_verdict,
+                        result.findings.len()
+                    ),
+                )
+            } else if dangerous_hard_block {
+                (
+                    Some(false),
+                    format!(
+                        "Blocked ({:?} source + dangerous verdict, {} findings). --force does not override a dangerous verdict.",
+                        result.trust_level,
                         result.findings.len()
                     ),
                 )
@@ -1470,10 +1488,10 @@ pub fn content_hash(skill_path: &Path) -> String {
                 hasher.update(&data);
             }
         }
-    } else if skill_path.is_file() {
-        if let Ok(data) = std::fs::read(skill_path) {
-            hasher.update(&data);
-        }
+    } else if skill_path.is_file()
+        && let Ok(data) = std::fs::read(skill_path)
+    {
+        hasher.update(&data);
     }
 
     let digest = hasher.finalize();
@@ -2175,7 +2193,9 @@ mod tests {
     }
 
     #[test]
-    fn test_force_overrides_dangerous_for_community() {
+    fn test_force_cannot_override_dangerous_for_community() {
+        // Hermes parity: dangerous verdicts from community sources are
+        // hard-blocked — `--force` does not override them.
         let (allowed, reason) = should_allow_install(
             &make_result(
                 TrustLevel::Community,
@@ -2184,12 +2204,14 @@ mod tests {
             ),
             true,
         );
-        assert_eq!(allowed, Some(true));
-        assert!(reason.contains("Force-installed"));
+        assert_eq!(allowed, Some(false));
+        assert!(reason.contains("--force does not override"));
     }
 
     #[test]
-    fn test_force_overrides_dangerous_for_trusted() {
+    fn test_force_cannot_override_dangerous_for_trusted() {
+        // Hermes parity: dangerous verdicts from trusted sources are
+        // hard-blocked — `--force` does not override them.
         let (allowed, reason) = should_allow_install(
             &make_result(
                 TrustLevel::Trusted,
@@ -2198,8 +2220,8 @@ mod tests {
             ),
             true,
         );
-        assert_eq!(allowed, Some(true));
-        assert!(reason.contains("Force-installed"));
+        assert_eq!(allowed, Some(false));
+        assert!(reason.contains("--force does not override"));
     }
 
     // -- agent-created policy --
