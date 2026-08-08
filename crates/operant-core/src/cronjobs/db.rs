@@ -707,3 +707,83 @@ impl CronDb {
         Ok(jobs)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    fn test_db() -> (CronDb, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cron.db");
+        let db = CronDb::init(path).unwrap();
+        // Return the TempDir so it stays alive for the whole test — dropping
+        // it deletes the directory, leaving SQLite with a readonly handle.
+        (db, dir)
+    }
+
+    fn create_repeat_job(db: &CronDb, repeat_times: Option<i32>) -> String {
+        db.create_job(CreateJobParams {
+            name: "test job".to_string(),
+            prompt: "do a thing".to_string(),
+            schedule: "* * * * * *".to_string(),
+            schedule_display: "every second".to_string(),
+            repeat_times,
+            deliver: "local".to_string(),
+            origin_platform: None,
+            origin_chat_id: None,
+            origin_thread_id: None,
+            skill: None,
+            skills: None,
+            model: None,
+            provider: None,
+            base_url: None,
+            script: None,
+            context_from: None,
+            enabled_toolsets: None,
+            workdir: None,
+            no_agent: true,
+        })
+        .unwrap()
+    }
+
+    #[test]
+    fn mark_job_run_increments_repeat_completed() {
+        let (db, _dir) = test_db();
+        let id = create_repeat_job(&db, Some(3));
+        db.mark_job_run(
+            &id,
+            true,
+            None,
+            None,
+            Some("2030-01-01T00:00:00Z".to_string()),
+        )
+        .unwrap();
+        let job = db.get_job(&id).unwrap().unwrap();
+        assert_eq!(job.repeat_completed, 1);
+        assert_eq!(job.last_status.as_deref(), Some("ok"));
+    }
+
+    #[test]
+    fn update_job_can_express_terminal_completion_shape() {
+        // The scheduler marks a finished finite-repeat job by disabling it,
+        // setting state="completed" and clearing next_run_at (hermes parity).
+        let (db, _dir) = test_db();
+        let id = create_repeat_job(&db, Some(2));
+        db.update_job(
+            &id,
+            HashMap::from([
+                ("enabled".to_string(), Some(serde_json::json!(false))),
+                ("state".to_string(), Some(serde_json::json!("completed"))),
+                ("next_run_at".to_string(), None),
+            ]),
+        )
+        .unwrap();
+        let job = db.get_job(&id).unwrap().unwrap();
+        assert!(!job.enabled);
+        assert_eq!(job.state, "completed");
+        assert_eq!(job.next_run_at, None);
+        // A disabled/completed job is no longer due.
+        assert!(db.get_due_jobs().unwrap().is_empty());
+    }
+}

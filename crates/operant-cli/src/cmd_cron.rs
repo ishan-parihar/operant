@@ -25,6 +25,9 @@ pub enum CronSubcommand {
         schedule: String,
         /// Command or prompt to execute when triggered
         command: String,
+        /// Run at most this many times, then mark the job completed (default: infinite)
+        #[arg(long)]
+        repeat: Option<i32>,
     },
     /// Show details of a specific cron job
     Get {
@@ -88,7 +91,8 @@ pub async fn handle_cron_command(
             name,
             schedule,
             command,
-        } => cmd_create(config, &name, &schedule, &command).await,
+            repeat,
+        } => cmd_create(config, &name, &schedule, &command, repeat).await,
         CronSubcommand::Get { id } => cmd_get(config, &id).await,
         CronSubcommand::Update {
             id,
@@ -180,15 +184,25 @@ async fn cmd_list(config: &AppConfig, json: bool) -> Result<()> {
     Ok(())
 }
 
-async fn cmd_create(config: &AppConfig, name: &str, schedule: &str, command: &str) -> Result<()> {
+async fn cmd_create(
+    config: &AppConfig,
+    name: &str,
+    schedule: &str,
+    command: &str,
+    repeat: Option<i32>,
+) -> Result<()> {
     let db = CronDb::init(config.database_path.clone()).context("Failed to open cron database")?;
+    // Repeat is now enforced by the scheduler (R16): when repeat_completed
+    // reaches repeat_times the job is marked completed and disabled. Negative
+    // values mean "infinite" — same semantics as a None repeat.
+    let repeat_times = repeat.filter(|n| *n > 0);
     let id = db
         .create_job(operant_core::cronjobs::db::CreateJobParams {
             name: name.to_string(),
             prompt: command.to_string(),
             schedule: schedule.to_string(),
             schedule_display: schedule.to_string(),
-            repeat_times: None,
+            repeat_times,
             deliver: "local".to_string(),
             origin_platform: None,
             origin_chat_id: None,

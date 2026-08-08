@@ -299,6 +299,43 @@ per surface is wired. Not fixed: rewiring the CLI to `start_channels` is a
 large architectural change with its own risks; documented so a future round
 can decide which stack is canonical.
 
+### R16-1 — cron `repeat_times` was never enforced — finite-repeat jobs ran forever (FIXED)
+
+`CronDb::mark_job_run` incremented `repeat_completed` on every run but **no code
+checked it against `repeat_times`** — a job configured to run N times ran
+indefinitely. Hermes (`cron/jobs.py`) enforces the limit: when
+`completed >= times` it disables the job, sets `state="completed"`, and clears
+`next_run_at` (retaining the record so `last_status`/`last_error` stay
+inspectable). Operant had the schema field + the counter but not the check.
+
+- **Fix** (scheduler.rs): `run_job` now computes `repeat_limit_reached(
+  repeat_times, repeat_completed)` (pure function, unit-tested) and, on the
+  final run, writes the terminal completion shape (`enabled=false`,
+  `state="completed"`, `next_run_at=null`) via `update_job` instead of
+  scheduling the next run. Delivery of the final response still happens.
+- **Fix** (cmd_cron.rs): `cron create` exposed a `--repeat N` flag (previously
+  the CLI always stored `repeat_times: None`, making the field unreachable);
+  negative/zero is treated as infinite, matching `None` semantics.
+- **Tests**: 3 unit tests for `repeat_limit_reached` (reached / not-reached /
+  infinite semantics) + 2 DB tests (counter increments; terminal completion
+  shape disables the job and it leaves `get_due_jobs`).
+
+### R16-2 — rust-best-practices scan (PASSED / notes)
+
+- Applied the skill's disciplines to the round's edits: extracted a pure
+  testable helper instead of inline logic, used `update_job` (no new SQL),
+  kept error propagation via `?` / `anyhow::Context`, no `unwrap` outside
+  tests, and `#[expect]` over `#[allow]` where the existing code already used
+  it.
+- Scan results: `cargo clippy --all-features` on operant-core reports 130
+  pre-existing style errors (125 `collapsible_if` etc.) but they live in
+  vendor-feature code paths not compiled in the shipped binary; the default-
+  feature build is clean. ~1786 `unwrap`/`expect` occurrences outside tests
+  are almost entirely the `lock().expect("…poisoned")` idiom (a poisoned
+  mutex is unrecoverable — a legitimate use), plus tested invariants; no
+  user-input `parse().unwrap()` or index-unwrap patterns found in the live
+  agent/gateway path.
+
 ### R15-2 — `operant channel` subcommands lied or dead-ended (FIXED)
 
 - **`channel start`** printed "Use `operant daemon` to start channels" — but

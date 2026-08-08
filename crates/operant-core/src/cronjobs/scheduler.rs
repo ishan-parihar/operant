@@ -1,4 +1,5 @@
 use cron::Schedule;
+use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
 use tokio::process::Command;
@@ -73,13 +74,35 @@ impl CronScheduler {
             self.run_agent_job(job).await
         };
 
-        self.db.mark_job_run(
-            &job.id,
-            success,
-            error_msg,
-            None,
-            self.compute_next_run(job),
-        )?;
+        // Repeat-limit enforcement (hermes parity — hermes cron/jobs.py marks a
+        // finite-repeat job as terminal when completed >= times). Previously
+        // `repeat_completed` was incremented forever and never checked, so a
+        // job configured with repeat_times = N ran indefinitely.
+        // `mark_job_run` bumps repeat_completed by 1, so this run's new count
+        // is job.repeat_completed + 1.
+        let repeat_exhausted = repeat_limit_reached(job.repeat_times, job.repeat_completed);
+
+        if repeat_exhausted {
+            // Terminal completion: retain the record (so last_status / last_error
+            // stay inspectable) but disable it and clear next_run_at — mirroring
+            // hermes's terminal-completion shape.
+            self.db.update_job(
+                &job.id,
+                HashMap::from([
+                    ("enabled".to_string(), Some(serde_json::json!(false))),
+                    ("state".to_string(), Some(serde_json::json!("completed"))),
+                    ("next_run_at".to_string(), None),
+                ]),
+            )?;
+        } else {
+            self.db.mark_job_run(
+                &job.id,
+                success,
+                error_msg,
+                None,
+                self.compute_next_run(job),
+            )?;
+        }
 
         if success && final_response != "[SILENT]" {
             self.deliver_result(job, &final_response).await?;
@@ -179,5 +202,41 @@ impl CronScheduler {
         let schedule = Schedule::from_str(&job.schedule).ok()?;
         let next = schedule.upcoming(chrono::Utc).next()?;
         Some(next.to_rfc3339())
+    }
+}
+
+/// Whether a job's finite repeat limit is reached after its next run.
+///
+/// `repeat_times` semantics match hermes: `None` or `<= 0` means infinite.
+/// `repeat_completed` is the count BEFORE this run; the run itself pushes it
+/// to `repeat_completed + 1`.
+fn repeat_limit_reached(repeat_times: Option<i32>, repeat_completed: i32) -> bool {
+    match repeat_times {
+        Some(times) if times > 0 => repeat_completed + 1 >= times,
+        _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::repeat_limit_reached;
+
+    #[test]
+    fn repeat_limit_reached_when_completed_reaches_times() {
+        assert!(repeat_limit_reached(Some(1), 0));
+        assert!(repeat_limit_reached(Some(3), 2));
+    }
+
+    #[test]
+    fn repeat_limit_not_reached_before_final_run() {
+        assert!(!repeat_limit_reached(Some(3), 1));
+        assert!(!repeat_limit_reached(Some(5), 0));
+    }
+
+    #[test]
+    fn repeat_limit_none_or_nonpositive_means_infinite() {
+        assert!(!repeat_limit_reached(None, 9999));
+        assert!(!repeat_limit_reached(Some(0), 9999));
+        assert!(!repeat_limit_reached(Some(-5), 9999));
     }
 }
