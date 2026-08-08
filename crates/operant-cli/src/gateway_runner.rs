@@ -370,7 +370,8 @@ fn platform_registry() -> Vec<PlatformEntry> {
                 if config.whatsapp_enabled {
                     Some(Arc::new(
                         WhatsAppAdapter::new(config.whatsapp_enabled)
-                            .with_token(config.whatsapp_token.clone()),
+                            .with_token(config.whatsapp_token.clone())
+                            .with_phone_number_id(config.whatsapp_phone_number_id.clone()),
                     ))
                 } else {
                     None
@@ -443,6 +444,7 @@ fn gateway_config_from_app(app_config: &AppConfig) -> GatewayConfig {
         slack_token: app_config.gateway.slack_token.clone(),
         whatsapp_enabled: app_config.gateway.whatsapp_enabled,
         whatsapp_token: app_config.gateway.whatsapp_token.clone(),
+        whatsapp_phone_number_id: app_config.gateway.whatsapp_phone_number_id.clone(),
         email_enabled: app_config.gateway.email_enabled,
         email_smtp_host: app_config.gateway.email_smtp_host.clone(),
         email_smtp_user: app_config.gateway.email_smtp_user.clone(),
@@ -1586,6 +1588,46 @@ mod tests {
     use operant_core::config::GatewaySettings;
 
     #[test]
+    fn build_adapters_wires_whatsapp_phone_number_id() {
+        // R22: WhatsApp outbound was permanently broken — the adapter's
+        // `phone_number_id` (required for the Graph API URL) had no wiring
+        // path: no config field, wizard skipped it, factory never called
+        // `with_phone_number_id`. This guards the full chain.
+        let mut config = GatewayConfig::default();
+        config.whatsapp_enabled = true;
+        config.whatsapp_token = Some("wa-token".to_string());
+        config.whatsapp_phone_number_id = Some("123456789".to_string());
+        let adapters = build_adapters(&config);
+        let wa = adapters
+            .iter()
+            .find(|a| a.name() == "whatsapp")
+            .expect("whatsapp adapter built when enabled");
+        assert!(
+            wa.config_json()["phone_number_id_configured"]
+                .as_bool()
+                .unwrap(),
+            "configured phone_number_id must reach the adapter"
+        );
+
+        // Without phone_number_id the adapter must report the misconfig so
+        // doctor/status surfaces surface it instead of 404ing at send time.
+        let mut bare = GatewayConfig::default();
+        bare.whatsapp_enabled = true;
+        bare.whatsapp_token = Some("wa-token".to_string());
+        let adapters = build_adapters(&bare);
+        let wa = adapters
+            .iter()
+            .find(|a| a.name() == "whatsapp")
+            .expect("whatsapp adapter built when enabled");
+        assert!(
+            !wa.config_json()["phone_number_id_configured"]
+                .as_bool()
+                .unwrap(),
+            "missing phone_number_id must be visible in config_json"
+        );
+    }
+
+    #[test]
     fn yolo_set_clear_and_enabled_roundtrip() {
         set_yolo("telegram", "chan-a", true);
         set_yolo("telegram", "chan-b", false);
@@ -1620,6 +1662,7 @@ mod tests {
             slack_token: None,
             whatsapp_enabled: false,
             whatsapp_token: None,
+            whatsapp_phone_number_id: None,
             email_enabled: false,
             email_smtp_host: None,
             email_smtp_user: None,
@@ -1649,6 +1692,7 @@ mod tests {
             slack_token: None,
             whatsapp_enabled: false,
             whatsapp_token: None,
+            whatsapp_phone_number_id: None,
             email_enabled: false,
             email_smtp_host: None,
             email_smtp_user: None,
@@ -1679,6 +1723,7 @@ mod tests {
             slack_token: Some("s-token".to_string()),
             whatsapp_enabled: false,
             whatsapp_token: None,
+            whatsapp_phone_number_id: None,
             email_enabled: false,
             email_smtp_host: None,
             email_smtp_user: None,

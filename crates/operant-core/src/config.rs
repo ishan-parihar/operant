@@ -410,6 +410,10 @@ pub struct GatewaySettings {
     pub slack_api_base: String,
     pub whatsapp_enabled: bool,
     pub whatsapp_token: Option<String>,
+    /// WhatsApp Cloud API phone number ID (Meta Business Manager).
+    /// Required for outbound sends — without it the Graph API URL has no
+    /// `phone_number_id` segment and returns 404. (R22)
+    pub whatsapp_phone_number_id: Option<String>,
     pub email_enabled: bool,
     pub email_smtp_host: Option<String>,
     pub email_smtp_user: Option<String>,
@@ -446,6 +450,7 @@ impl Default for GatewaySettings {
             slack_api_base: "https://slack.com/api".to_string(),
             whatsapp_enabled: false,
             whatsapp_token: None,
+            whatsapp_phone_number_id: None,
             email_enabled: false,
             email_smtp_host: None,
             email_smtp_user: None,
@@ -1043,6 +1048,10 @@ impl AppConfig {
         apply_bool_override("HERMES_DISCORD_ENABLED", &mut self.gateway.discord_enabled)?;
         apply_string_option_override("SLACK_BOT_TOKEN", &mut self.gateway.slack_token)?;
         apply_bool_override("HERMES_SLACK_ENABLED", &mut self.gateway.slack_enabled)?;
+        apply_string_option_override(
+            "OPERANT_WHATSAPP_PHONE_NUMBER_ID",
+            &mut self.gateway.whatsapp_phone_number_id,
+        )?;
 
         Ok(())
     }

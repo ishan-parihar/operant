@@ -118,7 +118,22 @@ fn setup_whatsapp(config: &mut AppConfig) -> Result<()> {
         "WhatsApp token",
         &mut config.gateway.whatsapp_token,
         &mut config.gateway.whatsapp_enabled,
-    )
+    )?;
+    // R22: the Cloud API phone number ID is required for outbound sends (it
+    // is the Graph API URL segment). Prompt once; empty skips.
+    if config.gateway.whatsapp_enabled && config.gateway.whatsapp_phone_number_id.is_none() {
+        let pid: String = dialoguer::Input::new()
+            .with_prompt(
+                "WhatsApp phone number ID (Meta Business Manager > API Setup; empty to skip)",
+            )
+            .allow_empty(true)
+            .interact_text()
+            .unwrap_or_default();
+        if !pid.trim().is_empty() {
+            config.gateway.whatsapp_phone_number_id = Some(pid.trim().to_string());
+        }
+    }
+    Ok(())
 }
 
 fn setup_email_smtp(config: &mut AppConfig) -> Result<()> {

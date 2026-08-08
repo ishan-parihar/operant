@@ -41,6 +41,9 @@ pub struct GatewayConfig {
     pub whatsapp_enabled: bool,
     /// WhatsApp Cloud API token
     pub whatsapp_token: Option<String>,
+    /// WhatsApp Cloud API phone number ID (Meta Business Manager).
+    /// Required for outbound sends. (R22)
+    pub whatsapp_phone_number_id: Option<String>,
     /// Enable Email (SMTP)
     pub email_enabled: bool,
     /// SMTP host
@@ -82,6 +85,7 @@ impl Default for GatewayConfig {
             slack_token: settings.slack_token,
             whatsapp_enabled: settings.whatsapp_enabled,
             whatsapp_token: settings.whatsapp_token,
+            whatsapp_phone_number_id: settings.whatsapp_phone_number_id,
             email_enabled: settings.email_enabled,
             email_smtp_host: settings.email_smtp_host,
             email_smtp_user: settings.email_smtp_user,
@@ -2872,7 +2876,7 @@ impl PlatformAdapter for WhatsAppAdapter {
         let client = shared_http_client().clone();
         let phone_number_id = self.phone_number_id.as_deref().ok_or_else(|| {
             Error::Config(
-                "WhatsApp phone_number_id not configured. Set it via WhatsAppAdapter::with_phone_number_id() or config.gateway.whatsapp_phone_number_id. Get it from Meta Business Manager.".to_string()
+                "WhatsApp phone_number_id not configured. Set `whatsapp_phone_number_id` in your gateway config (or OPERANT_WHATSAPP_PHONE_NUMBER_ID env) — find it under Meta Business Manager > WhatsApp > API Setup. (R22)".to_string()
             )
         })?;
         let url = format!(
@@ -2942,6 +2946,7 @@ impl PlatformAdapter for WhatsAppAdapter {
             "platform": "whatsapp",
             "enabled": self.enabled,
             "token_configured": self.token.is_some(),
+            "phone_number_id_configured": self.phone_number_id.is_some(),
         })
     }
 
@@ -3721,6 +3726,7 @@ mod tests {
             telegram_dm_topics_enabled: false,
             whatsapp_enabled: false,
             whatsapp_token: None,
+            whatsapp_phone_number_id: None,
             email_enabled: false,
             email_smtp_host: None,
             email_smtp_user: None,
@@ -3985,6 +3991,7 @@ mod tests {
             telegram_dm_topics_enabled: false,
             whatsapp_enabled: false,
             whatsapp_token: None,
+            whatsapp_phone_number_id: None,
             email_enabled: false,
             email_smtp_host: None,
             email_smtp_user: None,
