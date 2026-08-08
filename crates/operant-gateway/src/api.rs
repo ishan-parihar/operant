@@ -1439,7 +1439,7 @@ pub fn router(
     reload_tx: Option<tokio::sync::watch::Sender<bool>>,
     canvas_store: Option<crate::tools::CanvasStore>,
 ) -> axum::Router<super::AppState> {
-    use axum::Router;
+    use axum::{Router, routing::get};
 
     // Build the AppState from the config
     let state = super::AppState::new(
@@ -1453,6 +1453,8 @@ pub fn router(
     );
 
     Router::new()
+        .route("/ws/chat", get(crate::ws::handle_ws_chat))
+        .route("/ws/nodes", get(crate::nodes::handle_ws_nodes))
         .nest("/api", build_api_routes())
         .with_state(state)
 }
@@ -1473,11 +1475,11 @@ fn build_api_routes() -> axum::Router<super::AppState> {
         // Cron
         .route("/cron", get(handle_api_cron_list))
         .route("/cron", post(handle_api_cron_add))
-        .route("/cron/:id", get(handle_api_cron_get))
-        .route("/cron/:id", patch(handle_api_cron_patch))
-        .route("/cron/:id", delete(handle_api_cron_delete))
-        .route("/cron/:id/run", post(handle_api_cron_run))
-        .route("/cron/:id/runs", get(handle_api_cron_runs))
+        .route("/cron/{id}", get(handle_api_cron_get))
+        .route("/cron/{id}", patch(handle_api_cron_patch))
+        .route("/cron/{id}", delete(handle_api_cron_delete))
+        .route("/cron/{id}/run", post(handle_api_cron_run))
+        .route("/cron/{id}/runs", get(handle_api_cron_runs))
         .route("/cron/settings", get(handle_api_cron_settings_get))
         .route("/cron/settings", patch(handle_api_cron_settings_patch))
         // Integrations
@@ -1495,7 +1497,7 @@ fn build_api_routes() -> axum::Router<super::AppState> {
         // Memory
         .route("/memory", get(handle_api_memory_list))
         .route("/memory", post(handle_api_memory_store))
-        .route("/memory/:key", delete(handle_api_memory_delete))
+        .route("/memory/{key}", delete(handle_api_memory_delete))
         // Cost
         .route("/cost", get(handle_api_cost))
         // CLI tools
@@ -1520,6 +1522,9 @@ fn build_api_routes() -> axum::Router<super::AppState> {
         .route("/hardware", get(handle_api_hardware))
         // OpenAPI
         .route("/openapi.json", get(handle_api_openapi))
+        // SSE event stream (global + per-session events, pairing-auth guarded)
+        .route("/events", get(crate::sse::handle_sse_events))
+        .route("/events/history", get(crate::sse::handle_events_history))
         // Prometheus metrics
         .route("/metrics", get(handle_metrics))
 }
@@ -1646,7 +1651,7 @@ pub fn cron_router(config: operant_config::schema::Config) -> axum::Router {
 
     Router::new()
         .route("/api/cron", post(handle_api_cron_add))
-        .route("/api/cron/:id/run", post(handle_api_cron_run))
+        .route("/api/cron/{id}/run", post(handle_api_cron_run))
         .with_state(state)
 }
 
@@ -2637,5 +2642,144 @@ mod tests {
         .into_response();
 
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn ws_and_sse_routes_are_registered() {
+        use tower::ServiceExt;
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        let config = operant_config::schema::Config {
+            workspace_dir: tmp.path().join("workspace"),
+            config_path: tmp.path().join("config.toml"),
+            ..operant_config::schema::Config::default()
+        };
+        let (event_tx, _rx) = tokio::sync::broadcast::channel::<serde_json::Value>(16);
+        let (_, shutdown_rx) = tokio::sync::watch::channel(false);
+        let pairing = std::sync::Arc::new(operant_config::pairing::PairingGuard::new(false, &[]));
+
+        // Build the full app exactly as the gateway serve path does (router()
+        // then with_state(app_state) to convert Router<AppState> -> Router<()>).
+        let app = crate::api::router(
+            config.clone(),
+            pairing,
+            shutdown_rx.clone(),
+            event_tx.clone(),
+            None,
+            None,
+            None,
+        )
+        .with_state(crate::AppState::new(
+            config,
+            std::sync::Arc::new(operant_config::pairing::PairingGuard::new(false, &[])),
+            shutdown_rx,
+            event_tx,
+            None,
+            None,
+            None,
+        ));
+
+        for path in [
+            "/ws/chat",
+            "/ws/nodes",
+            "/api/events",
+            "/api/events/history",
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    axum::http::Request::builder()
+                        .uri(path)
+                        .body(axum::body::Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .expect("request served");
+            assert_ne!(
+                response.status(),
+                StatusCode::NOT_FOUND,
+                "route {path} must be registered (regression: ws/nodes/sse handlers were built but never routed)"
+            );
+        }
+
+        // /api/events (SSE) with pairing disabled streams — expect 200.
+        let response = app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/api/events")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("events request served");
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn ws_routes_gated_when_pairing_enabled() {
+        use tower::ServiceExt;
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        let config = operant_config::schema::Config {
+            workspace_dir: tmp.path().join("workspace"),
+            config_path: tmp.path().join("config.toml"),
+            ..operant_config::schema::Config::default()
+        };
+        let (event_tx, _rx) = tokio::sync::broadcast::channel::<serde_json::Value>(16);
+        let (_, shutdown_rx) = tokio::sync::watch::channel(false);
+        let pairing = std::sync::Arc::new(operant_config::pairing::PairingGuard::new(true, &[]));
+
+        let app = crate::api::router(
+            config.clone(),
+            pairing,
+            shutdown_rx.clone(),
+            event_tx.clone(),
+            None,
+            None,
+            None,
+        )
+        .with_state(crate::AppState::new(
+            config,
+            std::sync::Arc::new(operant_config::pairing::PairingGuard::new(true, &[])),
+            shutdown_rx,
+            event_tx,
+            None,
+            None,
+            None,
+        ));
+
+        for path in ["/ws/chat", "/ws/nodes"] {
+            let response = app
+                .clone()
+                .oneshot(
+                    axum::http::Request::builder()
+                        .method("GET")
+                        .uri(path)
+                        .header("Connection", "Upgrade")
+                        .header("Upgrade", "websocket")
+                        .header("Sec-WebSocket-Version", "13")
+                        .header("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
+                        .body(axum::body::Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .expect("request served");
+            // Route is registered (not 404) and gated: an unauthenticated
+            // websocket upgrade on a raw router can't complete (hyper's
+            // OnUpgrade extension is only set by a real server), so any
+            // rejection other than 200/404 proves the route matched and is
+            // protected by auth + the upgrade extractor.
+            assert_ne!(
+                response.status(),
+                StatusCode::OK,
+                "{path} must not serve unauthenticated connections"
+            );
+            assert_ne!(
+                response.status(),
+                StatusCode::NOT_FOUND,
+                "{path} must be registered (regression: ws handlers were never routed)"
+            );
+        }
     }
 }

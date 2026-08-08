@@ -127,7 +127,7 @@ pub async fn run_dashboard(
         .route("/api/boards", get(handle_boards))
         .route("/api/health", get(handle_health))
         .route("/api/config", get(handle_config))
-        .route("/assets/:filename", get(handle_asset))
+        .route("/assets/{filename}", get(handle_asset))
         .route("/", get(handle_index))
         .with_state(state);
 
