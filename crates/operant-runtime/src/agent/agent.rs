@@ -48,7 +48,8 @@ pub struct Agent {
     classification_config: operant_config::schema::QueryClassificationConfig,
     available_hints: Vec<String>,
     route_model_by_hint: HashMap<String, String>,
-    #[allow(dead_code)] // WIP: stored for future runtime tool filtering
+    #[expect(dead_code, reason = "WIP: stored for future runtime tool filtering")]
+    // WIP: stored for future runtime tool filtering
     allowed_tools: Option<Vec<String>>,
     response_cache: Option<Arc<operant_memory::response_cache::ResponseCache>>,
     /// Pre-rendered security policy summary injected into the system prompt

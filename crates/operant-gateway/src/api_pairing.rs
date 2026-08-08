@@ -250,7 +250,10 @@ impl DeviceRegistry {
 #[derive(Debug)]
 pub struct PairingStore {
     pending: Mutex<Vec<PendingPairing>>,
-    #[allow(dead_code)] // WIP: will be used to cap pending pairing requests
+    #[expect(
+        dead_code,
+        reason = "WIP: will be used to cap pending pairing requests"
+    )] // WIP: will be used to cap pending pairing requests
     max_pending: usize,
 }
 

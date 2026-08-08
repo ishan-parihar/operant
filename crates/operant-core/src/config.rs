@@ -416,6 +416,11 @@ pub struct GatewaySettings {
     pub email_smtp_pass: Option<String>,
     pub webhooks_enabled: bool,
     pub webhooks_addr: Option<String>,
+    /// Shared secret for HMAC-SHA256 verification of inbound webhook
+    /// signatures (GitHub `x-hub-signature-256`, Stripe `Stripe-Signature`,
+    /// Slack `x-slack-signature`, or the custom `x-webhook-signature` header).
+    /// When set, unsigned or mismatched webhook requests are rejected.
+    pub webhooks_secret: Option<String>,
     pub sms_twilio_enabled: bool,
     pub admins: Vec<String>,
     pub streaming_transport: String,
@@ -447,6 +452,7 @@ impl Default for GatewaySettings {
             email_smtp_pass: None,
             webhooks_enabled: false,
             webhooks_addr: None,
+            webhooks_secret: None,
             sms_twilio_enabled: false,
             admins: Vec::new(),
             streaming_transport: "auto".to_string(),

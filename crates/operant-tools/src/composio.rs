@@ -20,7 +20,6 @@ use std::fmt::Write;
 use std::sync::Arc;
 
 const COMPOSIO_API_BASE_V3: &str = "https://backend.composio.dev/api/v3";
-#[allow(dead_code)] // Used by WIP get_connection_url_v2
 const COMPOSIO_API_BASE_V2: &str = "https://backend.composio.dev/api";
 const COMPOSIO_TOOL_VERSION_LATEST: &str = "latest";
 
@@ -487,7 +486,7 @@ impl ComposioTool {
         })
     }
 
-    #[allow(dead_code)] // WIP: V2 connection API
+    #[expect(dead_code, reason = "WIP: V2 connection API")] // WIP: V2 connection API
     async fn get_connection_url_v2(
         &self,
         app_name: &str,

@@ -39,7 +39,10 @@ fn acquire_sqlite_startup_lock() -> MutexGuard<'static, ()> {
 /// - **Safe Reindex**: temp DB → seed → sync → atomic swap → rollback
 pub struct SqliteMemory {
     conn: Arc<Mutex<Connection>>,
-    #[allow(dead_code)] // stored for potential future use (e.g., reindex, diagnostics)
+    #[expect(
+        dead_code,
+        reason = "stored for potential future use (e.g., reindex, diagnostics)"
+    )] // stored for potential future use (e.g., reindex, diagnostics)
     db_path: PathBuf,
     embedder: Arc<dyn EmbeddingProvider>,
     vector_weight: f32,

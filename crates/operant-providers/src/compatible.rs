@@ -509,7 +509,13 @@ impl OpenAiCompatibleProvider {
         }
     }
 
-    #[allow(dead_code)]
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "shared tool-spec conversion helper for provider-translation paths"
+        )
+    )]
     fn tool_specs_to_openai_format(
         tools: &[operant_api::tool::ToolSpec],
     ) -> Vec<serde_json::Value> {

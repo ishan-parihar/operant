@@ -369,7 +369,13 @@ impl OllamaProvider {
             .to_string()
     }
 
-    #[allow(dead_code)]
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "chat request builder for alternate ollama chat paths"
+        )
+    )]
     fn build_chat_request(
         &self,
         messages: Vec<Message>,

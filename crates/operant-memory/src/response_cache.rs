@@ -28,7 +28,10 @@ struct InMemoryEntry {
 /// the entry is promoted to the hot cache.
 pub struct ResponseCache {
     conn: Mutex<Connection>,
-    #[allow(dead_code)]
+    #[expect(
+        dead_code,
+        reason = "db path retained for diagnostics/reindex alongside the live conn"
+    )]
     db_path: PathBuf,
     ttl_minutes: i64,
     max_entries: usize,

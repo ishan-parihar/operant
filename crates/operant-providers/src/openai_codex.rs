@@ -224,7 +224,13 @@ fn first_nonempty(text: Option<&str>) -> Option<String> {
     })
 }
 
-#[allow(dead_code)]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "system-prompt resolution helper for non-CLI codex paths"
+    )
+)]
 fn resolve_instructions(system_prompt: Option<&str>) -> String {
     first_nonempty(system_prompt).unwrap_or_else(|| DEFAULT_CODEX_INSTRUCTIONS.to_string())
 }
@@ -1006,7 +1012,13 @@ fn append_utf8_stream_chunk(
     clippy::expect_used,
     reason = "invariant guaranteed by surrounding validation"
 )]
-#[allow(dead_code)]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "utf8 stream chunk decoder for streaming fallback paths"
+    )
+)]
 fn decode_utf8_stream_chunks<'a, I>(chunks: I) -> anyhow::Result<String>
 where
     I: IntoIterator<Item = &'a [u8]>,

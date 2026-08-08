@@ -215,6 +215,9 @@ struct GeminiUsageMetadata {
 
 /// Response envelope for the internal cloudcode-pa API.
 /// The internal API nests the standard response under a `response` field.
+// cfg-dependent: used by the default-feature response path, unused when the
+// full provider set is enabled (all-features) — keep allow (expect would go
+// unfulfilled under one of the two feature sets).
 #[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct InternalGenerateContentResponse {
@@ -692,7 +695,13 @@ impl GeminiProvider {
     }
 
     /// Get the Gemini CLI config directory (~/.gemini)
-    #[allow(dead_code)]
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "gemini CLI config discovery for oauth/token paths"
+        )
+    )]
     fn gemini_cli_dir() -> Option<PathBuf> {
         UserDirs::new().map(|u| u.home_dir().join(".gemini"))
     }

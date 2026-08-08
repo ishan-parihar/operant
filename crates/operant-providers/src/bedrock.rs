@@ -533,7 +533,10 @@ struct ConverseResponse {
     #[serde(default)]
     output: Option<ConverseOutput>,
     #[serde(default)]
-    #[allow(dead_code)]
+    #[expect(
+        dead_code,
+        reason = "deserialized stop reason for response metadata parity"
+    )]
     stop_reason: Option<String>,
     #[serde(default)]
     usage: Option<BedrockUsage>,
@@ -556,7 +559,7 @@ struct ConverseOutput {
 
 #[derive(Debug, Deserialize)]
 struct ConverseOutputMessage {
-    #[allow(dead_code)]
+    #[expect(dead_code, reason = "deserialized message role for payload parity")]
     role: String,
     content: Vec<ResponseContentBlock>,
 }

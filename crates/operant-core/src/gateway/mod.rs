@@ -55,6 +55,9 @@ pub struct GatewayConfig {
     pub webhooks_enabled: bool,
     /// Webhook listen address
     pub webhooks_addr: Option<String>,
+    /// Shared secret for HMAC-SHA256 verification of inbound webhook
+    /// signatures (GitHub/Stripe/Slack/custom `x-webhook-signature`).
+    pub webhooks_secret: Option<String>,
     /// Default admin users (user IDs that can access admin commands)
     pub admins: Vec<String>,
     /// Streaming transport mode: "auto", "edit", "draft", "off"
@@ -86,6 +89,7 @@ impl Default for GatewayConfig {
             sms_twilio_enabled: settings.sms_twilio_enabled,
             webhooks_enabled: settings.webhooks_enabled,
             webhooks_addr: settings.webhooks_addr,
+            webhooks_secret: settings.webhooks_secret,
             admins: settings.admins,
             streaming_transport: settings.streaming_transport,
             telegram_proxy: settings.telegram_proxy,
@@ -1222,10 +1226,8 @@ fn find_split_point(region: &str, cp_limit: usize) -> usize {
         }
     }
     // Then space
-    if let Some(pos) = region.rfind(' ') {
-        if pos > cp_limit / 4 {
-            return pos;
-        }
+    if let Some(pos) = region.rfind(' ') && pos > cp_limit / 4 {
+        return pos;
     }
     // Fallback: hard split at the limit
     cp_limit
@@ -3709,6 +3711,7 @@ mod tests {
             slack_token: None,
             webhooks_enabled: false,
             webhooks_addr: None,
+            webhooks_secret: None,
             admins: vec![],
             streaming_transport: "auto".to_string(),
             telegram_proxy: None,
@@ -3854,6 +3857,18 @@ mod tests {
     }
 
     #[test]
+    fn test_webhook_secret_flows_from_settings_to_adapter() {
+        // Regression: webhooks_secret existed in the schema and the webhook
+        // handler supports HMAC verification, but the CLI never wired it —
+        // a configured secret silently did nothing (unsigned webhooks accepted).
+        let adapter = WebhookAdapter::new(true).with_secret(Some("s3cret".to_string()));
+        assert!(adapter.config_json()["hmac_secret_configured"] == serde_json::json!(true));
+
+        let no_secret = WebhookAdapter::new(true);
+        assert!(no_secret.config_json()["hmac_secret_configured"] == serde_json::json!(false));
+    }
+
+    #[test]
     fn test_telegram_adapter_health_check_default() {
         let adapter = TelegramAdapter::new(None);
         let healthy = adapter.health_check().unwrap();
@@ -3873,6 +3888,7 @@ mod tests {
             slack_token: Some("tok".to_string()),
             webhooks_enabled: false,
             webhooks_addr: None,
+            webhooks_secret: None,
             admins: vec!["admin1".to_string()],
             streaming_transport: "auto".to_string(),
             telegram_proxy: None,

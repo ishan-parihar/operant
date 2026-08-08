@@ -19,7 +19,10 @@ pub struct ImageInfoTool {
     // tool-specific checks (e.g. post-canonicalization is_resolved_path_allowed).
     // Pre-canonicalization path-allowlist enforcement now lives in the
     // PathGuardedTool wrapper applied at registration time.
-    #[allow(dead_code)]
+    #[expect(
+        dead_code,
+        reason = "policy enforcement moved to PathGuardedTool; kept for construction-time capture"
+    )]
     security: Arc<SecurityPolicy>,
 }
 

@@ -60,7 +60,10 @@ impl ScriptedProvider {
         }
     }
 
-    #[allow(dead_code)]
+    #[expect(
+        dead_code,
+        reason = "test helper: request counter for the mock provider"
+    )]
     fn request_count(&self) -> usize {
         self.requests.lock().unwrap().len()
     }

@@ -2,7 +2,6 @@
 //!
 //! Wraps the broadcast channel in AppState to deliver events to web dashboard clients.
 
-#[allow(dead_code)] // SSE module: BroadcastObserver and related items prepared for future use
 use super::AppState;
 use axum::{
     Json,
@@ -145,13 +144,19 @@ fn is_public_sse_event(event: &serde_json::Value) -> bool {
 ///
 /// Crate-private: the constructor signature is intentionally not part of any
 /// stable surface, since it is wired directly into `run_gateway`.
-#[allow(dead_code)]
 pub(crate) struct BroadcastObserver {
     tx: tokio::sync::broadcast::Sender<serde_json::Value>,
     buffer: Arc<EventBuffer>,
 }
 
 impl BroadcastObserver {
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "SSE dashboard broadcaster constructor reserved for web-dashboard wiring"
+        )
+    )]
     pub(crate) fn new(
         tx: tokio::sync::broadcast::Sender<serde_json::Value>,
         buffer: Arc<EventBuffer>,

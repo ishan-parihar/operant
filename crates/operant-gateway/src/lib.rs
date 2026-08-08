@@ -1,5 +1,4 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
-#![allow(dead_code)] // Gateway module: webhook handlers, admin functions, and structs prepared for future use
 
 //! Axum-based HTTP gateway with proper HTTP/1.1 compliance, body limits, and timeouts.
 //!
@@ -139,7 +138,6 @@ fn nextcloud_talk_memory_key(msg: &operant_api::channel::ChannelMessage) -> Stri
 }
 
 fn sender_session_id(channel: &str, msg: &operant_api::channel::ChannelMessage) -> String {
-    #[allow(dead_code)]
     match &msg.thread_ts {
         Some(thread_id) => format!("{channel}_{thread_id}_{}", msg.sender),
         None => format!("{channel}_{}", msg.sender),
@@ -147,7 +145,6 @@ fn sender_session_id(channel: &str, msg: &operant_api::channel::ChannelMessage) 
 }
 
 fn webhook_session_id(headers: &HeaderMap) -> Option<String> {
-    #[allow(dead_code)]
     const MAX_SESSION_ID_LEN: usize = 128;
     headers
         .get("X-Session-Id")
@@ -164,7 +161,6 @@ fn webhook_session_id(headers: &HeaderMap) -> Option<String> {
 }
 
 fn hash_webhook_secret(value: &str) -> String {
-    #[allow(dead_code)]
     use sha2::{Digest, Sha256};
 
     let digest = Sha256::digest(value.as_bytes());
@@ -328,8 +324,11 @@ fn parse_client_ip(value: &str) -> Option<IpAddr> {
     value.parse::<IpAddr>().ok()
 }
 
+#[expect(
+    dead_code,
+    reason = "superseded by the api.rs router surface; retained pending removal (tracked in RUST_BEST_PRACTICES_PLAN Phase 10)"
+)]
 fn dirs_data_local() -> Option<std::path::PathBuf> {
-    #[allow(dead_code)]
     directories::BaseDirs::new().map(|d| d.data_local_dir().to_path_buf())
 }
 
@@ -362,8 +361,14 @@ fn client_key_from_request(
         .unwrap_or_else(|| "unknown".to_string())
 }
 
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "superseded by the api.rs router surface; retained pending removal (tracked in RUST_BEST_PRACTICES_PLAN Phase 10)"
+    )
+)]
 fn normalize_max_keys(configured: usize, fallback: usize) -> usize {
-    #[allow(dead_code)]
     if configured == 0 {
         fallback.max(1)
     } else {
@@ -729,8 +734,14 @@ pub async fn run_gateway(
     Ok(())
 }
 
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "superseded by the api.rs router surface; retained pending removal (tracked in RUST_BEST_PRACTICES_PLAN Phase 10)"
+    )
+)]
 fn format_paircode_recovery_command(host: &str, port: u16) -> String {
-    #[allow(dead_code)]
     let mut cmd = format!("operant gateway get-paircode --new --port {port}");
     if let Some(host_arg) = paircode_recovery_host_arg(host) {
         cmd.push_str(" --host ");
@@ -740,13 +751,19 @@ fn format_paircode_recovery_command(host: &str, port: u16) -> String {
 }
 
 fn paircode_recovery_host_arg(host: &str) -> Option<&str> {
-    #[allow(dead_code)]
     match host {
         "127.0.0.1" | "localhost" | "::1" | "0.0.0.0" | "::" => None,
         _ => Some(host),
     }
 }
 
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "superseded by the api.rs router surface; retained pending removal (tracked in RUST_BEST_PRACTICES_PLAN Phase 10)"
+    )
+)]
 fn format_paircode_recovery_curl(host: &str, port: u16, path_prefix: &str) -> String {
     format!("curl -s -X POST http://{host}:{port}{path_prefix}/admin/paircode/new")
 }
@@ -756,8 +773,11 @@ fn format_paircode_recovery_curl(host: &str, port: u16, path_prefix: &str) -> St
 // ══════════════════════════════════════════════════════════════════════════════
 
 /// GET /health — always public (no secrets leaked)
+#[expect(
+    dead_code,
+    reason = "superseded by the api.rs router surface; retained pending removal (tracked in RUST_BEST_PRACTICES_PLAN Phase 10)"
+)]
 async fn handle_health(State(state): State<AppState>) -> impl IntoResponse {
-    #[allow(dead_code)]
     let body = serde_json::json!({
         "status": "ok",
         "paired": state.pairing.is_paired(),
@@ -769,9 +789,7 @@ async fn handle_health(State(state): State<AppState>) -> impl IntoResponse {
 
 /// Prometheus content type for text exposition format.
 const PROMETHEUS_CONTENT_TYPE: &str = "text/plain; version=0.0.4; charset=utf-8";
-#[allow(dead_code)]
 fn prometheus_disabled_hint() -> String {
-    #[allow(dead_code)]
     String::from(
         "# Prometheus backend not enabled. Set [observability] backend = \"prometheus\" in config.\n",
     )
@@ -790,8 +808,14 @@ fn prometheus_observer_from_state(
 }
 
 /// GET /metrics — Prometheus text exposition format
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "superseded by the api.rs router surface; retained pending removal (tracked in RUST_BEST_PRACTICES_PLAN Phase 10)"
+    )
+)]
 async fn handle_metrics(State(state): State<AppState>) -> impl IntoResponse {
-    #[allow(dead_code)]
     let body = {
         #[cfg(feature = "observability-prometheus")]
         {
@@ -817,8 +841,12 @@ async fn handle_metrics(State(state): State<AppState>) -> impl IntoResponse {
 
 /// POST /pair — exchange one-time code for bearer token
 #[axum::debug_handler]
+#[expect(
+    dead_code,
+    reason = "superseded by the api.rs router surface; retained pending removal (tracked in RUST_BEST_PRACTICES_PLAN Phase 10)"
+)]
 async fn handle_pair(
-    #[allow(dead_code)] State(state): State<AppState>,
+    State(state): State<AppState>,
     ConnectInfo(peer_addr): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
@@ -916,7 +944,6 @@ async fn persist_pairing_tokens(config: Arc<Mutex<Config>>, pairing: &PairingGua
 /// so callers can populate observer-event annotations without racing
 /// concurrent webhook traffic that shares the same `CostTracker`.
 struct GatewayChatOutcome {
-    #[allow(dead_code)]
     response: String,
     input_tokens: Option<u64>,
     output_tokens: Option<u64>,
@@ -966,7 +993,7 @@ fn needs_onboarding_channel_reply() -> String {
 
 /// Full-featured chat with tools for channel and webhook handlers.
 async fn run_gateway_chat_with_tools(
-    #[allow(dead_code)] state: &AppState,
+    state: &AppState,
     message: &str,
     session_id: Option<&str>,
 ) -> Result<GatewayChatOutcome> {
@@ -1051,8 +1078,15 @@ pub struct WebhookBody {
 }
 
 /// POST /webhook — main webhook endpoint
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "superseded by the api.rs router surface; retained pending removal (tracked in RUST_BEST_PRACTICES_PLAN Phase 10)"
+    )
+)]
 async fn handle_webhook(
-    #[allow(dead_code)] State(state): State<AppState>,
+    State(state): State<AppState>,
     ConnectInfo(peer_addr): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     body: Result<Json<WebhookBody>, axum::extract::rejection::JsonRejection>,
@@ -1289,8 +1323,12 @@ pub struct WhatsAppVerifyQuery {
 }
 
 /// GET /whatsapp — Meta webhook verification
+#[expect(
+    dead_code,
+    reason = "superseded by the api.rs router surface; retained pending removal (tracked in RUST_BEST_PRACTICES_PLAN Phase 10)"
+)]
 async fn handle_whatsapp_verify(
-    #[allow(dead_code)] State(state): State<AppState>,
+    State(state): State<AppState>,
     Query(params): Query<WhatsAppVerifyQuery>,
 ) -> impl IntoResponse {
     let Some(ref wa) = state.whatsapp else {
@@ -1342,8 +1380,12 @@ pub fn verify_whatsapp_signature(app_secret: &str, body: &[u8], signature_header
 }
 
 /// POST /whatsapp — incoming message webhook
+#[expect(
+    dead_code,
+    reason = "superseded by the api.rs router surface; retained pending removal (tracked in RUST_BEST_PRACTICES_PLAN Phase 10)"
+)]
 async fn handle_whatsapp_message(
-    #[allow(dead_code)] State(state): State<AppState>,
+    State(state): State<AppState>,
     headers: HeaderMap,
     body: Bytes,
 ) -> impl IntoResponse {
@@ -1464,8 +1506,12 @@ async fn handle_whatsapp_message(
 }
 
 /// POST /linq — incoming message webhook (iMessage/RCS/SMS via Linq)
+#[expect(
+    dead_code,
+    reason = "superseded by the api.rs router surface; retained pending removal (tracked in RUST_BEST_PRACTICES_PLAN Phase 10)"
+)]
 async fn handle_linq_webhook(
-    #[allow(dead_code)] State(state): State<AppState>,
+    State(state): State<AppState>,
     headers: HeaderMap,
     body: Bytes,
 ) -> impl IntoResponse {
@@ -1588,8 +1634,12 @@ async fn handle_linq_webhook(
 }
 
 /// GET /wati — WATI webhook verification (echoes hub.challenge)
+#[expect(
+    dead_code,
+    reason = "superseded by the api.rs router surface; retained pending removal (tracked in RUST_BEST_PRACTICES_PLAN Phase 10)"
+)]
 async fn handle_wati_verify(
-    #[allow(dead_code)] State(state): State<AppState>,
+    State(state): State<AppState>,
     Query(params): Query<WatiVerifyQuery>,
 ) -> impl IntoResponse {
     if state.wati.is_none() {
@@ -1612,8 +1662,11 @@ pub struct WatiVerifyQuery {
 }
 
 /// POST /wati — incoming WATI WhatsApp message webhook
+#[expect(
+    dead_code,
+    reason = "superseded by the api.rs router surface; retained pending removal (tracked in RUST_BEST_PRACTICES_PLAN Phase 10)"
+)]
 async fn handle_wati_webhook(State(state): State<AppState>, body: Bytes) -> impl IntoResponse {
-    #[allow(dead_code)]
     let Some(ref wati) = state.wati else {
         return (
             StatusCode::NOT_FOUND,
@@ -1708,8 +1761,15 @@ async fn handle_wati_webhook(State(state): State<AppState>, body: Bytes) -> impl
 }
 
 /// POST /nextcloud-talk — incoming message webhook (Nextcloud Talk bot API)
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "superseded by the api.rs router surface; retained pending removal (tracked in RUST_BEST_PRACTICES_PLAN Phase 10)"
+    )
+)]
 async fn handle_nextcloud_talk_webhook(
-    #[allow(dead_code)] State(state): State<AppState>,
+    State(state): State<AppState>,
     headers: HeaderMap,
     body: Bytes,
 ) -> impl IntoResponse {
@@ -1838,10 +1898,13 @@ async fn handle_nextcloud_talk_webhook(
 /// Maximum request body size for the Gmail webhook endpoint (1 MB).
 /// Google Pub/Sub messages are typically under 10 KB.
 const GMAIL_WEBHOOK_MAX_BODY: usize = 1024 * 1024;
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "gmail Pub/Sub push webhook handler reserved (not yet mounted on the router)"
+)]
 /// POST /webhook/gmail — incoming Gmail Pub/Sub push notification
 async fn handle_gmail_push_webhook(
-    #[allow(dead_code)] State(state): State<AppState>,
+    State(state): State<AppState>,
     headers: HeaderMap,
     body: Bytes,
 ) -> impl IntoResponse {
@@ -1910,14 +1973,12 @@ async fn handle_gmail_push_webhook(
 /// Response for admin endpoints
 #[derive(serde::Serialize)]
 struct AdminResponse {
-    #[allow(dead_code)]
     success: bool,
     message: String,
 }
 
 /// Reject requests that do not originate from a loopback address.
 fn require_localhost(peer: &SocketAddr) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
-    #[allow(dead_code)]
     if peer.ip().is_loopback() {
         Ok(())
     } else {
@@ -1931,8 +1992,12 @@ fn require_localhost(peer: &SocketAddr) -> Result<(), (StatusCode, Json<serde_js
 }
 
 /// POST /admin/shutdown — graceful shutdown from CLI (localhost only)
+#[expect(
+    dead_code,
+    reason = "superseded by the api.rs router surface; retained pending removal (tracked in RUST_BEST_PRACTICES_PLAN Phase 10)"
+)]
 async fn handle_admin_shutdown(
-    #[allow(dead_code)] State(state): State<AppState>,
+    State(state): State<AppState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
     require_localhost(&peer)?;
@@ -1964,8 +2029,12 @@ async fn handle_admin_shutdown(
 /// the channel is in-process tokio, not an OS signal. The gateway-only
 /// `operant gateway start` (no daemon supervisor) returns 503 with a
 /// clear message because there's nothing to signal.
+#[expect(
+    dead_code,
+    reason = "superseded by the api.rs router surface; retained pending removal (tracked in RUST_BEST_PRACTICES_PLAN Phase 10)"
+)]
 async fn handle_admin_reload(
-    #[allow(dead_code)] State(state): State<AppState>,
+    State(state): State<AppState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
     require_localhost(&peer)?;
@@ -2013,8 +2082,12 @@ async fn handle_admin_reload(
 }
 
 /// GET /admin/paircode — fetch current pairing code (localhost only)
+#[expect(
+    dead_code,
+    reason = "superseded by the api.rs router surface; retained pending removal (tracked in RUST_BEST_PRACTICES_PLAN Phase 10)"
+)]
 async fn handle_admin_paircode(
-    #[allow(dead_code)] State(state): State<AppState>,
+    State(state): State<AppState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
     require_localhost(&peer)?;
@@ -2044,8 +2117,12 @@ async fn handle_admin_paircode(
 }
 
 /// POST /admin/paircode/new — generate a new pairing code (localhost only)
+#[expect(
+    dead_code,
+    reason = "superseded by the api.rs router surface; retained pending removal (tracked in RUST_BEST_PRACTICES_PLAN Phase 10)"
+)]
 async fn handle_admin_paircode_new(
-    #[allow(dead_code)] State(state): State<AppState>,
+    State(state): State<AppState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
     require_localhost(&peer)?;
@@ -2079,8 +2156,11 @@ async fn handle_admin_paircode_new(
 /// returns a code when the gateway is in its initial un-paired state (no devices
 /// paired yet and a pairing code exists). Once the first device pairs, this
 /// endpoint stops returning a code.
+#[expect(
+    dead_code,
+    reason = "superseded by the api.rs router surface; retained pending removal (tracked in RUST_BEST_PRACTICES_PLAN Phase 10)"
+)]
 async fn handle_pair_code(State(state): State<AppState>) -> impl IntoResponse {
-    #[allow(dead_code)]
     let require = state.pairing.require_pairing();
     let is_paired = state.pairing.is_paired();
 

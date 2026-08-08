@@ -25,7 +25,8 @@ pub struct GoogleWorkspaceTool {
     allowed_operations: Vec<GoogleWorkspaceAllowedOperation>,
     credentials_path: Option<String>,
     default_account: Option<String>,
-    #[allow(dead_code)] // Config field for future rate-limiting
+    #[expect(dead_code, reason = "Config field for future rate-limiting")]
+    // Config field for future rate-limiting
     rate_limit_per_minute: u32,
     timeout_secs: u64,
     audit_log: bool,

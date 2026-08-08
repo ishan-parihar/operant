@@ -373,7 +373,9 @@ fn platform_registry() -> Vec<PlatformEntry> {
                         .clone()
                         .unwrap_or_else(|| "0.0.0.0:8080".to_string());
                     Some(Arc::new(
-                        WebhookAdapter::new(config.webhooks_enabled).with_addr(addr),
+                        WebhookAdapter::new(config.webhooks_enabled)
+                            .with_addr(addr)
+                            .with_secret(config.webhooks_secret.clone()),
                     ))
                 } else {
                     None
@@ -448,6 +450,7 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
         sms_twilio_enabled: app_config.gateway.sms_twilio_enabled,
         webhooks_enabled: app_config.gateway.webhooks_enabled,
         webhooks_addr: app_config.gateway.webhooks_addr.clone(),
+        webhooks_secret: app_config.gateway.webhooks_secret.clone(),
         admins: app_config.gateway.admins.clone(),
         streaming_transport: app_config.gateway.streaming_transport.clone(),
         telegram_proxy: app_config.gateway.telegram_proxy.clone(),
@@ -1496,6 +1499,7 @@ mod tests {
             sms_twilio_enabled: false,
             webhooks_enabled: false,
             webhooks_addr: None,
+            webhooks_secret: None,
             admins: vec![],
             streaming_transport: "auto".to_string(),
             telegram_proxy: None,
@@ -1524,6 +1528,7 @@ mod tests {
             sms_twilio_enabled: false,
             webhooks_enabled: false,
             webhooks_addr: None,
+            webhooks_secret: None,
             admins: vec![],
             streaming_transport: "auto".to_string(),
             telegram_proxy: None,
@@ -1553,6 +1558,7 @@ mod tests {
             sms_twilio_enabled: false,
             webhooks_enabled: true,
             webhooks_addr: Some("0.0.0.0:9090".to_string()),
+            webhooks_secret: None,
             admins: vec![],
             streaming_transport: "auto".to_string(),
             telegram_proxy: None,
@@ -1575,6 +1581,7 @@ mod tests {
                 slack_token: Some("stok".to_string()),
                 webhooks_enabled: false,
                 webhooks_addr: None,
+                webhooks_secret: None,
                 admins: vec!["admin1".to_string()],
                 ..Default::default()
             },
@@ -1597,6 +1604,7 @@ mod tests {
             sms_twilio_enabled: app_config.gateway.sms_twilio_enabled,
             webhooks_enabled: app_config.gateway.webhooks_enabled,
             webhooks_addr: app_config.gateway.webhooks_addr.clone(),
+            webhooks_secret: app_config.gateway.webhooks_secret.clone(),
             admins: app_config.gateway.admins.clone(),
             streaming_transport: "auto".to_string(),
             telegram_proxy: app_config.gateway.telegram_proxy.clone(),

@@ -47,7 +47,10 @@ impl std::fmt::Display for AuditOp {
 pub struct AuditedMemory<M: Memory> {
     inner: M,
     audit_conn: Arc<Mutex<Connection>>,
-    #[allow(dead_code)]
+    #[expect(
+        dead_code,
+        reason = "db path retained for diagnostics/reindex alongside the live conn"
+    )]
     db_path: PathBuf,
 }
 

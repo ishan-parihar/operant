@@ -1027,7 +1027,10 @@ mod tests {
     }
 
     /// Get the first active run_id from the engine (for tests with a single run).
-    #[allow(dead_code)]
+    #[expect(
+        dead_code,
+        reason = "test helper: first active run id for single-run tests"
+    )]
     fn first_active_run_id(engine: &SopEngine) -> String {
         engine
             .active_runs()

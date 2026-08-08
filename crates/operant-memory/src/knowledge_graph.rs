@@ -157,7 +157,10 @@ pub struct GraphStats {
 /// SQLite-backed knowledge graph.
 pub struct KnowledgeGraph {
     conn: Mutex<Connection>,
-    #[allow(dead_code)]
+    #[expect(
+        dead_code,
+        reason = "db path retained for diagnostics/reindex alongside the live conn"
+    )]
     db_path: PathBuf,
     max_nodes: usize,
 }

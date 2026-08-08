@@ -11,9 +11,21 @@ const DEFAULT_API_VERSION: &str = "2024-08-01-preview";
 
 pub struct AzureOpenAiProvider {
     credential: Option<String>,
-    #[allow(dead_code)]
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "azure resource identity retained for endpoint derivation/diagnostics"
+        )
+    )]
     resource_name: String,
-    #[allow(dead_code)]
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "azure deployment identity retained for endpoint derivation/diagnostics"
+        )
+    )]
     deployment_name: String,
     api_version: String,
     base_url: String,

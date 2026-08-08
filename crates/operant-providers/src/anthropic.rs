@@ -176,7 +176,10 @@ struct AnthropicUsage {
     #[serde(default)]
     output_tokens: Option<u64>,
     #[serde(default)]
-    #[allow(dead_code)]
+    #[expect(
+        dead_code,
+        reason = "deserialized usage field for cache-accounting parity"
+    )]
     cache_creation_input_tokens: Option<u64>,
     #[serde(default)]
     cache_read_input_tokens: Option<u64>,
@@ -270,7 +273,13 @@ impl AnthropicProvider {
     }
 
     /// Cache system prompts larger than ~1024 tokens (3KB of text)
-    #[allow(dead_code)]
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "prompt-cache threshold heuristic for cache-eligible system prompts"
+        )
+    )]
     fn should_cache_system(text: &str) -> bool {
         text.len() > 3072
     }
