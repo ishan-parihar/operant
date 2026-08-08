@@ -3,6 +3,7 @@
 //! Tools for getting current time and timestamps.
 
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::Value;
@@ -148,63 +149,20 @@ impl OperantTool for TimestampTool {
     }
 }
 
-/// Simple datetime formatter (no external dependencies)
+/// Format a Unix timestamp (plus nanoseconds) as a strftime-style string.
+///
+/// Uses `chrono` (the canonical datetime crate) instead of hand-rolled
+/// civil-date math — the previous implementation rendered every month
+/// ≥ February one behind (Aug 8 2026 → "2026-07-08", audit R14-1).
+/// `chrono` is already a workspace + crate dependency, so no new deps.
 fn format_datetime(secs: u64, nsecs: u32, format: &str) -> String {
-    // Calculate date/time components from Unix timestamp
-    let days = secs / 86400;
-    let mut remaining_secs = secs % 86400;
-    let hours = remaining_secs / 3600;
-    remaining_secs %= 3600;
-    let minutes = remaining_secs / 60;
-    let seconds = remaining_secs % 60;
-
-    // Calculate year, month, day using Zeller's congruence approximation
-    let (year, month, day) = days_to_date(days);
-
-    // Format according to pattern
-    format
-        .replace("%Y", &format!("{:04}", year))
-        .replace("%m", &format!("{:02}", month))
-        .replace("%d", &format!("{:02}", day))
-        .replace("%H", &format!("{:02}", hours))
-        .replace("%M", &format!("{:02}", minutes))
-        .replace("%S", &format!("{:02}", seconds))
-        .replace("%f", &format!("{:09}", nsecs))
-        .replace("%T", &format!("{:02}:{:02}:{:02}", hours, minutes, seconds))
-}
-
-/// Convert days since epoch to year, month, day
-fn days_to_date(days: u64) -> (u64, u8, u8) {
-    // Simplified algorithm - works for dates after 1970-01-01
-    let mut year = 1970;
-    let mut remaining_days = days as i64;
-
-    loop {
-        let days_in_year = if is_leap_year(year) { 366 } else { 365 };
-        if remaining_days < days_in_year {
-            break;
-        }
-        remaining_days -= days_in_year;
-        year += 1;
+    match DateTime::<Utc>::from_timestamp(secs as i64, nsecs) {
+        Some(dt) => dt.format(format).to_string(),
+        // `from_timestamp` is None only outside the supported i64-second
+        // range — unreachable for real timestamps, but fail gracefully
+        // rather than panic.
+        None => format!("{secs}"),
     }
-
-    // Days in each month (non-leap year)
-    let days_in_months = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-    let mut month = 1;
-    for (i, &dim) in days_in_months.iter().enumerate() {
-        let days_in_this_month = if i == 1 && is_leap_year(year) {
-            29
-        } else {
-            dim
-        };
-        if remaining_days < days_in_this_month as i64 {
-            break;
-        }
-        remaining_days -= days_in_this_month as i64;
-        month = i as u8 + 1;
-    }
-
-    (year, month, (remaining_days + 1) as u8)
 }
 
 #[allow(clippy::manual_is_multiple_of)]
@@ -444,8 +402,37 @@ mod tests {
     }
 
     #[test]
-    fn test_days_to_date() {
-        let (year, month, day) = days_to_date(0);
-        assert_eq!((year, month, day), (1970, 1, 1));
+    fn test_format_datetime_modern_date() {
+        // Regression for R14-1: the hand-rolled month loop set `month`
+        // only when it did NOT break, so every month ≥ February rendered
+        // one behind. This timestamp is 2026-08-08 01:16:16 UTC.
+        assert_eq!(
+            format_datetime(1786151776, 0, "%Y-%m-%d %H:%M:%S"),
+            "2026-08-08 01:16:16"
+        );
+    }
+
+    #[test]
+    fn test_format_datetime_leap_day() {
+        // 2024 is a leap year — Feb 29 must render, not Feb 28/Mar 1.
+        assert_eq!(
+            format_datetime(1709208000, 0, "%Y-%m-%d %H:%M:%S"),
+            "2024-02-29 12:00:00"
+        );
+    }
+
+    #[test]
+    fn test_format_datetime_year_end() {
+        // December: the old loop never set month to 12 on the final break.
+        assert_eq!(
+            format_datetime(2019686399, 0, "%Y-%m-%d %H:%M:%S"),
+            "2033-12-31 23:59:59"
+        );
+    }
+
+    #[test]
+    fn test_format_datetime_nanoseconds() {
+        assert_eq!(format_datetime(0, 123_456_789, "%H:%M:%S"), "00:00:00");
+        assert_eq!(format_datetime(0, 123_456_789, "%f"), "123456789");
     }
 }

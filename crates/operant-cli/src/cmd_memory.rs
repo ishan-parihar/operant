@@ -272,11 +272,25 @@ async fn cmd_get(id: &str) -> Result<()> {
 
 async fn cmd_delete(id: &str) -> Result<()> {
     let mm = loaded_memory_manager().await?;
-    mm.delete_session(id).await;
-    mm.save_to_disk()
-        .await
-        .context("Failed to save memory to disk")?;
-    println!("Session '{}' deleted.", id);
+    // Memory *entries* (MEMORY.md blocks) and *sessions* are two distinct
+    // namespaces: delete_session() only removes a session record, so the
+    // old code silently no-oped on memory ids while still printing
+    // success (audit R14-2 — live-verified: the entry stayed on disk).
+    // Try the block namespace first — what `memory list/search/get`
+    // surface — then fall back to the legacy session namespace.
+    let removed_block = mm.remove_block(id).await;
+    if removed_block {
+        mm.save_to_disk()
+            .await
+            .context("Failed to save memory to disk")?;
+        println!("Memory entry '{}' deleted.", id);
+    } else {
+        mm.delete_session(id).await;
+        mm.save_to_disk()
+            .await
+            .context("Failed to save memory to disk")?;
+        println!("Session '{}' deleted.", id);
+    }
     Ok(())
 }
 

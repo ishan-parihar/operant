@@ -175,3 +175,59 @@ Ran the shipped binary (v0.1.4) against `~/.operant/operant.toml` (kilo.ai gatew
 - **Verified**: file read correct; memory entry persisted to `~/.operant/MEMORY.md` and recalled by key; assistant+tool messages persisted to `database.db` (`sess_2bb86894…`); turn diagnostics logged (`Turn ended: reason=text_response … api_calls=4/12 … tool_turns=3`).
 - Rate limiter (`check_rate_limit`), streaming usage halves, credential-pool attach, empty-response retry ladder, and evolution-trigger split (R1) all confirmed present in the exercised path.
 - **Not live-tested**: LLM-compressor overflow path (requires context >80% of the 128k window on the free tier; gate verified by code review — `should_compress` checks `config.enabled`, and unit test `prefer_reported` covers the real-usage gate).
+
+## Round 14 (2026-08-08) — deeper-scan audit (binary live-test + wiring)
+
+### R14-1 — datetime tool rendered every month ≥ February one behind (FIXED)
+`days_to_date`'s month loop only assigned `month` on iterations that did NOT break,
+so the final (breaking) month was never recorded: Aug 8 2026 rendered as
+"2026-07-08" (live-verified — unix timestamp 1786151776 is correct, the formatted
+string was one month behind). The unit test only covered the epoch
+(`1970-01-01`), which is why it shipped.
+- **Fix**: replaced the hand-rolled civil-date math with `chrono`
+  (`DateTime::<Utc>::from_timestamp`) — chrono was already a workspace + crate
+  dependency, so no new deps. `parse_date`/`is_leap_year` (used by the
+  `timestamp` tool) unchanged.
+- **Tests**: 4 new regressions — modern date (1786151776 → "2026-08-08 01:16:16"),
+  leap day (1709208000 → "2024-02-29 12:00:00"), year end (2019686399 →
+  "2033-12-31 23:59:59"), nanoseconds (`%f`). All 19 datetime tests pass.
+- **Live-verified** on the rebuilt binary: `operant test datetime` →
+  `"formatted":"2026-08-08 01:29:26"` (correct).
+
+### R14-2 — `operant memory delete` silently no-oped on memory entries (FIXED)
+`cmd_delete` called `mm.delete_session(id)` — the *session* namespace — while
+memory entries live in the *block* namespace (MEMORY.md). Deleting a memory id
+printed "Session '...' deleted." but the entry stayed on disk (live-verified:
+`operant memory delete audit_r14_live_test` → the entry remained in MEMORY.md).
+- **Fix**: `cmd_delete` now tries `remove_block(id)` first (the R5-1c primitive
+  `memory prune` already uses), falls back to the legacy session namespace, and
+  flushes either way.
+- **Live-verified**: `operant memory delete audit_r14_live_test` →
+  "Memory entry 'audit_r14_live_test' deleted." and the entry is gone from
+  MEMORY.md (grep count 0).
+
+### R14 observations (no code change)
+- **Live core-loop test**: with the real `~/.operant` config, `operant run`
+  executed 5 tool calls end-to-end (datetime, file_write, file_read,
+  memory_store, skills_list); file landed, memory entry landed in MEMORY.md,
+  session recorded (218→219), trajectory saved + listable. A second run
+  completed 10/10 datetime calls cleanly (exit 0).
+- **Reflection wiring**: skill nudge (`advance_skill_trigger`, interval 10,
+  mod.rs:1851) and memory review (per-turn, mod.rs:1133) are wired into the
+  live `OperantAgent` loop with unit-tested counters; the 10-call run landed
+  exactly on the counter boundary (needs the 11th iteration to fire), so the
+  nudge itself was not re-observed this round (prior round R2 live-verified it
+  at iteration 10).
+- **MaxIterationsExceeded UX**: when the iteration budget is exhausted and the
+  grace call fails, `run` returns a hard error and the CLI exits 1 with no
+  visible output (observed on a 12-append run the free-tier model could not
+  finish). Recommendation (not applied): surface the partial session state +
+  a closing summary on budget exhaustion instead of silent exit — hermes
+  produces a closing summary.
+- **Config hygiene**: `~/.operant/operant.toml` still had `[memory] provider =
+  "tdg"` (legacy/removed — silently downgraded to BuiltinProvider, so the
+  memory-review reflection gate IS live). Changed to `"builtin"` (backup
+  kept); doctor no longer flags it.
+- **In-flight tree**: the `#[allow(dead_code)]` → `#[expect(dead_code,
+  reason=...)]` migration (26 files) was uncommitted; it compiles clean and is
+  committed alongside this round.
