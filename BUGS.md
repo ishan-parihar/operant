@@ -389,3 +389,36 @@ inspectable). Operant had the schema field + the counter but not the check.
   reports the honest OFF instead of claiming ON while prompts resume.
   Steady-state auto-approve log downgraded warn→info.
 
+### R18 — ACP server: lied about state, violated JSON-RPC framing, ignored a flag (FIXED)
+
+- **`status` always reported `idle`** — `AcpCliHandler::agent_state` returned
+  `AgentState::Idle` unconditionally, so a client polling status during a
+  long-running `command` was told the agent was idle while it was mid-run.
+  → **Fix**: new `operant_core::acp::AgentStateTracker` (cloneable, shared
+  `Arc<Mutex<AgentState>>`); `execute_command` sets `Running` before the
+  `spawn_blocking` run and restores `Idle`/`Error` on completion. `status`
+  now reports real state. Unit-tested.
+- **JSON-RPC 2.0 framing violations**: (a) a request without an `id` (a
+  JSON-RPC notification) failed to *deserialize* and got `-32700 Parse error`
+  instead of being honored as a notification with no response; (b) the
+  `jsonrpc` version member was never validated — `"1.0"` or missing was
+  accepted silently; (c) object/array `id`s were echoed back. → **Fix**:
+  `id`/`jsonrpc` are `#[serde(default)]`, new `validate_request` returns
+  `-32600 Invalid Request` for wrong version / bad id type, and the stdio
+  loop suppresses responses for notifications. Live-verified: notification
+  ping produced no output; `"jsonrpc":"1.0"` → `-32600`.
+- **`--accept-hooks` was accepted and silently ignored** (`accept_hooks: _`)
+  while the server implements no ACP hooks. → **Fix**: the flag now fails
+  loudly with a pointer to what implementing hooks requires. Live-verified.
+- **Flagged (documented divergence)**: `operant acp server` is a *custom
+  operant-native 4-method protocol* (ping/status/command/stop) over stdio,
+  not the ACP wire protocol — hermes ships a real 5,832-line ACP adapter
+  (`hermes-agent/acp_adapter/`: server.py 2510, session.py 684, tools.py
+  1347, permissions.py, provenance.py) with sessions, prompts, permissions
+  and provenance. Operant's biggest gap vs hermes: **each `command` spawns a
+  fresh agent with no session continuity** (hermes keeps a session
+  (`session.py`)). The gateway's ACP-over-WebSocket endpoint
+  (`operant-gateway/src/acp.rs`) does use the channels-crate `AcpServer` —
+  the one live caller found so far (narrows the R15 dead-wiring note to the
+  channels *orchestrator* specifically).
+

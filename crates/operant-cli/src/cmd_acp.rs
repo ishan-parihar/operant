@@ -2,6 +2,7 @@ use anyhow::Result;
 use clap::Subcommand;
 use operant_core::acp::AcpHandler;
 use operant_core::acp::AgentState;
+use operant_core::acp::AgentStateTracker;
 use operant_core::config::AppConfig;
 use std::sync::Arc;
 
@@ -17,7 +18,14 @@ pub enum AcpSubcommand {
 
 pub async fn handle_acp_command(config: &AppConfig, cmd: AcpSubcommand) -> Result<()> {
     match cmd {
-        AcpSubcommand::Server { accept_hooks: _ } => cmd_server(config).await,
+        AcpSubcommand::Server { accept_hooks } => {
+            if accept_hooks {
+                anyhow::bail!(
+                    "--accept-hooks is not supported: the operant ACP server does not implement ACP hooks (accepting hook requests requires the full ACP session/permission machinery). Remove the flag."
+                );
+            }
+            cmd_server(config).await
+        }
     }
 }
 
@@ -36,17 +44,20 @@ async fn cmd_server(config: &AppConfig) -> Result<()> {
 
 /// ACP handler that connects to the Operant agent runtime.
 ///
-/// The handler tracks agent state and delegates `command` execution
-/// via `spawn_blocking` to isolate non-Send async boundaries that
-/// arise from the MCP/agent internals.
+/// The handler tracks agent state (so `status` reports `running` while a
+/// command executes, not a constant `idle`) and delegates `command` execution
+/// via `spawn_blocking` to isolate non-Send async boundaries that arise from
+/// the MCP/agent internals.
 struct AcpCliHandler {
     config: Arc<AppConfig>,
+    state: AgentStateTracker,
 }
 
 impl AcpCliHandler {
     fn new(config: AppConfig) -> Self {
         Self {
             config: Arc::new(config),
+            state: AgentStateTracker::new(),
         }
     }
 }
@@ -54,24 +65,36 @@ impl AcpCliHandler {
 #[async_trait::async_trait]
 impl AcpHandler for AcpCliHandler {
     async fn agent_state(&self) -> AgentState {
-        AgentState::Idle
+        self.state.get()
     }
 
     async fn execute_command(&self, command: &str) -> Result<String, String> {
+        // Report `running` for the duration of the command so `status` is
+        // truthful. (R18: agent_state previously returned Idle unconditionally.)
+        self.state.set(AgentState::Running);
+
         // Spawn a blocking task with its own tokio runtime to isolate
         // the non-Send async context that arises from McpManager's
         // internal tracing usage.
         let config = self.config.clone();
         let cmd = command.to_string();
+        let state = self.state.clone();
 
-        tokio::task::spawn_blocking(move || {
+        let result = tokio::task::spawn_blocking(move || {
             let rt = tokio::runtime::Runtime::new()
                 .map_err(|e| format!("Failed to create runtime: {}", e))?;
 
             rt.block_on(execute_acp_command_inner(config, &cmd))
         })
         .await
-        .map_err(|e| format!("Task join error: {}", e))?
+        .map_err(|e| format!("Task join error: {}", e))?;
+
+        // Restore a truthful state for the next request.
+        match &result {
+            Ok(_) => state.set(AgentState::Idle),
+            Err(err) => state.set(AgentState::Error(err.clone())),
+        }
+        result
     }
 }
 

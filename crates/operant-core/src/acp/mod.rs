@@ -20,13 +20,43 @@ use serde_json::Value;
 // ─── JSON-RPC Protocol Types ───────────────────────────────────────────────
 
 /// A valid JSON-RPC 2.0 request.
+///
+/// `jsonrpc` and `id` are `#[serde(default)]` so that malformed requests are
+/// rejected with the correct error code (-32600 Invalid Request) instead of a
+/// parse error (-32700): a missing `jsonrpc` member or a request without an
+/// `id` (a JSON-RPC notification) must still deserialize. (R18)
 #[derive(Debug, Deserialize)]
 pub struct RpcRequest {
+    #[serde(default)]
     pub jsonrpc: String,
+    #[serde(default)]
     pub id: Value,
     pub method: String,
     #[serde(default)]
     pub params: Value,
+}
+
+impl RpcRequest {
+    /// True when this is a JSON-RPC notification (no `id`), which per the
+    /// spec must NOT receive a response.
+    pub fn is_notification(&self) -> bool {
+        self.id.is_null()
+    }
+}
+
+/// Validate a parsed request against the JSON-RPC 2.0 framing rules.
+///
+/// Returns `Err(code)` with the spec error code on violation:
+/// - `-32600` (Invalid Request) when `jsonrpc != "2.0"` or the `id` is not
+///   a string, number, or null.
+pub fn validate_request(request: &RpcRequest) -> Result<(), i32> {
+    if request.jsonrpc != "2.0" {
+        return Err(-32600);
+    }
+    if !(request.id.is_null() || request.id.is_string() || request.id.is_number()) {
+        return Err(-32600);
+    }
+    Ok(())
 }
 
 /// A valid JSON-RPC 2.0 response.
@@ -78,7 +108,7 @@ pub struct RpcError {
 // ─── Agent State ──────────────────────────────────────────────────────────
 
 /// Current state of the agent, returned by the `status` method.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentState {
     /// Agent is running and processing
@@ -86,6 +116,7 @@ pub enum AgentState {
     /// Agent is paused (user-requested halt)
     Paused,
     /// Agent is idle (running but not actively processing)
+    #[default]
     Idle,
     /// Agent encountered an error
     Error(String),
@@ -99,6 +130,38 @@ impl std::fmt::Display for AgentState {
             AgentState::Idle => write!(f, "idle"),
             AgentState::Error(msg) => write!(f, "error: {}", msg),
         }
+    }
+}
+
+/// Shared agent-state tracker so the `status` method reports real activity
+/// while a command is executing. (R18: the CLI handler previously returned
+/// `Idle` unconditionally, so `status` lied during a running command.)
+///
+/// `Clone` shares the same underlying state (via `Arc`), which lets a
+/// long-running `spawn_blocking` command task update the tracker from the
+/// handler side without races.
+#[derive(Clone, Default)]
+pub struct AgentStateTracker(std::sync::Arc<std::sync::Mutex<AgentState>>);
+
+impl AgentStateTracker {
+    /// Create a tracker initialized to `Idle`.
+    pub fn new() -> Self {
+        Self(std::sync::Arc::new(std::sync::Mutex::new(AgentState::Idle)))
+    }
+
+    /// Set the current agent state.
+    pub fn set(&self, state: AgentState) {
+        if let Ok(mut guard) = self.0.lock() {
+            *guard = state;
+        }
+    }
+
+    /// Read the current agent state.
+    pub fn get(&self) -> AgentState {
+        self.0
+            .lock()
+            .map(|g| g.clone())
+            .unwrap_or_else(|_| AgentState::Error("state tracker poisoned".to_string()))
     }
 }
 
@@ -301,6 +364,42 @@ mod tests {
         assert!(!shutdown);
         assert!(resp.error.is_some());
         assert_eq!(resp.error.unwrap().code, -32601);
+    }
+
+    #[test]
+    fn request_without_id_is_a_notification() {
+        let req = parse_request(r#"{"jsonrpc":"2.0","method":"ping"}"#).unwrap();
+        assert!(req.is_notification());
+        let req = parse_request(r#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#).unwrap();
+        assert!(!req.is_notification());
+    }
+
+    #[test]
+    fn validate_request_accepts_wellformed_and_rejects_wrong_version_or_id_type() {
+        let ok = parse_request(r#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#).unwrap();
+        assert_eq!(validate_request(&ok), Ok(()));
+        // Missing jsonrpc member deserializes to "" → Invalid Request.
+        let no_version = parse_request(r#"{"id":1,"method":"ping"}"#).unwrap();
+        assert_eq!(validate_request(&no_version), Err(-32600));
+        let bad_version = parse_request(r#"{"jsonrpc":"1.0","id":1,"method":"ping"}"#).unwrap();
+        assert_eq!(validate_request(&bad_version), Err(-32600));
+        // A notification (null id) is still a valid request.
+        let notify = parse_request(r#"{"jsonrpc":"2.0","method":"ping"}"#).unwrap();
+        assert_eq!(validate_request(&notify), Ok(()));
+        // An object id is invalid per spec.
+        let obj_id = parse_request(r#"{"jsonrpc":"2.0","id":{},"method":"ping"}"#).unwrap();
+        assert_eq!(validate_request(&obj_id), Err(-32600));
+    }
+
+    #[test]
+    fn agent_state_tracker_reports_transitions_and_shares_across_clones() {
+        let tracker = AgentStateTracker::new();
+        assert_eq!(tracker.get(), AgentState::Idle);
+        tracker.set(AgentState::Running);
+        assert_eq!(tracker.get(), AgentState::Running);
+        let clone = tracker.clone();
+        clone.set(AgentState::Error("boom".to_string()));
+        assert_eq!(tracker.get(), AgentState::Error("boom".to_string()));
     }
 
     #[test]

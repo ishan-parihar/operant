@@ -3,7 +3,9 @@
 //! Reads JSON-RPC requests from stdin (line-delimited) and writes responses
 //! to stdout using tokio's async I/O to avoid blocking the event loop.
 
-use super::{AcpHandler, RpcResponse, dispatch, parse_request, serialize_response};
+use super::{
+    AcpHandler, RpcResponse, dispatch, parse_request, serialize_response, validate_request,
+};
 use anyhow::Result;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -57,9 +59,26 @@ pub async fn run_stdio_server(handler: Arc<dyn AcpHandler>) -> Result<()> {
             }
         };
 
-        // Dispatch and check if we should shut down
+        // Validate the JSON-RPC 2.0 framing (version member, id type).
+        // (R18: a wrong/missing `jsonrpc` version or an invalid id type was
+        // previously accepted silently; per spec these are -32600 Invalid
+        // Request.)
+        if let Err(code) = validate_request(&request) {
+            let err_resp = RpcResponse::error(
+                request.id.clone(),
+                code,
+                "Invalid Request: `jsonrpc` must be \"2.0\" and `id` must be a string, number, or null",
+            );
+            write_response(&err_resp).await?;
+            continue;
+        }
+
+        // Dispatch and check if we should shut down. JSON-RPC notifications
+        // (no `id`) must not receive a response.
         let (response, should_shutdown) = dispatch(&request, &*handler).await;
-        write_response(&response).await?;
+        if !request.is_notification() {
+            write_response(&response).await?;
+        }
 
         if should_shutdown {
             break;
