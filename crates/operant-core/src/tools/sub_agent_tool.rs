@@ -110,6 +110,12 @@ pub struct SubAgentTool {
     parent_depth: u32,
     /// Parent's enabled toolsets
     parent_toolsets: Vec<String>,
+    /// Parent's explicitly disabled tools — inherited so children never gain
+    /// tools the parent lacks (hermes delegate_tool.py: "subagent must not
+    /// gain tools the parent lacks").
+    parent_disabled_tools: std::collections::HashSet<String>,
+    /// Parent's explicitly disabled toolsets — inherited for the same reason.
+    parent_disabled_toolsets: std::collections::HashSet<String>,
     database: Arc<Database>,
     /// Optional event channel to forward child progress events to parent
     event_tx: Option<tokio::sync::mpsc::Sender<AgentEvent>>,
@@ -124,12 +130,39 @@ impl SubAgentTool {
         database: Arc<Database>,
         event_tx: Option<tokio::sync::mpsc::Sender<AgentEvent>>,
     ) -> Self {
+        Self::with_parent_tool_policy(
+            parent_client,
+            model,
+            parent_depth,
+            parent_toolsets,
+            std::collections::HashSet::new(),
+            std::collections::HashSet::new(),
+            database,
+            event_tx,
+        )
+    }
+
+    /// Construct with the parent's disabled tool/toolset policy so that
+    /// spawned children inherit the exact same tool restrictions as the
+    /// parent registry (hermes parity).
+    pub fn with_parent_tool_policy(
+        parent_client: &OpenAIClient,
+        model: impl Into<String>,
+        parent_depth: u32,
+        parent_toolsets: Vec<String>,
+        parent_disabled_tools: std::collections::HashSet<String>,
+        parent_disabled_toolsets: std::collections::HashSet<String>,
+        database: Arc<Database>,
+        event_tx: Option<tokio::sync::mpsc::Sender<AgentEvent>>,
+    ) -> Self {
         Self {
             client_config: parent_client.config_clone(),
             http_client: parent_client.http_client_clone(),
             model: model.into(),
             parent_depth,
             parent_toolsets,
+            parent_disabled_tools,
+            parent_disabled_toolsets,
             database,
             event_tx,
         }
@@ -287,28 +320,51 @@ impl SubAgentTool {
             model: self.model.clone(),
             parent_depth: self.parent_depth,
             parent_toolsets: self.parent_toolsets.clone(),
+            parent_disabled_tools: self.parent_disabled_tools.clone(),
+            parent_disabled_toolsets: self.parent_disabled_toolsets.clone(),
             database: self.database.clone(),
             event_tx: self.event_tx.clone(),
         }
     }
 
     fn compute_child_toolsets(&self, role: SubAgentRole) -> Vec<String> {
-        // Start with parent's toolsets, filtered to remove blocked tools
-        let mut toolsets = self.parent_toolsets.clone();
+        // Start with the parent's toolsets, with the parent's explicit
+        // disabled toolsets removed (hermes: children never gain tools the
+        // parent lacks). Most core tools live in the "builtin" toolset.
+        let mut toolsets: Vec<String> = self
+            .parent_toolsets
+            .iter()
+            .filter(|ts| !self.parent_disabled_toolsets.contains(ts.as_str()))
+            .cloned()
+            .collect();
 
-        // Remove blocked toolsets for all children
-        let blocked_toolsets: Vec<&str> = vec!["delegation", "clarify", "memory", "code_execution"];
+        // Hermes fallback: when the parent supplies no toolset list, children
+        // get the default toolset (builtin core tools), not nothing. Without
+        // this, children whose parent passes an empty toolset list (the CLI
+        // registers the tool with `vec![]`) would receive ZERO tools.
+        if toolsets.is_empty() {
+            toolsets.push("builtin".to_string());
+        }
+
+        // Remove toolsets that are blocked for ALL children. Mirrors hermes
+        // delegate_tool.py `_strip_blocked_tools` + `DELEGATE_BLOCKED_TOOLS`:
+        // children never get delegation/clarify/memory/code_execution from the
+        // parent's toolset inheritance.
+        let blocked_toolsets: [&str; 4] = ["delegation", "clarify", "memory", "code_execution"];
         toolsets.retain(|ts| !blocked_toolsets.contains(&ts.as_str()));
 
-        // Orchestrators retain the delegation toolset
-        if role == SubAgentRole::Orchestrator && !toolsets.contains(&"delegate_task".to_string()) {
-            // Note: we add the tool name, not toolset - tools are filtered separately
+        // Orchestrators retain the delegation toolset: the delegate_task tool
+        // itself is re-registered for orchestrator children in
+        // register_child_tools (hermes `_blocked_toolsets_for_role` discards
+        // "delegate_task" from the blocklist when role == "orchestrator").
+        if role == SubAgentRole::Orchestrator {
+            toolsets.push("delegation".to_string());
         }
 
         toolsets
     }
 
-    async fn register_child_tools(&self, registry: &ToolRegistry, _toolsets: &[String]) {
+    async fn register_child_tools(&self, registry: &ToolRegistry, toolsets: &[String]) {
         use super::browser_tool::BrowserTool;
         use super::datetime_tool::{DateTimeTool, TimestampTool};
         use super::file_state::FileStateTool;
@@ -319,20 +375,105 @@ impl SubAgentTool {
         use super::vision_tool::VisionTool;
         use super::web_tools::{WebFetchTool, WebSearchTool};
 
-        let _ = registry.register(TerminalTool).await;
-        let _ = registry.register(FileReadTool).await;
-        let _ = registry.register(FileWriteTool).await;
-        let _ = registry.register(FileSearchTool).await;
-        let _ = registry.register(FileListTool).await;
-        let _ = registry.register(FileStateTool).await;
-        let _ = registry.register(WebSearchTool).await;
-        let _ = registry.register(WebFetchTool).await;
-        let _ = registry.register(BrowserTool).await;
-        let _ = registry.register(HttpRequestTool).await;
-        let _ = registry.register(PatchTool).await;
-        let _ = registry.register(DateTimeTool).await;
-        let _ = registry.register(TimestampTool).await;
-        let _ = registry.register(VisionTool).await;
+        let toolset_set: std::collections::HashSet<&str> =
+            toolsets.iter().map(String::as_str).collect();
+
+        // Only register a tool when BOTH the child's computed toolset list
+        // allows its toolset AND the parent did not explicitly disable it.
+        // The child's toolset list was already filtered by the parent's
+        // disabled toolsets + the hermes child-blocked list, so a tool whose
+        // toolset is absent here is deliberately withheld from children.
+        // Most tools default to toolset "builtin", which is always present
+        // unless explicitly disabled by the parent.
+        let builtin = "builtin";
+        self.register_if_allowed(registry, &toolset_set, "terminal", builtin, TerminalTool)
+            .await;
+        self.register_if_allowed(registry, &toolset_set, "file_read", builtin, FileReadTool)
+            .await;
+        self.register_if_allowed(registry, &toolset_set, "file_write", builtin, FileWriteTool)
+            .await;
+        self.register_if_allowed(
+            registry,
+            &toolset_set,
+            "file_search",
+            builtin,
+            FileSearchTool,
+        )
+        .await;
+        self.register_if_allowed(registry, &toolset_set, "file_list", builtin, FileListTool)
+            .await;
+        self.register_if_allowed(registry, &toolset_set, "file_state", builtin, FileStateTool)
+            .await;
+        self.register_if_allowed(registry, &toolset_set, "web_search", builtin, WebSearchTool)
+            .await;
+        self.register_if_allowed(registry, &toolset_set, "web_fetch", builtin, WebFetchTool)
+            .await;
+        self.register_if_allowed(registry, &toolset_set, "browser", builtin, BrowserTool)
+            .await;
+        self.register_if_allowed(
+            registry,
+            &toolset_set,
+            "http_request",
+            builtin,
+            HttpRequestTool,
+        )
+        .await;
+        self.register_if_allowed(registry, &toolset_set, "patch", builtin, PatchTool)
+            .await;
+        self.register_if_allowed(registry, &toolset_set, "datetime", builtin, DateTimeTool)
+            .await;
+        self.register_if_allowed(registry, &toolset_set, "timestamp", builtin, TimestampTool)
+            .await;
+        self.register_if_allowed(
+            registry,
+            &toolset_set,
+            "vision_analyze",
+            builtin,
+            VisionTool,
+        )
+        .await;
+
+        // Recursive delegation: grant delegate_task ONLY to orchestrator
+        // children (hermes: leaf children must never recursively delegate;
+        // orchestrators retain the tool). The toolsets vec contains
+        // "delegation" iff the effective role is orchestrator (see
+        // compute_child_toolsets).
+        if toolset_set.contains("delegation") {
+            let raw_client = OpenAIClient::from_shared_http_client(
+                self.client_config.clone(),
+                self.http_client.clone(),
+            );
+            let child = SubAgentTool::with_parent_tool_policy(
+                &raw_client,
+                self.model.clone(),
+                self.parent_depth + 1,
+                self.parent_toolsets.clone(),
+                self.parent_disabled_tools.clone(),
+                self.parent_disabled_toolsets.clone(),
+                self.database.clone(),
+                self.event_tx.clone(),
+            );
+            let _ = registry.register(child).await;
+        }
+    }
+
+    /// Register one child tool unless the parent disabled it or the child's
+    /// computed toolset list does not include its toolset.
+    async fn register_if_allowed<T: OperantTool + 'static>(
+        &self,
+        registry: &ToolRegistry,
+        toolset_set: &std::collections::HashSet<&str>,
+        name: &'static str,
+        toolset: &'static str,
+        tool: T,
+    ) {
+        if self.parent_disabled_tools.contains(name)
+            || self.parent_disabled_toolsets.contains(toolset)
+            || !toolset_set.contains(toolset)
+        {
+            return;
+        }
+        let _ = registry.register(tool).await;
     }
 
     fn ensure_supported_model(&self) -> std::result::Result<(), BoxedToolError> {
@@ -580,6 +721,7 @@ pub fn set_max_concurrent_children(count: usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     #[test]
     fn parse_args_accepts_object_argument() {
@@ -651,6 +793,142 @@ mod tests {
             build_child_system_prompt("Analyze this", None, SubAgentRole::Orchestrator, 1, 2);
         assert!(prompt.contains("Orchestrator Role"));
         assert!(prompt.contains("delegate_task"));
+    }
+
+    #[test]
+    fn compute_child_toolsets_defaults_to_builtin_when_parent_passes_none() {
+        // hermes fallback: a parent that supplies no toolset list (the CLI
+        // registers the tool with vec![]) must not produce zero-tool children.
+        let tool = SubAgentTool::with_parent_tool_policy(
+            &OpenAIClient::new(crate::client::ClientConfig::default()),
+            "gpt-4.1",
+            0,
+            vec![],
+            std::collections::HashSet::new(),
+            std::collections::HashSet::new(),
+            Arc::new(Database::init(PathBuf::from("test_sub_ts.db")).unwrap()),
+            None,
+        );
+        let ts = tool.compute_child_toolsets(SubAgentRole::Leaf);
+        assert!(
+            ts.contains(&"builtin".to_string()),
+            "builtin fallback missing: {ts:?}"
+        );
+        assert!(!ts.contains(&"delegation".to_string()));
+        assert!(!ts.contains(&"memory".to_string()));
+        assert!(!ts.contains(&"clarify".to_string()));
+        assert!(!ts.contains(&"code_execution".to_string()));
+    }
+
+    #[test]
+    fn compute_child_toolsets_orchestrator_retains_delegation() {
+        let tool = SubAgentTool::with_parent_tool_policy(
+            &OpenAIClient::new(crate::client::ClientConfig::default()),
+            "gpt-4.1",
+            0,
+            vec!["builtin".to_string()],
+            std::collections::HashSet::new(),
+            std::collections::HashSet::new(),
+            Arc::new(Database::init(PathBuf::from("test_sub_orch.db")).unwrap()),
+            None,
+        );
+        // Orchestrators retain the delegation toolset (hermes
+        // `_blocked_toolsets_for_role` discards delegate_task from the
+        // blocklist when role == "orchestrator").
+        let ts = tool.compute_child_toolsets(SubAgentRole::Orchestrator);
+        assert!(ts.contains(&"delegation".to_string()));
+        // ...but the child-blocked toolsets are still stripped.
+        assert!(!ts.contains(&"memory".to_string()));
+        assert!(!ts.contains(&"clarify".to_string()));
+    }
+
+    #[test]
+    fn compute_child_toolsets_honors_parent_disabled_toolsets() {
+        let disabled_toolsets =
+            std::collections::HashSet::from(["builtin".to_string(), "web".to_string()]);
+        let tool = SubAgentTool::with_parent_tool_policy(
+            &OpenAIClient::new(crate::client::ClientConfig::default()),
+            "gpt-4.1",
+            0,
+            vec!["builtin".to_string(), "web".to_string()],
+            std::collections::HashSet::new(),
+            disabled_toolsets,
+            Arc::new(Database::init(PathBuf::from("test_sub_disabled.db")).unwrap()),
+            None,
+        );
+        let ts = tool.compute_child_toolsets(SubAgentRole::Leaf);
+        // "web" is stripped; the builtin fallback kicks in (hermes: the
+        // child must never gain a toolset the parent disabled).
+        assert!(!ts.contains(&"web".to_string()));
+        assert!(ts.contains(&"builtin".to_string()));
+    }
+
+    #[tokio::test]
+    async fn child_registry_grants_delegate_task_only_to_orchestrators() {
+        use crate::tools::ToolRegistry;
+
+        let client = OpenAIClient::new(crate::client::ClientConfig::default());
+        let database = Arc::new(Database::init(PathBuf::from("test_child_reg.db")).unwrap());
+        let tool = SubAgentTool::with_parent_tool_policy(
+            &client,
+            "gpt-4.1",
+            0,
+            vec![],
+            std::collections::HashSet::new(),
+            std::collections::HashSet::new(),
+            database,
+            None,
+        );
+
+        // Leaf child: core tools yes, delegate_task NO (hermes: leaf children
+        // must never recursively delegate).
+        let leaf_ts = tool.compute_child_toolsets(SubAgentRole::Leaf);
+        let leaf_registry = ToolRegistry::new(Duration::from_secs(5));
+        tool.register_child_tools(&leaf_registry, &leaf_ts).await;
+        assert!(
+            leaf_registry.contains("terminal").await,
+            "leaf child lost its core tools"
+        );
+        assert!(
+            !leaf_registry.contains(TOOL_NAME).await,
+            "leaf child must never receive delegate_task"
+        );
+
+        // Orchestrator child: retains delegate_task for recursive delegation
+        // (hermes `_blocked_toolsets_for_role` when role == "orchestrator").
+        let orch_ts = tool.compute_child_toolsets(SubAgentRole::Orchestrator);
+        let orch_registry = ToolRegistry::new(Duration::from_secs(5));
+        tool.register_child_tools(&orch_registry, &orch_ts).await;
+        assert!(
+            orch_registry.contains(TOOL_NAME).await,
+            "orchestrator child must retain delegate_task"
+        );
+    }
+
+    #[tokio::test]
+    async fn child_registry_honors_parent_disabled_tools() {
+        use crate::tools::ToolRegistry;
+
+        let client = OpenAIClient::new(crate::client::ClientConfig::default());
+        let disabled_tools = std::collections::HashSet::from(["terminal".to_string()]);
+        let database = Arc::new(Database::init(PathBuf::from("test_child_disabled.db")).unwrap());
+        let tool = SubAgentTool::with_parent_tool_policy(
+            &client,
+            "gpt-4.1",
+            0,
+            vec![],
+            disabled_tools,
+            std::collections::HashSet::new(),
+            database,
+            None,
+        );
+
+        let ts = tool.compute_child_toolsets(SubAgentRole::Leaf);
+        let registry = ToolRegistry::new(Duration::from_secs(5));
+        tool.register_child_tools(&registry, &ts).await;
+        // A tool the parent explicitly disabled must not leak into children.
+        assert!(!registry.contains("terminal").await);
+        assert!(registry.contains("file_read").await);
     }
 
     #[test]

@@ -167,6 +167,12 @@ pub async fn register_builtin_tools(
 }
 
 /// Register all built-in tools plus the sub-agent delegation tool.
+///
+/// `parent_disabled_tools` / `parent_disabled_toolsets` are the parent
+/// registry's explicit tool bans. They are inherited by every spawned child
+/// so a delegated sub-agent can never regain a tool the parent disabled
+/// (hermes delegate_tool.py: "subagent must not gain tools the parent
+/// lacks").
 #[allow(clippy::too_many_arguments)]
 pub async fn register_builtin_tools_with_sub_agent(
     registry: &ToolRegistry,
@@ -179,6 +185,8 @@ pub async fn register_builtin_tools_with_sub_agent(
     kanban_db: Arc<KanbanDb>,
     mcp_manager: Option<McpManager>,
     event_tx: Option<tokio::sync::mpsc::Sender<crate::agent::AgentEvent>>,
+    parent_disabled_tools: std::collections::HashSet<String>,
+    parent_disabled_toolsets: std::collections::HashSet<String>,
 ) -> Result<()> {
     register_builtin_tools(
         registry,
@@ -191,11 +199,13 @@ pub async fn register_builtin_tools_with_sub_agent(
     )
     .await?;
     registry
-        .register(SubAgentTool::new(
+        .register(SubAgentTool::with_parent_tool_policy(
             parent_client,
             model.into(),
             0,
             vec![],
+            parent_disabled_tools,
+            parent_disabled_toolsets,
             database,
             event_tx,
         ))
@@ -347,6 +357,8 @@ mod tests {
             kanban_db,
             None,
             None,
+            std::collections::HashSet::new(),
+            std::collections::HashSet::new(),
         )
         .await
         .unwrap();

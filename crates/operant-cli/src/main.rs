@@ -658,6 +658,14 @@ pub(crate) async fn build_registry(
     let kanban_db = Arc::new(KanbanDb::init(kanban_path)?);
     let registry = ToolRegistry::new(Duration::from_secs(config.tools.registry_timeout_secs));
     let memory_dir = &config.skills.memory_dir;
+
+    // Sub-agent delegation tool must inherit the parent's tool bans so
+    // spawned children can never regain a disabled tool (hermes parity).
+    // Passed explicitly because the bans are applied to the registry AFTER
+    // registration below.
+    let sub_agent_disabled_tools = config.tools.disabled_tools.iter().cloned().collect();
+    let sub_agent_disabled_toolsets = config.tools.disabled_toolsets.iter().cloned().collect();
+
     operant_core::tools::register_builtin_tools_with_sub_agent(
         &registry,
         &config.skills.root_dir,
@@ -669,6 +677,8 @@ pub(crate) async fn build_registry(
         kanban_db,
         Some(mcp_manager.clone()),
         event_tx,
+        sub_agent_disabled_tools,
+        sub_agent_disabled_toolsets,
     )
     .await?;
     // (iter-153: EchoTool + CalculatorTool deleted — toy demo tools.
