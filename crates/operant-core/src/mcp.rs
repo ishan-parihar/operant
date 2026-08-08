@@ -1471,6 +1471,17 @@ impl McpManager {
         auth_token: Option<String>,
     ) -> Result<()> {
         let name = name.into();
+        // Reject a name that is already connected instead of silently
+        // clobbering the existing server. Checked both before the connect
+        // (fail fast) and again under the write lock after the connect
+        // (atomic — closes the TOCTOU between a concurrent caller's check
+        // and insert). All CLI callers either use fresh names or pre-check
+        // `contains`, so this only fires on genuine duplicate adds.
+        if self.servers.read().await.contains_key(&name) {
+            return Err(crate::error::Error::Agent(format!(
+                "MCP server '{name}' is already connected"
+            )));
+        }
         let effective_token = match auth_token {
             Some(t) => Some(t),
             None => {
@@ -1491,10 +1502,13 @@ impl McpManager {
         };
         let client = McpClient::new(url, effective_token);
         client.connect().await?;
-        self.servers
-            .write()
-            .await
-            .insert(name, McpTransport::Http(client));
+        let mut servers = self.servers.write().await;
+        if servers.contains_key(&name) {
+            return Err(crate::error::Error::Agent(format!(
+                "MCP server '{name}' is already connected"
+            )));
+        }
+        servers.insert(name, McpTransport::Http(client));
         Ok(())
     }
 
