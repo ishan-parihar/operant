@@ -9,9 +9,9 @@ use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::Value;
-use std::path::PathBuf;
 
 use crate::schema::ToolSchema;
+use crate::tools::file_tools::{atomic_write, validate_path};
 use crate::tools::{OperantTool, ToolContext, ToolResult};
 
 /// Arguments for the patch tool
@@ -141,7 +141,15 @@ impl OperantTool for PatchTool {
             Err(e) => return ToolResult::error("patch", format!("Invalid arguments: {}", e)),
         };
 
-        let path = PathBuf::from(&args.path);
+        // Path safety check — the same gate every other file tool applies
+        // (file_read/write/search/list). Without it, `patch` was the only
+        // file tool that could write through `..` traversal or into
+        // sensitive files (SSH keys, .aws/credentials, /etc/shadow) that
+        // file_write rejects.
+        let path = match validate_path(&args.path) {
+            Ok(p) => p,
+            Err(e) => return ToolResult::error("patch", e),
+        };
 
         if !path.exists() {
             return ToolResult::error("patch", format!("File not found: {}", args.path));
@@ -178,12 +186,10 @@ impl OperantTool for PatchTool {
             }
         };
 
-        // Write the patched content back
-        match std::fs::write(&path, &new_content) {
-            Ok(_) => {}
-            Err(e) => {
-                return ToolResult::error("patch", format!("Failed to write file: {}", e));
-            }
+        // Write the patched content back — atomically (hermes _atomic_write
+        // parity) so a crash mid-write cannot corrupt the file.
+        if let Err(e) = atomic_write(&path, &new_content) {
+            return ToolResult::error("patch", format!("Failed to write file: {}", e));
         }
 
         ToolResult::success(
@@ -218,6 +224,34 @@ mod tests {
         ));
         std::fs::write(&path, content).unwrap();
         path
+    }
+
+    #[tokio::test]
+    async fn test_patch_rejects_denied_sensitive_path() {
+        // `patch` must apply the same security gate as file_write: a write
+        // into a sensitive path (here `.netrc` in a scratch dir) is refused.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".netrc");
+        std::fs::write(&path, "machine example.com login x password y\n").unwrap();
+
+        let tool = PatchTool;
+        let result = tool
+            .execute(
+                serde_json::json!({
+                    "path": path.to_string_lossy(),
+                    "find": "password y",
+                    "replace": "password z"
+                }),
+                default_context(),
+            )
+            .await;
+
+        assert!(!result.success);
+        let err = result.error.unwrap();
+        assert!(err.contains("denied"), "expected denied, got: {err}");
+        // The file must be untouched.
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.contains("password y"));
     }
 
     #[tokio::test]

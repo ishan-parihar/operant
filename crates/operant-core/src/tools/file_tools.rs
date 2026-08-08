@@ -57,9 +57,54 @@ const DENIED_PATH_PATTERNS: &[&str] = &[
     "Library/Keychains/login.keychain-db",
 ];
 
+/// Atomically replace `path` with `content` (hermes `file_operations._atomic_write`
+/// parity): write to a temp file in the SAME directory so the final rename is
+/// same-filesystem atomic, preserve the existing file's mode (an executable
+/// script's +x bit must survive an edit), and remove the temp on any failure —
+/// a crash mid-write never corrupts the target or leaks a partial file.
+pub(crate) fn atomic_write(path: &std::path::Path, content: &str) -> std::io::Result<()> {
+    use std::io::Write;
+
+    let dir = path.parent().unwrap_or_else(|| std::path::Path::new("."));
+    let existing_perms = std::fs::metadata(path).ok().map(|m| m.permissions());
+
+    let mut tmp = tempfile::NamedTempFile::new_in(dir)?;
+
+    // Preserve the existing file's mode across the replace (hermes copies
+    // mode with chmod --reference before renaming).
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Some(perms) = &existing_perms {
+            let mode = perms.mode();
+            let _ = tmp
+                .as_file()
+                .set_permissions(std::fs::Permissions::from_mode(mode));
+        }
+    }
+
+    let write_result = tmp
+        .as_file_mut()
+        .write_all(content.as_bytes())
+        .and_then(|_| tmp.as_file().sync_all());
+
+    if let Err(e) = write_result {
+        // Drop the temp so a failed write never leaks a partial file.
+        drop(tmp);
+        return Err(e);
+    }
+
+    // Atomic same-directory rename over the target. `persist` returns the
+    // (now-named) File on success — discard it.
+    tmp.persist(path).map(|_| ()).map_err(|e| e.error)
+}
+
 /// Validate that a path is safe for the agent to read or write. Returns
 /// the canonicalized path on success, or an error message on rejection.
-fn validate_path(raw_path: &str) -> Result<PathBuf, String> {
+///
+/// `pub(crate)` so the patch tool shares the same gate (it previously
+/// bypassed it entirely).
+pub(crate) fn validate_path(raw_path: &str) -> Result<PathBuf, String> {
     let path = PathBuf::from(raw_path);
 
     // Step 1: Resolve to canonical form. If the path doesn't exist yet
@@ -239,6 +284,7 @@ impl OperantTool for FileWriteTool {
         }
 
         let result = if args.append.unwrap_or(false) {
+            // Appends are inherently sequential — no atomic-replace possible.
             std::fs::OpenOptions::new()
                 .create(true)
                 .append(true)
@@ -248,7 +294,9 @@ impl OperantTool for FileWriteTool {
                     f.write_all(args.content.as_bytes())
                 })
         } else {
-            std::fs::write(&path, &args.content)
+            // Atomic replace (hermes _atomic_write parity): a crash mid-write
+            // must never corrupt the target or leave a partial file.
+            atomic_write(&path, &args.content)
         };
 
         match result {
@@ -586,7 +634,47 @@ mod tests {
         assert!(!result.success);
     }
 
-    #[tokio::test]
+    #[cfg(unix)]
+    #[test]
+    fn test_atomic_write_preserves_unix_mode() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("script.sh");
+        std::fs::write(&path, "#!/bin/sh\necho hi\n").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        atomic_write(&path, "#!/bin/sh\necho replaced\n").unwrap();
+
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(
+            mode, 0o755,
+            "atomic replace must preserve the executable bit"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "#!/bin/sh\necho replaced\n"
+        );
+    }
+
+    #[test]
+    fn test_atomic_write_replaces_and_cleans_temp() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("data.txt");
+        std::fs::write(&path, "old").unwrap();
+
+        atomic_write(&path, "new content").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "new content");
+
+        // No temp files left behind in the target directory.
+        let leftovers: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().starts_with('.'))
+            .collect();
+        assert!(leftovers.is_empty(), "temp files leaked: {leftovers:?}");
+    }
+
     async fn test_file_write_missing_args() {
         let tool = FileWriteTool;
         let result = tool.execute(json!({}), ToolContext::default()).await;
