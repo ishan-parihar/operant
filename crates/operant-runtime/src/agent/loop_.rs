@@ -5099,6 +5099,61 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn run_tool_call_loop_retries_empty_assistant_within_tiny_budget() {
+        // R23-followup: the retry ladder must complete even when the caller's
+        // real budget is tiny (e.g. `--max-iterations 2`). Retry passes refund
+        // their iteration slot, so two empty responses + a real answer must
+        // fit within a budget of 2 — without the refund they'd exhaust first.
+        let provider = StreamingScriptedProvider::from_text_responses(vec!["", "", "finally"]);
+        let mut history = vec![ChatMessage::user("hello".to_string())];
+        let tools_registry: Vec<Box<dyn Tool>> = Vec::new();
+        let observer = NoopObserver;
+        let (tx, _rx) = tokio::sync::mpsc::channel(64);
+
+        let result = run_tool_call_loop(
+            &provider,
+            &mut history,
+            &tools_registry,
+            &observer,
+            "mock-provider",
+            "mock-model",
+            0.0,
+            true,
+            None, // approval
+            "cli",
+            None, // channel_reply_target
+            &operant_config::schema::MultimodalConfig::default(),
+            2,        // max_tool_iterations — tiny real budget
+            None,     // cancellation_token
+            Some(tx), // on_delta — required for the streaming path
+            None,     // hooks
+            &[],      // excluded_tools
+            &[],      // dedup_exempt_tools
+            None,     // activated_tools
+            None,     // model_switch_callback
+            &operant_config::schema::PacingConfig::default(),
+            0,    // max_tool_result_chars
+            0,    // context_token_budget
+            None, // shared_budget
+            None, // channel
+            None, // receipt_generator
+            None, // collected_receipts
+        )
+        .await
+        .expect("loop terminates");
+
+        assert_eq!(
+            result, "finally",
+            "retries must not be starved by a tiny real iteration budget"
+        );
+        assert_eq!(
+            provider.stream_calls.load(Ordering::SeqCst),
+            3,
+            "two empty responses consumed the retry ladder, then a real answer"
+        );
+    }
+
+    #[tokio::test]
     async fn run_tool_call_loop_does_not_retry_reasoning_only_response() {
         // R23 guard: thinking-mode responses (empty text, non-empty reasoning)
         // must NOT be retried — only truly empty responses are. If the retry
