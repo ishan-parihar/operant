@@ -1135,6 +1135,35 @@ mod tests {
         ENV_LOCK.get_or_init(|| Mutex::new(()))
     }
 
+    #[test]
+    fn gateway_toml_roundtrips_whatsapp_phone_number_id() {
+        // R22: proves the headline fix path — a user setting
+        // `whatsapp_phone_number_id` under [gateway] in operant.toml actually
+        // reaches GatewaySettings (pure serde via parse_config_str).
+        let raw = r#"
+[gateway]
+whatsapp_enabled = true
+whatsapp_token = "wa-token"
+whatsapp_phone_number_id = "123456789"
+"#;
+        let parsed = parse_config_str(raw, std::path::Path::new("test.toml")).expect("valid TOML");
+        assert!(parsed.gateway.whatsapp_enabled);
+        assert_eq!(parsed.gateway.whatsapp_token.as_deref(), Some("wa-token"));
+        assert_eq!(
+            parsed.gateway.whatsapp_phone_number_id.as_deref(),
+            Some("123456789")
+        );
+
+        // And an old TOML without the key still parses (backward compat).
+        let old = r#"
+[gateway]
+whatsapp_enabled = true
+whatsapp_token = "wa-token"
+"#;
+        let parsed = parse_config_str(old, std::path::Path::new("old.toml")).expect("valid TOML");
+        assert_eq!(parsed.gateway.whatsapp_phone_number_id, None);
+    }
+
     fn temp_dir(name: &str) -> PathBuf {
         let path = std::env::temp_dir().join(format!(
             "operant_config_test_{}_{}_{}",
