@@ -462,5 +462,19 @@ inspectable). Operant had the schema field + the counter but not the check.
   and prune use the same `Local::now().to_rfc3339()` format; the FTS
   `memories_ad` delete trigger cascades prunes; archive/purge helpers are
   collision-safe and char-boundary-safe) are solid.
+- **Reviewer follow-up (same commit series)**: the first escape/unescape
+  draft had two correctness gaps in the round-trip contract — (1) a literal
+  `\`-prefixed collision line in content (`\---`) was *not* escaped by
+  export but *was* unescaped by parse (the checks were not inverses),
+  silently dropping the backslash; (2) the export check used `trim_start()`
+  while the parser's skip rules use `trim()`, so a `---  ` line with trailing
+  whitespace escaped export but was dropped on parse. → Fixed with a shared
+  `escape_content_line` helper: export escapes any line whose trimmed form
+  starts with `\` or collides, and parse strips exactly one `\` from any
+  backslash-leading line — now lossless in both directions (the test's
+  escaped-doc simulation also uses the helper, so it cannot drift). The
+  strengthened test covers `\---` and mid-content `---  `. (Pre-R19
+  snapshots were already corrupted by the original bug; the new format is
+  fully lossless.)
 
 

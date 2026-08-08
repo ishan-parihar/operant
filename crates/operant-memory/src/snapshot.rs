@@ -9,6 +9,7 @@
 use crate::error::Result;
 use chrono::Local;
 use rusqlite::{Connection, params};
+use std::borrow::Cow;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -75,15 +76,7 @@ pub fn export_snapshot(workspace_dir: &Path) -> Result<usize> {
         // (R19: unescaped colliding lines were silently dropped or
         // misinterpreted on hydration — a data-loss round-trip bug.)
         for line in content.lines() {
-            let trimmed = line.trim_start();
-            if trimmed.starts_with("### 🔑 `")
-                || trimmed.starts_with("*Created:")
-                || trimmed == "---"
-            {
-                let _ = writeln!(output, "\\{line}");
-            } else {
-                let _ = writeln!(output, "{line}");
-            }
+            let _ = writeln!(output, "{}", escape_content_line(line));
         }
         let _ = writeln!(
             output,
@@ -258,24 +251,15 @@ fn parse_snapshot(input: &str) -> Vec<(String, String)> {
             if trimmed.starts_with("*Created:") || trimmed == "---" {
                 continue;
             }
-            // Unescape content lines that export_snapshot escaped. Only lines
-            // whose escaped form matches a collision pattern are unescaped,
-            // so a literal leading backslash in content is preserved.
-            // (R19: colliding content lines were silently dropped before,
-            // corrupting the export/hydrate round trip.)
-            let content_line = match line.strip_prefix('\\') {
-                Some(rest) => {
-                    let rest_trimmed = rest.trim_start();
-                    if rest_trimmed.starts_with("### 🔑 `")
-                        || rest_trimmed.starts_with("*Created:")
-                        || rest_trimmed == "---"
-                    {
-                        rest
-                    } else {
-                        line
-                    }
-                }
-                None => line,
+            // Unescape content lines that export_snapshot escaped: any line
+            // whose trimmed form starts with `\` (export prefixes `\` for
+            // colliding or backslash-leading lines) loses exactly one
+            // backslash. (R19: colliding content lines were silently dropped
+            // before, corrupting the export/hydrate round trip.)
+            let content_line = if trimmed.starts_with('\\') {
+                line.strip_prefix('\\').unwrap_or(line)
+            } else {
+                line
             };
             // Accumulate content
             if !current_content.is_empty() || !content_line.is_empty() {
@@ -298,6 +282,29 @@ fn parse_snapshot(input: &str) -> Vec<(String, String)> {
     entries
 }
 
+/// Escape a content line so it survives the export → parse round trip.
+///
+/// Lines that would collide with snapshot syntax (key markers, metadata
+/// lines, the `---` separator) — or that start with the escape character
+/// itself — get a single `\` prefix. The backslash-prefix rule makes the
+/// scheme lossless: `parse_snapshot` strips exactly one `\` from any
+/// backslash-leading line, so a literal `\`-prefixed collision line in user
+/// content round-trips unchanged. The check uses `trim()` on both sides to
+/// stay symmetric with the parser's `trim()`-based skip rules (a `---` line
+/// with trailing whitespace must be escaped too). (R19)
+fn escape_content_line(line: &str) -> Cow<'_, str> {
+    let trimmed = line.trim();
+    if trimmed.starts_with('\\')
+        || trimmed.starts_with("### 🔑 `")
+        || trimmed.starts_with("*Created:")
+        || trimmed == "---"
+    {
+        Cow::Owned(format!("\\{line}"))
+    } else {
+        Cow::Borrowed(line)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -308,20 +315,16 @@ mod tests {
         // Content containing lines that collide with snapshot syntax (the
         // `---` separator, the `*Created:` metadata prefix, and the
         // `### 🔑 `` key marker) must survive export → parse unchanged.
-        let content = "Guide:\n---\n*Created: note\n### 🔑 `not_a_key`\nplain line";
+        // Note: the parser trims the final entry as a whole, so the
+        // trailing-whitespace case sits mid-content (it would be normalized
+        // away on the last line by design).
+        let content = "Guide:\n---\n*Created: note\n### 🔑 `not_a_key`\n---  \nplain line\n\\---";
 
         // Simulate export_snapshot's escaping so the document matches what a
         // real snapshot file contains after export.
         let mut escaped = String::new();
         for line in content.lines() {
-            let trimmed = line.trim_start();
-            if trimmed.starts_with("### 🔑 `")
-                || trimmed.starts_with("*Created:")
-                || trimmed == "---"
-            {
-                escaped.push('\\');
-            }
-            escaped.push_str(line);
+            escaped.push_str(escape_content_line(line).as_ref());
             escaped.push('\n');
         }
         let doc = format!("### 🔑 `tricky`\n{escaped}*Created: meta\n---\n");
