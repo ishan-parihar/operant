@@ -328,6 +328,13 @@ impl SubAgentTool {
     }
 
     fn compute_child_toolsets(&self, role: SubAgentRole) -> Vec<String> {
+        // Whether the parent supplied an explicit toolset list at all. hermes
+        // semantics: an EMPTY parent list means "use defaults" (DEFAULT_TOOLSETS
+        // fallback), but a NON-EMPTY parent list means "intersect/strip only"
+        // — if every supplied toolset gets stripped, the child gets ZERO
+        // tools, never a silent re-addition of tools the parent withheld.
+        let parent_supplied = !self.parent_toolsets.is_empty();
+
         // Start with the parent's toolsets, with the parent's explicit
         // disabled toolsets removed (hermes: children never gain tools the
         // parent lacks). Most core tools live in the "builtin" toolset.
@@ -338,11 +345,17 @@ impl SubAgentTool {
             .cloned()
             .collect();
 
-        // Hermes fallback: when the parent supplies no toolset list, children
+        // Hermes fallback: when the parent supplies NO toolset list, children
         // get the default toolset (builtin core tools), not nothing. Without
         // this, children whose parent passes an empty toolset list (the CLI
-        // registers the tool with `vec![]`) would receive ZERO tools.
-        if toolsets.is_empty() {
+        // registers the tool with `vec![]`) would receive ZERO tools. Guarded
+        // by parent_supplied so a parent that explicitly supplied toolsets
+        // (even ones that all got stripped) never gets builtin re-added, and
+        // never re-adds a toolset the parent explicitly disabled.
+        if toolsets.is_empty()
+            && !parent_supplied
+            && !self.parent_disabled_toolsets.contains("builtin")
+        {
             toolsets.push("builtin".to_string());
         }
 
@@ -857,10 +870,39 @@ mod tests {
             None,
         );
         let ts = tool.compute_child_toolsets(SubAgentRole::Leaf);
-        // "web" is stripped; the builtin fallback kicks in (hermes: the
-        // child must never gain a toolset the parent disabled).
+        // "web" is stripped AND the builtin fallback must NOT re-add builtin:
+        // the parent supplied an explicit list and disabled builtin itself
+        // (hermes: children never gain a toolset the parent disabled).
         assert!(!ts.contains(&"web".to_string()));
-        assert!(ts.contains(&"builtin".to_string()));
+        assert!(!ts.contains(&"builtin".to_string()));
+    }
+
+    #[test]
+    fn compute_child_toolsets_supplied_list_fully_stripped_yields_empty() {
+        // Parent supplied an explicit toolset list, but every entry is
+        // hermes-blocked for children. hermes semantics: non-empty parent
+        // list → intersect/strip only — the child must get ZERO tools, NOT a
+        // silent builtin re-addition.
+        let tool = SubAgentTool::with_parent_tool_policy(
+            &OpenAIClient::new(crate::client::ClientConfig::default()),
+            "gpt-4.1",
+            0,
+            vec!["memory".to_string(), "delegation".to_string()],
+            std::collections::HashSet::new(),
+            std::collections::HashSet::new(),
+            Arc::new(Database::init(PathBuf::from("test_sub_stripped.db")).unwrap()),
+            None,
+        );
+        let ts = tool.compute_child_toolsets(SubAgentRole::Leaf);
+        assert!(
+            ts.is_empty(),
+            "fully-stripped parent list must yield empty, got {ts:?}"
+        );
+
+        // Orchestrator role still retains delegation (its own sub-agents),
+        // but never the blocked memory toolset.
+        let orch_ts = tool.compute_child_toolsets(SubAgentRole::Orchestrator);
+        assert_eq!(orch_ts, vec!["delegation".to_string()]);
     }
 
     #[tokio::test]
