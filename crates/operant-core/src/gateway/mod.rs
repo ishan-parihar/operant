@@ -1226,7 +1226,9 @@ fn find_split_point(region: &str, cp_limit: usize) -> usize {
         }
     }
     // Then space
-    if let Some(pos) = region.rfind(' ') && pos > cp_limit / 4 {
+    if let Some(pos) = region.rfind(' ')
+        && pos > cp_limit / 4
+    {
         return pos;
     }
     // Fallback: hard split at the limit
@@ -3866,6 +3868,93 @@ mod tests {
 
         let no_secret = WebhookAdapter::new(true);
         assert!(no_secret.config_json()["hmac_secret_configured"] == serde_json::json!(false));
+    }
+
+    #[tokio::test]
+    async fn test_webhook_hmac_live_server() {
+        // End-to-end: boot the real axum server with a configured secret and
+        // prove the verification gate actually rejects/accepts on the wire.
+        // (Regression for R14-1: the secret used to be dead config — every
+        // webhook was accepted unsigned.)
+        use hmac::{Hmac, Mac};
+        use sha2::Sha256;
+        type HmacSha256 = Hmac<Sha256>;
+        use tokio::sync::mpsc;
+
+        // Grab a free ephemeral port.
+        let probe = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = probe.local_addr().unwrap();
+        drop(probe);
+
+        let (tx, mut rx) = mpsc::unbounded_channel::<IncomingMessage>();
+        let adapter = WebhookAdapter::new(true)
+            .with_addr(addr.to_string())
+            .with_secret(Some("topsecret".to_string()));
+        adapter
+            .start_with_channel(tx.clone())
+            .await
+            .expect("webhook adapter should start");
+
+        let url = format!("http://{}/webhook/r14", addr);
+        let client = reqwest::Client::new();
+        let body = r#"{"text":"hmac live test"}"#;
+
+        // The server binds inside a spawned task — wait until it accepts.
+        for _ in 0..50 {
+            if client
+                .get(&url.replace("/webhook/r14", "/health"))
+                .send()
+                .await
+                .is_ok()
+            {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+
+        // 1) No signature -> 401
+        let resp = client
+            .post(&url)
+            .header(axum::http::header::CONTENT_TYPE, "application/json")
+            .body(body)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), axum::http::StatusCode::UNAUTHORIZED);
+
+        // 2) Wrong signature -> 401
+        let resp = client
+            .post(&url)
+            .header(axum::http::header::CONTENT_TYPE, "application/json")
+            .header("x-webhook-signature", hex::encode(vec![0u8; 32]))
+            .body(body)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), axum::http::StatusCode::UNAUTHORIZED);
+
+        // 3) Correct HMAC-SHA256(secret, body) -> 200 + message forwarded
+        let mut mac = HmacSha256::new_from_slice(b"topsecret").unwrap();
+        mac.update(body.as_bytes());
+        let expected = hex::encode(mac.finalize().into_bytes());
+        let resp = client
+            .post(&url)
+            .header(axum::http::header::CONTENT_TYPE, "application/json")
+            .header("x-webhook-signature", &expected)
+            .body(body)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), axum::http::StatusCode::OK);
+
+        // The forwarded message must carry the body as content.
+        let msg = tokio::time::timeout(std::time::Duration::from_secs(3), rx.recv())
+            .await
+            .expect("timed out waiting for forwarded webhook")
+            .expect("channel closed");
+        assert_eq!(msg.platform, "webhook");
+        assert_eq!(msg.channel_id, "webhook:r14");
+        assert_eq!(msg.content, "hmac live test");
     }
 
     #[test]

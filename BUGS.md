@@ -241,3 +241,32 @@ printed "Session '...' deleted." but the entry stayed on disk (live-verified:
   `+`/`:` so a timezone suffix like `+05:30` can be misread as extra time
   components. Out of scope for the R14 format-side fix; revisit if the
   timestamp tool's parse path is ever hardened.
+
+### R14-3 — `webhooks_secret` config was never wired to signature verification (FIXED)
+
+The webhook platform (live path: `operant-core/src/gateway/mod.rs`, `WebhookAdapter`)
+had complete HMAC-SHA256 / Slack / Stripe signature verification, and the TOML
+schema exposed `webhooks_secret` — but the CLI **never read it**:
+`GatewaySettings` (core) lacked the field, `GatewayConfig` lacked it,
+`start_gateway`/`build_adapters` never called `.with_secret(...)`, and
+`with_secret` had **zero live callers**. Any webhook request was accepted
+unsigned even when a secret was configured.
+
+- **Fix**: added `webhooks_secret: Option<String>` to `GatewaySettings` +
+  `GatewayConfig`, wired `start_gateway` → `build_adapters` →
+  `.with_secret(...)`, and updated all literals. Signature verification now
+  actually engages when a secret is present.
+- **Test**: `test_webhook_hmac_live_server` boots the real axum server on an
+  ephemeral port with a secret and asserts: unsigned request → **401**, wrong
+  signature → **401**, correct `sha256=` HMAC → **200** and the payload is
+  forwarded to the channel. Live-verified passing.
+
+### R14-4 — Slack `_signing_secret` is a dead field; SlackAdapter gets `None` (FLAGGED)
+
+`gateway/mod.rs` defines `_signing_secret` (underscore-prefixed — Rust treats it
+as intentionally-unused, so no dead-code warning fires), and the CLI wires
+`SlackAdapter::new(token, None)`. Slack's own webhook signature verification
+(implemented in the same file) can therefore never be reached through the Slack
+adapter. Same root pattern as R14-3; left FLAGGED because wiring it requires a
+`slack_signing_secret` schema field + adapter plumbing (higher churn), and the
+webhook adapter now honors its secret.
