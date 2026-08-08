@@ -134,7 +134,7 @@ impl CheckpointManager {
     }
 
     /// Take a checkpoint of the given directory
-    pub fn ensure_checkpoint(&self, working_dir: &str) -> bool {
+    pub fn ensure_checkpoint(&self, working_dir: &str, reason: &str) -> bool {
         let config_guard = match self.config.lock() {
             Ok(g) => g,
             Err(_) => return false,
@@ -175,7 +175,7 @@ impl CheckpointManager {
         }
 
         // Take the checkpoint
-        self.take_checkpoint(working_dir, "auto checkpoint")
+        self.take_checkpoint(working_dir, reason)
     }
 
     /// Internal: take a checkpoint into the shadow store.
@@ -236,6 +236,10 @@ impl CheckpointManager {
 
         match commit_result {
             Ok(ref output) if output.status.success() => {
+                // Enforce max_snapshots — keep the newest N commits by moving
+                // the store's branch ref (never touches the index or the user's
+                // worktree; hermes prune parity).
+                self.prune_old_checkpoints(&store, &env);
                 info!("Checkpoint taken in {}: {}", working_dir, reason);
                 true
             }
@@ -368,6 +372,63 @@ impl CheckpointManager {
             .map(|g| g.base_dir.join("store").join(store_name(working_dir)))
             .unwrap_or_default()
     }
+
+    /// Drop the oldest shadow-store commits so at most `max_snapshots` remain.
+    /// Uses `git update-ref`, which is safe on a bare store and never touches
+    /// the user's index or worktree.
+    fn prune_old_checkpoints(&self, store: &Path, env: &[(String, String)]) {
+        let max = self.config.lock().map(|g| g.max_snapshots).unwrap_or(20);
+        if max == 0 {
+            return;
+        }
+        let env_iter = env.iter().map(|(k, v)| (k.as_str(), v.as_str()));
+        let count = match Command::new("git")
+            .args(["rev-list", "--count", "HEAD"])
+            .envs(env_iter)
+            .output()
+        {
+            Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).trim().to_string(),
+            _ => return,
+        };
+        let Ok(n) = count.parse::<usize>() else {
+            return;
+        };
+        if n <= max {
+            return;
+        }
+        let excess = n - max;
+        let keep = match Command::new("git")
+            .args(["rev-list", "-n", "1", &format!("HEAD~{}", excess)])
+            .envs(env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
+            .output()
+        {
+            Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).trim().to_string(),
+            _ => return,
+        };
+        if keep.is_empty() {
+            return;
+        }
+        let Some(branch) = current_branch(store) else {
+            return;
+        };
+        let _ = Command::new("git")
+            .args(["update-ref", &branch, &keep])
+            .envs(env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
+            .output();
+        debug!(
+            "Pruned old checkpoints for {} (kept newest {})",
+            store.display(),
+            max
+        );
+    }
+}
+
+/// Read the store's current branch from its `HEAD` symref (`ref: refs/heads/..`).
+fn current_branch(store: &Path) -> Option<String> {
+    let head = std::fs::read_to_string(store.join("HEAD")).ok()?;
+    head.strip_prefix("ref: ")
+        .map(str::trim)
+        .map(str::to_string)
 }
 
 /// Stable 16-hex store name for a working directory.
@@ -515,12 +576,12 @@ impl OperantTool for CheckpointTool {
 
         match action {
             "ensure" => {
-                let _reason = args
+                let reason = args
                     .get("reason")
                     .and_then(|v| v.as_str())
                     .unwrap_or("manual checkpoint");
 
-                let success = manager.ensure_checkpoint(working_dir);
+                let success = manager.ensure_checkpoint(working_dir, reason);
 
                 if success {
                     ToolResult::success(
@@ -703,7 +764,7 @@ mod tests {
     fn test_checkpoints_disabled_by_default() {
         let mgr = CheckpointManager::new();
         assert!(!mgr.is_enabled());
-        assert!(!mgr.ensure_checkpoint("."));
+        assert!(!mgr.ensure_checkpoint(".", "test"));
     }
 
     #[test]
@@ -729,7 +790,7 @@ mod tests {
         let dir = tmp.to_str().unwrap();
 
         // First snapshot captures a.txt
-        assert!(mgr.ensure_checkpoint(dir));
+        assert!(mgr.ensure_checkpoint(dir, "one"));
         // No git state leaks into the working directory
         assert!(!tmp.join(".git").exists());
         assert_eq!(mgr.list_checkpoints(dir).len(), 1);
@@ -737,12 +798,58 @@ mod tests {
         // Mutate, second snapshot, then restore the first
         std::fs::write(tmp.join("a.txt"), "changed").unwrap();
         mgr.new_turn(); // clear per-turn dedup
-        assert!(mgr.ensure_checkpoint(dir));
+        assert!(mgr.ensure_checkpoint(dir, "two"));
         let cps = mgr.list_checkpoints(dir);
         assert_eq!(cps.len(), 2);
 
         mgr.restore(dir, &cps[1].hash, Some("a.txt")).unwrap();
         assert_eq!(std::fs::read_to_string(tmp.join("a.txt")).unwrap(), "hello");
+
+        let _ = std::fs::remove_dir_all(&tmp);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn test_shadow_checkpoint_respects_max_snapshots() {
+        use std::process::Command as StdCommand;
+        if StdCommand::new("git").arg("--version").output().is_err() {
+            return;
+        }
+
+        let tmp = std::env::temp_dir().join(format!("operant_ckpt_{}", uuid::Uuid::new_v4()));
+        let base =
+            std::env::temp_dir().join(format!("operant_ckpt_store_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        std::fs::write(tmp.join("a.txt"), "v0").unwrap();
+
+        let mgr = CheckpointManager::new();
+        mgr.configure(CheckpointConfig {
+            base_dir: base.clone(),
+            enabled: true,
+            max_snapshots: 2,
+            ..Default::default()
+        });
+        let dir = tmp.to_str().unwrap();
+
+        assert!(mgr.ensure_checkpoint(dir, "one"));
+        std::fs::write(tmp.join("a.txt"), "v1").unwrap();
+        mgr.new_turn();
+        assert!(mgr.ensure_checkpoint(dir, "two"));
+        std::fs::write(tmp.join("a.txt"), "v2").unwrap();
+        mgr.new_turn();
+        assert!(mgr.ensure_checkpoint(dir, "three"));
+
+        // Only the newest `max_snapshots` remain
+        assert!(
+            mgr.list_checkpoints(dir).len() <= 2,
+            "expected <=2, got {}",
+            mgr.list_checkpoints(dir).len()
+        );
+        // The newest checkpoint is still restorable
+        let cps = mgr.list_checkpoints(dir);
+        if let Some(latest) = cps.first() {
+            mgr.restore(dir, &latest.hash, Some("a.txt")).unwrap();
+        }
 
         let _ = std::fs::remove_dir_all(&tmp);
         let _ = std::fs::remove_dir_all(&base);
