@@ -71,7 +71,11 @@ pub(crate) fn atomic_write(path: &std::path::Path, content: &str) -> std::io::Re
     let mut tmp = tempfile::NamedTempFile::new_in(dir)?;
 
     // Preserve the existing file's mode across the replace (hermes copies
-    // mode with chmod --reference before renaming).
+    // mode with chmod --reference before renaming). For brand-new targets,
+    // land at 0666 & ~umask (typically 0644) instead of NamedTempFile's
+    // hardcoded 0600 — hermes fixed exactly this with `chmod "=rw"`
+    // (#70856). set_permissions bypasses the umask (fchmod sets the exact
+    // mode), so compute 0666 & ~umask explicitly.
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -80,6 +84,10 @@ pub(crate) fn atomic_write(path: &std::path::Path, content: &str) -> std::io::Re
             let _ = tmp
                 .as_file()
                 .set_permissions(std::fs::Permissions::from_mode(mode));
+        } else {
+            let _ = tmp
+                .as_file()
+                .set_permissions(std::fs::Permissions::from_mode(0o666 & !current_umask()));
         }
     }
 
@@ -97,6 +105,24 @@ pub(crate) fn atomic_write(path: &std::path::Path, content: &str) -> std::io::Re
     // Atomic same-directory rename over the target. `persist` returns the
     // (now-named) File on success — discard it.
     tmp.persist(path).map(|_| ()).map_err(|e| e.error)
+}
+
+/// Read the process umask race-free. Linux exposes it in `/proc/self/status`;
+/// other unixes fall back to the common 0o022 (a best-effort default — the
+/// typical deployment is Linux, where the /proc read is authoritative).
+#[cfg(unix)]
+fn current_umask() -> u32 {
+    if let Ok(status) = std::fs::read_to_string("/proc/self/status") {
+        for line in status.lines() {
+            let Some(rest) = line.strip_prefix("Umask:") else {
+                continue;
+            };
+            if let Ok(mask) = u32::from_str_radix(rest.trim(), 8) {
+                return mask;
+            }
+        }
+    }
+    0o022
 }
 
 /// Validate that a path is safe for the agent to read or write. Returns
@@ -654,6 +680,26 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(&path).unwrap(),
             "#!/bin/sh\necho replaced\n"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_atomic_write_new_file_lands_at_umask_mode() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("new_file.txt");
+        // Target does not exist yet — the temp must NOT inherit
+        // NamedTempFile's hardcoded 0600 (hermes #70856 parity).
+        atomic_write(&path, "hello").unwrap();
+
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        let expected = 0o666 & !current_umask();
+        assert_eq!(mode, expected, "new files must respect the process umask");
+        assert_ne!(
+            mode, 0o600,
+            "new files must not land at NamedTempFile's 0600"
         );
     }
 
