@@ -74,18 +74,30 @@ impl CronScheduler {
             self.run_agent_job(job).await
         };
 
+        // Record the run FIRST (writes last_run_at/last_status/last_error and
+        // bumps repeat_completed) — mirroring hermes's order, where the run's
+        // outcome is persisted before the terminal-completion branch runs.
+        // Skipping mark_job_run on the final run (as an earlier draft did)
+        // lost the final run's status/error and left repeat_completed at
+        // times-1.
+        self.db.mark_job_run(
+            &job.id,
+            success,
+            error_msg,
+            None,
+            self.compute_next_run(job),
+        )?;
+
         // Repeat-limit enforcement (hermes parity — hermes cron/jobs.py marks a
         // finite-repeat job as terminal when completed >= times). Previously
         // `repeat_completed` was incremented forever and never checked, so a
-        // job configured with repeat_times = N ran indefinitely.
-        // `mark_job_run` bumps repeat_completed by 1, so this run's new count
-        // is job.repeat_completed + 1.
-        let repeat_exhausted = repeat_limit_reached(job.repeat_times, job.repeat_completed);
-
-        if repeat_exhausted {
-            // Terminal completion: retain the record (so last_status / last_error
-            // stay inspectable) but disable it and clear next_run_at — mirroring
-            // hermes's terminal-completion shape.
+        // job configured with repeat_times = N ran indefinitely. mark_job_run
+        // bumped repeat_completed by 1, so this run's new count is
+        // job.repeat_completed + 1.
+        if repeat_limit_reached(job.repeat_times, job.repeat_completed) {
+            // Terminal completion: retain the record (last_status / last_error
+            // were just written above and stay inspectable) but disable it and
+            // clear next_run_at — mirroring hermes's terminal-completion shape.
             self.db.update_job(
                 &job.id,
                 HashMap::from([
@@ -93,14 +105,6 @@ impl CronScheduler {
                     ("state".to_string(), Some(serde_json::json!("completed"))),
                     ("next_run_at".to_string(), None),
                 ]),
-            )?;
-        } else {
-            self.db.mark_job_run(
-                &job.id,
-                success,
-                error_msg,
-                None,
-                self.compute_next_run(job),
             )?;
         }
 

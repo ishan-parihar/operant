@@ -786,4 +786,54 @@ mod tests {
         // A disabled/completed job is no longer due.
         assert!(db.get_due_jobs().unwrap().is_empty());
     }
+
+    #[test]
+    fn scheduler_final_run_records_status_and_bumps_completed_then_disables() {
+        // Locks the reviewer-caught regression: the terminal run must record
+        // its outcome (last_status, repeat_completed) BEFORE the completion
+        // override is applied — the final run's status must not be lost and
+        // the counter must reach `times`, not `times - 1`.
+        let (db, _dir) = test_db();
+        let id = create_repeat_job(&db, Some(2));
+
+        // First run: not exhausted, counter 0 -> 1.
+        db.mark_job_run(
+            &id,
+            true,
+            None,
+            None,
+            Some("2030-01-01T00:00:00Z".to_string()),
+        )
+        .unwrap();
+        let job = db.get_job(&id).unwrap().unwrap();
+        assert_eq!(job.repeat_completed, 1);
+        assert_eq!(job.last_status.as_deref(), Some("ok"));
+
+        // Final run: mark_job_run records status + bumps counter to 2, then
+        // the scheduler applies the terminal override on top.
+        db.mark_job_run(
+            &id,
+            true,
+            None,
+            None,
+            Some("2030-01-02T00:00:00Z".to_string()),
+        )
+        .unwrap();
+        db.update_job(
+            &id,
+            HashMap::from([
+                ("enabled".to_string(), Some(serde_json::json!(false))),
+                ("state".to_string(), Some(serde_json::json!("completed"))),
+                ("next_run_at".to_string(), None),
+            ]),
+        )
+        .unwrap();
+
+        let job = db.get_job(&id).unwrap().unwrap();
+        assert_eq!(job.repeat_completed, 2);
+        assert_eq!(job.last_status.as_deref(), Some("ok"));
+        assert!(!job.enabled);
+        assert_eq!(job.state, "completed");
+        assert_eq!(job.next_run_at, None);
+    }
 }
