@@ -1194,6 +1194,25 @@ mod tests {
     }
 
     #[test]
+    fn pairing_gate_rejects_unauthenticated_ws_connections() {
+        // Mirrors the auth branch of handle_ws_chat / handle_ws_nodes:
+        // when pairing is required, an empty/missing token must not pass.
+        use operant_config::pairing::PairingGuard;
+
+        let guard = PairingGuard::new(true, &["valid-token".to_string()]);
+        assert!(guard.require_pairing());
+        assert!(!guard.is_authenticated(""));
+        assert!(!guard.is_authenticated("wrong-token"));
+        assert!(guard.is_authenticated("valid-token"));
+
+        // A header-extracted token is exactly what the handler passes in.
+        let mut headers = HeaderMap::new();
+        headers.insert("authorization", "Bearer valid-token".parse().unwrap());
+        assert_eq!(extract_ws_token(&headers, None), Some("valid-token"));
+        assert!(guard.is_authenticated(extract_ws_token(&headers, None).unwrap_or("")));
+    }
+
+    #[test]
     fn extract_ws_token_precedence_subprotocol_over_query() {
         let mut headers = HeaderMap::new();
         headers.insert("sec-websocket-protocol", "bearer.zc_sub".parse().unwrap());

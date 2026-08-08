@@ -2765,20 +2765,15 @@ mod tests {
                 )
                 .await
                 .expect("request served");
-            // Route is registered (not 404) and gated: an unauthenticated
-            // websocket upgrade on a raw router can't complete (hyper's
-            // OnUpgrade extension is only set by a real server), so any
-            // rejection other than 200/404 proves the route matched and is
-            // protected by auth + the upgrade extractor.
-            assert_ne!(
+            // The route matched a WebSocket handler, so the extractor runs
+            // (hyper's OnUpgrade extension is absent on a raw oneshot router)
+            // and rejects with 426 Upgrade Required BEFORE the handler body.
+            // Asserting the exact 426 pins this: a removed route would 404,
+            // a wrongly-typed handler (e.g. plain JSON) would 200.
+            assert_eq!(
                 response.status(),
-                StatusCode::OK,
-                "{path} must not serve unauthenticated connections"
-            );
-            assert_ne!(
-                response.status(),
-                StatusCode::NOT_FOUND,
-                "{path} must be registered (regression: ws handlers were never routed)"
+                StatusCode::UPGRADE_REQUIRED,
+                "{path} must resolve to a WebSocket handler behind the pairing gate"
             );
         }
     }
