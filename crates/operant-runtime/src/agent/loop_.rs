@@ -72,6 +72,11 @@ const STREAM_TOOL_MARKER_WINDOW_CHARS: usize = 512;
 /// Used as a safe fallback when `max_tool_iterations` is unset or configured as zero.
 const DEFAULT_MAX_TOOL_ITERATIONS: usize = 10;
 
+/// How many times to retry an empty assistant response (no text, no reasoning,
+/// no tool calls) before giving up and returning it. Mirrors OperantAgent's
+/// R4 `empty_content_retries` ladder and hermes's conversation_loop.py.
+const EMPTY_RESPONSE_MAX_RETRIES: usize = 3;
+
 // History management moved to `super::history`.
 pub use super::history::{
     append_or_merge_system_message, canonicalize_tool_result_media_markers, emergency_history_trim,
@@ -911,6 +916,7 @@ pub async fn run_tool_call_loop(
         .collect();
     let mut consecutive_identical_outputs: usize = 0;
     let mut last_tool_output_hash: Option<u64> = None;
+    let mut empty_response_retries: usize = 0;
 
     let mut loop_detector = crate::agent::loop_detector::LoopDetector::new(
         crate::agent::loop_detector::LoopDetectorConfig {
@@ -1267,6 +1273,7 @@ pub async fn run_tool_call_loop(
             native_tool_calls,
             _parse_issue_detected,
             response_streamed_live,
+            response_reasoning,
         ) = match chat_result {
             Ok(resp) => {
                 let (resp_input_tokens, resp_output_tokens) = resp
@@ -1399,6 +1406,7 @@ pub async fn run_tool_call_loop(
                     native_calls,
                     parse_issue.is_some(),
                     streamed_live_deltas,
+                    reasoning_content,
                 )
             }
             Err(e) => {
@@ -1478,6 +1486,28 @@ pub async fn run_tool_call_loop(
         }
 
         if tool_calls.is_empty() {
+            // R23: empty-response retry (OperantAgent R4 parity). The CLI
+            // path retries empty assistant responses up to max_retries times
+            // with a nudge; the gateway path previously returned an empty
+            // answer to the user immediately. Bounded so a model that
+            // persistently returns nothing still terminates.
+            if empty_response_retries < EMPTY_RESPONSE_MAX_RETRIES
+                && response_text.trim().is_empty()
+                && response_reasoning
+                    .as_deref()
+                    .is_none_or(|reasoning| reasoning.trim().is_empty())
+            {
+                empty_response_retries += 1;
+                tracing::warn!(
+                    retry = empty_response_retries,
+                    max = EMPTY_RESPONSE_MAX_RETRIES,
+                    "Empty assistant response — retrying"
+                );
+                // Append the empty assistant turn so the model sees its own
+                // empty reply and is nudged to actually respond.
+                history.push(ChatMessage::assistant(String::new()));
+                continue;
+            }
             runtime_trace::record_event(
                 "turn_final_response",
                 Some(channel_name),
@@ -4989,6 +5019,61 @@ mod tests {
         assert!(err.to_string().contains("provider_capability_error"));
         assert!(err.to_string().contains("capability=vision"));
         assert_eq!(calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn run_tool_call_loop_retries_empty_assistant_response() {
+        // R23: the gateway path previously returned an empty answer when the
+        // model produced no text, no reasoning, and no tool calls (OperantAgent
+        // R4 parity — the CLI path retries with a nudge). Two empty responses
+        // must be retried, then the real answer returned.
+        let provider = StreamingScriptedProvider::from_text_responses(vec!["", "", "finally"]);
+        let mut history = vec![ChatMessage::user("hello".to_string())];
+        let tools_registry: Vec<Box<dyn Tool>> = Vec::new();
+        let observer = NoopObserver;
+        let (tx, _rx) = tokio::sync::mpsc::channel(64);
+
+        let result = run_tool_call_loop(
+            &provider,
+            &mut history,
+            &tools_registry,
+            &observer,
+            "mock-provider",
+            "mock-model",
+            0.0,
+            true,
+            None, // approval
+            "cli",
+            None, // channel_reply_target
+            &operant_config::schema::MultimodalConfig::default(),
+            10,       // max_tool_iterations
+            None,     // cancellation_token
+            Some(tx), // on_delta — required for the streaming path
+            None,     // hooks
+            &[],      // excluded_tools
+            &[],      // dedup_exempt_tools
+            None,     // activated_tools
+            None,     // model_switch_callback
+            &operant_config::schema::PacingConfig::default(),
+            0,    // max_tool_result_chars
+            0,    // context_token_budget
+            None, // shared_budget
+            None, // channel
+            None, // receipt_generator
+            None, // collected_receipts
+        )
+        .await
+        .expect("loop terminates");
+
+        assert_eq!(
+            result, "finally",
+            "empty responses must be retried, not returned to the user"
+        );
+        assert_eq!(
+            provider.stream_calls.load(Ordering::SeqCst),
+            3,
+            "two empty responses consumed the retry ladder, then a real answer"
+        );
     }
 
     #[tokio::test]
