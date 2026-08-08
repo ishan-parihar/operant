@@ -231,3 +231,13 @@ printed "Session '...' deleted." but the entry stayed on disk (live-verified:
 - **In-flight tree**: the `#[allow(dead_code)]` → `#[expect(dead_code,
   reason=...)]` migration (26 files) was uncommitted; it compiles clean and is
   committed alongside this round.
+### R14 review-followups (2026-08-08)
+- `%f` zero-padding regression assertion added (`nsecs=5` → `"000000005"`) locking
+  parity with the old `{:09}` formatter.
+- `operant memory delete` now reports "No memory entry or session with id
+  '...' found." when the id exists in neither namespace (was a misleading
+  "Session deleted." success message).
+- Known follow-up (not fixed): the `timestamp` tool's `parse_date` splits on
+  `+`/`:` so a timezone suffix like `+05:30` can be misread as extra time
+  components. Out of scope for the R14 format-side fix; revisit if the
+  timestamp tool's parse path is ever hardened.

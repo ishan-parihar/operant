@@ -434,5 +434,7 @@ mod tests {
     fn test_format_datetime_nanoseconds() {
         assert_eq!(format_datetime(0, 123_456_789, "%H:%M:%S"), "00:00:00");
         assert_eq!(format_datetime(0, 123_456_789, "%f"), "123456789");
+        // Lock zero-padding parity with the old `{:09}` formatter.
+        assert_eq!(format_datetime(0, 5, "%f"), "000000005");
     }
 }

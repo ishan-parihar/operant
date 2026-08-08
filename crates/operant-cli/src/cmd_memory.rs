@@ -284,12 +284,14 @@ async fn cmd_delete(id: &str) -> Result<()> {
             .await
             .context("Failed to save memory to disk")?;
         println!("Memory entry '{}' deleted.", id);
-    } else {
+    } else if mm.list_sessions().await.iter().any(|s| s.id == id) {
         mm.delete_session(id).await;
         mm.save_to_disk()
             .await
             .context("Failed to save memory to disk")?;
         println!("Session '{}' deleted.", id);
+    } else {
+        println!("No memory entry or session with id '{}' found.", id);
     }
     Ok(())
 }
