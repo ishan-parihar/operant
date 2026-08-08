@@ -267,6 +267,15 @@ unsigned even when a secret was configured.
 as intentionally-unused, so no dead-code warning fires), and the CLI wires
 `SlackAdapter::new(token, None)`. Slack's own webhook signature verification
 (implemented in the same file) can therefore never be reached through the Slack
-adapter. Same root pattern as R14-3; left FLAGGED because wiring it requires a
-`slack_signing_secret` schema field + adapter plumbing (higher churn), and the
+adapter. Same root pattern as R14-3; left FLAGGED because wiring it requiresa `slack_signing_secret` schema field + adapter plumbing (higher churn), and the
 webhook adapter now honors its secret.
+
+### R14-5 — `WhatsAppAdapter::with_phone_number_id` is dead-wired (FLAGGED)
+
+`gateway/mod.rs` exposes `with_phone_number_id(...)` but it has **zero live
+callers** and no `whatsapp_phone_number_id` schema/config field — the
+`WhatsAppAdapter` is always constructed with `None`. This only disables
+per-number routing hints (inbound messages still arrive with `platform =
+"whatsapp"`), so it's cosmetic; flagged as the same dead-config pattern as
+R14-3/R14-4 for a future sweep of `with_*` setters vs callers.
+
