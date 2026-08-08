@@ -58,6 +58,15 @@ const ALLOWED_SUBDIRS: &[&str] = &["references", "templates", "scripts", "assets
 static REVIEW_READ_SKILLS: LazyLock<RwLock<HashSet<String>>> =
     LazyLock::new(|| RwLock::new(HashSet::new()));
 
+/// Serializes `.usage.json` read-modify-write cycles. The main agent and the
+/// background-review daemon both call `skill_manage` concurrently, and other
+/// operant processes may share the same skills dir — without this, two
+/// interleaved non-atomic writes corrupt the telemetry file (silently
+/// unpinning skills and zeroing usage data). Mirrors hermes's
+/// `.usage.json.lock` (`skill_usage.py`). (R20)
+static USAGE_TELEMETRY_LOCK: LazyLock<std::sync::Mutex<()>> =
+    LazyLock::new(|| std::sync::Mutex::new(()));
+
 /// Mark a skill as having been read during the current background review.
 /// Called by `skill_view` when the origin is `background_review`.
 pub fn mark_review_skill_read(name: &str) {
@@ -1173,6 +1182,15 @@ impl SkillManageTool {
 
     // ── Telemetry ────────────────────────────────────────────────────
     fn record_usage(&self, name: &str, action: &str) {
+        // Serialize read-modify-write across the main agent task, the
+        // background-review daemon, and other processes sharing this skills
+        // dir. (R20: the previous direct `fs::write` could interleave two
+        // writers and corrupt `.usage.json`, silently unpinning skills and
+        // zeroing telemetry.)
+        let _guard = USAGE_TELEMETRY_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+
         let usage_path = self.root_dir.join(".usage.json");
         let mut telemetry: std::collections::HashMap<String, serde_json::Value> =
             if usage_path.exists() {
@@ -1206,8 +1224,21 @@ impl SkillManageTool {
             let _ = fs::create_dir_all(parent);
         }
         if let Ok(content) = serde_json::to_string_pretty(&telemetry) {
-            let _ = fs::write(&usage_path, content);
+            atomic_write_json(&usage_path, &content);
         }
+    }
+}
+
+/// Write a JSON file atomically: write to a sibling temp file, then rename
+/// over the target. A crash or concurrent reader never observes a
+/// partially-written file. (R20)
+fn atomic_write_json(path: &Path, content: &str) {
+    let tmp = path.with_extension("json.tmp");
+    if let Some(parent) = tmp.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    if fs::write(&tmp, content).is_ok() {
+        let _ = fs::rename(&tmp, path);
     }
 }
 
@@ -1241,6 +1272,42 @@ mod tests {
         let (fm, body) = parse_frontmatter(sample_skill_md());
         assert_eq!(fm.get("name").and_then(|v| v.as_str()), Some("new-skill"));
         assert!(body.contains("Instructions here."));
+    }
+
+    #[test]
+    fn concurrent_record_usage_preserves_telemetry_file() {
+        // The main agent and the background-review daemon both call
+        // `skill_manage` concurrently; a non-atomic `.usage.json` write would
+        // corrupt the file. The telemetry must remain valid JSON with intact
+        // counts after concurrent writers. (R20)
+        let (_tmp, skills_dir) = setup_test_env();
+
+        let mut handles = Vec::new();
+        for i in 0..8 {
+            let dir = skills_dir.clone();
+            handles.push(std::thread::spawn(move || {
+                let tool = SkillManageTool::new(dir);
+                for _ in 0..25 {
+                    tool.record_usage(&format!("skill-{}", i % 4), "patch");
+                }
+            }));
+        }
+        for handle in handles {
+            handle.join().unwrap();
+        }
+
+        let usage_path = skills_dir.join(".usage.json");
+        let content = fs::read_to_string(&usage_path).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&content)
+            .expect("usage telemetry must remain valid JSON after concurrent writes");
+        // 4 skills × 8 threads × 25 patches = 200 total patch_count.
+        let total: u64 = parsed
+            .as_object()
+            .expect("telemetry must be an object")
+            .values()
+            .filter_map(|v| v.get("patch_count").and_then(|c| c.as_u64()))
+            .sum();
+        assert_eq!(total, 200, "no patch_count may be lost to write races");
     }
 
     #[test]

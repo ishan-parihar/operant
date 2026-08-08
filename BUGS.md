@@ -477,4 +477,30 @@ inspectable). Operant had the schema field + the counter but not the check.
   snapshots were already corrupted by the original bug; the new format is
   fully lossless.)
 
+### R20 — skill `.usage.json` telemetry write race (FIXED)
 
+- **`.usage.json` was written non-atomically and unlocked.** The main agent
+  and the background-review daemon both call `skill_manage` concurrently
+  (the review is `tokio::spawn`-ed and keeps running while the next turn
+  starts), and multiple operant processes can share a skills dir — so two
+  interleaved read-modify-write cycles lost updates or corrupted the file.
+  A corrupt `.usage.json` silently unpins skills (`is_pinned` defaults to
+  false on parse failure) and zeroes telemetry. Hermes serializes the same
+  file with a `.json.lock` (`skill_usage.py`) and never writes it in place.
+  → **Fix**: a process-wide `USAGE_TELEMETRY_LOCK` (std Mutex, poison-
+  tolerant) around the read-modify-write, plus `atomic_write_json`
+  (write `.usage.json.tmp` then rename). New concurrency test: 8 threads ×
+  25 `patch` records on a shared tool — the file stays valid JSON and all
+  200 `patch_count`s survive. (Lost updates across *separate processes*
+  remain possible without an OS file lock, but corruption is no longer
+  possible; matches the realistic single-process agent+review case.)
+- **Audited, parity-consistent (no fix)**: `use_count` is seeded at 0 and
+  never bumped on actual skill usage — but hermes's `record_used`
+  (`skill_usage.py:870`) has **zero callers** too, so this is a shared
+  dormant-telemetry gap rather than an operant divergence. The learning
+  graph's "used skills" stat is therefore always 0 in both implementations.
+- **Audited, solid**: the skill-upgrade pipeline (background-review daemon:
+  whitelisted memory/skill tools, write-origin guard, read-before-modify
+  guard, protected/hub-installed skill protection from R10, frozen-prefix
+  prompt-cache parity, digest replay for routed models) is complete and
+  matches hermes's background_review.py pattern.
