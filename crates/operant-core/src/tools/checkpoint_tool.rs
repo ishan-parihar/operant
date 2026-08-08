@@ -411,15 +411,48 @@ impl CheckpointManager {
         let Some(branch) = current_branch(store) else {
             return;
         };
-        let _ = Command::new("git")
+        // NOTE: `current_branch` must return the full `refs/heads/<name>` form;
+        // a bare `master` would create a stray top-level loose ref instead of
+        // moving the branch (covered by test_max_snapshots_caps_commits).
+        let pruned = Command::new("git")
             .args(["update-ref", &branch, &keep])
             .envs(env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
             .output();
-        debug!(
-            "Pruned old checkpoints for {} (kept newest {})",
-            store.display(),
-            max
-        );
+        match pruned {
+            Ok(o) if o.status.success() => {
+                debug!(
+                    "Pruned old checkpoints for {} (kept newest {})",
+                    store.display(),
+                    max
+                );
+            }
+            other => {
+                warn!(
+                    "Failed to prune old checkpoints for {} (excess {}): {:?}",
+                    store.display(),
+                    excess,
+                    other.as_ref().map(|o| &o.stderr)
+                );
+                return;
+            }
+        }
+        // update-ref only hides the dropped commits; reclaim their objects so
+        // the store doesn't grow unbounded even with max_snapshots capped.
+        // gc must run with the same GIT_DIR env so it operates on the store,
+        // never the user's repo.
+        let gc = Command::new("git")
+            .args(["gc", "--prune=now", "--quiet"])
+            .envs(env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
+            .output();
+        if let Ok(o) = gc
+            && !o.status.success()
+        {
+            warn!(
+                "git gc on checkpoint store {} failed (non-fatal): {}",
+                store.display(),
+                String::from_utf8_lossy(&o.stderr).trim()
+            );
+        }
     }
 }
 
