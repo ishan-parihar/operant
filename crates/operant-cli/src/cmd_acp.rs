@@ -80,14 +80,23 @@ impl AcpHandler for AcpCliHandler {
         let cmd = command.to_string();
         let state = self.state.clone();
 
-        let result = tokio::task::spawn_blocking(move || {
+        let result = match tokio::task::spawn_blocking(move || {
             let rt = tokio::runtime::Runtime::new()
                 .map_err(|e| format!("Failed to create runtime: {}", e))?;
 
             rt.block_on(execute_acp_command_inner(config, &cmd))
         })
         .await
-        .map_err(|e| format!("Task join error: {}", e))?;
+        {
+            Ok(inner) => inner,
+            // The blocking task panicked/cancelled: reset the state so `status`
+            // does not stay wedged at `running` forever. (R18 review catch.)
+            Err(e) => {
+                let msg = format!("Task join error: {}", e);
+                state.set(AgentState::Error(msg.clone()));
+                return Err(msg);
+            }
+        };
 
         // Restore a truthful state for the next request.
         match &result {

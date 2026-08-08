@@ -29,18 +29,39 @@ use serde_json::Value;
 pub struct RpcRequest {
     #[serde(default)]
     pub jsonrpc: String,
-    #[serde(default)]
-    pub id: Value,
+    /// `None` = id omitted → notification (no response). `Some(Value::Null)`
+    /// is an *explicit* null id, which per JSON-RPC 2.0 is a valid id that
+    /// still receives a response with `"id": null`. (R18: the Option
+    /// distinguishes these two cases, which a defaulted `Value` cannot. The
+    /// `deserialize_with` is required because plain `Option<T>` collapses an
+    /// explicit JSON `null` into `None`.)
+    #[serde(default, deserialize_with = "deserialize_id")]
+    pub id: Option<Value>,
     pub method: String,
     #[serde(default)]
     pub params: Value,
+}
+
+/// Presence-aware deserializer for the `id` member: a missing `id` yields
+/// `None` (a notification), while an explicit `null` yields `Some(Value::Null)`
+/// — a valid request id that still receives a response. (R18)
+fn deserialize_id<'de, D>(deserializer: D) -> Result<Option<Value>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Value::deserialize(deserializer).map(Some)
 }
 
 impl RpcRequest {
     /// True when this is a JSON-RPC notification (no `id`), which per the
     /// spec must NOT receive a response.
     pub fn is_notification(&self) -> bool {
-        self.id.is_null()
+        self.id.is_none()
+    }
+
+    /// The id to echo in a response (null when absent / a notification).
+    pub fn response_id(&self) -> Value {
+        self.id.clone().unwrap_or(Value::Null)
     }
 }
 
@@ -53,8 +74,10 @@ pub fn validate_request(request: &RpcRequest) -> Result<(), i32> {
     if request.jsonrpc != "2.0" {
         return Err(-32600);
     }
-    if !(request.id.is_null() || request.id.is_string() || request.id.is_number()) {
-        return Err(-32600);
+    if let Some(id) = &request.id {
+        if !(id.is_null() || id.is_string() || id.is_number()) {
+            return Err(-32600);
+        }
     }
     Ok(())
 }
@@ -201,7 +224,7 @@ pub async fn dispatch(request: &RpcRequest, handler: &dyn AcpHandler) -> (RpcRes
         "stop" => (handle_stop(request), true),
         _ => (
             RpcResponse::error(
-                request.id.clone(),
+                request.response_id(),
                 -32601,
                 format!("Method not found: {}", request.method),
             ),
@@ -211,7 +234,7 @@ pub async fn dispatch(request: &RpcRequest, handler: &dyn AcpHandler) -> (RpcRes
 }
 
 fn handle_ping(request: &RpcRequest) -> RpcResponse {
-    RpcResponse::success(request.id.clone(), serde_json::json!("pong"))
+    RpcResponse::success(request.response_id(), serde_json::json!("pong"))
 }
 
 async fn handle_status(request: &RpcRequest, handler: &dyn AcpHandler) -> RpcResponse {
@@ -219,7 +242,7 @@ async fn handle_status(request: &RpcRequest, handler: &dyn AcpHandler) -> RpcRes
     let info = handler.server_info();
 
     RpcResponse::success(
-        request.id.clone(),
+        request.response_id(),
         serde_json::json!({
             "agent": {
                 "state": state,
@@ -238,7 +261,7 @@ async fn handle_command(request: &RpcRequest, handler: &dyn AcpHandler) -> RpcRe
 
     if command.is_empty() {
         return RpcResponse::error(
-            request.id.clone(),
+            request.response_id(),
             -32602,
             "Missing required parameter: 'command'",
         );
@@ -246,14 +269,14 @@ async fn handle_command(request: &RpcRequest, handler: &dyn AcpHandler) -> RpcRe
 
     match handler.execute_command(command).await {
         Ok(output) => RpcResponse::success(
-            request.id.clone(),
+            request.response_id(),
             serde_json::json!({
                 "success": true,
                 "output": output,
             }),
         ),
         Err(err) => RpcResponse::success(
-            request.id.clone(),
+            request.response_id(),
             serde_json::json!({
                 "success": false,
                 "output": err,
@@ -264,7 +287,7 @@ async fn handle_command(request: &RpcRequest, handler: &dyn AcpHandler) -> RpcRe
 
 fn handle_stop(request: &RpcRequest) -> RpcResponse {
     RpcResponse::success(
-        request.id.clone(),
+        request.response_id(),
         serde_json::json!({
             "message": "ACP server shutting down gracefully",
         }),
@@ -303,7 +326,7 @@ mod tests {
     fn make_request(method: &str, params: Value) -> RpcRequest {
         RpcRequest {
             jsonrpc: "2.0".to_string(),
-            id: serde_json::json!(1),
+            id: Some(serde_json::json!(1)),
             method: method.to_string(),
             params,
         }
@@ -372,6 +395,12 @@ mod tests {
         assert!(req.is_notification());
         let req = parse_request(r#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#).unwrap();
         assert!(!req.is_notification());
+        // Explicit null id is NOT a notification — it must get a response.
+        let explicit_null =
+            parse_request(r#"{"jsonrpc":"2.0","id":null,"method":"ping"}"#).unwrap();
+        assert_eq!(explicit_null.id, Some(Value::Null));
+        assert!(!explicit_null.is_notification());
+        assert_eq!(explicit_null.response_id(), Value::Null);
     }
 
     #[test]
@@ -383,9 +412,12 @@ mod tests {
         assert_eq!(validate_request(&no_version), Err(-32600));
         let bad_version = parse_request(r#"{"jsonrpc":"1.0","id":1,"method":"ping"}"#).unwrap();
         assert_eq!(validate_request(&bad_version), Err(-32600));
-        // A notification (null id) is still a valid request.
+        // A notification (omitted id) is still a valid request.
         let notify = parse_request(r#"{"jsonrpc":"2.0","method":"ping"}"#).unwrap();
         assert_eq!(validate_request(&notify), Ok(()));
+        // An explicit null id is a valid request per spec.
+        let null_id = parse_request(r#"{"jsonrpc":"2.0","id":null,"method":"ping"}"#).unwrap();
+        assert_eq!(validate_request(&null_id), Ok(()));
         // An object id is invalid per spec.
         let obj_id = parse_request(r#"{"jsonrpc":"2.0","id":{},"method":"ping"}"#).unwrap();
         assert_eq!(validate_request(&obj_id), Err(-32600));
@@ -407,7 +439,7 @@ mod tests {
         let line = r#"{"jsonrpc":"2.0","id":1,"method":"ping","params":{}}"#;
         let req = parse_request(line).unwrap();
         assert_eq!(req.method, "ping");
-        assert_eq!(req.id, serde_json::json!(1));
+        assert_eq!(req.id, Some(serde_json::json!(1)));
     }
 
     #[test]

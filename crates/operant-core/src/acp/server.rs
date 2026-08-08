@@ -65,7 +65,7 @@ pub async fn run_stdio_server(handler: Arc<dyn AcpHandler>) -> Result<()> {
         // Request.)
         if let Err(code) = validate_request(&request) {
             let err_resp = RpcResponse::error(
-                request.id.clone(),
+                request.response_id(),
                 code,
                 "Invalid Request: `jsonrpc` must be \"2.0\" and `id` must be a string, number, or null",
             );

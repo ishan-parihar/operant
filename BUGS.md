@@ -421,4 +421,13 @@ inspectable). Operant had the schema field + the counter but not the check.
   (`operant-gateway/src/acp.rs`) does use the channels-crate `AcpServer` —
   the one live caller found so far (narrows the R15 dead-wiring note to the
   channels *orchestrator* specifically).
+- **Reviewer follow-up (same commit series)**: (1) explicit `"id": null` was
+  conflated with a notification (`Option<Value>` collapsed JSON null → None),
+  so a spec-valid null-id request was silently dropped — now a presence-aware
+  `deserialize_with` keeps `Some(Value::Null)`, and the loop only suppresses
+  responses for truly omitted ids. (2) `execute_command` early-returned on a
+  `spawn_blocking` join failure (`?` before state restore), wedging the
+  tracker at `Running` forever — the join error now flows through the same
+  restore path and sets `Error` state. Live-verified: explicit null-id ping
+  → `{"id":null,"result":"pong"}`; omitted-id notification → no output.
 
