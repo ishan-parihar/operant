@@ -184,7 +184,11 @@ impl CuratorEngine {
             fs::create_dir_all(parent)?;
         }
         let content = serde_json::to_string_pretty(state)?;
-        fs::write(&self.state_path, content)?;
+        // Atomic write (temp + rename): a crash mid-save must never leave a
+        // truncated state.json that hard-fails load_state. (R21)
+        let tmp_path = self.state_path.with_extension("json.tmp");
+        fs::write(&tmp_path, &content)?;
+        fs::rename(&tmp_path, &self.state_path)?;
         Ok(())
     }
 

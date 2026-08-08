@@ -80,15 +80,25 @@ impl UsageTelemetry {
 
     /// Load telemetry from a JSON file.
     ///
-    /// Returns an empty store if the file doesn't exist.
-    /// Propagates IO / JSON parse errors when the file is present but corrupt.
+    /// Returns an empty store if the file doesn't exist, and falls back to an
+    /// empty store (with a warning) when the file is present but corrupt —
+    /// telemetry is disposable and must never brick the curator or the skill
+    /// manager. IO errors (permissions, etc.) still propagate. (R21)
     pub fn load(filepath: &Path) -> Result<Self> {
         if !filepath.exists() {
             return Ok(Self::new());
         }
         let content = std::fs::read_to_string(filepath)?;
-        let records: Vec<UsageRecord> = serde_json::from_str(&content)?;
-        Ok(Self { records })
+        match serde_json::from_str::<Vec<UsageRecord>>(&content) {
+            Ok(records) => Ok(Self { records }),
+            Err(e) => {
+                eprintln!(
+                    "warning: corrupt skill usage telemetry at {} — starting fresh ({e})",
+                    filepath.display()
+                );
+                Ok(Self::new())
+            }
+        }
     }
 
     /// Save telemetry to a JSON file atomically (temp file + rename).
@@ -213,6 +223,19 @@ impl UsageTelemetry {
         let rec = self.ensure_record(name);
         rec.agent_created = true;
         rec.provenance = Some("agent".to_string());
+    }
+
+    /// Record a skill creation event (hermes `skill_manager_tool.py`
+    /// `record_created` parity). `agent_created` is true only when the
+    /// background-review fork created the skill — those are the records the
+    /// curator manages (archive/stale review). Ordinary creates stay tracked
+    /// but are never auto-archived. (R21)
+    pub fn record_created(&mut self, name: &str, agent_created: bool) {
+        if agent_created {
+            self.mark_agent_created(name);
+        } else {
+            self.ensure_record(name);
+        }
     }
 
     /// Get records filtered by provenance source.
@@ -369,6 +392,32 @@ impl SkillUsageTracker {
         clippy::expect_used,
         reason = "poisoned lock: panic is the intended recovery"
     )]
+    /// Record a skill creation event. See [`UsageTelemetry::record_created`].
+    pub fn record_created(&self, name: &str, agent_created: bool) {
+        let mut inner = self
+            .inner
+            .lock()
+            .expect("skill usage mutex poisoned — programmer error");
+        inner.record_created(name, agent_created);
+    }
+
+    #[expect(
+        clippy::expect_used,
+        reason = "poisoned lock: panic is the intended recovery"
+    )]
+    /// Bump `last_used` for a patch/edit event. See [`UsageTelemetry::bump_patch`].
+    pub fn bump_patch(&self, name: &str) {
+        let mut inner = self
+            .inner
+            .lock()
+            .expect("skill usage mutex poisoned — programmer error");
+        inner.bump_patch(name);
+    }
+
+    #[expect(
+        clippy::expect_used,
+        reason = "poisoned lock: panic is the intended recovery"
+    )]
     /// Remove a record by name.
     pub fn remove(&self, name: &str) {
         let mut inner = self
@@ -424,6 +473,58 @@ mod tests {
         let path = test_file_path();
         let telemetry = UsageTelemetry::load(&path).unwrap();
         assert!(telemetry.is_empty());
+        // Cleanup
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_load_tolerates_corrupt_file() {
+        let path = test_file_path();
+        std::fs::write(&path, "{ definitely not json").unwrap();
+        let telemetry = UsageTelemetry::load(&path).unwrap();
+        assert!(telemetry.is_empty());
+        // Cleanup
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_record_created_honors_agent_created_flag() {
+        let mut telemetry = UsageTelemetry::new();
+        telemetry.record_created("review-skill", true);
+        telemetry.record_created("user-skill", false);
+
+        let review = telemetry.get_record("review-skill").unwrap();
+        assert!(review.agent_created);
+        assert_eq!(review.provenance.as_deref(), Some("agent"));
+
+        let user = telemetry.get_record("user-skill").unwrap();
+        assert!(!user.agent_created);
+    }
+
+    #[test]
+    fn test_tracker_bump_patch_and_remove() {
+        let path = test_file_path();
+        let tracker = SkillUsageTracker::new(path.clone());
+        tracker.load().unwrap();
+        tracker.record_created("s1", true);
+        tracker.bump_patch("s1");
+        tracker.save().unwrap();
+
+        let loaded = SkillUsageTracker::new(path.clone());
+        loaded.load().unwrap();
+        let rec = loaded
+            .all_records()
+            .into_iter()
+            .find(|r| r.name == "s1")
+            .expect("record survives save/load");
+        assert!(rec.agent_created);
+        assert!(rec.last_used.timestamp() > 0);
+
+        loaded.remove("s1");
+        loaded.save().unwrap();
+        let reloaded = SkillUsageTracker::new(path.clone());
+        reloaded.load().unwrap();
+        assert!(reloaded.all_records().is_empty());
         // Cleanup
         let _ = std::fs::remove_file(&path);
     }

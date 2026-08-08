@@ -514,3 +514,20 @@ inspectable). Operant had the schema field + the counter but not the check.
   guard, protected/hub-installed skill protection from R10, frozen-prefix
   prompt-cache parity, digest replay for routed models) is complete and
   matches hermes's background_review.py pattern.
+
+## Round 21 (2026-08-08)
+
+### R21 — Curator archival pipeline dead: skill_manage never fed the usage tracker (FIXED)
+`operant curator` reads `.curator/usage.json` via `SkillUsageTracker`, and `run_review` archives skills filtered by `agent_created` — but **nothing ever populated that file**: `mark_agent_created`/`bump_*` had zero production callers, so `agent_created_records()` was permanently empty and the entire archive/stale pipeline was dead code. Hermes wires this in `skill_manager_tool.py` (`record_created(name, agent_created=is_background_review())` on create, `bump_patch` on patch/edit/write_file/remove_file, `forget` on delete).
+- **Fix**: bridged real agent activity into the curator tracker from `SkillManageTool::record_usage` — the existing choke point — under the same `USAGE_TELEMETRY_LOCK`, so the main agent and background-review daemon can't lose curator records. `create` → `record_created(name, is_background_review())` (review-created skills become agent-managed candidates; ordinary creates stay tracked but are never auto-archived), `patch/edit/write_file/remove_file` → `bump_patch` (advances `last_used`), `delete` → `remove`. Added `UsageTelemetry::record_created` + `SkillUsageTracker::{record_created, bump_patch}`. +4 tests (bridge create/patch/delete, corrupt-file tolerance, record semantics, tracker round-trip).
+
+### R21-b — Curator `state.json` non-atomic write (FIXED)
+`save_state_inner` wrote `state.json` with a plain `fs::write` — the R20 bug class. A crash mid-save could truncate it, hard-failing `load_state` forever.
+- **Fix**: atomic temp + rename, matching the tracker's own save pattern.
+
+### R21-c — Corrupt `.curator/usage.json` bricked skill_manage/curator (FIXED)
+`UsageTelemetry::load` propagated JSON parse errors, so one corrupt sidecar hard-failed `operant curator` and (with the new bridge) would silently disable the bridge. Telemetry is disposable — hermes falls back on corrupt telemetry.
+- **Fix**: corrupt file now falls back to an empty store with a warning; IO errors still propagate. The bridge then self-heals the file on the next successful save. +2 tests.
+
+### Audited, parity-consistent (no fix)
+- **View recording unwired on both sides**: hermes's `skill_view` → `record_view` path is equally dormant (its `record_used` has zero callers), so not wiring `bump_view` is parity, not divergence. Views already feed the review daemon via `mark_review_skill_read`.

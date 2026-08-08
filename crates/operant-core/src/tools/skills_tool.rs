@@ -21,6 +21,7 @@ use std::collections::HashSet;
 use std::sync::{LazyLock, RwLock};
 
 use crate::schema::ToolSchema;
+use crate::skill_usage::SkillUsageTracker;
 use crate::tools::{OperantTool, ToolContext, ToolResult};
 use crate::write_origin::is_background_review;
 
@@ -1226,6 +1227,25 @@ impl SkillManageTool {
         if let Ok(content) = serde_json::to_string_pretty(&telemetry) {
             atomic_write_json(&usage_path, &content);
         }
+
+        // R21: bridge real agent activity into the curator tracker so the
+        // archival pipeline has data to work on (hermes skill_manager_tool.py
+        // parity — record_created / bump_patch / forget go to the same
+        // `.curator/usage.json` the curator reads). The per-call
+        // load-mutate-save is serialized with the `.usage.json` telemetry by
+        // USAGE_TELEMETRY_LOCK above, so concurrent skill_manage actions
+        // (main agent + background-review daemon) never lose curator records,
+        // and a corrupt sidecar self-heals on the next save.
+        let tracker = SkillUsageTracker::new(self.root_dir.join(".curator").join("usage.json"));
+        if tracker.load().is_ok() {
+            match action {
+                "create" => tracker.record_created(name, is_background_review()),
+                "delete" => tracker.remove(name),
+                "patch" | "edit" | "write_file" | "remove_file" => tracker.bump_patch(name),
+                _ => {}
+            }
+            let _ = tracker.save();
+        }
     }
 }
 
@@ -1272,6 +1292,69 @@ mod tests {
         let (fm, body) = parse_frontmatter(sample_skill_md());
         assert_eq!(fm.get("name").and_then(|v| v.as_str()), Some("new-skill"));
         assert!(body.contains("Instructions here."));
+    }
+
+    #[test]
+    fn record_usage_bridges_curator_tracker_on_create() {
+        let (_tmp, skills_dir) = setup_test_env();
+        let tool = SkillManageTool::new(skills_dir.clone());
+        // Simulate the background-review fork creating a skill.
+        let _guard = crate::write_origin::WriteOriginGuard::background_review();
+        tool.record_usage("test-skill", "create");
+
+        let usage_path = skills_dir.join(".curator").join("usage.json");
+        let content = std::fs::read_to_string(&usage_path).expect("curator usage file written");
+        let records: Vec<crate::skill_usage::UsageRecord> =
+            serde_json::from_str(&content).expect("valid JSON");
+        let rec = records
+            .iter()
+            .find(|r| r.name == "test-skill")
+            .expect("create recorded in curator tracker");
+        assert!(rec.agent_created, "review-created skills are agent-managed");
+        assert_eq!(rec.provenance.as_deref(), Some("agent"));
+    }
+
+    #[test]
+    fn record_usage_bridge_patches_and_forgets() {
+        let (_tmp, skills_dir) = setup_test_env();
+        let tool = SkillManageTool::new(skills_dir.clone());
+        tool.record_usage("test-skill", "patch");
+
+        let usage_path = skills_dir.join(".curator").join("usage.json");
+        let content = std::fs::read_to_string(&usage_path).expect("curator usage file written");
+        let records: Vec<crate::skill_usage::UsageRecord> =
+            serde_json::from_str(&content).expect("valid JSON");
+        let rec = records
+            .iter()
+            .find(|r| r.name == "test-skill")
+            .expect("patch recorded in curator tracker");
+        assert!(!rec.agent_created, "patches don't mark agent-created");
+        assert!(rec.last_used.timestamp() > 0, "last_used bumped");
+
+        tool.record_usage("test-skill", "delete");
+        let content = std::fs::read_to_string(&usage_path).expect("file still present");
+        let records: Vec<crate::skill_usage::UsageRecord> =
+            serde_json::from_str(&content).expect("valid JSON");
+        assert!(
+            records.iter().all(|r| r.name != "test-skill"),
+            "deleted skills are forgotten by the tracker"
+        );
+    }
+
+    #[test]
+    fn record_usage_bridge_tolerates_corrupt_curator_file() {
+        let (_tmp, skills_dir) = setup_test_env();
+        let curator_dir = skills_dir.join(".curator");
+        std::fs::create_dir_all(&curator_dir).expect("create .curator dir");
+        std::fs::write(curator_dir.join("usage.json"), "{not-json").expect("write corrupt file");
+        let tool = SkillManageTool::new(skills_dir.clone());
+        // Must not panic or fail; the corrupt sidecar self-heals.
+        tool.record_usage("test-skill", "patch");
+        let content =
+            std::fs::read_to_string(curator_dir.join("usage.json")).expect("file present");
+        let records: Vec<crate::skill_usage::UsageRecord> =
+            serde_json::from_str(&content).expect("self-healed to valid JSON");
+        assert_eq!(records.len(), 1);
     }
 
     #[test]
