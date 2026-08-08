@@ -917,6 +917,11 @@ pub async fn run_tool_call_loop(
     let mut consecutive_identical_outputs: usize = 0;
     let mut last_tool_output_hash: Option<u64> = None;
     let mut empty_response_retries: usize = 0;
+    // Real-work iteration count. Empty-response retries below "refund" their
+    // slot, so the caller's max_iterations budget is reserved for real work
+    // (OperantAgent R4 refund parity) while the loop bound keeps headroom for
+    // the retry ladder on tiny budgets (e.g. `--max-iterations 2`).
+    let mut real_iterations: usize = 0;
 
     let mut loop_detector = crate::agent::loop_detector::LoopDetector::new(
         crate::agent::loop_detector::LoopDetectorConfig {
@@ -929,8 +934,22 @@ pub async fn run_tool_call_loop(
     // Accumulated display text across all tool-loop calls.
     let mut accumulated_display_text = String::new();
 
-    for iteration in 0..max_iterations {
+    // Reserve retry headroom so empty-response retries don't consume the
+    // caller's real iteration budget (OperantAgent R4 refund parity). With a
+    // small budget (e.g. `--max-iterations 2`), the bounded retry ladder must
+    // be able to run without exhausting it — the extra slots go unused when
+    // no empty responses occur, and loop detection still bounds runaways.
+    for iteration in 0..(max_iterations + EMPTY_RESPONSE_MAX_RETRIES) {
         let mut seen_tool_signatures: HashSet<(String, String)> = HashSet::new();
+
+        // Real-budget gate: retry passes refund their slot, so only genuine
+        // work counts against max_iterations. Exceeding it falls through to
+        // the exhaustion path below the loop (same semantics as the original
+        // `0..max_iterations` bound for non-retry callers).
+        real_iterations += 1;
+        if real_iterations > max_iterations {
+            break;
+        }
 
         if cancellation_token
             .as_ref()
@@ -1498,6 +1517,9 @@ pub async fn run_tool_call_loop(
                     .is_none_or(|reasoning| reasoning.trim().is_empty())
             {
                 empty_response_retries += 1;
+                // Refund the iteration slot: retries must not consume the
+                // caller's real budget (OperantAgent R4 refund parity).
+                real_iterations -= 1;
                 tracing::warn!(
                     retry = empty_response_retries,
                     max = EMPTY_RESPONSE_MAX_RETRIES,
@@ -5073,6 +5095,62 @@ mod tests {
             provider.stream_calls.load(Ordering::SeqCst),
             3,
             "two empty responses consumed the retry ladder, then a real answer"
+        );
+    }
+
+    #[tokio::test]
+    async fn run_tool_call_loop_does_not_retry_reasoning_only_response() {
+        // R23 guard: thinking-mode responses (empty text, non-empty reasoning)
+        // must NOT be retried — only truly empty responses are. If the retry
+        // fired, the second pop from the empty turns queue would panic.
+        let provider = StreamingNativeToolEventProvider::with_turns(vec![
+            NativeStreamTurn::TextWithReasoning {
+                text: String::new(),
+                reasoning: "thinking...".to_string(),
+            },
+        ]);
+        let mut history = vec![ChatMessage::user("hello".to_string())];
+        let tools_registry: Vec<Box<dyn Tool>> = Vec::new();
+        let observer = NoopObserver;
+        let (tx, _rx) = tokio::sync::mpsc::channel(64);
+
+        let result = run_tool_call_loop(
+            &provider,
+            &mut history,
+            &tools_registry,
+            &observer,
+            "mock-provider",
+            "mock-model",
+            0.0,
+            true,
+            None, // approval
+            "cli",
+            None, // channel_reply_target
+            &operant_config::schema::MultimodalConfig::default(),
+            10,       // max_tool_iterations
+            None,     // cancellation_token
+            Some(tx), // on_delta
+            None,     // hooks
+            &[],      // excluded_tools
+            &[],      // dedup_exempt_tools
+            None,     // activated_tools
+            None,     // model_switch_callback
+            &operant_config::schema::PacingConfig::default(),
+            0,    // max_tool_result_chars
+            0,    // context_token_budget
+            None, // shared_budget
+            None, // channel
+            None, // receipt_generator
+            None, // collected_receipts
+        )
+        .await
+        .expect("loop terminates");
+
+        assert_eq!(result, "", "reasoning-only responses are not retried");
+        assert_eq!(
+            provider.stream_calls.load(Ordering::SeqCst),
+            1,
+            "a reasoning-only response must not consume the retry ladder"
         );
     }
 
