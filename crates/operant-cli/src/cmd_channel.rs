@@ -69,12 +69,51 @@ pub async fn handle_channel_command(
         ChannelSubcommand::Start => {
             // R15-2: `operant daemon` does not exist — wire to the real
             // gateway runner (the same path `operant gateway run` uses).
+            // Mirror cmd_run's lifecycle: `start_gateway` spawns the gateway
+            // tasks, so the process MUST await a signal and then stop the
+            // gateway — otherwise the runtime drops the spawned tasks the
+            // instant the command returns and the gateway dies immediately
+            // (reviewer-caught bug).
             let msg = crate::gateway_runner::start_gateway(config).await?;
             if json {
                 println!("{}", serde_json::json!({"status":"started","message": msg}));
+                println!(
+                    "{}",
+                    serde_json::json!({"status":"running","message": "Gateway running. Send SIGINT or SIGTERM to stop."})
+                );
             } else {
                 println!("{msg}");
-                println!("Running in foreground — press Ctrl+C to stop.");
+                println!("Running in foreground — press Ctrl+C (SIGINT) or send SIGTERM to stop.");
+            }
+
+            let mut sigint =
+                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?;
+            let mut sigterm =
+                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+            tokio::select! {
+                _ = sigint.recv() => {
+                    if json {
+                        println!(r#"{{"status":"stopping","reason":"SIGINT"}}"#);
+                    } else {
+                        println!("\nReceived SIGINT (Ctrl+C). Shutting down gateway...");
+                    }
+                }
+                _ = sigterm.recv() => {
+                    if json {
+                        println!(r#"{{"status":"stopping","reason":"SIGTERM"}}"#);
+                    } else {
+                        println!("\nReceived SIGTERM. Shutting down gateway...");
+                    }
+                }
+            }
+            let stop = crate::gateway_runner::stop_gateway().await?;
+            if json {
+                println!(
+                    "{}",
+                    serde_json::json!({"status":"stopped","message": stop})
+                );
+            } else {
+                println!("{stop}");
             }
             Ok(())
         }
