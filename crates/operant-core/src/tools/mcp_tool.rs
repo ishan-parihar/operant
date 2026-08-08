@@ -35,6 +35,29 @@ struct McpManagementArgs {
     auth_token: Option<String>,
 }
 
+/// Validate a model-supplied `server_url` for `add_server`: must parse as a
+/// URL with an http/https scheme and a non-empty host. Prevents the agent
+/// from registering servers at arbitrary schemes (file://, etc.) or
+/// malformed addresses. Loopback hosts stay allowed — local MCP dev servers
+/// are a legitimate target.
+fn validate_server_url(raw: &str) -> Result<String, String> {
+    let trimmed = raw.trim();
+    let parsed =
+        url::Url::parse(trimmed).map_err(|e| format!("server_url is not a valid URL: {e}"))?;
+    match parsed.scheme() {
+        "http" | "https" => {}
+        other => {
+            return Err(format!(
+                "server_url scheme must be http or https, got '{other}'"
+            ));
+        }
+    }
+    if parsed.host_str().is_none_or(|h| h.is_empty()) {
+        return Err(format!("server_url must include a host, got: {raw}"));
+    }
+    Ok(trimmed.to_string())
+}
+
 pub struct McpManagementTool {
     mcp_manager: McpManager,
 }
@@ -151,6 +174,22 @@ impl OperantTool for McpManagementTool {
                         );
                     }
                 };
+                // Model-supplied URL: enforce http/https scheme + host so the
+                // agent cannot register servers at arbitrary schemes or
+                // malformed addresses (hermes only loads config-declared
+                // server URLs).
+                let server_url = match validate_server_url(&server_url) {
+                    Ok(u) => u,
+                    Err(e) => return ToolResult::error(self.name(), e),
+                };
+                // Reject re-adding an already-connected name instead of
+                // silently clobbering the existing server.
+                if self.mcp_manager.contains(&server_name).await {
+                    return ToolResult::error(
+                        self.name(),
+                        format!("Server '{server_name}' is already connected"),
+                    );
+                }
                 match self
                     .mcp_manager
                     .add_server(server_name, server_url, parsed.auth_token)
@@ -200,6 +239,62 @@ mod tests {
         let args = serde_json::json!({ "action": "list_servers" });
         let result = tool.execute(args, ToolContext::default()).await;
         assert!(result.success);
+    }
+
+    #[test]
+    fn test_validate_server_url_accepts_http_and_https() {
+        assert!(validate_server_url("http://localhost:8080/mcp").is_ok());
+        assert!(validate_server_url("https://mcp.example.com").is_ok());
+    }
+
+    #[test]
+    fn test_validate_server_url_rejects_bad_schemes() {
+        let err = validate_server_url("file:///etc/passwd").unwrap_err();
+        assert!(err.contains("http or https"), "got: {err}");
+        assert!(validate_server_url("ftp://example.com").is_err());
+        // `localhost:8080` parses with scheme `localhost` — rejected.
+        assert!(validate_server_url("localhost:8080").is_err());
+    }
+
+    #[test]
+    fn test_validate_server_url_rejects_missing_host() {
+        assert!(validate_server_url("http://").is_err());
+        assert!(validate_server_url("not a url").is_err());
+        // (the URL crate parses `https:///path` as host `path` per the WHATWG
+        // spec — a hostname like any other, so it is accepted, not a hole)
+        assert!(validate_server_url("https:///path").is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_mcp_tool_add_server_rejects_bad_url_before_network() {
+        // Validation happens before any connect attempt, so a bad URL fails
+        // fast without touching the network.
+        let tool = McpManagementTool::new(McpManager::new());
+        let args = serde_json::json!({
+            "action": "add_server",
+            "server_name": "evil",
+            "server_url": "file:///etc/passwd",
+            "auth_token": "secret"
+        });
+        let result = tool.execute(args, ToolContext::default()).await;
+        assert!(!result.success);
+        let err = result.error.unwrap();
+        assert!(err.contains("http or https"), "got: {err}");
+    }
+
+    #[tokio::test]
+    async fn test_mcp_tool_add_server_connect_failure_reported() {
+        // A valid-format URL to a dead port fails at connect and is reported
+        // as a failed add — proves the http/https path still reaches connect.
+        let tool = McpManagementTool::new(McpManager::new());
+        let args = serde_json::json!({
+            "action": "add_server",
+            "server_name": "dead",
+            "server_url": "http://127.0.0.1:1/mcp"
+        });
+        let result = tool.execute(args, ToolContext::default()).await;
+        assert!(!result.success);
+        assert!(result.error.unwrap().contains("Failed to add server"));
     }
 
     #[tokio::test]
