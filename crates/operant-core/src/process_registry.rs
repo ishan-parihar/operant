@@ -11,6 +11,28 @@ use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 const MAX_OUTPUT_CHARS: usize = 200_000;
+/// Max concurrently tracked processes before finished sessions are pruned
+/// (hermes process_registry.py MAX_PROCESSES = 64).
+const MAX_PROCESSES: usize = 64;
+
+/// Drop the oldest finished sessions once the registry exceeds MAX_PROCESSES
+/// (hermes `_prune_finished` LRU behavior).
+fn prune_finished(fin_map: &mut HashMap<String, ProcessSession>) {
+    if fin_map.len() <= MAX_PROCESSES {
+        return;
+    }
+    let mut oldest: Vec<String> = fin_map.keys().cloned().collect();
+    oldest.sort_by(|a, b| {
+        fin_map[a]
+            .started_at
+            .partial_cmp(&fin_map[b].started_at)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    let overflow = oldest.len() - MAX_PROCESSES;
+    for sid in oldest.iter().take(overflow) {
+        fin_map.remove(sid);
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum ProcessStatus {
@@ -107,6 +129,12 @@ impl ProcessRegistry {
         } else {
             let mut c = Command::new("sh");
             c.arg("-c").arg(&command);
+            // hermes parity (process_registry.py): run the child in its own
+            // process group so a kill can reap the whole tree. A lone TERM to
+            // the shell pid orphans `cmd &` descendants, which would otherwise
+            // keep the stdout pipe open forever (subshell-wait trap).
+            #[cfg(unix)]
+            c.process_group(0);
             c
         };
         if let Some(ref dir) = cwd {
@@ -188,6 +216,10 @@ impl ProcessRegistry {
                 fs.exit_code = exit_code;
                 fs.status = ProcessStatus::Exited;
                 fin_map.insert(sid2.clone(), fs);
+                // hermes parity (process_registry.py MAX_PROCESSES=64): prune
+                // the oldest finished sessions so a long-lived agent does not
+                // grow the finished map without bound.
+                prune_finished(&mut fin_map);
                 info!(session = %sid2, "Process finished");
             }
         });
@@ -256,12 +288,26 @@ impl ProcessRegistry {
             if let Some(pid) = session.pid {
                 #[cfg(unix)]
                 {
-                    let result = std::process::Command::new("kill")
+                    // Kill the whole process group first — children spawned
+                    // with `&` (or double-forked descendants) share the
+                    // session's group created at spawn via process_group(0).
+                    // hermes kills the tree recursively (psutil
+                    // children(recursive=True)); a negative pid targets the
+                    // group. Fall back to the single pid if the group is gone.
+                    let group_ok = std::process::Command::new("kill")
                         .arg("-TERM")
-                        .arg(pid.to_string())
-                        .output();
-                    if let Err(e) = result {
-                        warn!(session = %session_id, error = %e, "kill failed");
+                        .arg(format!("-{pid}"))
+                        .output()
+                        .map(|o| o.status.success())
+                        .unwrap_or(false);
+                    if !group_ok {
+                        let result = std::process::Command::new("kill")
+                            .arg("-TERM")
+                            .arg(pid.to_string())
+                            .output();
+                        if let Err(e) = result {
+                            warn!(session = %session_id, error = %e, "kill failed");
+                        }
                     }
                 }
                 #[cfg(windows)]
@@ -364,5 +410,42 @@ mod tests {
         sleep(Duration::from_millis(500)).await;
         let sessions = registry.list().await;
         assert!(sessions.len() >= 2);
+    }
+
+    fn finished_session(id: &str, started_at: f64) -> ProcessSession {
+        let mut s = ProcessSession::new(format!("cmd {id}"), None);
+        s.id = id.to_string();
+        s.started_at = started_at;
+        s.status = ProcessStatus::Exited;
+        s.exit_code = Some(0);
+        s
+    }
+
+    #[test]
+    fn test_prune_finished_keeps_newest_64() {
+        let mut fin_map: HashMap<String, ProcessSession> = HashMap::new();
+        for i in 0..70 {
+            let s = finished_session(&format!("proc_{i}"), i as f64);
+            fin_map.insert(s.id.clone(), s);
+        }
+        prune_finished(&mut fin_map);
+        assert_eq!(fin_map.len(), MAX_PROCESSES);
+        // The 6 oldest (started first) must be evicted.
+        for i in 0..6 {
+            assert!(!fin_map.contains_key(&format!("proc_{i}")));
+        }
+        // The newest survives.
+        assert!(fin_map.contains_key("proc_69"));
+    }
+
+    #[test]
+    fn test_prune_finished_noop_under_cap() {
+        let mut fin_map: HashMap<String, ProcessSession> = HashMap::new();
+        for i in 0..10 {
+            let s = finished_session(&format!("proc_{i}"), i as f64);
+            fin_map.insert(s.id.clone(), s);
+        }
+        prune_finished(&mut fin_map);
+        assert_eq!(fin_map.len(), 10);
     }
 }

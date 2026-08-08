@@ -2578,7 +2578,28 @@ If nothing needs updating, say 'Nothing to save.' and stop.\n\n{}",
     /// Compress context on overflow: try LLM summarization first, fall back
     /// to deterministic decay/eviction. Matches hermes-agent's compression
     /// pipeline: LLM compressor → fallback to manage_context.
+    /// Compress an overflowing conversation, then fold the active todo list
+    /// back into the compressed history so the model keeps its plan across
+    /// compactions (hermes conversation_compression.py:
+    /// `todo_snapshot = agent._todo_store.format_for_injection()`).
     async fn compress_context_overflow(&self, messages: Vec<Message>) -> Vec<Message> {
+        let compressed = self.compress_context_overflow_inner(messages).await;
+        self.reinject_todos_after_compression(compressed)
+    }
+
+    /// hermes parity: append the active todo list as a trailing user message
+    /// after compression. Any prior snapshot row is stripped first so
+    /// repeated compactions refresh rather than accumulate (#26981 analog).
+    fn reinject_todos_after_compression(&self, mut messages: Vec<Message>) -> Vec<Message> {
+        let session_id = self.persistent_session_id.as_deref().unwrap_or("default");
+        if let Some(snapshot) = crate::tools::todo_tool::todo_injection_for_session(session_id) {
+            messages.retain(|m| !crate::tools::todo_tool::is_todo_injection_row(&m.content));
+            messages.push(Message::user(snapshot));
+        }
+        messages
+    }
+
+    async fn compress_context_overflow_inner(&self, messages: Vec<Message>) -> Vec<Message> {
         if let Some(ref compressor) = self.llm_compressor {
             // Bind database persistence on first compression attempt.
             // This ensures cooldown state survives process restarts —
