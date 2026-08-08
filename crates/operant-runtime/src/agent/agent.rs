@@ -73,6 +73,13 @@ pub struct Agent {
     /// `start_channels`; this is the alternate path for environments that
     /// build an Agent directly without `start_channels`.
     channel_handles: AgentChannelHandles,
+    /// Completed turns since the last memory-review nudge fired.
+    ///
+    /// Mirrors hermes-agent-ultra's streaming-path counter
+    /// (`methods_run_stream.rs`: `turns_since_memory += 1` per turn).
+    turns_since_memory: u64,
+    /// Completed turns since the last skill-creation nudge fired.
+    turns_since_skill: u64,
 }
 
 /// Bundle of late-bound channel-map handles owned by an Agent. Cloning is
@@ -418,11 +425,191 @@ impl AgentBuilder {
             hook_runner: self.hook_runner,
             approval_manager: self.approval_manager,
             channel_handles: AgentChannelHandles::default(),
+            turns_since_memory: 0,
+            turns_since_skill: 0,
         })
     }
 }
 
 impl Agent {
+    /// Advance a per-turn nudge counter; returns `true` (and resets) once
+    /// `interval` completed turns have elapsed. `0` disables the trigger.
+    fn advance_turn_trigger(counter: &mut u64, interval: usize) -> bool {
+        if interval == 0 {
+            return false;
+        }
+        *counter = counter.saturating_add(1);
+        if *counter >= interval as u64 {
+            *counter = 0;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Advance the per-turn memory-review counter; fires (and resets) every
+    /// `memory_nudge_interval` completed turns.
+    ///
+    /// Mirrors hermes-agent-ultra's streaming-path counter
+    /// (`methods_run_stream.rs`: `turns_since_memory += 1` per turn).
+    fn advance_memory_trigger(&mut self) -> bool {
+        Self::advance_turn_trigger(
+            &mut self.turns_since_memory,
+            self.config.memory_nudge_interval,
+        )
+    }
+
+    /// Advance the per-turn skill-nudge counter; fires (and resets) every
+    /// `creation_nudge_interval` completed turns.
+    fn advance_skill_trigger(&mut self) -> bool {
+        Self::advance_turn_trigger(
+            &mut self.turns_since_skill,
+            self.config.creation_nudge_interval,
+        )
+    }
+
+    /// Reset the memory-review counter when the agent itself used a memory
+    /// tool (`memory_*`), matching hermes-agent-ultra's
+    /// `"memory" => c.turns_since_memory = 0` reset on the streaming path.
+    fn note_memory_tool_use(&mut self) {
+        self.turns_since_memory = 0;
+    }
+
+    /// Run the self-evolution triggers at a successful turn boundary.
+    ///
+    /// Memory trigger: runs a lightweight LLM memory review every
+    /// `memory_nudge_interval` turns and persists the extracted facts.
+    /// Skill trigger: emits an `evolution_nudge` observer event (`kind =
+    /// "skill"`) every `creation_nudge_interval` turns so UIs can prompt the
+    /// user/agent to create or upgrade a skill.
+    async fn fire_evolution_triggers(&mut self, final_text: &str) {
+        if self.advance_memory_trigger() {
+            self.run_memory_review(final_text).await;
+        }
+        if self.advance_skill_trigger() {
+            self.observer.record_event(&ObserverEvent::EvolutionNudge {
+                kind: "skill".into(),
+                interval: self.config.creation_nudge_interval as u64,
+                facts_stored: None,
+            });
+        }
+    }
+
+    /// Run a lightweight memory review and persist extracted durable facts.
+    ///
+    /// The gateway-path analog of `OperantAgent`'s background memory review
+    /// (core `background_review.rs`) and hermes-agent-ultra's
+    /// `spawn_background_review`: the model is asked to extract durable,
+    /// generalizable facts from the recent conversation, and each fact is
+    /// stored as a long-term (`Core`) memory entry. Runs synchronously at the
+    /// turn boundary, only every `memory_nudge_interval` turns; every failure
+    /// is swallowed (logged) so a failed review never fails the turn.
+    async fn run_memory_review(&mut self, last_assistant_text: &str) {
+        let interval = self.config.memory_nudge_interval as u64;
+        let digest = self.review_digest(last_assistant_text);
+        let review_prompt = format!(
+            "You are the memory curator for an autonomous coding agent.\n\
+             From the recent conversation below, extract durable, generalizable facts worth \
+             remembering long-term (user preferences, decisions, environment facts, project \
+             facts). Output each fact on its own line. Do not output anything else. Skip \
+             trivial, one-off, or ephemeral details.\n\n<conversation>\n{digest}\n</conversation>"
+        );
+        let messages = vec![
+            ChatMessage::system("You extract long-term memories. Output facts one per line."),
+            ChatMessage::user(review_prompt),
+        ];
+        let model = self.model_name.clone();
+        let response = match self
+            .provider
+            .chat(
+                ChatRequest {
+                    messages: &messages,
+                    tools: None,
+                },
+                &model,
+                Some(0.0),
+            )
+            .await
+        {
+            Ok(resp) => resp,
+            Err(err) => {
+                tracing::warn!(error = %err, "memory review LLM call failed (gateway path)");
+                self.observer.record_event(&ObserverEvent::EvolutionNudge {
+                    kind: "memory".into(),
+                    interval,
+                    facts_stored: None,
+                });
+                return;
+            }
+        };
+
+        let mut stored = 0usize;
+        let session = self.memory_session_id.clone();
+        let ts = chrono::Local::now().format("%Y%m%d%H%M%S").to_string();
+        for (i, line) in response
+            .text
+            .unwrap_or_default()
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .take(8)
+            .enumerate()
+        {
+            let fact = line.trim_start_matches(['-', '*', '•']).trim();
+            if fact.is_empty() {
+                continue;
+            }
+            let key = format!("memory_review_{ts}_{i}");
+            if self
+                .memory
+                .store(&key, fact, MemoryCategory::Core, session.as_deref())
+                .await
+                .is_ok()
+            {
+                stored += 1;
+            }
+        }
+
+        tracing::info!(facts = stored, "memory review complete (gateway path)");
+        self.observer.record_event(&ObserverEvent::EvolutionNudge {
+            kind: "memory".into(),
+            interval,
+            facts_stored: Some(stored),
+        });
+    }
+
+    /// Build a compact text digest of the recent conversation for the review.
+    fn review_digest(&self, last_assistant_text: &str) -> String {
+        const MAX_DIGEST_CHARS: usize = 4000;
+        let mut parts: Vec<String> = Vec::new();
+        for msg in self.history.iter().rev().take(10).rev() {
+            let line = match msg {
+                ConversationMessage::Chat(c) => {
+                    let content: String = c.content.chars().take(600).collect();
+                    format!("{}: {content}", c.role)
+                }
+                ConversationMessage::AssistantToolCalls { text, .. } => text
+                    .as_ref()
+                    .map(|t| format!("assistant: {}", t.chars().take(600).collect::<String>()))
+                    .unwrap_or_default(),
+                _ => String::new(),
+            };
+            if !line.is_empty() {
+                parts.push(line);
+            }
+        }
+        if !last_assistant_text.is_empty() {
+            parts.push(format!(
+                "assistant: {}",
+                last_assistant_text.chars().take(600).collect::<String>()
+            ));
+        }
+        let mut digest = parts.join("\n");
+        if digest.chars().count() > MAX_DIGEST_CHARS {
+            digest = digest.chars().take(MAX_DIGEST_CHARS).collect();
+        }
+        digest
+    }
     pub fn builder() -> AgentBuilder {
         AgentBuilder::new()
     }
@@ -1330,6 +1517,8 @@ impl Agent {
                     )));
                 self.trim_history();
 
+                self.fire_evolution_triggers(&final_text).await;
+
                 return Ok(final_text);
             }
 
@@ -1343,8 +1532,11 @@ impl Agent {
                 tool_calls: response.tool_calls.clone(),
                 reasoning_content: response.reasoning_content.clone(),
             });
-
             let results = self.execute_tools(&calls).await;
+            if results.iter().any(|r| r.name.starts_with("memory_")) {
+                self.note_memory_tool_use();
+            }
+
             let formatted = self.tool_dispatcher.format_results(&results);
             self.history.push(formatted);
             self.trim_history();
@@ -1795,6 +1987,7 @@ impl Agent {
                     tokens_used: None,
                     cost_usd: None,
                 });
+                self.fire_evolution_triggers(&final_text).await;
                 return Ok(final_text);
             }
 
@@ -1827,6 +2020,9 @@ impl Agent {
             }
 
             let results = self.execute_tools(&calls).await;
+            if results.iter().any(|r| r.name.starts_with("memory_")) {
+                self.note_memory_tool_use();
+            }
 
             // Notify about each tool result (skip results without an id).
             for result in &results {
@@ -3993,6 +4189,260 @@ mod tests {
         assert_eq!(
             names,
             &["file_read", "web_fetch", "ops__deploy", "ops__rollback"]
+        );
+    }
+
+    // ── Self-evolution triggers (R24) ───────────────────────────────────
+
+    #[test]
+    fn advance_turn_trigger_fires_every_interval_and_resets() {
+        let mut counter = 0u64;
+        assert!(
+            !Agent::advance_turn_trigger(&mut counter, 3),
+            "turn 1 must not fire"
+        );
+        assert!(
+            !Agent::advance_turn_trigger(&mut counter, 3),
+            "turn 2 must not fire"
+        );
+        assert!(
+            Agent::advance_turn_trigger(&mut counter, 3),
+            "turn 3 must fire"
+        );
+        assert_eq!(counter, 0, "counter resets after firing");
+        assert!(
+            !Agent::advance_turn_trigger(&mut counter, 3),
+            "next window starts fresh"
+        );
+    }
+
+    #[test]
+    fn advance_turn_trigger_zero_interval_disables() {
+        let mut counter = 0u64;
+        for _ in 0..100 {
+            assert!(
+                !Agent::advance_turn_trigger(&mut counter, 0),
+                "0 interval never fires"
+            );
+        }
+        assert_eq!(counter, 0, "disabled trigger must not bump the counter");
+    }
+
+    #[test]
+    fn note_memory_tool_use_resets_the_memory_counter() {
+        // Interval 2: turn 1 bumps the counter to 1; a memory-tool use resets
+        // it, so the immediately following turn (counter 1) does not fire.
+        let mut counter = 0u64;
+        Agent::advance_turn_trigger(&mut counter, 2);
+        assert_eq!(counter, 1);
+        counter = 0; // note_memory_tool_use semantics
+        assert!(!Agent::advance_turn_trigger(&mut counter, 2));
+        assert!(Agent::advance_turn_trigger(&mut counter, 2));
+    }
+
+    struct RecordingMemory {
+        stored: Arc<Mutex<Vec<(String, String, MemoryCategory)>>>,
+    }
+
+    #[async_trait]
+    impl Memory for RecordingMemory {
+        fn name(&self) -> &str {
+            "recording"
+        }
+
+        async fn store(
+            &self,
+            key: &str,
+            content: &str,
+            category: MemoryCategory,
+            _session_id: Option<&str>,
+        ) -> operant_memory::MemoryResult<()> {
+            self.stored
+                .lock()
+                .push((key.to_string(), content.to_string(), category));
+            Ok(())
+        }
+
+        async fn recall(
+            &self,
+            _query: &str,
+            _limit: usize,
+            _session_id: Option<&str>,
+            _since: Option<&str>,
+            _until: Option<&str>,
+        ) -> operant_memory::MemoryResult<Vec<operant_memory::MemoryEntry>> {
+            Ok(Vec::new())
+        }
+
+        async fn get(
+            &self,
+            _key: &str,
+        ) -> operant_memory::MemoryResult<Option<operant_memory::MemoryEntry>> {
+            Ok(None)
+        }
+
+        async fn list(
+            &self,
+            _category: Option<&operant_memory::MemoryCategory>,
+            _session_id: Option<&str>,
+        ) -> operant_memory::MemoryResult<Vec<operant_memory::MemoryEntry>> {
+            Ok(Vec::new())
+        }
+
+        async fn forget(&self, _key: &str) -> operant_memory::MemoryResult<bool> {
+            Ok(false)
+        }
+
+        async fn count(&self) -> operant_memory::MemoryResult<usize> {
+            Ok(0)
+        }
+
+        async fn health_check(&self) -> bool {
+            true
+        }
+    }
+
+    struct CapturingObserver {
+        events: Arc<Mutex<Vec<ObserverEvent>>>,
+    }
+
+    impl Observer for CapturingObserver {
+        fn record_event(&self, event: &ObserverEvent) {
+            self.events.lock().push(event.clone());
+        }
+
+        fn record_metric(&self, _metric: &operant_api::observability_traits::ObserverMetric) {}
+
+        fn name(&self) -> &str {
+            "capturing"
+        }
+
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+    }
+
+    async fn make_nudge_agent(
+        provider: Box<dyn Provider>,
+        memory: Arc<dyn Memory>,
+        observer: Arc<dyn Observer>,
+        memory_nudge_interval: usize,
+        creation_nudge_interval: usize,
+    ) -> Agent {
+        let config = operant_config::schema::AgentConfig {
+            memory_nudge_interval,
+            creation_nudge_interval,
+            ..operant_config::schema::AgentConfig::default()
+        };
+        Agent::builder()
+            .provider(provider)
+            .tools(vec![Box::new(MockTool)])
+            .memory(memory)
+            .observer(observer)
+            .tool_dispatcher(Box::new(XmlToolDispatcher))
+            .workspace_dir(std::path::PathBuf::from("/tmp"))
+            .config(config)
+            .model_name("test-model".into())
+            .temperature(0.2)
+            .build()
+            .expect("agent build should succeed")
+    }
+
+    #[tokio::test]
+    async fn turn_fires_memory_review_and_stores_facts_when_interval_elapsed() {
+        let stored = Arc::new(Mutex::new(Vec::new()));
+        let memory: Arc<dyn Memory> = Arc::new(RecordingMemory {
+            stored: stored.clone(),
+        });
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let observer: Arc<dyn Observer> = Arc::new(CapturingObserver {
+            events: events.clone(),
+        });
+        // Scripted: [turn answer, memory-review extraction].
+        let provider = Box::new(MockProvider {
+            responses: Mutex::new(vec![
+                operant_providers::ChatResponse {
+                    text: Some("hello".into()),
+                    tool_calls: vec![],
+                    usage: None,
+                    reasoning_content: None,
+                },
+                operant_providers::ChatResponse {
+                    text: Some("- user prefers Rust\n- workspace is /home/ishanp".into()),
+                    tool_calls: vec![],
+                    usage: None,
+                    reasoning_content: None,
+                },
+            ]),
+        });
+
+        let mut agent = make_nudge_agent(provider, memory, observer, 1, 99).await;
+        let answer = agent.turn("hi").await.expect("turn should succeed");
+        assert_eq!(answer, "hello");
+
+        let guard = stored.lock();
+        assert_eq!(
+            guard.len(),
+            2,
+            "review must persist the two extracted facts"
+        );
+        assert!(
+            guard
+                .iter()
+                .any(|(_, content, _)| content == "user prefers Rust")
+        );
+        assert!(
+            guard
+                .iter()
+                .any(|(_, content, _)| content == "workspace is /home/ishanp")
+        );
+        assert!(guard.iter().all(|(_, _, cat)| *cat == MemoryCategory::Core));
+        drop(guard);
+
+        let ev_guard = events.lock();
+        assert!(
+            ev_guard.iter().any(|e| matches!(
+                e,
+                ObserverEvent::EvolutionNudge {
+                    kind,
+                    facts_stored,
+                    ..
+                } if kind == "memory" && *facts_stored == Some(2)
+            )),
+            "memory evolution nudge with facts_stored=2 must be emitted"
+        );
+    }
+
+    #[tokio::test]
+    async fn skill_trigger_emits_nudge_event_at_interval() {
+        let memory: Arc<dyn Memory> = Arc::new(RecordingMemory {
+            stored: Arc::new(Mutex::new(Vec::new())),
+        });
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let observer: Arc<dyn Observer> = Arc::new(CapturingObserver {
+            events: events.clone(),
+        });
+        // One LLM call (turn answer); the memory review never fires
+        // (interval 99) so the scripted queue is not drained further.
+        let provider = Box::new(MockProvider {
+            responses: Mutex::new(vec![operant_providers::ChatResponse {
+                text: Some("hi".into()),
+                tool_calls: vec![],
+                usage: None,
+                reasoning_content: None,
+            }]),
+        });
+
+        let mut agent = make_nudge_agent(provider, memory, observer, 99, 1).await;
+        agent.turn("hello").await.expect("turn should succeed");
+
+        let ev_guard = events.lock();
+        assert!(
+            ev_guard.iter().any(|e| matches!(
+                e,
+                ObserverEvent::EvolutionNudge { kind, .. } if kind == "skill"
+            )),
+            "skill evolution nudge must fire every creation_nudge_interval turns"
         );
     }
 }

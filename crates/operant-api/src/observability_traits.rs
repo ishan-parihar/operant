@@ -113,6 +113,22 @@ pub enum ObserverEvent {
     },
     /// Recovery from a failed deployment has completed.
     RecoveryCompleted { deploy_id: String },
+    /// A self-evolution trigger fired at a turn boundary.
+    ///
+    /// The gateway/streaming agent fires this every `memory_nudge_interval`
+    /// completed turns (`kind = "memory"`) or every `creation_nudge_interval`
+    /// turns (`kind = "skill"`) so post-turn reflection is observable.
+    /// Mirrors hermes-agent-ultra's `turns_since_memory` counter on the
+    /// streaming agent path (`methods_run_stream.rs`).
+    EvolutionNudge {
+        /// `"memory"` (memory review performed) or `"skill"` (skill review due).
+        kind: String,
+        /// Config interval that fired (completed turns between nudges).
+        interval: u64,
+        /// Number of durable facts persisted by the memory review.
+        /// `Some` only for `kind = "memory"`.
+        facts_stored: Option<usize>,
+    },
 }
 
 /// Numeric metrics emitted by the agent runtime.

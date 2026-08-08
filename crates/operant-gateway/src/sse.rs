@@ -285,6 +285,17 @@ impl operant_runtime::observability::Observer for BroadcastObserver {
                     "timestamp": chrono::Utc::now().to_rfc3339(),
                 })
             }
+            operant_runtime::observability::ObserverEvent::EvolutionNudge {
+                kind,
+                interval,
+                facts_stored,
+            } => serde_json::json!({
+                "type": "evolution_nudge",
+                "kind": kind,
+                "interval": interval,
+                "facts_stored": facts_stored,
+                "timestamp": chrono::Utc::now().to_rfc3339(),
+            }),
             _ => return, // Skip events we don't broadcast
         };
 

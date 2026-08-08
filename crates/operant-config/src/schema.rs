@@ -1648,6 +1648,24 @@ pub struct AgentConfig {
     #[serde(default = "default_keep_tool_context_turns")]
     pub keep_tool_context_turns: usize,
 
+    /// Self-evolution: completed turns between memory-review nudges.
+    ///
+    /// At each interval boundary the agent runs a lightweight LLM memory
+    /// review of the recent conversation and persists the extracted durable
+    /// facts as long-term (`core`) memory entries, mirroring the streaming
+    /// agent path in hermes-agent-ultra (`turns_since_memory`). `0` disables
+    /// the trigger. Default: `10`.
+    #[serde(default = "default_memory_nudge_interval")]
+    pub memory_nudge_interval: usize,
+
+    /// Self-evolution: completed turns between skill-creation nudges.
+    ///
+    /// At each interval boundary an `evolution_nudge` observer event
+    /// (`kind = "skill"`) is emitted so UIs can prompt the user/agent to
+    /// create or upgrade a skill. `0` disables the trigger. Default: `10`.
+    #[serde(default = "default_creation_nudge_interval")]
+    pub creation_nudge_interval: usize,
+
     /// HMAC tool execution receipt configuration.
     #[nested]
     #[serde(default)]
@@ -1663,6 +1681,14 @@ fn default_keep_tool_context_turns() -> usize {
 }
 
 fn default_agent_max_tool_iterations() -> usize {
+    10
+}
+
+fn default_memory_nudge_interval() -> usize {
+    10
+}
+
+fn default_creation_nudge_interval() -> usize {
     10
 }
 
@@ -1703,6 +1729,8 @@ impl Default for AgentConfig {
             precheck: crate::scattered_types::ChannelPrecheckConfig::default(),
             max_tool_result_chars: default_max_tool_result_chars(),
             keep_tool_context_turns: default_keep_tool_context_turns(),
+            memory_nudge_interval: default_memory_nudge_interval(),
+            creation_nudge_interval: default_creation_nudge_interval(),
             tool_receipts: ToolReceiptsConfig::default(),
         }
     }
@@ -13237,6 +13265,33 @@ tool_dispatcher = "xml"
         assert_eq!(parsed.agent.max_history_messages, 80);
         assert!(parsed.agent.parallel_tools);
         assert_eq!(parsed.agent.tool_dispatcher, "xml");
+    }
+
+    #[test]
+    async fn agent_config_evolution_nudge_intervals_deserialize() {
+        // R24: the gateway path (runtime Agent) reads these from `[agent]`;
+        // they drive the per-turn memory-review and skill-nudge triggers.
+        let raw = r#"
+default_temperature = 0.7
+[agent]
+memory_nudge_interval = 3
+creation_nudge_interval = 7
+"#;
+        let parsed: Config = toml::from_str(raw).unwrap();
+        assert_eq!(parsed.agent.memory_nudge_interval, 3);
+        assert_eq!(parsed.agent.creation_nudge_interval, 7);
+    }
+
+    #[test]
+    async fn agent_config_evolution_nudge_intervals_default_to_ten() {
+        let parsed: Config = toml::from_str(
+            r#"default_temperature = 0.7
+[agent]
+"#,
+        )
+        .unwrap();
+        assert_eq!(parsed.agent.memory_nudge_interval, 10);
+        assert_eq!(parsed.agent.creation_nudge_interval, 10);
     }
 
     #[test]

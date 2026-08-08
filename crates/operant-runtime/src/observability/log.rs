@@ -130,6 +130,18 @@ impl Observer for LogObserver {
             ObserverEvent::RecoveryCompleted { deploy_id } => {
                 info!(deploy_id = %deploy_id, "recovery.completed");
             }
+            ObserverEvent::EvolutionNudge {
+                kind,
+                interval,
+                facts_stored,
+            } => {
+                info!(
+                    kind = %kind,
+                    interval = interval,
+                    facts_stored = facts_stored,
+                    "evolution.nudge"
+                );
+            }
         }
     }
 
