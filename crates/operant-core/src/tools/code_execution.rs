@@ -181,26 +181,36 @@ struct ExecOutcome {
 /// Kill the child's whole process group (created at spawn via
 /// `process_group(0)`), escalating TERM → KILL after a short grace period.
 /// A lone TERM to the direct child would orphan `&`-spawned descendants, so a
-/// negative pid targets the group (hermes `_kill_process_group` parity).
+/// negative pid targets the group (hermes `_kill_process_group` parity). The
+/// single-pid fallback fires ONLY when the group signal fails (ESRCH) — an
+/// unconditional fallback could hit a recycled PID in the grace window.
 #[cfg(unix)]
 async fn kill_process_group(pid: u32) {
-    let _ = std::process::Command::new("kill")
+    let group_term_ok = std::process::Command::new("kill")
         .arg("-TERM")
         .arg(format!("-{pid}"))
-        .output();
-    let _ = std::process::Command::new("kill")
-        .arg("-TERM")
-        .arg(pid.to_string())
-        .output();
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    if !group_term_ok {
+        let _ = std::process::Command::new("kill")
+            .arg("-TERM")
+            .arg(pid.to_string())
+            .output();
+    }
     tokio::time::sleep(Duration::from_millis(250)).await;
-    let _ = std::process::Command::new("kill")
+    let group_kill_ok = std::process::Command::new("kill")
         .arg("-KILL")
         .arg(format!("-{pid}"))
-        .output();
-    let _ = std::process::Command::new("kill")
-        .arg("-KILL")
-        .arg(pid.to_string())
-        .output();
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    if !group_kill_ok {
+        let _ = std::process::Command::new("kill")
+            .arg("-KILL")
+            .arg(pid.to_string())
+            .output();
+    }
 }
 
 #[cfg(windows)]
@@ -276,12 +286,31 @@ async fn run_capped(mut cmd: tokio::process::Command, timeout: Duration) -> Exec
             if let Some(pid) = pid {
                 kill_process_group(pid).await;
             }
-            // Pipes close once the group is dead; collect partial output.
-            let (so, se) = tokio::join!(out_task, err_task);
-            let _ = child.wait().await; // reap so no zombie lingers
+            // Pipes close once the group is dead; collect partial output. The
+            // join is itself bounded: a child wedged in D-state (uninterruptible,
+            // e.g. blocked on a dead NFS mount) holds the pipes open — the hard
+            // deadline must stay hard even then.
+            let partial = tokio::time::timeout(Duration::from_secs(2), async {
+                let (so, se) = tokio::join!(out_task, err_task);
+                (so.unwrap_or_default(), se.unwrap_or_default())
+            })
+            .await;
+            let (stdout, stderr) = partial.unwrap_or_else(|_| {
+                (
+                    CappedOutput {
+                        text:
+                            "\n... [output capture aborted: process unresponsive after kill] ...\n"
+                                .to_string(),
+                        truncated: true,
+                    },
+                    CappedOutput::default(),
+                )
+            });
+            // Reap so no zombie lingers — bounded in case the child is stuck.
+            let _ = tokio::time::timeout(Duration::from_secs(1), child.wait()).await;
             ExecOutcome {
-                stdout: so.unwrap_or_default(),
-                stderr: se.unwrap_or_default(),
+                stdout,
+                stderr,
                 exit_code: None,
                 timed_out: true,
             }

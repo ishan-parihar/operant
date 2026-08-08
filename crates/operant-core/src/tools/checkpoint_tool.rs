@@ -499,8 +499,21 @@ fn store_name(working_dir: &str) -> String {
 /// the shadow store would hang on pathological directories.
 const MAX_CHECKPOINT_FILES: usize = 50_000;
 
+/// Directory names the shadow store's `info/exclude` tells git to skip — the
+/// file counter mirrors the same list so it never falsely refuses a
+/// checkpoint for a repo with a large object store / node_modules.
+const CHECKPOINT_EXCLUDE_DIRS: [&str; 6] = [
+    ".git",
+    "node_modules",
+    "target",
+    "__pycache__",
+    ".venv",
+    "venv",
+];
+
 /// Count files under `dir` recursively, stopping early once `max` is exceeded
-/// (hermes `_dir_file_count` parity).
+/// (hermes `_dir_file_count` parity: `os.walk` with `followlinks=False` —
+/// symlinks are never followed, so a symlink cycle cannot loop forever).
 fn dir_file_count(dir: &Path, max: usize) -> usize {
     let mut count = 0usize;
     let mut stack = vec![dir.to_path_buf()];
@@ -509,10 +522,19 @@ fn dir_file_count(dir: &Path, max: usize) -> usize {
             continue;
         };
         for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                stack.push(path);
-            } else {
+            // entry.file_type() does NOT follow symlinks — `path.is_dir()`
+            // would follow a `loop -> .` cycle forever.
+            let Ok(ft) = entry.file_type() else {
+                continue;
+            };
+            if ft.is_dir() {
+                let name = entry.file_name();
+                let name = name.to_string_lossy();
+                if CHECKPOINT_EXCLUDE_DIRS.contains(&name.as_ref()) {
+                    continue;
+                }
+                stack.push(entry.path());
+            } else if ft.is_file() {
                 count += 1;
                 if count > max {
                     return count;
@@ -559,11 +581,42 @@ fn validate_restore_path(file_path: &str, working_dir: &str) -> std::result::Res
             .unwrap_or_default()
             .join(working_dir)
     };
-    let resolved = resolve_non_strict(&workdir_abs.join(file_path));
-    if !resolved.starts_with(&workdir_abs) {
+    // Resolve symlinks in the working dir itself for a consistent base.
+    let base = std::fs::canonicalize(&workdir_abs).unwrap_or_else(|_| workdir_abs.clone());
+    let resolved = resolve_non_strict(&base.join(file_path));
+    if !resolved.starts_with(&base) {
         return Err(format!(
             "File path escapes the working directory via traversal: {file_path:?}"
         ));
+    }
+    // Defense-in-depth (hermes `Path.resolve()` parity): the lexical check
+    // cannot see a symlink INSIDE the workdir pointing outside (e.g.
+    // `link -> /etc`). Resolve the longest existing prefix canonically and
+    // re-check containment; the lexical tail covers restoring deleted files.
+    let mut probe = resolved.clone();
+    let mut suffix: Vec<PathBuf> = Vec::new();
+    loop {
+        match std::fs::canonicalize(&probe) {
+            Ok(canon) => {
+                let mut final_path = canon;
+                for part in suffix.iter().rev() {
+                    final_path.push(part);
+                }
+                if !final_path.starts_with(&base) {
+                    return Err(format!(
+                        "File path escapes the working directory via traversal: {file_path:?}"
+                    ));
+                }
+                break;
+            }
+            Err(_) => match probe.file_name() {
+                Some(name) => {
+                    suffix.push(PathBuf::from(name));
+                    probe.pop();
+                }
+                None => break,
+            },
+        }
     }
     Ok(())
 }
@@ -1057,6 +1110,23 @@ mod tests {
 
         assert_eq!(dir_file_count(&tmp, 100), 3);
         assert!(dir_file_count(&tmp, 2) > 2); // stops early once over-cap
+
+        // Excluded dirs (mirroring the shadow store's info/exclude list) are
+        // not counted — a repo with a large .git object store must not be
+        // falsely refused a checkpoint.
+        std::fs::create_dir_all(tmp.join(".git/objects")).unwrap();
+        for i in 0..10 {
+            std::fs::write(tmp.join(format!(".git/objects/o{i}")), "x").unwrap();
+        }
+        assert_eq!(dir_file_count(&tmp, 100), 3);
+
+        // Symlinks are never followed (os.walk followlinks=False parity) — a
+        // self-cycle must terminate instead of looping forever.
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(&tmp, tmp.join("loop")).unwrap();
+            assert_eq!(dir_file_count(&tmp, 100), 3);
+        }
 
         let _ = std::fs::remove_dir_all(&tmp);
     }
