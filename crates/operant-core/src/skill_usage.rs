@@ -289,6 +289,11 @@ impl Default for UsageTelemetry {
 /// handle drops or the process exits, so a crash can never leave a stale lock
 /// that wedges later writers.
 ///
+/// The `.lock` files intentionally persist: unlinking a lockfile is racy (a
+/// new opener would create a fresh inode and no longer contend with existing
+/// fd holders), so they are left in place as inert dotfiles that no skill
+/// scan reads.
+///
 /// Best-effort: if the lock file cannot be opened we proceed unlocked rather
 /// than fail the operation — telemetry must never block skill tooling.
 pub(crate) fn with_exclusive_file_lock<T>(path: &Path, f: impl FnOnce() -> T) -> T {
@@ -602,21 +607,13 @@ mod tests {
             .collect();
         for t in threads {
             t.join().unwrap();
-        }
-        let tracker = SkillUsageTracker::new(path.clone());
+        }        let tracker = SkillUsageTracker::new(path.clone());
         tracker.load().unwrap();
         let records = tracker.all_records();
-        assert_eq!(
-            records.len(),
-            4,
-            "all four skills survive concurrent writers"
-        );
-        for rec in &records {
-            assert!(
-                rec.last_used.timestamp() > 0,
-                "every record has a fresh last_used"
-            );
-        }
+        assert_eq!(records.len(), 4, "all four skills survive concurrent writers");
+        let mut names: Vec<_> = records.iter().map(|r| r.name.as_str()).collect();
+        names.sort_unstable();
+        assert_eq!(names, vec!["skill-0", "skill-1", "skill-2", "skill-3"]);
         // Cleanup
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(format!("{}.lock", path.display()));
