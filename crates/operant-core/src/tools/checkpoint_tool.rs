@@ -17,7 +17,7 @@ use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
 use tracing::{debug, info, warn};
@@ -192,6 +192,16 @@ impl CheckpointManager {
             return false;
         }
 
+        // hermes `_MAX_FILES` parity: skip pathological directories instead of
+        // hanging `git add -A` on the shadow store.
+        if dir_file_count(&workdir, MAX_CHECKPOINT_FILES) > MAX_CHECKPOINT_FILES {
+            debug!(
+                "Checkpoint skipped: {} exceeds {} files",
+                working_dir, MAX_CHECKPOINT_FILES
+            );
+            return false;
+        }
+
         let base_dir = self
             .config
             .lock()
@@ -259,7 +269,7 @@ impl CheckpointManager {
     }
 
     /// List available checkpoints for a directory
-    pub fn list_checkpoints(&self, working_dir: &str) -> Vec<Checkpoint> {
+    pub fn list_checkpoints(&self, working_dir: &str, limit: Option<usize>) -> Vec<Checkpoint> {
         let workdir = PathBuf::from(working_dir);
         let store = self.store_path(working_dir);
         if !store.join("HEAD").exists() {
@@ -267,9 +277,15 @@ impl CheckpointManager {
         }
         let env = git_shadow_env(&store, &workdir, &store.join("index"));
 
+        // Honor the explicit limit, defaulting to the configured snapshot cap
+        // (the old implementation hardcoded `-n 20` and ignored the tool's
+        // `limit` argument).
+        let max = self.config.lock().map(|g| g.max_snapshots).unwrap_or(20);
+        let n = limit.unwrap_or(max).clamp(1, 100);
+
         // Get commit log from the shadow store
         let log_output = Command::new("git")
-            .args(["log", "--format=%H|%h|%aI|%s", "-n", "20"])
+            .args(["log", "--format=%H|%h|%aI|%s", "-n", &n.to_string()])
             .envs(env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
             .output();
 
@@ -307,6 +323,11 @@ impl CheckpointManager {
         commit_hash: &str,
         file_path: Option<&str>,
     ) -> Result<String> {
+        // hermes `_validate_file_path` parity: the target never reaches git
+        // unchecked — absolute paths and `..` traversal are rejected up front.
+        if let Some(target) = file_path {
+            validate_restore_path(target, working_dir).map_err(Error::Agent)?;
+        }
         let workdir = PathBuf::from(working_dir);
         let store = self.store_path(working_dir);
         if !store.join("HEAD").exists() {
@@ -473,6 +494,80 @@ fn store_name(working_dir: &str) -> String {
     hex::encode(&digest[..8])
 }
 
+/// Maximum files a checkpoint directory may contain — hermes
+/// `checkpoint_manager.py` `_MAX_FILES` parity: beyond this, `git add -A` on
+/// the shadow store would hang on pathological directories.
+const MAX_CHECKPOINT_FILES: usize = 50_000;
+
+/// Count files under `dir` recursively, stopping early once `max` is exceeded
+/// (hermes `_dir_file_count` parity).
+fn dir_file_count(dir: &Path, max: usize) -> usize {
+    let mut count = 0usize;
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(current) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&current) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else {
+                count += 1;
+                if count > max {
+                    return count;
+                }
+            }
+        }
+    }
+    count
+}
+
+/// Lexically normalize a path (`.`/`..`) without requiring it to exist —
+/// hermes `Path.resolve()` non-strict parity for the restore-path gate.
+fn resolve_non_strict(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for comp in path.components() {
+        match comp {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                out.pop();
+            }
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
+}
+
+/// Validate a restore `file_path` before it reaches git: reject absolute
+/// paths and `..` traversal that escapes the working directory — hermes
+/// `_validate_file_path` parity (`checkpoint_manager.py`).
+fn validate_restore_path(file_path: &str, working_dir: &str) -> std::result::Result<(), String> {
+    if file_path.trim().is_empty() {
+        return Err("Empty file path".to_string());
+    }
+    let p = Path::new(file_path);
+    if p.is_absolute() {
+        return Err(format!(
+            "File path must be relative, got absolute path: {file_path:?}"
+        ));
+    }
+    let workdir_abs = if Path::new(working_dir).is_absolute() {
+        PathBuf::from(working_dir)
+    } else {
+        std::env::current_dir()
+            .unwrap_or_default()
+            .join(working_dir)
+    };
+    let resolved = resolve_non_strict(&workdir_abs.join(file_path));
+    if !resolved.starts_with(&workdir_abs) {
+        return Err(format!(
+            "File path escapes the working directory via traversal: {file_path:?}"
+        ));
+    }
+    Ok(())
+}
+
 /// Shadow-store environment (hermes parity): git operations run against the
 /// private store with the user's directory as work tree, so no refs, index,
 /// or objects ever touch the user's repository.
@@ -632,7 +727,11 @@ impl OperantTool for CheckpointTool {
                 }
             }
             "list" => {
-                let checkpoints = manager.list_checkpoints(working_dir);
+                let limit = args
+                    .get("limit")
+                    .and_then(|v| v.as_u64())
+                    .map(|v| v as usize);
+                let checkpoints = manager.list_checkpoints(working_dir, limit);
                 ToolResult::success(
                     "checkpoint_list",
                     serde_json::json!({
@@ -826,13 +925,13 @@ mod tests {
         assert!(mgr.ensure_checkpoint(dir, "one"));
         // No git state leaks into the working directory
         assert!(!tmp.join(".git").exists());
-        assert_eq!(mgr.list_checkpoints(dir).len(), 1);
+        assert_eq!(mgr.list_checkpoints(dir, None).len(), 1);
 
         // Mutate, second snapshot, then restore the first
         std::fs::write(tmp.join("a.txt"), "changed").unwrap();
         mgr.new_turn(); // clear per-turn dedup
         assert!(mgr.ensure_checkpoint(dir, "two"));
-        let cps = mgr.list_checkpoints(dir);
+        let cps = mgr.list_checkpoints(dir, None);
         assert_eq!(cps.len(), 2);
 
         mgr.restore(dir, &cps[1].hash, Some("a.txt")).unwrap();
@@ -874,15 +973,126 @@ mod tests {
 
         // Only the newest `max_snapshots` remain
         assert!(
-            mgr.list_checkpoints(dir).len() <= 2,
+            mgr.list_checkpoints(dir, None).len() <= 2,
             "expected <=2, got {}",
-            mgr.list_checkpoints(dir).len()
+            mgr.list_checkpoints(dir, None).len()
         );
         // The newest checkpoint is still restorable
-        let cps = mgr.list_checkpoints(dir);
+        let cps = mgr.list_checkpoints(dir, None);
         if let Some(latest) = cps.first() {
             mgr.restore(dir, &latest.hash, Some("a.txt")).unwrap();
         }
+
+        let _ = std::fs::remove_dir_all(&tmp);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn test_validate_restore_path_rejects_absolute_and_traversal() {
+        let tmp = std::env::temp_dir().join(format!("operant_ckpt_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let dir = tmp.to_str().unwrap();
+
+        // Absolute paths are rejected outright (hermes `_validate_file_path`).
+        let err = validate_restore_path("/etc/passwd", dir).unwrap_err();
+        assert!(err.contains("absolute"), "got: {err}");
+
+        // `..` traversal escaping the working directory is rejected.
+        let err = validate_restore_path("../../etc/passwd", dir).unwrap_err();
+        assert!(err.contains("escapes"), "got: {err}");
+
+        // Safe relative paths (including in-dir normalization) are accepted.
+        std::fs::write(tmp.join("a.txt"), "x").unwrap();
+        assert!(validate_restore_path("a.txt", dir).is_ok());
+        assert!(validate_restore_path("sub/../a.txt", dir).is_ok());
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[tokio::test]
+    async fn test_checkpoint_restore_rejects_absolute_path() {
+        let tool = CheckpointTool::new();
+        let result = tool
+            .execute(
+                serde_json::json!({
+                    "action": "restore",
+                    "working_dir": ".",
+                    "commit_hash": "abc123",
+                    "file_path": "/etc/passwd"
+                }),
+                ToolContext::default(),
+            )
+            .await;
+        assert!(!result.success);
+        let err = result.error.unwrap_or_default();
+        assert!(err.contains("absolute"), "got: {err}");
+    }
+
+    #[tokio::test]
+    async fn test_checkpoint_restore_rejects_traversal() {
+        let tool = CheckpointTool::new();
+        let result = tool
+            .execute(
+                serde_json::json!({
+                    "action": "restore",
+                    "working_dir": ".",
+                    "commit_hash": "abc123",
+                    "file_path": "../../etc/passwd"
+                }),
+                ToolContext::default(),
+            )
+            .await;
+        assert!(!result.success);
+        let err = result.error.unwrap_or_default();
+        assert!(err.contains("escapes"), "got: {err}");
+    }
+
+    #[test]
+    fn test_dir_file_count_stops_early() {
+        let tmp = std::env::temp_dir().join(format!("operant_ckpt_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(tmp.join("sub")).unwrap();
+        std::fs::write(tmp.join("f1"), "a").unwrap();
+        std::fs::write(tmp.join("f2"), "b").unwrap();
+        std::fs::write(tmp.join("sub/f3"), "c").unwrap();
+
+        assert_eq!(dir_file_count(&tmp, 100), 3);
+        assert!(dir_file_count(&tmp, 2) > 2); // stops early once over-cap
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_shadow_list_checkpoints_honors_limit() {
+        use std::process::Command as StdCommand;
+        if StdCommand::new("git").arg("--version").output().is_err() {
+            return;
+        }
+
+        let tmp = std::env::temp_dir().join(format!("operant_ckpt_{}", uuid::Uuid::new_v4()));
+        let base =
+            std::env::temp_dir().join(format!("operant_ckpt_store_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        std::fs::write(tmp.join("a.txt"), "v0").unwrap();
+
+        let mgr = CheckpointManager::new();
+        mgr.configure(CheckpointConfig {
+            base_dir: base.clone(),
+            enabled: true,
+            ..Default::default()
+        });
+        let dir = tmp.to_str().unwrap();
+
+        assert!(mgr.ensure_checkpoint(dir, "one"));
+        std::fs::write(tmp.join("a.txt"), "v1").unwrap();
+        mgr.new_turn();
+        assert!(mgr.ensure_checkpoint(dir, "two"));
+        std::fs::write(tmp.join("a.txt"), "v2").unwrap();
+        mgr.new_turn();
+        assert!(mgr.ensure_checkpoint(dir, "three"));
+
+        assert_eq!(mgr.list_checkpoints(dir, Some(2)).len(), 2);
+        assert_eq!(mgr.list_checkpoints(dir, Some(10)).len(), 3);
+        assert_eq!(mgr.list_checkpoints(dir, None).len(), 3);
 
         let _ = std::fs::remove_dir_all(&tmp);
         let _ = std::fs::remove_dir_all(&base);
