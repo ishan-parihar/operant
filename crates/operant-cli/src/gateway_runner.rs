@@ -21,7 +21,7 @@ use crate::gateway_commands::{
 };
 use operant_core::mcp::McpManager;
 use operant_core::tools::{OperantTool, ToolContext, TranscriptionTool};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::OnceLock;
 use tokio::sync::Mutex;
@@ -47,6 +47,40 @@ pub static PENDING_PERMISSIONS: OnceLock<PendingPermissions> = OnceLock::new();
 /// The next incoming message from that channel is routed as the reply
 /// instead of being sent to the agent. (iter-161)
 pub static PENDING_USER_QUESTIONS: OnceLock<PendingUserQuestions> = OnceLock::new();
+
+/// Live YOLO-mode channels: keys are `"{platform}:{channel_id}"` for channels
+/// that opted into skipping approval prompts (via `/yolo` in the gateway). The
+/// permission receiver consults this set before prompting, so YOLO mode
+/// actually takes effect. (R17: `/yolo` previously only wrote a metadata key
+/// that nothing read — mirroring the TUI's
+/// PermissionMode::BypassPermissions.)
+pub static YOLO_CHANNELS: OnceLock<std::sync::Mutex<HashSet<String>>> = OnceLock::new();
+
+fn yolo_key(platform: &str, channel_id: &str) -> String {
+    format!("{platform}:{channel_id}")
+}
+
+/// Returns true when the given channel has YOLO mode enabled.
+pub fn yolo_enabled(platform: &str, channel_id: &str) -> bool {
+    YOLO_CHANNELS
+        .get()
+        .and_then(|s| s.lock().ok())
+        .map(|guard| guard.contains(&yolo_key(platform, channel_id)))
+        .unwrap_or(false)
+}
+
+/// Set (true) or clear (false) YOLO mode for a channel.
+pub fn set_yolo(platform: &str, channel_id: &str, enabled: bool) {
+    let cell = YOLO_CHANNELS.get_or_init(|| std::sync::Mutex::new(HashSet::new()));
+    if let Ok(mut guard) = cell.lock() {
+        let key = yolo_key(platform, channel_id);
+        if enabled {
+            guard.insert(key);
+        } else {
+            guard.remove(&key);
+        }
+    }
+}
 
 /// Initialize the globals (call once at startup).
 fn init_pending_permissions() {
@@ -915,6 +949,20 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
             let channel_info = current_channel_for_perm.lock().await.clone();
 
             if let Some((platform, channel_id)) = &channel_info {
+                // YOLO mode: the channel opted into skipping approval prompts
+                // via /yolo. (R17: /yolo previously wrote a metadata key that
+                // nothing read — the receiver now honors the live set, mirroring
+                // the TUI's PermissionMode::BypassPermissions.)
+                if yolo_enabled(platform, channel_id) {
+                    tracing::warn!(
+                        channel = %channel_id,
+                        "YOLO mode — auto-approving tool permission"
+                    );
+                    let _ = req
+                        .response_tx
+                        .send(operant_core::agent::ToolPermissionResponse::AllowSession);
+                    continue;
+                }
                 // Send the permission prompt
                 let prompt = format!(
                     "🔧 Permission required: {} — {}\nReply /approve to allow, /deny to cancel (60s timeout)",
@@ -1536,6 +1584,30 @@ fn enrich_document(raw: &serde_json::Value) -> Option<String> {
 mod tests {
     use super::*;
     use operant_core::config::GatewaySettings;
+
+    #[test]
+    fn yolo_set_clear_and_enabled_roundtrip() {
+        set_yolo("telegram", "chan-a", true);
+        set_yolo("telegram", "chan-b", false);
+        assert!(yolo_enabled("telegram", "chan-a"));
+        assert!(
+            !yolo_enabled("telegram", "chan-b"),
+            "explicitly-disabled channel must not be YOLO"
+        );
+        assert!(
+            !yolo_enabled("slack", "chan-a"),
+            "platform must be part of the key"
+        );
+        assert!(
+            !yolo_enabled("telegram", "chan-other"),
+            "unrelated channel must not be YOLO"
+        );
+        set_yolo("telegram", "chan-a", false);
+        assert!(
+            !yolo_enabled("telegram", "chan-a"),
+            "cleared channel must not be YOLO"
+        );
+    }
 
     #[tokio::test]
     async fn test_build_adapters_all_disabled() {

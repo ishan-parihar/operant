@@ -355,3 +355,28 @@ inspectable). Operant had the schema field + the counter but not the check.
   `not-applied` and points to `[gateway] admins` (the live enforcement
   mechanism), in both JSON and text output.
 
+### R17 — gateway `/yolo` wrote a dead metadata key; approvals were never skipped (FIXED)
+
+- **Gateway `/yolo`** toggled a `yolo_mode` session-metadata key that **no
+  consumer read**: `grep` across all crates shows `yolo_mode`/`reasoning_override`
+  have zero readers outside the command handler itself, and the gateway
+  permission receiver (`gateway_runner.rs`, spawned in `start_gateway`)
+  prompted on every tool permission request regardless — yet `/yolo`
+  advertised "skips approval prompts for destructive operations." The TUI's
+  `/yolo` genuinely flips `PermissionMode::BypassPermissions`, which the TUI
+  permission flow consumes — the gateway path was a false promise.
+  → **Fix**: new live global `gateway_runner::YOLO_CHANNELS` (keyed
+  `"{platform}:{channel_id}"`); the permission receiver now checks
+  `yolo_enabled()` before prompting and auto-sends
+  `ToolPermissionResponse::AllowSession` for YOLO channels. `/yolo` handler
+  syncs the set in addition to the metadata, and now supports `/yolo
+  [on|off|status]`. New unit test pins the set semantics (per-channel,
+  per-platform, clear).
+- **Audited the other gateway metadata overrides** (`reasoning_override`,
+  `fast_mode`, `footer_enabled`, `voice_enabled`, `personality`,
+  `codex_runtime`): all are display-only toggles with no agent-run consumer,
+  which is **parity-consistent** — the TUI's `/fast` and `/reasoning` are also
+  display-only state toggles, and `voice_enabled` is only consumed by the TUI
+  voice-notice UI. Only `/yolo` promised safety-relevant behavior (skipping
+  approval prompts) while being dead, so it got the live wiring.
+
