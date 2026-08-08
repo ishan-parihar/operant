@@ -2587,15 +2587,38 @@ If nothing needs updating, say 'Nothing to save.' and stop.\n\n{}",
         self.reinject_todos_after_compression(compressed)
     }
 
-    /// hermes parity: append the active todo list as a trailing user message
-    /// after compression. Any prior snapshot row is stripped first so
+    /// hermes parity: fold the active todo list back into the compressed
+    /// history after compression. Any prior snapshot row is stripped first so
     /// repeated compactions refresh rather than accumulate (#26981 analog).
     fn reinject_todos_after_compression(&self, mut messages: Vec<Message>) -> Vec<Message> {
         let session_id = self.persistent_session_id.as_deref().unwrap_or("default");
-        if let Some(snapshot) = crate::tools::todo_tool::todo_injection_for_session(session_id) {
-            messages.retain(|m| !crate::tools::todo_tool::is_todo_injection_row(&m.content));
-            messages.push(Message::user(snapshot));
+        // The todo tool defaults to "default" when the model omits sessionId;
+        // on gateway paths a persistent session id may be set while the model
+        // still writes under the default key — look up both, preferring the
+        // one that actually holds active todos.
+        let snapshot =
+            crate::tools::todo_tool::todo_injection_for_session(session_id).or_else(|| {
+                if session_id != "default" {
+                    crate::tools::todo_tool::todo_injection_for_session("default")
+                } else {
+                    None
+                }
+            });
+        let Some(snapshot) = snapshot else {
+            return messages;
+        };
+
+        messages.retain(|m| !crate::tools::todo_tool::is_todo_injection_row(&m.content));
+
+        // Fold into a trailing REAL user message so compression never
+        // introduces a synthetic user/user pair (hermes
+        // conversation_compression.py); otherwise append as a new user turn.
+        if let Some(tail) = messages.last_mut().filter(|m| m.role == Role::User) {
+            tail.content.push_str("\n\n");
+            tail.content.push_str(&snapshot);
+            return messages;
         }
+        messages.push(Message::user(snapshot));
         messages
     }
 

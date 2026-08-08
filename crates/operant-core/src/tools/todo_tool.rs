@@ -161,15 +161,13 @@ impl OperantTool for TodoTool {
             Ok(a) => a,
             Err(e) => return ToolResult::error("todo", format!("Invalid arguments: {}", e)),
         };
-
         let session_id = args.session_id.unwrap_or_else(|| "default".to_string());
-
-        let mut store = TODO_STORE
-            .lock()
-            .expect("TODO_STORE mutex poisoned — programmer error");
 
         // Read mode (hermes: omit `todos` to read the current list)
         let Some(todos) = args.todos else {
+            let store = TODO_STORE
+                .lock()
+                .expect("TODO_STORE mutex poisoned — programmer error");
             let current = store.get(&session_id).cloned().unwrap_or_default();
             let summary: Vec<Value> = current
                 .iter()
@@ -192,35 +190,44 @@ impl OperantTool for TodoTool {
         };
 
         // Write path: dedupe by id, normalize, enforce item cap (hermes caps
-        // persisted state so the re-injection block stays bounded).
+        // persisted state so the re-injection block stays bounded). The global
+        // store lock is scoped to just the store access — summaries are built
+        // outside it.
         let mut items: Vec<TodoItem> = dedupe_by_id(todos)
             .into_iter()
             .map(TodoItem::normalized)
             .collect();
         items.truncate(MAX_TODO_ITEMS);
 
-        let next: Vec<TodoItem> = if args.merge {
-            // Merge mode: update existing items by id, append new ones.
-            let mut merged: Vec<TodoItem> = store.get(&session_id).cloned().unwrap_or_default();
-            // Owned keys avoid aliasing borrows into `merged` while it is
-            // mutated below.
-            let mut index: HashMap<String, usize> = HashMap::new();
-            for (i, item) in merged.iter().enumerate() {
-                index.insert(item.id.clone(), i);
-            }
-            for item in items {
-                if let Some(&i) = index.get(item.id.as_str()) {
-                    merged[i].content = item.content;
-                    merged[i].status = item.status;
-                } else {
-                    index.insert(item.id.clone(), merged.len());
-                    merged.push(item);
+        let next: Vec<TodoItem> = {
+            let mut store = TODO_STORE
+                .lock()
+                .expect("TODO_STORE mutex poisoned — programmer error");
+            let next = if args.merge {
+                // Merge mode: update existing items by id, append new ones.
+                let mut merged: Vec<TodoItem> = store.get(&session_id).cloned().unwrap_or_default();
+                // Owned keys avoid aliasing borrows into `merged` while it is
+                // mutated below.
+                let mut index: HashMap<String, usize> = HashMap::new();
+                for (i, item) in merged.iter().enumerate() {
+                    index.insert(item.id.clone(), i);
                 }
-            }
-            merged.truncate(MAX_TODO_ITEMS);
-            merged
-        } else {
-            items
+                for item in items {
+                    if let Some(&i) = index.get(item.id.as_str()) {
+                        merged[i].content = item.content;
+                        merged[i].status = item.status;
+                    } else {
+                        index.insert(item.id.clone(), merged.len());
+                        merged.push(item);
+                    }
+                }
+                merged.truncate(MAX_TODO_ITEMS);
+                merged
+            } else {
+                items
+            };
+            store.insert(session_id.clone(), next.clone());
+            next
         };
 
         let summary: Vec<Value> = next
@@ -233,8 +240,6 @@ impl OperantTool for TodoTool {
                 })
             })
             .collect();
-
-        store.insert(session_id.clone(), next);
 
         ToolResult::success(
             "todo",

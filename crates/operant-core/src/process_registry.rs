@@ -328,7 +328,18 @@ impl ProcessRegistry {
             Ok(())
         } else {
             let fin_map = self.finished.read().await;
-            if fin_map.contains_key(session_id) {
+            if let Some(session) = fin_map.get(session_id) {
+                // Leader already exited, but a `sh -c 'cmd &'` descendant may
+                // still be alive in the group (the process group survives
+                // leader exit). Best-effort reap before reporting the session
+                // done (hermes reaps survivors on the already-exited path too).
+                #[cfg(unix)]
+                if let Some(pid) = session.pid {
+                    let _ = std::process::Command::new("kill")
+                        .arg("-TERM")
+                        .arg(format!("-{pid}"))
+                        .output();
+                }
                 Err("Process already exited".to_string())
             } else {
                 Err(format!("Process '{}' not found", session_id))
