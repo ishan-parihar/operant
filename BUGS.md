@@ -499,6 +499,16 @@ inspectable). Operant had the schema field + the counter but not the check.
   (`skill_usage.py:870`) has **zero callers** too, so this is a shared
   dormant-telemetry gap rather than an operant divergence. The learning
   graph's "used skills" stat is therefore always 0 in both implementations.
+- **Reviewer verification (closed)**: `skills/.usage.json` has exactly ONE
+  writer — `record_usage` (now locked+atomic). The second telemetry
+  implementation (`skill_usage.rs` `SkillUsageTracker`) writes a *different*
+  file (`.curator/usage.json`, already temp+rename atomic) and is used only
+  by `operant curator`; the marketplace/CLI install paths write no usage
+  file. No writer bypasses the lock. **Flagged (duplication, not fixed)**:
+  operant carries two parallel usage-tracking implementations with different
+  schemas and files (`skills/.usage.json` vs `.curator/usage.json`) — the
+  same parallel-implementation class flagged in R15 (channels crate) and R3
+  (RuntimeAgent); consolidating them is a larger refactor.
 - **Audited, solid**: the skill-upgrade pipeline (background-review daemon:
   whitelisted memory/skill tools, write-origin guard, read-before-modify
   guard, protected/hub-installed skill protection from R10, frozen-prefix
