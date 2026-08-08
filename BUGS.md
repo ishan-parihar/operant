@@ -279,3 +279,42 @@ per-number routing hints (inbound messages still arrive with `platform =
 "whatsapp"`), so it's cosmetic; flagged as the same dead-config pattern as
 R14-3/R14-4 for a future sweep of `with_*` setters vs callers.
 
+### R15-1 — the operant-channels crate (55K lines) is dead-wired (FLAGGED, major)
+
+`operant-channels/src/orchestrator/mod.rs::start_channels` — the 14K-line
+orchestrator with the full dispatch machinery (debouncer, per-sender
+interruption, session manager, media pipeline, link enricher, reply-intent
+precheck, per-platform listeners for 20+ channels) — has **zero non-test
+callers** anywhere in the workspace. `operant gateway run` / `channel start`
+use `gateway_runner::start_gateway`, which runs only the 7 operant-core
+`PlatformAdapter`s (telegram, discord, slack, whatsapp, email, sms, webhooks).
+The only live path INTO the channels crate is `operant acp server` →
+`operant-gateway::acp` → `AcpServer`. All the other platform implementations
+(irc, mattermost, imessage, matrix, lark, wechat, nostr, qq, twitter, reddit,
+notion, linq, wati, nextcloud, mochat, wecom, dingtalk, bluesky, clawdtalk,
+line, signal, gmail_push, etc.) are compiled but unreachable in the shipped
+binary. Same dead-wiring class as R13-3 (HTTP `run_gateway`) and the dead
+RuntimeAgent — the codebase carries parallel implementations and only one path
+per surface is wired. Not fixed: rewiring the CLI to `start_channels` is a
+large architectural change with its own risks; documented so a future round
+can decide which stack is canonical.
+
+### R15-2 — `operant channel` subcommands lied or dead-ended (FIXED)
+
+- **`channel start`** printed "Use `operant daemon` to start channels" — but
+  **no `daemon` subcommand exists** in the CLI (verified: `error:
+  unrecognized subcommand 'daemon'`). → Now calls
+  `gateway_runner::start_gateway` directly (same path as `operant gateway
+  run`). Live-verified: boots the gateway.
+- **`channel send`** printed a fake `"status":"sent"` (JSON) / "Sending..."
+  (text) without delivering anything (`// TODO: wire to actual gateway
+  sender`). → Now routes through `gateway_runner::send_channel_message`,
+  which uses the running gateway when present or a one-shot gateway built
+  from config otherwise, and surfaces real errors (unknown platform, nothing
+  enabled). Two new tests pin the honest-error paths.
+- **`channel bind-telegram`** claimed "Bound Telegram identity" + "The agent
+  will now respond" while doing nothing (no allowlist persistence existed for
+  it, and the live gateway has no per-user allowlist). → Now reports
+  `not-applied` and points to `[gateway] admins` (the live enforcement
+  mechanism), in both JSON and text output.
+

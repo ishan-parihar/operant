@@ -394,6 +394,84 @@ fn build_adapters(config: &GatewayConfig) -> Vec<Arc<dyn PlatformAdapter>> {
         .collect()
 }
 
+/// Map an `AppConfig`'s `[gateway]` section onto a `GatewayConfig`.
+/// Extracted so `start_gateway` and one-shot sends share one mapping —
+/// previously every literal was hand-maintained and drifted (e.g. the
+/// `webhooks_secret` field was missing for a full round, silently disabling
+/// signature verification).
+fn gateway_config_from_app(app_config: &AppConfig) -> GatewayConfig {
+    GatewayConfig {
+        telegram_enabled: app_config.gateway.telegram_enabled,
+        telegram_token: app_config.gateway.telegram_token.clone(),
+        discord_enabled: app_config.gateway.discord_enabled,
+        discord_token: app_config.gateway.discord_token.clone(),
+        slack_enabled: app_config.gateway.slack_enabled,
+        slack_token: app_config.gateway.slack_token.clone(),
+        whatsapp_enabled: app_config.gateway.whatsapp_enabled,
+        whatsapp_token: app_config.gateway.whatsapp_token.clone(),
+        email_enabled: app_config.gateway.email_enabled,
+        email_smtp_host: app_config.gateway.email_smtp_host.clone(),
+        email_smtp_user: app_config.gateway.email_smtp_user.clone(),
+        email_smtp_pass: app_config.gateway.email_smtp_pass.clone(),
+        sms_twilio_enabled: app_config.gateway.sms_twilio_enabled,
+        webhooks_enabled: app_config.gateway.webhooks_enabled,
+        webhooks_addr: app_config.gateway.webhooks_addr.clone(),
+        webhooks_secret: app_config.gateway.webhooks_secret.clone(),
+        admins: app_config.gateway.admins.clone(),
+        streaming_transport: app_config.gateway.streaming_transport.clone(),
+        telegram_proxy: app_config.gateway.telegram_proxy.clone(),
+        telegram_bot_username: app_config.gateway.telegram_bot_username.clone(),
+        telegram_dm_topics_enabled: app_config.gateway.telegram_dm_topics_enabled,
+    }
+}
+
+/// Send a message to a configured platform, using the running gateway when
+/// available or a fresh one-shot gateway built from config otherwise.
+///
+/// Wired so `operant channel send` actually delivers instead of printing a
+/// success stub (R15-2). Returns the platform's response/error text.
+pub async fn send_channel_message(
+    app_config: &AppConfig,
+    platform: &str,
+    recipient: &str,
+    message: &str,
+) -> Result<String> {
+    // Prefer the live gateway so one-shot sends ride the same adapter
+    // instances (tokens, proxy, streaming config) as the running service.
+    let gw = runner().lock().await.clone();
+    let msg = OutgoingMessage::new(recipient, message).no_markdown();
+    if let Some(gw) = gw {
+        if gw.is_running().await {
+            return gw
+                .send_to_platform(platform, msg)
+                .await
+                .map(|_| format!("Sent via {platform} to {recipient}."))
+                .map_err(anyhow::Error::from);
+        }
+    }
+
+    // No running gateway — build a one-shot gateway with the enabled
+    // adapters and send directly (stateless platform APIs like Telegram's
+    // sendMessage work without the listener running).
+    let gw_config = gateway_config_from_app(app_config);
+    let adapters = build_adapters(&gw_config);
+    if adapters.is_empty() {
+        anyhow::bail!(
+            "No channels are enabled. Set gateway.{}_enabled = true in operant.toml first",
+            platform
+        );
+    }
+    let mut one_shot = Gateway::new(gw_config);
+    for adapter in adapters {
+        one_shot = one_shot.with_adapter(adapter);
+    }
+    one_shot
+        .send_to_platform(platform, msg)
+        .await
+        .map(|_| format!("Sent via {platform} to {recipient}."))
+        .map_err(anyhow::Error::from)
+}
+
 fn build_session_context(platform: &str, channel_id: &str, app_config: &AppConfig) -> String {
     let mut ctx = String::new();
     ctx.push_str(&format!("Connected platform: {}\n", platform));
@@ -434,29 +512,7 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
         }
     }
 
-    let gw_config = GatewayConfig {
-        telegram_enabled: app_config.gateway.telegram_enabled,
-        telegram_token: app_config.gateway.telegram_token.clone(),
-        discord_enabled: app_config.gateway.discord_enabled,
-        discord_token: app_config.gateway.discord_token.clone(),
-        slack_enabled: app_config.gateway.slack_enabled,
-        slack_token: app_config.gateway.slack_token.clone(),
-        whatsapp_enabled: app_config.gateway.whatsapp_enabled,
-        whatsapp_token: app_config.gateway.whatsapp_token.clone(),
-        email_enabled: app_config.gateway.email_enabled,
-        email_smtp_host: app_config.gateway.email_smtp_host.clone(),
-        email_smtp_user: app_config.gateway.email_smtp_user.clone(),
-        email_smtp_pass: app_config.gateway.email_smtp_pass.clone(),
-        sms_twilio_enabled: app_config.gateway.sms_twilio_enabled,
-        webhooks_enabled: app_config.gateway.webhooks_enabled,
-        webhooks_addr: app_config.gateway.webhooks_addr.clone(),
-        webhooks_secret: app_config.gateway.webhooks_secret.clone(),
-        admins: app_config.gateway.admins.clone(),
-        streaming_transport: app_config.gateway.streaming_transport.clone(),
-        telegram_proxy: app_config.gateway.telegram_proxy.clone(),
-        telegram_bot_username: app_config.gateway.telegram_bot_username.clone(),
-        telegram_dm_topics_enabled: app_config.gateway.telegram_dm_topics_enabled,
-    };
+    let gw_config = gateway_config_from_app(app_config);
     let dispatch_config = gw_config.clone();
     let adapters = build_adapters(&gw_config);
 
@@ -1588,35 +1644,49 @@ mod tests {
             ..Default::default()
         };
 
-        let gw_config = GatewayConfig {
-            telegram_enabled: app_config.gateway.telegram_enabled,
-            telegram_token: app_config.gateway.telegram_token.clone(),
-            discord_enabled: app_config.gateway.discord_enabled,
-            discord_token: app_config.gateway.discord_token.clone(),
-            slack_enabled: app_config.gateway.slack_enabled,
-            slack_token: app_config.gateway.slack_token.clone(),
-            whatsapp_enabled: app_config.gateway.whatsapp_enabled,
-            whatsapp_token: app_config.gateway.whatsapp_token.clone(),
-            email_enabled: app_config.gateway.email_enabled,
-            email_smtp_host: app_config.gateway.email_smtp_host.clone(),
-            email_smtp_user: app_config.gateway.email_smtp_user.clone(),
-            email_smtp_pass: app_config.gateway.email_smtp_pass.clone(),
-            sms_twilio_enabled: app_config.gateway.sms_twilio_enabled,
-            webhooks_enabled: app_config.gateway.webhooks_enabled,
-            webhooks_addr: app_config.gateway.webhooks_addr.clone(),
-            webhooks_secret: app_config.gateway.webhooks_secret.clone(),
-            admins: app_config.gateway.admins.clone(),
-            streaming_transport: "auto".to_string(),
-            telegram_proxy: app_config.gateway.telegram_proxy.clone(),
-            telegram_bot_username: app_config.gateway.telegram_bot_username.clone(),
-            telegram_dm_topics_enabled: app_config.gateway.telegram_dm_topics_enabled,
-        };
+        let gw_config = gateway_config_from_app(&app_config);
 
         assert!(gw_config.telegram_enabled);
         assert!(!gw_config.discord_enabled);
         assert!(gw_config.slack_enabled);
         assert!(!gw_config.webhooks_enabled);
         assert_eq!(gw_config.admins, vec!["admin1"]);
+    }
+
+    #[tokio::test]
+    async fn test_send_channel_message_no_enabled_platforms_errors() {
+        // Regression for R15-2: `operant channel send` used to print a fake
+        // "sent" status without delivering. With nothing enabled it must
+        // return a real error explaining the config fix.
+        let app_config = AppConfig::default();
+        let err = send_channel_message(&app_config, "telegram", "123", "hi")
+            .await
+            .unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("No channels are enabled"),
+            "unexpected error: {msg}"
+        );
+        assert!(msg.contains("telegram_enabled = true"));
+    }
+
+    #[tokio::test]
+    async fn test_send_channel_message_unknown_platform_errors() {
+        // A configured-but-unknown platform name must surface the gateway's
+        // real error instead of a fake success.
+        let app_config = AppConfig {
+            gateway: GatewaySettings {
+                telegram_enabled: true,
+                telegram_token: Some("tok".to_string()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let err = send_channel_message(&app_config, "pager", "123", "hi")
+            .await
+            .unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("Unknown platform"), "unexpected error: {msg}");
     }
 
     #[tokio::test]

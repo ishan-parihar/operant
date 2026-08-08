@@ -67,12 +67,14 @@ pub async fn handle_channel_command(
             Ok(())
         }
         ChannelSubcommand::Start => {
+            // R15-2: `operant daemon` does not exist — wire to the real
+            // gateway runner (the same path `operant gateway run` uses).
+            let msg = crate::gateway_runner::start_gateway(config).await?;
             if json {
-                println!(
-                    r#"{{"status":"error","message":"Use `operant daemon` to start channels"}}"#
-                );
+                println!("{}", serde_json::json!({"status":"started","message": msg}));
             } else {
-                println!("Use `operant daemon` to start channels in production mode.");
+                println!("{msg}");
+                println!("Running in foreground — press Ctrl+C to stop.");
             }
             Ok(())
         }
@@ -137,14 +139,24 @@ pub async fn handle_channel_command(
             Ok(())
         }
         ChannelSubcommand::BindTelegram { identity } => {
+            // R15-2: this command previously claimed success without doing
+            // anything (no allowlist persistence existed for it). Report the
+            // truth: the live gateway enforces `[gateway] admins`, not a
+            // per-channel allowlist.
             if json {
                 println!(
                     "{}",
-                    serde_json::json!({"status":"bound","identity": identity})
+                    serde_json::json!({
+                        "status": "not-applied",
+                        "identity": identity,
+                        "message": "The gateway does not support a per-user Telegram allowlist. Add the identity to [gateway] admins in operant.toml instead."
+                    })
                 );
             } else {
-                println!("Bound Telegram identity: {}", identity);
-                println!("The agent will now respond to messages from this identity.");
+                println!("Cannot bind Telegram identity: {}", identity);
+                println!(
+                    "The gateway does not support a per-user Telegram allowlist.\nAdd the identity to `[gateway] admins` in operant.toml instead."
+                );
             }
             Ok(())
         }
@@ -153,15 +165,36 @@ pub async fn handle_channel_command(
             channel_id,
             recipient,
         } => {
-            if json {
-                println!(
-                    "{}",
-                    serde_json::json!({"status":"sent","channel": channel_id, "recipient": recipient})
-                );
-            } else {
-                println!("Sending via {} to {}...", channel_id, recipient);
-                println!("Message: {}", message);
-                // TODO: wire to actual gateway sender
+            // R15-2: this previously printed a fake "sent" status without
+            // delivering anything. Wire to the real gateway sender.
+            let result = crate::gateway_runner::send_channel_message(
+                config,
+                &channel_id,
+                &recipient,
+                &message,
+            )
+            .await;
+            match result {
+                Ok(detail) => {
+                    if json {
+                        println!(
+                            "{}",
+                            serde_json::json!({"status":"sent","channel": channel_id, "recipient": recipient, "detail": detail})
+                        );
+                    } else {
+                        println!("{detail}");
+                    }
+                }
+                Err(e) => {
+                    if json {
+                        println!(
+                            "{}",
+                            serde_json::json!({"status":"error","channel": channel_id, "recipient": recipient, "message": e.to_string()})
+                        );
+                    } else {
+                        println!("Failed to send: {e:#}");
+                    }
+                }
             }
             Ok(())
         }
