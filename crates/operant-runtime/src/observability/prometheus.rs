@@ -378,7 +378,8 @@ impl Observer for PrometheusObserver {
             | ObserverEvent::TurnComplete
             | ObserverEvent::LlmRequest { .. }
             | ObserverEvent::DeploymentStarted { .. }
-            | ObserverEvent::RecoveryCompleted { .. } => {}
+            | ObserverEvent::RecoveryCompleted { .. }
+            | ObserverEvent::EvolutionNudge { .. } => {}
             ObserverEvent::ToolCall {
                 tool,
                 duration,

@@ -851,31 +851,60 @@ async fn xml_dispatcher_does_not_send_tool_specs() {
 
 #[tokio::test]
 async fn turn_handles_empty_text_response() {
-    let provider = Box::new(ScriptedProvider::new(vec![ChatResponse {
+    // R25: empty responses are retried up to EMPTY_RESPONSE_MAX_RETRIES (3)
+    // with an empty assistant nudge; only after the cap is the empty answer
+    // returned. Script 4 empties (3 retries + the cap final).
+    let empty = ChatResponse {
         text: Some(String::new()),
         tool_calls: vec![],
         usage: None,
         reasoning_content: None,
-    }]));
+    };
+    let provider = Arc::new(ScriptedProvider::new(vec![
+        empty.clone(),
+        empty.clone(),
+        empty.clone(),
+        empty,
+    ]));
+    let arc_provider: Arc<dyn Provider> = provider.clone();
 
-    let mut agent = build_agent_with(provider, vec![], Box::new(NativeToolDispatcher));
+    let mut agent = build_agent_with(
+        Box::new(arc_provider),
+        vec![],
+        Box::new(NativeToolDispatcher),
+    );
 
     let response = agent.turn("hi").await.unwrap();
-    assert!(response.is_empty());
+    assert!(
+        response.is_empty(),
+        "empty answer returned only after the retry cap"
+    );
+    assert_eq!(
+        provider.request_count(),
+        4,
+        "exactly 1 + EMPTY_RESPONSE_MAX_RETRIES LLM calls for an always-empty model"
+    );
 }
 
 #[tokio::test]
 async fn turn_handles_none_text_response() {
-    let provider = Box::new(ScriptedProvider::new(vec![ChatResponse {
+    // Same bounded-retry ladder when the provider returns `text: None`.
+    let none_text = ChatResponse {
         text: None,
         tool_calls: vec![],
         usage: None,
         reasoning_content: None,
-    }]));
+    };
+    let provider = Box::new(ScriptedProvider::new(vec![
+        none_text.clone(),
+        none_text.clone(),
+        none_text.clone(),
+        none_text,
+    ]));
 
     let mut agent = build_agent_with(provider, vec![], Box::new(NativeToolDispatcher));
 
-    // Should not panic — falls back to empty string
+    // Should not panic — falls back to empty string after the retry cap
     let response = agent.turn("hi").await.unwrap();
     assert!(response.is_empty());
 }

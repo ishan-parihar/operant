@@ -24,6 +24,11 @@ use std::time::Instant;
 // Re-export TurnEvent from operant-types for backwards compatibility.
 pub use operant_api::agent::TurnEvent;
 
+/// Maximum retries for empty assistant responses (no text, no reasoning,
+/// no tool calls) before giving up and returning the empty answer.
+/// Parity with `run_tool_call_loop`'s ladder (loop_.rs).
+const EMPTY_RESPONSE_MAX_RETRIES: usize = 3;
+
 pub struct Agent {
     provider: Box<dyn Provider>,
     tools: Vec<Box<dyn Tool>>,
@@ -519,6 +524,12 @@ impl Agent {
             ChatMessage::user(review_prompt),
         ];
         let model = self.model_name.clone();
+        self.observer.record_event(&ObserverEvent::LlmRequest {
+            provider: self.provider_name.clone(),
+            model: model.clone(),
+            messages_count: messages.len(),
+        });
+        let review_started_at = Instant::now();
         let response = match self
             .provider
             .chat(
@@ -533,6 +544,15 @@ impl Agent {
         {
             Ok(resp) => resp,
             Err(err) => {
+                self.observer.record_event(&ObserverEvent::LlmResponse {
+                    provider: self.provider_name.clone(),
+                    model: model.clone(),
+                    duration: review_started_at.elapsed(),
+                    success: false,
+                    error_message: Some(err.to_string()),
+                    input_tokens: None,
+                    output_tokens: None,
+                });
                 tracing::warn!(error = %err, "memory review LLM call failed (gateway path)");
                 self.observer.record_event(&ObserverEvent::EvolutionNudge {
                     kind: "memory".into(),
@@ -542,6 +562,15 @@ impl Agent {
                 return;
             }
         };
+        self.observer.record_event(&ObserverEvent::LlmResponse {
+            provider: self.provider_name.clone(),
+            model: model.clone(),
+            duration: review_started_at.elapsed(),
+            success: true,
+            error_message: None,
+            input_tokens: response.usage.as_ref().and_then(|u| u.input_tokens),
+            output_tokens: response.usage.as_ref().and_then(|u| u.output_tokens),
+        });
 
         let mut stored = 0usize;
         let session = self.memory_session_id.clone();
@@ -1427,7 +1456,22 @@ impl Agent {
 
         let effective_model = self.classify_model(user_message);
 
-        for _ in 0..self.config.max_tool_iterations {
+        // Empty-response retry ladder (parity with `run_tool_call_loop` R23):
+        // the free-tier model occasionally returns an empty assistant turn
+        // with no text/reasoning/tool calls; retry up to N times with an
+        // empty assistant nudge. `real_iterations` keeps `max_tool_iterations`
+        // as the true real-work budget — retry passes refund their slot.
+        let mut empty_response_retries = 0usize;
+        let mut real_iterations = 0usize;
+        for _ in 0..self
+            .config
+            .max_tool_iterations
+            .saturating_add(EMPTY_RESPONSE_MAX_RETRIES)
+        {
+            real_iterations += 1;
+            if real_iterations > self.config.max_tool_iterations {
+                break;
+            }
             let messages = self.tool_dispatcher.to_provider_messages(&self.history);
 
             // Response cache: check before LLM call (only for deterministic, text-only prompts)
@@ -1499,6 +1543,28 @@ impl Agent {
                 } else {
                     text
                 };
+
+                // Empty assistant response (no text, no reasoning, no tools):
+                // nudge and retry instead of returning an empty answer.
+                if final_text.trim().is_empty()
+                    && response
+                        .reasoning_content
+                        .as_deref()
+                        .is_none_or(|r| r.trim().is_empty())
+                    && empty_response_retries < EMPTY_RESPONSE_MAX_RETRIES
+                {
+                    empty_response_retries += 1;
+                    tracing::warn!(
+                        retry = empty_response_retries,
+                        "Empty assistant response — retrying"
+                    );
+                    self.history
+                        .push(ConversationMessage::Chat(ChatMessage::assistant(
+                            String::new(),
+                        )));
+                    real_iterations = real_iterations.saturating_sub(1);
+                    continue;
+                }
 
                 // Store in response cache (text-only, no tool calls)
                 if let (Some(cache), Some(key)) = (&self.response_cache, &cache_key) {
@@ -1611,7 +1677,22 @@ impl Agent {
         });
 
         // ── Turn loop ──────────────────────────────────────────────────
-        for _ in 0..self.config.max_tool_iterations {
+        // Empty-response retry ladder (parity with `run_tool_call_loop` R23):
+        // the free-tier model occasionally returns an empty assistant turn
+        // with no text/reasoning/tool calls; retry up to N times with an
+        // empty assistant nudge. `real_iterations` keeps `max_tool_iterations`
+        // as the true real-work budget — retry passes refund their slot.
+        let mut empty_response_retries = 0usize;
+        let mut real_iterations = 0usize;
+        for _ in 0..self
+            .config
+            .max_tool_iterations
+            .saturating_add(EMPTY_RESPONSE_MAX_RETRIES)
+        {
+            real_iterations += 1;
+            if real_iterations > self.config.max_tool_iterations {
+                break;
+            }
             // Early exit if the caller cancelled this turn (e.g. user abort).
             // Emit AgentEnd so the observer sequence is balanced even on an
             // already-cancelled token (common in rapid user-abort scenarios).
@@ -1953,6 +2034,28 @@ impl Agent {
                 } else {
                     text
                 };
+
+                // Empty assistant response (no text, no reasoning, no tools):
+                // nudge and retry instead of returning an empty answer.
+                if final_text.trim().is_empty()
+                    && response
+                        .reasoning_content
+                        .as_deref()
+                        .is_none_or(|r| r.trim().is_empty())
+                    && empty_response_retries < EMPTY_RESPONSE_MAX_RETRIES
+                {
+                    empty_response_retries += 1;
+                    tracing::warn!(
+                        retry = empty_response_retries,
+                        "Empty assistant response — retrying"
+                    );
+                    self.history
+                        .push(ConversationMessage::Chat(ChatMessage::assistant(
+                            String::new(),
+                        )));
+                    real_iterations = real_iterations.saturating_sub(1);
+                    continue;
+                }
 
                 // Store in response cache
                 if let (Some(cache), Some(key)) = (&self.response_cache, &cache_key) {
@@ -4228,16 +4331,36 @@ mod tests {
         assert_eq!(counter, 0, "disabled trigger must not bump the counter");
     }
 
-    #[test]
-    fn note_memory_tool_use_resets_the_memory_counter() {
-        // Interval 2: turn 1 bumps the counter to 1; a memory-tool use resets
-        // it, so the immediately following turn (counter 1) does not fire.
-        let mut counter = 0u64;
-        Agent::advance_turn_trigger(&mut counter, 2);
-        assert_eq!(counter, 1);
-        counter = 0; // note_memory_tool_use semantics
-        assert!(!Agent::advance_turn_trigger(&mut counter, 2));
-        assert!(Agent::advance_turn_trigger(&mut counter, 2));
+    #[tokio::test]
+    async fn note_memory_tool_use_resets_the_memory_counter() {
+        let memory: Arc<dyn Memory> = Arc::new(RecordingMemory {
+            stored: Arc::new(Mutex::new(Vec::new())),
+        });
+        let observer: Arc<dyn Observer> = Arc::from(crate::observability::NoopObserver {});
+        let mut agent = make_nudge_agent(
+            Box::new(MockProvider {
+                responses: Mutex::new(Vec::new()),
+            }),
+            memory,
+            observer,
+            2,
+            99,
+        )
+        .await;
+
+        // Interval 2: the first completed turn bumps the counter to 1; a
+        // memory-tool use resets it, so the next turn (counter 1) does not
+        // fire, and only the following turn does.
+        assert!(!agent.advance_memory_trigger(), "turn 1 must not fire");
+        agent.note_memory_tool_use();
+        assert!(
+            !agent.advance_memory_trigger(),
+            "memory-tool use must reset the counter so the next turn does not fire"
+        );
+        assert!(
+            agent.advance_memory_trigger(),
+            "fires on the following turn (counter 2)"
+        );
     }
 
     struct RecordingMemory {
@@ -4443,6 +4566,78 @@ mod tests {
                 ObserverEvent::EvolutionNudge { kind, .. } if kind == "skill"
             )),
             "skill evolution nudge must fire every creation_nudge_interval turns"
+        );
+    }
+
+    // ── Empty-response retry ladder on the live gateway loops (R25) ─────
+
+    #[tokio::test]
+    async fn turn_retries_empty_assistant_response() {
+        let memory: Arc<dyn Memory> = Arc::new(RecordingMemory {
+            stored: Arc::new(Mutex::new(Vec::new())),
+        });
+        let observer: Arc<dyn Observer> = Arc::from(crate::observability::NoopObserver {});
+        // Scripted: two empty responses (no text/reasoning/tools), then an answer.
+        let empty = operant_providers::ChatResponse {
+            text: Some(String::new()),
+            tool_calls: vec![],
+            usage: None,
+            reasoning_content: None,
+        };
+        let provider = Box::new(MockProvider {
+            responses: Mutex::new(vec![
+                empty.clone(),
+                empty.clone(),
+                operant_providers::ChatResponse {
+                    text: Some("finally".into()),
+                    tool_calls: vec![],
+                    usage: None,
+                    reasoning_content: None,
+                },
+            ]),
+        });
+
+        let mut agent = make_nudge_agent(provider, memory, observer, 99, 99).await;
+        let answer = agent.turn("hi").await.expect("turn should succeed");
+        assert_eq!(
+            answer, "finally",
+            "empty responses must be retried, not returned as an empty answer"
+        );
+    }
+
+    #[tokio::test]
+    async fn turn_streamed_retries_empty_assistant_response() {
+        let memory: Arc<dyn Memory> = Arc::new(RecordingMemory {
+            stored: Arc::new(Mutex::new(Vec::new())),
+        });
+        let observer: Arc<dyn Observer> = Arc::from(crate::observability::NoopObserver {});
+        let empty = operant_providers::ChatResponse {
+            text: Some(String::new()),
+            tool_calls: vec![],
+            usage: None,
+            reasoning_content: None,
+        };
+        let provider = Box::new(MockProvider {
+            responses: Mutex::new(vec![
+                empty.clone(),
+                operant_providers::ChatResponse {
+                    text: Some("streamed-finally".into()),
+                    tool_calls: vec![],
+                    usage: None,
+                    reasoning_content: None,
+                },
+            ]),
+        });
+
+        let mut agent = make_nudge_agent(provider, memory, observer, 99, 99).await;
+        let (event_tx, _event_rx) = tokio::sync::mpsc::channel::<TurnEvent>(64);
+        let answer = agent
+            .turn_streamed("hi", event_tx, None)
+            .await
+            .expect("turn_streamed should succeed");
+        assert_eq!(
+            answer, "streamed-finally",
+            "empty responses must be retried, not returned as an empty answer"
         );
     }
 }
