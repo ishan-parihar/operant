@@ -70,7 +70,21 @@ pub fn export_snapshot(workspace_dir: &Path) -> Result<usize> {
 
     for (key, content, _category, created_at, updated_at) in &rows {
         let _ = writeln!(output, "### 🔑 `{key}`");
-        let _ = writeln!(output, "{content}");
+        // Escape content lines that would collide with snapshot syntax when
+        // parsed back: key markers, metadata lines, and the `---` separator.
+        // (R19: unescaped colliding lines were silently dropped or
+        // misinterpreted on hydration — a data-loss round-trip bug.)
+        for line in content.lines() {
+            let trimmed = line.trim_start();
+            if trimmed.starts_with("### 🔑 `")
+                || trimmed.starts_with("*Created:")
+                || trimmed == "---"
+            {
+                let _ = writeln!(output, "\\{line}");
+            } else {
+                let _ = writeln!(output, "{line}");
+            }
+        }
         let _ = writeln!(
             output,
             "*Created: {created_at} | Updated: {updated_at}*\n---\n"
@@ -152,11 +166,6 @@ pub fn hydrate_from_snapshot(workspace_dir: &Path) -> Result<usize> {
 
         match result {
             Ok(changed) if changed > 0 => {
-                // Populate FTS5
-                let _ = conn.execute(
-                    "INSERT INTO memories_fts(key, content) VALUES (?1, ?2)",
-                    params![key, content],
-                );
                 hydrated += 1;
             }
             Ok(_) => {
@@ -167,6 +176,15 @@ pub fn hydrate_from_snapshot(workspace_dir: &Path) -> Result<usize> {
             }
         }
     }
+
+    // Rebuild the FTS index from the content table. (R19: the previous code
+    // inserted directly into the external-content `memories_fts` without an
+    // explicit rowid and without the sync triggers (this schema block does not
+    // create them), so index correctness depended on FTS rowid auto-assignment
+    // coinciding with the content table's rowids — and insert errors were
+    // swallowed with `let _`. A rebuild makes the index consistent regardless
+    // of rowid assignment and surfaces failures loudly.)
+    conn.execute_batch("INSERT INTO memories_fts(memories_fts) VALUES('rebuild');")?;
 
     tracing::info!(
         "🧬 Memory hydration complete: {} entries restored from {}",
@@ -234,16 +252,37 @@ fn parse_snapshot(input: &str) -> Vec<(String, String)> {
                 current_content = String::new();
             }
         } else if current_key.is_some() {
-            // Skip metadata lines and separators
+            // Skip metadata lines and separators. Exported content escapes
+            // colliding lines with a leading backslash, so unescaped
+            // `*Created:` / `---` lines are always decorative metadata.
             if trimmed.starts_with("*Created:") || trimmed == "---" {
                 continue;
             }
+            // Unescape content lines that export_snapshot escaped. Only lines
+            // whose escaped form matches a collision pattern are unescaped,
+            // so a literal leading backslash in content is preserved.
+            // (R19: colliding content lines were silently dropped before,
+            // corrupting the export/hydrate round trip.)
+            let content_line = match line.strip_prefix('\\') {
+                Some(rest) => {
+                    let rest_trimmed = rest.trim_start();
+                    if rest_trimmed.starts_with("### 🔑 `")
+                        || rest_trimmed.starts_with("*Created:")
+                        || rest_trimmed == "---"
+                    {
+                        rest
+                    } else {
+                        line
+                    }
+                }
+                None => line,
+            };
             // Accumulate content
-            if !current_content.is_empty() || !trimmed.is_empty() {
+            if !current_content.is_empty() || !content_line.is_empty() {
                 if !current_content.is_empty() {
                     current_content.push('\n');
                 }
-                current_content.push_str(line);
+                current_content.push_str(content_line);
             }
         }
     }
@@ -263,6 +302,77 @@ fn parse_snapshot(input: &str) -> Vec<(String, String)> {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    #[test]
+    fn round_trip_preserves_colliding_content_lines() {
+        // Content containing lines that collide with snapshot syntax (the
+        // `---` separator, the `*Created:` metadata prefix, and the
+        // `### 🔑 `` key marker) must survive export → parse unchanged.
+        let content = "Guide:\n---\n*Created: note\n### 🔑 `not_a_key`\nplain line";
+
+        // Simulate export_snapshot's escaping so the document matches what a
+        // real snapshot file contains after export.
+        let mut escaped = String::new();
+        for line in content.lines() {
+            let trimmed = line.trim_start();
+            if trimmed.starts_with("### 🔑 `")
+                || trimmed.starts_with("*Created:")
+                || trimmed == "---"
+            {
+                escaped.push('\\');
+            }
+            escaped.push_str(line);
+            escaped.push('\n');
+        }
+        let doc = format!("### 🔑 `tricky`\n{escaped}*Created: meta\n---\n");
+
+        let entries = parse_snapshot(&doc);
+        assert_eq!(entries.len(), 1, "one entry expected, got {entries:?}");
+        assert_eq!(entries[0].0, "tricky");
+        assert_eq!(
+            entries[0].1, content,
+            "colliding content lines must round-trip unchanged"
+        );
+    }
+
+    #[test]
+    fn hydrated_entries_are_searchable_via_fts_join() {
+        // Cold-boot path: brain.db missing, MEMORY_SNAPSHOT.md present.
+        let tmp = TempDir::new().unwrap();
+        let workspace = tmp.path();
+        let snapshot = workspace.join(SNAPSHOT_FILENAME);
+        fs::write(
+            &snapshot,
+            "### 🔑 `soul`\nI am the agent's core soul memory about Rust\n---\n",
+        )
+        .unwrap();
+
+        assert!(should_hydrate(workspace));
+        let count = hydrate_from_snapshot(workspace).unwrap();
+        assert_eq!(count, 1, "snapshot should hydrate one memory");
+
+        // Hydration creates memories_fts WITHOUT the external-content triggers
+        // and inserts into it directly, swallowing insert errors with `let _`.
+        // FTS search joins f.rowid = m.rowid, so a rowid mismatch (or a
+        // silently-failed insert) makes hydrated memories invisible to recall.
+        let db_path = workspace.join("memory").join("brain.db");
+        let conn = Connection::open(&db_path).unwrap();
+        let sql = "SELECT m.key FROM memories_fts f
+                   JOIN memories m ON m.rowid = f.rowid
+                   WHERE memories_fts MATCH ?1 LIMIT 10";
+        let hits: Vec<String> = conn
+            .prepare(sql)
+            .unwrap()
+            .query_map(["Rust"], |row| row.get(0))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+
+        assert!(
+            hits.iter().any(|k| k == "soul"),
+            "hydrated memory must be FTS-searchable (rowids in sync); hits: {hits:?}"
+        );
+    }
 
     #[test]
     fn parse_snapshot_basic() {

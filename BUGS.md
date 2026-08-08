@@ -423,11 +423,44 @@ inspectable). Operant had the schema field + the counter but not the check.
   channels *orchestrator* specifically).
 - **Reviewer follow-up (same commit series)**: (1) explicit `"id": null` was
   conflated with a notification (`Option<Value>` collapsed JSON null → None),
-  so a spec-valid null-id request was silently dropped — now a presence-aware
-  `deserialize_with` keeps `Some(Value::Null)`, and the loop only suppresses
+  so a spec-valid null-id request was silently dropped — now a  presence-aware `deserialize_with` keeps `Some(Value::Null)`, and the loop only suppresses
   responses for truly omitted ids. (2) `execute_command` early-returned on a
   `spawn_blocking` join failure (`?` before state restore), wedging the
   tracker at `Running` forever — the join error now flows through the same
   restore path and sets `Error` state. Live-verified: explicit null-id ping
   → `{"id":null,"result":"pong"}`; omitted-id notification → no output.
+
+### R19 — MEMORY_SNAPSHOT.md round-trip data loss + fragile hydration FTS (FIXED)
+
+- **Export → hydrate round trip silently corrupted content**: `parse_snapshot`
+  treats any line starting with `*Created:` or exactly `---` as decorative
+  metadata (dropped), and any line starting with `### 🔑 `` as a new key —
+  but `export_snapshot` wrote core-memory content verbatim. A core memory
+  whose content contained such a line (markdown `---`, a `*Created:`-style
+  note, or a `### 🔑 ``-looking line) was silently truncated or split into a
+  phantom key on cold-boot hydration — data loss in the agent's "soul"
+  round trip. → **Fix**: export escapes colliding content lines with a
+  leading `\`; parse unescapes only lines whose escaped form matches a
+  collision pattern (a literal leading backslash in content is preserved).
+  New test proves the round trip preserves such content unchanged (fails
+  against the old parser).
+- **Hydration FTS index depended on a rowid coincidence and swallowed
+  errors**: `hydrate_from_snapshot` inserts directly into the
+  external-content `memories_fts` without an explicit rowid and without the
+  sync triggers (its schema block creates none), and wraps the insert in
+  `let _ =` (errors silently ignored). FTS search joins
+  `memories_fts f JOIN memories m ON m.rowid = f.rowid`, so index
+  correctness relied on FTS auto-rowids coinciding with the content table's
+  insertion-order rowids. → **Fix**: after hydrating, rebuild the index
+  (`INSERT INTO memories_fts(memories_fts) VALUES('rebuild')`), matching
+  sqlite.rs's own reindex approach — consistency is guaranteed regardless
+  of rowid assignment, and failures surface loudly instead of being
+  swallowed. New test locks in FTS-searchability of hydrated memories.
+- **Audited, no findings**: the gateway SSE surface (`sse.rs` — auth,
+  `KeepAlive`, lagged-receiver skip, history replay, e2e wiring test) and
+  the hygiene prunes (`prune_conversation_rows`/`prune_audit_entries` write
+  and prune use the same `Local::now().to_rfc3339()` format; the FTS
+  `memories_ad` delete trigger cascades prunes; archive/purge helpers are
+  collision-safe and char-boundary-safe) are solid.
+
 
