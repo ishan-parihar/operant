@@ -607,10 +607,15 @@ mod tests {
             .collect();
         for t in threads {
             t.join().unwrap();
-        }        let tracker = SkillUsageTracker::new(path.clone());
+        }
+        let tracker = SkillUsageTracker::new(path.clone());
         tracker.load().unwrap();
         let records = tracker.all_records();
-        assert_eq!(records.len(), 4, "all four skills survive concurrent writers");
+        assert_eq!(
+            records.len(),
+            4,
+            "all four skills survive concurrent writers"
+        );
         let mut names: Vec<_> = records.iter().map(|r| r.name.as_str()).collect();
         names.sort_unstable();
         assert_eq!(names, vec!["skill-0", "skill-1", "skill-2", "skill-3"]);
