@@ -331,31 +331,30 @@ async fn cmd_resume(engine: &CuratorEngine) -> Result<()> {
 }
 
 async fn cmd_pin(tracker: &SkillUsageTracker, skill: &str) -> Result<()> {
-    match tracker.set_pinned(skill, true) {
-        Ok(()) => {
-            tracker.save()?;
-            println!("Pinned skill '{}'. It will not be auto-archived.", skill);
-        }
+    // R21: single read-modify-write transaction under the cross-process file
+    // lock, so the agent's skill_manage bridge can't lose this pin (or vice
+    // versa). Reloads fresh state from disk inside the lock.
+    tracker.with_exclusive_lock(|t| match t.set_pinned(skill, true) {
+        Ok(()) => Ok(()),
         Err(e) => {
             // Skill may not have a telemetry record yet — still succeed for the user
             eprintln!("Warning: could not update telemetry for '{}': {}", skill, e);
-            println!("Pinned skill '{}'.", skill);
+            Ok(())
         }
-    }
+    })?;
+    println!("Pinned skill '{}'. It will not be auto-archived.", skill);
     Ok(())
 }
 
 async fn cmd_unpin(tracker: &SkillUsageTracker, skill: &str) -> Result<()> {
-    match tracker.set_pinned(skill, false) {
-        Ok(()) => {
-            tracker.save()?;
-            println!("Unpinned skill '{}'. It may now be auto-archived.", skill);
-        }
+    tracker.with_exclusive_lock(|t| match t.set_pinned(skill, false) {
+        Ok(()) => Ok(()),
         Err(e) => {
             eprintln!("Warning: could not update telemetry for '{}': {}", skill, e);
-            println!("Unpinned skill '{}'.", skill);
+            Ok(())
         }
-    }
+    })?;
+    println!("Unpinned skill '{}'. It may now be auto-archived.", skill);
     Ok(())
 }
 
@@ -366,9 +365,11 @@ async fn cmd_restore(
     skill: &str,
 ) -> Result<()> {
     archiver::restore_skill(skill, archive_dir, skills_dir)?;
-    // Update telemetry state if a record exists
-    let _ = tracker.set_state(skill, LifecycleState::Active);
-    tracker.save()?;
+    // Update telemetry state if a record exists (R21: locked transaction).
+    tracker.with_exclusive_lock(|t| {
+        let _ = t.set_state(skill, LifecycleState::Active);
+        Ok(())
+    })?;
     println!("Restored skill '{}' from archive.", skill);
     Ok(())
 }
@@ -393,9 +394,11 @@ async fn cmd_archive(
     skill: &str,
 ) -> Result<()> {
     archiver::archive_skill(skill, skills_dir, archive_dir)?;
-    // Update telemetry state if a record exists
-    let _ = tracker.set_state(skill, LifecycleState::Archived);
-    tracker.save()?;
+    // Update telemetry state if a record exists (R21: locked transaction).
+    tracker.with_exclusive_lock(|t| {
+        let _ = t.set_state(skill, LifecycleState::Archived);
+        Ok(())
+    })?;
     println!("Archived skill '{}'.", skill);
     Ok(())
 }

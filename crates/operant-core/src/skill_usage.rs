@@ -92,9 +92,10 @@ impl UsageTelemetry {
         match serde_json::from_str::<Vec<UsageRecord>>(&content) {
             Ok(records) => Ok(Self { records }),
             Err(e) => {
-                eprintln!(
-                    "warning: corrupt skill usage telemetry at {} — starting fresh ({e})",
-                    filepath.display()
+                tracing::warn!(
+                    file = %filepath.display(),
+                    error = %e,
+                    "corrupt skill usage telemetry — starting fresh"
                 );
                 Ok(Self::new())
             }
@@ -229,7 +230,11 @@ impl UsageTelemetry {
     /// `record_created` parity). `agent_created` is true only when the
     /// background-review fork created the skill — those are the records the
     /// curator manages (archive/stale review). Ordinary creates stay tracked
-    /// but are never auto-archived. (R21)
+    /// but are never auto-archived.
+    ///
+    /// Note: non-review creates keep `provenance` unset (only
+    /// `mark_agent_created` sets `"agent"`); nothing queries provenance for
+    /// non-agent-created records, so this is purely cosmetic. (R21)
     pub fn record_created(&mut self, name: &str, agent_created: bool) {
         if agent_created {
             self.mark_agent_created(name);
@@ -275,6 +280,34 @@ impl UsageTelemetry {
 impl Default for UsageTelemetry {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Take an OS-level exclusive advisory lock on `<path>.lock` for the duration
+/// of `f`, making read-modify-write cycles on `path` atomic across processes
+/// (hermes's `.json.lock` parity). The kernel releases the lock when the file
+/// handle drops or the process exits, so a crash can never leave a stale lock
+/// that wedges later writers.
+///
+/// Best-effort: if the lock file cannot be opened we proceed unlocked rather
+/// than fail the operation — telemetry must never block skill tooling.
+pub(crate) fn with_exclusive_file_lock<T>(path: &Path, f: impl FnOnce() -> T) -> T {
+    let lock_path = PathBuf::from(format!("{}.lock", path.display()));
+    if let Some(parent) = lock_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    match std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .open(&lock_path)
+    {
+        Ok(file) => {
+            let _ = file.lock();
+            let result = f();
+            let _ = file.unlock();
+            result
+        }
+        Err(_) => f(),
     }
 }
 
@@ -439,6 +472,21 @@ impl SkillUsageTracker {
             .expect("skill usage mutex poisoned — programmer error");
         inner.set_state(name, state)
     }
+
+    /// Run `f` as a single read-modify-write transaction on the backing file:
+    /// re-load fresh state from disk under a cross-process exclusive file lock
+    /// (so we never clobber another process's newer writes with stale in-memory
+    /// state), apply `f`, then persist. This makes the agent's skill_manage
+    /// bridge and `operant curator` pin/unpin/restore/archive atomic with
+    /// respect to each other. (R21)
+    pub fn with_exclusive_lock<R>(&self, f: impl FnOnce(&Self) -> Result<R>) -> Result<R> {
+        with_exclusive_file_lock(&self.file_path, || {
+            self.load()?;
+            let result = f(self)?;
+            self.save()?;
+            Ok(result)
+        })
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -527,6 +575,51 @@ mod tests {
         assert!(reloaded.all_records().is_empty());
         // Cleanup
         let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(format!("{}.lock", path.display()));
+    }
+
+    #[test]
+    fn tracker_with_exclusive_lock_serializes_writers() {
+        // flock contends per open-file-description, so separate tracker
+        // instances in separate threads exercise the same cross-process
+        // serialization `operant curator` relies on: no record is lost.
+        let path = test_file_path();
+        let threads: Vec<_> = (0..8)
+            .map(|i| {
+                let path = path.clone();
+                std::thread::spawn(move || {
+                    let tracker = SkillUsageTracker::new(path);
+                    for j in 0..25 {
+                        tracker
+                            .with_exclusive_lock(|t| {
+                                t.bump_patch(&format!("skill-{}", (i + j) % 4));
+                                Ok(())
+                            })
+                            .expect("locked transaction succeeds");
+                    }
+                })
+            })
+            .collect();
+        for t in threads {
+            t.join().unwrap();
+        }
+        let tracker = SkillUsageTracker::new(path.clone());
+        tracker.load().unwrap();
+        let records = tracker.all_records();
+        assert_eq!(
+            records.len(),
+            4,
+            "all four skills survive concurrent writers"
+        );
+        for rec in &records {
+            assert!(
+                rec.last_used.timestamp() > 0,
+                "every record has a fresh last_used"
+            );
+        }
+        // Cleanup
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(format!("{}.lock", path.display()));
     }
 
     #[test]

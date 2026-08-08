@@ -21,7 +21,7 @@ use std::collections::HashSet;
 use std::sync::{LazyLock, RwLock};
 
 use crate::schema::ToolSchema;
-use crate::skill_usage::SkillUsageTracker;
+use crate::skill_usage::{SkillUsageTracker, with_exclusive_file_lock};
 use crate::tools::{OperantTool, ToolContext, ToolResult};
 use crate::write_origin::is_background_review;
 
@@ -1183,69 +1183,75 @@ impl SkillManageTool {
 
     // ── Telemetry ────────────────────────────────────────────────────
     fn record_usage(&self, name: &str, action: &str) {
-        // Serialize read-modify-write across the main agent task, the
-        // background-review daemon, and other processes sharing this skills
-        // dir. (R20: the previous direct `fs::write` could interleave two
-        // writers and corrupt `.usage.json`, silently unpinning skills and
-        // zeroing telemetry.)
+        // Serialize the read-modify-write across every writer of these sidecar
+        // files: in-process (main agent task + background-review daemon) via
+        // USAGE_TELEMETRY_LOCK, and across processes sharing the skills dir
+        // (e.g. `operant curator`, concurrent agent runs) via an OS advisory
+        // lock on the sidecar files themselves. (R20: the previous direct
+        // `fs::write` could interleave two writers and corrupt `.usage.json`,
+        // silently unpinning skills and zeroing telemetry; R21: the OS lock
+        // also covers the curator-tracker write below.)
         let _guard = USAGE_TELEMETRY_LOCK
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
 
         let usage_path = self.root_dir.join(".usage.json");
-        let mut telemetry: std::collections::HashMap<String, serde_json::Value> =
-            if usage_path.exists() {
-                fs::read_to_string(&usage_path)
-                    .ok()
-                    .and_then(|c| serde_json::from_str(&c).ok())
-                    .unwrap_or_default()
-            } else {
-                std::collections::HashMap::new()
-            };
-        let entry = telemetry
-            .entry(name.to_string())
-            .or_insert_with(|| json!({ "use_count": 0, "patch_count": 0 }));
-        if action == "delete" {
-            telemetry.remove(name);
-        } else if action == "patch"
-            || action == "edit"
-            || action == "write_file"
-            || action == "remove_file"
-        {
-            if let Some(obj) = entry.as_object_mut() {
-                let count = obj.get("patch_count").and_then(|v| v.as_u64()).unwrap_or(0);
-                obj.insert("patch_count".into(), json!(count + 1));
+        with_exclusive_file_lock(&usage_path, || {
+            let mut telemetry: std::collections::HashMap<String, serde_json::Value> =
+                if usage_path.exists() {
+                    fs::read_to_string(&usage_path)
+                        .ok()
+                        .and_then(|c| serde_json::from_str(&c).ok())
+                        .unwrap_or_default()
+                } else {
+                    std::collections::HashMap::new()
+                };
+            let entry = telemetry
+                .entry(name.to_string())
+                .or_insert_with(|| json!({ "use_count": 0, "patch_count": 0 }));
+            if action == "delete" {
+                telemetry.remove(name);
+            } else if action == "patch"
+                || action == "edit"
+                || action == "write_file"
+                || action == "remove_file"
+            {
+                if let Some(obj) = entry.as_object_mut() {
+                    let count = obj.get("patch_count").and_then(|v| v.as_u64()).unwrap_or(0);
+                    obj.insert("patch_count".into(), json!(count + 1));
+                }
+            } else if action == "create" {
+                if let Some(obj) = entry.as_object_mut() {
+                    obj.insert("created_by".into(), json!("agent"));
+                }
             }
-        } else if action == "create" {
-            if let Some(obj) = entry.as_object_mut() {
-                obj.insert("created_by".into(), json!("agent"));
+            if let Some(parent) = usage_path.parent() {
+                let _ = fs::create_dir_all(parent);
             }
-        }
-        if let Some(parent) = usage_path.parent() {
-            let _ = fs::create_dir_all(parent);
-        }
-        if let Ok(content) = serde_json::to_string_pretty(&telemetry) {
-            atomic_write_json(&usage_path, &content);
-        }
+            if let Ok(content) = serde_json::to_string_pretty(&telemetry) {
+                atomic_write_json(&usage_path, &content);
+            }
 
-        // R21: bridge real agent activity into the curator tracker so the
-        // archival pipeline has data to work on (hermes skill_manager_tool.py
-        // parity — record_created / bump_patch / forget go to the same
-        // `.curator/usage.json` the curator reads). The per-call
-        // load-mutate-save is serialized with the `.usage.json` telemetry by
-        // USAGE_TELEMETRY_LOCK above, so concurrent skill_manage actions
-        // (main agent + background-review daemon) never lose curator records,
-        // and a corrupt sidecar self-heals on the next save.
-        let tracker = SkillUsageTracker::new(self.root_dir.join(".curator").join("usage.json"));
-        if tracker.load().is_ok() {
-            match action {
-                "create" => tracker.record_created(name, is_background_review()),
-                "delete" => tracker.remove(name),
-                "patch" | "edit" | "write_file" | "remove_file" => tracker.bump_patch(name),
-                _ => {}
-            }
-            let _ = tracker.save();
-        }
+            // R21: bridge real agent activity into the curator tracker so the
+            // archival pipeline has data to work on (hermes
+            // skill_manager_tool.py parity — record_created / bump_patch /
+            // forget go to the same `.curator/usage.json` the curator reads).
+            // `with_exclusive_lock` re-loads fresh state from disk inside the
+            // OS lock, so concurrent skill_manage actions (main agent +
+            // background-review daemon, or a separate `operant curator`
+            // process) never lose curator records, and a corrupt sidecar
+            // self-heals on the next save.
+            let tracker = SkillUsageTracker::new(self.root_dir.join(".curator").join("usage.json"));
+            let _ = tracker.with_exclusive_lock(|t| {
+                match action {
+                    "create" => t.record_created(name, is_background_review()),
+                    "delete" => t.remove(name),
+                    "patch" | "edit" | "write_file" | "remove_file" => t.bump_patch(name),
+                    _ => {}
+                }
+                Ok(())
+            });
+        });
     }
 }
 
