@@ -288,11 +288,11 @@ pub static COMMAND_REGISTRY: &[CommandDef] = &[
     },
     CommandDef {
         name: "yolo",
-        description: "Toggle YOLO mode",
+        description: "Toggle YOLO mode (auto-approves destructive tool prompts for this channel)",
         aliases: &[],
         category: "Config",
-        args_hint: "",
-        admin_only: false,
+        args_hint: "[on|off|status]",
+        admin_only: true,
     },
     CommandDef {
         name: "voice",
@@ -1302,10 +1302,11 @@ pub fn handle_command(cmd_name: &str, _args: &str, ctx: &CommandContext<'_>) -> 
             let arg = _args.trim();
             if let Some(gateway) = ctx.gateway {
                 let store = gateway.get_session_store();
-                let session = store.find_session(ctx.platform, ctx.user_id, ctx.channel_id);
-                let currently = session
-                    .map(|s| s.metadata.get("yolo_mode").map(|s| s.as_str()) == Some("true"))
-                    .unwrap_or(false);
+                // Single source of truth: the live YOLO_CHANNELS set that the
+                // permission receiver honors. (The persisted yolo_mode metadata
+                // is kept as a record only — reading it here would diverge
+                // after a gateway restart, since the set is in-memory.)
+                let currently = crate::gateway_runner::yolo_enabled(ctx.platform, ctx.channel_id);
                 let new_val = match arg {
                     "on" => true,
                     "off" => false,

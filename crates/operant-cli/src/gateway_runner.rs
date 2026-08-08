@@ -954,7 +954,7 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                 // nothing read — the receiver now honors the live set, mirroring
                 // the TUI's PermissionMode::BypassPermissions.)
                 if yolo_enabled(platform, channel_id) {
-                    tracing::warn!(
+                    tracing::info!(
                         channel = %channel_id,
                         "YOLO mode — auto-approving tool permission"
                     );

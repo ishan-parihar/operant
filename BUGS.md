@@ -379,4 +379,13 @@ inspectable). Operant had the schema field + the counter but not the check.
   display-only state toggles, and `voice_enabled` is only consumed by the TUI
   voice-notice UI. Only `/yolo` promised safety-relevant behavior (skipping
   approval prompts) while being dead, so it got the live wiring.
+- **Reviewer follow-up (same commit series)**: `/yolo` is now `admin_only:
+  true` — previously any channel user could flip it (the registry flagged it
+  `false`), auto-approving destructive tool executions for the whole channel;
+  the dispatch gate at `gateway_commands.rs:558` now blocks non-admins. Also
+  `/yolo status`/toggle now read the live `YOLO_CHANNELS` set (single source
+  of truth) instead of the persisted `yolo_mode` metadata — the metadata is
+  kept as a record only, so after a gateway restart (set is in-memory) status
+  reports the honest OFF instead of claiming ON while prompts resume.
+  Steady-state auto-approve log downgraded warn→info.
 
