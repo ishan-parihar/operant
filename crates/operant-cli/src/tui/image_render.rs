@@ -354,9 +354,15 @@ pub fn has_graphics_support() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    /// Serializes env-var-mutating tests: they run on parallel threads and
+    /// share process-global environment, so they must not interleave.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn test_detect_protocol_kitty_env() {
+        let _guard = ENV_LOCK.lock().unwrap();
         unsafe {
             std::env::set_var("TERM", "xterm-kitty");
         }
@@ -368,6 +374,7 @@ mod tests {
 
     #[test]
     fn test_detect_protocol_iterm_env() {
+        let _guard = ENV_LOCK.lock().unwrap();
         unsafe {
             std::env::set_var("TERM_PROGRAM", "iTerm.app");
         }
