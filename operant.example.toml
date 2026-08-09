@@ -132,6 +132,12 @@ aft_enabled = false
 igs_enabled = true
 # igs_binary_path = "/usr/local/bin/igs"
 # igs_timeout_secs = 60
+# Obscura browser binary used by the `obscura` browser provider.
+# When unset, operant reuses the binary the IGS integration manages
+# (~/.config/igs-mcp/bin/obscura, or $IGS_CONFIG_DIR/bin/obscura), then falls
+# back to its own copy at ~/.operant/bin/obscura. Set this to guarantee a
+# single shared Obscura across the browser tool + IGS web tools.
+# obscura_binary_path = "/home/you/.config/igs-mcp/bin/obscura"
 lifeos_enabled = false
 
 [tools.web]

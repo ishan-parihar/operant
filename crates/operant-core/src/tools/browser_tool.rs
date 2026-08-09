@@ -15,7 +15,11 @@
 //! ## Troubleshooting
 //! If you see "Permission denied (os error 13)" or "binary not found" errors:
 //! 1. Ensure you have internet access to download the binary from GitHub
-//! 2. The binary is downloaded to `~/.operant/bin/browser` (Lightpanda) or `~/.operant/bin/obscura` (Obscura) - check if it exists and is executable
+//! 2. The binary is downloaded to `~/.operant/bin/browser` (Lightpanda) or
+//!    `~/.operant/bin/obscura` (Obscura). When IGS is installed the `obscura`
+//!    provider reuses IGS's managed copy (`~/.config/igs-mcp/bin/obscura`,
+//!    or `$IGS_CONFIG_DIR/bin/obscura`) so browser + IGS web tools share one
+//!    binary - check those paths if `browser.provider = "obscura"` fails.
 //! 3. On Linux, you may need to install dependencies: `sudo apt-get install -y libnss3 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libgbm1 libasound2`
 
 use async_trait::async_trait;

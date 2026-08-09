@@ -16,6 +16,7 @@ use async_trait::async_trait;
 use serde_json::Value;
 use std::time::Duration;
 
+use crate::config::runtime_config;
 use crate::error::{Error, Result};
 use dirs;
 use reqwest;
@@ -150,12 +151,73 @@ pub struct ObscuraProvider;
 
 impl ObscuraProvider {
     /// Returns the default installation path for the Obscura binary
+    /// (the operant-managed copy at `~/.operant/bin/obscura`).
     pub fn default_bin_path() -> std::path::PathBuf {
         dirs::home_dir()
             .unwrap_or_else(|| std::path::PathBuf::from("."))
             .join(".operant")
             .join("bin")
             .join("obscura")
+    }
+
+    /// The config directory the IGS integration uses for its own Obscura
+    /// binary. Mirrors igs-rust's `config::user_config_dir()` precedence
+    /// exactly: `$IGS_CONFIG_DIR` override, else `$XDG_CONFIG_HOME/igs-mcp`
+    /// or `~/.config/igs-mcp`.
+    fn igs_config_dir() -> std::path::PathBuf {
+        if let Ok(dir) = std::env::var("IGS_CONFIG_DIR")
+            && !dir.trim().is_empty()
+        {
+            return std::path::PathBuf::from(dir);
+        }
+        let home = std::env::var("HOME").unwrap_or_default();
+        let xdg = std::env::var("XDG_CONFIG_HOME").unwrap_or_else(|_| format!("{home}/.config"));
+        std::path::PathBuf::from(xdg).join("igs-mcp")
+    }
+
+    /// Resolve the Obscura binary to execute, in order:
+    ///
+    /// 1. `tools.obscura_binary_path` config override
+    /// 2. The binary the IGS integration manages — `$IGS_CONFIG_DIR/bin/obscura`
+    ///    or `~/.config/igs-mcp/bin/obscura`. igs-rust's `ObscuraManager`
+    ///    (`src/obscura.rs`) hardcodes that location and auto-downloads from
+    ///    the same `h4ckf0r0day/obscura` releases operant uses, so reusing it
+    ///    keeps the `browser` tool and the IGS web tools (web_search,
+    ///    web_scrape, web_extract, web.crawl) on the *exact same* binary —
+    ///    one download, no version drift.
+    /// 3. The operant-managed copy at `~/.operant/bin/obscura` (fallback for
+    ///    machines that never installed IGS).
+    ///
+    /// Returns the first path that exists; `None` when no binary is installed
+    /// (callers then fall back to [`Self::download_binary`], which installs to
+    /// the operant-managed copy).
+    pub fn resolve_obscura_binary() -> Option<std::path::PathBuf> {
+        Self::resolve_obscura_binary_with(runtime_config().tools.obscura_binary_path.as_deref())
+    }
+
+    /// Testable core of [`Self::resolve_obscura_binary`]: resolution order is
+    /// `config_override` → IGS-managed binary → operant-managed copy.
+    fn resolve_obscura_binary_with(
+        config_override: Option<&std::path::Path>,
+    ) -> Option<std::path::PathBuf> {
+        // 1. Explicit config override.
+        if let Some(path) = config_override {
+            if path.exists() {
+                return Some(path.to_path_buf());
+            }
+            tracing::warn!(
+                path = %path.display(),
+                "configured tools.obscura_binary_path does not exist — falling back"
+            );
+        }
+        // 2. IGS-managed binary (shared with the IGS integration).
+        let igs_bin = Self::igs_config_dir().join("bin").join("obscura");
+        if igs_bin.exists() {
+            return Some(igs_bin);
+        }
+        // 3. Operant-managed copy.
+        let own = Self::default_bin_path();
+        own.exists().then_some(own)
     }
 
     /// Downloads the latest Obscura browser binary for the current platform.
@@ -285,9 +347,8 @@ impl ObscuraProvider {
     }
 
     async fn ensure_binary(&self) -> Result<std::path::PathBuf> {
-        let bin_path = Self::default_bin_path();
-        if bin_path.exists() {
-            return Ok(bin_path);
+        if let Some(bin) = Self::resolve_obscura_binary() {
+            return Ok(bin);
         }
         Self::download_binary().await
     }
@@ -661,6 +722,69 @@ pub fn build_browser_provider(name: &str) -> std::sync::Arc<dyn BrowserProvider>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    static ENV_LOCK: std::sync::OnceLock<Mutex<()>> = std::sync::OnceLock::new();
+
+    fn env_lock() -> &'static Mutex<()> {
+        ENV_LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    fn temp_dir(name: &str) -> std::path::PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "operant_obscura_test_{}_{}_{}",
+            name,
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&path).unwrap();
+        path
+    }
+
+    #[test]
+    fn resolve_prefers_config_override() {
+        let _guard = env_lock().lock().unwrap();
+        let dir = temp_dir("override");
+        let bin = dir.join("custom-obscura");
+        std::fs::write(&bin, b"").unwrap();
+        let result = ObscuraProvider::resolve_obscura_binary_with(Some(&bin));
+        assert_eq!(result, Some(bin));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn resolve_uses_igs_managed_binary_when_present() {
+        let _guard = env_lock().lock().unwrap();
+        let dir = temp_dir("igs");
+        let bin = dir.join("bin").join("obscura");
+        std::fs::create_dir_all(bin.parent().unwrap()).unwrap();
+        std::fs::write(&bin, b"").unwrap();
+        // SAFETY: test-only env mutation under exclusive lock
+        unsafe { std::env::set_var("IGS_CONFIG_DIR", &dir) };
+        let result = ObscuraProvider::resolve_obscura_binary_with(None);
+        unsafe { std::env::remove_var("IGS_CONFIG_DIR") };
+        assert_eq!(result, Some(bin));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn resolve_ignores_missing_override_then_uses_igs() {
+        let _guard = env_lock().lock().unwrap();
+        let dir = temp_dir("igs2");
+        let bin = dir.join("bin").join("obscura");
+        std::fs::create_dir_all(bin.parent().unwrap()).unwrap();
+        std::fs::write(&bin, b"").unwrap();
+        let missing = dir.join("does-not-exist");
+        // SAFETY: test-only env mutation under exclusive lock
+        unsafe { std::env::set_var("IGS_CONFIG_DIR", &dir) };
+        let result = ObscuraProvider::resolve_obscura_binary_with(Some(&missing));
+        unsafe { std::env::remove_var("IGS_CONFIG_DIR") };
+        assert_eq!(result, Some(bin));
+        let _ = std::fs::remove_dir_all(dir);
+    }
 
     #[test]
     fn test_default_is_lightpanda() {

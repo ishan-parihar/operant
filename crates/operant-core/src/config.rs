@@ -586,6 +586,14 @@ pub struct ToolSettings {
     /// Optional explicit path to the `igs` binary (default: PATH lookup).
     #[serde(default)]
     pub igs_binary_path: Option<PathBuf>,
+    /// Optional explicit path to the Obscura browser binary used by the
+    /// `obscura` browser provider. When unset, operant reuses the binary the
+    /// IGS integration manages (`$IGS_CONFIG_DIR/bin/obscura` or
+    /// `~/.config/igs-mcp/bin/obscura`), then falls back to its own copy at
+    /// `~/.operant/bin/obscura`. Point this at the same binary IGS uses to
+    /// guarantee a single shared Obscura across browser + web tools.
+    #[serde(default)]
+    pub obscura_binary_path: Option<PathBuf>,
     /// Timeout (seconds) for a single `igs` invocation (5..=600).
     #[serde(default = "default_igs_timeout")]
     pub igs_timeout_secs: u64,
@@ -617,6 +625,7 @@ impl Default for ToolSettings {
             aft_enabled: false,
             igs_enabled: true,
             igs_binary_path: None,
+            obscura_binary_path: None,
             igs_timeout_secs: 60,
             lifeos_enabled: false,
         }
@@ -1162,6 +1171,33 @@ whatsapp_token = "wa-token"
 "#;
         let parsed = parse_config_str(old, std::path::Path::new("old.toml")).expect("valid TOML");
         assert_eq!(parsed.gateway.whatsapp_phone_number_id, None);
+    }
+
+    #[test]
+    fn tools_toml_parses_obscura_binary_path() {
+        // The shared-Obscura knob: `tools.obscura_binary_path` must reach
+        // ToolSettings so ObscuraProvider can reuse the IGS-managed binary.
+        let raw = r#"
+[tools]
+igs_enabled = true
+obscura_binary_path = "/home/dev/.config/igs-mcp/bin/obscura"
+"#;
+        let parsed = parse_config_str(raw, std::path::Path::new("test.toml")).expect("valid TOML");
+        assert!(parsed.tools.igs_enabled);
+        assert_eq!(
+            parsed.tools.obscura_binary_path.as_deref(),
+            Some(std::path::Path::new(
+                "/home/dev/.config/igs-mcp/bin/obscura"
+            ))
+        );
+
+        // Old TOML without the key still parses (backward compat → None).
+        let old = r#"
+[tools]
+igs_enabled = true
+"#;
+        let parsed = parse_config_str(old, std::path::Path::new("old.toml")).expect("valid TOML");
+        assert_eq!(parsed.tools.obscura_binary_path, None);
     }
 
     fn temp_dir(name: &str) -> PathBuf {

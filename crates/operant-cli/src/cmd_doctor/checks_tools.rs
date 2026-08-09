@@ -366,6 +366,22 @@ pub fn run_platform_checks(
     let igs_present =
         config.tools.igs_enabled && operant_core::tools::igs::find_igs_binary().is_some();
 
+    // Obscura browser binary: the `browser.provider = "obscura"` backend
+    // reuses the IGS-managed binary when present so browser + IGS web tools
+    // (search/scrape/crawl) share a single download. Surface which copy is
+    // resolved so `operant doctor` shows the sharing guarantee. (audit 2026-08-09)
+    if let Some(obscura) = operant_core::browser_provider::ObscuraProvider::resolve_obscura_binary()
+    {
+        check_info(&format!(
+            "Obscura browser binary (shared with IGS: {})",
+            obscura.display()
+        ));
+    } else {
+        check_info(
+            "Obscura browser binary (not installed — auto-downloaded on first use by the obscura provider)",
+        );
+    }
+
     // Simplified port: list main tool categories and check their requirements.
     // `is_configured` covers keyless backends (igs, builtin memory); `required_envs`
     // still counts as available for users of the legacy API-key providers, so
