@@ -170,7 +170,7 @@ impl ObscuraProvider {
         {
             return std::path::PathBuf::from(dir);
         }
-        let home = std::env::var("HOME").unwrap_or_default();
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
         let xdg = std::env::var("XDG_CONFIG_HOME").unwrap_or_else(|_| format!("{home}/.config"));
         std::path::PathBuf::from(xdg).join("igs-mcp")
     }
@@ -200,9 +200,9 @@ impl ObscuraProvider {
     fn resolve_obscura_binary_with(
         config_override: Option<&std::path::Path>,
     ) -> Option<std::path::PathBuf> {
-        // 1. Explicit config override.
+        // 1. Explicit config override (must be a real file, not a directory).
         if let Some(path) = config_override {
-            if path.exists() {
+            if path.is_file() {
                 return Some(path.to_path_buf());
             }
             tracing::warn!(
@@ -220,10 +220,25 @@ impl ObscuraProvider {
         own.exists().then_some(own)
     }
 
+    /// Where a fresh download is installed. When the IGS config directory
+    /// exists (IGS has run at least once), install into its `bin/` so a later
+    /// `igs` run finds the same binary and skips its own download — the
+    /// single-shared-binary guarantee even on first-run ordering. Otherwise
+    /// fall back to the operant-managed copy.
+    fn download_target() -> std::path::PathBuf {
+        let igs_dir = Self::igs_config_dir();
+        if igs_dir.exists() {
+            igs_dir.join("bin").join("obscura")
+        } else {
+            Self::default_bin_path()
+        }
+    }
+
     /// Downloads the latest Obscura browser binary for the current platform.
     /// Checks GitHub Releases for the latest binary.
     async fn download_binary() -> Result<std::path::PathBuf> {
-        let bin_path = Self::default_bin_path();
+        let install_into_igs = Self::igs_config_dir().exists();
+        let bin_path = Self::download_target();
 
         tracing::info!("Fetching latest Obscura browser binary from GitHub Releases…");
 
@@ -233,6 +248,7 @@ impl ObscuraProvider {
             .build()?;
 
         let release: serde_json::Value = client.get(release_url).send().await?.json().await?;
+        let version = release["tag_name"].as_str().unwrap_or("").to_string();
 
         let assets = release["assets"]
             .as_array()
@@ -277,6 +293,18 @@ impl ObscuraProvider {
             return Err(Error::Agent(
                 "Downloaded binary failed verification".to_string(),
             ));
+        }
+
+        // Stamp the version file igs-rust's ObscuraManager reads
+        // (`bin/.obscura_version`). Its `ensure_ready()` compares that file to
+        // the latest GitHub release and skips downloading when they match — so
+        // a binary we installed into its `bin/` dir is reused, not replaced.
+        if install_into_igs && !version.is_empty() {
+            tokio::fs::write(
+                bin_path.with_file_name(".obscura_version"),
+                version.as_bytes(),
+            )
+            .await?;
         }
 
         tracing::info!(
@@ -744,6 +772,34 @@ mod tests {
         path
     }
 
+    /// Restores an env var to its prior value on drop, so a panicking
+    /// assertion can't leak `IGS_CONFIG_DIR` into other tests in the process.
+    struct EnvGuard {
+        name: &'static str,
+        previous: Option<std::ffi::OsString>,
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            // SAFETY: test-only env mutation under exclusive lock; the guard
+            // is always created while `env_lock()` is held.
+            match &self.previous {
+                Some(value) => unsafe { std::env::set_var(self.name, value) },
+                None => unsafe { std::env::remove_var(self.name) },
+            }
+        }
+    }
+
+    fn set_env_igs_config_dir(dir: &std::path::Path) -> EnvGuard {
+        let previous = std::env::var_os("IGS_CONFIG_DIR");
+        // SAFETY: test-only env mutation under exclusive lock
+        unsafe { std::env::set_var("IGS_CONFIG_DIR", dir) };
+        EnvGuard {
+            name: "IGS_CONFIG_DIR",
+            previous,
+        }
+    }
+
     #[test]
     fn resolve_prefers_config_override() {
         let _guard = env_lock().lock().unwrap();
@@ -762,10 +818,8 @@ mod tests {
         let bin = dir.join("bin").join("obscura");
         std::fs::create_dir_all(bin.parent().unwrap()).unwrap();
         std::fs::write(&bin, b"").unwrap();
-        // SAFETY: test-only env mutation under exclusive lock
-        unsafe { std::env::set_var("IGS_CONFIG_DIR", &dir) };
+        let _env = set_env_igs_config_dir(&dir);
         let result = ObscuraProvider::resolve_obscura_binary_with(None);
-        unsafe { std::env::remove_var("IGS_CONFIG_DIR") };
         assert_eq!(result, Some(bin));
         let _ = std::fs::remove_dir_all(dir);
     }
@@ -778,12 +832,33 @@ mod tests {
         std::fs::create_dir_all(bin.parent().unwrap()).unwrap();
         std::fs::write(&bin, b"").unwrap();
         let missing = dir.join("does-not-exist");
-        // SAFETY: test-only env mutation under exclusive lock
-        unsafe { std::env::set_var("IGS_CONFIG_DIR", &dir) };
+        let _env = set_env_igs_config_dir(&dir);
         let result = ObscuraProvider::resolve_obscura_binary_with(Some(&missing));
-        unsafe { std::env::remove_var("IGS_CONFIG_DIR") };
         assert_eq!(result, Some(bin));
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn download_target_prefers_igs_dir_when_present() {
+        let _guard = env_lock().lock().unwrap();
+        // IGS config dir exists → downloads land in its bin/ so igs reuses them.
+        let dir = temp_dir("dl-igs");
+        let _env = set_env_igs_config_dir(&dir);
+        assert_eq!(
+            ObscuraProvider::download_target(),
+            dir.join("bin").join("obscura")
+        );
+        let _ = std::fs::remove_dir_all(dir);
+
+        // IGS config dir does NOT exist → operant-managed copy (no IGS to share).
+        let absent = temp_dir("dl-absent");
+        std::fs::remove_dir_all(&absent).unwrap();
+        let _env2 = set_env_igs_config_dir(&absent);
+        assert_eq!(
+            ObscuraProvider::download_target(),
+            ObscuraProvider::default_bin_path()
+        );
+        let _ = std::fs::remove_dir_all(absent);
     }
 
     #[test]

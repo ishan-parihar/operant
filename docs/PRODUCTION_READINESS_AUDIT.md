@@ -47,8 +47,15 @@ Not re-architected (per standing instruction — already designed effectively). 
 3. operant's own `~/.operant/bin/obscura` (fallback; the download target when neither exists — only on machines that never installed IGS).
 
 - `ensure_binary()` now reuses a resolved binary instead of downloading a second copy.
+- `download_target()` closes the first-run ordering gap: when the IGS config
+  dir exists (IGS has run), fresh downloads install into IGS's `bin/` **and**
+  stamp `bin/.obscura_version` with the fetched release tag — igs-rust's
+  `ObscuraManager` compares that file against the latest release and skips its
+  own download when they match. So even when operant downloads first, IGS
+  reuses the same binary (no second copy on any ordering).
 - `operant doctor` reports which binary is resolved ("Obscura browser binary (shared with IGS: …)").
-- Tests: 3 resolve-order unit tests + config parse/back-compat test.
+- Tests: 4 resolve-order/download-target unit tests (RAII env guard, no
+  leakage on panic) + config parse/back-compat test.
 
 ### Why this is the right layer
 igs-rust's `ObscuraManager` has no binary-path knob — only `IGS_CONFIG_DIR` (which moves the whole config dir, not just the binary). So operant adapts to IGS's location rather than vice-versa. With the **default config** (`browser.provider = "igs"`, `web.preferred_provider = "igs"`), everything already routes through the igs binary's Obscura; the fix extends that guarantee to `browser.provider = "obscura"`.
@@ -85,7 +92,7 @@ igs-rust's `ObscuraManager` has no binary-path knob — only `IGS_CONFIG_DIR` (w
 1. **Manual smoke test (user's own):** the binary-sharing fix is covered by unit tests, but a live end-to-end run is recommended:
    - `operant doctor` → confirm "Obscura browser binary (shared with IGS: ~/.config/igs-mcp/bin/obscura)".
    - `operant run --query "search the web for X"`, then a `web_scrape`, then `browser` navigate → confirm all three work and only one `obscura` binary exists on disk (`ls ~/.config/igs-mcp/bin ~/.operant/bin`).
-2. **igs-rust feature (upstream):** add a `binaryPath`/`OBSCURA_BIN` override to `ObscuraManager` so the sharing is bidirectional and configurable on the IGS side too. Out of operant's control; noted for the igs-rust repo.
+2. **igs-rust feature (upstream):** add a `binaryPath`/`OBSCURA_BIN` override to `ObscuraManager` so the sharing is bidirectional and configurable on the IGS side too (e.g. point IGS at `~/.operant/bin/obscura` or a user-chosen path). Out of operant's control; noted for the igs-rust repo.
 3. **`operant-tools` crate:** a second `WebSearchTool` exists at `crates/operant-tools/src/web_search_tool.rs` (plus an `operant-browser`-style naming in docs). Confirm whether `operant-tools` is wired into the runtime tool registry or is dead weight for the next dead-code pass.
 4. **Windows Obscura asset matching** only handles x86_64 (no aarch64-windows entry) — fine for now, note for cross-compile targets.
 5. **`web_extract` auxiliary model** slot exists in config but the IGS path returns raw markdown (no LLM post-processing) — intended; document that `auxiliary_models.web_extract` only applies when an LLM-backed extractor is wired.
