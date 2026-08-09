@@ -428,6 +428,7 @@ impl TuiApp {
             if !no_mouse {
                 let _ = execute!(std::io::stdout(), crossterm::event::DisableMouseCapture);
             }
+            let _ = execute!(std::io::stdout(), crossterm::event::DisableFocusChange);
             prev_hook(info);
         }));
 
@@ -442,6 +443,10 @@ impl TuiApp {
         if !self.no_mouse {
             execute!(stdout, crossterm::event::EnableMouseCapture)?;
         }
+        // Enable focus-change reporting so the TUI can pause animations and
+        // drop the redraw cadence when the window is backgrounded (Phase 2.3).
+        // Terminals that don't support focus events simply ignore the sequence.
+        execute!(stdout, crossterm::event::EnableFocusChange)?;
         let backend = CrosstermBackend::new(stdout);
         let mut terminal = Terminal::new(backend)?;
 
@@ -765,6 +770,7 @@ impl TuiApp {
                 crossterm::event::DisableMouseCapture
             );
         }
+        let _ = execute!(terminal.backend_mut(), crossterm::event::DisableFocusChange);
         execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
         result
     }

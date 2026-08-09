@@ -89,6 +89,7 @@ impl App {
             frame_count: 0,
             perf_tier: crate::tui::redraw::PerformanceTier::detect(),
             last_activity: std::time::Instant::now(),
+            client_focused: true,
             token_count: 0,
             cost_usd: 0.0,
             model_name,

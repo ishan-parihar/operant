@@ -114,6 +114,11 @@ pub struct App {
     pub perf_tier: crate::tui::redraw::PerformanceTier,
     /// Timestamp of last user activity (for idle detection in redraw cadence).
     pub last_activity: std::time::Instant,
+    /// Whether the terminal window currently has focus. When the app is
+    /// backgrounded, the redraw cadence drops to the slowest tier so a
+    /// backgrounded tab doesn't burn CPU/battery. Updated from crossterm
+    /// `Event::FocusGained`/`Event::FocusLost` (Phase 2.3).
+    pub client_focused: bool,
     pub token_count: u32,
     pub cost_usd: f64,
     pub model_name: String,
@@ -904,6 +909,7 @@ impl App {
                         self.is_streaming,
                         Some(self.last_activity.elapsed()),
                         None, // use default 5s idle threshold
+                        self.client_focused,
                     );
                     event::poll(poll_timeout)?
                 }
@@ -1003,6 +1009,18 @@ impl App {
                     }
                     Event::Mouse(mouse_event) => {
                         self.handle_mouse_event(mouse_event);
+                    }
+                    Event::FocusGained => {
+                        // Terminal regained focus — resume full redraw cadence.
+                        // Also bump the activity timestamp so the idle/deep-idle
+                        // timers restart from this moment.
+                        self.client_focused = true;
+                        self.last_activity = std::time::Instant::now();
+                    }
+                    Event::FocusLost => {
+                        // Backgrounded tab: pause expensive animations and drop
+                        // to the slowest redraw cadence (see redraw_interval).
+                        self.client_focused = false;
                     }
                     _ => {}
                 }

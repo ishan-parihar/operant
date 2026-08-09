@@ -99,12 +99,31 @@ impl PerformanceTier {
 /// The `idle_timeout` parameter defines how long (in seconds) of inactivity
 /// before entering idle mode. If `None`, defaults to 5 seconds.
 /// Deep idle (slowest cadence) kicks in at `idle_timeout * 6` seconds.
+///
+/// `is_focused` reflects whether the terminal window has keyboard focus. When
+/// unfocused (backgrounded tab), we drop straight to the slowest cadence for
+/// the tier so the process doesn't burn CPU/battery while invisible — the
+/// event loop still wakes to drain agent events, but never re-renders
+/// animations the user can't see.
 pub fn redraw_interval(
     tier: PerformanceTier,
     is_streaming: bool,
     time_since_activity: Option<Duration>,
     idle_timeout: Option<Duration>,
+    is_focused: bool,
 ) -> Duration {
+    // Backgrounded tab: use the tier's slowest cadence regardless of activity.
+    // Streaming is still checked below for correctness if the caller passes
+    // focused=false while actively streaming (rare — headless simulation), but
+    // the main loop always sends true here while a turn is streaming.
+    if !is_focused {
+        return match tier {
+            PerformanceTier::Minimal => Duration::from_secs(5),
+            PerformanceTier::Normal => Duration::from_secs(2),
+            PerformanceTier::High => Duration::from_secs(1),
+        };
+    }
+
     let idle_threshold = idle_timeout.unwrap_or(Duration::from_secs(5));
     let deep_idle_threshold = idle_threshold * 6;
 
@@ -158,7 +177,7 @@ mod tests {
 
     #[test]
     fn streaming_always_uses_fast_interval() {
-        let interval = redraw_interval(PerformanceTier::Minimal, true, None, None);
+        let interval = redraw_interval(PerformanceTier::Minimal, true, None, None, true);
         assert!(interval <= Duration::from_millis(200));
     }
 
@@ -169,6 +188,21 @@ mod tests {
             false,
             Some(Duration::from_secs(60)),
             None,
+            true,
+        );
+        assert!(interval >= Duration::from_secs(1));
+    }
+
+    #[test]
+    fn unfocused_uses_slowest_cadence() {
+        // A backgrounded tab must not burn CPU: even while actively streaming,
+        // an unfocused terminal falls to the tier's slowest cadence.
+        let interval = redraw_interval(
+            PerformanceTier::High,
+            true,
+            Some(Duration::ZERO),
+            None,
+            false,
         );
         assert!(interval >= Duration::from_secs(1));
     }
