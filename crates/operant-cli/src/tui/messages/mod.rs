@@ -7,7 +7,7 @@ use std::collections::HashMap;
 
 use ratatui::style::Color;
 
-mod cache;
+pub(crate) mod cache;
 mod commands;
 mod helpers;
 mod markdown;

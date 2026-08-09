@@ -83,7 +83,7 @@ pub(crate) fn render_file_chip(label: String) -> Line<'static> {
     render_attachment_chip_colored("file", label, Color::Rgb(51, 102, 170), Color::White)
 }
 
-pub(crate) fn render_attachment_chip_colored(
+fn render_attachment_chip_colored(
     kind: &str,
     label: String,
     badge_bg: Color,
@@ -104,7 +104,6 @@ pub(crate) fn render_attachment_chip_colored(
     ])
 }
 
-#[allow(dead_code)] // Reserved: user prompt metadata not shown in current layout
 pub(crate) fn user_metadata_line(_meta: Option<&TurnMetadata>) -> Option<Line<'static>> {
     // User prompt line has no metadata — mode/model/duration are shown on the
     // assistant footer instead (matching OpenCode's layout).
