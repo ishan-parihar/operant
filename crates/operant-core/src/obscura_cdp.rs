@@ -113,6 +113,11 @@ impl CdpBrowserSession {
                 Error::Agent("Timed out waiting for Obscura CDP WebSocket URL".to_string())
             })??;
 
+        // Drain the rest of stdout so a chatty serve process can't fill the
+        // pipe buffer and stall — the CDP protocol continues over the
+        // WebSocket, not stdin/stdout.
+        tokio::spawn(async move { while let Ok(Some(_line)) = reader.next_line().await {} });
+
         info!(%ws_url, "Obscura CDP session ready");
         Ok(Self {
             ws_url,
@@ -211,6 +216,10 @@ impl CdpBrowserSession {
             target_id,
             session_id,
         };
+        // Enable domains best-effort so Page.navigate / Runtime.evaluate are
+        // reliably serviced (some builds reject methods on non-enabled domains).
+        let _ = self.page_cmd(&page, "Page.enable", json!({})).await;
+        let _ = self.page_cmd(&page, "Runtime.enable", json!({})).await;
         *guard = Some(PageTarget {
             target_id: page.target_id.clone(),
             session_id: page.session_id.clone(),
@@ -252,10 +261,11 @@ impl CdpBrowserSession {
             let text = exception["text"].as_str().unwrap_or("evaluation exception");
             return Err(Error::Agent(format!("Runtime.evaluate failed: {text}")));
         }
-        Ok(response["result"]["result"]["value"]
-            .as_str()
-            .unwrap_or("")
-            .to_string())
+        Ok(match &response["result"]["result"]["value"] {
+            Value::String(s) => s.clone(),
+            Value::Null => String::new(),
+            other => other.to_string(),
+        })
     }
 
     /// Extract page content as markdown (LP.getMarkdown, then innerText fallback).
