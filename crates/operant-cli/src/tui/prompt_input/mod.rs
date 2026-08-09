@@ -1474,13 +1474,12 @@ pub fn render_prompt_input(
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
+#[allow(non_snake_case)] // vim-motion test names mirror key names (motion_W_B_basic, etc.)
 mod tests {
     use super::typeahead::{compute_file_suggestions, compute_slash_suggestions};
     use super::vim::{
-        VimOperator, apply_operator_range, lowercase_region, motion_B, motion_E, motion_G,
-        motion_W, motion_b, motion_e, motion_find_char, motion_first_nonblank, motion_gg, motion_w,
-        uppercase_region, vim_count, vim_g, vim_idle, vim_normal, vim_operator, vim_operator_count,
-        vim_operator_g,
+        VimOperator, motion_B, motion_E, motion_G, motion_W, motion_b, motion_e, motion_find_char,
+        motion_first_nonblank, motion_gg, motion_w,
     };
     use super::*;
 
