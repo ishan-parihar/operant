@@ -23,13 +23,16 @@ pub enum SkillsSubcommand {
         /// Skill name to inspect
         id: String,
     },
-    /// Install a skill from a local file or URL.
+    /// Install a skill from a local file, directory, or URL.
+    ///
+    /// A directory source imports the whole skill directory (SKILL.md plus
+    /// its reference files) — e.g. `operant skills install ./skills/foo`.
     ///
     /// Runs a pre-install security scan (skills_guard) and blocks
     /// installation if high-severity threats are found. Use --force to
     /// override the scan verdict (not recommended for untrusted sources).
     Install {
-        /// Source path or URL to the skill content
+        /// Source path (file or directory) or URL to the skill content
         source: String,
         /// Optional name override (defaults to the file stem or URL basename)
         #[arg(long)]
@@ -402,6 +405,13 @@ async fn install_skill(
     name: Option<&str>,
     force: bool,
 ) -> Result<()> {
+    // Directory source: import the whole skill directory (SKILL.md + its
+    // reference files). Previously only single files/URLs were accepted and
+    // a directory failed with "Is a directory" at read_to_string.
+    if Path::new(source).is_dir() {
+        return install_skill_directory(config, Path::new(source), name, force).await;
+    }
+
     let (content, skill_name) = if source.starts_with("http://") || source.starts_with("https://") {
         let response = reqwest::get(source)
             .await
@@ -531,6 +541,174 @@ async fn install_skill(
         skill_name
     );
     Ok(())
+}
+
+/// Import a whole skill directory (SKILL.md + reference files) into the
+/// skills root.
+///
+/// The source directory is security-scanned recursively (`skills_guard`
+/// scans directories), then copied under `<skills_root>/<name>/`. If the
+/// imported SKILL.md fails to parse, the copy is rolled back so the skills
+/// store never holds a half-imported directory.
+async fn install_skill_directory(
+    config: &AppConfig,
+    source_dir: &Path,
+    name: Option<&str>,
+    force: bool,
+) -> Result<()> {
+    let source_display = source_dir.display().to_string();
+
+    if !source_dir.join("SKILL.md").exists() {
+        anyhow::bail!(
+            "Directory '{}' is not a skill — it has no SKILL.md file.",
+            source_display
+        );
+    }
+
+    let skill_name = name.map(|s| s.to_string()).unwrap_or_else(|| {
+        source_dir
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("skill")
+            .to_string()
+    });
+
+    // ── Pre-install security scan (scans the whole directory recursively) ──
+    let scan_result = operant_core::skills_guard::scan_skill(source_dir, &source_display);
+    let (allow, reason) = operant_core::skills_guard::should_allow_install(&scan_result, force);
+
+    if !scan_result.findings.is_empty() {
+        println!(
+            "{}",
+            operant_core::skills_guard::format_scan_report(&scan_result)
+        );
+    }
+
+    match allow {
+        Some(true) => {
+            if !scan_result.findings.is_empty() {
+                println!("{} {}", style("⚠").yellow(), reason);
+            }
+        }
+        Some(false) => {
+            let force_hint = if reason.contains("--force does not override") {
+                String::new()
+            } else {
+                "\nTo install anyway, re-run with --force.".to_string()
+            };
+            anyhow::bail!(
+                "Installation blocked by security scan: {}\n\
+                 {} findings ({} critical, {} high, {} medium, {} low).{}",
+                reason,
+                scan_result.findings.len(),
+                scan_result
+                    .findings
+                    .iter()
+                    .filter(|f| f.severity == operant_core::skills_guard::Severity::Critical)
+                    .count(),
+                scan_result
+                    .findings
+                    .iter()
+                    .filter(|f| f.severity == operant_core::skills_guard::Severity::High)
+                    .count(),
+                scan_result
+                    .findings
+                    .iter()
+                    .filter(|f| f.severity == operant_core::skills_guard::Severity::Medium)
+                    .count(),
+                scan_result
+                    .findings
+                    .iter()
+                    .filter(|f| f.severity == operant_core::skills_guard::Severity::Low)
+                    .count(),
+                force_hint,
+            );
+        }
+        None => {
+            println!(
+                "{}",
+                style("⚠ Security scan requires confirmation:").yellow()
+            );
+            println!("  {}", reason);
+            if !Confirm::new()
+                .with_prompt(format!("Install skill '{}' anyway?", skill_name))
+                .default(false)
+                .interact()
+                .context("Failed to read confirmation")?
+            {
+                println!("Installation cancelled.");
+                return Ok(());
+            }
+        }
+    }
+
+    // ── Copy the whole directory (SKILL.md + references) ──
+    let target = config.skills.root_dir.join(&skill_name);
+    if target.exists() {
+        anyhow::bail!(
+            "Skill '{}' already exists at '{}'. Uninstall it first or choose a different --name.",
+            skill_name,
+            target.display()
+        );
+    }
+
+    // Baseline the currently-loadable skill count BEFORE copying so the
+    // post-import validation can detect a broken SKILL.md (load_all skips
+    // unparseable skills silently).
+    let mut manager = SkillManager::new(config.skills.root_dir.clone());
+    let loaded_before = manager.load_all()?.len();
+
+    std::fs::create_dir_all(&target)
+        .with_context(|| format!("Failed to create skill directory '{}'", target.display()))?;
+
+    let file_count = copy_dir_recursive(source_dir, &target)?;
+
+    // Validate the imported SKILL.md parses; roll back on failure so the
+    // store never holds a broken skill.
+    let loaded_after = manager.load_all()?.len();
+    if loaded_after <= loaded_before {
+        let _ = std::fs::remove_dir_all(&target);
+        anyhow::bail!(
+            "Imported '{}' has an invalid SKILL.md — installation rolled back.",
+            skill_name
+        );
+    }
+
+    println!(
+        "{} Skill '{}' imported from '{}' ({} file(s)).",
+        style("✓").green(),
+        skill_name,
+        source_display,
+        file_count
+    );
+    Ok(())
+}
+
+/// Recursively copy a directory tree. Returns the number of files copied.
+fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<usize> {
+    std::fs::create_dir_all(dst)
+        .with_context(|| format!("Failed to create '{}'", dst.display()))?;
+    let mut count = 0usize;
+    for entry in
+        std::fs::read_dir(src).with_context(|| format!("Failed to read '{}'", src.display()))?
+    {
+        let entry = entry?;
+        let path = entry.path();
+        let target = dst.join(entry.file_name());
+        if path.is_dir() {
+            count += copy_dir_recursive(&path, &target)?;
+        } else {
+            std::fs::copy(&path, &target).with_context(|| {
+                format!(
+                    "Failed to copy '{}' → '{}'",
+                    path.display(),
+                    target.display()
+                )
+            })?;
+            count += 1;
+        }
+    }
+    Ok(count)
 }
 
 fn uninstall_skill(config: &AppConfig, name: &str) -> Result<()> {
@@ -1112,5 +1290,64 @@ fn current_platform() -> &'static str {
         "windows"
     } else {
         "unknown"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    fn temp_dir(tag: &str) -> PathBuf {
+        let n = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
+        let dir = std::env::temp_dir().join(format!(
+            "operant_skills_cli_{}_{}_{}",
+            tag,
+            std::process::id(),
+            n
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn copy_dir_recursive_copies_whole_tree_and_counts_files() {
+        let src = temp_dir("src");
+        std::fs::create_dir_all(src.join("sub")).unwrap();
+        std::fs::write(src.join("SKILL.md"), "# skill").unwrap();
+        std::fs::write(src.join("sub").join("helper.py"), "print(1)").unwrap();
+
+        let dst = temp_dir("dst");
+        let count = copy_dir_recursive(&src, &dst).unwrap();
+        assert_eq!(count, 2);
+        assert!(dst.join("SKILL.md").exists());
+        assert_eq!(
+            std::fs::read_to_string(dst.join("SKILL.md")).unwrap(),
+            "# skill"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dst.join("sub").join("helper.py")).unwrap(),
+            "print(1)"
+        );
+
+        let _ = std::fs::remove_dir_all(src);
+        let _ = std::fs::remove_dir_all(dst);
+    }
+
+    #[test]
+    fn copy_dir_recursive_nested_dir_preserved() {
+        let src = temp_dir("src2");
+        std::fs::create_dir_all(src.join("a").join("b")).unwrap();
+        std::fs::write(src.join("a").join("b").join("f.txt"), "x").unwrap();
+
+        let dst = temp_dir("dst2");
+        copy_dir_recursive(&src, &dst).unwrap();
+        assert!(dst.join("a").join("b").join("f.txt").exists());
+
+        let _ = std::fs::remove_dir_all(src);
+        let _ = std::fs::remove_dir_all(dst);
     }
 }

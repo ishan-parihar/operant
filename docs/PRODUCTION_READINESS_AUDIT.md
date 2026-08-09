@@ -151,6 +151,14 @@ Verified empirically: `operant tools list` under the test config surfaces **54 t
 - **Fix:** `build_search_candidates()` — hermes `web_search_registry._resolve` capability fallback: configured provider first, then igs → tavily (key) → exa (key) → duckduckgo → searxng (url), deduplicated. When every candidate returns nothing, `web_search` now returns an **actionable error** ("DuckDuckGo may be rate-limiting… configure a Tavily/Exa key") instead of silently-empty `0 results`. DDG provider also hardened: `http1_only()` + one retry after 500 ms on empty (anomaly blocks are transient). 5 new candidate-chain unit tests.
 - **Remaining (needs user credentials):** to get real results on this machine, set a `TAVILY_API_KEY` (operant `[tools.web] tavily_api_key` or igs's `settings.yml`) or an `EXA_API_KEY`. No code path is broken — the chain will pick the keyed provider automatically.
 
+### Skills import from a directory (fixed this session)
+- **Gap found:** `operant skills install <source>` only accepted a single **file** or URL — pointing it at a skill *directory* failed at `read_to_string` ("Is a directory"). The repo itself ships 494 skill directories, so directory import is the primary real-world path.
+- **Fix (`cmd_skills.rs`):** `install_skill` now detects a directory source and routes to `install_skill_directory`: requires `SKILL.md`, runs the recursive `skills_guard` security scan on the whole directory (the scanner already supported directories), copies the entire tree (SKILL.md + reference files + nested dirs) to `<skills_root>/<name>/`, refuses overwrites with a clear "already exists" error, and **rolls back** if the imported SKILL.md fails to parse (validated via a pre-copy baseline count, since `load_all` skips broken skills silently). Help text updated. `copy_dir_recursive` covered by 2 new unit tests.
+- **Verified live:** imported `openclaw/.agents/skills/gitcrawl` + `discord-clawd` (2 files each incl. nested `agents/*.yaml`) into a throwaway config; `skills list`/`audit`/`inspect` all work; duplicate install errors cleanly.
+
+### Native-tool live batch (this session)
+`operant test <tool>` exercised the non-keyed native surface: timestamp, echo, debug_system, file_list, todo, cron, kanban, process (list + spawn), http_request, web_fetch, memory_store, session_search, skills_list, checkpoint — **all functional**. Keyed tools (image_generate, vision_analyze, transcribe_audio, text_to_speech) return graceful errors when unconfigured — expected environment behavior, not defects.
+
 ---
 
 ## 7. Verification summary
