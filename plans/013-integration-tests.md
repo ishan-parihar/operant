@@ -27,8 +27,11 @@ boundary.
 ## Steps
 
 1. **Gateway WS roundtrip**: start the gateway in-process (use the existing
-   `start_gateway`-style builder in `gateway_runner.rs`/`gateway/lib.rs` — check how the
-   34 `api` tests boot the router; mirror that), connect a real WebSocket client
+   `start_gateway`-style builder in `gateway_runner.rs`/`gateway/lib.rs` — the
+   router-boot harness already lives inside `operant-gateway`'s own lib tests (219
+   tests; the 34-test `operant-api` crate is the provider/schema layer and does NOT
+   boot the router — mirror the gateway crate's harness, not operant-api), connect a
+   real WebSocket client
    (tokio-tungstenite is likely already a dev-dependency — verify), send a message,
    assert a scripted-provider agent response arrives and a session row is persisted.
    Include: bad-route 404, `/health` 200, WS auth rejection when token auth configured.

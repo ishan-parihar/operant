@@ -9,9 +9,9 @@ Stamped: `d394c136`. Priority: **P0**.
 `/pair`, `/webhooks/github`, `/webhooks/gmail`, `/webhooks/gmail/push`,
 `/webhooks/linq`, `/webhooks/nextcloud-talk`, `/webhooks/wati`
 (routes at `api.rs:1508–1518`, stub handlers at `api.rs:1655–1717`).
-Meanwhile `crates/operant-gateway/src/ws.rs:39` tells clients "Unauthorized — pair
-first via POST /pair" — an advertised auth flow that returns 501. The gateway is
-effectively unauthenticated-by-default.
+Meanwhile `crates/operant-gateway/src/api.rs:39` (router-doc/error text) tells clients
+"Unauthorized — pair first via POST /pair" — an advertised auth flow that returns 501.
+The gateway is effectively unauthenticated-by-default.
 
 ## Files in scope
 
@@ -49,11 +49,13 @@ effectively unauthenticated-by-default.
    - If no implementation exists → **remove** the route AND the stub handler
      (dead 501 surface is worse than a 404 — a 404 tells the truth).
 2. **Pair flow**: either (a) implement minimal real pairing — `POST /pair` creates a
-   random token, persists it to the gateway state (0600, reuse plan 002 helper), returns
-   it once, `extract_ws_token` validates against it — or (b) remove the `/pair` routes
-   and rewrite `ws.rs:39` to describe the actual methods (config `token`, bearer
-   header/subprotocol/query). Prefer (a) if the dashboard/`pair`-referencing clients
-   exist; prefer (b) if nothing calls it. Verify which by grepping for `/pair` callers.
+   random token, persists it to the gateway state (0600, via the core secret-write
+   helper from plan 002, `crates/operant-core/src/fs_secrets.rs`), returns it once,
+   `extract_ws_token` validates against it — or (b) remove the `/pair` routes and
+   rewrite the auth error text at `api.rs:39` to describe the actual methods (config
+   `token`, bearer header/subprotocol/query). Prefer (a) if the
+   dashboard/`pair`-referencing clients exist; prefer (b) if nothing calls it. Verify
+   which by grepping for `/pair` callers.
 3. **Document the auth posture**: state in the gateway README section (or
    `docs/security.md` created in plan 014) what the default bind host is, that the
    gateway is unauthenticated by default, and how to enable `token` auth. Note the

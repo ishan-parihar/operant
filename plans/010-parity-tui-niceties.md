@@ -43,10 +43,11 @@ Three hermes QoL surfaces are absent in operant's TUI/terminal stack:
    `annotate_failure(...)` output as a `HINT:` line to the tool result. Tests for each
    heuristic.
 2. **Slash confirm**: implement the store (HashMap keyed by session, with a
-   `Instant`-based staleness timeout, prune on access). Wire at least one real use:
-   the destructive/permission-toggling slash commands currently confirmed inline
-   (`/yolo`, permission bypass) get the store treatment, or add a confirmation flow for
-   a pending action — follow the existing dialogs pattern (`dialogs.rs`,
+   `Instant`-based staleness timeout, prune on access). Wire at least one real use in a
+   TUI-local flow (note: `/yolo` and gateway permission bypass live in the gateway
+   channel layer, NOT the TUI — pick a TUI command from `tui/app/commands.rs` that
+   should confirm before executing, e.g. a destructive `/clear`-style or settings
+   mutation) — follow the existing dialogs pattern (`dialogs.rs`,
    `bypass_permissions_dialog.rs`).
 3. **Focus pane**: implement the tool (validates pane name against a known set, returns
    the current focus). Register it. In the TUI, render the focused pane as a status

@@ -8,6 +8,8 @@ rely on these gates being locally green.
 The workspace cannot pass the project's own quality commands locally:
 - `cargo clippy --workspace --all-targets -- -D warnings` → **146 errors** (pre-existing
   debt, concentrated in `operant-core`; 2 are hard compile errors in `operant-providers`).
+  Note: 146 was measured WITHOUT `--all-features`; the gate below uses `--all-features`
+  (the CI command), so expect ≥ 146.
 - `cargo test --workspace --all-features --lib` → **1 failing test**
   (`tool_registry::tests::hardware_feature_registers_all_six_tools`).
 - MSRV drift: `Cargo.toml` declares `rust-version = "1.88"` but `.github/workflows/ci.yml`
@@ -75,7 +77,7 @@ green so every future plan can validate against it. It does not enable any autom
 
 ```bash
 cargo fmt --all --check                                          # exit 0, no diffs
-cargo clippy --workspace --all-targets -- -D warnings            # exit 0, zero hits
+cargo clippy --workspace --all-targets --all-features -- -D warnings   # exit 0, zero hits (CI command; sweep beyond the 146 no-features baseline)
 cargo test  --workspace --all-features --lib                     # exit 0, 0 failed
 ```
 Plus the four per-crate suites (core / cli / runtime / gateway) stay green.

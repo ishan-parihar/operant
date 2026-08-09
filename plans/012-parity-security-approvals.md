@@ -43,8 +43,8 @@ executing. This is the missing approval surface for non-interactive origins.
    against hermes `write_approval.current_origin`/`is_background` + `skill_provenance.py`.
    Write the delta list into `BUGS.md`.
 2. **Implement `write_approval.rs`**: pure gate + origin detection. Persisted pending
-   store (JSON under `~/.operant/approvals/` — atomic write, 0600, reuse plan 002
-   helper conventions).
+   store (JSON under `~/.operant/approvals/` — atomic write, 0600, via the core
+   secret-write helper from plan 002, `crates/operant-core/src/fs_secrets.rs`).
 3. **Wire the gate**: in the write paths, when `is_background()` && `write_approval_enabled`
    → return `GateDecision::Stage` (write is staged, message tells the user where);
    interactive origin keeps current behavior. This must be opt-in (config

@@ -35,12 +35,17 @@ missed. State DB / `.env` need an audit too.
 ## Steps
 
 1. Add a helper `write_secret_file(path, bytes) -> io::Result<()>` in
-   `crates/operant-cli/src/cmd_setup.rs` (or a shared `secret_utils` module if the CLI
-   already has one): write via `OpenOptions::new().write(true).create(true).truncate(true)`
-   then `set_permissions(0o600)` on the created file (on unix). On existing files that
-   are already 0600 or stricter, leave them; if looser, tighten to 0600.
-2. Route the config write (`:1316`), the `.env` write (`:1131`), and the `config.rs`
-   write path through the helper.
+   **`crates/operant-core/src/fs_secrets.rs`** (new module — it must live in core so the
+   gateway (plan 003 pair token) and `write_approval.rs` (plan 012) can reuse it too;
+   do NOT put it in the CLI crate). Write via
+   `OpenOptions::new().write(true).create(true).truncate(true)` then
+   `set_permissions(0o600)` on the created file (on unix). On existing files that are
+   already 0600 or stricter, leave them; if looser, tighten to 0600. `set_permissions`
+   bypasses umask, so 0600 is exact.
+2. Route the config write (`cmd_setup.rs:1316`), the `.env` write (`cmd_setup.rs:1131`),
+   and the `config.rs` write path through the helper (re-export from `fs_secrets`).
+   Before touching `config.rs:1229`, verify it is a real (non-test) write site — lines
+   1246–1247 in that file are test fixtures.
 3. Audit + tighten `state.db` + `-wal`/`-shm` creation: if the DB can hold auth/token
    material (check `database.rs` schema for token/secret columns), create with 0600
    (SQLite `CREATE` honors the process umask; set perms explicitly after open).

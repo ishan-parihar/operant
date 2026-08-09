@@ -35,9 +35,10 @@ reason about in-progress edits).
    `builtin.rs` registers tools).
 2. Action `collect` with args: `mode` (`"working"` | `"staged"`, default `"working"`),
    optional `path` (repo root; default cwd). Run `git diff` / `git diff --cached` via a
-   bounded child process (`Command::new("git")`, timeout via the same pattern as
-   `code_execution.rs::run_capped` or the terminal tool's timeout — cap output at
-   ~100KB with truncation marker; reuse an existing helper if one exists).
+   bounded child process. **Reuse the existing git-invocation pattern in
+   `checkpoint_tool.rs`** (it already runs bounded `git checkout`/`add`/`rev-parse`
+   subprocesses with timeouts) rather than inventing a new one — extract or mirror it.
+   Cap output at ~100KB with a truncation marker.
 3. If `git rev-parse --is-inside-work-tree` fails → honest tool error ("not a git
    repository").
 4. Untracked list: `git status --porcelain` + cap at 50 files with the "…N more"
