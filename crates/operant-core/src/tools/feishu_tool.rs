@@ -47,10 +47,10 @@ async fn get_tenant_token() -> Result<String, String> {
         let guard = auth_cache()
             .lock()
             .expect("auth_cache mutex poisoned — programmer error");
-        if let Some((token, expiry)) = guard.as_ref() {
-            if Instant::now() < *expiry {
-                return Ok(token.clone());
-            }
+        if let Some((token, expiry)) = guard.as_ref()
+            && Instant::now() < *expiry
+        {
+            return Ok(token.clone());
         }
     }
 

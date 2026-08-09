@@ -74,10 +74,10 @@ pub fn validate_request(request: &RpcRequest) -> Result<(), i32> {
     if request.jsonrpc != "2.0" {
         return Err(-32600);
     }
-    if let Some(id) = &request.id {
-        if !(id.is_null() || id.is_string() || id.is_number()) {
-            return Err(-32600);
-        }
+    if let Some(id) = &request.id
+        && !(id.is_null() || id.is_string() || id.is_number())
+    {
+        return Err(-32600);
     }
     Ok(())
 }

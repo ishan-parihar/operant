@@ -296,7 +296,7 @@ fn truncate_output(s: &str, max: usize) -> String {
     if trimmed.len() <= max {
         trimmed.replace('\n', " ")
     } else {
-        format!("{}...", &trimmed[..max].replace('\n', " "))
+        format!("{}...", trimmed[..max].replace('\n', " "))
     }
 }
 

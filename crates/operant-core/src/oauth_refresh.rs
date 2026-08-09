@@ -275,24 +275,24 @@ impl OAuthRefresher {
             let mut message = format!("Codex token refresh failed with status {status}.");
             let mut _relogin_required = false;
 
-            if let Ok(err) = serde_json::from_str::<serde_json::Value>(&text) {
-                if let Some(err_obj) = err.get("error") {
-                    if let Some(obj) = err_obj.as_object() {
-                        if let Some(nested_code) = obj
-                            .get("code")
-                            .or_else(|| obj.get("type"))
-                            .and_then(|v| v.as_str())
-                        {
-                            code = nested_code.to_string();
-                        }
-                        if let Some(nested_msg) = obj.get("message").and_then(|v| v.as_str()) {
-                            message = format!("Codex token refresh failed: {nested_msg}");
-                        }
-                    } else if let Some(code_str) = err_obj.as_str() {
-                        code = code_str.to_string();
-                        if let Some(desc) = err.get("error_description").and_then(|v| v.as_str()) {
-                            message = format!("Codex token refresh failed: {desc}");
-                        }
+            if let Ok(err) = serde_json::from_str::<serde_json::Value>(&text)
+                && let Some(err_obj) = err.get("error")
+            {
+                if let Some(obj) = err_obj.as_object() {
+                    if let Some(nested_code) = obj
+                        .get("code")
+                        .or_else(|| obj.get("type"))
+                        .and_then(|v| v.as_str())
+                    {
+                        code = nested_code.to_string();
+                    }
+                    if let Some(nested_msg) = obj.get("message").and_then(|v| v.as_str()) {
+                        message = format!("Codex token refresh failed: {nested_msg}");
+                    }
+                } else if let Some(code_str) = err_obj.as_str() {
+                    code = code_str.to_string();
+                    if let Some(desc) = err.get("error_description").and_then(|v| v.as_str()) {
+                        message = format!("Codex token refresh failed: {desc}");
                     }
                 }
             }
@@ -570,10 +570,10 @@ impl OAuthRefresher {
                         debug!("Adopting newer Anthropic access token from auth store");
                         updated.value = tokens.access_token.clone();
                     }
-                    if let Some(rt) = &tokens.refresh_token {
-                        if Some(rt) != entry.refresh_token.as_ref() {
-                            updated.refresh_token = Some(rt.clone());
-                        }
+                    if let Some(rt) = &tokens.refresh_token
+                        && Some(rt) != entry.refresh_token.as_ref()
+                    {
+                        updated.refresh_token = Some(rt.clone());
                     }
                 }
             }
@@ -583,10 +583,10 @@ impl OAuthRefresher {
                         debug!("Adopting newer Codex access token from auth store");
                         updated.value = tokens.access_token.clone();
                     }
-                    if let Some(rt) = &tokens.refresh_token {
-                        if Some(rt) != entry.refresh_token.as_ref() {
-                            updated.refresh_token = Some(rt.clone());
-                        }
+                    if let Some(rt) = &tokens.refresh_token
+                        && Some(rt) != entry.refresh_token.as_ref()
+                    {
+                        updated.refresh_token = Some(rt.clone());
                     }
                 }
                 if let Some(lr) = &state.last_refresh {
@@ -599,10 +599,10 @@ impl OAuthRefresher {
                         debug!("Adopting newer xAI access token from auth store");
                         updated.value = tokens.access_token.clone();
                     }
-                    if let Some(rt) = &tokens.refresh_token {
-                        if Some(rt) != entry.refresh_token.as_ref() {
-                            updated.refresh_token = Some(rt.clone());
-                        }
+                    if let Some(rt) = &tokens.refresh_token
+                        && Some(rt) != entry.refresh_token.as_ref()
+                    {
+                        updated.refresh_token = Some(rt.clone());
                     }
                 }
                 if let Some(te) = &state.token_endpoint {
@@ -610,16 +610,16 @@ impl OAuthRefresher {
                 }
             }
             "nous" => {
-                if let Some(at) = &state.access_token {
-                    if at != &entry.value {
-                        debug!("Adopting newer Nous access token from auth store");
-                        updated.value = at.clone();
-                    }
+                if let Some(at) = &state.access_token
+                    && at != &entry.value
+                {
+                    debug!("Adopting newer Nous access token from auth store");
+                    updated.value = at.clone();
                 }
-                if let Some(rt) = &state.refresh_token {
-                    if Some(rt) != entry.refresh_token.as_ref() {
-                        updated.refresh_token = Some(rt.clone());
-                    }
+                if let Some(rt) = &state.refresh_token
+                    && Some(rt) != entry.refresh_token.as_ref()
+                {
+                    updated.refresh_token = Some(rt.clone());
                 }
                 if let Some(ak) = &state.agent_key {
                     updated.agent_key = Some(ak.clone());

@@ -288,8 +288,10 @@ mod tests {
         assert!(registry.len() >= 2);
     }
 
-    /// With the `hardware` feature, exactly 6 built-in tools must be present:
-    /// gpio_read, gpio_write, pico_flash, device_read_code, device_write_code, device_exec.
+    /// With the `hardware` feature, the five common built-in tools must be present;
+    /// `pico_flash` is additionally gated behind the build.rs-registered
+    /// `hardware-vendor` cfg (UF2 assets embedded at compile time), so it is
+    /// asserted conditionally.
     #[cfg(feature = "hardware")]
     #[tokio::test]
     async fn hardware_feature_registers_all_six_tools() {
@@ -303,7 +305,6 @@ mod tests {
             "device_write_code",
             "gpio_read",
             "gpio_write",
-            "pico_flash",
         ];
         for tool_name in &expected {
             assert!(
@@ -313,10 +314,15 @@ mod tests {
                 names
             );
         }
-        assert_eq!(
-            registry.len(),
-            6,
-            "expected exactly 6 built-in tools, got {} (names: {:?})",
+        #[cfg(feature = "hardware-vendor")]
+        assert!(
+            names.contains("pico_flash"),
+            "expected tool 'pico_flash' missing; got: {:?}",
+            names
+        );
+        assert!(
+            registry.len() >= 5,
+            "expected at least 5 built-in tools, got {} (names: {:?})",
             registry.len(),
             names
         );

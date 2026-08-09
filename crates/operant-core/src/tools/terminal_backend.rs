@@ -658,8 +658,10 @@ mod tests {
             crate::config::TerminalBackend::VercelSandbox,
             crate::config::TerminalBackend::Singularity,
         ] {
-            let mut config = crate::config::AppConfig::default();
-            config.terminal_backend = kind.clone();
+            let config = crate::config::AppConfig {
+                terminal_backend: kind.clone(),
+                ..Default::default()
+            };
             match create_backend(&config) {
                 Ok(_) => panic!("backend {} should be refused, not silently local", kind),
                 Err(e) => {

@@ -469,10 +469,8 @@ pub fn build_session_key(
         group_sessions_per_user
     };
 
-    if isolate_user {
-        if let Some(pid) = participant_id {
-            key_parts.push(pid.to_string());
-        }
+    if isolate_user && let Some(pid) = participant_id {
+        key_parts.push(pid.to_string());
     }
 
     key_parts.join(":")

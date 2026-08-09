@@ -274,25 +274,23 @@ impl CuratorEngine {
         let mut skills_consolidated = Vec::new();
         let mut skills_pruned = Vec::new();
         let mut cron_rewrites = None;
-        if consolidate {
-            if let Some(client) = llm_client {
-                // Release the state write lock before calling consolidation
-                // (consolidation acquires its own locks internally)
-                drop(state);
-                match self.run_consolidation(client, dry_run, cron_db).await {
-                    Ok(consolidation) => {
-                        skills_consolidated = consolidation.consolidated;
-                        skills_pruned = consolidation.pruned;
-                        cron_rewrites = consolidation.cron_rewrites;
-                        errors.extend(consolidation.errors);
-                    }
-                    Err(e) => {
-                        errors.push(format!("Consolidation failed: {}", e));
-                    }
+        if consolidate && let Some(client) = llm_client {
+            // Release the state write lock before calling consolidation
+            // (consolidation acquires its own locks internally)
+            drop(state);
+            match self.run_consolidation(client, dry_run, cron_db).await {
+                Ok(consolidation) => {
+                    skills_consolidated = consolidation.consolidated;
+                    skills_pruned = consolidation.pruned;
+                    cron_rewrites = consolidation.cron_rewrites;
+                    errors.extend(consolidation.errors);
                 }
-                // Re-acquire the state lock for the final save
-                state = self.state.write().await;
+                Err(e) => {
+                    errors.push(format!("Consolidation failed: {}", e));
+                }
             }
+            // Re-acquire the state lock for the final save
+            state = self.state.write().await;
         }
 
         state.last_run_at = Some(now);
@@ -608,14 +606,12 @@ impl CuratorEngine {
 
                 if !dry_run {
                     // Ensure the umbrella directory exists
-                    if !umbrella_exists {
-                        if let Err(e) = fs::create_dir_all(&umbrella_dir) {
-                            result.errors.push(format!(
-                                "Failed to create umbrella '{}': {}",
-                                verdict.umbrella, e
-                            ));
-                            continue;
-                        }
+                    if !umbrella_exists && let Err(e) = fs::create_dir_all(&umbrella_dir) {
+                        result.errors.push(format!(
+                            "Failed to create umbrella '{}': {}",
+                            verdict.umbrella, e
+                        ));
+                        continue;
                     }
 
                     // Append the absorbed skill's content to the umbrella's SKILL.md

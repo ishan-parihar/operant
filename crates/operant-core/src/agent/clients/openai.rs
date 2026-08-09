@@ -173,14 +173,14 @@ fn extract_tool_calls_from_stream_event(
             // Merge with the last call if it has the same id (some providers
             // emit several deltas for the same tool call inside a single
             // event).
-            if let Some(last) = calls.last_mut() {
-                if last.id == id {
-                    if last.function.name.is_empty() && !delta_name.is_empty() {
-                        last.function.name = delta_name;
-                    }
-                    last.function.arguments.push_str(&delta_arguments);
-                    continue;
+            if let Some(last) = calls.last_mut()
+                && last.id == id
+            {
+                if last.function.name.is_empty() && !delta_name.is_empty() {
+                    last.function.name = delta_name;
                 }
+                last.function.arguments.push_str(&delta_arguments);
+                continue;
             }
 
             calls.push(ToolCall {

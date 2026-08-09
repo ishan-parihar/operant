@@ -271,7 +271,7 @@ pub async fn start_device_code_flow(client: &Client) -> Result<DeviceCodeStart> 
 
     Ok(DeviceCodeStart {
         device_code: device_response.device_code,
-        verification_uri_complete: Some(format!("{}?user_code={}", &verification_url, &user_code)),
+        verification_uri_complete: Some(format!("{}?user_code={}", verification_url, user_code)),
         user_code,
         verification_uri: verification_url,
         expires_in: device_response.expires_in.unwrap_or(1800),

@@ -71,10 +71,10 @@ static USAGE_TELEMETRY_LOCK: LazyLock<std::sync::Mutex<()>> =
 /// Mark a skill as having been read during the current background review.
 /// Called by `skill_view` when the origin is `background_review`.
 pub fn mark_review_skill_read(name: &str) {
-    if is_background_review() {
-        if let Ok(mut set) = REVIEW_READ_SKILLS.write() {
-            set.insert(name.to_string());
-        }
+    if is_background_review()
+        && let Ok(mut set) = REVIEW_READ_SKILLS.write()
+    {
+        set.insert(name.to_string());
     }
 }
 
@@ -928,13 +928,13 @@ impl SkillManageTool {
                 return ToolResult::error("skill_manage", err);
             }
             // If patching SKILL.md, validate frontmatter still intact
-            if target.file_name().map(|n| n == "SKILL.md").unwrap_or(false) {
-                if let Some(err) = validate_frontmatter(&updated) {
-                    return ToolResult::error(
-                        "skill_manage",
-                        format!("Patch would break SKILL.md structure: {}", err),
-                    );
-                }
+            if target.file_name().map(|n| n == "SKILL.md").unwrap_or(false)
+                && let Some(err) = validate_frontmatter(&updated)
+            {
+                return ToolResult::error(
+                    "skill_manage",
+                    format!("Patch would break SKILL.md structure: {}", err),
+                );
             }
             if let Err(e) = fs::write(&target, &updated) {
                 return ToolResult::error("skill_manage", format!("Failed to write: {}", e));
@@ -974,13 +974,13 @@ impl SkillManageTool {
         if let Some(err) = validate_content_size(&updated, "SKILL.md") {
             return ToolResult::error("skill_manage", err);
         }
-        if target.file_name().map(|n| n == "SKILL.md").unwrap_or(false) {
-            if let Some(err) = validate_frontmatter(&updated) {
-                return ToolResult::error(
-                    "skill_manage",
-                    format!("Patch would break SKILL.md structure: {}", err),
-                );
-            }
+        if target.file_name().map(|n| n == "SKILL.md").unwrap_or(false)
+            && let Some(err) = validate_frontmatter(&updated)
+        {
+            return ToolResult::error(
+                "skill_manage",
+                format!("Patch would break SKILL.md structure: {}", err),
+            );
         }
         if let Err(e) = fs::write(&target, &updated) {
             return ToolResult::error("skill_manage", format!("Failed to write: {}", e));
@@ -1021,15 +1021,14 @@ impl SkillManageTool {
             return ToolResult::error("skill_manage", format!("Failed to delete: {}", e));
         }
         // Clean up empty category directories
-        if let Some(parent) = skill_dir.parent() {
-            if parent != self.root_dir
-                && parent.exists()
-                && fs::read_dir(parent)
-                    .map(|mut e| e.next().is_none())
-                    .unwrap_or(false)
-            {
-                let _ = fs::remove_dir(parent);
-            }
+        if let Some(parent) = skill_dir.parent()
+            && parent != self.root_dir
+            && parent.exists()
+            && fs::read_dir(parent)
+                .map(|mut e| e.next().is_none())
+                .unwrap_or(false)
+        {
+            let _ = fs::remove_dir(parent);
         }
         self.record_usage(&parsed.name, "delete");
         ToolResult::success(
@@ -1072,10 +1071,10 @@ impl SkillManageTool {
             Ok(t) => t,
             Err(e) => return ToolResult::error("skill_manage", e),
         };
-        if let Some(parent) = target.parent() {
-            if let Err(e) = fs::create_dir_all(parent) {
-                return ToolResult::error("skill_manage", format!("Failed to create dir: {}", e));
-            }
+        if let Some(parent) = target.parent()
+            && let Err(e) = fs::create_dir_all(parent)
+        {
+            return ToolResult::error("skill_manage", format!("Failed to create dir: {}", e));
         }
         if let Err(e) = fs::write(&target, file_content) {
             return ToolResult::error("skill_manage", format!("Failed to write: {}", e));
@@ -1112,19 +1111,19 @@ impl SkillManageTool {
             let mut available = Vec::new();
             for subdir in ALLOWED_SUBDIRS {
                 let d = skill_dir.join(subdir);
-                if d.exists() {
-                    if let Ok(entries) = fs::read_dir(&d) {
-                        for entry in entries.flatten() {
-                            if entry.path().is_file() {
-                                available.push(
-                                    entry
-                                        .path()
-                                        .strip_prefix(&skill_dir)
-                                        .unwrap_or(&entry.path())
-                                        .to_string_lossy()
-                                        .to_string(),
-                                );
-                            }
+                if d.exists()
+                    && let Ok(entries) = fs::read_dir(&d)
+                {
+                    for entry in entries.flatten() {
+                        if entry.path().is_file() {
+                            available.push(
+                                entry
+                                    .path()
+                                    .strip_prefix(&skill_dir)
+                                    .unwrap_or(&entry.path())
+                                    .to_string_lossy()
+                                    .to_string(),
+                            );
                         }
                     }
                 }
@@ -1141,15 +1140,14 @@ impl SkillManageTool {
             return ToolResult::error("skill_manage", format!("Failed to remove: {}", e));
         }
         // Clean up empty subdirectories
-        if let Some(parent) = target.parent() {
-            if parent != skill_dir
-                && parent.exists()
-                && fs::read_dir(parent)
-                    .map(|mut e| e.next().is_none())
-                    .unwrap_or(false)
-            {
-                let _ = fs::remove_dir(parent);
-            }
+        if let Some(parent) = target.parent()
+            && parent != skill_dir
+            && parent.exists()
+            && fs::read_dir(parent)
+                .map(|mut e| e.next().is_none())
+                .unwrap_or(false)
+        {
+            let _ = fs::remove_dir(parent);
         }
         self.record_usage(&parsed.name, "remove_file");
         ToolResult::success(
@@ -1220,10 +1218,10 @@ impl SkillManageTool {
                     let count = obj.get("patch_count").and_then(|v| v.as_u64()).unwrap_or(0);
                     obj.insert("patch_count".into(), json!(count + 1));
                 }
-            } else if action == "create" {
-                if let Some(obj) = entry.as_object_mut() {
-                    obj.insert("created_by".into(), json!("agent"));
-                }
+            } else if action == "create"
+                && let Some(obj) = entry.as_object_mut()
+            {
+                obj.insert("created_by".into(), json!("agent"));
             }
             if let Some(parent) = usage_path.parent() {
                 let _ = fs::create_dir_all(parent);

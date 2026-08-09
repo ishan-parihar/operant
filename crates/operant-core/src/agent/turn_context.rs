@@ -78,19 +78,18 @@ pub async fn build_turn_context(agent: &OperantAgent, user_query: &str) -> Resul
     // Hydrate them from persisted metadata so the review cadence
     // continues where it left off. Matches hermes-agent's
     // _restore_memory_nudge_from_history pattern.
-    if agent.persistent_session_id.is_some() {
-        if let Ok(metadata) = agent.database.get_all_session_metadata(&session_id) {
-            if !metadata.is_empty() {
-                // In-process evolution_state lock; only held across a synchronous
-                // hydrate_from_metadata call, never across await points, so a
-                // poisoned guard is a programmer error.
-                let mut evo = agent
-                    .evolution_state
-                    .lock()
-                    .expect("evolution_state lock poisoned");
-                evo.hydrate_from_metadata(&metadata);
-            }
-        }
+    if agent.persistent_session_id.is_some()
+        && let Ok(metadata) = agent.database.get_all_session_metadata(&session_id)
+        && !metadata.is_empty()
+    {
+        // In-process evolution_state lock; only held across a synchronous
+        // hydrate_from_metadata call, never across await points, so a
+        // poisoned guard is a programmer error.
+        let mut evo = agent
+            .evolution_state
+            .lock()
+            .expect("evolution_state lock poisoned");
+        evo.hydrate_from_metadata(&metadata);
     }
 
     // ── 4. User message dedup check ──────────────────────────────────

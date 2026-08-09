@@ -145,6 +145,10 @@ impl SubAgentTool {
     /// Construct with the parent's disabled tool/toolset policy so that
     /// spawned children inherit the exact same tool restrictions as the
     /// parent registry (hermes parity).
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "builder mirrors the SubAgentTool fields (hermes parity); callers construct it directly"
+    )]
     pub fn with_parent_tool_policy(
         parent_client: &OpenAIClient,
         model: impl Into<String>,
@@ -515,10 +519,10 @@ fn build_child_system_prompt(
         format!("\nYOUR TASK:\n{}", goal),
     ];
 
-    if let Some(ctx) = context {
-        if !ctx.trim().is_empty() {
-            parts.push(format!("\nCONTEXT:\n{}", ctx));
-        }
+    if let Some(ctx) = context
+        && !ctx.trim().is_empty()
+    {
+        parts.push(format!("\nCONTEXT:\n{}", ctx));
     }
 
     parts.push(
@@ -694,10 +698,10 @@ fn parse_args(args: Value) -> Result<SubAgentArgs, String> {
         value => serde_json::from_value(value).map_err(|e| format!("Invalid arguments: {}", e))?,
     };
 
-    if let Some(ref goal) = parsed.goal {
-        if goal.trim().is_empty() {
-            return Err("goal must not be empty".to_string());
-        }
+    if let Some(ref goal) = parsed.goal
+        && goal.trim().is_empty()
+    {
+        return Err("goal must not be empty".to_string());
     }
 
     if let Some(ref tasks) = parsed.tasks {

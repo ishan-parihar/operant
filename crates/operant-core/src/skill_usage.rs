@@ -303,6 +303,7 @@ pub(crate) fn with_exclusive_file_lock<T>(path: &Path, f: impl FnOnce() -> T) ->
     }
     match std::fs::OpenOptions::new()
         .create(true)
+        .truncate(true)
         .write(true)
         .open(&lock_path)
     {

@@ -457,27 +457,27 @@ impl OpenAIClient {
             request["temperature"] = json!(temperature);
         }
 
-        if let Some(tools) = tools {
-            if !tools.is_empty() {
-                let tools_array: Vec<Value> = tools
-                    .iter()
-                    .map(|t| {
-                        let mut params = t.parameters.clone();
-                        if let Some(obj) = params.as_object_mut() {
-                            Self::clean_schema(obj);
+        if let Some(tools) = tools
+            && !tools.is_empty()
+        {
+            let tools_array: Vec<Value> = tools
+                .iter()
+                .map(|t| {
+                    let mut params = t.parameters.clone();
+                    if let Some(obj) = params.as_object_mut() {
+                        Self::clean_schema(obj);
+                    }
+                    json!({
+                        "type": "function",
+                        "function": {
+                            "name": t.name,
+                            "description": t.description,
+                            "parameters": params
                         }
-                        json!({
-                            "type": "function",
-                            "function": {
-                                "name": t.name,
-                                "description": t.description,
-                                "parameters": params
-                            }
-                        })
                     })
-                    .collect();
-                request["tools"] = json!(tools_array);
-            }
+                })
+                .collect();
+            request["tools"] = json!(tools_array);
         }
 
         Ok(request)
@@ -696,11 +696,11 @@ impl Message {
         }
 
         // Include provider-specific extra content (e.g. Google Gemini thought_signature)
-        if let Some(ref extra) = self.extra_content {
-            if let Some(obj) = extra.as_object() {
-                for (k, v) in obj {
-                    map.insert(k.clone(), v.clone());
-                }
+        if let Some(ref extra) = self.extra_content
+            && let Some(obj) = extra.as_object()
+        {
+            for (k, v) in obj {
+                map.insert(k.clone(), v.clone());
             }
         }
 
@@ -934,10 +934,10 @@ fn parse_retry_after_from_body(body: &str) -> Option<Duration> {
     if let Some(seconds) = json.get("retry_after").and_then(|v| v.as_f64()) {
         return Some(Duration::from_secs_f64(seconds));
     }
-    if let Some(seconds_str) = json.get("retry_after").and_then(|v| v.as_str()) {
-        if let Ok(seconds) = seconds_str.parse::<f64>() {
-            return Some(Duration::from_secs_f64(seconds));
-        }
+    if let Some(seconds_str) = json.get("retry_after").and_then(|v| v.as_str())
+        && let Ok(seconds) = seconds_str.parse::<f64>()
+    {
+        return Some(Duration::from_secs_f64(seconds));
     }
     None
 }

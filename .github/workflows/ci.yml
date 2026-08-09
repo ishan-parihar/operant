@@ -46,12 +46,12 @@ jobs:
       - run: cargo doc --workspace --no-deps --all-features
 
   msrv:
-    name: MSRV Check (1.86)
+    name: MSRV Check (1.89)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: "1.86"
+          toolchain: "1.89"
       - uses: Swatinem/rust-cache@v2
       - run: cargo check --workspace

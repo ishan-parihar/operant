@@ -58,13 +58,14 @@ fn detect_shell_windows() -> ShellInfo {
 
 #[cfg(not(target_os = "windows"))]
 fn detect_shell_unix() -> ShellInfo {
-    if let Ok(shell) = env::var("SHELL") {
-        if !shell.is_empty() && which::which(&shell).is_ok() {
-            return ShellInfo {
-                path: PathBuf::from(shell),
-                args_pattern: vec!["-c".to_string()],
-            };
-        }
+    if let Ok(shell) = env::var("SHELL")
+        && !shell.is_empty()
+        && which::which(&shell).is_ok()
+    {
+        return ShellInfo {
+            path: PathBuf::from(shell),
+            args_pattern: vec!["-c".to_string()],
+        };
     }
     for candidate in &["bash", "sh"] {
         if which::which(candidate).is_ok() {
@@ -95,10 +96,10 @@ fn detect_shell_unix() -> ShellInfo {
 /// 1. `$HERMES_HOME` environment variable (if set and non-empty).
 /// 2. `~/.operant` on Unix, `%APPDATA%\operant` on Windows.
 pub fn operant_home() -> PathBuf {
-    if let Ok(val) = env::var("HERMES_HOME") {
-        if !val.is_empty() {
-            return PathBuf::from(val);
-        }
+    if let Ok(val) = env::var("HERMES_HOME")
+        && !val.is_empty()
+    {
+        return PathBuf::from(val);
     }
 
     #[cfg(target_os = "windows")]

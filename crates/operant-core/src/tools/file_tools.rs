@@ -298,15 +298,11 @@ impl OperantTool for FileWriteTool {
         };
 
         // Create parent directories if they don't exist
-        if let Some(parent) = path.parent() {
-            if !parent.exists() {
-                if let Err(e) = std::fs::create_dir_all(parent) {
-                    return ToolResult::error(
-                        "file_write",
-                        format!("Failed to create directory: {}", e),
-                    );
-                }
-            }
+        if let Some(parent) = path.parent()
+            && !parent.exists()
+            && let Err(e) = std::fs::create_dir_all(parent)
+        {
+            return ToolResult::error("file_write", format!("Failed to create directory: {}", e));
         }
 
         let result = if args.append.unwrap_or(false) {
@@ -418,28 +414,27 @@ impl OperantTool for FileSearchTool {
 
                 if path.is_dir() {
                     // Skip hidden directories and common non-relevant dirs
-                    if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                        if !name.starts_with('.')
-                            && name != "node_modules"
-                            && name != "target"
-                            && name != "__pycache__"
-                        {
-                            search_recursive(&path, re, results, max_results);
-                        }
+                    if let Some(name) = path.file_name().and_then(|n| n.to_str())
+                        && !name.starts_with('.')
+                        && name != "node_modules"
+                        && name != "target"
+                        && name != "__pycache__"
+                    {
+                        search_recursive(&path, re, results, max_results);
                     }
-                } else if path.is_file() {
-                    if let Ok(content) = std::fs::read_to_string(&path) {
-                        for (line_num, line) in content.lines().enumerate() {
-                            if re.is_match(line) {
-                                results.push(serde_json::json!({
-                                    "file": path.to_string_lossy(),
-                                    "line": line_num + 1,
-                                    "content": line
-                                }));
+                } else if path.is_file()
+                    && let Ok(content) = std::fs::read_to_string(&path)
+                {
+                    for (line_num, line) in content.lines().enumerate() {
+                        if re.is_match(line) {
+                            results.push(serde_json::json!({
+                                "file": path.to_string_lossy(),
+                                "line": line_num + 1,
+                                "content": line
+                            }));
 
-                                if results.len() >= max_results {
-                                    break;
-                                }
+                            if results.len() >= max_results {
+                                break;
                             }
                         }
                     }
@@ -721,6 +716,7 @@ mod tests {
         assert!(leftovers.is_empty(), "temp files leaked: {leftovers:?}");
     }
 
+    #[tokio::test]
     async fn test_file_write_missing_args() {
         let tool = FileWriteTool;
         let result = tool.execute(json!({}), ToolContext::default()).await;

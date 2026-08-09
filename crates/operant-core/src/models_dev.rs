@@ -76,31 +76,30 @@ pub async fn fetch_models_dev(
 ) -> Result<(Vec<serde_json::Value>, Vec<serde_json::Value>), String> {
     let cache_path = cache_path();
 
-    if !force_refresh {
-        if let Ok(content) = fs::read_to_string(&cache_path) {
-            if let Ok(cache) = serde_json::from_str::<ModelsDevCache>(&content) {
-                let age = now_secs() - cache.cached_at;
-                if age < CACHE_TTL_SECS {
-                    return Ok((cache.models, cache.providers));
+    if !force_refresh
+        && let Ok(content) = fs::read_to_string(&cache_path)
+        && let Ok(cache) = serde_json::from_str::<ModelsDevCache>(&content)
+    {
+        let age = now_secs() - cache.cached_at;
+        if age < CACHE_TTL_SECS {
+            return Ok((cache.models, cache.providers));
+        }
+        let stale = Some(cache);
+        match fetch_from_network().await {
+            Ok((models, providers)) => {
+                let new_cache = ModelsDevCache {
+                    models: models.clone(),
+                    providers: providers.clone(),
+                    cached_at: now_secs(),
+                };
+                if let Ok(json) = serde_json::to_string(&new_cache) {
+                    let _ = fs::write(&cache_path, json);
                 }
-                let stale = Some(cache);
-                match fetch_from_network().await {
-                    Ok((models, providers)) => {
-                        let new_cache = ModelsDevCache {
-                            models: models.clone(),
-                            providers: providers.clone(),
-                            cached_at: now_secs(),
-                        };
-                        if let Ok(json) = serde_json::to_string(&new_cache) {
-                            let _ = fs::write(&cache_path, json);
-                        }
-                        return Ok((models, providers));
-                    }
-                    Err(_) => {
-                        if let Some(stale) = stale {
-                            return Ok((stale.models, stale.providers));
-                        }
-                    }
+                return Ok((models, providers));
+            }
+            Err(_) => {
+                if let Some(stale) = stale {
+                    return Ok((stale.models, stale.providers));
                 }
             }
         }

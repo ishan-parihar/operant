@@ -620,15 +620,13 @@ fn handle_list_channels<'a>(
                 .get("parent_id")
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string());
-            if let Some(ref pid) = parent_id {
-                if categories.contains_key(pid) {
-                    if let Some(cat) = categories.get_mut(pid) {
-                        if let Some(arr) = cat.get_mut("channels").and_then(|a| a.as_array_mut()) {
-                            arr.push(entry);
-                            continue;
-                        }
-                    }
-                }
+            if let Some(ref pid) = parent_id
+                && categories.contains_key(pid)
+                && let Some(cat) = categories.get_mut(pid)
+                && let Some(arr) = cat.get_mut("channels").and_then(|a| a.as_array_mut())
+            {
+                arr.push(entry);
+                continue;
             }
             uncategorized.push(entry);
         }

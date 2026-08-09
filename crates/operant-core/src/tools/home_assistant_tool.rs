@@ -119,10 +119,10 @@ fn filter_and_summarize(states: &[Value], domain: Option<&str>, area: Option<&st
             let entity_id = s.get("entity_id").and_then(|v| v.as_str()).unwrap_or("");
 
             // Filter by domain prefix
-            if let Some(ref d) = domain_lower {
-                if !entity_id.starts_with(&format!("{}.", d)) {
-                    return false;
-                }
+            if let Some(ref d) = domain_lower
+                && !entity_id.starts_with(&format!("{}.", d))
+            {
+                return false;
             }
 
             // Filter by area (matches against friendly_name or attributes.area)
@@ -173,11 +173,11 @@ fn build_service_payload(entity_id: Option<&str>, data: Option<&Value>) -> Value
     let mut payload = serde_json::Map::new();
 
     // Merge data fields into payload
-    if let Some(data_val) = data {
-        if let Some(obj) = data_val.as_object() {
-            for (k, v) in obj {
-                payload.insert(k.clone(), v.clone());
-            }
+    if let Some(data_val) = data
+        && let Some(obj) = data_val.as_object()
+    {
+        for (k, v) in obj {
+            payload.insert(k.clone(), v.clone());
         }
     }
 
@@ -630,17 +630,17 @@ impl HomeAssistantTool {
 
         // Validate entity_id if provided
         let entity_id = args.get("entity_id").and_then(|v| v.as_str());
-        if let Some(eid) = entity_id {
-            if !ENTITY_ID_RE.is_match(eid) {
-                return ToolResult::error(
-                    "ha_call_service",
-                    format!(
-                        "Invalid entity_id format: '{}'. Expected format: 'domain.entity' \
+        if let Some(eid) = entity_id
+            && !ENTITY_ID_RE.is_match(eid)
+        {
+            return ToolResult::error(
+                "ha_call_service",
+                format!(
+                    "Invalid entity_id format: '{}'. Expected format: 'domain.entity' \
                          (e.g. 'light.living_room').",
-                        eid
-                    ),
-                );
-            }
+                    eid
+                ),
+            );
         }
 
         // Parse data from JSON string

@@ -545,10 +545,10 @@ impl CredentialPool {
                         error = %e,
                         "OAuth refresh failed, attempting sync from auth store"
                     );
-                    if let Some(synced) = refresher.sync_from_auth_store(&self.provider, cred) {
-                        if synced.value != cred.value {
-                            info!(provider = %self.provider, credential = %cred.name, "Adopted synced token from auth store");
-                        }
+                    if let Some(synced) = refresher.sync_from_auth_store(&self.provider, cred)
+                        && synced.value != cred.value
+                    {
+                        info!(provider = %self.provider, credential = %cred.name, "Adopted synced token from auth store");
                     }
                 }
             }
@@ -590,10 +590,10 @@ impl CredentialPool {
                         error = %e,
                         "OAuth refresh failed"
                     );
-                    if let Some(synced) = refresher.sync_from_auth_store(provider_type, cred) {
-                        if synced.value != cred.value {
-                            info!(provider = %self.provider, "Adopted synced token from auth store");
-                        }
+                    if let Some(synced) = refresher.sync_from_auth_store(provider_type, cred)
+                        && synced.value != cred.value
+                    {
+                        info!(provider = %self.provider, "Adopted synced token from auth store");
                     }
                 }
             }
@@ -717,11 +717,11 @@ impl CredentialPool {
                 let mut best = available_indices[0];
                 let mut best_count = u64::MAX;
                 for &idx in &available_indices {
-                    if let Some(cred) = inner.credentials.get(&inner.ordered_ids[idx]) {
-                        if cred.usage_count < best_count {
-                            best_count = cred.usage_count;
-                            best = idx;
-                        }
+                    if let Some(cred) = inner.credentials.get(&inner.ordered_ids[idx])
+                        && cred.usage_count < best_count
+                    {
+                        best_count = cred.usage_count;
+                        best = idx;
                     }
                 }
                 best

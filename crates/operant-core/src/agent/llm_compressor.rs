@@ -195,26 +195,25 @@ impl LlmCompressor {
         };
 
         // Load cooldown_until
-        if let Some(val) = db.get_session_metadata(&session_id, "compression_cooldown_until") {
-            if let Ok(ts) = val.parse::<f64>() {
-                self.cooldown_until = ts;
-                debug!(
-                    cooldown_until = ts,
-                    "Loaded compression cooldown from database"
-                );
-            }
+        if let Some(val) = db.get_session_metadata(&session_id, "compression_cooldown_until")
+            && let Ok(ts) = val.parse::<f64>()
+        {
+            self.cooldown_until = ts;
+            debug!(
+                cooldown_until = ts,
+                "Loaded compression cooldown from database"
+            );
         }
 
         // Load consecutive_failures
         if let Some(val) = db.get_session_metadata(&session_id, "compression_consecutive_failures")
+            && let Ok(count) = val.parse::<usize>()
         {
-            if let Ok(count) = val.parse::<usize>() {
-                self.consecutive_failures = count;
-                debug!(
-                    consecutive_failures = count,
-                    "Loaded compression failure count from database"
-                );
-            }
+            self.consecutive_failures = count;
+            debug!(
+                consecutive_failures = count,
+                "Loaded compression failure count from database"
+            );
         }
     }
 
@@ -417,11 +416,11 @@ impl LlmCompressor {
         info!(
             tokens_before,
             tokens_after,
-            saved_pct = if tokens_before > 0 {
-                ((tokens_before - tokens_after) * 100) / tokens_before
-            } else {
-                0
-            },
+            saved_pct = tokens_before
+                .checked_sub(tokens_after)
+                .and_then(|diff| diff.checked_mul(100))
+                .and_then(|n| n.checked_div(tokens_before))
+                .unwrap_or(0),
             turns_summarized,
             "LLM compression complete"
         );

@@ -276,10 +276,10 @@ impl ModelClient for FallbackModelClient {
             // Check for auth/billing errors → try provider fallback
             if let Err(ref e) = result {
                 let classified = Self::classify_error(e);
-                if classified.is_auth() || matches!(classified.reason, FailoverReason::Billing) {
-                    if let Some(provider_result) = self.try_next_provider_chat(&request).await {
-                        return provider_result;
-                    }
+                if (classified.is_auth() || matches!(classified.reason, FailoverReason::Billing))
+                    && let Some(provider_result) = self.try_next_provider_chat(&request).await
+                {
+                    return provider_result;
                 }
             }
             return result;
@@ -289,10 +289,10 @@ impl ModelClient for FallbackModelClient {
         // Check for auth/billing errors → try provider fallback
         if let Err(ref e) = result {
             let classified = Self::classify_error(e);
-            if classified.is_auth() || matches!(classified.reason, FailoverReason::Billing) {
-                if let Some(provider_result) = self.try_next_provider_chat(&request).await {
-                    return provider_result;
-                }
+            if (classified.is_auth() || matches!(classified.reason, FailoverReason::Billing))
+                && let Some(provider_result) = self.try_next_provider_chat(&request).await
+            {
+                return provider_result;
             }
         }
         result
@@ -306,11 +306,10 @@ impl ModelClient for FallbackModelClient {
             let result = self.inner.chat_streaming(request.clone()).await;
             if let Err(ref e) = result {
                 let classified = Self::classify_error(e);
-                if classified.is_auth() || matches!(classified.reason, FailoverReason::Billing) {
-                    if let Some(provider_result) = self.try_next_provider_streaming(&request).await
-                    {
-                        return provider_result;
-                    }
+                if (classified.is_auth() || matches!(classified.reason, FailoverReason::Billing))
+                    && let Some(provider_result) = self.try_next_provider_streaming(&request).await
+                {
+                    return provider_result;
                 }
             }
             return result;
@@ -321,10 +320,10 @@ impl ModelClient for FallbackModelClient {
             .await;
         if let Err(ref e) = result {
             let classified = Self::classify_error(e);
-            if classified.is_auth() || matches!(classified.reason, FailoverReason::Billing) {
-                if let Some(provider_result) = self.try_next_provider_streaming(&request).await {
-                    return provider_result;
-                }
+            if (classified.is_auth() || matches!(classified.reason, FailoverReason::Billing))
+                && let Some(provider_result) = self.try_next_provider_streaming(&request).await
+            {
+                return provider_result;
             }
         }
         result

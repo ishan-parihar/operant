@@ -57,23 +57,21 @@ const SUPPORTED_FORMATS: &[&str] = &[
 const MAX_FILE_SIZE: u64 = 25 * 1024 * 1024;
 
 fn get_groq_api_key(config: &Option<AppConfig>) -> Option<String> {
-    if let Some(cfg) = config {
-        if let Some(ref key) = cfg.tools.stt.groq_api_key {
-            if !key.is_empty() {
-                return Some(key.clone());
-            }
-        }
+    if let Some(cfg) = config
+        && let Some(ref key) = cfg.tools.stt.groq_api_key
+        && !key.is_empty()
+    {
+        return Some(key.clone());
     }
     std::env::var("GROQ_API_KEY").ok()
 }
 
 fn get_openai_api_key(config: &Option<AppConfig>) -> Option<String> {
-    if let Some(cfg) = config {
-        if let Some(ref key) = cfg.tools.stt.openai_api_key {
-            if !key.is_empty() {
-                return Some(key.clone());
-            }
-        }
+    if let Some(cfg) = config
+        && let Some(ref key) = cfg.tools.stt.openai_api_key
+        && !key.is_empty()
+    {
+        return Some(key.clone());
     }
     std::env::var("OPENAI_API_KEY")
         .or_else(|_| std::env::var("VOICE_TOOLS_OPENAI_KEY"))

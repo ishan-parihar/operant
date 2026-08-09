@@ -62,10 +62,9 @@ fn apply_cache_marker_envelope(msg: &mut Value, marker: &Value) {
         .get_mut("content")
         .and_then(|c| c.as_array_mut())
         .and_then(|a| a.last_mut())
+        && let Some(obj) = last.as_object_mut()
     {
-        if let Some(obj) = last.as_object_mut() {
-            obj.insert("cache_control".to_string(), marker.clone());
-        }
+        obj.insert("cache_control".to_string(), marker.clone());
     }
 }
 

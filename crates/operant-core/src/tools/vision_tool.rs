@@ -205,13 +205,12 @@ fn resize_image_for_vision(
         }
 
         for &q in &quality_steps {
-            if let Ok(encoded) = encode_image(&current, out_mime, q) {
-                if encoded.len() <= max_base64_bytes
-                    && current.width() <= max_dimension
-                    && current.height() <= max_dimension
-                {
-                    return Ok((encoded, out_mime.to_string()));
-                }
+            if let Ok(encoded) = encode_image(&current, out_mime, q)
+                && encoded.len() <= max_base64_bytes
+                && current.width() <= max_dimension
+                && current.height() <= max_dimension
+            {
+                return Ok((encoded, out_mime.to_string()));
             }
         }
     }
@@ -283,13 +282,13 @@ async fn download_image(url: &str) -> Result<Vec<u8>, String> {
         .map_err(|e| format!("Failed to download image: {}", e))?;
 
     // Check content length
-    if let Some(content_length) = response.content_length() {
-        if content_length > MAX_DOWNLOAD_SIZE_BYTES {
-            return Err(format!(
-                "Image too large: {} bytes (max {})",
-                content_length, MAX_DOWNLOAD_SIZE_BYTES
-            ));
-        }
+    if let Some(content_length) = response.content_length()
+        && content_length > MAX_DOWNLOAD_SIZE_BYTES
+    {
+        return Err(format!(
+            "Image too large: {} bytes (max {})",
+            content_length, MAX_DOWNLOAD_SIZE_BYTES
+        ));
     }
 
     let bytes = response

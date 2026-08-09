@@ -108,7 +108,7 @@ enabled = ["fs", "git", "web", "shell", "code", "notes"]
 
 ## Requirements
 
-- Rust 1.78+
+- Rust 1.89+
 - 4 GB RAM (8 GB recommended)
 - llama.cpp compatible model
 

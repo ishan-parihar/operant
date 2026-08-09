@@ -278,7 +278,7 @@ fn compute_model_breakdown(sessions: &[SessionRow]) -> Vec<ModelStats> {
         entry.estimated_cost_usd += estimate_session_cost(s);
     }
     let mut result: Vec<ModelStats> = map.into_values().collect();
-    result.sort_by(|a, b| b.total_tokens.cmp(&a.total_tokens));
+    result.sort_by_key(|a| std::cmp::Reverse(a.total_tokens));
     result
 }
 
@@ -299,7 +299,7 @@ fn compute_platform_breakdown(sessions: &[SessionRow]) -> Vec<PlatformStats> {
         entry.tokens += (s.input_tokens + s.output_tokens) as u64;
     }
     let mut result: Vec<PlatformStats> = map.into_values().collect();
-    result.sort_by(|a, b| b.sessions.cmp(&a.sessions));
+    result.sort_by_key(|a| std::cmp::Reverse(a.sessions));
     result
 }
 
@@ -508,14 +508,14 @@ fn compute_top_sessions(sessions: &[SessionRow]) -> Vec<SessionHighlight> {
             date: format_naive(s.started_dt()),
         });
     }
-    if let Some(s) = sessions.iter().max_by_key(|s| s.message_count) {
-        if s.message_count > 0 {
-            highlights.push(SessionHighlight {
-                label: "Most messages".to_string(),
-                value: format!("{} msgs", s.message_count),
-                date: format_naive(s.started_dt()),
-            });
-        }
+    if let Some(s) = sessions.iter().max_by_key(|s| s.message_count)
+        && s.message_count > 0
+    {
+        highlights.push(SessionHighlight {
+            label: "Most messages".to_string(),
+            value: format!("{} msgs", s.message_count),
+            date: format_naive(s.started_dt()),
+        });
     }
     if let Some(s) = sessions
         .iter()

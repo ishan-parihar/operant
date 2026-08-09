@@ -510,13 +510,13 @@ impl CronDb {
                     refs.insert(trimmed);
                 }
             }
-            if let Some(raw) = skills_raw {
-                if let Ok(list) = serde_json::from_str::<Vec<String>>(&raw) {
-                    for s in list {
-                        let trimmed = s.trim().to_string();
-                        if !trimmed.is_empty() {
-                            refs.insert(trimmed);
-                        }
+            if let Some(raw) = skills_raw
+                && let Ok(list) = serde_json::from_str::<Vec<String>>(&raw)
+            {
+                for s in list {
+                    let trimmed = s.trim().to_string();
+                    if !trimmed.is_empty() {
+                        refs.insert(trimmed);
                     }
                 }
             }

@@ -166,53 +166,53 @@ impl TtsTool {
         }
 
         // Plugin-registered providers (dispatched when name is not a built-in)
-        if !TtsPluginRegistry::is_builtin(provider) {
-            if let Some(plugin) = self.plugin_registry.get_provider(provider).await {
-                debug!(provider = %provider, "Dispatching to plugin provider");
-                let temp_dir = std::env::temp_dir();
-                let output_path = temp_dir.join("tts_plugin_output.mp3");
-                match plugin
-                    .synthesize(
-                        &args.text,
-                        output_path.to_str().unwrap_or("/tmp/tts_plugin_output.mp3"),
-                        Some(&args.voice),
-                        args.model.as_deref(),
-                        AudioFormat::Mp3,
-                    )
-                    .await
-                {
-                    Ok(result) => {
-                        let audio_bytes = match std::fs::read(&result.output_path) {
-                            Ok(b) => b,
-                            Err(e) => {
-                                return ToolResult::error(
-                                    "text_to_speech",
-                                    format!("Failed to read output: {}", e),
-                                );
-                            }
-                        };
-                        let audio_base64 = base64::Engine::encode(
-                            &base64::engine::general_purpose::STANDARD,
-                            &audio_bytes,
-                        );
-                        let _ = std::fs::remove_file(&result.output_path);
-                        return ToolResult::success(
-                            "text_to_speech",
-                            json!({
-                                "success": true,
-                                "audio": audio_base64,
-                                "format": result.format.to_string(),
-                                "provider": provider,
-                                "voice": args.voice
-                            }),
-                        );
-                    }
-                    Err(e) => {
-                        return ToolResult::error(
-                            "text_to_speech",
-                            format!("Plugin provider failed: {}", e),
-                        );
-                    }
+        if !TtsPluginRegistry::is_builtin(provider)
+            && let Some(plugin) = self.plugin_registry.get_provider(provider).await
+        {
+            debug!(provider = %provider, "Dispatching to plugin provider");
+            let temp_dir = std::env::temp_dir();
+            let output_path = temp_dir.join("tts_plugin_output.mp3");
+            match plugin
+                .synthesize(
+                    &args.text,
+                    output_path.to_str().unwrap_or("/tmp/tts_plugin_output.mp3"),
+                    Some(&args.voice),
+                    args.model.as_deref(),
+                    AudioFormat::Mp3,
+                )
+                .await
+            {
+                Ok(result) => {
+                    let audio_bytes = match std::fs::read(&result.output_path) {
+                        Ok(b) => b,
+                        Err(e) => {
+                            return ToolResult::error(
+                                "text_to_speech",
+                                format!("Failed to read output: {}", e),
+                            );
+                        }
+                    };
+                    let audio_base64 = base64::Engine::encode(
+                        &base64::engine::general_purpose::STANDARD,
+                        &audio_bytes,
+                    );
+                    let _ = std::fs::remove_file(&result.output_path);
+                    return ToolResult::success(
+                        "text_to_speech",
+                        json!({
+                            "success": true,
+                            "audio": audio_base64,
+                            "format": result.format.to_string(),
+                            "provider": provider,
+                            "voice": args.voice
+                        }),
+                    );
+                }
+                Err(e) => {
+                    return ToolResult::error(
+                        "text_to_speech",
+                        format!("Plugin provider failed: {}", e),
+                    );
                 }
             }
         }
@@ -1018,12 +1018,11 @@ impl OperantTool for TtsTool {
         if args.provider == default_provider() && cfg.tts.provider != default_provider() {
             args.provider = cfg.tts.provider.clone();
         }
-        if args.voice == default_voice() {
-            if let Some(ref v) = cfg.tts.voice {
-                if !v.is_empty() {
-                    args.voice = v.clone();
-                }
-            }
+        if args.voice == default_voice()
+            && let Some(ref v) = cfg.tts.voice
+            && !v.is_empty()
+        {
+            args.voice = v.clone();
         }
 
         self.generate_speech(&args).await

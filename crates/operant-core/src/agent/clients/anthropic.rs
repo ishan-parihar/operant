@@ -671,11 +671,9 @@ mod tests {
         ];
 
         for ev in &events {
-            if let Some(chunk) = parse_sse_event(ev, &mut map) {
-                if let Some(tcs) = chunk.tool_calls {
-                    for tc in tcs {
-                        merge_stream_tool_call(&mut tool_calls, tc);
-                    }
+            if let Some(tcs) = parse_sse_event(ev, &mut map).and_then(|chunk| chunk.tool_calls) {
+                for tc in tcs {
+                    merge_stream_tool_call(&mut tool_calls, tc);
                 }
             }
         }

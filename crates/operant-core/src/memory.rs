@@ -550,10 +550,10 @@ impl MemoryManager {
     pub async fn get_session_messages_by_id(&self, session_id: &str) -> Vec<Message> {
         // In a real implementation, this would load from persistent storage
         // For now, we only have the current session in memory
-        if let Some(current) = self.current_session.read().await.clone() {
-            if current == session_id {
-                return self.session_messages.read().await.clone();
-            }
+        if let Some(current) = self.current_session.read().await.clone()
+            && current == session_id
+        {
+            return self.session_messages.read().await.clone();
         }
         Vec::new()
     }

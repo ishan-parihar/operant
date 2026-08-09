@@ -407,23 +407,23 @@ impl SelfEvolutionState {
     /// Keys: `evo_turns_since_memory`, `evo_iters_since_skill`.
     /// Missing keys are treated as 0 (first run of a session).
     pub fn hydrate_from_metadata(&mut self, metadata: &std::collections::HashMap<String, String>) {
-        if let Some(val) = metadata.get("evo_turns_since_memory") {
-            if let Ok(n) = val.parse::<usize>() {
-                self.turns_since_memory_review = n;
-                debug!(
-                    turns = n,
-                    "Hydrated memory review counter from persisted session"
-                );
-            }
+        if let Some(val) = metadata.get("evo_turns_since_memory")
+            && let Ok(n) = val.parse::<usize>()
+        {
+            self.turns_since_memory_review = n;
+            debug!(
+                turns = n,
+                "Hydrated memory review counter from persisted session"
+            );
         }
-        if let Some(val) = metadata.get("evo_iters_since_skill") {
-            if let Ok(n) = val.parse::<usize>() {
-                self.iters_since_skill = n;
-                debug!(
-                    iters = n,
-                    "Hydrated skill nudge counter from persisted session"
-                );
-            }
+        if let Some(val) = metadata.get("evo_iters_since_skill")
+            && let Ok(n) = val.parse::<usize>()
+        {
+            self.iters_since_skill = n;
+            debug!(
+                iters = n,
+                "Hydrated skill nudge counter from persisted session"
+            );
         }
     }
 

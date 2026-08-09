@@ -87,25 +87,25 @@ impl KanbanManager {
             for entry in entries.flatten() {
                 let name = entry.file_name();
                 let name_str = name.to_string_lossy();
-                if name_str.starts_with("operant_kanban_") && name_str.ends_with(".db") {
-                    if let Some(slug) = name_str
+                if name_str.starts_with("operant_kanban_")
+                    && name_str.ends_with(".db")
+                    && let Some(slug) = name_str
                         .strip_prefix("operant_kanban_")
                         .and_then(|s| s.strip_suffix(".db"))
-                    {
-                        if slug == "default" {
-                            continue;
-                        }
-                        let path = entry.path();
-                        let count = match KanbanDb::init(path) {
-                            Ok(db) => db.list_tasks().unwrap_or_default().len(),
-                            Err(_) => 0,
-                        };
-                        boards.push(BoardInfo {
-                            slug: slug.to_string(),
-                            task_count: count,
-                            exists: true,
-                        });
+                {
+                    if slug == "default" {
+                        continue;
                     }
+                    let path = entry.path();
+                    let count = match KanbanDb::init(path) {
+                        Ok(db) => db.list_tasks().unwrap_or_default().len(),
+                        Err(_) => 0,
+                    };
+                    boards.push(BoardInfo {
+                        slug: slug.to_string(),
+                        task_count: count,
+                        exists: true,
+                    });
                 }
             }
         }

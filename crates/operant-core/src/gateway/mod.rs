@@ -1440,14 +1440,12 @@ impl PlatformAdapter for TelegramAdapter {
                     }))
                     .send()
                     .await
+                    && let Ok(data) = resp.json::<serde_json::Value>().await
+                    && let Some(updates) = data["result"].as_array()
                 {
-                    if let Ok(data) = resp.json::<serde_json::Value>().await {
-                        if let Some(updates) = data["result"].as_array() {
-                            for update in updates {
-                                if let Some(update_id) = update["update_id"].as_i64() {
-                                    offset = update_id + 1;
-                                }
-                            }
+                    for update in updates {
+                        if let Some(update_id) = update["update_id"].as_i64() {
+                            offset = update_id + 1;
                         }
                     }
                 }
@@ -1455,14 +1453,12 @@ impl PlatformAdapter for TelegramAdapter {
 
                 // === LOAD SAVED OFFSET (persist across restarts) ===
                 let offset_path = get_offset_path();
-                if offset_path.exists() {
-                    if let Ok(saved) = tokio::fs::read_to_string(&offset_path).await {
-                        if let Ok(n) = saved.trim().parse::<i64>() {
-                            if n > offset {
-                                offset = n;
-                            }
-                        }
-                    }
+                if offset_path.exists()
+                    && let Ok(saved) = tokio::fs::read_to_string(&offset_path).await
+                    && let Ok(n) = saved.trim().parse::<i64>()
+                    && n > offset
+                {
+                    offset = n;
                 }
                 tracing::info!("Loaded saved offset: {}", offset);
 
@@ -1512,37 +1508,37 @@ impl PlatformAdapter for TelegramAdapter {
                             // Any other successful HTTP response resets the retry delay.
                             retry_delay = 1;
 
-                            if let Ok(data) = resp.json::<serde_json::Value>().await {
-                                if let Some(updates) = data["result"].as_array() {
-                                    had_updates = !updates.is_empty();
-                                    if had_updates {
-                                        tracing::info!(
-                                            "Received {} update(s) from Telegram",
-                                            updates.len()
-                                        );
-                                        last_heartbeat = Instant::now();
+                            if let Ok(data) = resp.json::<serde_json::Value>().await
+                                && let Some(updates) = data["result"].as_array()
+                            {
+                                had_updates = !updates.is_empty();
+                                if had_updates {
+                                    tracing::info!(
+                                        "Received {} update(s) from Telegram",
+                                        updates.len()
+                                    );
+                                    last_heartbeat = Instant::now();
+                                }
+                                for update in updates {
+                                    if let Some(update_id) = update["update_id"].as_i64() {
+                                        offset = update_id + 1;
                                     }
-                                    for update in updates {
-                                        if let Some(update_id) = update["update_id"].as_i64() {
-                                            offset = update_id + 1;
-                                        }
-                                        if let Ok(Some(msg)) =
-                                            TelegramAdapter::parse_update(update.clone())
-                                        {
-                                            tracing::info!(
-                                                "Sent message to gateway handler (chat: {}, content: {:.50})",
-                                                msg.channel_id,
-                                                msg.content
+                                    if let Ok(Some(msg)) =
+                                        TelegramAdapter::parse_update(update.clone())
+                                    {
+                                        tracing::info!(
+                                            "Sent message to gateway handler (chat: {}, content: {:.50})",
+                                            msg.channel_id,
+                                            msg.content
+                                        );
+                                        if let Err(e) = message_tx.send(msg) {
+                                            tracing::error!(
+                                                "Failed to send message to gateway handler: {}",
+                                                e
                                             );
-                                            if let Err(e) = message_tx.send(msg) {
-                                                tracing::error!(
-                                                    "Failed to send message to gateway handler: {}",
-                                                    e
-                                                );
-                                                // Receiver dropped — likely shutting down.
-                                                running.store(false, Ordering::SeqCst);
-                                                break;
-                                            }
+                                            // Receiver dropped — likely shutting down.
+                                            running.store(false, Ordering::SeqCst);
+                                            break;
                                         }
                                     }
                                 }
@@ -1638,14 +1634,13 @@ impl TelegramAdapter {
         };
 
         // Filter out messages from bots
-        if let Some(from) = message.get("from") {
-            if from
+        if let Some(from) = message.get("from")
+            && from
                 .get("is_bot")
                 .and_then(|b| b.as_bool())
                 .unwrap_or(false)
-            {
-                return Ok(None);
-            }
+        {
+            return Ok(None);
         }
 
         let chat = match message.get("chat") {
@@ -2129,12 +2124,11 @@ async fn connect_discord_gateway(
                             info!(bot = %bot_user, "Discord gateway: READY");
                         } else if event_type == "MESSAGE_CREATE" {
                             // Forward to the gateway runner.
-                            if let Some(incoming) = parse_discord_message(&json, api_url) {
-                                if message_tx.send(incoming).is_err() {
+                            if let Some(incoming) = parse_discord_message(&json, api_url)
+                                && message_tx.send(incoming).is_err() {
                                     info!("Discord WS: message channel closed, exiting");
                                     return Ok(());
                                 }
-                            }
                         }
                     }
                     11 => {
@@ -2528,8 +2522,8 @@ impl PlatformAdapter for WebhookAdapter {
                         // is JSON; WhatsApp handshake is GET with query params).
                         if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&body) {
                             // Slack url_verification
-                            if v.get("type").and_then(|t| t.as_str()) == Some("url_verification") {
-                                if let Some(challenge) = v.get("challenge").and_then(|c| c.as_str()) {
+                            if v.get("type").and_then(|t| t.as_str()) == Some("url_verification")
+                                && let Some(challenge) = v.get("challenge").and_then(|c| c.as_str()) {
                                     debug!("Slack url_verification challenge — responding with challenge token");
                                     return (
                                         axum::http::StatusCode::OK,
@@ -2537,7 +2531,6 @@ impl PlatformAdapter for WebhookAdapter {
                                         challenge.to_string(),
                                     ).into_response();
                                 }
-                            }
                         }
 
                         // Validate HMAC signature if secret is configured.
@@ -2670,9 +2663,9 @@ impl PlatformAdapter for WebhookAdapter {
                         // generic "webhook" platform.
                         if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&body) {
                             // Slack event_callback forwarding.
-                            if v.get("type").and_then(|t| t.as_str()) == Some("event_callback") {
-                                if let Some(event) = v.get("event") {
-                                    if event.get("type").and_then(|t| t.as_str()) == Some("message") {
+                            if v.get("type").and_then(|t| t.as_str()) == Some("event_callback")
+                                && let Some(event) = v.get("event")
+                                    && event.get("type").and_then(|t| t.as_str()) == Some("message") {
                                         // Skip bot messages (prevents echo loops).
                                         let is_bot = event
                                             .get("bot_id")
@@ -2705,14 +2698,12 @@ impl PlatformAdapter for WebhookAdapter {
                                         // Always 200 OK to Slack — otherwise it retries.
                                         return (axum::http::StatusCode::OK, "ok").into_response();
                                     }
-                                }
-                            }
 
                             // WhatsApp Cloud API event forwarding. Meta sends
                             // `{"entry":[{"changes":[{"value":{"messages":[{"from":"...","text":{"body":"..."}}]}}]}]}`.
-                            if let Some(entry) = v.get("entry").and_then(|e| e.as_array()).and_then(|a| a.first()) {
-                                if let Some(change) = entry.get("changes").and_then(|c| c.as_array()).and_then(|a| a.first()) {
-                                    if let Some(messages) = change.get("value").and_then(|val| val.get("messages")).and_then(|m| m.as_array()) {
+                            if let Some(entry) = v.get("entry").and_then(|e| e.as_array()).and_then(|a| a.first())
+                                && let Some(change) = entry.get("changes").and_then(|c| c.as_array()).and_then(|a| a.first())
+                                    && let Some(messages) = change.get("value").and_then(|val| val.get("messages")).and_then(|m| m.as_array()) {
                                         for msg in messages {
                                             let from = msg.get("from").and_then(|f| f.as_str()).unwrap_or("").to_string();
                                             let text = msg.get("text").and_then(|t| t.get("body")).and_then(|b| b.as_str()).unwrap_or("").to_string();
@@ -2733,8 +2724,6 @@ impl PlatformAdapter for WebhookAdapter {
                                         }
                                         return (axum::http::StatusCode::OK, "ok").into_response();
                                     }
-                                }
-                            }
                         }
 
                         let content = if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&body) {
@@ -2911,32 +2900,30 @@ impl PlatformAdapter for WhatsAppAdapter {
 
     async fn handle_update(&self, update: serde_json::Value) -> Result<Option<IncomingMessage>> {
         // Parse WhatsApp webhook payload
-        if let Some(entry) = update["entry"].as_array().and_then(|e| e.first()) {
-            if let Some(change) = entry["changes"].as_array().and_then(|c| c.first()) {
-                if let Some(msg) = change["value"]["messages"]
-                    .as_array()
-                    .and_then(|m| m.first())
-                {
-                    let from = msg["from"].as_str().unwrap_or("");
-                    let text = msg["text"]["body"].as_str().unwrap_or("");
-                    let name = change["value"]["contacts"][0]["profile"]["name"]
-                        .as_str()
-                        .unwrap_or("WhatsApp User");
+        if let Some(entry) = update["entry"].as_array().and_then(|e| e.first())
+            && let Some(change) = entry["changes"].as_array().and_then(|c| c.first())
+            && let Some(msg) = change["value"]["messages"]
+                .as_array()
+                .and_then(|m| m.first())
+        {
+            let from = msg["from"].as_str().unwrap_or("");
+            let text = msg["text"]["body"].as_str().unwrap_or("");
+            let name = change["value"]["contacts"][0]["profile"]["name"]
+                .as_str()
+                .unwrap_or("WhatsApp User");
 
-                    return Ok(Some(IncomingMessage {
-                        platform: "whatsapp".to_string(),
-                        channel_id: from.to_string(),
-                        user_id: from.to_string(),
-                        username: name.to_string(),
-                        content: text.to_string(),
-                        is_group_chat: false,
-                        timestamp: chrono::Utc::now().timestamp(),
-                        thread_id: None,
+            return Ok(Some(IncomingMessage {
+                platform: "whatsapp".to_string(),
+                channel_id: from.to_string(),
+                user_id: from.to_string(),
+                username: name.to_string(),
+                content: text.to_string(),
+                is_group_chat: false,
+                timestamp: chrono::Utc::now().timestamp(),
+                thread_id: None,
 
-                        raw: update,
-                    }));
-                }
-            }
+                raw: update,
+            }));
         }
         Ok(None)
     }
@@ -3908,7 +3895,7 @@ mod tests {
         // The server binds inside a spawned task — wait until it accepts.
         for _ in 0..50 {
             if client
-                .get(&url.replace("/webhook/r14", "/health"))
+                .get(url.replace("/webhook/r14", "/health"))
                 .send()
                 .await
                 .is_ok()

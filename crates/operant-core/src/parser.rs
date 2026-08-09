@@ -145,12 +145,13 @@ impl ToolCallParser {
 
                     // INCREMENTAL DETECTION: Try to extract a tool call even without tags
                     // Optimization: Only check at potential JSON boundaries or significant length
-                    if self.buffer.len() > 10 && (ch == '}' || ch == '\n' || ch == ' ') {
-                        if let Some(tool_call) = self.try_parse_tool_call(&self.buffer) {
-                            events.push(ParserEvent::ToolCall(tool_call));
-                            // Clear buffer after successful detection to prevent partial/duplicate matches
-                            self.buffer.clear();
-                        }
+                    if self.buffer.len() > 10
+                        && (ch == '}' || ch == '\n' || ch == ' ')
+                        && let Some(tool_call) = self.try_parse_tool_call(&self.buffer)
+                    {
+                        events.push(ParserEvent::ToolCall(tool_call));
+                        // Clear buffer after successful detection to prevent partial/duplicate matches
+                        self.buffer.clear();
                     }
                 }
             }
@@ -283,10 +284,10 @@ impl ToolCallParser {
     /// Try to parse tool call using robust extraction
     fn try_parse_tool_call(&self, content: &str) -> Option<ToolCall> {
         // First try standard JSON parsing
-        if let Ok(parsed) = serde_json::from_str::<Value>(content) {
-            if let Some(tc) = self.extract_tool_call_from_json(&parsed) {
-                return Some(tc);
-            }
+        if let Ok(parsed) = serde_json::from_str::<Value>(content)
+            && let Some(tc) = self.extract_tool_call_from_json(&parsed)
+        {
+            return Some(tc);
         }
 
         // Look for JSON object candidates
@@ -310,18 +311,16 @@ impl ToolCallParser {
                     }
                     depth += 1;
                 }
-                '}' if !in_string => {
-                    if depth > 0 {
-                        depth -= 1;
-                        if depth == 0 {
-                            if let Some(start) = start_index {
-                                let potential_json = &content[start..i + 1];
-                                if let Ok(parsed) = serde_json::from_str::<Value>(potential_json) {
-                                    if let Some(tc) = self.extract_tool_call_from_json(&parsed) {
-                                        return Some(tc);
-                                    }
-                                }
-                            }
+                '}' if !in_string && depth > 0 => {
+                    depth -= 1;
+                    if depth == 0
+                        && let Some(start) = start_index
+                    {
+                        let potential_json = &content[start..i + 1];
+                        if let Ok(parsed) = serde_json::from_str::<Value>(potential_json)
+                            && let Some(tc) = self.extract_tool_call_from_json(&parsed)
+                        {
+                            return Some(tc);
                         }
                     }
                 }
@@ -330,28 +329,28 @@ impl ToolCallParser {
         }
 
         // Handle partial/unclosed JSON if we have a start_index and depth > 0
-        if let Some(start) = start_index {
-            if depth > 0 {
-                let partial = &content[start..];
-                // Try to "close" it by adding enough }
-                let mut closed = partial.to_string();
-                if in_string {
-                    closed.push('"');
-                }
-                for _ in 0..depth {
-                    closed.push('}');
-                }
+        if let Some(start) = start_index
+            && depth > 0
+        {
+            let partial = &content[start..];
+            // Try to "close" it by adding enough }
+            let mut closed = partial.to_string();
+            if in_string {
+                closed.push('"');
+            }
+            for _ in 0..depth {
+                closed.push('}');
+            }
 
-                if let Ok(parsed) = serde_json::from_str::<Value>(&closed) {
-                    if let Some(tc) = self.extract_tool_call_from_json(&parsed) {
-                        return Some(tc);
-                    }
-                }
+            if let Ok(parsed) = serde_json::from_str::<Value>(&closed)
+                && let Some(tc) = self.extract_tool_call_from_json(&parsed)
+            {
+                return Some(tc);
+            }
 
-                // If closing braces didn't work, try more aggressive partial extraction
-                if let Some(tc) = self.aggressive_parse(partial) {
-                    return Some(tc);
-                }
+            // If closing braces didn't work, try more aggressive partial extraction
+            if let Some(tc) = self.aggressive_parse(partial) {
+                return Some(tc);
             }
         }
 

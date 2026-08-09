@@ -168,13 +168,13 @@ pub fn file_mutation_verifier_footer(messages: &[Message]) -> Option<String> {
 
     for msg in messages {
         // Collect tool call IDs from assistant messages that invoked file mutations
-        if msg.role == Role::Assistant {
-            if let Some(ref tool_calls) = msg.tool_calls {
-                for tc in tool_calls {
-                    let name = tc.function.name.to_lowercase();
-                    if name == "write_file" || name == "patch" || name == "create_file" {
-                        file_mutation_call_ids.insert(tc.id.clone());
-                    }
+        if msg.role == Role::Assistant
+            && let Some(ref tool_calls) = msg.tool_calls
+        {
+            for tc in tool_calls {
+                let name = tc.function.name.to_lowercase();
+                if name == "write_file" || name == "patch" || name == "create_file" {
+                    file_mutation_call_ids.insert(tc.id.clone());
                 }
             }
         }
@@ -331,22 +331,6 @@ pub fn advance_memory_trigger(evo: &mut SelfEvolutionState) -> EvolutionTriggerR
         should_review_memory,
         iters_since_skill: evo.iters_since_skill,
         turns_since_memory: turns_at_fire,
-    }
-}
-
-/// Check and advance evolution counters after a completed turn.
-#[cfg(test)]
-pub fn check_and_advance_evolution_triggers(
-    evo: &mut SelfEvolutionState,
-    skill_manage_called: bool,
-) -> EvolutionTriggerResult {
-    let skill = advance_skill_trigger(evo, skill_manage_called);
-    let memory = advance_memory_trigger(evo);
-    EvolutionTriggerResult {
-        should_review_skills: skill.should_review_skills,
-        should_review_memory: memory.should_review_memory,
-        iters_since_skill: skill.iters_since_skill,
-        turns_since_memory: memory.turns_since_memory,
     }
 }
 

@@ -877,11 +877,10 @@ impl OAuthProvider {
                     if let Ok(json) = resp.json::<serde_json::Value>().await {
                         if let Some(servers) =
                             json.get("authorization_servers").and_then(|v| v.as_array())
+                            && let Some(first) = servers.first().and_then(|v| v.as_str())
                         {
-                            if let Some(first) = servers.first().and_then(|v| v.as_str()) {
-                                auth_server_url = Some(first.to_string());
-                                debug!("MCP OAuth: PRM discovered auth_server={}", first);
-                            }
+                            auth_server_url = Some(first.to_string());
+                            debug!("MCP OAuth: PRM discovered auth_server={}", first);
                         }
                         // Also look for token_endpoint directly in PRM
                         if let Some(token_endpoint) =
@@ -1365,10 +1364,10 @@ impl OAuthProvider {
             .ok_or_else(|| OAuthError::AuthFailed("No authorization code received".to_string()))?;
 
         // Verify state
-        if let Some(returned_state) = result.state {
-            if returned_state != state {
-                warn!("MCP OAuth: state mismatch (possible CSRF)");
-            }
+        if let Some(returned_state) = result.state
+            && returned_state != state
+        {
+            warn!("MCP OAuth: state mismatch (possible CSRF)");
         }
 
         // Step 7: Exchange code for tokens
@@ -1391,10 +1390,10 @@ impl OAuthProvider {
         // Check cache
         {
             let cached = self.token.read().await;
-            if let Some(token) = cached.as_ref() {
-                if token.is_valid() {
-                    return Ok(token.clone());
-                }
+            if let Some(token) = cached.as_ref()
+                && token.is_valid()
+            {
+                return Ok(token.clone());
             }
         }
 
@@ -1422,19 +1421,19 @@ impl OAuthProvider {
 
     /// Load cached metadata from disk into memory.
     pub async fn load_cached_metadata(&self) {
-        if self.metadata.read().await.is_none() {
-            if let Some(meta) = self.storage.load_metadata() {
-                *self.metadata.write().await = Some(meta);
-            }
+        if self.metadata.read().await.is_none()
+            && let Some(meta) = self.storage.load_metadata()
+        {
+            *self.metadata.write().await = Some(meta);
         }
     }
 
     /// Load cached client info from disk into memory.
     pub async fn load_cached_client_info(&self) {
-        if self.client_info.read().await.is_none() {
-            if let Some(info) = self.storage.get_client_info().await {
-                *self.client_info.write().await = Some(info);
-            }
+        if self.client_info.read().await.is_none()
+            && let Some(info) = self.storage.get_client_info().await
+        {
+            *self.client_info.write().await = Some(info);
         }
     }
 }
@@ -1505,12 +1504,12 @@ impl OAuthManager {
             .expect("entries mutex poisoned — programmer error");
         let url = server_url.to_string();
 
-        if let Some(entry) = entries.get(&url) {
-            if entry.server_url == url {
-                let guard = entry.provider.blocking_read();
-                if let Some(ref provider) = *guard {
-                    return provider.clone();
-                }
+        if let Some(entry) = entries.get(&url)
+            && entry.server_url == url
+        {
+            let guard = entry.provider.blocking_read();
+            if let Some(ref provider) = *guard {
+                return provider.clone();
             }
         }
 

@@ -563,27 +563,27 @@ impl OperantAgent {
 
         // First pass: collect all tool_call_ids that have a matching tool-result message.
         for msg in conv.iter() {
-            if msg.role == Role::Tool {
-                if let Some(ref id) = msg.tool_call_id {
-                    completed_ids.insert(id.clone());
-                }
+            if msg.role == Role::Tool
+                && let Some(ref id) = msg.tool_call_id
+            {
+                completed_ids.insert(id.clone());
             }
         }
 
         // Second pass: find assistant messages with tool_calls for subagent tools.
         for msg in conv.iter() {
-            if msg.role == Role::Assistant {
-                if let Some(ref tool_calls) = msg.tool_calls {
-                    for tc in tool_calls {
-                        let name = &tc.function.name;
-                        if name == "delegate_task" || name == "spawn_subagent" {
-                            let status = if completed_ids.contains(&tc.id) {
-                                "done".to_string()
-                            } else {
-                                "running".to_string()
-                            };
-                            result.push((tc.id.clone(), status));
-                        }
+            if msg.role == Role::Assistant
+                && let Some(ref tool_calls) = msg.tool_calls
+            {
+                for tc in tool_calls {
+                    let name = &tc.function.name;
+                    if name == "delegate_task" || name == "spawn_subagent" {
+                        let status = if completed_ids.contains(&tc.id) {
+                            "done".to_string()
+                        } else {
+                            "running".to_string()
+                        };
+                        result.push((tc.id.clone(), status));
                     }
                 }
             }
@@ -1451,10 +1451,10 @@ impl OperantAgent {
                         assistant_msg = assistant_msg.with_tool_calls(tool_calls.clone());
                     }
                     // Attach provider-specific extra content (e.g. Gemini thought_signature)
-                    if let Some(ref extra) = stream_extra_content {
-                        if !extra.is_null() {
-                            assistant_msg = assistant_msg.with_extra_content(extra.clone());
-                        }
+                    if let Some(ref extra) = stream_extra_content
+                        && !extra.is_null()
+                    {
+                        assistant_msg = assistant_msg.with_extra_content(extra.clone());
                     }
 
                     messages.push(assistant_msg.clone());
@@ -1667,29 +1667,22 @@ impl OperantAgent {
                             && (result.name == "write_file"
                                 || result.name == "patch"
                                 || result.name == "create_file")
+                            && let Some(args_str) = call_args.get(&result.tool_call_id)
+                            && let Ok(args_val) =
+                                serde_json::from_str::<serde_json::Value>(args_str)
                         {
-                            if let Some(args_str) = call_args.get(&result.tool_call_id) {
-                                if let Ok(args_val) =
-                                    serde_json::from_str::<serde_json::Value>(args_str)
-                                {
-                                    let path = args_val
-                                        .get("path")
-                                        .or_else(|| args_val.get("file_path"))
-                                        .and_then(|v| v.as_str())
-                                        .unwrap_or("");
-                                    // Only mirror writes to memory-related files
-                                    let is_memory = path.ends_with("MEMORY.md")
-                                        || path.ends_with("USER.md")
-                                        || path.contains("/MEMORY.")
-                                        || path.contains("/USER.");
-                                    if is_memory {
-                                        self.notify_memory_write(
-                                            &result.name,
-                                            path,
-                                            &result.content,
-                                        );
-                                    }
-                                }
+                            let path = args_val
+                                .get("path")
+                                .or_else(|| args_val.get("file_path"))
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("");
+                            // Only mirror writes to memory-related files
+                            let is_memory = path.ends_with("MEMORY.md")
+                                || path.ends_with("USER.md")
+                                || path.contains("/MEMORY.")
+                                || path.contains("/USER.");
+                            if is_memory {
+                                self.notify_memory_write(&result.name, path, &result.content);
                             }
                         }
 
@@ -2630,10 +2623,10 @@ If nothing needs updating, say 'Nothing to save.' and stop.\n\n{}",
             // bind_persistence is idempotent and loads existing cooldown from DB.
             {
                 let mut guard = compressor.lock().await;
-                if guard.session_id().is_none() {
-                    if let Some(session_id) = self.persistent_session_id.as_ref() {
-                        guard.bind_persistence(Arc::clone(&self.database), session_id.clone());
-                    }
+                if guard.session_id().is_none()
+                    && let Some(session_id) = self.persistent_session_id.as_ref()
+                {
+                    guard.bind_persistence(Arc::clone(&self.database), session_id.clone());
                 }
             }
 
@@ -2742,10 +2735,10 @@ If nothing needs updating, say 'Nothing to save.' and stop.\n\n{}",
         })
         .await;
 
-        if let Some(cost) = cost_usd {
-            if let Ok(mut total) = self.session_cost_usd.write() {
-                *total += cost;
-            }
+        if let Some(cost) = cost_usd
+            && let Ok(mut total) = self.session_cost_usd.write()
+        {
+            *total += cost;
         }
     }
 
@@ -2806,10 +2799,10 @@ If nothing needs updating, say 'Nothing to save.' and stop.\n\n{}",
                     }
 
                     // Capture provider-specific extra content (e.g. Gemini thought_signature)
-                    if let Some(ref extra) = chunk.extra_content {
-                        if !extra.is_null() {
-                            accumulated_extra = Some(extra.clone());
-                        }
+                    if let Some(ref extra) = chunk.extra_content
+                        && !extra.is_null()
+                    {
+                        accumulated_extra = Some(extra.clone());
                     }
 
                     // Process content from StreamChunk
@@ -3527,34 +3520,34 @@ fn truncate_tool_result(tool_name: &str, content: &str) -> String {
         return content.to_string();
     }
     // Try to parse as JSON and strip large fields
-    if let Ok(mut val) = serde_json::from_str::<serde_json::Value>(content) {
-        if let Some(obj) = val.as_object_mut() {
-            // Remove known large fields
-            let had_audio = obj.remove("audio").is_some();
-            let had_data = obj.remove("data").is_some();
-            if had_audio {
-                obj.insert(
-                    "audio".to_string(),
-                    serde_json::json!("[audio data delivered to user]"),
-                );
-            }
-            if had_data {
-                obj.insert(
-                    "data".to_string(),
-                    serde_json::json!("[large data truncated]"),
-                );
-            }
-            let serialized = serde_json::to_string(&val).unwrap_or_default();
-            if serialized.len() <= MAX_TOOL_RESULT_LEN {
-                return serialized;
-            }
-            // Serialized JSON is still too long — fall through to safe truncate
-            return format!(
-                "{}... [truncated, tool: {}]",
-                safe_truncate_str(&serialized, MAX_TOOL_RESULT_LEN),
-                tool_name
+    if let Ok(mut val) = serde_json::from_str::<serde_json::Value>(content)
+        && let Some(obj) = val.as_object_mut()
+    {
+        // Remove known large fields
+        let had_audio = obj.remove("audio").is_some();
+        let had_data = obj.remove("data").is_some();
+        if had_audio {
+            obj.insert(
+                "audio".to_string(),
+                serde_json::json!("[audio data delivered to user]"),
             );
         }
+        if had_data {
+            obj.insert(
+                "data".to_string(),
+                serde_json::json!("[large data truncated]"),
+            );
+        }
+        let serialized = serde_json::to_string(&val).unwrap_or_default();
+        if serialized.len() <= MAX_TOOL_RESULT_LEN {
+            return serialized;
+        }
+        // Serialized JSON is still too long — fall through to safe truncate
+        return format!(
+            "{}... [truncated, tool: {}]",
+            safe_truncate_str(&serialized, MAX_TOOL_RESULT_LEN),
+            tool_name
+        );
     }
     // Fallback: hard truncate (char-boundary-safe to avoid panic on CJK/emoji)
     format!(

@@ -55,10 +55,10 @@ pub fn get_operant_home() -> PathBuf {
     }
 
     // 2. Check environment variable
-    if let Ok(val) = std::env::var("HERMES_HOME") {
-        if !val.is_empty() {
-            return PathBuf::from(val);
-        }
+    if let Ok(val) = std::env::var("HERMES_HOME")
+        && !val.is_empty()
+    {
+        return PathBuf::from(val);
     }
 
     // 3. Default
@@ -85,10 +85,9 @@ pub fn get_default_operant_root() -> PathBuf {
     // Check if HERMES_HOME is under ~/.operant (normal or profile mode)
     if let (Ok(env_resolved), Ok(native_resolved)) =
         (env_path.canonicalize(), native_home.canonicalize())
+        && env_resolved.starts_with(&native_resolved)
     {
-        if env_resolved.starts_with(&native_resolved) {
-            return native_home;
-        }
+        return native_home;
     }
 
     // Docker / custom deployment: check if this is a profile path

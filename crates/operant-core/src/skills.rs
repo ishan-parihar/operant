@@ -243,14 +243,12 @@ fn load_skill(skill_dir: &Path) -> Result<Skill> {
     if let Ok(entries) = std::fs::read_dir(skill_dir) {
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.is_file() {
-                if let Some(fname) = path.file_name().and_then(|n| n.to_str()) {
-                    if fname != "SKILL.md" {
-                        if let Ok(content) = std::fs::read_to_string(&path) {
-                            references.insert(fname.to_string(), content);
-                        }
-                    }
-                }
+            if path.is_file()
+                && let Some(fname) = path.file_name().and_then(|n| n.to_str())
+                && fname != "SKILL.md"
+                && let Ok(content) = std::fs::read_to_string(&path)
+            {
+                references.insert(fname.to_string(), content);
             }
         }
     }
@@ -274,21 +272,21 @@ fn extract_metadata_extras(fm: &SkillFrontmatter) -> (Vec<String>, String) {
     let mut tags = fm.tags.clone().unwrap_or_default();
     let mut category = fm.category.clone().unwrap_or_default();
 
-    if let Some(meta) = &fm.metadata {
-        if let Some(operant) = meta.get("operant") {
-            if tags.is_empty() {
-                if let Some(t) = operant.get("tags").and_then(|v| v.as_array()) {
-                    tags = t
-                        .iter()
-                        .filter_map(|v| v.as_str().map(String::from))
-                        .collect();
-                }
-            }
-            if category.is_empty() {
-                if let Some(c) = operant.get("category").and_then(|v| v.as_str()) {
-                    category = c.to_string();
-                }
-            }
+    if let Some(meta) = &fm.metadata
+        && let Some(operant) = meta.get("operant")
+    {
+        if tags.is_empty()
+            && let Some(t) = operant.get("tags").and_then(|v| v.as_array())
+        {
+            tags = t
+                .iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect();
+        }
+        if category.is_empty()
+            && let Some(c) = operant.get("category").and_then(|v| v.as_str())
+        {
+            category = c.to_string();
         }
     }
 

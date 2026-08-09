@@ -54,10 +54,11 @@ impl OperantTool for EnvVarTool {
         let filter_lower = filter.as_ref().map(|f| f.to_lowercase());
 
         for (key, value) in std::env::vars() {
-            if let Some(ref f) = filter_lower {
-                if !key.to_lowercase().contains(f) && !value.to_lowercase().contains(f) {
-                    continue;
-                }
+            if let Some(ref f) = filter_lower
+                && !key.to_lowercase().contains(f)
+                && !value.to_lowercase().contains(f)
+            {
+                continue;
             }
 
             let display_value = if is_sensitive_key(&key) {
@@ -181,10 +182,9 @@ fn get_hostname() -> String {
     if let Ok(output) = std::process::Command::new("hostname")
         .output()
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        && !output.is_empty()
     {
-        if !output.is_empty() {
-            return output;
-        }
+        return output;
     }
     "unknown".to_string()
 }
@@ -196,15 +196,15 @@ fn get_memory_info() -> Value {
             for line in content.lines() {
                 if line.starts_with("MemTotal:") {
                     let parts: Vec<&str> = line.split_whitespace().collect();
-                    if parts.len() >= 2 {
-                        if let Ok(kb) = parts[1].parse::<u64>() {
-                            let bytes = kb * 1024;
-                            return serde_json::json!({
-                                "total_bytes": bytes,
-                                "total_mb": bytes / (1024 * 1024),
-                                "total_gb": bytes / (1024 * 1024 * 1024)
-                            });
-                        }
+                    if parts.len() >= 2
+                        && let Ok(kb) = parts[1].parse::<u64>()
+                    {
+                        let bytes = kb * 1024;
+                        return serde_json::json!({
+                            "total_bytes": bytes,
+                            "total_mb": bytes / (1024 * 1024),
+                            "total_gb": bytes / (1024 * 1024 * 1024)
+                        });
                     }
                 }
             }
@@ -222,12 +222,11 @@ fn get_rust_version() -> String {
     if let Ok(output) = std::process::Command::new("rustc")
         .arg("--version")
         .output()
+        && output.status.success()
     {
-        if output.status.success() {
-            let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !version.is_empty() {
-                return version;
-            }
+        let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if !version.is_empty() {
+            return version;
         }
     }
     "unknown".to_string()

@@ -374,10 +374,10 @@ fn render_node_compact(node: &AccessibilityNode, output: &mut String, depth: usi
         }
         "root" => {}
         _ => {
-            if let Some(text) = &node.name {
-                if !text.is_empty() {
-                    output.push_str(&format!("{}{} \"{}\"\n", indent, node.role, text));
-                }
+            if let Some(text) = &node.name
+                && !text.is_empty()
+            {
+                output.push_str(&format!("{}{} \"{}\"\n", indent, node.role, text));
             }
         }
     }
@@ -395,15 +395,15 @@ fn render_node_full(node: &AccessibilityNode, output: &mut String, depth: usize)
     let indent = "  ".repeat(depth);
 
     let mut parts = vec![node.role.clone()];
-    if let Some(name) = &node.name {
-        if !name.is_empty() {
-            parts.push(format!("\"{}\"", name));
-        }
+    if let Some(name) = &node.name
+        && !name.is_empty()
+    {
+        parts.push(format!("\"{}\"", name));
     }
-    if let Some(value) = &node.value {
-        if !value.is_empty() {
-            parts.push(format!("value=\"{}\"", value));
-        }
+    if let Some(value) = &node.value
+        && !value.is_empty()
+    {
+        parts.push(format!("value=\"{}\"", value));
     }
     if let Some(ref_id) = &node.ref_id {
         parts.insert(0, format!("[{}]", ref_id));
@@ -420,10 +420,10 @@ fn find_by_ref_recursive<'a>(
     node: &'a AccessibilityNode,
     clean_ref: &str,
 ) -> Option<&'a AccessibilityNode> {
-    if let Some(ref_id) = &node.ref_id {
-        if ref_id.trim_start_matches('@') == clean_ref {
-            return Some(node);
-        }
+    if let Some(ref_id) = &node.ref_id
+        && ref_id.trim_start_matches('@') == clean_ref
+    {
+        return Some(node);
     }
     for child in &node.children {
         if let Some(found) = find_by_ref_recursive(child, clean_ref) {

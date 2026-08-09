@@ -2098,7 +2098,7 @@ mod tests {
         db.save_message(session_id, "assistant", "hi", "2024-01-01T00:00:02Z")
             .unwrap();
 
-        let mut msg = MessageData {
+        let msg = MessageData {
             session_id: session_id.to_string(),
             role: "assistant".to_string(),
             content: Some("tool call".to_string()),

@@ -80,17 +80,15 @@ impl ToolSchema {
     /// `{}` for optional fields like integer `num_results` or array `tags`) or misses/misnames required fields.
     pub fn sanitize_args(&self, args: &mut Value) {
         // 1. If args is a string but the schema expects an object, try to wrap it if there is exactly 1 required field.
-        if args.is_string() {
-            if let Some(required) = self.parameters.get("required").and_then(|r| r.as_array()) {
-                if required.len() == 1 {
-                    if let Some(req_key) = required[0].as_str() {
-                        // Coerce gracefully: only treat args as a string when
-                        // it actually is one (no panicking on mismatched input).
-                        if let Some(str_val) = args.as_str() {
-                            *args = json!({ req_key: str_val });
-                        }
-                    }
-                }
+        if args.is_string()
+            && let Some(required) = self.parameters.get("required").and_then(|r| r.as_array())
+            && required.len() == 1
+            && let Some(req_key) = required[0].as_str()
+        {
+            // Coerce gracefully: only treat args as a string when
+            // it actually is one (no panicking on mismatched input).
+            if let Some(str_val) = args.as_str() {
+                *args = json!({ req_key: str_val });
             }
         }
 
@@ -246,10 +244,10 @@ impl ToolSchema {
                             // Try to coerce string to array if expected type is array
                             else if expected_types.contains(&"array") {
                                 // Try to parse as JSON array first
-                                if let Ok(parsed) = serde_json::from_str::<Value>(s) {
-                                    if parsed.is_array() {
-                                        *val = parsed;
-                                    }
+                                if let Ok(parsed) = serde_json::from_str::<Value>(s)
+                                    && parsed.is_array()
+                                {
+                                    *val = parsed;
                                 }
                             }
                         }
@@ -277,13 +275,13 @@ impl ToolSchema {
         // A full JSON Schema validator would be more robust
         if let Some(required) = self.parameters.get("required").and_then(|r| r.as_array()) {
             for req_field in required {
-                if let Some(key) = req_field.as_str() {
-                    if args.get(key).is_none() {
-                        return Err(Error::InvalidToolArgs {
-                            name: self.name.clone(),
-                            details: format!("Missing required field: {}", key),
-                        });
-                    }
+                if let Some(key) = req_field.as_str()
+                    && args.get(key).is_none()
+                {
+                    return Err(Error::InvalidToolArgs {
+                        name: self.name.clone(),
+                        details: format!("Missing required field: {}", key),
+                    });
                 }
             }
         }

@@ -400,12 +400,12 @@ pub fn sanitize_tool_calls_for_strict_api(messages: &mut [Message]) -> usize {
                     // If it doesn't start with '{', wrap it
                     if !trimmed.starts_with('{') && !trimmed.starts_with('[') {
                         // Might be a bare string or other non-object
-                        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(trimmed) {
-                            if !parsed.is_object() {
-                                // Wrap non-object values in {"input": ...}
-                                tc.function.arguments = format!("{{\"input\":{}}}", trimmed);
-                                sanitizations += 1;
-                            }
+                        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(trimmed)
+                            && !parsed.is_object()
+                        {
+                            // Wrap non-object values in {"input": ...}
+                            tc.function.arguments = format!("{{\"input\":{}}}", trimmed);
+                            sanitizations += 1;
                         }
                     }
                 }
