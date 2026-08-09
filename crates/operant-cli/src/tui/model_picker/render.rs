@@ -240,12 +240,12 @@ pub fn render_model_picker(state: &ModelPickerState, area: Rect, buf: &mut Buffe
         Span::styled(" enter", Style::default().fg(dim)),
         Span::styled(" select", Style::default().fg(dim)),
     ];
-    if let Some(model) = filtered.get(state.selected_idx) {
-        if model_supports_effort(&model.id) {
-            footer_spans.push(Span::raw("  "));
-            footer_spans.push(Span::styled("\u{2190}/\u{2192}", Style::default().fg(dim)));
-            footer_spans.push(Span::styled(" effort", Style::default().fg(dim)));
-        }
+    if let Some(model) = filtered.get(state.selected_idx)
+        && model_supports_effort(&model.id)
+    {
+        footer_spans.push(Span::raw("  "));
+        footer_spans.push(Span::styled("\u{2190}/\u{2192}", Style::default().fg(dim)));
+        footer_spans.push(Span::styled(" effort", Style::default().fg(dim)));
     }
     footer_spans.push(Span::raw("  "));
     footer_spans.push(Span::styled("Esc", Style::default().fg(dim)));

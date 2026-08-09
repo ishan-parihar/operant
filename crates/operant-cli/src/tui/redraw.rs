@@ -48,10 +48,10 @@ impl PerformanceTier {
         }
 
         // WSL detection
-        if let Ok(osrelease) = std::fs::read_to_string("/proc/version") {
-            if osrelease.to_lowercase().contains("microsoft") {
-                return Self::Normal;
-            }
+        if let Ok(osrelease) = std::fs::read_to_string("/proc/version")
+            && osrelease.to_lowercase().contains("microsoft")
+        {
+            return Self::Normal;
         }
 
         // TERM_PROGRAM hints

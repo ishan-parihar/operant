@@ -457,37 +457,37 @@ pub(crate) fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
         }
 
         // 4. Rate limits
-        if let Some(pct) = app.rate_limit_5h_pct {
-            if pct > 0.0 {
-                if !parts.is_empty() {
-                    parts.push(Span::raw("  "));
-                }
-                let color = if pct >= 90.0 {
-                    Color::Red
-                } else {
-                    Color::Yellow
-                };
-                parts.push(Span::styled(
-                    format!("5h:{:.0}%", pct),
-                    Style::default().fg(color),
-                ));
+        if let Some(pct) = app.rate_limit_5h_pct
+            && pct > 0.0
+        {
+            if !parts.is_empty() {
+                parts.push(Span::raw("  "));
             }
+            let color = if pct >= 90.0 {
+                Color::Red
+            } else {
+                Color::Yellow
+            };
+            parts.push(Span::styled(
+                format!("5h:{:.0}%", pct),
+                Style::default().fg(color),
+            ));
         }
-        if let Some(pct) = app.rate_limit_7day_pct {
-            if pct > 0.0 {
-                if !parts.is_empty() {
-                    parts.push(Span::raw("  "));
-                }
-                let color = if pct >= 90.0 {
-                    Color::Red
-                } else {
-                    Color::Yellow
-                };
-                parts.push(Span::styled(
-                    format!("7d:{:.0}%", pct),
-                    Style::default().fg(color),
-                ));
+        if let Some(pct) = app.rate_limit_7day_pct
+            && pct > 0.0
+        {
+            if !parts.is_empty() {
+                parts.push(Span::raw("  "));
             }
+            let color = if pct >= 90.0 {
+                Color::Red
+            } else {
+                Color::Yellow
+            };
+            parts.push(Span::styled(
+                format!("7d:{:.0}%", pct),
+                Style::default().fg(color),
+            ));
         }
 
         // 5. Vim mode — displayed on the left side as "-- MODE --"; nothing extra on right.
@@ -524,41 +524,41 @@ pub(crate) fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
         }
 
         // Git branch (if settings enabled)
-        if app.settings_screen.show_git_branch {
-            if let Some(ref branch) = app.git_branch {
-                if !parts.is_empty() {
-                    parts.push(Span::raw("  "));
-                }
-                parts.push(Span::styled(
-                    format!("⎇ {}", branch),
-                    Style::default().fg(Color::Cyan),
-                ));
+        if app.settings_screen.show_git_branch
+            && let Some(ref branch) = app.git_branch
+        {
+            if !parts.is_empty() {
+                parts.push(Span::raw("  "));
             }
+            parts.push(Span::styled(
+                format!("⎇ {}", branch),
+                Style::default().fg(Color::Cyan),
+            ));
         }
 
         // Current directory (if settings enabled)
-        if app.settings_screen.show_cwd {
-            if let Some(ref dir) = app.current_dir {
-                if !parts.is_empty() {
-                    parts.push(Span::raw("  "));
-                }
-                // Use dirs::home_dir() so this works on Windows (where $HOME
-                // is unset and the home is $USERPROFILE). Guard against an
-                // empty home string: `str::replace("", "~")` inserts "~"
-                // between every character, producing the infamous
-                // `~X~:~\~B~i~g~g~e~r~…` output.
-                let home = dirs::home_dir()
-                    .and_then(|p| p.to_str().map(|s| s.to_string()))
-                    .filter(|s| !s.is_empty());
-                let display_dir = match home {
-                    Some(h) if dir.starts_with(&h) => dir.replacen(&h, "~", 1),
-                    _ => dir.clone(),
-                };
-                parts.push(Span::styled(
-                    display_dir,
-                    Style::default().fg(Color::DarkGray),
-                ));
+        if app.settings_screen.show_cwd
+            && let Some(ref dir) = app.current_dir
+        {
+            if !parts.is_empty() {
+                parts.push(Span::raw("  "));
             }
+            // Use dirs::home_dir() so this works on Windows (where $HOME
+            // is unset and the home is $USERPROFILE). Guard against an
+            // empty home string: `str::replace("", "~")` inserts "~"
+            // between every character, producing the infamous
+            // `~X~:~\~B~i~g~g~e~r~…` output.
+            let home = dirs::home_dir()
+                .and_then(|p| p.to_str().map(|s| s.to_string()))
+                .filter(|s| !s.is_empty());
+            let display_dir = match home {
+                Some(h) if dir.starts_with(&h) => dir.replacen(&h, "~", 1),
+                _ => dir.clone(),
+            };
+            parts.push(Span::styled(
+                display_dir,
+                Style::default().fg(Color::DarkGray),
+            ));
         }
 
         // Output style indicator (only when non-default)

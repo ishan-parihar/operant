@@ -133,10 +133,10 @@ fn coerce_json_value(raw: &str) -> Value {
         return Value::Number(n.into());
     }
 
-    if let Ok(f) = raw.parse::<f64>() {
-        if let Some(n) = serde_json::Number::from_f64(f) {
-            return Value::Number(n);
-        }
+    if let Ok(f) = raw.parse::<f64>()
+        && let Some(n) = serde_json::Number::from_f64(f)
+    {
+        return Value::Number(n);
     }
 
     Value::String(raw.to_string())
@@ -184,13 +184,13 @@ fn handle_check(config: &AppConfig) -> Result<()> {
         );
     }
 
-    if let Some(parent) = config.database_path.parent() {
-        if !parent.exists() {
-            issues.push(format!(
-                "Database directory '{}' does not exist and will be created at runtime.",
-                parent.display()
-            ));
-        }
+    if let Some(parent) = config.database_path.parent()
+        && !parent.exists()
+    {
+        issues.push(format!(
+            "Database directory '{}' does not exist and will be created at runtime.",
+            parent.display()
+        ));
     }
 
     for server in &config.mcp.servers {

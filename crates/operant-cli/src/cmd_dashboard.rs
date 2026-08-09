@@ -76,10 +76,8 @@ async fn cmd_server(
     let url = format!("http://{}:{}", host, port);
     println!("Starting Operant Dashboard on {}", url);
 
-    if !no_open {
-        if let Err(e) = open::that(&url) {
-            tracing::warn!("Failed to open browser: {}", e);
-        }
+    if !no_open && let Err(e) = open::that(&url) {
+        tracing::warn!("Failed to open browser: {}", e);
     }
 
     crate::dashboard_server::run_dashboard(config, &host, port, insecure).await

@@ -990,7 +990,7 @@ impl App {
                                 .collect();
                             summary.push_str(&format!(
                                 "  [{:>3}] {:<10} {}\n",
-                                block.importance, &block.block_type, preview,
+                                block.importance, block.block_type, preview,
                             ));
                         }
                         if blocks.len() > 10 {

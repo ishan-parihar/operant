@@ -49,10 +49,10 @@ pub const FREE_CATALOG: &[FreeUpstream] = &[
 
 pub(crate) fn reverse_provider_lookup(dev_provider: &str) -> String {
     for provider in crate::provider::PROVIDERS {
-        if let Some(mapped) = operant_core::models_dev::provider_to_models_dev(provider.name) {
-            if mapped == dev_provider {
-                return provider.name.to_string();
-            }
+        if let Some(mapped) = operant_core::models_dev::provider_to_models_dev(provider.name)
+            && mapped == dev_provider
+        {
+            return provider.name.to_string();
         }
     }
     dev_provider.to_string()

@@ -1638,45 +1638,45 @@ impl CliConfig {
     /// Apply HERMES_* environment variable overrides to the config.
     fn apply_operant_env_overrides(&mut self) {
         // HERMES_MODEL → agent default model
-        if let Ok(val) = std::env::var("HERMES_MODEL") {
-            if !val.is_empty() {
-                self.api.default_model = Some(val);
-            }
+        if let Ok(val) = std::env::var("HERMES_MODEL")
+            && !val.is_empty()
+        {
+            self.api.default_model = Some(val);
         }
 
         // HERMES_LOG_LEVEL
-        if let Ok(val) = std::env::var("HERMES_LOG_LEVEL") {
-            if !val.is_empty() {
-                self.logging.level = Some(val);
-            }
+        if let Ok(val) = std::env::var("HERMES_LOG_LEVEL")
+            && !val.is_empty()
+        {
+            self.logging.level = Some(val);
         }
 
         // HERMES_MAX_ITERATIONS
-        if let Ok(val) = std::env::var("HERMES_MAX_ITERATIONS") {
-            if let Ok(n) = val.parse::<u32>() {
-                self.agent.max_turns = Some(n);
-            }
+        if let Ok(val) = std::env::var("HERMES_MAX_ITERATIONS")
+            && let Ok(n) = val.parse::<u32>()
+        {
+            self.agent.max_turns = Some(n);
         }
 
         // HERMES_TOOL_TIMEOUT
-        if let Ok(val) = std::env::var("HERMES_TOOL_TIMEOUT") {
-            if let Ok(n) = val.parse::<u64>() {
-                self.terminal.timeout = Some(n);
-            }
+        if let Ok(val) = std::env::var("HERMES_TOOL_TIMEOUT")
+            && let Ok(n) = val.parse::<u64>()
+        {
+            self.terminal.timeout = Some(n);
         }
 
         // HERMES_REQUEST_TIMEOUT
-        if let Ok(val) = std::env::var("HERMES_REQUEST_TIMEOUT") {
-            if let Ok(n) = val.parse::<u64>() {
-                self.api.timeout_seconds = Some(n);
-            }
+        if let Ok(val) = std::env::var("HERMES_REQUEST_TIMEOUT")
+            && let Ok(n) = val.parse::<u64>()
+        {
+            self.api.timeout_seconds = Some(n);
         }
 
         // HERMES_CONTEXT_WINDOW
-        if let Ok(val) = std::env::var("HERMES_CONTEXT_WINDOW") {
-            if let Ok(n) = val.parse::<u32>() {
-                self.api.max_tokens = Some(n);
-            }
+        if let Ok(val) = std::env::var("HERMES_CONTEXT_WINDOW")
+            && let Ok(n) = val.parse::<u32>()
+        {
+            self.api.max_tokens = Some(n);
         }
 
         // HERMES_STREAM
@@ -1688,10 +1688,10 @@ impl CliConfig {
         }
 
         // HERMES_SKILLS_DIR
-        if let Ok(val) = std::env::var("HERMES_SKILLS_DIR") {
-            if !val.is_empty() {
-                self.operant.skills_dir = Some(PathBuf::from(val));
-            }
+        if let Ok(val) = std::env::var("HERMES_SKILLS_DIR")
+            && !val.is_empty()
+        {
+            self.operant.skills_dir = Some(PathBuf::from(val));
         }
 
         // HERMES_HOME — already handled in paths

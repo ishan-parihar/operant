@@ -777,10 +777,10 @@ pub(super) fn vim_normal(
             false
         }
         ";" => {
-            if let Some((kind, c)) = *last_find {
-                if let Some(pos) = motion_find_char(text, *cursor, c, kind, n) {
-                    *cursor = pos;
-                }
+            if let Some((kind, c)) = *last_find
+                && let Some(pos) = motion_find_char(text, *cursor, c, kind, n)
+            {
+                *cursor = pos;
             }
             false
         }

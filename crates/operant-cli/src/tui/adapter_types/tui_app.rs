@@ -47,10 +47,10 @@ impl TuiApp {
         // provider+model are now exclusively stored in operant.toml (config.agent.model /
         // config.client.base_url). The settings.json only carries visual prefs (theme, vim, etc.).
 
-        if let Some(entry) = settings.providers.get("custom-openai") {
-            if let Some(ref base) = entry.api_base {
-                app_config.client.base_url = base.clone();
-            }
+        if let Some(entry) = settings.providers.get("custom-openai")
+            && let Some(ref base) = entry.api_base
+        {
+            app_config.client.base_url = base.clone();
         }
 
         let cost_tracker = Arc::new(CostTracker::new());
@@ -515,26 +515,26 @@ impl TuiApp {
 
         self.app.model_registry.load_models_dev().await;
 
-        if let Some(query) = self.initial_query.take() {
-            if let Some(ref agent) = agent {
-                use crate::tui::adapter_types::types::{Message, MessageContent, Role};
-                self.app.messages.push(Message {
-                    role: Role::User,
-                    content: MessageContent::Text(query.clone()),
-                });
-                self.app.is_streaming = true;
-                self.app.streaming_text.clear();
-                self.app.streaming_thinking.clear();
+        if let Some(query) = self.initial_query.take()
+            && let Some(ref agent) = agent
+        {
+            use crate::tui::adapter_types::types::{Message, MessageContent, Role};
+            self.app.messages.push(Message {
+                role: Role::User,
+                content: MessageContent::Text(query.clone()),
+            });
+            self.app.is_streaming = true;
+            self.app.streaming_text.clear();
+            self.app.streaming_thinking.clear();
 
-                let agent_clone = std::sync::Arc::clone(agent);
-                let (tx, rx) = tokio::sync::oneshot::channel();
-                let handle = tokio::spawn(async move {
-                    let result = agent_clone.run(query).await.map(|_| ());
-                    let _ = tx.send(result);
-                });
-                self.app.run_complete_rx = Some(rx);
-                self.app.agent_task_handle = Some(handle);
-            }
+            let agent_clone = std::sync::Arc::clone(agent);
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            let handle = tokio::spawn(async move {
+                let result = agent_clone.run(query).await.map(|_| ());
+                let _ = tx.send(result);
+            });
+            self.app.run_complete_rx = Some(rx);
+            self.app.agent_task_handle = Some(handle);
         }
 
         let result = loop {
@@ -697,30 +697,27 @@ impl TuiApp {
                     }
                     // /retry: drain pending_retry_query set by intercept arm.
                     // (iter-270 — real /retry wiring.)
-                    if let Some(retry_text) = self.app.pending_retry_query.take() {
-                        if let Some(ref agent) = agent {
-                            if !self.app.is_streaming {
-                                use crate::tui::adapter_types::types::{
-                                    Message, MessageContent, Role,
-                                };
-                                self.app.messages.push(Message {
-                                    role: Role::User,
-                                    content: MessageContent::Text(retry_text.clone()),
-                                });
-                                self.app.is_streaming = true;
-                                self.app.streaming_text.clear();
-                                self.app.streaming_thinking.clear();
-                                let agent_clone = std::sync::Arc::clone(agent);
-                                let (tx, rx) = tokio::sync::oneshot::channel();
-                                let handle = tokio::spawn(async move {
-                                    let result = agent_clone.run(retry_text).await.map(|_| ());
-                                    let _ = tx.send(result);
-                                });
-                                self.app.run_complete_rx = Some(rx);
-                                self.app.agent_task_handle = Some(handle);
-                                continue;
-                            }
-                        }
+                    if let Some(retry_text) = self.app.pending_retry_query.take()
+                        && let Some(ref agent) = agent
+                        && !self.app.is_streaming
+                    {
+                        use crate::tui::adapter_types::types::{Message, MessageContent, Role};
+                        self.app.messages.push(Message {
+                            role: Role::User,
+                            content: MessageContent::Text(retry_text.clone()),
+                        });
+                        self.app.is_streaming = true;
+                        self.app.streaming_text.clear();
+                        self.app.streaming_thinking.clear();
+                        let agent_clone = std::sync::Arc::clone(agent);
+                        let (tx, rx) = tokio::sync::oneshot::channel();
+                        let handle = tokio::spawn(async move {
+                            let result = agent_clone.run(retry_text).await.map(|_| ());
+                            let _ = tx.send(result);
+                        });
+                        self.app.run_complete_rx = Some(rx);
+                        self.app.agent_task_handle = Some(handle);
+                        continue;
                     }
                     if let Some(ref agent) = agent {
                         // If a turn is currently streaming, push the input as
@@ -728,16 +725,16 @@ impl TuiApp {
                         // The agent drains steers at the next iteration boundary
                         // and injects them as user-role messages. (iter-93 —
                         // closes the /steer parity gap.)
-                        if self.app.is_streaming {
-                            if let Some(ref handle) = self.app.steer_queue_handle {
-                                let mut q = handle.lock().await;
-                                q.push(input.clone());
-                                self.app.status_message = Some(format!(
-                                    "Steer queued: {}",
-                                    input.chars().take(60).collect::<String>()
-                                ));
-                                continue;
-                            }
+                        if self.app.is_streaming
+                            && let Some(ref handle) = self.app.steer_queue_handle
+                        {
+                            let mut q = handle.lock().await;
+                            q.push(input.clone());
+                            self.app.status_message = Some(format!(
+                                "Steer queued: {}",
+                                input.chars().take(60).collect::<String>()
+                            ));
+                            continue;
                         }
                         use crate::tui::adapter_types::types::{Message, MessageContent, Role};
                         self.app.messages.push(Message {
@@ -856,26 +853,26 @@ impl TuiApp {
             self.app.model_registry.load_models_dev().await;
         }
 
-        if let Some(query) = self.initial_query.take() {
-            if let Some(ref agent) = agent {
-                use crate::tui::adapter_types::types::{Message, MessageContent, Role};
-                self.app.messages.push(Message {
-                    role: Role::User,
-                    content: MessageContent::Text(query.clone()),
-                });
-                self.app.is_streaming = true;
-                self.app.streaming_text.clear();
-                self.app.streaming_thinking.clear();
+        if let Some(query) = self.initial_query.take()
+            && let Some(ref agent) = agent
+        {
+            use crate::tui::adapter_types::types::{Message, MessageContent, Role};
+            self.app.messages.push(Message {
+                role: Role::User,
+                content: MessageContent::Text(query.clone()),
+            });
+            self.app.is_streaming = true;
+            self.app.streaming_text.clear();
+            self.app.streaming_thinking.clear();
 
-                let agent_clone = std::sync::Arc::clone(agent);
-                let (tx, rx) = tokio::sync::oneshot::channel();
-                let handle = tokio::spawn(async move {
-                    let result = agent_clone.run(query).await.map(|_| ());
-                    let _ = tx.send(result);
-                });
-                self.app.run_complete_rx = Some(rx);
-                self.app.agent_task_handle = Some(handle);
-            }
+            let agent_clone = std::sync::Arc::clone(agent);
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            let handle = tokio::spawn(async move {
+                let result = agent_clone.run(query).await.map(|_| ());
+                let _ = tx.send(result);
+            });
+            self.app.run_complete_rx = Some(rx);
+            self.app.agent_task_handle = Some(handle);
         }
 
         use ratatui::Terminal;
@@ -904,12 +901,12 @@ impl TuiApp {
                         }
                     }
                     if let Some(ref agent) = agent {
-                        if self.app.is_streaming {
-                            if let Some(ref handle) = self.app.steer_queue_handle {
-                                let mut q = handle.lock().await;
-                                q.push(input.clone());
-                                continue;
-                            }
+                        if self.app.is_streaming
+                            && let Some(ref handle) = self.app.steer_queue_handle
+                        {
+                            let mut q = handle.lock().await;
+                            q.push(input.clone());
+                            continue;
                         }
                         use crate::tui::adapter_types::types::{Message, MessageContent, Role};
                         self.app.messages.push(Message {

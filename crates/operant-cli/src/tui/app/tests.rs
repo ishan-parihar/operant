@@ -849,11 +849,11 @@ fn test_interactive_multi_step_simulation() {
 
     // 2. Run the loop ticks
     while !app.simulated_keys.is_empty() && !app.should_exit {
-        if let Ok(Some(input)) = app.run(&mut terminal) {
-            if crate::input::is_slash_command(&input) {
-                let (cmd, args) = crate::input::parse_slash_command(&input);
-                app.handle_tui_command(cmd, args);
-            }
+        if let Ok(Some(input)) = app.run(&mut terminal)
+            && crate::input::is_slash_command(&input)
+        {
+            let (cmd, args) = crate::input::parse_slash_command(&input);
+            app.handle_tui_command(cmd, args);
         }
     }
 
@@ -865,11 +865,11 @@ fn test_interactive_multi_step_simulation() {
     app.simulated_keys = vec![press_key(KeyCode::Esc, KeyModifiers::NONE)];
 
     while !app.simulated_keys.is_empty() && !app.should_exit {
-        if let Ok(Some(input)) = app.run(&mut terminal) {
-            if crate::input::is_slash_command(&input) {
-                let (cmd, args) = crate::input::parse_slash_command(&input);
-                app.handle_tui_command(cmd, args);
-            }
+        if let Ok(Some(input)) = app.run(&mut terminal)
+            && crate::input::is_slash_command(&input)
+        {
+            let (cmd, args) = crate::input::parse_slash_command(&input);
+            app.handle_tui_command(cmd, args);
         }
     }
 
@@ -888,11 +888,11 @@ fn test_interactive_multi_step_simulation() {
     ];
 
     while !app.simulated_keys.is_empty() && !app.should_exit {
-        if let Ok(Some(input)) = app.run(&mut terminal) {
-            if crate::input::is_slash_command(&input) {
-                let (cmd, args) = crate::input::parse_slash_command(&input);
-                app.handle_tui_command(cmd, args);
-            }
+        if let Ok(Some(input)) = app.run(&mut terminal)
+            && crate::input::is_slash_command(&input)
+        {
+            let (cmd, args) = crate::input::parse_slash_command(&input);
+            app.handle_tui_command(cmd, args);
         }
     }
 
@@ -914,11 +914,11 @@ where
     let mut guard = 0;
     while !app.simulated_keys.is_empty() && !app.should_exit && guard < 5000 {
         guard += 1;
-        if let Ok(Some(input)) = app.run(terminal) {
-            if crate::input::is_slash_command(&input) {
-                let (cmd, args) = crate::input::parse_slash_command(&input);
-                app.handle_tui_command(cmd, args);
-            }
+        if let Ok(Some(input)) = app.run(terminal)
+            && crate::input::is_slash_command(&input)
+        {
+            let (cmd, args) = crate::input::parse_slash_command(&input);
+            app.handle_tui_command(cmd, args);
         }
     }
 }

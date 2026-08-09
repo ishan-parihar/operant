@@ -82,10 +82,10 @@ pub fn supports_progress_osc() -> bool {
     if std::env::var_os("TMUX").is_some() {
         return false;
     }
-    if let Ok(term) = std::env::var("TERM") {
-        if term.starts_with("screen") || term.starts_with("tmux") {
-            return false;
-        }
+    if let Ok(term) = std::env::var("TERM")
+        && (term.starts_with("screen") || term.starts_with("tmux"))
+    {
+        return false;
     }
     if std::env::var_os("WT_SESSION").is_some() || std::env::var_os("ConEmuPID").is_some() {
         return true;

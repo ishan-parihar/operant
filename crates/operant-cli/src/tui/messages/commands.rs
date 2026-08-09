@@ -50,10 +50,10 @@ pub fn render_system_api_error(msg: &str, retry_secs: Option<u64>) -> Vec<Line<'
 /// (`/goal status`, `pause`, `resume`, `clear`, `complete`) keep the normal
 /// rendering.
 pub fn render_user_command(name: &str, args: &str) -> Vec<Line<'static>> {
-    if name == "goal" {
-        if let Some(objective) = extract_goal_objective_from_args(args) {
-            return render_goal_active_block(&objective);
-        }
+    if name == "goal"
+        && let Some(objective) = extract_goal_objective_from_args(args)
+    {
+        return render_goal_active_block(&objective);
     }
     vec![Line::from(vec![
         Span::styled(

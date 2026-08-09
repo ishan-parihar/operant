@@ -370,7 +370,7 @@ async fn debug_journey(config: &AppConfig) -> Result<()> {
         }
         Ok(map) => {
             let mut blocks: Vec<_> = map.into_values().collect();
-            blocks.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+            blocks.sort_by_key(|b| std::cmp::Reverse(b.created_at));
             for m in &blocks {
                 let content_preview: String = m
                     .content
@@ -492,10 +492,10 @@ async fn debug_context(config: &AppConfig) -> Result<()> {
     let settings_path = operant_core::platform::operant_home().join("settings.json");
     if settings_path.exists() {
         let content = std::fs::read_to_string(&settings_path)?;
-        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&content) {
-            if let Some(ctx) = v.get("context_window_size").and_then(|c| c.as_u64()) {
-                println!("Configured context window: {} tokens", ctx);
-            }
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&content)
+            && let Some(ctx) = v.get("context_window_size").and_then(|c| c.as_u64())
+        {
+            println!("Configured context window: {} tokens", ctx);
         }
     }
 
@@ -1009,56 +1009,56 @@ fn parse_key_sequence(seq: &str) -> Vec<crossterm::event::KeyEvent> {
     let chars: Vec<char> = seq.chars().collect();
     let mut i = 0;
     while i < chars.len() {
-        if chars[i] == '<' {
-            if let Some(close_idx) = chars[i..].iter().position(|&c| c == '>') {
-                let name: String = chars[i + 1..i + close_idx].iter().collect();
-                let lower = name.to_lowercase();
-                let mut modifiers = KeyModifiers::NONE;
-                let mut parsed = true;
-                let code = match lower.as_str() {
-                    "enter" => KeyCode::Enter,
-                    "esc" | "escape" => KeyCode::Esc,
-                    "tab" => KeyCode::Tab,
-                    "up" => KeyCode::Up,
-                    "down" => KeyCode::Down,
-                    "left" => KeyCode::Left,
-                    "right" => KeyCode::Right,
-                    "backspace" | "bs" => KeyCode::Backspace,
-                    "ctrl+a" => {
-                        modifiers.insert(KeyModifiers::CONTROL);
-                        KeyCode::Char('a')
-                    }
-                    "ctrl+c" => {
-                        modifiers.insert(KeyModifiers::CONTROL);
-                        KeyCode::Char('c')
-                    }
-                    "ctrl+t" => {
-                        modifiers.insert(KeyModifiers::CONTROL);
-                        KeyCode::Char('t')
-                    }
-                    "ctrl+r" => {
-                        modifiers.insert(KeyModifiers::CONTROL);
-                        KeyCode::Char('r')
-                    }
-                    "shift+tab" => {
-                        modifiers.insert(KeyModifiers::SHIFT);
-                        KeyCode::BackTab
-                    }
-                    _ => {
-                        parsed = false;
-                        KeyCode::Null
-                    }
-                };
-                if parsed {
-                    events.push(KeyEvent {
-                        code,
-                        modifiers,
-                        kind: KeyEventKind::Press,
-                        state: KeyEventState::NONE,
-                    });
-                    i += close_idx + 1;
-                    continue;
+        if chars[i] == '<'
+            && let Some(close_idx) = chars[i..].iter().position(|&c| c == '>')
+        {
+            let name: String = chars[i + 1..i + close_idx].iter().collect();
+            let lower = name.to_lowercase();
+            let mut modifiers = KeyModifiers::NONE;
+            let mut parsed = true;
+            let code = match lower.as_str() {
+                "enter" => KeyCode::Enter,
+                "esc" | "escape" => KeyCode::Esc,
+                "tab" => KeyCode::Tab,
+                "up" => KeyCode::Up,
+                "down" => KeyCode::Down,
+                "left" => KeyCode::Left,
+                "right" => KeyCode::Right,
+                "backspace" | "bs" => KeyCode::Backspace,
+                "ctrl+a" => {
+                    modifiers.insert(KeyModifiers::CONTROL);
+                    KeyCode::Char('a')
                 }
+                "ctrl+c" => {
+                    modifiers.insert(KeyModifiers::CONTROL);
+                    KeyCode::Char('c')
+                }
+                "ctrl+t" => {
+                    modifiers.insert(KeyModifiers::CONTROL);
+                    KeyCode::Char('t')
+                }
+                "ctrl+r" => {
+                    modifiers.insert(KeyModifiers::CONTROL);
+                    KeyCode::Char('r')
+                }
+                "shift+tab" => {
+                    modifiers.insert(KeyModifiers::SHIFT);
+                    KeyCode::BackTab
+                }
+                _ => {
+                    parsed = false;
+                    KeyCode::Null
+                }
+            };
+            if parsed {
+                events.push(KeyEvent {
+                    code,
+                    modifiers,
+                    kind: KeyEventKind::Press,
+                    state: KeyEventState::NONE,
+                });
+                i += close_idx + 1;
+                continue;
             }
         }
 

@@ -166,10 +166,10 @@ pub fn render_transcript_user_message(
             _ => None,
         }),
     };
-    if let Some(text) = goal_text {
-        if let Some(objective) = extract_goal_slash_objective(text) {
-            return render_goal_active_block(&objective);
-        }
+    if let Some(text) = goal_text
+        && let Some(objective) = extract_goal_slash_objective(text)
+    {
+        return render_goal_active_block(&objective);
     }
 
     let inner_width = width.saturating_sub(4).max(10);
@@ -180,10 +180,10 @@ pub fn render_transcript_user_message(
     // content_blocks(), so we extract the text directly.  This fixes the bug
     // where user input text was invisible because content_blocks() returned
     // empty for MessageContent::Text messages.
-    if let MessageContent::Text(ref text) = msg.content {
-        if !text.is_empty() {
-            pending_text.push_str(text);
-        }
+    if let MessageContent::Text(ref text) = msg.content
+        && !text.is_empty()
+    {
+        pending_text.push_str(text);
     }
 
     // Collect the absolute paths of every injected file so we can strip the
@@ -450,10 +450,10 @@ pub fn render_transcript_assistant_message_tagged(
     // where committed assistant messages were invisible because content_blocks()
     // returned empty for MessageContent::Text messages created by
     // flush_streamed_assistant_message.
-    if let MessageContent::Text(ref text) = msg.content {
-        if !text.is_empty() {
-            pending_text.push_str(text);
-        }
+    if let MessageContent::Text(ref text) = msg.content
+        && !text.is_empty()
+    {
+        pending_text.push_str(text);
     }
 
     let flush_text =

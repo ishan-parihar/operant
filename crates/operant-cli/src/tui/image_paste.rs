@@ -99,10 +99,11 @@ fn read_text_linux_selection(primary: bool) -> Option<String> {
     };
 
     for (prog, args) in commands {
-        if let Ok(out) = Command::new(prog).args(*args).output() {
-            if out.status.success() && !out.stdout.is_empty() {
-                return Some(String::from_utf8_lossy(&out.stdout).into_owned());
-            }
+        if let Ok(out) = Command::new(prog).args(*args).output()
+            && out.status.success()
+            && !out.stdout.is_empty()
+        {
+            return Some(String::from_utf8_lossy(&out.stdout).into_owned());
         }
     }
     None
@@ -221,21 +222,20 @@ fn check_linux_clipboard_has_image() -> bool {
     if let Ok(out) = Command::new("xclip")
         .args(["-selection", "clipboard", "-t", "TARGETS", "-o"])
         .output()
+        && out.status.success()
     {
-        if out.status.success() {
-            let targets = String::from_utf8_lossy(&out.stdout);
-            if targets.contains("image/") {
-                return true;
-            }
+        let targets = String::from_utf8_lossy(&out.stdout);
+        if targets.contains("image/") {
+            return true;
         }
     }
     // wl-paste: check available types
-    if let Ok(out) = Command::new("wl-paste").args(["--list-types"]).output() {
-        if out.status.success() {
-            let types = String::from_utf8_lossy(&out.stdout);
-            if types.contains("image/") {
-                return true;
-            }
+    if let Ok(out) = Command::new("wl-paste").args(["--list-types"]).output()
+        && out.status.success()
+    {
+        let types = String::from_utf8_lossy(&out.stdout);
+        if types.contains("image/") {
+            return true;
         }
     }
     false
@@ -247,25 +247,21 @@ fn try_save_linux_image(path: &PathBuf) -> bool {
     if let Ok(out) = Command::new("xclip")
         .args(["-selection", "clipboard", "-t", "image/png", "-o"])
         .output()
+        && out.status.success()
+        && !out.stdout.is_empty()
+        && std::fs::write(path, &out.stdout).is_ok()
     {
-        if out.status.success()
-            && !out.stdout.is_empty()
-            && std::fs::write(path, &out.stdout).is_ok()
-        {
-            return true;
-        }
+        return true;
     }
     // wl-paste
     if let Ok(out) = Command::new("wl-paste")
         .args(["--type", "image/png"])
         .output()
+        && out.status.success()
+        && !out.stdout.is_empty()
+        && std::fs::write(path, &out.stdout).is_ok()
     {
-        if out.status.success()
-            && !out.stdout.is_empty()
-            && std::fs::write(path, &out.stdout).is_ok()
-        {
-            return true;
-        }
+        return true;
     }
     false
 }

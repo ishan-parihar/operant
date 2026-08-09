@@ -183,13 +183,13 @@ impl App {
         let visible_row = msg_area.y.saturating_add(self.scroll_offset as u16);
 
         // Try to find message at the visible scroll position
-        if let Some(message_index) = self.message_index_at_row(visible_row) {
-            if message_index < self.messages.len() {
-                let x = msg_area.x.saturating_add(2);
-                let y = msg_area.y.saturating_add(2);
-                self.show_context_menu(x, y, ContextMenuKind::Message { message_index });
-                return;
-            }
+        if let Some(message_index) = self.message_index_at_row(visible_row)
+            && message_index < self.messages.len()
+        {
+            let x = msg_area.x.saturating_add(2);
+            let y = msg_area.y.saturating_add(2);
+            self.show_context_menu(x, y, ContextMenuKind::Message { message_index });
+            return;
         }
 
         // Fall back to selection if any

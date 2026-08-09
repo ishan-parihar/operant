@@ -240,18 +240,17 @@ pub fn try_copy_to_clipboard(text: &str) -> bool {
             "xsel --clipboard --input",
         ] {
             let parts: Vec<&str> = cmd.split_whitespace().collect();
-            if let Some((prog, args)) = parts.split_first() {
-                if let Ok(mut child) = std::process::Command::new(prog)
+            if let Some((prog, args)) = parts.split_first()
+                && let Ok(mut child) = std::process::Command::new(prog)
                     .args(args)
                     .stdin(std::process::Stdio::piped())
                     .spawn()
-                {
-                    if let Some(stdin) = child.stdin.as_mut() {
-                        let _ = stdin.write_all(text.as_bytes());
-                    }
-                    if child.wait().map(|s| s.success()).unwrap_or(false) {
-                        return true;
-                    }
+            {
+                if let Some(stdin) = child.stdin.as_mut() {
+                    let _ = stdin.write_all(text.as_bytes());
+                }
+                if child.wait().map(|s| s.success()).unwrap_or(false) {
+                    return true;
                 }
             }
         }

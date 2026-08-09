@@ -18,10 +18,10 @@ pub(crate) fn spinner_char(frame_count: u64) -> char {
 /// Returns the colour to use for the streaming spinner.
 /// Turns red when no stream data has arrived for more than 3 seconds.
 pub(crate) fn spinner_color(app: &App) -> Color {
-    if let Some(start) = app.stall_start {
-        if start.elapsed() > std::time::Duration::from_secs(3) {
-            return Color::Red;
-        }
+    if let Some(start) = app.stall_start
+        && start.elapsed() > std::time::Duration::from_secs(3)
+    {
+        return Color::Red;
     }
     Color::Yellow
 }

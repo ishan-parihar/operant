@@ -25,28 +25,27 @@ impl AuthStore {
         let mut credentials = std::collections::HashMap::new();
 
         // Load from environment variables
-        if let Ok(key) = std::env::var("ANTHROPIC_API_KEY") {
-            if !key.is_empty() {
-                credentials.insert("anthropic".to_string(), StoredCredential::ApiKey { key });
-            }
+        if let Ok(key) = std::env::var("ANTHROPIC_API_KEY")
+            && !key.is_empty()
+        {
+            credentials.insert("anthropic".to_string(), StoredCredential::ApiKey { key });
         }
-        if let Ok(key) = std::env::var("OPENAI_API_KEY") {
-            if !key.is_empty() {
-                credentials.insert("openai".to_string(), StoredCredential::ApiKey { key });
-            }
+        if let Ok(key) = std::env::var("OPENAI_API_KEY")
+            && !key.is_empty()
+        {
+            credentials.insert("openai".to_string(), StoredCredential::ApiKey { key });
         }
 
         // Load from persisted auth file (simple format: {"provider": "key", ...})
-        if let Ok(auth_data) = std::fs::read_to_string(Self::auth_path()) {
-            if let Ok(saved) =
+        if let Ok(auth_data) = std::fs::read_to_string(Self::auth_path())
+            && let Ok(saved) =
                 serde_json::from_str::<std::collections::HashMap<String, String>>(&auth_data)
-            {
-                for (provider, key) in saved {
-                    if !key.is_empty() {
-                        credentials
-                            .entry(provider)
-                            .or_insert(StoredCredential::ApiKey { key });
-                    }
+        {
+            for (provider, key) in saved {
+                if !key.is_empty() {
+                    credentials
+                        .entry(provider)
+                        .or_insert(StoredCredential::ApiKey { key });
                 }
             }
         }

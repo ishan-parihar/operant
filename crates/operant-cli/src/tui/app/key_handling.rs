@@ -853,10 +853,10 @@ impl App {
                         self.skills_view.scroll_down(vh);
                     }
                 }
-                KeyCode::Enter => {
-                    if self.skills_view.stage == crate::tui::skills_view::SkillsStage::List {
-                        self.skills_view.open_detail();
-                    }
+                KeyCode::Enter
+                    if self.skills_view.stage == crate::tui::skills_view::SkillsStage::List =>
+                {
+                    self.skills_view.open_detail();
                 }
                 _ => {}
             }
@@ -1643,10 +1643,11 @@ impl App {
                 self.pending_mcp_reconnect = true;
                 self.status_message = Some("Reconnecting MCP runtime...".to_string());
             }
-            KeyCode::Char(c) if key.modifiers.is_empty() => {
-                if self.mcp_view.active_pane != crate::mcp_view::McpViewPane::ServerList {
-                    self.mcp_view.push_search_char(c);
-                }
+            KeyCode::Char(c)
+                if key.modifiers.is_empty()
+                    && self.mcp_view.active_pane != crate::mcp_view::McpViewPane::ServerList =>
+            {
+                self.mcp_view.push_search_char(c);
             }
             _ => {}
         }
@@ -1714,10 +1715,8 @@ impl App {
             }
             KeyCode::PageUp => self.diff_viewer.scroll_detail_up(),
             KeyCode::PageDown => self.diff_viewer.scroll_detail_down(),
-            KeyCode::Char(' ') => {
-                if self.diff_viewer.active_pane == DiffPane::FileList {
-                    self.diff_viewer.toggle_file_collapse();
-                }
+            KeyCode::Char(' ') if self.diff_viewer.active_pane == DiffPane::FileList => {
+                self.diff_viewer.toggle_file_collapse();
             }
             _ => {}
         }
@@ -1876,19 +1875,19 @@ impl App {
         }
 
         // Check if we have an active warning within the timeout
-        if let Some(warning_time) = self.last_exit_key_warning {
-            if warning_time.elapsed().as_secs_f64() <= 2.0 {
-                if self.exit_key_sequence_start == Some(key_char) {
-                    // Matching key - exit
-                    self.should_exit = true;
-                    self.last_exit_key_warning = None;
-                    self.exit_key_sequence_start = None;
-                    return;
-                }
-                if let Some(other_key) = self.exit_key_sequence_start {
-                    // Wrong key pressed - show message for the original key and reset timer
-                    key_char = other_key;
-                }
+        if let Some(warning_time) = self.last_exit_key_warning
+            && warning_time.elapsed().as_secs_f64() <= 2.0
+        {
+            if self.exit_key_sequence_start == Some(key_char) {
+                // Matching key - exit
+                self.should_exit = true;
+                self.last_exit_key_warning = None;
+                self.exit_key_sequence_start = None;
+                return;
+            }
+            if let Some(other_key) = self.exit_key_sequence_start {
+                // Wrong key pressed - show message for the original key and reset timer
+                key_char = other_key;
             }
         }
 

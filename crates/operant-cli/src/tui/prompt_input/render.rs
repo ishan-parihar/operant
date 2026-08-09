@@ -71,7 +71,6 @@ pub fn wrap_line(line: &str, width: usize) -> Vec<String> {
 /// multi-line input rows (one per logical line in the text) plus an accent
 /// underline. Suggestions are rendered by the footer, not as a boxed dropdown
 /// here.
-
 pub fn render_prompt_input(
     state: &PromptInputState,
     area: Rect,
@@ -331,31 +330,30 @@ pub fn render_prompt_input(
     // This shows the character AND the cursor simultaneously.
     // (iter-121 — user-reported bug: input text was invisible because the
     // solid block cursor covered the typed character.)
-    if show_cursor {
-        if let Some((vi, col_in_row)) = cursor_visual {
-            if vi >= scroll_offset {
-                let display_idx = vi - scroll_offset;
-                if display_idx < max_text_rows {
-                    let row_y = text_start_y + display_idx as u16;
-                    let x = area.x + prefix_width + col_in_row as u16;
-                    if x < area.x + area.width && row_y < area.y + area.height {
-                        let cell = &mut buf[(x, row_y)];
-                        // Get the current character at this position
-                        let current_symbol = cell.symbol().to_string();
-                        if current_symbol.is_empty() || current_symbol == " " {
-                            // Empty position — show a cursor bar
-                            cell.set_symbol("▏");
-                            cell.set_style(Style::default().fg(Color::White).bg(Color::Black));
-                        } else {
-                            // Non-empty position — reverse video
-                            cell.set_style(
-                                Style::default()
-                                    .fg(Color::Black)
-                                    .bg(Color::White)
-                                    .add_modifier(Modifier::BOLD),
-                            );
-                        }
-                    }
+    if show_cursor
+        && let Some((vi, col_in_row)) = cursor_visual
+        && vi >= scroll_offset
+    {
+        let display_idx = vi - scroll_offset;
+        if display_idx < max_text_rows {
+            let row_y = text_start_y + display_idx as u16;
+            let x = area.x + prefix_width + col_in_row as u16;
+            if x < area.x + area.width && row_y < area.y + area.height {
+                let cell = &mut buf[(x, row_y)];
+                // Get the current character at this position
+                let current_symbol = cell.symbol().to_string();
+                if current_symbol.is_empty() || current_symbol == " " {
+                    // Empty position — show a cursor bar
+                    cell.set_symbol("▏");
+                    cell.set_style(Style::default().fg(Color::White).bg(Color::Black));
+                } else {
+                    // Non-empty position — reverse video
+                    cell.set_style(
+                        Style::default()
+                            .fg(Color::Black)
+                            .bg(Color::White)
+                            .add_modifier(Modifier::BOLD),
+                    );
                 }
             }
         }
@@ -392,18 +390,18 @@ pub fn render_prompt_input(
         (None, text_start_y + text_rows_rendered as u16)
     };
 
-    if let (Some(row), Some(cl)) = (cmdline_row, cmd_line) {
-        if row < area.y + area.height {
-            Paragraph::new(cl).render(
-                Rect {
-                    x: area.x,
-                    y: row,
-                    width: area.width,
-                    height: 1,
-                },
-                buf,
-            );
-        }
+    if let (Some(row), Some(cl)) = (cmdline_row, cmd_line)
+        && row < area.y + area.height
+    {
+        Paragraph::new(cl).render(
+            Rect {
+                x: area.x,
+                y: row,
+                width: area.width,
+                height: 1,
+            },
+            buf,
+        );
     }
 
     if underline_row < area.y + area.height {

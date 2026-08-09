@@ -572,24 +572,23 @@ pub fn render_permission_dialog(frame: &mut Frame, pr: &PermissionRequest, area:
     if !matches!(
         pr.kind,
         PermissionDialogKind::Bash { .. } | PermissionDialogKind::PowerShell { .. }
-    ) {
-        if let Some(ref preview) = pr.input_preview {
-            lines.push(Line::from(vec![
-                Span::styled(
-                    "  \u{276F} ",
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(
-                    preview.clone(),
-                    Style::default()
-                        .fg(Color::White)
-                        .add_modifier(Modifier::BOLD),
-                ),
-            ]));
-            lines.push(Line::from(""));
-        }
+    ) && let Some(ref preview) = pr.input_preview
+    {
+        lines.push(Line::from(vec![
+            Span::styled(
+                "  \u{276F} ",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                preview.clone(),
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]));
+        lines.push(Line::from(""));
     }
 
     // ---- Description (word-wrapped) -----------------------------------------

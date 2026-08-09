@@ -873,15 +873,15 @@ where
             report.workspace_key = Some(snapshot.workspace_key().to_string());
         }
 
-        if matches!(state, AutonomousState::Failed | AutonomousState::Paused) {
-            if let Some(failure) = &self.failure {
-                report.attempts = failure.attempts;
-                report.last_failure_signature = Some(failure.last_failure_signature.clone());
-                report.last_error = Some(failure.last_error.clone());
-                report.paused = failure.paused;
-                report.workspace_key = Some(failure.workspace_key.to_string());
-                report.state_fingerprint = Some(failure.state_fingerprint.to_string());
-            }
+        if matches!(state, AutonomousState::Failed | AutonomousState::Paused)
+            && let Some(failure) = &self.failure
+        {
+            report.attempts = failure.attempts;
+            report.last_failure_signature = Some(failure.last_failure_signature.clone());
+            report.last_error = Some(failure.last_error.clone());
+            report.paused = failure.paused;
+            report.workspace_key = Some(failure.workspace_key.to_string());
+            report.state_fingerprint = Some(failure.state_fingerprint.to_string());
         }
 
         report

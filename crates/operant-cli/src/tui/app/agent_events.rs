@@ -9,7 +9,7 @@ impl App {
     pub fn handle_agent_event(&mut self, event: AgentEvent) {
         // Publish to debug bus (no-op when disabled).
         let event_variant = format!("{:?}", std::mem::discriminant(&event));
-        let event_summary: String = format!("{:?}", &event).chars().take(80).collect();
+        let event_summary: String = format!("{:?}", event).chars().take(80).collect();
         self.debug_hub
             .publish(crate::tui::debug::TuiEvent::AgentEvent {
                 variant: event_variant,
@@ -230,13 +230,13 @@ impl App {
                 {
                     // Non-streaming path: Done carries the full message.
                     let mut blocks = Vec::new();
-                    if let Some(reasoning) = &message.reasoning {
-                        if !reasoning.trim().is_empty() {
-                            blocks.push(ContentBlock::Thinking {
-                                thinking: reasoning.clone(),
-                                signature: String::new(),
-                            });
-                        }
+                    if let Some(reasoning) = &message.reasoning
+                        && !reasoning.trim().is_empty()
+                    {
+                        blocks.push(ContentBlock::Thinking {
+                            thinking: reasoning.clone(),
+                            signature: String::new(),
+                        });
                     }
                     blocks.push(ContentBlock::Text {
                         text: message.content.clone(),

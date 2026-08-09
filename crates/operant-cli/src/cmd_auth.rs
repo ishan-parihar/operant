@@ -221,12 +221,12 @@ fn handle_auth_list(config: &AppConfig) -> Result<()> {
     }
 
     // Also check the config-level api_key
-    if let Some(ref key) = config.client.api_key {
-        if !key.is_empty() {
-            found_any = true;
-            let hint = key_hint(key, 8);
-            println!(" {:<14} {:<28} config (client.api_key)", "default", hint);
-        }
+    if let Some(ref key) = config.client.api_key
+        && !key.is_empty()
+    {
+        found_any = true;
+        let hint = key_hint(key, 8);
+        println!(" {:<14} {:<28} config (client.api_key)", "default", hint);
     }
 
     if !found_any {

@@ -105,39 +105,33 @@ impl PromptInputState {
 
     /// Accept the current suggestion.
     pub fn accept_suggestion(&mut self) {
-        if let Some(idx) = self.suggestion_index {
-            if let Some(s) = self.suggestions.get(idx) {
-                let new_cursor = match s.source {
-                    TypeaheadSource::SlashCommand => {
-                        // Replace entire text; discard anything after cursor too.
-                        self.text = s.text.clone();
-                        self.text.len()
-                    }
-                    TypeaheadSource::FileRef => {
-                        // Replace from the last word-boundary @ up to the cursor.
-                        // Preserve any text that was already after the cursor.
-                        let tail = self.text[self.cursor..].to_string();
-                        if let Some(at_idx) = self.text[..self.cursor].rfind('@') {
-                            let at_word_boundary = at_idx == 0
-                                || self.text[..at_idx]
-                                    .chars()
-                                    .last()
-                                    .map(|c| c.is_whitespace())
-                                    .unwrap_or(false);
-                            if at_word_boundary {
-                                let mut new_text = self.text[..at_idx].to_string();
-                                new_text.push_str(&s.text);
-                                let cursor = new_text.len();
-                                new_text.push_str(&tail);
-                                self.text = new_text;
-                                cursor
-                            } else {
-                                let mut new_text = s.text.clone();
-                                let cursor = new_text.len();
-                                new_text.push_str(&tail);
-                                self.text = new_text;
-                                cursor
-                            }
+        if let Some(idx) = self.suggestion_index
+            && let Some(s) = self.suggestions.get(idx)
+        {
+            let new_cursor = match s.source {
+                TypeaheadSource::SlashCommand => {
+                    // Replace entire text; discard anything after cursor too.
+                    self.text = s.text.clone();
+                    self.text.len()
+                }
+                TypeaheadSource::FileRef => {
+                    // Replace from the last word-boundary @ up to the cursor.
+                    // Preserve any text that was already after the cursor.
+                    let tail = self.text[self.cursor..].to_string();
+                    if let Some(at_idx) = self.text[..self.cursor].rfind('@') {
+                        let at_word_boundary = at_idx == 0
+                            || self.text[..at_idx]
+                                .chars()
+                                .last()
+                                .map(|c| c.is_whitespace())
+                                .unwrap_or(false);
+                        if at_word_boundary {
+                            let mut new_text = self.text[..at_idx].to_string();
+                            new_text.push_str(&s.text);
+                            let cursor = new_text.len();
+                            new_text.push_str(&tail);
+                            self.text = new_text;
+                            cursor
                         } else {
                             let mut new_text = s.text.clone();
                             let cursor = new_text.len();
@@ -145,13 +139,19 @@ impl PromptInputState {
                             self.text = new_text;
                             cursor
                         }
+                    } else {
+                        let mut new_text = s.text.clone();
+                        let cursor = new_text.len();
+                        new_text.push_str(&tail);
+                        self.text = new_text;
+                        cursor
                     }
-                };
-                self.cursor = new_cursor;
-                self.suggestions.clear();
-                self.suggestion_index = None;
-                self.update_token_estimate();
-            }
+                }
+            };
+            self.cursor = new_cursor;
+            self.suggestions.clear();
+            self.suggestion_index = None;
+            self.update_token_estimate();
         }
     }
 

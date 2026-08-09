@@ -110,11 +110,12 @@ impl AskUserDialogState {
 
     /// Select an option directly by 1-based number key.
     pub fn select_by_number(&mut self, n: usize) {
-        if let Some(ref opts) = self.options {
-            if n >= 1 && n <= opts.len() {
-                self.selected_idx = n - 1;
-                self.in_custom_input = false;
-            }
+        if let Some(ref opts) = self.options
+            && n >= 1
+            && n <= opts.len()
+        {
+            self.selected_idx = n - 1;
+            self.in_custom_input = false;
         }
     }
 
@@ -249,11 +250,11 @@ pub fn render_ask_user_dialog(state: &AskUserDialogState, area: Rect, buf: &mut 
         .add_modifier(Modifier::BOLD);
     for (i, ch) in title.chars().enumerate() {
         let x = title_x + i as u16;
-        if x < modal_area.right() - 1 {
-            if let Some(cell) = buf.cell_mut((x, modal_area.top())) {
-                cell.set_char(ch);
-                cell.set_style(title_style);
-            }
+        if x < modal_area.right() - 1
+            && let Some(cell) = buf.cell_mut((x, modal_area.top()))
+        {
+            cell.set_char(ch);
+            cell.set_style(title_style);
         }
     }
 

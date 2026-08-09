@@ -144,10 +144,10 @@ impl MessageHandler for GatewayMessageHandler {
                 );
                 let _ = reply_tx.send(message.content.clone());
                 // Restore the map for future questions
-                if let Some(g) = crate::gateway_runner::PENDING_USER_QUESTIONS.get() {
-                    if let Ok(mut guard) = g.lock() {
-                        *guard = Some(pending_map);
-                    }
+                if let Some(g) = crate::gateway_runner::PENDING_USER_QUESTIONS.get()
+                    && let Ok(mut guard) = g.lock()
+                {
+                    *guard = Some(pending_map);
                 }
                 return Ok(OutgoingMessage::new(
                     message.channel_id.clone(),
@@ -156,10 +156,10 @@ impl MessageHandler for GatewayMessageHandler {
                 .no_markdown());
             }
             // No pending question — restore the map and continue to agent
-            if let Some(g) = crate::gateway_runner::PENDING_USER_QUESTIONS.get() {
-                if let Ok(mut guard) = g.lock() {
-                    *guard = Some(pending_map);
-                }
+            if let Some(g) = crate::gateway_runner::PENDING_USER_QUESTIONS.get()
+                && let Ok(mut guard) = g.lock()
+            {
+                *guard = Some(pending_map);
             }
         }
 
@@ -476,14 +476,14 @@ pub async fn send_channel_message(
     // instances (tokens, proxy, streaming config) as the running service.
     let gw = runner().lock().await.clone();
     let msg = OutgoingMessage::new(recipient, message).no_markdown();
-    if let Some(gw) = gw {
-        if gw.is_running().await {
-            return gw
-                .send_to_platform(platform, msg)
-                .await
-                .map(|_| format!("Sent via {platform} to {recipient}."))
-                .map_err(anyhow::Error::from);
-        }
+    if let Some(gw) = gw
+        && gw.is_running().await
+    {
+        return gw
+            .send_to_platform(platform, msg)
+            .await
+            .map(|_| format!("Sent via {platform} to {recipient}."))
+            .map_err(anyhow::Error::from);
     }
 
     // No running gateway — build a one-shot gateway with the enabled
@@ -540,12 +540,11 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
     init_pending_permissions();
     let mut guard = runner().lock().await;
 
-    if guard.is_some() {
-        if let Some(gw) = guard.as_ref() {
-            if gw.is_running().await {
-                return Ok("Gateway is already running.".to_string());
-            }
-        }
+    if guard.is_some()
+        && let Some(gw) = guard.as_ref()
+        && gw.is_running().await
+    {
+        return Ok("Gateway is already running.".to_string());
     }
 
     let gw_config = gateway_config_from_app(app_config);
@@ -819,23 +818,19 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                 }
                 AgentEvent::ToolComplete { result } => {
                     // Intercept TTS audio results and send as voice message
-                    if result.name == "text_to_speech" && result.success {
-                        if let Ok(data) = serde_json::from_str::<serde_json::Value>(&result.content)
+                    if result.name == "text_to_speech"
+                        && result.success
+                        && let Ok(data) = serde_json::from_str::<serde_json::Value>(&result.content)
+                        && let Some(audio_b64) = data.get("audio").and_then(|a| a.as_str())
+                    {
+                        let format = data.get("format").and_then(|f| f.as_str()).unwrap_or("wav");
+                        if let Ok(audio_bytes) =
+                            base64::engine::general_purpose::STANDARD.decode(audio_b64)
+                            && let Err(e) = gw_for_events
+                                .send_voice(&platform, &channel_id, &audio_bytes, format)
+                                .await
                         {
-                            if let Some(audio_b64) = data.get("audio").and_then(|a| a.as_str()) {
-                                let format =
-                                    data.get("format").and_then(|f| f.as_str()).unwrap_or("wav");
-                                if let Ok(audio_bytes) =
-                                    base64::engine::general_purpose::STANDARD.decode(audio_b64)
-                                {
-                                    if let Err(e) = gw_for_events
-                                        .send_voice(&platform, &channel_id, &audio_bytes, format)
-                                        .await
-                                    {
-                                        tracing::warn!(error = %e, "Failed to send TTS voice message");
-                                    }
-                                }
-                            }
+                            tracing::warn!(error = %e, "Failed to send TTS voice message");
                         }
                     }
                 }
@@ -1024,10 +1019,10 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
     let pending_uq: Arc<Mutex<HashMap<String, tokio::sync::oneshot::Sender<String>>>> =
         Arc::new(Mutex::new(HashMap::new()));
     // Store in the global so GatewayMessageHandler can check it
-    if let Some(global_uq) = PENDING_USER_QUESTIONS.get() {
-        if let Ok(mut guard) = global_uq.lock() {
-            *guard = Some(pending_uq.clone());
-        }
+    if let Some(global_uq) = PENDING_USER_QUESTIONS.get()
+        && let Ok(mut guard) = global_uq.lock()
+    {
+        *guard = Some(pending_uq.clone());
     }
     let pending_uq_for_task = pending_uq.clone();
     tokio::spawn(async move {
@@ -1142,24 +1137,24 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                 }
 
                 // ── 2. Message enrichment ─────────────────────────────────────
-                if platform == "telegram" {
-                    if let Some(token) = &telegram_token {
-                        // Photo enrichment: download largest photo and note it
-                        if let Some(desc) = enrich_photo(&msg.raw, token).await {
-                            msg.content = format!("{}\n{}", desc, msg.content);
-                        }
-                        // Voice enrichment: download, transcribe, prepend
-                        if let Some(transcript) = enrich_voice(&msg.raw, token).await {
-                            msg.content = format!("{}\n{}", transcript, msg.content);
-                        }
-                        // Document enrichment: extract filename + caption
-                        if let Some(info) = enrich_document(&msg.raw) {
-                            msg.content = if msg.content.is_empty() {
-                                info
-                            } else {
-                                format!("{}\n{}", msg.content, info)
-                            };
-                        }
+                if platform == "telegram"
+                    && let Some(token) = &telegram_token
+                {
+                    // Photo enrichment: download largest photo and note it
+                    if let Some(desc) = enrich_photo(&msg.raw, token).await {
+                        msg.content = format!("{}\n{}", desc, msg.content);
+                    }
+                    // Voice enrichment: download, transcribe, prepend
+                    if let Some(transcript) = enrich_voice(&msg.raw, token).await {
+                        msg.content = format!("{}\n{}", transcript, msg.content);
+                    }
+                    // Document enrichment: extract filename + caption
+                    if let Some(info) = enrich_document(&msg.raw) {
+                        msg.content = if msg.content.is_empty() {
+                            info
+                        } else {
+                            format!("{}\n{}", msg.content, info)
+                        };
                     }
                 }
                 tracing::info!(
@@ -1528,18 +1523,18 @@ async fn enrich_voice(raw: &serde_json::Value, token: &str) -> Option<String> {
     let result = tool.execute(args, ToolContext::default()).await;
 
     if result.success {
-        if let Ok(data) = result.parse_content::<serde_json::Value>() {
-            if let Some(transcript) = data.get("transcript").and_then(|v| v.as_str()) {
-                let trimmed = transcript.trim();
-                if !trimmed.is_empty() {
-                    tracing::info!(
-                        "Transcribed voice message ({}:{:02}): {}",
-                        minutes,
-                        seconds,
-                        trimmed
-                    );
-                    return Some(format!("[Transcription: {}]", trimmed));
-                }
+        if let Ok(data) = result.parse_content::<serde_json::Value>()
+            && let Some(transcript) = data.get("transcript").and_then(|v| v.as_str())
+        {
+            let trimmed = transcript.trim();
+            if !trimmed.is_empty() {
+                tracing::info!(
+                    "Transcribed voice message ({}:{:02}): {}",
+                    minutes,
+                    seconds,
+                    trimmed
+                );
+                return Some(format!("[Transcription: {}]", trimmed));
             }
         }
     } else {
@@ -1593,10 +1588,12 @@ mod tests {
         // `phone_number_id` (required for the Graph API URL) had no wiring
         // path: no config field, wizard skipped it, factory never called
         // `with_phone_number_id`. This guards the full chain.
-        let mut config = GatewayConfig::default();
-        config.whatsapp_enabled = true;
-        config.whatsapp_token = Some("wa-token".to_string());
-        config.whatsapp_phone_number_id = Some("123456789".to_string());
+        let config = GatewayConfig {
+            whatsapp_enabled: true,
+            whatsapp_token: Some("wa-token".to_string()),
+            whatsapp_phone_number_id: Some("123456789".to_string()),
+            ..GatewayConfig::default()
+        };
         let adapters = build_adapters(&config);
         let wa = adapters
             .iter()
@@ -1611,9 +1608,11 @@ mod tests {
 
         // Without phone_number_id the adapter must report the misconfig so
         // doctor/status surfaces surface it instead of 404ing at send time.
-        let mut bare = GatewayConfig::default();
-        bare.whatsapp_enabled = true;
-        bare.whatsapp_token = Some("wa-token".to_string());
+        let bare = GatewayConfig {
+            whatsapp_enabled: true,
+            whatsapp_token: Some("wa-token".to_string()),
+            ..GatewayConfig::default()
+        };
         let adapters = build_adapters(&bare);
         let wa = adapters
             .iter()

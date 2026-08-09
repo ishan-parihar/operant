@@ -594,36 +594,35 @@ fn render_tool_detail(state: &McpViewState, area: Rect, buf: &mut Buffer) {
     };
 
     // If error is expanded, show full error text in this pane
-    if state.error_expanded {
-        if let Some(server) = state.servers.get(state.selected_server) {
-            if let Some(ref err_msg) = server.error_message {
-                Block::default()
-                    .title(" Error Detail [e: close] ")
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(Color::Red))
-                    .style(Style::default().bg(OPERANT_PANEL_BG).fg(OPERANT_TEXT))
-                    .render(area, buf);
-                let inner = Rect {
-                    x: area.x + 1,
-                    y: area.y + 1,
-                    width: area.width.saturating_sub(2),
-                    height: area.height.saturating_sub(2),
-                };
-                let lines: Vec<Line> = err_msg
-                    .lines()
-                    .map(|l| {
-                        Line::from(vec![Span::styled(
-                            l.to_string(),
-                            Style::default().fg(Color::White),
-                        )])
-                    })
-                    .collect();
-                Paragraph::new(lines)
-                    .wrap(ratatui::widgets::Wrap { trim: false })
-                    .render(inner, buf);
-                return;
-            }
-        }
+    if state.error_expanded
+        && let Some(server) = state.servers.get(state.selected_server)
+        && let Some(ref err_msg) = server.error_message
+    {
+        Block::default()
+            .title(" Error Detail [e: close] ")
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Red))
+            .style(Style::default().bg(OPERANT_PANEL_BG).fg(OPERANT_TEXT))
+            .render(area, buf);
+        let inner = Rect {
+            x: area.x + 1,
+            y: area.y + 1,
+            width: area.width.saturating_sub(2),
+            height: area.height.saturating_sub(2),
+        };
+        let lines: Vec<Line> = err_msg
+            .lines()
+            .map(|l| {
+                Line::from(vec![Span::styled(
+                    l.to_string(),
+                    Style::default().fg(Color::White),
+                )])
+            })
+            .collect();
+        Paragraph::new(lines)
+            .wrap(ratatui::widgets::Wrap { trim: false })
+            .render(inner, buf);
+        return;
     }
 
     Block::default()

@@ -188,10 +188,10 @@ impl App {
                 // Esc = cancel = deny. Force the selected option to the deny
                 // option (key 'n') before resolving so the response is always
                 // Deny regardless of which option was highlighted.
-                if let Some(pr) = self.permission_request.as_mut() {
-                    if let Some(idx) = pr.options.iter().position(|o| o.key == 'n') {
-                        pr.selected_option = idx;
-                    }
+                if let Some(pr) = self.permission_request.as_mut()
+                    && let Some(idx) = pr.options.iter().position(|o| o.key == 'n')
+                {
+                    pr.selected_option = idx;
                 }
                 self.resolve_permission_dialog();
             }

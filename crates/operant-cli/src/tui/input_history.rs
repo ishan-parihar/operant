@@ -132,13 +132,13 @@ pub fn append(text: &str) {
             // Fall back to append-only mode if atomic write fails (e.g.
             // permission issue creating the tmp file). Still better than
             // losing the entry.
-            if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(&path) {
-                if let Ok(json) = serde_json::to_string(&HistoryEntry {
+            if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(&path)
+                && let Ok(json) = serde_json::to_string(&HistoryEntry {
                     ts: now,
                     text: trimmed.to_string(),
-                }) {
-                    let _ = writeln!(file, "{}", json);
-                }
+                })
+            {
+                let _ = writeln!(file, "{}", json);
             }
         }
     }

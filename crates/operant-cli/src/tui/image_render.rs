@@ -192,16 +192,15 @@ fn render_sixel(path: &PathBuf, config: &ImageRenderConfig) -> RenderedImage {
         .args(["-w", &config.max_width_cells.to_string()])
         .arg(path)
         .output()
+        && output.status.success()
     {
-        if output.status.success() {
-            let sixel_data = String::from_utf8_lossy(&output.stdout);
-            return RenderedImage {
-                escape_sequence: sixel_data.to_string(),
-                width_cells: config.max_width_cells,
-                height_cells: config.max_height_cells,
-                success: true,
-            };
-        }
+        let sixel_data = String::from_utf8_lossy(&output.stdout);
+        return RenderedImage {
+            escape_sequence: sixel_data.to_string(),
+            width_cells: config.max_width_cells,
+            height_cells: config.max_height_cells,
+            success: true,
+        };
     }
 
     // Fallback: try built-in sixel encoder for PNG

@@ -68,17 +68,16 @@ pub fn copy_to_clipboard(text: &str) -> bool {
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .spawn()
+            && let Some(mut stdin) = child.stdin.take()
         {
-            if let Some(mut stdin) = child.stdin.take() {
-                if let Err(_e) = stdin.write_all(text.as_bytes()) {
-                    // fall through to xclip/xsel
-                } else {
-                    drop(stdin);
-                    if let Ok(status) = child.wait() {
-                        if status.success() {
-                            return true;
-                        }
-                    }
+            if let Err(_e) = stdin.write_all(text.as_bytes()) {
+                // fall through to xclip/xsel
+            } else {
+                drop(stdin);
+                if let Ok(status) = child.wait()
+                    && status.success()
+                {
+                    return true;
                 }
             }
         }
@@ -98,10 +97,10 @@ pub fn copy_to_clipboard(text: &str) -> bool {
                 }
                 drop(stdin);
             }
-            if let Ok(status) = child.wait() {
-                if status.success() {
-                    return true;
-                }
+            if let Ok(status) = child.wait()
+                && status.success()
+            {
+                return true;
             }
         }
 
@@ -120,10 +119,10 @@ pub fn copy_to_clipboard(text: &str) -> bool {
                 }
                 drop(stdin);
             }
-            if let Ok(status) = child.wait() {
-                if status.success() {
-                    return true;
-                }
+            if let Ok(status) = child.wait()
+                && status.success()
+            {
+                return true;
             }
         }
     }

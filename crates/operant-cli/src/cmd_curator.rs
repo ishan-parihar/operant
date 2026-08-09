@@ -295,21 +295,21 @@ async fn cmd_run(
             report.skills_pruned.join(", ")
         );
     }
-    if let Some(ref cron) = report.cron_rewrites {
-        if cron.jobs_updated > 0 {
+    if let Some(ref cron) = report.cron_rewrites
+        && cron.jobs_updated > 0
+    {
+        println!(
+            "  Cron jobs rewritten ({}/{}):",
+            cron.jobs_updated, cron.jobs_scanned
+        );
+        for mapping in &cron.mappings {
             println!(
-                "  Cron jobs rewritten ({}/{}):",
-                cron.jobs_updated, cron.jobs_scanned
+                "    {} -> {} (job {})",
+                mapping.old_skill, mapping.new_skill, mapping.job_id
             );
-            for mapping in &cron.mappings {
-                println!(
-                    "    {} -> {} (job {})",
-                    mapping.old_skill, mapping.new_skill, mapping.job_id
-                );
-            }
-            for drop in &cron.drops {
-                println!("    {} dropped (job {})", drop.dropped_skill, drop.job_id);
-            }
+        }
+        for drop in &cron.drops {
+            println!("    {} dropped (job {})", drop.dropped_skill, drop.job_id);
         }
     }
     for err in &report.errors {

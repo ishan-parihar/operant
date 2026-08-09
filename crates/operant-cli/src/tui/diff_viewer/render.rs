@@ -302,7 +302,9 @@ fn render_diff_detail(state: &DiffViewerState, area: Rect, buf: &mut Buffer) {
         // Thumb position
         let scroll_range = total_lines.saturating_sub(bar_h);
         let thumb_top = if scroll_range > 0 {
-            (scroll * (bar_h.saturating_sub(thumb_size))) / scroll_range
+            (scroll * (bar_h.saturating_sub(thumb_size)))
+                .checked_div(scroll_range)
+                .unwrap_or(0)
         } else {
             0
         };
@@ -483,36 +485,35 @@ pub(crate) fn build_diff_lines(file: &FileDiffStats, width: u16) -> Vec<Line<'st
             let diff_line = &hunk_lines[i];
 
             // Detect adjacent Removed → Added pair for inline word-level diff
-            if diff_line.kind == DiffLineKind::Removed {
-                if let Some(next_line) = hunk_lines.get(i + 1) {
-                    if next_line.kind == DiffLineKind::Added {
-                        let (old_spans, new_spans) =
-                            build_inline_diff_spans(&diff_line.content, &next_line.content);
+            if diff_line.kind == DiffLineKind::Removed
+                && let Some(next_line) = hunk_lines.get(i + 1)
+                && next_line.kind == DiffLineKind::Added
+            {
+                let (old_spans, new_spans) =
+                    build_inline_diff_spans(&diff_line.content, &next_line.content);
 
-                        let mut removed_row = vec![
-                            Span::styled(
-                                format_gutter(diff_line.old_line_no, None),
-                                Style::default().fg(Color::DarkGray),
-                            ),
-                            Span::styled("-  ", Style::default().fg(Color::Red)),
-                        ];
-                        removed_row.extend(truncate_spans_to_width(old_spans, avail));
-                        lines.push(Line::from(removed_row));
+                let mut removed_row = vec![
+                    Span::styled(
+                        format_gutter(diff_line.old_line_no, None),
+                        Style::default().fg(Color::DarkGray),
+                    ),
+                    Span::styled("-  ", Style::default().fg(Color::Red)),
+                ];
+                removed_row.extend(truncate_spans_to_width(old_spans, avail));
+                lines.push(Line::from(removed_row));
 
-                        let mut added_row = vec![
-                            Span::styled(
-                                format_gutter(None, next_line.new_line_no),
-                                Style::default().fg(Color::DarkGray),
-                            ),
-                            Span::styled("+  ", Style::default().fg(Color::Green)),
-                        ];
-                        added_row.extend(truncate_spans_to_width(new_spans, avail));
-                        lines.push(Line::from(added_row));
+                let mut added_row = vec![
+                    Span::styled(
+                        format_gutter(None, next_line.new_line_no),
+                        Style::default().fg(Color::DarkGray),
+                    ),
+                    Span::styled("+  ", Style::default().fg(Color::Green)),
+                ];
+                added_row.extend(truncate_spans_to_width(new_spans, avail));
+                lines.push(Line::from(added_row));
 
-                        i += 2;
-                        continue;
-                    }
-                }
+                i += 2;
+                continue;
             }
 
             // Standard single-line rendering

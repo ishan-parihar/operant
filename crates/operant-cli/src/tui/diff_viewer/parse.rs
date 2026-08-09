@@ -45,10 +45,10 @@ pub fn parse_unified_diff(text: &str) -> Vec<FileDiffStats> {
     for raw_line in text.lines() {
         if raw_line.starts_with("diff --git ") {
             // Flush previous hunk and file
-            if let Some(hunk) = current_hunk.take() {
-                if let Some(f) = current_file.as_mut() {
-                    f.hunks.push(hunk);
-                }
+            if let Some(hunk) = current_hunk.take()
+                && let Some(f) = current_file.as_mut()
+            {
+                f.hunks.push(hunk);
             }
             if let Some(f) = current_file.take() {
                 files.push(f);
@@ -77,10 +77,10 @@ pub fn parse_unified_diff(text: &str) -> Vec<FileDiffStats> {
             }
         } else if raw_line.starts_with("@@ ") {
             // Flush previous hunk
-            if let Some(hunk) = current_hunk.take() {
-                if let Some(f) = current_file.as_mut() {
-                    f.hunks.push(hunk);
-                }
+            if let Some(hunk) = current_hunk.take()
+                && let Some(f) = current_file.as_mut()
+            {
+                f.hunks.push(hunk);
             }
             // Parse @@ -old_start,old_count +new_start,new_count @@
             let (old_start, _old_count, new_start, _new_count) = parse_hunk_header(raw_line);
@@ -131,10 +131,10 @@ pub fn parse_unified_diff(text: &str) -> Vec<FileDiffStats> {
     }
 
     // Flush final hunk and file
-    if let Some(hunk) = current_hunk.take() {
-        if let Some(f) = current_file.as_mut() {
-            f.hunks.push(hunk);
-        }
+    if let Some(hunk) = current_hunk.take()
+        && let Some(f) = current_file.as_mut()
+    {
+        f.hunks.push(hunk);
     }
     if let Some(f) = current_file.take() {
         files.push(f);

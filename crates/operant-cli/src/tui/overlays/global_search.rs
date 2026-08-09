@@ -93,25 +93,25 @@ impl GlobalSearchState {
 
         if let Ok(out) = output {
             for line in String::from_utf8_lossy(&out.stdout).lines() {
-                if let Ok(val) = serde_json::from_str::<serde_json::Value>(line) {
-                    if let Some("match") = val["type"].as_str() {
-                        let data = &val["data"];
-                        let file = data["path"]["text"].as_str().unwrap_or("").to_string();
-                        let line_no = data["line_number"].as_u64().unwrap_or(0) as u32;
-                        let text = data["lines"]["text"]
-                            .as_str()
-                            .unwrap_or("")
-                            .trim_end_matches('\n')
-                            .to_string();
-                        self.results.push(SearchResult {
-                            file,
-                            line: line_no,
-                            text,
-                        });
-                        self.total_matches += 1;
-                        if self.results.len() >= 500 {
-                            break;
-                        }
+                if let Ok(val) = serde_json::from_str::<serde_json::Value>(line)
+                    && let Some("match") = val["type"].as_str()
+                {
+                    let data = &val["data"];
+                    let file = data["path"]["text"].as_str().unwrap_or("").to_string();
+                    let line_no = data["line_number"].as_u64().unwrap_or(0) as u32;
+                    let text = data["lines"]["text"]
+                        .as_str()
+                        .unwrap_or("")
+                        .trim_end_matches('\n')
+                        .to_string();
+                    self.results.push(SearchResult {
+                        file,
+                        line: line_no,
+                        text,
+                    });
+                    self.total_matches += 1;
+                    if self.results.len() >= 500 {
+                        break;
                     }
                 }
             }

@@ -384,22 +384,22 @@ pub fn render_app(frame: &mut Frame, app: &App) {
     }
 
     // Always show error modals on top of everything (highest priority)
-    if let Some(notif) = app.notifications.current() {
-        if notif.kind == NotificationKind::Error {
-            let is_welcome_screen = app.messages.is_empty()
-                && app.streaming_text.is_empty()
-                && app.streaming_thinking.is_empty()
-                && app.tool_use_blocks.is_empty();
-            render_error_modal(
-                frame,
-                size,
-                notif,
-                app.error_modal_scroll_offset,
-                app.footer_right_column_area.get(),
-                is_welcome_screen,
-            );
-            return; // Don't render other overlays/notifications when error modal is showing
-        }
+    if let Some(notif) = app.notifications.current()
+        && notif.kind == NotificationKind::Error
+    {
+        let is_welcome_screen = app.messages.is_empty()
+            && app.streaming_text.is_empty()
+            && app.streaming_thinking.is_empty()
+            && app.tool_use_blocks.is_empty();
+        render_error_modal(
+            frame,
+            size,
+            notif,
+            app.error_modal_scroll_offset,
+            app.footer_right_column_area.get(),
+            is_welcome_screen,
+        );
+        return; // Don't render other overlays/notifications when error modal is showing
     }
 
     let modal_active = is_modal_open(app);

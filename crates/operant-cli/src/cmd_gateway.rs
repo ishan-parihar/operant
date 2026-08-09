@@ -423,27 +423,27 @@ async fn cmd_stop() -> Result<()> {
         .output()
         .await;
 
-    if let Ok(output) = &sysd {
-        if output.status.success() {
-            println!("Gateway service stopped via systemd.");
-            return Ok(());
-        }
+    if let Ok(output) = &sysd
+        && output.status.success()
+    {
+        println!("Gateway service stopped via systemd.");
+        return Ok(());
     }
 
     let pid_path = operant_core::platform::operant_home().join("gateway.pid");
-    if let Ok(pid_str) = std::fs::read_to_string(&pid_path) {
-        if let Ok(pid) = pid_str.trim().parse::<u32>() {
-            let kill = tokio::process::Command::new("kill")
-                .arg(pid.to_string())
-                .output()
-                .await;
-            if let Ok(k) = kill {
-                if k.status.success() {
-                    println!("Gateway process ({}) killed.", pid);
-                    let _ = std::fs::remove_file(&pid_path);
-                    return Ok(());
-                }
-            }
+    if let Ok(pid_str) = std::fs::read_to_string(&pid_path)
+        && let Ok(pid) = pid_str.trim().parse::<u32>()
+    {
+        let kill = tokio::process::Command::new("kill")
+            .arg(pid.to_string())
+            .output()
+            .await;
+        if let Ok(k) = kill
+            && k.status.success()
+        {
+            println!("Gateway process ({}) killed.", pid);
+            let _ = std::fs::remove_file(&pid_path);
+            return Ok(());
         }
     }
 

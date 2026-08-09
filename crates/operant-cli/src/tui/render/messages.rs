@@ -284,15 +284,14 @@ pub(crate) fn append_turn_items(
     // append_live_content (not here) to avoid duplicating streaming content.
     // This was causing visible duplication/glitching during streaming.
 
-    if !turn.active {
-        if let Some(meta_line) = render_transcript_assistant_meta(turn.metadata, accent) {
-            if turn.has_visible_assistant_content() {
-                sections.push((
-                    SectionContent::Plain(vec![meta_line]),
-                    Some(turn.primary_message_index()),
-                ));
-            }
-        }
+    if !turn.active
+        && let Some(meta_line) = render_transcript_assistant_meta(turn.metadata, accent)
+        && turn.has_visible_assistant_content()
+    {
+        sections.push((
+            SectionContent::Plain(vec![meta_line]),
+            Some(turn.primary_message_index()),
+        ));
     }
 
     if !sections.is_empty() {
@@ -335,16 +334,16 @@ pub(crate) fn render_message_items(app: &App, width: u16) -> Vec<RenderedLineIte
         annotations_len: app.system_annotations.len(),
         thinking_expanded_len: app.thinking_expanded.len(),
     };
-    if cacheable {
-        if let Some(lines) = MESSAGE_LINES_CACHE.with(|cache| {
+    if cacheable
+        && let Some(lines) = MESSAGE_LINES_CACHE.with(|cache| {
             cache
                 .borrow()
                 .as_ref()
                 .filter(|c| c.key == full_key)
                 .map(|c| c.lines.clone())
-        }) {
-            return lines;
-        }
+        })
+    {
+        return lines;
     }
 
     let completed_key = CompletedMsgCacheKey {
@@ -381,21 +380,21 @@ pub(crate) fn render_message_items(app: &App, width: u16) -> Vec<RenderedLineIte
             }
 
             let message = &app.messages[index];
-            if message.role == Role::User {
-                if let Some(&turn) = turn_map.get(&index) {
-                    append_turn_items(
-                        &mut items,
-                        turn,
-                        width,
-                        &tool_names,
-                        &app.thinking_expanded,
-                        app.show_reasoning,
-                        app.frame_count,
-                        app.accent_color,
-                    );
-                    index = turn.end_message_index + 1;
-                    continue;
-                }
+            if message.role == Role::User
+                && let Some(&turn) = turn_map.get(&index)
+            {
+                append_turn_items(
+                    &mut items,
+                    turn,
+                    width,
+                    &tool_names,
+                    &app.thinking_expanded,
+                    app.show_reasoning,
+                    app.frame_count,
+                    app.accent_color,
+                );
+                index = turn.end_message_index + 1;
+                continue;
             }
 
             let tagged = render_transcript_assistant_message_tagged(
@@ -511,10 +510,11 @@ pub(crate) fn append_live_content(
     if !app.streaming_text.is_empty() {
         let text_lines = STREAMING_TEXT_CACHE.with(|cache| {
             let mut slot = cache.borrow_mut();
-            if let Some(cached) = slot.as_ref() {
-                if cached.width == width && cached.text == app.streaming_text {
-                    return cached.lines.clone();
-                }
+            if let Some(cached) = slot.as_ref()
+                && cached.width == width
+                && cached.text == app.streaming_text
+            {
+                return cached.lines.clone();
             }
             let lines = render_transcript_live_text(&app.streaming_text, width);
             *slot = Some(StreamingTextCache {

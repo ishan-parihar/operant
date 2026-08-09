@@ -151,10 +151,9 @@ impl App {
             if let Some(p) = crate::provider::PROVIDERS
                 .iter()
                 .find(|p| p.name == *provider)
+                && !p.default_base_url.is_empty()
             {
-                if !p.default_base_url.is_empty() {
-                    config.client.base_url = p.default_base_url.to_string();
-                }
+                config.client.base_url = p.default_base_url.to_string();
             }
         }
         // Write to ~/.operant/operant.toml.

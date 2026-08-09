@@ -61,12 +61,12 @@ impl RewindFlowOverlay {
     /// Confirm the current selection; advances to the `Confirming` step.
     /// Returns the selected message index if in the Selecting step.
     pub fn confirm_selection(&mut self) -> Option<usize> {
-        if self.step == RewindStep::Selecting {
-            if let Some(msg) = self.selector.current_message() {
-                let idx = msg.idx;
-                self.step = RewindStep::Confirming { message_idx: idx };
-                return Some(idx);
-            }
+        if self.step == RewindStep::Selecting
+            && let Some(msg) = self.selector.current_message()
+        {
+            let idx = msg.idx;
+            self.step = RewindStep::Confirming { message_idx: idx };
+            return Some(idx);
         }
         None
     }

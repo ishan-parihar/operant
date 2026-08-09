@@ -12,26 +12,25 @@ impl PromptInputState {
         // ---- Escape always cancels recording, pending state, returns to Normal ----
         if key == "Escape" {
             // If leaving insert mode, finalise dot-repeat insert action
-            if self.vim_mode == VimMode::Insert {
-                if let Some(before) = self.vim_insert_text_before.take() {
-                    // Compute inserted text as the new characters added since mode entry
-                    let inserted = if self.text.len() >= before.len() {
-                        // Simple case: text only grew (cursor at end of inserted span)
-                        let from = before.len().min(self.cursor);
-                        let _ = from; // use cursor-based diff below
-                        // Find the diff between before/after texts at current cursor
-                        // Inserted = text[insert_start..cursor] but we don't track start.
-                        // Approximate: whole text minus before, substring at cursor.
-                        // Better: store cursor-at-entry and extract.
-                        self.text
-                            [before.len().min(self.text.len())..self.cursor.min(self.text.len())]
-                            .to_string()
-                    } else {
-                        String::new()
-                    };
-                    if !inserted.is_empty() {
-                        self.vim_dot_action = Some(DotRepeatAction::Insert { text: inserted });
-                    }
+            if self.vim_mode == VimMode::Insert
+                && let Some(before) = self.vim_insert_text_before.take()
+            {
+                // Compute inserted text as the new characters added since mode entry
+                let inserted = if self.text.len() >= before.len() {
+                    // Simple case: text only grew (cursor at end of inserted span)
+                    let from = before.len().min(self.cursor);
+                    let _ = from; // use cursor-based diff below
+                    // Find the diff between before/after texts at current cursor
+                    // Inserted = text[insert_start..cursor] but we don't track start.
+                    // Approximate: whole text minus before, substring at cursor.
+                    // Better: store cursor-at-entry and extract.
+                    self.text[before.len().min(self.text.len())..self.cursor.min(self.text.len())]
+                        .to_string()
+                } else {
+                    String::new()
+                };
+                if !inserted.is_empty() {
+                    self.vim_dot_action = Some(DotRepeatAction::Insert { text: inserted });
                 }
             }
             self.vim_mode = VimMode::Normal;
@@ -364,146 +363,142 @@ impl PromptInputState {
             return;
         }
         // In visual-line mode, `y`/`d`/`c` operate on whole lines, motion keys extend selection
-        if self.vim_mode == VimMode::VisualLine {
-            if let Some(anchor) = self.visual_anchor {
-                let line_start = |pos: usize, s: &str| -> usize {
-                    s[..pos].rfind('\n').map(|p| p + 1).unwrap_or(0)
-                };
-                let line_end = |pos: usize, s: &str| -> usize {
-                    s[pos..].find('\n').map(|p| pos + p + 1).unwrap_or(s.len())
-                };
-                let sel_start = line_start(anchor.min(self.cursor), &self.text);
-                let sel_end = line_end(anchor.max(self.cursor), &self.text);
-                match key {
-                    "y" => {
-                        self.yank_buf = self.text[sel_start..sel_end].to_string();
-                        self.cursor = sel_start;
-                        self.vim_mode = VimMode::Normal;
-                        self.visual_anchor = None;
-                        return;
-                    }
-                    "d" | "x" => {
-                        self.push_undo();
-                        self.yank_buf = self.text[sel_start..sel_end].to_string();
-                        let char_count = self.yank_buf.chars().count();
-                        self.text.drain(sel_start..sel_end);
-                        self.cursor = sel_start.min(self.text.len());
-                        self.vim_mode = VimMode::Normal;
-                        self.visual_anchor = None;
-                        self.vim_dot_action =
-                            Some(DotRepeatAction::DeleteChars { count: char_count });
-                        self.normalize();
-                        return;
-                    }
-                    "c" => {
-                        self.push_undo();
-                        self.yank_buf = self.text[sel_start..sel_end].to_string();
-                        self.text.drain(sel_start..sel_end);
-                        self.cursor = sel_start;
-                        self.vim_mode = VimMode::Insert;
-                        self.visual_anchor = None;
-                        self.vim_insert_text_before = Some(self.text.clone());
-                        self.normalize();
-                        return;
-                    }
-                    _ => {
-                        // Motion keys extend the selection (handled by apply_vim_key below)
-                    }
+        if self.vim_mode == VimMode::VisualLine
+            && let Some(anchor) = self.visual_anchor
+        {
+            let line_start =
+                |pos: usize, s: &str| -> usize { s[..pos].rfind('\n').map(|p| p + 1).unwrap_or(0) };
+            let line_end = |pos: usize, s: &str| -> usize {
+                s[pos..].find('\n').map(|p| pos + p + 1).unwrap_or(s.len())
+            };
+            let sel_start = line_start(anchor.min(self.cursor), &self.text);
+            let sel_end = line_end(anchor.max(self.cursor), &self.text);
+            match key {
+                "y" => {
+                    self.yank_buf = self.text[sel_start..sel_end].to_string();
+                    self.cursor = sel_start;
+                    self.vim_mode = VimMode::Normal;
+                    self.visual_anchor = None;
+                    return;
+                }
+                "d" | "x" => {
+                    self.push_undo();
+                    self.yank_buf = self.text[sel_start..sel_end].to_string();
+                    let char_count = self.yank_buf.chars().count();
+                    self.text.drain(sel_start..sel_end);
+                    self.cursor = sel_start.min(self.text.len());
+                    self.vim_mode = VimMode::Normal;
+                    self.visual_anchor = None;
+                    self.vim_dot_action = Some(DotRepeatAction::DeleteChars { count: char_count });
+                    self.normalize();
+                    return;
+                }
+                "c" => {
+                    self.push_undo();
+                    self.yank_buf = self.text[sel_start..sel_end].to_string();
+                    self.text.drain(sel_start..sel_end);
+                    self.cursor = sel_start;
+                    self.vim_mode = VimMode::Insert;
+                    self.visual_anchor = None;
+                    self.vim_insert_text_before = Some(self.text.clone());
+                    self.normalize();
+                    return;
+                }
+                _ => {
+                    // Motion keys extend the selection (handled by apply_vim_key below)
                 }
             }
         }
         // In visual-block mode, treat like character-wise visual for single-line input
-        if self.vim_mode == VimMode::VisualBlock {
-            if let Some(anchor) = self.visual_anchor {
-                let from = anchor.min(self.cursor);
-                let to_excl = anchor.max(self.cursor);
-                let to = self.text[to_excl..]
-                    .char_indices()
-                    .nth(1)
-                    .map(|(b, _)| to_excl + b)
-                    .unwrap_or(self.text.len());
-                match key {
-                    "y" => {
-                        self.yank_buf = self.text[from..to].to_string();
-                        self.cursor = from;
-                        self.vim_mode = VimMode::Normal;
-                        self.visual_anchor = None;
-                        return;
-                    }
-                    "d" | "x" => {
-                        self.push_undo();
-                        self.yank_buf = self.text[from..to].to_string();
-                        let char_count = self.yank_buf.chars().count();
-                        self.text.drain(from..to);
-                        self.cursor = from.min(self.text.len());
-                        self.vim_mode = VimMode::Normal;
-                        self.visual_anchor = None;
-                        self.vim_dot_action =
-                            Some(DotRepeatAction::DeleteChars { count: char_count });
-                        self.normalize();
-                        return;
-                    }
-                    "c" => {
-                        self.push_undo();
-                        self.yank_buf = self.text[from..to].to_string();
-                        self.text.drain(from..to);
-                        self.cursor = from;
-                        self.vim_mode = VimMode::Insert;
-                        self.visual_anchor = None;
-                        self.vim_insert_text_before = Some(self.text.clone());
-                        self.normalize();
-                        return;
-                    }
-                    _ => {}
+        if self.vim_mode == VimMode::VisualBlock
+            && let Some(anchor) = self.visual_anchor
+        {
+            let from = anchor.min(self.cursor);
+            let to_excl = anchor.max(self.cursor);
+            let to = self.text[to_excl..]
+                .char_indices()
+                .nth(1)
+                .map(|(b, _)| to_excl + b)
+                .unwrap_or(self.text.len());
+            match key {
+                "y" => {
+                    self.yank_buf = self.text[from..to].to_string();
+                    self.cursor = from;
+                    self.vim_mode = VimMode::Normal;
+                    self.visual_anchor = None;
+                    return;
                 }
+                "d" | "x" => {
+                    self.push_undo();
+                    self.yank_buf = self.text[from..to].to_string();
+                    let char_count = self.yank_buf.chars().count();
+                    self.text.drain(from..to);
+                    self.cursor = from.min(self.text.len());
+                    self.vim_mode = VimMode::Normal;
+                    self.visual_anchor = None;
+                    self.vim_dot_action = Some(DotRepeatAction::DeleteChars { count: char_count });
+                    self.normalize();
+                    return;
+                }
+                "c" => {
+                    self.push_undo();
+                    self.yank_buf = self.text[from..to].to_string();
+                    self.text.drain(from..to);
+                    self.cursor = from;
+                    self.vim_mode = VimMode::Insert;
+                    self.visual_anchor = None;
+                    self.vim_insert_text_before = Some(self.text.clone());
+                    self.normalize();
+                    return;
+                }
+                _ => {}
             }
         }
         // In visual mode, `y`/`d`/`c` operate on the selection, Escape exits
-        if self.vim_mode == VimMode::Visual {
-            if let Some(anchor) = self.visual_anchor {
-                let from = anchor.min(self.cursor);
-                let to_excl = anchor.max(self.cursor);
-                let to = self.text[to_excl..]
-                    .char_indices()
-                    .nth(1)
-                    .map(|(b, _)| to_excl + b)
-                    .unwrap_or(self.text.len());
-                match key {
-                    "y" => {
-                        self.yank_buf = self.text[from..to].to_string();
-                        self.cursor = from;
-                        self.vim_mode = VimMode::Normal;
-                        self.visual_anchor = None;
-                        return;
-                    }
-                    "d" | "x" => {
-                        self.push_undo();
-                        self.yank_buf = self.text[from..to].to_string();
-                        // Count chars to delete BEFORE mutating text
-                        let char_count = self.yank_buf.chars().count();
-                        self.text.drain(from..to);
-                        self.cursor = from.min(self.text.len());
-                        self.vim_mode = VimMode::Normal;
-                        self.visual_anchor = None;
-                        self.vim_dot_action =
-                            Some(DotRepeatAction::DeleteChars { count: char_count });
-                        self.normalize();
-                        return;
-                    }
-                    "c" => {
-                        self.push_undo();
-                        self.yank_buf = self.text[from..to].to_string();
-                        self.text.drain(from..to);
-                        self.cursor = from;
-                        self.vim_mode = VimMode::Insert;
-                        self.visual_anchor = None;
-                        self.vim_insert_text_before = Some(self.text.clone());
-                        self.normalize();
-                        return;
-                    }
-                    _ => {
-                        // Motion keys still move cursor in visual mode
-                    }
+        if self.vim_mode == VimMode::Visual
+            && let Some(anchor) = self.visual_anchor
+        {
+            let from = anchor.min(self.cursor);
+            let to_excl = anchor.max(self.cursor);
+            let to = self.text[to_excl..]
+                .char_indices()
+                .nth(1)
+                .map(|(b, _)| to_excl + b)
+                .unwrap_or(self.text.len());
+            match key {
+                "y" => {
+                    self.yank_buf = self.text[from..to].to_string();
+                    self.cursor = from;
+                    self.vim_mode = VimMode::Normal;
+                    self.visual_anchor = None;
+                    return;
+                }
+                "d" | "x" => {
+                    self.push_undo();
+                    self.yank_buf = self.text[from..to].to_string();
+                    // Count chars to delete BEFORE mutating text
+                    let char_count = self.yank_buf.chars().count();
+                    self.text.drain(from..to);
+                    self.cursor = from.min(self.text.len());
+                    self.vim_mode = VimMode::Normal;
+                    self.visual_anchor = None;
+                    self.vim_dot_action = Some(DotRepeatAction::DeleteChars { count: char_count });
+                    self.normalize();
+                    return;
+                }
+                "c" => {
+                    self.push_undo();
+                    self.yank_buf = self.text[from..to].to_string();
+                    self.text.drain(from..to);
+                    self.cursor = from;
+                    self.vim_mode = VimMode::Insert;
+                    self.visual_anchor = None;
+                    self.vim_insert_text_before = Some(self.text.clone());
+                    self.normalize();
+                    return;
+                }
+                _ => {
+                    // Motion keys still move cursor in visual mode
                 }
             }
         }
@@ -545,17 +540,18 @@ impl PromptInputState {
         }
 
         // Handle `r` replace pending → after confirm, store dot action
-        if let VimPendingState::None = self.vim_pending {
-            if modified && was_normal {
-                // Check if a replace happened (text changed by exactly 1 char at cursor)
-                if self.text.len() == prev_text_len && self.text != snapshot_text {
-                    // Likely a replace — extract the replacement char at snapshot_cursor
-                    if let Some(ch) = self.text[snapshot_cursor..].chars().next() {
-                        // Verify it's different from what was there before
-                        let old_ch = snapshot_text[snapshot_cursor..].chars().next();
-                        if old_ch != Some(ch) {
-                            self.vim_dot_action = Some(DotRepeatAction::ReplaceChar { ch });
-                        }
+        if let VimPendingState::None = self.vim_pending
+            && modified
+            && was_normal
+        {
+            // Check if a replace happened (text changed by exactly 1 char at cursor)
+            if self.text.len() == prev_text_len && self.text != snapshot_text {
+                // Likely a replace — extract the replacement char at snapshot_cursor
+                if let Some(ch) = self.text[snapshot_cursor..].chars().next() {
+                    // Verify it's different from what was there before
+                    let old_ch = snapshot_text[snapshot_cursor..].chars().next();
+                    if old_ch != Some(ch) {
+                        self.vim_dot_action = Some(DotRepeatAction::ReplaceChar { ch });
                     }
                 }
             }

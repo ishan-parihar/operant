@@ -83,18 +83,17 @@ impl UsageStore {
             let _ = std::fs::create_dir_all(parent);
         }
         let tmp_path = path.with_extension("json.tmp");
-        if let Ok(json) = serde_json::to_string(self) {
-            if let Ok(mut file) = OpenOptions::new()
+        if let Ok(json) = serde_json::to_string(self)
+            && let Ok(mut file) = OpenOptions::new()
                 .create(true)
                 .write(true)
                 .truncate(true)
                 .open(&tmp_path)
-            {
-                let _ = file.write_all(json.as_bytes());
-                let _ = file.flush();
-                drop(file);
-                let _ = std::fs::rename(&tmp_path, &path);
-            }
+        {
+            let _ = file.write_all(json.as_bytes());
+            let _ = file.flush();
+            drop(file);
+            let _ = std::fs::rename(&tmp_path, &path);
         }
     }
 }

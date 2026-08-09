@@ -265,12 +265,12 @@ pub fn render_notification_banner(frame: &mut Frame, queue: &NotificationQueue, 
         // Left accent bar (all rows)
         if toast_area.x < buf.area().right() {
             for row in 0..toast_height {
-                if toast_area.y + row < buf.area().bottom() {
-                    if let Some(cell) = buf.cell_mut((toast_area.x, toast_area.y + row)) {
-                        cell.set_bg(bg);
-                        cell.set_fg(color);
-                        cell.set_char('▌');
-                    }
+                if toast_area.y + row < buf.area().bottom()
+                    && let Some(cell) = buf.cell_mut((toast_area.x, toast_area.y + row))
+                {
+                    cell.set_bg(bg);
+                    cell.set_fg(color);
+                    cell.set_char('▌');
                 }
             }
         }
@@ -278,12 +278,12 @@ pub fn render_notification_banner(frame: &mut Frame, queue: &NotificationQueue, 
         let right_x = toast_area.x + toast_width.saturating_sub(1);
         if right_x < buf.area().right() && toast_area.x < buf.area().right() {
             for row in 0..toast_height {
-                if toast_area.y + row < buf.area().bottom() {
-                    if let Some(cell) = buf.cell_mut((right_x, toast_area.y + row)) {
-                        cell.set_bg(bg);
-                        cell.set_fg(OPERANT_PANEL_BORDER);
-                        cell.set_char('▐');
-                    }
+                if toast_area.y + row < buf.area().bottom()
+                    && let Some(cell) = buf.cell_mut((right_x, toast_area.y + row))
+                {
+                    cell.set_bg(bg);
+                    cell.set_fg(OPERANT_PANEL_BORDER);
+                    cell.set_char('▐');
                 }
             }
         }

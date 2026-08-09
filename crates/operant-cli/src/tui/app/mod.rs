@@ -516,12 +516,11 @@ impl App {
             }
             // Frame-cap guard: a headless scenario that never stops streaming
             // (e.g. a real agent that hangs) can't spin the loop forever.
-            if self.is_simulating {
-                if let Some(max) = self.simulation_max_frames {
-                    if self.frame_count >= max {
-                        self.should_exit = true;
-                    }
-                }
+            if self.is_simulating
+                && let Some(max) = self.simulation_max_frames
+                && self.frame_count >= max
+            {
+                self.should_exit = true;
             }
             if self.should_exit {
                 self.debug_hub.dump_on_exit();
@@ -811,24 +810,23 @@ impl App {
                         // consulted.) "Always allow" in the bypass-permissions
                         // dialog populates the allowlist via
                         // maybe_record_bash_prefix; this is the read side.
-                        if req.tool_name == "bash"
+                        if (req.tool_name == "bash"
                             || req.tool_name == "shell"
-                            || req.tool_name == "terminal"
+                            || req.tool_name == "terminal")
+                            && let Some(ref preview) = req.input_preview
                         {
-                            if let Some(ref preview) = req.input_preview {
-                                let first_word = preview
-                                    .split_whitespace()
-                                    .next()
-                                    .map(|w| w.trim_start_matches("./").to_string())
-                                    .unwrap_or_default();
-                                if !first_word.is_empty()
-                                    && self.bash_prefix_allowlist.contains(&first_word)
-                                {
-                                    let _ = req.response_tx.send(
-                                        operant_core::agent::ToolPermissionResponse::AllowSession,
-                                    );
-                                    continue;
-                                }
+                            let first_word = preview
+                                .split_whitespace()
+                                .next()
+                                .map(|w| w.trim_start_matches("./").to_string())
+                                .unwrap_or_default();
+                            if !first_word.is_empty()
+                                && self.bash_prefix_allowlist.contains(&first_word)
+                            {
+                                let _ = req.response_tx.send(
+                                    operant_core::agent::ToolPermissionResponse::AllowSession,
+                                );
+                                continue;
                             }
                         }
 
@@ -952,24 +950,23 @@ impl App {
                         // zero-timeout immediately after the first character arrives — a paste
                         // dumps every character at once while normal typing rarely queues more
                         // than one char in the same 50 ms window.
-                        if key.modifiers == KeyModifiers::NONE
-                            || key.modifiers == KeyModifiers::SHIFT
+                        if (key.modifiers == KeyModifiers::NONE
+                            || key.modifiers == KeyModifiers::SHIFT)
+                            && let KeyCode::Char(c) = key.code
                         {
-                            if let KeyCode::Char(c) = key.code {
-                                if self.prompt_is_accepting_text() {
-                                    if let Some(burst) = self.try_detect_paste_burst(c) {
-                                        self.handle_paste_data(burst);
-                                        self.refresh_prompt_input();
-                                        continue;
-                                    }
-                                } else if self.key_input_dialog.visible {
-                                    if let Some(burst) = self.try_detect_paste_burst(c) {
-                                        for ch in burst.chars() {
-                                            self.key_input_dialog.insert_char(ch);
-                                        }
-                                        continue;
-                                    }
+                            if self.prompt_is_accepting_text() {
+                                if let Some(burst) = self.try_detect_paste_burst(c) {
+                                    self.handle_paste_data(burst);
+                                    self.refresh_prompt_input();
+                                    continue;
                                 }
+                            } else if self.key_input_dialog.visible
+                                && let Some(burst) = self.try_detect_paste_burst(c)
+                            {
+                                for ch in burst.chars() {
+                                    self.key_input_dialog.insert_char(ch);
+                                }
+                                continue;
                             }
                         }
                         // -------------------------------------------------------------------

@@ -629,22 +629,22 @@ pub fn run_platform_checks(
 
             // Check for orphan wrappers
             let wrapper_dir = operant_home().join("bin");
-            if wrapper_dir.is_dir() {
-                if let Ok(wrapper_entries) = std::fs::read_dir(&wrapper_dir) {
-                    for wrapper in wrapper_entries.flatten() {
-                        let wpath = wrapper.path();
-                        if !wpath.is_file() {
-                            continue;
-                        }
-                        // Simple heuristic: check if it's a operant profile wrapper
-                        if let Ok(content) = std::fs::read_to_string(&wpath) {
-                            if content.contains("operant -p") {
-                                check_info(&format!(
-                                    "  Profile wrapper: {}",
-                                    wpath.file_name().unwrap_or_default().to_string_lossy()
-                                ));
-                            }
-                        }
+            if wrapper_dir.is_dir()
+                && let Ok(wrapper_entries) = std::fs::read_dir(&wrapper_dir)
+            {
+                for wrapper in wrapper_entries.flatten() {
+                    let wpath = wrapper.path();
+                    if !wpath.is_file() {
+                        continue;
+                    }
+                    // Simple heuristic: check if it's a operant profile wrapper
+                    if let Ok(content) = std::fs::read_to_string(&wpath)
+                        && content.contains("operant -p")
+                    {
+                        check_info(&format!(
+                            "  Profile wrapper: {}",
+                            wpath.file_name().unwrap_or_default().to_string_lossy()
+                        ));
                     }
                 }
             }
@@ -687,20 +687,16 @@ fn detect_memory_provider(config: &AppConfig) -> Option<String> {
     ];
 
     for path in &config_paths {
-        if path.exists() {
-            if let Ok(raw) = std::fs::read_to_string(path) {
-                if let Ok(value) = raw.parse::<toml::Value>() {
-                    if let Some(provider) = value
-                        .get("memory")
-                        .and_then(|m| m.get("provider"))
-                        .and_then(|p| p.as_str())
-                    {
-                        if !provider.is_empty() {
-                            return Some(provider.to_string());
-                        }
-                    }
-                }
-            }
+        if path.exists()
+            && let Ok(raw) = std::fs::read_to_string(path)
+            && let Ok(value) = raw.parse::<toml::Value>()
+            && let Some(provider) = value
+                .get("memory")
+                .and_then(|m| m.get("provider"))
+                .and_then(|p| p.as_str())
+            && !provider.is_empty()
+        {
+            return Some(provider.to_string());
         }
     }
 

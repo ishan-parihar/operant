@@ -1035,15 +1035,14 @@ pub fn handle_command(cmd_name: &str, _args: &str, ctx: &CommandContext<'_>) -> 
                             if let Some(session) = store.find_session(ctx.platform, ctx.user_id, ctx.channel_id) {
                                 let existing = session.metadata.get("subgoal").cloned().unwrap_or_default();
                                 let mut parts: Vec<&str> = existing.split('\n').collect();
-                                if let Ok(idx) = num.parse::<usize>() {
-                                    if idx > 0 && idx <= parts.len() {
+                                if let Ok(idx) = num.parse::<usize>()
+                                    && idx > 0 && idx <= parts.len() {
                                         parts.remove(idx - 1);
                                         let new_val = parts.join("\n");
                                         store.update_session_metadata(ctx.platform, ctx.user_id, ctx.channel_id, &[
                                             ("subgoal".to_string(), new_val),
                                         ]);
                                     }
-                                }
                             }
                         }
                         format!("🗑️ Sub-goal #{} removed.", num)
@@ -1151,11 +1150,10 @@ pub fn handle_command(cmd_name: &str, _args: &str, ctx: &CommandContext<'_>) -> 
                 let mut msg = format!("🤖 Current model: `{}`", current_model);
                 if let Some(gateway) = ctx.gateway {
                     let store = gateway.get_session_store();
-                    if let Some(session) = store.find_session(ctx.platform, ctx.user_id, ctx.channel_id) {
-                        if let Some(override_model) = session.metadata.get("model_override") {
+                    if let Some(session) = store.find_session(ctx.platform, ctx.user_id, ctx.channel_id)
+                        && let Some(override_model) = session.metadata.get("model_override") {
                             msg.push_str(&format!("\nSession override: `{}`", override_model));
                         }
-                    }
                 }
                 msg.push_str("\nUsage: `/model <name> [--provider name]`");
                 msg
@@ -1185,11 +1183,10 @@ pub fn handle_command(cmd_name: &str, _args: &str, ctx: &CommandContext<'_>) -> 
                     };
                     if let Some(gateway) = ctx.gateway {
                         let store = gateway.get_session_store();
-                        if let Some(session) = store.find_session(ctx.platform, ctx.user_id, ctx.channel_id) {
-                            if let Some(override_val) = session.metadata.get("reasoning_override") {
+                        if let Some(session) = store.find_session(ctx.platform, ctx.user_id, ctx.channel_id)
+                            && let Some(override_val) = session.metadata.get("reasoning_override") {
                                 msg.push_str(&format!("\nSession override: `{}`", override_val));
                             }
-                        }
                     }
                     msg.push_str("\nUsage: `/reasoning [show|hide|status]`");
                     msg
@@ -1552,11 +1549,10 @@ pub fn handle_command(cmd_name: &str, _args: &str, ctx: &CommandContext<'_>) -> 
                 if let Ok(entries) = std::fs::read_dir(skills_dir) {
                     for entry in entries.flatten() {
                         let path = entry.path();
-                        if path.is_dir() && path.join("SKILL.md").exists() {
-                            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                        if path.is_dir() && path.join("SKILL.md").exists()
+                            && let Some(name) = path.file_name().and_then(|n| n.to_str()) {
                                 skill_names.push(name.to_string());
                             }
-                        }
                     }
                 }
                 if skill_names.is_empty() {
@@ -1624,16 +1620,18 @@ pub fn handle_command(cmd_name: &str, _args: &str, ctx: &CommandContext<'_>) -> 
                 let mut total_messages: usize = 0;
                 let mut sessions_with_msgs: usize = 0;
                 for s in &active {
-                    if let Some(count_str) = s.metadata.get("message_count") {
-                        if let Ok(count) = count_str.parse::<usize>() {
+                    if let Some(count_str) = s.metadata.get("message_count")
+                        && let Ok(count) = count_str.parse::<usize>() {
                             total_messages += count;
                             sessions_with_msgs += 1;
                         }
-                    }
                 }
                 lines.push(format!("• Total messages (active sessions): {}", total_messages));
                 if sessions_with_msgs > 0 {
-                    lines.push(format!("• Avg messages/session: {}", total_messages / sessions_with_msgs));
+                    lines.push(format!(
+                        "• Avg messages/session: {}",
+                        total_messages.checked_div(sessions_with_msgs).unwrap_or(0)
+                    ));
                 }
 
                 // Model usage from config

@@ -5,10 +5,6 @@
 use super::*;
 
 impl PromptInputState {
-    #[expect(
-        clippy::unwrap_used,
-        reason = "invariant guaranteed by surrounding validation"
-    )]
     /// Push the current (text, cursor) to the undo stack.
     pub fn push_undo(&mut self) {
         self.undo_stack.push((self.text.clone(), self.cursor));
@@ -102,12 +98,12 @@ impl PromptInputState {
         }
         let start = if skip > 0 {
             // Start after the current character to avoid re-matching same position
-            let next = self.text[self.cursor..]
+
+            self.text[self.cursor..]
                 .char_indices()
                 .nth(1)
                 .map(|(b, _)| self.cursor + b)
-                .unwrap_or(0);
-            next
+                .unwrap_or(0)
         } else {
             self.cursor
         };

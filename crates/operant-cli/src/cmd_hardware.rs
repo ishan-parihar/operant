@@ -107,17 +107,13 @@ fn discover_usb_devices() -> Vec<(u16, u16, &'static str)> {
             if let (Ok(vid), Ok(pid)) = (
                 std::fs::read_to_string(&vid_path),
                 std::fs::read_to_string(&pid_path),
-            ) {
-                if let (Ok(vid), Ok(pid)) = (
-                    u16::from_str_radix(vid.trim(), 16),
-                    u16::from_str_radix(pid.trim(), 16),
-                ) {
-                    if let Some((_, _, name)) =
-                        KNOWN_BOARDS.iter().find(|(v, p, _)| *v == vid && *p == pid)
-                    {
-                        found.push((vid, pid, *name));
-                    }
-                }
+            ) && let (Ok(vid), Ok(pid)) = (
+                u16::from_str_radix(vid.trim(), 16),
+                u16::from_str_radix(pid.trim(), 16),
+            ) && let Some((_, _, name)) =
+                KNOWN_BOARDS.iter().find(|(v, p, _)| *v == vid && *p == pid)
+            {
+                found.push((vid, pid, *name));
             }
         }
     }
