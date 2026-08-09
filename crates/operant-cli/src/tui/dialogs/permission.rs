@@ -1,0 +1,666 @@
+// dialogs/permission.rs — Tool permission request dialogs.
+//
+// Extracted from dialogs.rs. Owns PermissionDialogKind, PermissionOption,
+// PermissionRequest (with its constructors + key handling), and the
+// render_permission_dialog renderer.
+
+use ratatui::Frame;
+use ratatui::layout::Rect;
+use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
+
+/// Distinguishes what kind of action the permission dialog is for.
+/// This drives how many options are shown and what the command block looks like.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub enum PermissionDialogKind {
+    /// Generic four-option dialog (the previous default).
+    #[default]
+    Generic,
+    /// Bash command execution — optionally carries a suggested prefix for a
+    /// 5th "allow prefix*" option.
+    #[allow(dead_code)] // Prepared for Bash-specific permission dialog
+    Bash {
+        command: String,
+        suggested_prefix: Option<String>,
+    },
+    /// PowerShell command execution — rendered like Bash without prefix rules.
+    #[allow(dead_code)] // Prepared for PowerShell-specific permission dialog
+    PowerShell { command: String },
+    /// File read — three options: once / session / deny.
+    #[allow(dead_code)] // Prepared for file read permission dialog
+    FileRead { path: String },
+    /// File write — four options: once / session / project / deny.
+    #[allow(dead_code)] // Prepared for file write permission dialog
+    FileWrite { path: String },
+}
+
+// ---------------------------------------------------------------------------
+// Permission dialog types
+// ---------------------------------------------------------------------------
+
+/// A single option inside a permission request dialog.
+#[derive(Debug, Clone)]
+pub struct PermissionOption {
+    pub label: String,
+    pub key: char,
+}
+
+/// State for an in-flight permission request popup.
+///
+/// This struct is intentionally richer than the legacy version to match the
+/// TS permission dialog: it carries the command/path preview, a danger
+/// explanation, and a stable set of TS-compatible options.
+#[derive(Debug, Clone)]
+pub struct PermissionRequest {
+    #[allow(dead_code)] // Tool use ID for permission tracking
+    pub tool_use_id: String,
+    pub tool_name: String,
+    /// Short summary line shown when present.
+    pub description: String,
+    /// One-sentence danger explanation shown in yellow.
+    pub danger_explanation: String,
+    /// The raw command / path / URL (displayed in a code-block style line).
+    pub input_preview: Option<String>,
+    /// What kind of dialog this is — drives option set and rendering.
+    pub kind: PermissionDialogKind,
+    pub options: Vec<PermissionOption>,
+    pub selected_option: usize,
+}
+
+impl PermissionRequest {
+    /// Create a standard four-option dialog matching the TS dialog options:
+    ///   `y` — Yes, allow once
+    ///   `Y` — Yes, allow this session
+    ///   `p` — Yes, always allow (persistent)
+    ///   `n` — No, deny
+    #[allow(dead_code)] // Prepared for standard permission dialog
+    pub fn standard(tool_use_id: String, tool_name: String, description: String) -> Self {
+        Self {
+            tool_use_id,
+            tool_name,
+            description: description.clone(),
+            danger_explanation: String::new(),
+            input_preview: None,
+            kind: PermissionDialogKind::Generic,
+            selected_option: 0,
+            options: Self::default_options(),
+        }
+    }
+
+    /// Build with a richer description derived from the full permission reason
+    /// text produced by `crate::tui::adapter_types::format_permission_reason`.
+    ///
+    /// The `reason` string may contain a newline splitting the one-liner from
+    /// the danger explanation — this constructor splits on the first `\n` and
+    /// places each part in the right field.
+    #[allow(dead_code)] // Prepared for reason-based permission dialog
+    pub fn from_reason(
+        tool_use_id: String,
+        tool_name: String,
+        reason: String,
+        input_preview: Option<String>,
+    ) -> Self {
+        let (description, danger_explanation) = split_reason(reason);
+
+        Self {
+            tool_use_id,
+            tool_name,
+            description,
+            danger_explanation,
+            input_preview,
+            kind: PermissionDialogKind::Generic,
+            selected_option: 0,
+            options: Self::default_options(),
+        }
+    }
+
+    /// Build a Bash-specific dialog, computing the options set based on whether
+    /// a `suggested_prefix` is available (5 options) or not (4 options).
+    #[allow(dead_code)] // Prepared for Bash-specific permission dialog
+    pub fn bash(
+        tool_use_id: String,
+        tool_name: String,
+        reason: String,
+        command: String,
+        suggested_prefix: Option<String>,
+    ) -> Self {
+        let options = Self::bash_options(suggested_prefix.as_deref());
+        let kind = PermissionDialogKind::Bash {
+            command: command.clone(),
+            suggested_prefix,
+        };
+
+        Self {
+            tool_use_id,
+            tool_name,
+            description: String::new(),
+            danger_explanation: command_reason_body(reason, &command),
+            input_preview: Some(command),
+            kind,
+            selected_option: 0,
+            options,
+        }
+    }
+
+    #[allow(dead_code)] // Prepared for PowerShell-specific permission dialog
+    pub fn powershell(
+        tool_use_id: String,
+        tool_name: String,
+        reason: String,
+        command: String,
+    ) -> Self {
+        Self {
+            tool_use_id,
+            tool_name,
+            description: String::new(),
+            danger_explanation: command_reason_body(reason, &command),
+            input_preview: Some(command.clone()),
+            kind: PermissionDialogKind::PowerShell { command },
+            selected_option: 0,
+            options: Self::default_options(),
+        }
+    }
+
+    /// Build a FileRead-specific dialog (3 options: once / session / deny).
+    #[allow(dead_code)] // Prepared for file read permission dialog
+    pub fn file_read(tool_use_id: String, tool_name: String, reason: String, path: String) -> Self {
+        let (description, danger_explanation) = if let Some(nl) = reason.find('\n') {
+            (reason[..nl].to_string(), reason[nl + 1..].to_string())
+        } else {
+            (reason, String::new())
+        };
+
+        let preview = path.clone();
+        let kind = PermissionDialogKind::FileRead { path };
+
+        Self {
+            tool_use_id,
+            tool_name,
+            description,
+            danger_explanation,
+            input_preview: Some(preview),
+            kind,
+            selected_option: 0,
+            options: Self::file_read_options(),
+        }
+    }
+
+    /// Build a FileWrite-specific dialog (4 options: once / session / project / deny).
+    #[allow(dead_code)] // Prepared for file write permission dialog
+    pub fn file_write(
+        tool_use_id: String,
+        tool_name: String,
+        reason: String,
+        path: String,
+    ) -> Self {
+        let (description, danger_explanation) = if let Some(nl) = reason.find('\n') {
+            (reason[..nl].to_string(), reason[nl + 1..].to_string())
+        } else {
+            (reason, String::new())
+        };
+
+        let preview = path.clone();
+        let kind = PermissionDialogKind::FileWrite { path };
+
+        Self {
+            tool_use_id,
+            tool_name,
+            description,
+            danger_explanation,
+            input_preview: Some(preview),
+            kind,
+            selected_option: 0,
+            options: Self::file_write_options(),
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Option sets
+    // ------------------------------------------------------------------
+
+    /// The four canonical options (matches TS interactive permission dialog).
+    pub fn default_options() -> Vec<PermissionOption> {
+        vec![
+            PermissionOption {
+                label: "Yes, allow once".to_string(),
+                key: 'y',
+            },
+            PermissionOption {
+                label: "Yes, allow this session".to_string(),
+                key: 'Y',
+            },
+            PermissionOption {
+                label: "Yes, always allow (persistent)".to_string(),
+                key: 'p',
+            },
+            PermissionOption {
+                label: "No, deny".to_string(),
+                key: 'n',
+            },
+        ]
+    }
+
+    #[expect(
+        clippy::unwrap_used,
+        reason = "invariant guaranteed by surrounding validation"
+    )]
+    /// Bash options: 4 standard + optional 5th prefix-based rule.
+    pub fn bash_options(suggested_prefix: Option<&str>) -> Vec<PermissionOption> {
+        let mut opts = Self::default_options();
+        if let Some(prefix) = suggested_prefix {
+            // Insert before the deny option (last item).
+            let deny = opts.pop().unwrap();
+            opts.push(PermissionOption {
+                label: format!("Allow commands matching {}*", prefix),
+                key: 'P',
+            });
+            opts.push(deny);
+        }
+        opts
+    }
+
+    /// FileRead options (3): once / session / deny.
+    pub fn file_read_options() -> Vec<PermissionOption> {
+        vec![
+            PermissionOption {
+                label: "Yes, allow once".to_string(),
+                key: 'y',
+            },
+            PermissionOption {
+                label: "Yes, allow this session".to_string(),
+                key: 'Y',
+            },
+            PermissionOption {
+                label: "No, deny".to_string(),
+                key: 'n',
+            },
+        ]
+    }
+
+    /// FileWrite options (4): once / session / project / deny.
+    pub fn file_write_options() -> Vec<PermissionOption> {
+        vec![
+            PermissionOption {
+                label: "Yes, allow once".to_string(),
+                key: 'y',
+            },
+            PermissionOption {
+                label: "Yes, allow this session".to_string(),
+                key: 'Y',
+            },
+            PermissionOption {
+                label: "Yes, always allow for this project".to_string(),
+                key: 'p',
+            },
+            PermissionOption {
+                label: "No, deny".to_string(),
+                key: 'n',
+            },
+        ]
+    }
+}
+
+fn split_reason(reason: String) -> (String, String) {
+    if let Some(nl) = reason.find('\n') {
+        (reason[..nl].to_string(), reason[nl + 1..].to_string())
+    } else {
+        (reason, String::new())
+    }
+}
+
+#[allow(dead_code)] // Command reason formatting helper
+fn command_reason_body(reason: String, command: &str) -> String {
+    let (_, danger_explanation) = split_reason(reason.clone());
+    let candidate = if danger_explanation.is_empty() {
+        reason
+    } else {
+        danger_explanation
+    };
+    let mut lines: Vec<&str> = candidate.lines().collect();
+    if lines.first().is_some_and(|line| line.trim() == command) {
+        lines.remove(0);
+        while lines.first().is_some_and(|line| line.trim().is_empty()) {
+            lines.remove(0);
+        }
+    }
+    lines.join("\n").trim().to_string()
+}
+
+// ---------------------------------------------------------------------------
+// Rendering helpers
+// ---------------------------------------------------------------------------
+
+/// Compute a centred `Rect` of the given `width` × `height` inside `area`.
+pub(crate) fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
+    let x = area.x + area.width.saturating_sub(width) / 2;
+    let y = area.y + area.height.saturating_sub(height) / 2;
+    Rect {
+        x,
+        y,
+        width: width.min(area.width),
+        height: height.min(area.height),
+    }
+}
+
+/// Wrap `text` to fit within `width` display columns, preferring whitespace
+/// breaks but falling back to a hard character break when a single token is
+/// longer than `width`. Without the hard-break fallback, long unbreakable
+/// tokens (Windows paths, base64 blobs, URLs, …) overflow the dialog border.
+pub(crate) fn word_wrap(text: &str, width: usize) -> Vec<String> {
+    use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+    if width == 0 {
+        return vec![text.to_string()];
+    }
+    if UnicodeWidthStr::width(text) <= width {
+        return vec![text.to_string()];
+    }
+
+    // Hard-break a token that doesn't fit on a line of `width` columns,
+    // returning the chunks each ≤ `width` cells wide. Splits at character
+    // boundaries — never inside a grapheme cluster.
+    fn break_long_token(token: &str, width: usize) -> Vec<String> {
+        let mut chunks: Vec<String> = Vec::new();
+        let mut current = String::new();
+        let mut current_w = 0usize;
+        for ch in token.chars() {
+            let cw = UnicodeWidthChar::width(ch).unwrap_or(0);
+            if current_w + cw > width && !current.is_empty() {
+                chunks.push(std::mem::take(&mut current));
+                current_w = 0;
+            }
+            current.push(ch);
+            current_w += cw;
+        }
+        if !current.is_empty() {
+            chunks.push(current);
+        }
+        chunks
+    }
+
+    let mut result = Vec::new();
+    let mut current_line = String::new();
+    let mut current_width = 0usize;
+    for word in text.split_whitespace() {
+        let word_w = UnicodeWidthStr::width(word);
+
+        // Long unbreakable token — flush the current line then hard-break the
+        // token across multiple lines.
+        if word_w > width {
+            if !current_line.is_empty() {
+                result.push(std::mem::take(&mut current_line));
+                current_width = 0;
+            }
+            let mut chunks = break_long_token(word, width);
+            if let Some(last) = chunks.pop() {
+                for chunk in chunks {
+                    result.push(chunk);
+                }
+                current_width = UnicodeWidthStr::width(last.as_str());
+                current_line = last;
+            }
+            continue;
+        }
+
+        if current_width == 0 {
+            current_line.push_str(word);
+            current_width = word_w;
+        } else if current_width + 1 + word_w <= width {
+            current_line.push(' ');
+            current_line.push_str(word);
+            current_width += 1 + word_w;
+        } else {
+            result.push(std::mem::take(&mut current_line));
+            current_line.push_str(word);
+            current_width = word_w;
+        }
+    }
+    if !current_line.is_empty() {
+        result.push(current_line);
+    }
+    if result.is_empty() {
+        result.push(text.to_string());
+    }
+    result
+}
+
+// ---------------------------------------------------------------------------
+// Main render function
+// ---------------------------------------------------------------------------
+
+/// Render a permission-request dialog as a centred overlay.
+///
+/// Layout (top → bottom):
+///   ┌─ Permission Required ─────────────────────────┐
+///   │                                                │
+///   │  Tool: Bash                                    │
+///   │                                                │
+///   │  > rm -rf /tmp/foo                             │
+///   │                                                │
+///   │  This will execute a shell command.             │
+///   │  This may modify system-wide security policy.   │
+///   │                                                │
+///   │  [1] Yes, allow once                           │
+///   │  [2] Yes, allow this session                   │
+///   │▶ [3] Yes, always allow (persistent)            │
+///   │  [4] No, deny                                  │
+///   └────────────────────────────────────────────────┘
+///
+/// For `Bash` with a `suggested_prefix`, a 5th option is shown:
+///   │  [5] Allow commands matching git*              │
+///
+/// For `FileRead`, only 3 options (once / session / deny).
+/// For `FileWrite`, 4 options (once / session / project / deny).
+pub fn render_permission_dialog(frame: &mut Frame, pr: &PermissionRequest, area: Rect) {
+    // Scale dialog width with the terminal: minimum 40 cols for narrow screens,
+    // maximum 80 cols on wide ones, otherwise leave a 4-col margin on each side.
+    // Without this the dialog was pinned at 62 cols, which made long commands
+    // (Windows paths, multi-segment shell pipelines) overflow even when the
+    // terminal had plenty of room.
+    let dialog_width = area
+        .width
+        .saturating_sub(8)
+        .clamp(40, 80)
+        .min(area.width.saturating_sub(4));
+    let text_width = (dialog_width as usize).saturating_sub(4); // 2 border + 2 padding
+
+    // Build a command block for Bash / PowerShell dialogs to prominently display the command.
+    // The chevron-prefix is only painted on the FIRST wrapped line; continuation
+    // lines align under the command body so the eye can scan the full command
+    // without the prompt-arrow repeating on every row.
+    let bash_command_lines: Option<Vec<Line>> = match &pr.kind {
+        PermissionDialogKind::Bash { command, .. }
+        | PermissionDialogKind::PowerShell { command } => {
+            let cmd_indent = "    ";
+            let wrap_width = text_width.saturating_sub(cmd_indent.len());
+            let wrapped = word_wrap(command, wrap_width);
+            Some(
+                wrapped
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, line)| {
+                        let prefix = if i == 0 { "  \u{276F} " } else { cmd_indent };
+                        Line::from(vec![
+                            Span::styled(
+                                prefix,
+                                Style::default()
+                                    .fg(Color::Green)
+                                    .add_modifier(Modifier::BOLD),
+                            ),
+                            Span::styled(
+                                line,
+                                Style::default()
+                                    .fg(Color::White)
+                                    .add_modifier(Modifier::BOLD),
+                            ),
+                        ])
+                    })
+                    .collect(),
+            )
+        }
+        _ => None,
+    };
+
+    // Count how many lines we need
+    let desc_lines = if pr.description.trim().is_empty() {
+        vec![]
+    } else {
+        word_wrap(&pr.description, text_width)
+    };
+    let expl_lines = if pr.danger_explanation.is_empty() {
+        vec![]
+    } else {
+        word_wrap(&pr.danger_explanation, text_width)
+    };
+
+    // preview line count (used for non-Bash kinds; Bash uses its own block above)
+    let preview_line_count: u16 = match &pr.kind {
+        PermissionDialogKind::Bash { .. } | PermissionDialogKind::PowerShell { .. } => 0,
+        _ => {
+            if pr.input_preview.is_some() {
+                3
+            } else {
+                0
+            }
+        }
+    };
+
+    let bash_block_height: u16 = bash_command_lines
+        .as_ref()
+        .map(|lines| lines.len() as u16 + 2) // lines + blank before + blank after
+        .unwrap_or(0);
+
+    let content_lines: u16 = 2 // "  Tool: <name>"  +  blank
+        + bash_block_height
+        + desc_lines.len() as u16
+        + if !expl_lines.is_empty() { expl_lines.len() as u16 + 1 } else { 0 }
+        + preview_line_count
+        + 1 // blank before options
+        + pr.options.len() as u16
+        + 1; // trailing blank
+
+    let dialog_height = (content_lines + 2) // +2 for top/bottom border
+        .min(area.height.saturating_sub(4));
+
+    let dialog_area = centered_rect(dialog_width, dialog_height, area);
+
+    frame.render_widget(Clear, dialog_area);
+
+    let mut lines: Vec<Line> = Vec::new();
+
+    // ---- Tool name header ---------------------------------------------------
+    lines.push(Line::from(vec![
+        Span::raw("  Tool: "),
+        Span::styled(
+            pr.tool_name.clone(),
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ),
+    ]));
+    lines.push(Line::from(""));
+
+    // ---- Bash command block (code-block style, green chevron) ---------------
+    if let Some(cmd_lines) = bash_command_lines {
+        for cmd_line in cmd_lines {
+            lines.push(cmd_line);
+        }
+        lines.push(Line::from(""));
+    }
+
+    // ---- Input preview for non-Bash kinds -----------------------------------
+    if !matches!(
+        pr.kind,
+        PermissionDialogKind::Bash { .. } | PermissionDialogKind::PowerShell { .. }
+    ) {
+        if let Some(ref preview) = pr.input_preview {
+            lines.push(Line::from(vec![
+                Span::styled(
+                    "  \u{276F} ",
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    preview.clone(),
+                    Style::default()
+                        .fg(Color::White)
+                        .add_modifier(Modifier::BOLD),
+                ),
+            ]));
+            lines.push(Line::from(""));
+        }
+    }
+
+    // ---- Description (word-wrapped) -----------------------------------------
+    for desc_line in &desc_lines {
+        lines.push(Line::from(vec![
+            Span::raw("  "),
+            Span::raw(desc_line.clone()),
+        ]));
+    }
+
+    // ---- Danger explanation (yellow) ----------------------------------------
+    if !expl_lines.is_empty() {
+        for expl_line in &expl_lines {
+            lines.push(Line::from(vec![
+                Span::raw("  "),
+                Span::styled(expl_line.clone(), Style::default().fg(Color::Yellow)),
+            ]));
+        }
+        lines.push(Line::from(""));
+    }
+
+    // ---- Options ------------------------------------------------------------
+    lines.push(Line::from(""));
+    for (i, opt) in pr.options.iter().enumerate() {
+        let is_selected = i == pr.selected_option;
+        let prefix = if is_selected { "  \u{25BA} " } else { "    " };
+        let key_style = if is_selected {
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::DarkGray)
+        };
+        let label_style = if is_selected {
+            Style::default().add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
+        };
+        lines.push(Line::from(vec![
+            Span::raw(prefix),
+            Span::styled(format!("[{}]", opt.key), key_style),
+            Span::raw(" "),
+            Span::styled(opt.label.clone(), label_style),
+        ]));
+    }
+
+    let (border_color, title_text) = match &pr.kind {
+        PermissionDialogKind::Bash { .. } | PermissionDialogKind::PowerShell { .. } => {
+            (Color::Yellow, " Permission Required ")
+        }
+        PermissionDialogKind::FileRead { .. } => (Color::Cyan, " File Read Permission "),
+        PermissionDialogKind::FileWrite { .. } => (Color::Yellow, " File Write Permission "),
+        PermissionDialogKind::Generic => (Color::Yellow, " Permission Required "),
+    };
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(Span::styled(
+            title_text,
+            Style::default()
+                .fg(border_color)
+                .add_modifier(Modifier::BOLD),
+        ))
+        .border_style(Style::default().fg(border_color));
+
+    // `Wrap { trim: false }` is a defensive safety net: word_wrap already
+    // breaks every span to fit, but if a future change introduces an
+    // un-wrapped line (e.g. a tool-emitted preview), ratatui will still wrap
+    // it at the dialog border instead of letting it bleed past the right edge.
+    let para = Paragraph::new(lines)
+        .block(block)
+        .wrap(Wrap { trim: false });
+    frame.render_widget(para, dialog_area);
+}
