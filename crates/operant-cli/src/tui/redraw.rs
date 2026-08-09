@@ -112,10 +112,11 @@ pub fn redraw_interval(
     idle_timeout: Option<Duration>,
     is_focused: bool,
 ) -> Duration {
-    // Backgrounded tab: use the tier's slowest cadence regardless of activity.
-    // Streaming is still checked below for correctness if the caller passes
-    // focused=false while actively streaming (rare — headless simulation), but
-    // the main loop always sends true here while a turn is streaming.
+    // Backgrounded tab: use the tier's slowest cadence regardless of activity
+    // OR streaming state. The user can't see the output while the window is
+    // unfocused, so rendering at animation speed would burn CPU for nothing;
+    // the event loop still wakes to drain agent events and repaints whenever
+    // the window regains focus (FocusGained interrupts the poll immediately).
     if !is_focused {
         return match tier {
             PerformanceTier::Minimal => Duration::from_secs(5),
@@ -197,14 +198,19 @@ mod tests {
     fn unfocused_uses_slowest_cadence() {
         // A backgrounded tab must not burn CPU: even while actively streaming,
         // an unfocused terminal falls to the tier's slowest cadence.
-        let interval = redraw_interval(
-            PerformanceTier::High,
-            true,
-            Some(Duration::ZERO),
-            None,
-            false,
+        let since_activity = Some(Duration::ZERO);
+        assert_eq!(
+            redraw_interval(PerformanceTier::Minimal, true, since_activity, None, false),
+            Duration::from_secs(5)
         );
-        assert!(interval >= Duration::from_secs(1));
+        assert_eq!(
+            redraw_interval(PerformanceTier::Normal, true, since_activity, None, false),
+            Duration::from_secs(2)
+        );
+        assert_eq!(
+            redraw_interval(PerformanceTier::High, true, since_activity, None, false),
+            Duration::from_secs(1)
+        );
     }
 
     #[test]

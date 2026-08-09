@@ -1007,18 +1007,8 @@ impl App {
                     Event::Mouse(mouse_event) => {
                         self.handle_mouse_event(mouse_event);
                     }
-                    Event::FocusGained => {
-                        // Terminal regained focus — resume full redraw cadence.
-                        // Also bump the activity timestamp so the idle/deep-idle
-                        // timers restart from this moment.
-                        self.client_focused = true;
-                        self.last_activity = std::time::Instant::now();
-                    }
-                    Event::FocusLost => {
-                        // Backgrounded tab: pause expensive animations and drop
-                        // to the slowest redraw cadence (see redraw_interval).
-                        self.client_focused = false;
-                    }
+                    Event::FocusGained => self.handle_focus_event(true),
+                    Event::FocusLost => self.handle_focus_event(false),
                     _ => {}
                 }
             }

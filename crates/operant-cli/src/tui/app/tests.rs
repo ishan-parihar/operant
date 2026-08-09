@@ -900,6 +900,39 @@ fn test_interactive_multi_step_simulation() {
     assert!(app.should_exit);
 }
 
+// ---- Focus-aware rendering (Phase 2.3) --------------------------------
+
+#[test]
+fn test_focus_event_transitions_client_focused() {
+    // FocusLost must drop client_focused so the redraw cadence slows;
+    // FocusGained must restore it and restart the activity timer.
+    let mut app = make_app();
+    assert!(app.client_focused, "starts focused");
+
+    app.handle_focus_event(false);
+    assert!(!app.client_focused, "FocusLost clears client_focused");
+
+    app.handle_focus_event(true);
+    assert!(app.client_focused, "FocusGained restores client_focused");
+}
+
+#[test]
+fn test_focus_gained_resets_activity_timer() {
+    // After FocusGained, last_activity is refreshed so idle cadence restarts
+    // instead of immediately deep-idling a terminal the user just refocused.
+    let mut app = make_app();
+    app.handle_focus_event(false);
+    // Simulate a stale activity timestamp from before the focus loss.
+    app.last_activity = std::time::Instant::now() - std::time::Duration::from_secs(120);
+
+    app.handle_focus_event(true);
+    let elapsed = app.last_activity.elapsed();
+    assert!(
+        elapsed < std::time::Duration::from_secs(5),
+        "last_activity should be refreshed on FocusGained (elapsed={elapsed:?})"
+    );
+}
+
 // ---- Phase A5: dialog open/close scenario regression pack -------------
 // Drives simulated keys through the real run loop (with the same slash
 // interception the interactive/headless loops use), then asserts state

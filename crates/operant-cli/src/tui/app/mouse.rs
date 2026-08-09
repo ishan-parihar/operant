@@ -413,6 +413,19 @@ impl App {
         }
     }
 
+    // Handle terminal focus-change events (Phase 2.3 focus-aware rendering).
+    // FocusGained resumes the full redraw cadence and restarts the
+    // idle/deep-idle timers; FocusLost drops to the slowest cadence so a
+    // backgrounded tab doesn't burn CPU re-rendering invisible animations.
+    pub(super) fn handle_focus_event(&mut self, focused: bool) {
+        self.client_focused = focused;
+        if focused {
+            // Restart idle detection from this moment so the cadence stays
+            // at animation speed while the user is actively watching.
+            self.last_activity = std::time::Instant::now();
+        }
+    }
+
     // Process mouse events (trackpad scroll, text selection, etc.).
 
     #[expect(
