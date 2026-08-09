@@ -907,7 +907,10 @@ fn test_interactive_multi_step_simulation() {
 // dialog-unification refactor (Phase B): every listed overlay must open
 // via its slash command and close on Esc.
 
-fn drive_keys<B: ratatui::backend::Backend>(app: &mut App, terminal: &mut ratatui::Terminal<B>) {
+fn drive_keys<B: ratatui::backend::Backend>(app: &mut App, terminal: &mut ratatui::Terminal<B>)
+where
+    B::Error: Send + Sync + 'static,
+{
     let mut guard = 0;
     while !app.simulated_keys.is_empty() && !app.should_exit && guard < 5000 {
         guard += 1;

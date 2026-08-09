@@ -501,7 +501,10 @@ impl App {
     pub fn run<B: ratatui::backend::Backend>(
         &mut self,
         terminal: &mut Terminal<B>,
-    ) -> anyhow::Result<Option<String>> {
+    ) -> anyhow::Result<Option<String>>
+    where
+        B::Error: Send + Sync + 'static,
+    {
         loop {
             if self.is_simulating && self.simulated_keys.is_empty() && !self.is_streaming {
                 self.should_exit = true;
