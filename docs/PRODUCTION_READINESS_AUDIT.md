@@ -227,12 +227,29 @@ hermes-agent's (`agent/skill_preprocessing.py`, `skill_bundles.py`,
    list/search/install` work out of the box.
 3. **Directory import** (previous session, still green).
 
-**Remaining gap (needs hermes-style /bundle work):** `agent/skill_bundle.rs`
-(`scan_bundles`, `resolve_bundle_command_key`, `build_bundle_invocation_message`)
-still has no callers — hermes expands `/skill` + `/bundle` slash turns via
-`skill_commands.py`. Wiring a `/skill <name>` expansion in the TUI/CLI that
-injects the full preprocessed skill content into the turn is the natural next
-step (progressive-disclosure tools already cover the agent-facing path).
+**Closed (iter-320):** `/skill <name>` + `/bundle <name>` slash expansion is
+now wired end-to-end (hermes `build_skill_invocation_message` parity):
+- `build_skill_invocation_message_in()` resolves the skill from the
+  configured `skills.root_dir`, strips frontmatter, runs template-var +
+  inline-shell preprocessing, and wraps with hermes activation scaffolding.
+- The TUI intercept arms set `pending_user_message` (drained at the top of
+  the run loop — expansion submits immediately after Enter, verified live
+  in 0.5s) and return `true`, eliminating the CommandRegistry "not yet
+  wired" fallback that previously swallowed `/skill`.
+- `/skill <Tab>` / `/bundle <Tab>` typeahead completes installed skill +
+  bundle names (`register_typeahead_names`, snapshot registered at App init).
+- Example bundles shipped in `skill-bundles/` (`ship-feature`, `quality-gate`)
+  and installed to `~/.operant/skill-bundles/`; `~/.operant/skills/` carries
+  matching demo skills.
+- Regression tests: slash expansion (temp skills dir), bundle intercept,
+  missing-skill `None`, typeahead name completion.
+
+**Remaining (known, documented):** repo-bundled skills (`remote-build-ssh`,
+`workspace-lint`) trip the `skills_guard` security scanner when installed via
+`skills install` (dangerous-verdict shell patterns) — the scanner is doing
+its job; importing them requires explicit review or `--force` on a clean
+verdict. `skill_bundle.rs` `get_skill_bundles` uses a `OnceLock` cache that
+is populated once per process — new bundles require a restart to appear.
 
 ---
 
@@ -240,7 +257,7 @@ step (progressive-disclosure tools already cover the agent-facing path).
 
 ```
 cargo check --workspace                                  → 0 errors, 0 warnings
-cargo test --workspace                                   → 8,535 passed / 0 failed
+cargo test --workspace                                   → 8,540 passed / 0 failed
 cargo clippy --workspace --all-targets --all-features -- -D warnings → exit 0
 cargo fmt --all --check                                  → clean
 ```

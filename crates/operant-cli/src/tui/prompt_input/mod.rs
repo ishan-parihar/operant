@@ -29,6 +29,7 @@ pub use kill_ring::KillRing;
 pub use render::{input_height, render_prompt_input, wrap_line};
 pub use typeahead::{
     AcceptForSubmitOutcome, TypeaheadSource, TypeaheadSuggestion, compute_typeahead,
+    register_typeahead_names,
 };
 pub use vim::{DotRepeatAction, VimFindKind, VimMode, VimPendingState, apply_vim_key};
 

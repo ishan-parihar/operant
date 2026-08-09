@@ -1,0 +1,7 @@
+name: ship-feature
+description: Full feature workflow — code review, then testing.
+skills:
+  - demo-code-review
+  - demo-testing
+instruction: |
+  Review the changes first, then write/run tests to validate them.

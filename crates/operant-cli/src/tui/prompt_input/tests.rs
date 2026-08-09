@@ -305,6 +305,37 @@ fn typeahead_case_insensitive() {
     assert_eq!(suggestions[0].text, "/Help");
 }
 
+// ---- skill / bundle name typeahead (iter-320) ----------------------
+
+#[test]
+fn typeahead_skill_names_complete() {
+    crate::tui::prompt_input::register_typeahead_names(
+        vec!["gitcrawl".to_string(), "web-research".to_string()],
+        vec!["research-pack".to_string()],
+    );
+    let cmds: [(&str, &str); 0] = [];
+
+    // /skill <prefix> completes installed skill names. (The snapshot is
+    // process-wide and shared with parallel tests that construct App and
+    // register the real installed skills, so assert membership, not length.)
+    let s = compute_typeahead("/skill git", &cmds, 15, false);
+    assert!(s.iter().any(|x| x.text == "/skill gitcrawl"));
+
+    // /bundle <prefix> completes bundle names too.
+    let s = compute_typeahead("/bundle rese", &cmds, 15, false);
+    assert!(s.iter().any(|x| x.text == "/bundle research-pack"));
+
+    // No match → empty (falls through to normal slash suggestions).
+    let s = compute_typeahead("/skill zzz", &cmds, 15, false);
+    assert!(s.is_empty());
+
+    // Regular slash commands still work after the skill prefix handling.
+    let cmds2 = [("help", "Show help")];
+    let s = compute_typeahead("/he", &cmds2, 15, false);
+    assert_eq!(s.len(), 1);
+    assert_eq!(s[0].text, "/help");
+}
+
 // ---- suggestion navigation -----------------------------------------
 
 #[test]

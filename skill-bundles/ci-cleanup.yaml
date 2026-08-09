@@ -1,0 +1,7 @@
+name: quality-gate
+description: Quality gate — testing discipline plus code review.
+skills:
+  - demo-testing
+  - demo-code-review
+instruction: |
+  Run tests first to establish a baseline, then review the code.

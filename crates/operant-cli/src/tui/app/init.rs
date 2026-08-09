@@ -51,7 +51,7 @@ impl App {
         let (bridge_state_tx, bridge_state_rx) = tokio::sync::mpsc::unbounded_channel::<
             crate::tui::bridge_state::BridgeConnectionState,
         >();
-        Self {
+        let app = Self {
             config,
             settings,
             project_dir: std::env::current_dir().ok(),
@@ -279,6 +279,23 @@ impl App {
             bash_prefix_allowlist: std::collections::HashSet::new(),
             last_exit_key_warning: None,
             exit_key_sequence_start: None,
-        }
+        };
+
+        // Register installed skill + bundle names for `/skill <Tab>` and
+        // `/bundle <Tab>` typeahead (hermes parity — the expansion takes a
+        // name, so completing it is the useful step). Best-effort: a missing
+        // or unreadable skills dir just yields an empty completion set.
+        let skill_names =
+            operant_core::skills::SkillManager::new(app.config.skills.root_dir.clone())
+                .load_all()
+                .map(|loaded| loaded.into_iter().map(|s| s.name).collect())
+                .unwrap_or_default();
+        let bundle_names = operant_core::agent::skill_bundle::list_bundles()
+            .into_iter()
+            .map(|b| b.slug.clone())
+            .collect();
+        crate::tui::prompt_input::register_typeahead_names(skill_names, bundle_names);
+
+        app
     }
 }

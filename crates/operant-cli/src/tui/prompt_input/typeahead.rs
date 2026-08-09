@@ -40,6 +40,15 @@ pub fn compute_typeahead(
 ) -> Vec<TypeaheadSuggestion> {
     // Handle slash commands: /help, /clear, etc.
     if input.starts_with('/') {
+        // /skill <prefix> and /bundle <prefix> expand to installed skill /
+        // bundle names (hermes parity — the model-facing expansion takes a
+        // name, so completing the name is the useful step).
+        if let Some(rest) = input.strip_prefix("/skill ") {
+            return compute_name_completions("skill", rest, TypeaheadSource::SlashCommand);
+        }
+        if let Some(rest) = input.strip_prefix("/bundle ") {
+            return compute_name_completions("bundle", rest, TypeaheadSource::SlashCommand);
+        }
         return compute_slash_suggestions(input, slash_commands);
     }
 
@@ -111,6 +120,49 @@ pub(super) fn compute_slash_suggestions(
             source: TypeaheadSource::SlashCommand,
         })
         .collect()
+}
+
+/// Process-wide snapshot of installed skill + bundle names for `/skill <Tab>`
+/// and `/bundle <Tab>` typeahead. The app (re)registers it whenever the
+/// skills directory is scanned; the pure prompt-input layer only reads it.
+static SKILL_NAME_SNAPSHOT: std::sync::OnceLock<std::sync::RwLock<Vec<String>>> =
+    std::sync::OnceLock::new();
+
+/// Compute `/skill <name>` / `/bundle <name>` name completions from the
+/// installed-skills snapshot registered by the app.
+fn compute_name_completions(
+    command: &str,
+    prefix: &str,
+    source: TypeaheadSource,
+) -> Vec<TypeaheadSuggestion> {
+    let names = SKILL_NAME_SNAPSHOT.get_or_init(|| std::sync::RwLock::new(Vec::new()));
+    let names = names.read().unwrap_or_else(|e| e.into_inner());
+
+    let prefix_lower = prefix.trim().to_lowercase();
+    names
+        .iter()
+        .filter(|n| {
+            prefix_lower.is_empty()
+                || n.to_lowercase().starts_with(&prefix_lower)
+                || n.to_lowercase().contains(&prefix_lower)
+        })
+        .take(20)
+        .map(|n| TypeaheadSuggestion {
+            text: format!("/{} {}", command, n),
+            description: format!("Expand {} '{}' into the turn", command, n),
+            source: source.clone(),
+        })
+        .collect()
+}
+
+/// Register the installed skill + bundle names for `/skill <Tab>` typeahead.
+/// Called by the app whenever the skills directory is (re)scanned.
+pub fn register_typeahead_names(skill_names: Vec<String>, bundle_names: Vec<String>) {
+    let names = SKILL_NAME_SNAPSHOT.get_or_init(|| std::sync::RwLock::new(Vec::new()));
+    let mut names = names.write().unwrap_or_else(|e| e.into_inner());
+    names.clear();
+    names.extend(skill_names);
+    names.extend(bundle_names);
 }
 
 /// Compute typeahead suggestions for file references (e.g., `@src/main.rs`).
