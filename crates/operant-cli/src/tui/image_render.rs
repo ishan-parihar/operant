@@ -360,28 +360,45 @@ mod tests {
     /// share process-global environment, so they must not interleave.
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
+    /// RAII guard: sets an env var for the duration of the test and restores
+    /// the previous value on drop — even if the test panics.
+    struct EnvGuard(&'static str, Option<String>);
+
+    impl EnvGuard {
+        fn set(key: &'static str, value: &str) -> Self {
+            let prev = std::env::var(key).ok();
+            // Safety: tests run single-threaded under ENV_LOCK for these keys.
+            unsafe {
+                std::env::set_var(key, value);
+            }
+            EnvGuard(key, prev)
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            // Safety: env mutations are serialized by ENV_LOCK.
+            unsafe {
+                match &self.1 {
+                    Some(prev) => std::env::set_var(self.0, prev),
+                    None => std::env::remove_var(self.0),
+                }
+            }
+        }
+    }
+
     #[test]
     fn test_detect_protocol_kitty_env() {
         let _guard = ENV_LOCK.lock().unwrap();
-        unsafe {
-            std::env::set_var("TERM", "xterm-kitty");
-        }
+        let _env = EnvGuard::set("TERM", "xterm-kitty");
         assert_eq!(detect_graphics_protocol(), GraphicsProtocol::Kitty);
-        unsafe {
-            std::env::remove_var("TERM");
-        }
     }
 
     #[test]
     fn test_detect_protocol_iterm_env() {
         let _guard = ENV_LOCK.lock().unwrap();
-        unsafe {
-            std::env::set_var("TERM_PROGRAM", "iTerm.app");
-        }
+        let _env = EnvGuard::set("TERM_PROGRAM", "iTerm.app");
         assert_eq!(detect_graphics_protocol(), GraphicsProtocol::ITerm2);
-        unsafe {
-            std::env::remove_var("TERM_PROGRAM");
-        }
     }
 
     #[test]
