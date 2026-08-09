@@ -45,9 +45,10 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
-/// Default registry index URL. Points at the operant-skills GitHub repo.
+/// Default registry index URL. Self-hosted in the operant repo so the
+/// marketplace works out of the box — `OPERANT_SKILL_REGISTRY` overrides.
 const DEFAULT_REGISTRY_URL: &str =
-    "https://raw.githubusercontent.com/ishan-parihar/operant-skills/main/index.json";
+    "https://raw.githubusercontent.com/ishan-parihar/operant/main/skill-registry/index.json";
 
 /// Cache TTL — re-fetch the registry if the local copy is older than this.
 const CACHE_TTL: Duration = Duration::from_secs(3600); // 1 hour

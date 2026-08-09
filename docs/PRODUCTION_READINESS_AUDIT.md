@@ -161,11 +161,86 @@ Verified empirically: `operant tools list` under the test config surfaces **54 t
 
 ---
 
+## 6.1 IGS v1.0.2 upgrade + integration audit (2026-08-10)
+
+See [`docs/IGS_V102_AUDIT.md`](IGS_V102_AUDIT.md) for the full binary audit,
+per-command live results, and igs-source patch suggestions. Summary of
+changes shipped here:
+
+- **Binary:** installed IGS **v1.0.2** (`/usr/local/bin/igs`) — replaced the
+  stale 0.5.4 that had been on PATH. Verified against the real binary, not
+  stale source clones.
+- **Shared obscura guaranteed:** IGS `settings.yml` (`browser.default:
+  obscura`, stealth) and operant `ObscuraProvider` both resolve
+  `~/.config/igs-mcp/bin/obscura` — one binary in use. ✅
+- **`IgsBrowserProvider` rewritten** for v1.0.2 reality: `igs browser` CLI is
+  **stateless** across invocations and its `markdown` subcommand is broken
+  (`--dump markdown` invalid). navigate/snapshot now route through
+  `igs web scrape` (same Obscura engine) with last-URL tracking;
+  click/fill/scroll return a clear error directing to the CDP provider.
+- **Default browser provider changed `"igs"` → `"obscura"`** — the
+  CDP-driven, stealth, shared-binary provider that supports real
+  multi-step automation.
+- **New `web_crawl` tool** (v1.0.2 fixed the 0.5.x crawl 404): SSRF-guarded,
+  bounded by `maxDepth`/`maxPages`, returns `pages[]` as markdown.
+  Registered in `builtin.rs`.
+- **`web_search` now key-free via IGS**: v1.0.2 multi-engine search
+  (DDG/Wikipedia/GitHub/HN/SO/YouTube) works without any API key — verified
+  live (10 real results, `provider: igs`). Stale docs/error strings
+  ("needs a search key") corrected.
+- **User config updated** (`~/.operant/operant.toml`): `igs_enabled = true`,
+  `preferred_provider = "igs"` (it had been disabled with the old broken
+  binary).
+
+## 6.2 Skill-management infrastructure audit (vs hermes-agent) — 2026-08-10
+
+Operant's skill stack (`skills.rs` SkillManager, `skills_guard` scanner,
+`skill_marketplace`, `cmd_skills` CLI, `skills_tool` agent tools,
+`agent/skill_preprocessing`, `agent/skill_bundle`) was audited against
+hermes-agent's (`agent/skill_preprocessing.py`, `skill_bundles.py`,
+`skill_commands.py`, `skill_utils.py`, `hermes_cli/skills_hub.py`,
+`subcommands/skills.py`).
+
+| Area | hermes-agent | operant | Verdict |
+|------|-------------|---------|---------|
+| SKILL.md parsing / frontmatter | `skill_utils.py` | `skills.rs` | ✅ parity |
+| Template vars `${HERMES/OPERANT_SKILL_DIR}` + inline shell `` !`cmd` `` | `skill_preprocessing.py` (used at load) | `skill_preprocessing.rs` — **was unwired** | ⚠️ **fixed** |
+| Bundles (`/bundle` expansion) | `skill_bundles.py` + `skill_commands.py` | `skill_bundle.rs` (no callers) | ⚠️ still unwired |
+| Security scan on install | `skills_hub` verdict | `skills_guard.rs` (2,675 LOC, recursive dir scan, block/confirm/allow, `--force`) | ✅ stronger |
+| Remote registry / hub | `skills_hub.py` (multi-source: skills.sh, GitHub, clawhub, lobehub…) | `skill_marketplace.rs` — **default registry URL 404'd** (repo `operant-skills` doesn't exist) | ⚠️ **fixed** |
+| CLI surface | browse/search/install/inspect/list + sources | list/search/inspect/install/uninstall/update/browse/check/audit/reset/publish/snapshot/tap/toggle/market | ✅ superset |
+| Agent tools | `skills_tool` + `skill_manager_tool` | `skills_list` / `skill_view` / `skill_manage` (+ protected-skills & background-review guards) | ✅ parity+ |
+| System-prompt injection | metadata-only progressive disclosure | `<available_skills>` name+description in `build_frozen_prefix` | ✅ parity |
+
+**Fixes shipped this session:**
+
+1. **`skill_preprocessing` wired into `skill_view`** — template-var
+   substitution (`${OPERANT_SKILL_DIR}`/`${OPERANT_SESSION_ID}`) + inline
+   shell expansion (opt-in, hermes `inline_shell` semantics) now run before
+   skill content reaches the model (hermes parity: preprocessing at load).
+2. **Self-hosted skill registry** — created `skill-registry/index.json` in
+   the operant repo (bundled `remote-build-ssh`, `workspace-lint` entries
+   with download URLs into this repo) and pointed `DEFAULT_REGISTRY_URL` at
+   `raw.githubusercontent.com/ishan-parihar/operant/main/skill-registry/index.json`
+   (was a nonexistent `operant-skills` repo → `market list` 404'd).
+   `OPERANT_SKILL_REGISTRY` still overrides. After the push, `skills market
+   list/search/install` work out of the box.
+3. **Directory import** (previous session, still green).
+
+**Remaining gap (needs hermes-style /bundle work):** `agent/skill_bundle.rs`
+(`scan_bundles`, `resolve_bundle_command_key`, `build_bundle_invocation_message`)
+still has no callers — hermes expands `/skill` + `/bundle` slash turns via
+`skill_commands.py`. Wiring a `/skill <name>` expansion in the TUI/CLI that
+injects the full preprocessed skill content into the turn is the natural next
+step (progressive-disclosure tools already cover the agent-facing path).
+
+---
+
 ## 7. Verification summary
 
 ```
 cargo check --workspace                                  → 0 errors, 0 warnings
-cargo test --workspace                                   → 8,527 passed / 0 failed (live-test iteration)
+cargo test --workspace                                   → 8,535 passed / 0 failed
 cargo clippy --workspace --all-targets --all-features -- -D warnings → exit 0
 cargo fmt --all --check                                  → clean
 ```

@@ -30,7 +30,7 @@ pub use super::file_state::FileStateTool;
 pub use super::file_tools::{FileListTool, FileReadTool, FileSearchTool, FileWriteTool};
 pub use super::home_assistant_tool::HomeAssistantTool;
 pub use super::http_tool::HttpRequestTool;
-pub use super::igs::{WebExtractTool, WebScrapeTool};
+pub use super::igs::{WebCrawlTool, WebExtractTool, WebScrapeTool};
 pub use super::image_generation_tool::ImageGenerationTool;
 pub use super::insights_tool::InsightsTool;
 pub use super::kanban_tool::KanbanTool;
@@ -81,10 +81,11 @@ pub async fn register_builtin_tools(
     registry.register(ToolBackendTool).await?;
     registry.register(WebSearchTool).await?;
     registry.register(WebFetchTool).await?;
-    // IGS-backed web tools (web_scrape / web_extract). They self-disable
-    // via is_available() when the `igs` binary is not installed.
+    // IGS-backed web tools (web_scrape / web_extract / web_crawl). They
+    // self-disable via is_available() when the `igs` binary is not installed.
     registry.register(WebScrapeTool).await?;
     registry.register(WebExtractTool).await?;
+    registry.register(WebCrawlTool).await?;
     registry.register(XaiHttpTool).await?;
     registry.register(CodeExecutionTool).await?;
     registry.register(CronTool::new(cron_db)).await?;
@@ -262,6 +263,7 @@ pub fn builtin_tool_names() -> Vec<&'static str> {
         "web_search",
         "web_scrape",
         "web_extract",
+        "web_crawl",
         "xai_http_request",
         "send_message",
         "discord",

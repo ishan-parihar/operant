@@ -719,7 +719,9 @@ impl Default for MemorySettings {
 /// Browser provider configuration.
 ///
 /// `provider` selects the browser backend:
-/// - `"igs"` (default) — IGS headless browser via the `igs` binary (Obscura)
+/// - `"obscura"` (default) — local Obscura binary shared with IGS; CDP-driven,
+///   stealth by default (reliable multi-step automation)
+/// - `"igs"` — IGS CLI (`igs web scrape` / stateless browser CLI)
 /// - `"lightpanda"` — local binary, auto-downloaded from GitHub Releases
 /// - `"camofox"` — local anti-detection browser REST API (`CAMOFOX_URL`)
 /// - `"browserbase"` — Browserbase cloud (`BROWSERBASE_API_KEY` + `BROWSERBASE_PROJECT_ID`)
@@ -735,7 +737,7 @@ pub struct BrowserSettings {
 impl Default for BrowserSettings {
     fn default() -> Self {
         Self {
-            provider: "igs".to_string(),
+            provider: "obscura".to_string(),
         }
     }
 }

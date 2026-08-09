@@ -4,10 +4,10 @@ use async_trait::async_trait;
 
 /// Web search provider backed by the `igs` CLI (`igs web search --format json`).
 ///
-/// Requires the `igs` binary on PATH (or `tools.igs_binary_path`). Search
-/// routes through igs's upstream (Tavily/Firecrawl) — when no upstream key
-/// is configured igs returns zero results, so `WebSearchTool` falls back to
-/// DuckDuckGo on empty output.
+/// Requires the `igs` binary on PATH (or `tools.igs_binary_path`). IGS >= 1.0
+/// ships a key-free multi-engine search (DDG, Wikipedia, GitHub, HackerNews,
+/// StackOverflow, YouTube) — no API key required. `WebSearchTool` still falls
+/// back to DuckDuckGo when IGS is unavailable or returns empty output.
 pub struct IgsSearchProvider;
 
 #[async_trait]

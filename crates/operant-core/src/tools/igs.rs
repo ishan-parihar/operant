@@ -200,10 +200,9 @@ pub fn parse_search_results(
 
 /// Search the web via `igs web search` (structured results).
 ///
-/// Note: `igs web search` routes through Tavily/Firecrawl and needs the
-/// corresponding upstream key; with no key it returns zero results. Callers
-/// (e.g. `WebSearchTool`) should fall back to DuckDuckGo when this returns
-/// an empty vec or an error.
+/// Note: IGS >= 1.0 `web search` is key-free (multi-engine: DDG, Wikipedia,
+/// GitHub, HN, StackOverflow, YouTube). Callers (e.g. `WebSearchTool`) still
+/// fall back to DuckDuckGo when this returns an empty vec or an error.
 pub async fn web_search_igs(
     query: &str,
     limit: usize,
@@ -351,18 +350,139 @@ impl OperantTool for WebExtractTool {
 }
 
 // ---------------------------------------------------------------------------
+// web_crawl tool
+// ---------------------------------------------------------------------------
+
+/// Crawl a site via `igs web crawl` (Obscura engine, markdown pages).
+///
+/// IGS >= 1.0 fixed `web crawl` (0.5.x 404'd on its obscura auto-update).
+pub struct WebCrawlTool;
+
+#[derive(JsonSchema, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WebCrawlArgs {
+    url: String,
+    /// Maximum link depth (default 2).
+    #[serde(default = "default_crawl_depth")]
+    max_depth: u32,
+    /// Maximum pages to crawl (default 20).
+    #[serde(default = "default_crawl_pages")]
+    max_pages: u32,
+}
+
+fn default_crawl_depth() -> u32 {
+    2
+}
+fn default_crawl_pages() -> u32 {
+    20
+}
+
+#[async_trait]
+impl OperantTool for WebCrawlTool {
+    fn name(&self) -> &str {
+        "web_crawl"
+    }
+
+    fn description(&self) -> &str {
+        "Crawl a website starting from a URL, following internal links up to a \
+         max depth and page count, returning each page as markdown. Uses the \
+         IGS Obscura engine (JS rendering). Set maxDepth/maxPages to bound the \
+         crawl. Requires the 'igs' binary."
+    }
+
+    fn schema(&self) -> ToolSchema {
+        ToolSchema::from_type::<WebCrawlArgs>("web_crawl", "Crawl website to markdown")
+    }
+
+    fn is_available(&self) -> bool {
+        find_igs_binary().is_some()
+    }
+
+    async fn execute(&self, args: Value, _context: ToolContext) -> ToolResult {
+        let args: WebCrawlArgs = match serde_json::from_value(args) {
+            Ok(a) => a,
+            Err(e) => return ToolResult::error("web_crawl", format!("Invalid arguments: {e}")),
+        };
+        if args.url.trim().is_empty() {
+            return ToolResult::error("web_crawl", "url is required");
+        }
+        // SSRF protection — same fail-closed guard as web_scrape/web_extract.
+        let (safe, block_msg) = ssrf_verdict(&args.url).await;
+        if !safe {
+            return ToolResult::error("web_crawl", block_msg);
+        }
+
+        let cli = match IgsCli::new() {
+            Some(c) => c,
+            None => return ToolResult::error("web_crawl", IGS_INSTALL_HINT.to_string()),
+        };
+        let raw = match cli
+            .run_json(&[
+                "web",
+                "crawl",
+                "--url",
+                &args.url,
+                "--max-depth",
+                &args.max_depth.to_string(),
+                "--max-pages",
+                &args.max_pages.to_string(),
+            ])
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => return ToolResult::error("web_crawl", e.to_string()),
+        };
+
+        match serde_json::from_str::<Value>(&raw) {
+            Ok(value) => {
+                // Surface the structured crawl result: pages as markdown list.
+                let pages = value
+                    .get("pages")
+                    .and_then(|v| v.as_array())
+                    .cloned()
+                    .unwrap_or_default();
+                ToolResult::success(
+                    "web_crawl",
+                    serde_json::json!({
+                        "start_url": args.url,
+                        "page_count": pages.len(),
+                        "pages": pages.iter().map(|p| serde_json::json!({
+                            "url": p.get("url").and_then(|v| v.as_str()).unwrap_or(""),
+                            "title": p.get("title").and_then(|v| v.as_str()).unwrap_or(""),
+                            "markdown": p.get("content").and_then(|v| v.as_str()).unwrap_or(""),
+                        })).collect::<Vec<_>>(),
+                    }),
+                )
+            }
+            Err(_) => ToolResult::success("web_crawl", serde_json::json!({"raw": raw})),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // IGS browser provider
 // ---------------------------------------------------------------------------
 
-/// Browser provider backed by `igs browser` (Obscura headless browser).
+/// Browser provider backed by the `igs` binary (Obscura headless browser).
 ///
-/// Each command shells out to the `igs` binary; the browser session persists
-/// server-side so goto → markdown → click sequences work across calls.
-pub struct IgsBrowserProvider;
+/// IMPORTANT (IGS >= 1.0): the `igs browser` CLI subcommands are **stateless**
+/// across invocations — every `igs browser <cmd>` spawns a fresh about:blank
+/// session, and the `markdown` subcommand is broken (`--dump markdown` is not
+/// a valid value). The reliable, tested path is `igs web scrape`, which uses
+/// the same shared Obscura engine and returns clean markdown. This provider
+/// therefore routes `navigate`/`snapshot` through `web scrape`, tracking the
+/// last URL so a snapshot can re-scrape it. Interactive actions (click/fill/
+/// scroll) are not supported over the stateless CLI — they return a clear
+/// error directing the user to the `obscura` (CDP) provider.
+pub struct IgsBrowserProvider {
+    last_url: std::sync::Mutex<Option<String>>,
+}
 
 impl Default for IgsBrowserProvider {
     fn default() -> Self {
-        Self
+        Self {
+            last_url: std::sync::Mutex::new(None),
+        }
     }
 }
 
@@ -377,25 +497,54 @@ impl crate::browser_provider::BrowserProvider for IgsBrowserProvider {
     }
 
     async fn navigate(&self, url: &str) -> Result<String> {
-        // goto, then dump the page as markdown.
-        browser_command(&["browser", "goto", "--url", url]).await?;
-        browser_command(&["browser", "markdown"]).await
+        let markdown = scrape_url(url).await?;
+        if let Ok(mut last) = self.last_url.lock() {
+            *last = Some(url.to_string());
+        }
+        Ok(markdown)
     }
 
     async fn snapshot(&self) -> Result<String> {
-        browser_command(&["browser", "markdown"]).await
+        let last = self.last_url.lock().ok().and_then(|g| g.clone());
+        match last {
+            Some(url) => scrape_url(&url).await,
+            None => Err(Error::Agent(
+                "No page loaded: call navigate(url) first. \
+                 (The IGS browser CLI is stateless across invocations, so the \
+                 snapshot re-scrapes the last navigated URL.)"
+                    .to_string(),
+            )),
+        }
     }
 
-    async fn click(&self, selector: &str) -> Result<String> {
-        browser_command(&["browser", "click", "--selector", selector]).await
+    async fn click(&self, _selector: &str) -> Result<String> {
+        Err(Error::Agent(
+            "The IGS browser CLI is stateless (IGS >= 1.0) — click/fill/scroll \
+             are not supported over the CLI. Set browser.provider = \"obscura\" \
+             in operant.toml to use the CDP-driven provider for interactive \
+             automation."
+                .to_string(),
+        ))
     }
 
-    async fn type_text(&self, selector: &str, text: &str) -> Result<String> {
-        browser_command(&["browser", "fill", "--selector", selector, "--value", text]).await
+    async fn type_text(&self, _selector: &str, _text: &str) -> Result<String> {
+        Err(Error::Agent(
+            "The IGS browser CLI is stateless (IGS >= 1.0) — click/fill/scroll \
+             are not supported over the CLI. Set browser.provider = \"obscura\" \
+             in operant.toml to use the CDP-driven provider for interactive \
+             automation."
+                .to_string(),
+        ))
     }
 
-    async fn scroll(&self, direction: &str) -> Result<String> {
-        browser_command(&["browser", "scroll", "--direction", direction]).await
+    async fn scroll(&self, _direction: &str) -> Result<String> {
+        Err(Error::Agent(
+            "The IGS browser CLI is stateless (IGS >= 1.0) — click/fill/scroll \
+             are not supported over the CLI. Set browser.provider = \"obscura\" \
+             in operant.toml to use the CDP-driven provider for interactive \
+             automation."
+                .to_string(),
+        ))
     }
 }
 

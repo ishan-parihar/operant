@@ -732,7 +732,7 @@ impl BrowserProvider for FirecrawlProvider {
 
 pub fn build_browser_provider(name: &str) -> std::sync::Arc<dyn BrowserProvider> {
     match name {
-        "igs" => std::sync::Arc::new(crate::tools::igs::IgsBrowserProvider),
+        "igs" => std::sync::Arc::new(crate::tools::igs::IgsBrowserProvider::default()),
         "camofox" => std::sync::Arc::new(CamofoxProvider::new()),
         "browserbase" => std::sync::Arc::new(BrowserbaseProvider::new()),
         "browser-use" | "browser_use" => std::sync::Arc::new(BrowserUseProvider::new()),

@@ -99,9 +99,10 @@ impl OperantTool for WebSearchTool {
                 format!(
                     "Search failed: {}",
                     last_error.unwrap_or_else(|| {
-                        "all search providers returned no results — DuckDuckGo may be \
-                         rate-limiting this IP; configure a Tavily/Exa key in [tools.web] or \
-                         run with igs_enabled + a search key"
+                        "all search providers returned no results — the IGS engine \
+                     (v1.0.2, key-free) and DuckDuckGo both came up empty; try again \
+                     shortly, or configure a Tavily/Exa key in [tools.web] for \
+                     additional providers"
                             .to_string()
                     })
                 ),

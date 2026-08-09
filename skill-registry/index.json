@@ -1,0 +1,24 @@
+[
+  {
+    "name": "remote-build-ssh",
+    "description": "Build Rust cargo binaries remotely on the ishanp build machine via SSH through a cloudflared tunnel. Use this skill whenever you need to compile a Rust project on a powerful remote machine, when the user says \"build on the remote box\", \"compile remotely\", \"SSH and build\", \"deploy to build server\", or any time you need to push code and produce binaries on the ishanp build server. Works for ANY Rust project — not just operant. Also use when setting up a new AI agent to access this build machine, or when troubleshooting SSH tunnel connectivity.",
+    "version": "1.0.0",
+    "author": "ishan-parihar",
+    "license": "MIT",
+    "tags": ["rust", "ssh", "build", "remote", "cloudflare"],
+    "category": "development",
+    "homepage": "https://github.com/ishan-parihar/operant/tree/main/skills/remote-build-ssh",
+    "download_url": "https://raw.githubusercontent.com/ishan-parihar/operant/main/skills/remote-build-ssh/SKILL.md"
+  },
+  {
+    "name": "workspace-lint",
+    "description": "Maintain a pristine, project-specific directory structure by enforcing rules declared in a root config file (e.g. `workspace-lint.yaml`). Use this skill proactively whenever an AI agent creates new files, scripts, docs, reports, logs, or artifacts in any project — every placement decision (where to put a `.py`, `.md`, `.mq5`, `.csv`, log file, or analysis report) should be checked against this skill's config before the file is written. Trigger on phrases like \"organize files\", \"clean up directory\", \"where should I put this\", \"structure the workspace\", \"new script\", \"draft report\", \"save analysis to\", \"audit workspace\", or any time you notice orphaned files at the project root, duplicate directories (e.g. `1. PHANTOM` and `PHANTOM`), stray build artifacts (`__pycache__`, `.pyc`, `.log`), or a project that looks \"messy\". Run the bundled validator (`scripts/workspace_lint.py`) after each iteration to catch drift early.",
+    "version": "1.0.0",
+    "author": "ishan-parihar",
+    "license": "MIT",
+    "tags": ["workspace", "lint", "structure", "organization"],
+    "category": "development",
+    "homepage": "https://github.com/ishan-parihar/operant/tree/main/skills/workspace-lint",
+    "download_url": "https://raw.githubusercontent.com/ishan-parihar/operant/main/skills/workspace-lint/SKILL.md"
+  }
+]

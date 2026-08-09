@@ -628,6 +628,17 @@ impl OperantTool for SkillViewTool {
         match fs::read_to_string(&skill_md) {
             Ok(content) => {
                 let (frontmatter, body) = parse_frontmatter(&content);
+                // Apply SKILL.md preprocessing (template vars + inline shell)
+                // before the content reaches the model — hermes parity
+                // (`skill_preprocessing.preprocess_skill_content`). The inline
+                // shell runs with the skill directory as CWD. Unresolved
+                // template vars are left in place for the author to debug.
+                let body = crate::agent::skill_preprocessing::preprocess_skill_content(
+                    &body,
+                    Some(&skill_dir),
+                    None,
+                    None,
+                );
                 let skill_name = frontmatter
                     .get("name")
                     .and_then(|v| v.as_str())
