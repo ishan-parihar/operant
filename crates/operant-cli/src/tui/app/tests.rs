@@ -1092,3 +1092,57 @@ fn test_command_palette_opens_via_ctrl_k() {
         "Ctrl+K should open the command palette"
     );
 }
+
+#[test]
+fn test_skill_slash_command_injects_pending_message() {
+    // /skill <name> must be fully handled by the intercept arm (returns
+    // true) and stage the hermes-parity invocation expansion in
+    // pending_user_message — NOT fall through to the CommandRegistry
+    // fallback (iter-320). Uses a temp skills dir to keep the test
+    // hermetic and independent of the user's installed skills.
+    let mut app = make_app();
+    let tmp = std::env::temp_dir().join(format!("operant-skill-slash-{}", std::process::id()));
+    let skill_dir = tmp.join("demo-skill");
+    std::fs::create_dir_all(&skill_dir).unwrap();
+    std::fs::write(
+        skill_dir.join("SKILL.md"),
+        "---\nname: demo-skill\ndescription: demo\n---\n\n# Steps\nDo the demo.\n",
+    )
+    .unwrap();
+    app.config.skills.root_dir = tmp.clone();
+
+    // Missing skill: handled with a status message, no pending message.
+    assert!(app.intercept_slash_command_with_args("skill", "nope-missing"));
+    assert!(app.pending_user_message.is_none());
+    assert!(app.status_message.is_some());
+
+    // Existing skill: handled, expansion staged for the run loop.
+    assert!(app.intercept_slash_command_with_args("skill", "demo-skill"));
+    let staged = app.pending_user_message.take().expect("expansion staged");
+    assert!(
+        staged.contains("demo-skill"),
+        "expansion names the skill: {staged}"
+    );
+    assert!(
+        staged.contains("Do the demo."),
+        "expansion carries SKILL.md body"
+    );
+
+    // Bare /skill opens the overlay (existing behavior preserved).
+    assert!(!app.skills_view.visible);
+    assert!(app.intercept_slash_command("skill"));
+    assert!(app.skills_view.visible);
+
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+#[test]
+fn test_bundle_slash_command_handled_without_registry_fallback() {
+    // /bundle with no args must be intercepted (return true) even when no
+    // bundles exist — the pre-fix code path could fall through to the
+    // CommandRegistry and print a misleading "not yet wired" message
+    // (iter-320).
+    let mut app = make_app();
+    assert!(app.intercept_slash_command("bundle"));
+    assert!(app.pending_user_message.is_none());
+}

@@ -380,6 +380,24 @@ pub struct SkillsSettings {
     pub autoload: bool,
     pub template_name: String,
     pub template_description: String,
+    /// Substitute `${OPERANT_SKILL_DIR}` / `${OPERANT_SESSION_ID}` in
+    /// SKILL.md before injection (hermes `template_vars`, default true).
+    #[serde(default = "default_skill_template_vars")]
+    pub template_vars: bool,
+    /// Expand `` !`cmd` `` inline-shell snippets in SKILL.md at load time
+    /// (hermes `inline_shell`, default false — off unless opted in).
+    #[serde(default)]
+    pub inline_shell: bool,
+    /// Timeout (seconds) for each inline-shell snippet.
+    #[serde(default = "default_skill_inline_shell_timeout")]
+    pub inline_shell_timeout: u64,
+}
+
+fn default_skill_template_vars() -> bool {
+    true
+}
+fn default_skill_inline_shell_timeout() -> u64 {
+    10
 }
 
 impl Default for SkillsSettings {
@@ -392,6 +410,9 @@ impl Default for SkillsSettings {
             autoload: true,
             template_name: "new-skill".to_string(),
             template_description: "Describe what this skill does.".to_string(),
+            template_vars: true,
+            inline_shell: false,
+            inline_shell_timeout: 10,
         }
     }
 }

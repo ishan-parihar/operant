@@ -134,6 +134,7 @@ impl App {
             slash_usage: crate::tui::slash_usage::UsageStore::load(),
             session_goal: None,
             pending_retry_query: None,
+            pending_user_message: None,
             plan_mode: false,
             stall_start: None,
             settings_screen: SettingsScreen::new(),

@@ -280,7 +280,8 @@ pub fn build_bundle_invocation_message(
         seen.insert(identifier.to_string());
 
         // Try to load the skill content from the skills directory
-        let skills_dir = crate::platform::operant_home().join("skills");
+        // (config-aware; falls back to the default platform location).
+        let skills_dir = crate::platform::operant_skills_dir();
         let skill_dir = skills_dir.join(identifier);
         let skill_file = skill_dir.join("SKILL.md");
 

@@ -518,26 +518,35 @@ impl TuiApp {
         if let Some(query) = self.initial_query.take()
             && let Some(ref agent) = agent
         {
-            use crate::tui::adapter_types::types::{Message, MessageContent, Role};
-            self.app.messages.push(Message {
-                role: Role::User,
-                content: MessageContent::Text(query.clone()),
-            });
-            self.app.is_streaming = true;
-            self.app.streaming_text.clear();
-            self.app.streaming_thinking.clear();
-
-            let agent_clone = std::sync::Arc::clone(agent);
-            let (tx, rx) = tokio::sync::oneshot::channel();
-            let handle = tokio::spawn(async move {
-                let result = agent_clone.run(query).await.map(|_| ());
-                let _ = tx.send(result);
-            });
-            self.app.run_complete_rx = Some(rx);
-            self.app.agent_task_handle = Some(handle);
+            self.submit_user_message(agent, query);
         }
 
         let result = loop {
+            // /skill <name> and /bundle <name>: drain pending_user_message set
+            // by the intercept arm at the TOP of the loop so the expansion
+            // submits immediately after Enter — no further keystroke needed.
+            // (iter-320 — hermes-parity skill invocation expansion.)
+            // Guard order matters: check streaming/agent BEFORE .take() so a
+            // pending message is never consumed and dropped when a turn is
+            // already running (it stays queued for the next idle iteration).
+            if !self.app.is_streaming
+                && let Some(agent) = agent.as_ref()
+                && let Some(inject_text) = self.app.pending_user_message.take()
+            {
+                self.submit_user_message(agent, inject_text);
+                continue;
+            }
+            // /retry: drain pending_retry_query set by the intercept arm at
+            // the loop top too, so /retry fires immediately after Enter
+            // (same one-keystroke semantics as /skill — iter-320).
+            if !self.app.is_streaming
+                && let Some(agent) = agent.as_ref()
+                && let Some(retry_text) = self.app.pending_retry_query.take()
+            {
+                self.submit_user_message(agent, retry_text);
+                continue;
+            }
+
             match self.app.run(&mut terminal) {
                 Ok(Some(input)) => {
                     // Poll pending MCP state set by /mcp 'a' (panel auth) and
@@ -695,30 +704,7 @@ impl TuiApp {
                             continue;
                         }
                     }
-                    // /retry: drain pending_retry_query set by intercept arm.
-                    // (iter-270 — real /retry wiring.)
-                    if let Some(retry_text) = self.app.pending_retry_query.take()
-                        && let Some(ref agent) = agent
-                        && !self.app.is_streaming
-                    {
-                        use crate::tui::adapter_types::types::{Message, MessageContent, Role};
-                        self.app.messages.push(Message {
-                            role: Role::User,
-                            content: MessageContent::Text(retry_text.clone()),
-                        });
-                        self.app.is_streaming = true;
-                        self.app.streaming_text.clear();
-                        self.app.streaming_thinking.clear();
-                        let agent_clone = std::sync::Arc::clone(agent);
-                        let (tx, rx) = tokio::sync::oneshot::channel();
-                        let handle = tokio::spawn(async move {
-                            let result = agent_clone.run(retry_text).await.map(|_| ());
-                            let _ = tx.send(result);
-                        });
-                        self.app.run_complete_rx = Some(rx);
-                        self.app.agent_task_handle = Some(handle);
-                        continue;
-                    }
+
                     if let Some(ref agent) = agent {
                         // If a turn is currently streaming, push the input as
                         // a steer directive instead of starting a new turn.
@@ -770,6 +756,33 @@ impl TuiApp {
         let _ = execute!(terminal.backend_mut(), crossterm::event::DisableFocusChange);
         execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
         result
+    }
+
+    /// Push `text` as a user message and spawn an agent turn for it.
+    /// Shared by the initial-query path, /retry, and the /skill + /bundle
+    /// expansion so the submission wiring lives in exactly one place.
+    /// (iter-320 — dedupe three near-identical submission blocks.)
+    fn submit_user_message(
+        &mut self,
+        agent: &std::sync::Arc<operant_core::agent::OperantAgent>,
+        text: String,
+    ) {
+        use crate::tui::adapter_types::types::{Message, MessageContent, Role};
+        self.app.messages.push(Message {
+            role: Role::User,
+            content: MessageContent::Text(text.clone()),
+        });
+        self.app.is_streaming = true;
+        self.app.streaming_text.clear();
+        self.app.streaming_thinking.clear();
+        let agent_clone = std::sync::Arc::clone(agent);
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let handle = tokio::spawn(async move {
+            let result = agent_clone.run(text).await.map(|_| ());
+            let _ = tx.send(result);
+        });
+        self.app.run_complete_rx = Some(rx);
+        self.app.agent_task_handle = Some(handle);
     }
 
     /// Run the real `App::run` loop headlessly against a `TestBackend`,

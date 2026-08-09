@@ -201,6 +201,89 @@ impl App {
                 self.memory_file_selector.open(&root);
                 true
             }
+            // /skill <name> — expand a skill into the turn (hermes
+            // `build_skill_invocation_message` parity): the full preprocessed
+            // SKILL.md becomes the user message so the model treats it as
+            // active guidance. Bare `/skill` (or `/skills`) opens the overlay.
+            "skill" => {
+                let name = args.trim();
+                if name.is_empty() {
+                    let skills_dir = self.config.skills.root_dir.clone();
+                    self.skills_view.open(skills_dir);
+                    return true;
+                }
+                // Optional trailing instruction after the skill name:
+                // `/skill gitcrawl summarize the repo`
+                let (skill_name, instruction) = match name.split_once(char::is_whitespace) {
+                    Some((n, rest)) => (n, rest.trim().to_string()),
+                    None => (name, String::new()),
+                };
+                match operant_core::agent::skill_preprocessing::build_skill_invocation_message_in(
+                    &self.config.skills.root_dir,
+                    skill_name,
+                    &instruction,
+                ) {
+                    Some(msg) => {
+                        // Inject as a fresh user message on the next loop
+                        // iteration (pending_user_message is drained by the
+                        // run loop like pending_retry_query). Returning true
+                        // marks the slash command as fully handled, so the
+                        // registry fallback is never reached.
+                        self.pending_user_message = Some(msg);
+                        true
+                    }
+                    None => {
+                        self.status_message = Some(format!(
+                            "Skill '{}' not found. Use /skills to browse installed skills.",
+                            skill_name
+                        ));
+                        true
+                    }
+                }
+            }
+            // /bundle <name> — expand a skill bundle (multiple skills) into
+            // the turn. hermes parity: `skill_bundles.py` + slash bundles.
+            "bundle" => {
+                let name = args.trim();
+                if name.is_empty() {
+                    let bundles = operant_core::agent::skill_bundle::list_bundles();
+                    if bundles.is_empty() {
+                        self.status_message =
+                            Some("No skill bundles found in ~/.operant/skill-bundles/".to_string());
+                    } else {
+                        let names: Vec<&str> = bundles.iter().map(|b| b.slug.as_str()).collect();
+                        self.status_message = Some(format!(
+                            "Available bundles: {} — usage: /bundle <name>",
+                            names.join(", ")
+                        ));
+                    }
+                    true
+                } else {
+                    let (bundle_name, instruction) = match name.split_once(char::is_whitespace) {
+                        Some((n, rest)) => (n, rest.trim().to_string()),
+                        None => (name, String::new()),
+                    };
+                    let key =
+                        operant_core::agent::skill_bundle::resolve_bundle_command_key(bundle_name)
+                            .unwrap_or_else(|| bundle_name.to_string());
+                    match operant_core::agent::skill_bundle::build_bundle_invocation_message(
+                        &key,
+                        &instruction,
+                    ) {
+                        Some((msg, _loaded, _missing)) => {
+                            self.pending_user_message = Some(msg);
+                            true
+                        }
+                        None => {
+                            self.status_message = Some(format!(
+                                "Bundle '{}' not found (no loadable skills).",
+                                bundle_name
+                            ));
+                            true
+                        }
+                    }
+                }
+            }
             "skills" => {
                 let skills_dir = self.config.skills.root_dir.clone();
                 self.skills_view.open(skills_dir);

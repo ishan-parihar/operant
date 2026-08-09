@@ -234,6 +234,11 @@ pub struct App {
     /// as if the user typed it. Used by /retry to resubmit the last user msg.
     /// (iter-270 — wires /retry to real state.)
     pub pending_retry_query: Option<String>,
+    /// If set, the run loop submits this text as a fresh user message on the
+    /// next iteration. Used by /skill <name> and /bundle <name> to inject the
+    /// hermes-parity skill-invocation expansion into the turn.
+    /// (iter-320 — wires skill/bundle slash expansion to real state.)
+    pub pending_user_message: Option<String>,
 
     // ---- Visual mode indicators -------------------------------------------
     /// Plan mode — input border turns blue, [PLAN] shown in status bar.
