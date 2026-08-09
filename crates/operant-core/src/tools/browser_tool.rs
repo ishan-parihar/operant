@@ -6,7 +6,11 @@
 //! Supported providers (configured via `browser.provider` in config.toml):
 //! - `igs` (default) - IGS headless browser via the `igs` binary (Obscura)
 //! - `lightpanda` - Local Lightpanda binary (auto-downloaded from GitHub Releases)
-//! - `obscura` - Local Obscura binary (auto-downloaded, supports CDP)
+//! - `obscura` - Local Obscura binary (auto-downloaded). Full interactive
+//!   automation over CDP: operant spawns the shared binary in `serve` mode
+//!   (stealth by default) and drives `Page.navigate` / `Runtime.evaluate` /
+//!   `LP.getMarkdown` over a WebSocket, so navigate/snapshot/click/type/scroll
+//!   all work — same binary IGS web tools use.
 //! - `camofox` - Camofox REST API (`CAMOFOX_URL`)
 //! - `browserbase` - Browserbase cloud (`BROWSERBASE_API_KEY`)
 //! - `browser-use` - Browser Use cloud (`BROWSER_USE_API_KEY`)
@@ -119,7 +123,7 @@ impl OperantTool for BrowserTool {
          Supports multiple providers configured via browser.provider in config.toml:\n\
          - igs (default): IGS headless browser via igs binary (Obscura)\n\
          - lightpanda: Local Lightpanda binary (auto-downloaded)\n\
-         - obscura: Local Obscura binary (auto-downloaded, supports CDP)\n\
+         - obscura: Local Obscura binary (CDP-driven interactive browser, stealth by default)\n\
          - camofox: Camofox REST API (CAMOFOX_URL)\n\
          - browserbase: Browserbase cloud (BROWSERBASE_API_KEY)\n\
          - browser-use: Browser Use cloud (BROWSER_USE_API_KEY)\n\

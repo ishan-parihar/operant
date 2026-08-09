@@ -594,6 +594,13 @@ pub struct ToolSettings {
     /// guarantee a single shared Obscura across browser + web tools.
     #[serde(default)]
     pub obscura_binary_path: Option<PathBuf>,
+    /// Whether the `obscura` browser provider runs in stealth mode: prefers
+    /// the `-stealth` release build when downloading and passes `--stealth` to
+    /// `obscura serve` (anti-detection: browser TLS fingerprinting, tracker
+    /// blocking, `navigator.webdriver` masking). Defaults to true. Set to
+    /// false only if your Obscura binary predates `--stealth` support.
+    #[serde(default = "default_true")]
+    pub obscura_stealth: bool,
     /// Timeout (seconds) for a single `igs` invocation (5..=600).
     #[serde(default = "default_igs_timeout")]
     pub igs_timeout_secs: u64,
@@ -626,6 +633,7 @@ impl Default for ToolSettings {
             igs_enabled: true,
             igs_binary_path: None,
             obscura_binary_path: None,
+            obscura_stealth: true,
             igs_timeout_secs: 60,
             lifeos_enabled: false,
         }
@@ -1198,6 +1206,20 @@ igs_enabled = true
 "#;
         let parsed = parse_config_str(old, std::path::Path::new("old.toml")).expect("valid TOML");
         assert_eq!(parsed.tools.obscura_binary_path, None);
+    }
+
+    #[test]
+    fn tools_toml_parses_obscura_stealth_default_true() {
+        // Stealth is on by default; explicitly disabling must round-trip.
+        let raw = r#"
+[tools]
+obscura_stealth = false
+"#;
+        let parsed = parse_config_str(raw, std::path::Path::new("test.toml")).expect("valid TOML");
+        assert!(!parsed.tools.obscura_stealth);
+
+        let default = AppConfig::default();
+        assert!(default.tools.obscura_stealth);
     }
 
     fn temp_dir(name: &str) -> PathBuf {

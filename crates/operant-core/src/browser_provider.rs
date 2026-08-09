@@ -6,7 +6,8 @@
 //! | Value           | Backend                                         |
 //! |-----------------|-------------------------------------------------|
 //! | `"lightpanda"`  | Local Lightpanda binary (auto-downloaded)       |
-//! | `"obscura"`     | Local Obscura binary (auto-downloaded, CDP)     |
+//! | `"obscura"`     | Local Obscura binary (shared with IGS; CDP-driven,  |
+//! |                 | stealth by default)                              |
 //! | `"camofox"`     | Camofox REST API (`CAMOFOX_URL`)                |
 //! | `"browserbase"` | Browserbase cloud (`BROWSERBASE_API_KEY`)       |
 //! | `"browser-use"` | Browser Use cloud (`BROWSER_USE_API_KEY`)       |
@@ -320,7 +321,8 @@ impl ObscuraProvider {
 
         tracing::debug!("Matching asset for OS: {}, Arch: {}", os, arch);
 
-        // Obscura release naming: obscura-x86_64-linux.tar.gz, obscura-aarch64-linux.tar.gz, etc.
+        // Obscura release naming: obscura-x86_64-linux.tar.gz (standard),
+        // obscura-x86_64-linux-stealth.tar.gz (stealth), …
         let (os_pattern, arch_pattern) = match (os, arch) {
             ("linux", "x86_64") => ("linux", "x86_64"),
             ("linux", "aarch64") => ("linux", "aarch64"),
@@ -335,21 +337,32 @@ impl ObscuraProvider {
             }
         };
 
-        assets
+        let matches_platform = |a: &serde_json::Value| {
+            let name = a["name"].as_str().unwrap_or("");
+            name.contains(os_pattern) && name.contains(arch_pattern) && name.ends_with(".tar.gz")
+        };
+
+        // Prefer the stealth build (anti-detection + TLS fingerprinting + tracker
+        // blocking) — the default for the CDP browser. Fall back to the standard
+        // build when the release only ships non-stealth assets.
+        if let Some(stealth) = assets
             .iter()
-            .find(|a| {
-                let name = a["name"].as_str().unwrap_or("");
-                name.contains(os_pattern)
-                    && name.contains(arch_pattern)
-                    && name.ends_with(".tar.gz")
-            })
-            .cloned()
-            .ok_or_else(|| {
-                Error::Agent(format!(
-                    "Could not find matching binary for {} on {}",
-                    arch, os
-                ))
-            })
+            .find(|a| matches_platform(a) && a["name"].as_str().unwrap_or("").contains("-stealth"))
+        {
+            return Ok(stealth.clone());
+        }
+        if let Some(standard) = assets.iter().find(|a| matches_platform(a)) {
+            tracing::warn!(
+                "Stealth build unavailable for {}/{}, falling back to the standard build",
+                os,
+                arch
+            );
+            return Ok(standard.clone());
+        }
+        Err(Error::Agent(format!(
+            "Could not find matching binary for {} on {}",
+            arch, os
+        )))
     }
 
     /// Verifies that the binary exists and can be executed
@@ -374,28 +387,14 @@ impl ObscuraProvider {
         }
     }
 
-    async fn ensure_binary(&self) -> Result<std::path::PathBuf> {
+    /// Resolve the shared Obscura binary (reusing the IGS-managed copy when
+    /// present), downloading to the operant-managed location only when neither
+    /// IGS nor operant has one installed.
+    pub async fn ensure_binary() -> Result<std::path::PathBuf> {
         if let Some(bin) = Self::resolve_obscura_binary() {
             return Ok(bin);
         }
         Self::download_binary().await
-    }
-
-    async fn run(&self, args: &[&str]) -> Result<String> {
-        let bin = self.ensure_binary().await?;
-        let out = tokio::time::timeout(
-            Duration::from_secs(60),
-            tokio::process::Command::new(&bin).args(args).output(),
-        )
-        .await
-        .map_err(|_| Error::Agent("browser timeout".into()))??;
-
-        if out.status.success() {
-            Ok(String::from_utf8_lossy(&out.stdout).into_owned())
-        } else {
-            let stderr = String::from_utf8_lossy(&out.stderr);
-            Err(Error::Agent(format!("obscura error: {}", stderr)))
-        }
     }
 }
 
@@ -405,31 +404,27 @@ impl BrowserProvider for ObscuraProvider {
         "obscura"
     }
     fn is_configured(&self) -> bool {
-        true // Auto-downloads on first use
+        true // Auto-provisions the shared (stealth) binary on first use
     }
     async fn navigate(&self, url: &str) -> Result<String> {
-        // Use obscura fetch with markdown dump
-        self.run(&["fetch", "--dump", "markdown", url]).await
+        let session = crate::obscura_cdp::get_or_start_shared_session().await?;
+        session.navigate(url).await
     }
     async fn snapshot(&self) -> Result<String> {
-        Err(Error::Agent(
-            "Obscura fetch mode: use navigate(url) to get page content".into(),
-        ))
+        let session = crate::obscura_cdp::get_or_start_shared_session().await?;
+        session.snapshot().await
     }
-    async fn click(&self, _selector: &str) -> Result<String> {
-        Err(Error::Agent(
-            "Obscura fetch mode does not support click interactions. Use CDP mode for interactive automation.".into(),
-        ))
+    async fn click(&self, selector: &str) -> Result<String> {
+        let session = crate::obscura_cdp::get_or_start_shared_session().await?;
+        session.click(selector).await
     }
-    async fn type_text(&self, _selector: &str, _text: &str) -> Result<String> {
-        Err(Error::Agent(
-            "Obscura fetch mode does not support type interactions".into(),
-        ))
+    async fn type_text(&self, selector: &str, text: &str) -> Result<String> {
+        let session = crate::obscura_cdp::get_or_start_shared_session().await?;
+        session.fill(selector, text).await
     }
-    async fn scroll(&self, _direction: &str) -> Result<String> {
-        Err(Error::Agent(
-            "Obscura fetch mode does not support scroll".into(),
-        ))
+    async fn scroll(&self, direction: &str) -> Result<String> {
+        let session = crate::obscura_cdp::get_or_start_shared_session().await?;
+        session.scroll(direction).await
     }
 }
 
@@ -798,6 +793,34 @@ mod tests {
             name: "IGS_CONFIG_DIR",
             previous,
         }
+    }
+
+    #[test]
+    fn find_matching_asset_prefers_stealth_build() {
+        let os = std::env::consts::OS;
+        let arch = std::env::consts::ARCH;
+        let name = |suffix: &str| format!("obscura-{arch}-{os}{suffix}.tar.gz");
+        let assets = vec![
+            serde_json::json!({ "name": name("") }),
+            serde_json::json!({ "name": name("-stealth") }),
+            serde_json::json!({ "name": name("-no-render") }),
+        ];
+        let chosen = ObscuraProvider::find_matching_asset(&assets).unwrap();
+        assert_eq!(chosen["name"], name("-stealth"));
+    }
+
+    #[test]
+    fn find_matching_asset_falls_back_to_standard_build() {
+        let os = std::env::consts::OS;
+        let arch = std::env::consts::ARCH;
+        let name = |suffix: &str| format!("obscura-{arch}-{os}{suffix}.tar.gz");
+        let assets = vec![
+            serde_json::json!({ "name": name("") }),
+            serde_json::json!({ "name": name("-no-render") }),
+        ];
+        let chosen = ObscuraProvider::find_matching_asset(&assets).unwrap();
+        // No -stealth asset: standard rendering build wins over -no-render.
+        assert_eq!(chosen["name"], name(""));
     }
 
     #[test]

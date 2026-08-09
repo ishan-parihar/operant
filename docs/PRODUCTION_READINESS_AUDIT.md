@@ -64,6 +64,19 @@ igs-rust's `ObscuraManager` has no binary-path knob — only `IGS_CONFIG_DIR` (w
 
 ---
 
+## 3b. CDP browser implementation on the shared stealth Obscura (this audit)
+
+**Finding — IGS's browser is NOT CDP.** igs-rust's `src/tools/lp_mcp.rs` shows every `igs browser` command re-runs `obscura fetch <url> --stealth [--eval <js>]`; its "session" is a `CURRENT_URL` string. There is no CDP endpoint to reuse through IGS, so the CDP path must drive the shared Obscura binary directly (the user's suggested alternative).
+
+**Implemented (`obscura_cdp.rs`, commit pending):**
+- `CdpBrowserSession::start()` resolves the **shared** binary ([`ObscuraProvider::ensure_binary()`]) and spawns `obscura serve --port <free> --stealth`, parsing the emitted `ws://` URL from stdout (same pattern igs-rust's `screenshot()` uses).
+- Drives the browser over CDP: `Target.createTarget` + `Target.attachToTarget` (flattened session — the puppeteer flow), then `Page.navigate`, `Runtime.evaluate` (click/fill/scroll with `js_escape` injection defense), and `LP.getMarkdown` (DOM→markdown, innerText fallback).
+- **Stealth by default**: `find_matching_asset` prefers the `-stealth` release build (`obscura-<arch>-<os>-stealth.tar.gz`), and `--stealth` is passed to serve, gated by new `tools.obscura_stealth` (default `true`).
+- `ObscuraProvider` (`browser.provider = "obscura"`) is now fully interactive over CDP — navigate/snapshot/click/type/scroll all work (previously stubs). Process-wide shared session; killed on process exit.
+- `browser_cdp` tool auto-provisions the managed session when `BROWSER_CDP_URL` is unset and gained an optional `session_id` arg for page-scoped commands.
+
+---
+
 ## 4. Integration-by-integration status
 
 | Integration | Path | Status |
@@ -73,7 +86,7 @@ igs-rust's `ObscuraManager` has no binary-path knob — only `IGS_CONFIG_DIR` (w
 | `web_fetch` (raw HTTP) | `tools/web_tools.rs` | ✓ SSRF-guarded, redirects disabled, scheme-restricted |
 | `web.crawl` (via IGS) | exposed through `igs` CLI (`igs web crawl`) | ✓ Available when igs installed; SSRF checked by `web_scrape` path parity |
 | `browser` tool | `tools/browser_tool.rs` → provider factory | ✓ All commands validated; SSRF on navigate/snapshot; scroll/type validation tested |
-| `browser.provider = "obscura"` | `browser_provider.rs` | ✓ **Now shares the IGS binary** (this audit) |
+| `browser.provider = "obscura"` | `browser_provider.rs` + `obscura_cdp.rs` | ✓ **Shares the IGS binary; CDP-driven interactive browser, stealth by default** (this audit) |
 | `browser.provider = "igs"` (default) | `tools/igs.rs` `IgsBrowserProvider` | ✓ Persists session across goto → markdown → click sequences |
 | `operant doctor` | `cmd_doctor/checks_tools.rs` | ✓ Reports igs availability per toolset + resolved Obscura binary |
 
@@ -89,9 +102,10 @@ igs-rust's `ObscuraManager` has no binary-path knob — only `IGS_CONFIG_DIR` (w
 
 ## 6. Remaining gaps / recommendations (no code change yet)
 
-1. **Manual smoke test (user's own):** the binary-sharing fix is covered by unit tests, but a live end-to-end run is recommended:
+1. **Manual smoke test (user's own):** the binary-sharing + CDP paths are covered by unit tests, but a live end-to-end run is recommended:
    - `operant doctor` → confirm "Obscura browser binary (shared with IGS: ~/.config/igs-mcp/bin/obscura)".
    - `operant run --query "search the web for X"`, then a `web_scrape`, then `browser` navigate → confirm all three work and only one `obscura` binary exists on disk (`ls ~/.config/igs-mcp/bin ~/.operant/bin`).
+   - `browser.provider = "obscura"` → confirm `browser` navigate/snapshot/click/type/scroll work over CDP (first call spawns the shared `serve --stealth` session) and `browser_cdp` works without setting `BROWSER_CDP_URL`.
 2. **igs-rust feature (upstream):** add a `binaryPath`/`OBSCURA_BIN` override to `ObscuraManager` so the sharing is bidirectional and configurable on the IGS side too (e.g. point IGS at `~/.operant/bin/obscura` or a user-chosen path). Out of operant's control; noted for the igs-rust repo.
 3. **`operant-tools` crate:** a second `WebSearchTool` exists at `crates/operant-tools/src/web_search_tool.rs` (plus an `operant-browser`-style naming in docs). Confirm whether `operant-tools` is wired into the runtime tool registry or is dead weight for the next dead-code pass.
 4. **Windows Obscura asset matching** only handles x86_64 (no aarch64-windows entry) — fine for now, note for cross-compile targets.

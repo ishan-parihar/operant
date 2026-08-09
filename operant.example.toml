@@ -138,6 +138,11 @@ igs_enabled = true
 # back to its own copy at ~/.operant/bin/obscura. Set this to guarantee a
 # single shared Obscura across the browser tool + IGS web tools.
 # obscura_binary_path = "/home/you/.config/igs-mcp/bin/obscura"
+# Stealth mode for the `obscura` browser provider (default true): prefers the
+# -stealth release build when downloading and passes --stealth to the CDP
+# serve session (anti-detection + tracker blocking). Set false only for
+# binaries that predate --stealth support.
+# obscura_stealth = true
 lifeos_enabled = false
 
 [tools.web]

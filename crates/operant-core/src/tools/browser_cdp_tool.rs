@@ -20,6 +20,11 @@ struct BrowserCdpArgs {
     params: Option<Value>,
     #[serde(default)]
     target_id: Option<String>,
+    /// Optional CDP session id (from `Target.attachToTarget` against the
+    /// managed session) to scope the command to a page. Required for
+    /// page-level methods like `Page.navigate` / `Runtime.evaluate`.
+    #[serde(default)]
+    session_id: Option<String>,
     #[serde(default)]
     timeout: Option<u64>,
 }
@@ -41,9 +46,17 @@ impl OperantTool for BrowserCdpTool {
     async fn execute(&self, args: Value, _context: ToolContext) -> ToolResult {
         let cdp_url = match std::env::var("BROWSER_CDP_URL") {
             Ok(url) => url,
-            Err(_) => {
-                return ToolResult::error(self.name(), "BROWSER_CDP_URL not set");
-            }
+            Err(_) => match crate::obscura_cdp::resolve_cdp_ws_url().await {
+                Ok(url) => url,
+                Err(e) => {
+                    return ToolResult::error(
+                        self.name(),
+                        format!(
+                            "No CDP endpoint available: {e} — set BROWSER_CDP_URL or install the shared Obscura binary"
+                        ),
+                    );
+                }
+            },
         };
 
         let parsed: BrowserCdpArgs = match serde_json::from_value(args) {
@@ -66,11 +79,14 @@ impl OperantTool for BrowserCdpTool {
         };
 
         let cmd_id = 1u64;
-        let command = json!({
+        let mut command = json!({
             "id": cmd_id,
             "method": parsed.method,
             "params": parsed.params.unwrap_or(json!({})),
         });
+        if let Some(session_id) = parsed.session_id {
+            command["sessionId"] = Value::String(session_id);
+        }
 
         match super::cdp_utils::send_cdp_command(&target_ws_url, &command).await {
             Ok(response) => ToolResult::success(self.name(), response),
@@ -129,9 +145,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_browser_cdp_missing_env() {
+    async fn test_browser_cdp_unreachable_endpoint_errors() {
+        // An explicit but unreachable BROWSER_CDP_URL must surface a CDP error
+        // (the tool now auto-provisions the managed session when the env var is
+        // unset, so the deterministic failure path is a bad explicit endpoint).
         let saved = std::env::var("BROWSER_CDP_URL").ok();
-        unsafe { std::env::remove_var("BROWSER_CDP_URL") };
+        // SAFETY: test-only env mutation
+        unsafe { std::env::set_var("BROWSER_CDP_URL", "ws://127.0.0.1:1") };
 
         let tool = BrowserCdpTool;
         let result = tool
@@ -143,8 +163,11 @@ mod tests {
 
         if let Some(url) = saved {
             unsafe { std::env::set_var("BROWSER_CDP_URL", url) };
+        } else {
+            unsafe { std::env::remove_var("BROWSER_CDP_URL") };
         }
         assert!(!result.success);
+        assert!(result.error.unwrap_or_default().contains("CDP"));
     }
 
     #[tokio::test]

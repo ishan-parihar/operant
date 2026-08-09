@@ -71,6 +71,7 @@ pub mod memory;
 pub mod memory_provider;
 pub mod models_dev;
 pub mod oauth_refresh;
+pub mod obscura_cdp;
 pub mod observer;
 pub mod parser;
 pub mod pii;
