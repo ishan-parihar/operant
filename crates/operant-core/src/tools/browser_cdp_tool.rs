@@ -36,7 +36,11 @@ impl OperantTool for BrowserCdpTool {
     }
 
     fn description(&self) -> &str {
-        "Send raw Chrome DevTools Protocol commands directly to the browser via WebSocket."
+        "Send raw Chrome DevTools Protocol commands directly to the browser via WebSocket. \
+         When BROWSER_CDP_URL is unset, commands run against the managed Obscura session \
+         (auto-provisioning a page when no session_id is given) — \
+         e.g. Runtime.evaluate {expression: \"document.title\", returnByValue: true}. \
+         params may be an object or a JSON-encoded string."
     }
 
     fn schema(&self) -> ToolSchema {
@@ -44,54 +48,82 @@ impl OperantTool for BrowserCdpTool {
     }
 
     async fn execute(&self, args: Value, _context: ToolContext) -> ToolResult {
-        let cdp_url = match std::env::var("BROWSER_CDP_URL") {
-            Ok(url) => url,
-            Err(_) => match crate::obscura_cdp::resolve_cdp_ws_url().await {
-                Ok(url) => url,
-                Err(e) => {
-                    return ToolResult::error(
-                        self.name(),
-                        format!(
-                            "No CDP endpoint available: {e} — set BROWSER_CDP_URL or install the shared Obscura binary"
-                        ),
-                    );
-                }
-            },
-        };
-
         let parsed: BrowserCdpArgs = match serde_json::from_value(args) {
             Ok(a) => a,
             Err(e) => return ToolResult::error(self.name(), format!("Invalid arguments: {}", e)),
         };
 
-        let target_ws_url = if let Some(ref target_id) = parsed.target_id {
-            match resolve_target_ws_url(&cdp_url, target_id).await {
-                Ok(url) => url,
-                Err(e) => {
-                    return ToolResult::error(
-                        self.name(),
-                        format!("Target resolution failed: {}", e),
-                    );
+        let params = normalize_params(parsed.params.clone());
+
+        match std::env::var("BROWSER_CDP_URL") {
+            Ok(url) if !url.trim().is_empty() => {
+                // Explicit external endpoint (real Chrome / DevTools): targets
+                // live process-wide there, so a fresh connection per command
+                // is fine.
+                let target_ws_url = if let Some(ref target_id) = parsed.target_id {
+                    match resolve_target_ws_url(&url, target_id).await {
+                        Ok(u) => u,
+                        Err(e) => {
+                            return ToolResult::error(
+                                self.name(),
+                                format!("Target resolution failed: {}", e),
+                            );
+                        }
+                    }
+                } else {
+                    url
+                };
+                let mut command = json!({ "id": 1u64, "method": parsed.method, "params": params });
+                if let Some(session_id) = parsed.session_id {
+                    command["sessionId"] = Value::String(session_id);
+                }
+                match super::cdp_utils::send_cdp_command(&target_ws_url, &command).await {
+                    Ok(response) => ToolResult::success(self.name(), response),
+                    Err(e) => ToolResult::error(self.name(), format!("CDP error: {}", e)),
                 }
             }
-        } else {
-            cdp_url.clone()
-        };
-
-        let cmd_id = 1u64;
-        let mut command = json!({
-            "id": cmd_id,
-            "method": parsed.method,
-            "params": parsed.params.unwrap_or(json!({})),
-        });
-        if let Some(session_id) = parsed.session_id {
-            command["sessionId"] = Value::String(session_id);
+            _ => {
+                // Managed Obscura session: pages/sessions are per-connection,
+                // so commands must run over the shared persistent socket. If
+                // no session_id was given, auto-provision a page session so
+                // page-scoped methods (Runtime.evaluate, Page.navigate, ...)
+                // just work.
+                let session_id = match parsed.session_id.clone() {
+                    Some(sid) => Some(sid),
+                    None => crate::obscura_cdp::ensure_shared_page_session_id()
+                        .await
+                        .ok(),
+                };
+                match crate::obscura_cdp::send_shared_session_cmd(
+                    &parsed.method,
+                    params,
+                    session_id.as_deref(),
+                )
+                .await
+                {
+                    Ok(response) => ToolResult::success(self.name(), response),
+                    Err(e) => ToolResult::error(self.name(), format!("CDP error: {}", e)),
+                }
+            }
         }
+    }
+}
 
-        match super::cdp_utils::send_cdp_command(&target_ws_url, &command).await {
-            Ok(response) => ToolResult::success(self.name(), response),
-            Err(e) => ToolResult::error(self.name(), format!("CDP error: {}", e)),
+/// Normalize tool-call `params` into a JSON object.
+///
+/// Models frequently pass `params` as a JSON-encoded **string** (e.g.
+/// `"params": "{\"expression\": \"document.title\"}"`). Sending that verbatim
+/// makes the server read `params` as a string and fail with
+/// `-32601 "expression required"` because the field lookup on a string yields
+/// nothing. Parse the string into an object (falling back to `{"value": s}`
+/// for non-JSON payloads).
+fn normalize_params(params: Option<Value>) -> Value {
+    match params {
+        Some(Value::String(s)) => {
+            serde_json::from_str::<Value>(&s).unwrap_or_else(|_| json!({ "value": s }))
         }
+        Some(v) => v,
+        None => json!({}),
     }
 }
 
@@ -178,5 +210,25 @@ mod tests {
             .await;
 
         assert!(!result.success);
+    }
+
+    #[test]
+    fn normalize_params_parses_json_strings_into_objects() {
+        // The live-test failure: params arrived as a JSON string and obscura
+        // rejected the command with "expression required".
+        let normalized = normalize_params(Some(json!("{\"expression\": \"document.title\"}")));
+        assert_eq!(normalized, json!({"expression": "document.title"}));
+
+        // Objects pass through untouched.
+        let obj = normalize_params(Some(json!({"url": "https://example.com"})));
+        assert_eq!(obj, json!({"url": "https://example.com"}));
+
+        // Non-JSON strings degrade to a safe value wrapper instead of a
+        // malformed command.
+        let fallback = normalize_params(Some(json!("not json")));
+        assert_eq!(fallback, json!({ "value": "not json" }));
+
+        // Missing params become an empty object.
+        assert_eq!(normalize_params(None), json!({}));
     }
 }

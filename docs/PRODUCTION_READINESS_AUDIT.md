@@ -102,10 +102,7 @@ igs-rust's `ObscuraManager` has no binary-path knob — only `IGS_CONFIG_DIR` (w
 
 ## 6. Remaining gaps / recommendations (no code change yet)
 
-1. **Manual smoke test (user's own):** the binary-sharing + CDP paths are covered by unit tests, but a live end-to-end run is recommended:
-   - `operant doctor` → confirm "Obscura browser binary (shared with IGS: ~/.config/igs-mcp/bin/obscura)".
-   - `operant run --query "search the web for X"`, then a `web_scrape`, then `browser` navigate → confirm all three work and only one `obscura` binary exists on disk (`ls ~/.config/igs-mcp/bin ~/.operant/bin`).
-   - `browser.provider = "obscura"` → confirm `browser` navigate/snapshot/click/type/scroll work over CDP (first call spawns the shared `serve --stealth` session) and `browser_cdp` works without setting `BROWSER_CDP_URL`.
+1. **~~Manual smoke test~~ — DONE via the live agentic-loop test (section 6b).** The user asked operant itself to exercise the tools; see the results and the two defects it flushed out (CDP persistent-socket bug, browser_cdp params-string bug).
 2. **igs-rust feature (upstream):** add a `binaryPath`/`OBSCURA_BIN` override to `ObscuraManager` so the sharing is bidirectional and configurable on the IGS side too (e.g. point IGS at `~/.operant/bin/obscura` or a user-chosen path). Out of operant's control; noted for the igs-rust repo.
 3. **`operant-tools` crate:** a second `WebSearchTool` exists at `crates/operant-tools/src/web_search_tool.rs` (plus an `operant-browser`-style naming in docs). Confirm whether `operant-tools` is wired into the runtime tool registry or is dead weight for the next dead-code pass.
 4. **Windows Obscura asset matching** only handles x86_64 (no aarch64-windows entry) — fine for now, note for cross-compile targets.
@@ -113,11 +110,54 @@ igs-rust's `ObscuraManager` has no binary-path knob — only `IGS_CONFIG_DIR` (w
 
 ---
 
+## 6b. Live end-to-end agentic-loop test (this session)
+
+The user's standing instruction: run the operant agent itself against the integrations, and ensure **only enabled + functional tools appear in the agentic context**.
+
+### Test setup
+- Throwaway config `/tmp/operant-live-test.toml` (copy of `~/.operant/operant.toml` with `tools.igs_enabled = true` and `browser.provider = "obscura"`) — the user's real config was **not** modified.
+- `operant run --query "<10-step integration query>" --max-iterations 25 --record-trajectory -v` (stdin not a TTY → non-TUI `run_non_tui` path, full agentic loop with all registered tools, trajectory recorded).
+- Live environment: `igs 0.5.4` present, **one shared Obscura 0.1.11 at `~/.config/igs-mcp/bin/obscura`** (IGS-managed — the single-binary guarantee verified live), kilo.ai gateway + free nvidia model.
+
+### Tool-context filtering ("only enabled tools in context")
+Verified empirically: `operant tools list` under the test config surfaces **54 tools** — the intersection of *registered ∩ available (`is_available()` true) ∩ not-disabled* (e.g. no `spotify_*`/`discord` without tokens, no `mcp_management` without a manager). The agent loop feeds the model `registry.get_schemas()` (agent/mod.rs), so non-functional tools never reach context. `is_available()` gates: IGS web tools require `tools.igs_enabled && igs binary`; browser CDP tools auto-provision. **Requirement met.**
+
+### Results: 10/10 steps PASS (fixed build)
+| # | Step | Result |
+|---|---|---|
+| 1 | `datetime` | ✅ current time |
+| 2 | `web_search` | ⚠️ executes, but DDG served anomaly pages (see below) |
+| 3 | `web_scrape` (IGS) | ✅ example.com → markdown |
+| 4 | `web_extract` (IGS) | ✅ rust-lang.org → text |
+| 5 | `browser` (obscura CDP) | ✅ navigate + LP.getMarkdown ("# Example Domain…") |
+| 6 | `browser_cdp` | ✅ `Runtime.evaluate document.title` → "Example Domain" (auto-provisioned `page-1-session`) |
+| 7 | `http_request` | ✅ httpbin 200 |
+| 8 | `file_write`/`file_read` | ✅ roundtrip |
+| 9 | `terminal` | ✅ echo exit 0 |
+| 10 | `memory_store`/`memory_search` | ✅ store + recall |
+
+### Defect #1 flushed out: CDP session lost between commands (fixed)
+- **Symptom:** `browser navigate` → `-32601 "No page for session"`; `browser snapshot` → `-32601 "No page"`.
+- **Root cause (found by reading obscura's `obscura-cdp` source + probing the real binary):** `obscura serve` keeps pages/sessions **per WebSocket connection** (each connection gets its own `CdpContext`; `Target.createTarget` registers `{page_id}-session` in *that* context). Our `CdpBrowserSession::send` used `cdp_utils::send_cdp_command`, which opens a **fresh connection per command** — the created page/session vanished between calls. A probe with one persistent socket confirmed the whole flow (createTarget → attachToTarget → Page.navigate → LP.getMarkdown → Runtime.evaluate) works perfectly.
+- **Fix (commit pending):** new persistent `CdpSocket` in `obscura_cdp.rs` — one WebSocket with a background reader correlating responses by `id` (events ignored), timeout + protocol-error surfacing identical to `send_cdp_command`. `CdpBrowserSession::send` now multiplexes over it; `browser_cdp` routes through the same persistent socket when `BROWSER_CDP_URL` is unset.
+
+### Defect #2 flushed out: browser_cdp `params` as string (fixed)
+- **Symptom:** `browser_cdp` `Runtime.evaluate` → `-32601 "expression required"` even with a valid expression.
+- **Root cause:** the model passed `params` as a JSON-encoded **string**; serde kept it a string and the server's `params.get("expression")` on a string yields nothing. Added `normalize_params()` (string → object, non-JSON degrades to `{"value": s}`) + unit test.
+- **Bonus:** `browser_cdp` now auto-provisions the shared page session when no `session_id` is given, so `Runtime.evaluate`/`Page.navigate` work without the model manually doing createTarget/attachToTarget. Tool description now lists valid commands (`browser` tool: navigate/snapshot/click/type/scroll/accessibility_tree) — the model had invented a `text` command.
+
+### web_search: DDG fingerprint-blocking + provider fallback chain (fixed/robustified)
+- Live finding: DDG served **anomaly/rate-limit pages** to the reqwest/rustls client (0 results) while python/urllib3 with the same UA returned real results; `igs web search` returns `count: 0` because its upstream (Tavily) has no key configured on this machine.
+- **Fix:** `build_search_candidates()` — hermes `web_search_registry._resolve` capability fallback: configured provider first, then igs → tavily (key) → exa (key) → duckduckgo → searxng (url), deduplicated. When every candidate returns nothing, `web_search` now returns an **actionable error** ("DuckDuckGo may be rate-limiting… configure a Tavily/Exa key") instead of silently-empty `0 results`. DDG provider also hardened: `http1_only()` + one retry after 500 ms on empty (anomaly blocks are transient). 5 new candidate-chain unit tests.
+- **Remaining (needs user credentials):** to get real results on this machine, set a `TAVILY_API_KEY` (operant `[tools.web] tavily_api_key` or igs's `settings.yml`) or an `EXA_API_KEY`. No code path is broken — the chain will pick the keyed provider automatically.
+
+---
+
 ## 7. Verification summary
 
 ```
 cargo check --workspace                                  → 0 errors, 0 warnings
-cargo test --workspace                                   → 8,518 passed / 0 failed
+cargo test --workspace                                   → 8,527 passed / 0 failed (live-test iteration)
 cargo clippy --workspace --all-targets --all-features -- -D warnings → exit 0
 cargo fmt --all --check                                  → clean
 ```

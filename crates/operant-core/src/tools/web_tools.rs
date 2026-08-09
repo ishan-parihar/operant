@@ -7,7 +7,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::config::runtime_config;
+use crate::config::{WebToolSettings, runtime_config};
 use crate::schema::ToolSchema;
 use crate::security::ssrf_verdict;
 use crate::tools::web_providers::{
@@ -58,70 +58,167 @@ impl OperantTool for WebSearchTool {
         // we fall back to the configured provider / DuckDuckGo.
         let igs_available =
             runtime_config().tools.igs_enabled && crate::tools::igs::find_igs_binary().is_some();
-        // Explicit user config wins: only prefer IGS when it's the configured
-        // provider (or config is unset/"auto"). Previously `|| igs_available`
-        // silently overrode an explicit tavily/exa/searxng choice whenever the
-        // igs binary happened to be installed — hermes resolves the explicit
-        // web.search_backend config first and only auto-selects when unset.
-        let want_igs = should_prefer_igs(&settings.preferred_provider, igs_available);
 
-        let provider: Box<dyn WebSearchProvider> = if want_igs && igs_available {
-            Box::new(IgsSearchProvider)
-        } else {
-            match settings.preferred_provider.as_str() {
-                "tavily" => {
-                    let key = settings.tavily_api_key.clone().unwrap_or_default();
-                    Box::new(TavilyProvider::new(key))
+        // hermes `web_search_registry._resolve` semantics: the explicitly
+        // configured provider runs first, then the chain falls through the
+        // remaining available engines — so a rate-limited/anomaly-blocked
+        // DuckDuckGo (or a keyless igs) no longer silently returns 0 results.
+        let candidates = build_search_candidates(&settings, igs_available);
+        let mut used_provider = String::new();
+        let mut results: Vec<WebSearchResult> = Vec::new();
+        let mut last_error: Option<String> = None;
+        for provider in candidates {
+            used_provider = provider.name().to_string();
+            match provider.search(&args.query, num_results).await {
+                Ok(r) if !r.is_empty() => {
+                    results = r;
+                    break;
                 }
-                "exa" => {
-                    let key = settings.exa_api_key.clone().unwrap_or_default();
-                    Box::new(ExaProvider::new(key))
+                Ok(_) => {
+                    tracing::warn!(
+                        provider = %used_provider,
+                        "web search provider returned no results — trying next"
+                    );
                 }
-                "searxng" => {
-                    let base = settings.searxng_base_url.clone().unwrap_or_default();
-                    Box::new(SearXNGProvider::new(base))
-                }
-                _ => Box::new(DDGProvider::new(
-                    settings.search_url.clone(),
-                    settings.user_agent.clone(),
-                )),
-            }
-        };
-
-        let mut used_provider = provider.name().to_string();
-        let results = match provider.search(&args.query, num_results).await {
-            Ok(results) if !results.is_empty() => results,
-            // igs returned zero results (upstream key missing) — fall back
-            // to DuckDuckGo so search still works out of the box.
-            _ if used_provider == "igs" => {
-                tracing::warn!("igs search returned no results — falling back to DuckDuckGo");
-                let ddg =
-                    DDGProvider::new(settings.search_url.clone(), settings.user_agent.clone());
-                match ddg.search(&args.query, num_results).await {
-                    Ok(results) => {
-                        used_provider = ddg.name().to_string();
-                        results
-                    }
-                    Err(e) => {
-                        return ToolResult::error("web_search", format!("Search failed: {e}"));
-                    }
+                Err(e) => {
+                    tracing::warn!(
+                        provider = %used_provider,
+                        error = %e,
+                        "web search provider failed — trying next"
+                    );
+                    last_error = Some(e.to_string());
                 }
             }
-            Ok(results) => results,
-            Err(e) => return ToolResult::error("web_search", format!("Search failed: {e}")),
-        };
+        }
 
-        let serialized: Vec<WebSearchResult> = results;
+        if results.is_empty() {
+            // Every candidate either errored or returned nothing. Surface an
+            // actionable error instead of a silently-empty result set.
+            return ToolResult::error(
+                "web_search",
+                format!(
+                    "Search failed: {}",
+                    last_error.unwrap_or_else(|| {
+                        "all search providers returned no results — DuckDuckGo may be \
+                         rate-limiting this IP; configure a Tavily/Exa key in [tools.web] or \
+                         run with igs_enabled + a search key"
+                            .to_string()
+                    })
+                ),
+            );
+        }
+
         ToolResult::success(
             "web_search",
             serde_json::json!({
                 "query": args.query,
-                "num_results": serialized.len(),
-                "results": serialized,
+                "num_results": results.len(),
+                "results": results,
                 "provider": used_provider,
             }),
         )
     }
+}
+
+/// Build the ordered web-search provider chain (hermes
+/// `web_search_registry._resolve` capability fallback).
+///
+/// 1. The explicitly configured preferred provider runs first
+///    (tavily / exa / searxng / duckduckgo / igs / auto).
+/// 2. Then the remaining *available* engines in preference order:
+///    igs → tavily (key) → exa (key) → duckduckgo → searxng (url).
+///
+/// Engines that cannot function (no key, no base URL, missing binary) are
+/// skipped, and duplicates are deduplicated so a provider is never tried
+/// twice. This keeps `web_search` working when any single engine is blocked
+/// (DDG anomaly pages / rate limits) or unconfigured.
+fn build_search_candidates(
+    settings: &WebToolSettings,
+    igs_available: bool,
+) -> Vec<Box<dyn WebSearchProvider>> {
+    let mut out: Vec<Box<dyn WebSearchProvider>> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    let ddg = || {
+        Box::new(DDGProvider::new(
+            settings.search_url.clone(),
+            settings.user_agent.clone(),
+        )) as Box<dyn WebSearchProvider>
+    };
+    let igs = || Box::new(IgsSearchProvider) as Box<dyn WebSearchProvider>;
+    let tavily = || {
+        Box::new(TavilyProvider::new(
+            settings.tavily_api_key.clone().unwrap_or_default(),
+        )) as Box<dyn WebSearchProvider>
+    };
+    let exa = || {
+        Box::new(ExaProvider::new(
+            settings.exa_api_key.clone().unwrap_or_default(),
+        )) as Box<dyn WebSearchProvider>
+    };
+    let searxng = || {
+        Box::new(SearXNGProvider::new(
+            settings.searxng_base_url.clone().unwrap_or_default(),
+        )) as Box<dyn WebSearchProvider>
+    };
+
+    let mut push = |p: Box<dyn WebSearchProvider>| {
+        let name = p.name().to_string();
+        if seen.insert(name.clone()) {
+            out.push(p);
+        }
+    };
+
+    // 1. Explicitly configured provider wins (hermes resolves
+    // `web.search_backend` first and only auto-selects when unset).
+    match settings
+        .preferred_provider
+        .trim()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "tavily" => push(tavily()),
+        "exa" => push(exa()),
+        "searxng" => push(searxng()),
+        "duckduckgo" => push(ddg()),
+        // igs / auto / unset: prefer igs when the binary is available.
+        _ => {
+            if should_prefer_igs(&settings.preferred_provider, igs_available) {
+                push(igs());
+            } else {
+                push(ddg());
+            }
+        }
+    }
+
+    // 2. Capability fallbacks, in preference order, deduplicated.
+    if igs_available {
+        push(igs());
+    }
+    if settings
+        .tavily_api_key
+        .as_deref()
+        .is_some_and(|k| !k.trim().is_empty())
+    {
+        push(tavily());
+    }
+    if settings
+        .exa_api_key
+        .as_deref()
+        .is_some_and(|k| !k.trim().is_empty())
+    {
+        push(exa());
+    }
+    push(ddg());
+    if settings
+        .searxng_base_url
+        .as_deref()
+        .is_some_and(|u| !u.trim().is_empty())
+    {
+        push(searxng());
+    }
+
+    out
 }
 
 /// Tool for fetching web pages
@@ -483,6 +580,65 @@ mod tests {
         // Missing binary always wins regardless of preference.
         assert!(!should_prefer_igs("igs", false));
         assert!(!should_prefer_igs("tavily", false));
+    }
+
+    fn test_settings(preferred: &str) -> WebToolSettings {
+        WebToolSettings {
+            preferred_provider: preferred.to_string(),
+            ..Default::default()
+        }
+    }
+
+    fn provider_names(candidates: &[Box<dyn WebSearchProvider>]) -> Vec<String> {
+        candidates.iter().map(|p| p.name().to_string()).collect()
+    }
+
+    #[test]
+    fn search_candidates_preferred_first_then_fallbacks() {
+        // duckduckgo preferred: ddg first, igs second, ddg deduped.
+        let settings = test_settings("duckduckgo");
+        let names = provider_names(&build_search_candidates(&settings, true));
+        assert_eq!(names, vec!["duckduckgo", "igs"]);
+
+        // No igs binary: only ddg (deduped, single entry).
+        let names = provider_names(&build_search_candidates(&settings, false));
+        assert_eq!(names, vec!["duckduckgo"]);
+    }
+
+    #[test]
+    fn search_candidates_prefers_igs_when_auto() {
+        let settings = test_settings("auto");
+        let names = provider_names(&build_search_candidates(&settings, true));
+        assert_eq!(names, vec!["igs", "duckduckgo"]);
+
+        let names = provider_names(&build_search_candidates(&settings, false));
+        assert_eq!(names, vec!["duckduckgo"]);
+    }
+
+    #[test]
+    fn search_candidates_includes_keyed_providers() {
+        let mut settings = test_settings("duckduckgo");
+        settings.tavily_api_key = Some("tvly-key".to_string());
+        settings.exa_api_key = Some("exa-key".to_string());
+        let names = provider_names(&build_search_candidates(&settings, true));
+        assert_eq!(names, vec!["duckduckgo", "igs", "tavily", "exa"]);
+    }
+
+    #[test]
+    fn search_candidates_explicit_tavily_first() {
+        let mut settings = test_settings("tavily");
+        settings.tavily_api_key = Some("tvly-key".to_string());
+        let names = provider_names(&build_search_candidates(&settings, true));
+        assert_eq!(names, vec!["tavily", "igs", "duckduckgo"]);
+    }
+
+    #[test]
+    fn search_candidates_dedupes_across_preferred_and_fallback() {
+        let mut settings = test_settings("exa");
+        settings.exa_api_key = Some("exa-key".to_string());
+        let names = provider_names(&build_search_candidates(&settings, true));
+        // exa preferred + exa fallback are the same provider — one entry.
+        assert_eq!(names, vec!["exa", "igs", "duckduckgo"]);
     }
 
     #[test]

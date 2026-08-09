@@ -19,14 +19,19 @@
 //! (navigate / snapshot / click / type / scroll) on the stealth build — the
 //! same pattern as the `SGavrl/hermes-plugin-obscura` Hermes plugin.
 
+use std::collections::HashMap;
 use std::process::Stdio;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
+use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::net::TcpStream;
 use tokio::process::{Child, Command};
-use tokio::sync::{Mutex, OnceCell};
+use tokio::sync::{Mutex, OnceCell, oneshot};
+use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async, tungstenite::Message};
 use tracing::info;
 
 use crate::browser_provider::ObscuraProvider;
@@ -36,6 +41,93 @@ use crate::error::{Error, Result};
 const SERVE_START_TIMEOUT: Duration = Duration::from_secs(20);
 /// Post-navigation settling time before reading page content.
 const PAGE_SETTLE: Duration = Duration::from_secs(2);
+/// How long a single CDP command may take before we surface a timeout
+/// (obscura's own per-command V8 watchdog defaults to 60s).
+const CDP_COMMAND_TIMEOUT: Duration = Duration::from_secs(90);
+
+/// A single persistent CDP WebSocket connection with id→response correlation.
+///
+/// Obscura's `serve` keeps pages and sessions **per connection** — every WS
+/// connection gets its own `CdpContext`. A fresh connection per command would
+/// silently drop the created page/session, and the next step fails with
+/// `-32601 "No page for session"`. The whole session flow (createTarget →
+/// attachToTarget → Page.navigate → Runtime.evaluate → LP.getMarkdown) must
+/// therefore run over ONE socket, with responses correlated by id.
+struct CdpSocket {
+    write: Mutex<futures_util::stream::SplitSink<WsStream, Message>>,
+    pending: Arc<Mutex<HashMap<u64, oneshot::Sender<Value>>>>,
+    next_id: AtomicU64,
+}
+
+type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
+
+impl CdpSocket {
+    async fn connect(url: &str) -> Result<Self> {
+        let (ws, _) = connect_async(url).await.map_err(|e| Error::ToolExecution {
+            name: "cdp".into(),
+            source: std::io::Error::other(e.to_string()).into(),
+        })?;
+        let (write, mut read) = ws.split();
+        let pending: Arc<Mutex<HashMap<u64, oneshot::Sender<Value>>>> =
+            Arc::new(Mutex::new(HashMap::new()));
+        let reader_pending = Arc::clone(&pending);
+        // Background reader: correlate responses by id, ignore events (which
+        // carry no id — e.g. Target.targetCreated / attachedToTarget).
+        tokio::spawn(async move {
+            while let Some(msg) = read.next().await {
+                let Ok(Message::Text(text)) = msg else {
+                    continue;
+                };
+                let Ok(value) = serde_json::from_str::<Value>(&text) else {
+                    continue;
+                };
+                let Some(id) = value.get("id").and_then(|v| v.as_u64()) else {
+                    continue;
+                };
+                if let Some(tx) = reader_pending.lock().await.remove(&id) {
+                    let _ = tx.send(value);
+                }
+            }
+        });
+        Ok(Self {
+            write: Mutex::new(write),
+            pending,
+            next_id: AtomicU64::new(1),
+        })
+    }
+
+    async fn send(&self, method: &str, params: Value, session_id: Option<&str>) -> Result<Value> {
+        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        let (tx, rx) = oneshot::channel();
+        self.pending.lock().await.insert(id, tx);
+        let mut command = json!({ "id": id, "method": method, "params": params });
+        if let Some(sid) = session_id {
+            command["sessionId"] = Value::String(sid.to_string());
+        }
+        let text = serde_json::to_string(&command)
+            .map_err(|e| Error::Agent(format!("Failed to serialize CDP command: {e}")))?;
+        {
+            let mut write = self.write.lock().await;
+            write
+                .send(Message::Text(text.into()))
+                .await
+                .map_err(|e| Error::Agent(format!("Failed to send CDP command: {e}")))?;
+        }
+        let response = tokio::time::timeout(CDP_COMMAND_TIMEOUT, rx)
+            .await
+            .map_err(|_| Error::Agent("CDP command timed out".to_string()))?
+            .map_err(|_| Error::Agent("CDP connection closed".to_string()))?;
+        // Surface protocol errors exactly like cdp_utils::send_cdp_command
+        // does ("cdp - {json}"), so tool outputs stay consistent.
+        if let Some(error) = response.get("error") {
+            return Err(Error::ToolExecution {
+                name: "cdp".into(),
+                source: std::io::Error::other(error.to_string()).into(),
+            });
+        }
+        Ok(response)
+    }
+}
 
 /// A live page target attached to the CDP session.
 struct PageTarget {
@@ -49,6 +141,9 @@ pub struct CdpBrowserSession {
     ws_url: String,
     child: Child,
     page: Mutex<Option<PageTarget>>,
+    /// Persistent WebSocket — obscura keeps page/session state per
+    /// connection, so every command must reuse this one socket.
+    socket: CdpSocket,
 }
 
 impl Drop for CdpBrowserSession {
@@ -118,11 +213,16 @@ impl CdpBrowserSession {
         // WebSocket, not stdin/stdout.
         tokio::spawn(async move { while let Ok(Some(_line)) = reader.next_line().await {} });
 
+        // Connect the persistent socket BEFORE returning: without it the
+        // per-command fresh connections of cdp_utils would lose obscura's
+        // per-connection page/session state.
+        let socket = CdpSocket::connect(&ws_url).await?;
         info!(%ws_url, "Obscura CDP session ready");
         Ok(Self {
             ws_url,
             child,
             page: Mutex::new(None),
+            socket,
         })
     }
 
@@ -237,15 +337,9 @@ impl CdpBrowserSession {
         self.send(None, method, params).await
     }
 
-    /// Raw CDP send over the session's WebSocket.
+    /// Raw CDP send over the session's persistent WebSocket.
     async fn send(&self, session_id: Option<&str>, method: &str, params: Value) -> Result<Value> {
-        static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
-        let id = NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let mut command = json!({ "id": id, "method": method, "params": params });
-        if let Some(sid) = session_id {
-            command["sessionId"] = Value::String(sid.to_string());
-        }
-        crate::tools::cdp_utils::send_cdp_command(&self.ws_url, &command).await
+        self.socket.send(method, params, session_id).await
     }
 
     /// Evaluate a JS expression in the page and return the string result.
@@ -320,6 +414,30 @@ pub async fn resolve_cdp_ws_url() -> Result<String> {
     }
     let session = get_or_start_shared_session().await?;
     Ok(session.ws_url().to_string())
+}
+
+/// Send a raw CDP command over the shared session's **persistent** socket.
+///
+/// Used by the `browser_cdp` tool when `BROWSER_CDP_URL` is unset. Because
+/// obscura keeps pages/sessions per connection, this must reuse the shared
+/// socket rather than opening a fresh connection per command.
+pub async fn send_shared_session_cmd(
+    method: &str,
+    params: Value,
+    session_id: Option<&str>,
+) -> Result<Value> {
+    let session = get_or_start_shared_session().await?;
+    session.send(session_id, method, params).await
+}
+
+/// Resolve the shared session's current page session id, creating a page if
+/// none exists yet. Lets raw `browser_cdp` calls (e.g. `Runtime.evaluate`)
+/// work without the model manually running `Target.createTarget` /
+/// `Target.attachToTarget` first.
+pub async fn ensure_shared_page_session_id() -> Result<String> {
+    let session = get_or_start_shared_session().await?;
+    let page = session.ensure_page().await?;
+    Ok(page.session_id)
 }
 
 /// Find an available TCP port on localhost.

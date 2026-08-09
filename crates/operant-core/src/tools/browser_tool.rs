@@ -128,6 +128,8 @@ impl OperantTool for BrowserTool {
          - browserbase: Browserbase cloud (BROWSERBASE_API_KEY)\n\
          - browser-use: Browser Use cloud (BROWSER_USE_API_KEY)\n\
          - firecrawl: Firecrawl scrape API (FIRECRAWL_API_KEY)\n\
+         Commands: navigate (url), snapshot, click (selector), type (selector, text),\n\
+         scroll (text=direction), accessibility_tree. Use snapshot to read a page.\n\
          Supports accessibility_tree command for CDP-based accessibility tree extraction with ref selectors."
     }
 

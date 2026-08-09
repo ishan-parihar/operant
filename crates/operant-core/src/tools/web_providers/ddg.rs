@@ -28,19 +28,36 @@ impl WebSearchProvider for DDGProvider {
         // cannot inject extra params or mangle the URL.
         let encoded = super::urlencode(query);
         let url = self.search_url.replace("{query}", &encoded);
+        // HTTP/1.1 only: DDG's anomaly heuristics are friendlier to plain
+        // HTTP/1.1 clients (the tool's lite.duckduckgo.com endpoint serves
+        // result pages to them while anomalying HTTP/2 fingerprints).
         let client = reqwest::Client::builder()
             .user_agent(&self.user_agent)
+            .http1_only()
             .build()?;
-        let resp = client.get(&url).send().await?;
-        if !resp.status().is_success() {
-            return Err(crate::error::Error::Provider {
-                status: resp.status().as_u16(),
-                body: format!("DuckDuckGo search failed (HTTP {})", resp.status()),
-                retry_after: None,
-            });
+
+        // DDG rate-limits / anomaly-blocks by client fingerprint and IP, and
+        // the block is transient — one retry after a short backoff catches
+        // the good window instead of surfacing an empty page as "0 results".
+        let mut raw: Vec<serde_json::Value> = Vec::new();
+        for attempt in 0..2 {
+            let resp = client.get(&url).send().await?;
+            if !resp.status().is_success() {
+                return Err(crate::error::Error::Provider {
+                    status: resp.status().as_u16(),
+                    body: format!("DuckDuckGo search failed (HTTP {})", resp.status()),
+                    retry_after: None,
+                });
+            }
+            let html = resp.text().await?;
+            raw = parse_ddg_lite_results(&html, num_results);
+            if !raw.is_empty() || attempt == 1 {
+                break;
+            }
+            // Empty/anomaly page — brief backoff, then retry once.
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
         }
-        let html = resp.text().await?;
-        let raw = parse_ddg_lite_results(&html, num_results);
+
         Ok(raw
             .into_iter()
             .map(|v| WebSearchResult {
