@@ -86,7 +86,7 @@ impl App {
 
     /// Open the rewind flow with the current message list converted to
     /// `SelectorMessage` entries.
-    pub(crate) fn open_rewind_flow(&mut self) {
+    pub fn open_rewind_flow(&mut self) {
         let selector_msgs: Vec<SelectorMessage> = self
             .messages
             .iter()

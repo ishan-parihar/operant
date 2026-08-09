@@ -4,9 +4,7 @@
 // Extracted from the app/mod.rs monolith.
 
 use super::*;
-use crossterm::event::{
-    KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers, MouseButton, MouseEventKind,
-};
+use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers, MouseButton};
 
 fn make_app() -> App {
     let config = AppConfig::default();
