@@ -89,3 +89,14 @@ test_db*.sqlite3
 hermes*.db
 *.log
 logs/.superpowers/
+
+# ---- tool-state / session artifacts (never commit) ----
+.cortexkit/
+.contexty/
+.hive/
+.memsearch/
+.opencode/
+.cortex/
+.sisyphus/
+.oh-my-opencode/
+.history/
