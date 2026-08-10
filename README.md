@@ -1,5 +1,7 @@
 # Operant
 
+<!-- T2I HERO SPEC — Subject: a multi-agent corporate boardroom — five C-suite agent avatars (CEO/COO/CFO/CRO/CMO) around a table with Kanban boards, LanceDB memory modules, and Telegram/systemd wires; escalation arrows between seats and a central orchestration core. Composition: boardroom table, radial orchestration. Palette: deep navy #0f172a → executive gold #f59e0b → status LEDs. Style: dark corporate flat vector, no readable faces, no text. 16:9. -->
+
 ![Rust](https://img.shields.io/badge/Rust-1.78+-orange?logo=rust)
 ![License](https://img.shields.io/badge/License-MIT-green)
 ![llama.cpp](https://img.shields.io/badge/llama.cpp-GGUF-purple)
