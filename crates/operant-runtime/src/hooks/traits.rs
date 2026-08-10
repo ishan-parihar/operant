@@ -39,6 +39,23 @@ pub trait HookHandler: Send + Sync {
     async fn on_message_sent(&self, _channel: &str, _recipient: &str, _content: &str) {}
     async fn on_heartbeat_tick(&self) {}
 
+    // --- Hermes-parity lifecycle hooks (all default no-ops) ---
+    // Ported 1:1 from hermes-agent `VALID_HOOKS` so a hermes plugin can
+    // implement every callback it registers without adaptation.
+
+    /// Successful skill lifecycle facts (skill invoked / tool ran).
+    async fn on_skill_lifecycle(&self, _skill: &str, _action: &str, _ok: bool) {}
+    /// Fired when a delegate sub-agent starts a run.
+    async fn subagent_start(&self, _agent: &str, _depth: u32, _prompt: &str) {}
+    /// Fired when a delegate sub-agent finishes (or fails) a run.
+    async fn subagent_stop(&self, _agent: &str, _depth: u32, _ok: bool) {}
+    /// Fired before an approval prompt is raised (observers only; cannot veto).
+    async fn pre_approval_request(&self, _tool: &str, _summary: &str, _surface: &str) {}
+    /// Fired after an approval decision was recorded.
+    async fn post_approval_response(&self, _tool: &str, _decision: &str) {}
+    /// Fired when a session is reset (not started/ended — a reset).
+    async fn on_session_reset(&self, _session_id: &str, _channel: &str) {}
+
     // --- Modifying hooks (sequential by priority, can cancel) ---
     async fn before_model_resolve(
         &self,
@@ -75,6 +92,14 @@ pub trait HookHandler: Send + Sync {
         content: String,
     ) -> HookResult<(String, String, String)> {
         HookResult::Continue((channel, recipient, content))
+    }
+
+    /// Transform the assistant response text before it is returned to the
+    /// user. Mirrors hermes `transform_llm_output`: a handler returns a string
+    /// to replace the text, or `None` to leave unchanged. First non-`None`
+    /// result wins across handlers.
+    async fn transform_llm_output(&self, _text: String) -> Option<String> {
+        None
     }
 }
 

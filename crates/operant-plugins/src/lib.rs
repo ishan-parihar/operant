@@ -11,6 +11,8 @@ pub mod signature;
 pub mod wasm_channel;
 pub mod wasm_tool;
 
+pub use operant_api::tool::Tool as PluginTool;
+
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 

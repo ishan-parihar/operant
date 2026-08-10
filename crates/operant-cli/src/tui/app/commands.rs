@@ -243,15 +243,17 @@ impl App {
             }
             // /bundle <name> — expand a skill bundle (multiple skills) into
             // the turn. hermes parity: `skill_bundles.py` + slash bundles.
+            // The listing forces a fresh scan so bundles added mid-session
+            // show up without a restart (mtime-aware cache).
             "bundle" => {
                 let name = args.trim();
                 if name.is_empty() {
-                    let bundles = operant_core::agent::skill_bundle::list_bundles();
+                    let bundles = operant_core::agent::skill_bundle::refresh_skill_bundles();
                     if bundles.is_empty() {
                         self.status_message =
                             Some("No skill bundles found in ~/.operant/skill-bundles/".to_string());
                     } else {
-                        let names: Vec<&str> = bundles.iter().map(|b| b.slug.as_str()).collect();
+                        let names: Vec<&str> = bundles.keys().map(|k| k.as_str()).collect();
                         self.status_message = Some(format!(
                             "Available bundles: {} — usage: /bundle <name>",
                             names.join(", ")
@@ -876,14 +878,16 @@ impl App {
             }
 
             // /reload-skills — re-scan the skills directory and repopulate the
-            // /skills overlay's backing data. The running agent was built with a
-            // fixed SkillManager at startup (main.rs `with_skill_manager`) and
-            // exposes no runtime setter, so rescanned skills reach the model only
-            // after a restart; the status stays honest about that. Ref:
-            // hermes-agent cli.py reload_skills().
+            // /skills overlay's backing data + the /skill + /bundle Tab
+            // typeahead (so newly installed skills/bundles complete without a
+            // restart). The running agent was built with a fixed SkillManager
+            // at startup (main.rs `with_skill_manager`) and exposes no runtime
+            // setter, so rescanned skills reach the model only after a restart;
+            // the status stays honest about that. Ref: hermes-agent
+            // cli.py reload_skills().
             "reload-skills" => {
                 let skills_dir = self.config.skills.root_dir.clone();
-                let mut mgr = operant_core::skills::SkillManager::new(skills_dir);
+                let mut mgr = operant_core::skills::SkillManager::new(skills_dir.clone());
                 match mgr.load_all() {
                     Ok(mut loaded) => {
                         // Same (category, name) sort skills_view.open() uses so
@@ -898,6 +902,24 @@ impl App {
                         if self.skills_view.selected >= count {
                             self.skills_view.selected = 0;
                         }
+                        // Refresh the slash typeahead with fresh skill + bundle
+                        // names so /skill <Tab> completes newly-installed
+                        // skills without a restart.
+                        let skill_names = self
+                            .skills_view
+                            .skills
+                            .iter()
+                            .map(|s| s.name.clone())
+                            .collect();
+                        let bundle_names =
+                            operant_core::agent::skill_bundle::refresh_skill_bundles()
+                                .keys()
+                                .map(|k| k.trim_start_matches('/').to_string())
+                                .collect();
+                        crate::tui::prompt_input::register_typeahead_names(
+                            skill_names,
+                            bundle_names,
+                        );
                         self.status_message = Some(format!(
                             "Rescanned {} skill{}. Browse with /skills (agent picks up changes on restart).",
                             count,

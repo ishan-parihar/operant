@@ -116,6 +116,20 @@ async fn list_plugins(config: &AppConfig) -> Result<()> {
         );
     }
 
+    // Surface WASM plugin tools (feature `plugins-wasm`) so users can see
+    // which plugins will contribute tools to the agent.
+    #[cfg(feature = "plugins-wasm")]
+    {
+        let plugin_tools = crate::plugin_tools::list_plugin_tools(config);
+        if !plugin_tools.is_empty() {
+            println!();
+            println!("WASM plugin tools ({}):", plugin_tools.len());
+            for (name, count) in &plugin_tools {
+                println!("  {:<24} {} tool(s)", name, count);
+            }
+        }
+    }
+
     Ok(())
 }
 

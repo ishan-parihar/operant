@@ -122,6 +122,60 @@ impl HookRunner {
         join_all(futs).await;
     }
 
+    pub async fn fire_skill_lifecycle(&self, skill: &str, action: &str, ok: bool) {
+        let futs: Vec<_> = self
+            .handlers
+            .iter()
+            .map(|h| h.on_skill_lifecycle(skill, action, ok))
+            .collect();
+        join_all(futs).await;
+    }
+
+    pub async fn fire_subagent_start(&self, agent: &str, depth: u32, prompt: &str) {
+        let futs: Vec<_> = self
+            .handlers
+            .iter()
+            .map(|h| h.subagent_start(agent, depth, prompt))
+            .collect();
+        join_all(futs).await;
+    }
+
+    pub async fn fire_subagent_stop(&self, agent: &str, depth: u32, ok: bool) {
+        let futs: Vec<_> = self
+            .handlers
+            .iter()
+            .map(|h| h.subagent_stop(agent, depth, ok))
+            .collect();
+        join_all(futs).await;
+    }
+
+    pub async fn fire_pre_approval_request(&self, tool: &str, summary: &str, surface: &str) {
+        let futs: Vec<_> = self
+            .handlers
+            .iter()
+            .map(|h| h.pre_approval_request(tool, summary, surface))
+            .collect();
+        join_all(futs).await;
+    }
+
+    pub async fn fire_post_approval_response(&self, tool: &str, decision: &str) {
+        let futs: Vec<_> = self
+            .handlers
+            .iter()
+            .map(|h| h.post_approval_response(tool, decision))
+            .collect();
+        join_all(futs).await;
+    }
+
+    pub async fn fire_session_reset(&self, session_id: &str, channel: &str) {
+        let futs: Vec<_> = self
+            .handlers
+            .iter()
+            .map(|h| h.on_session_reset(session_id, channel))
+            .collect();
+        join_all(futs).await;
+    }
+
     // ---------------------------------------------------------------
     // Modifying dispatchers (sequential by priority, short-circuit on Cancel)
     // ---------------------------------------------------------------
@@ -318,6 +372,34 @@ impl HookRunner {
         }
         HookResult::Continue((channel, recipient, content))
     }
+
+    /// Transform the assistant response text. Mirrors hermes
+    /// `transform_llm_output`: first non-`None` handler result wins.
+    pub async fn run_transform_llm_output(&self, text: String) -> String {
+        for h in &self.handlers {
+            let hook_name = h.name();
+            match AssertUnwindSafe(h.transform_llm_output(text.clone()))
+                .catch_unwind()
+                .await
+            {
+                Ok(Some(replacement)) => {
+                    info!(
+                        hook = hook_name,
+                        "transform_llm_output replaced assistant text"
+                    );
+                    return replacement;
+                }
+                Ok(None) => {}
+                Err(_) => {
+                    tracing::error!(
+                        hook = hook_name,
+                        "transform_llm_output hook panicked; keeping original text"
+                    );
+                }
+            }
+        }
+        text
+    }
 }
 
 #[cfg(test)]
@@ -485,5 +567,107 @@ mod tests {
             HookResult::Continue(result) => assert_eq!(result, "HELLO_done"),
             HookResult::Cancel(_) => panic!("should not cancel"),
         }
+    }
+
+    /// A hook that implements the hermes-parity lifecycle hooks and records
+    /// every fire as a string, proving the full surface dispatches.
+    struct LifecycleRecordingHook {
+        events: Arc<std::sync::Mutex<Vec<String>>>,
+    }
+
+    #[async_trait]
+    impl HookHandler for LifecycleRecordingHook {
+        fn name(&self) -> &str {
+            "lifecycle-recorder"
+        }
+
+        async fn on_skill_lifecycle(&self, skill: &str, action: &str, ok: bool) {
+            self.events
+                .lock()
+                .unwrap()
+                .push(format!("skill:{skill}:{action}:{ok}"));
+        }
+
+        async fn subagent_start(&self, agent: &str, depth: u32, _prompt: &str) {
+            self.events
+                .lock()
+                .unwrap()
+                .push(format!("sub_start:{agent}:{depth}"));
+        }
+
+        async fn subagent_stop(&self, agent: &str, depth: u32, ok: bool) {
+            self.events
+                .lock()
+                .unwrap()
+                .push(format!("sub_stop:{agent}:{depth}:{ok}"));
+        }
+
+        async fn pre_approval_request(&self, tool: &str, _summary: &str, surface: &str) {
+            self.events
+                .lock()
+                .unwrap()
+                .push(format!("pre_approval:{tool}:{surface}"));
+        }
+
+        async fn post_approval_response(&self, tool: &str, decision: &str) {
+            self.events
+                .lock()
+                .unwrap()
+                .push(format!("post_approval:{tool}:{decision}"));
+        }
+
+        async fn on_session_reset(&self, session_id: &str, channel: &str) {
+            self.events
+                .lock()
+                .unwrap()
+                .push(format!("session_reset:{session_id}:{channel}"));
+        }
+
+        async fn transform_llm_output(&self, text: String) -> Option<String> {
+            if text.contains("secret") {
+                Some("[redacted]".to_string())
+            } else {
+                None
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn hermes_parity_lifecycle_hooks_dispatch() {
+        let mut runner = HookRunner::new();
+        let events = Arc::new(std::sync::Mutex::new(Vec::new()));
+        runner.register(Box::new(LifecycleRecordingHook {
+            events: Arc::clone(&events),
+        }));
+
+        runner.fire_skill_lifecycle("demo", "invoked", true).await;
+        runner.fire_subagent_start("coder", 1, "write code").await;
+        runner.fire_subagent_stop("coder", 1, true).await;
+        runner
+            .fire_pre_approval_request("shell", "rm -rf /", "cli")
+            .await;
+        runner.fire_post_approval_response("shell", "deny").await;
+        runner.fire_session_reset("sess-1", "cli").await;
+
+        let transformed = runner
+            .run_transform_llm_output("contains secret data".to_string())
+            .await;
+        assert_eq!(transformed, "[redacted]");
+        // Non-matching text passes through untouched.
+        let passthrough = runner.run_transform_llm_output("plain".to_string()).await;
+        assert_eq!(passthrough, "plain");
+
+        let events = events.lock().unwrap();
+        assert_eq!(
+            events.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
+            vec![
+                "skill:demo:invoked:true",
+                "sub_start:coder:1",
+                "sub_stop:coder:1:true",
+                "pre_approval:shell:cli",
+                "post_approval:shell:deny",
+                "session_reset:sess-1:cli",
+            ]
+        );
     }
 }

@@ -1174,6 +1174,17 @@ impl Agent {
                 arguments: tool_args.clone(),
             };
 
+            // ── Hook: pre_approval_request (observers only; cannot veto) ─
+            // Mirrors hermes-agent `pre_approval_request`. Fired before the
+            // approval prompt is raised so observers can record/log the
+            // pending request. Return values are ignored.
+            if let Some(ref hooks) = self.hook_runner {
+                let summary = crate::approval::summarize_args(&request.arguments);
+                hooks
+                    .fire_pre_approval_request(&tool_name, &summary, "agent")
+                    .await;
+            }
+
             let (decision, decision_channel) = if mgr.is_non_interactive() {
                 // Iterate every registered channel looking for one that can
                 // handle the approval request. The first Ok(Some(_)) wins.
@@ -1242,6 +1253,18 @@ impl Agent {
                 (mgr.prompt_cli(&request), String::new())
             };
 
+            // ── Hook: post_approval_response ───────────────────────
+            if let Some(ref hooks) = self.hook_runner {
+                let decision_str = match decision {
+                    ApprovalResponse::Yes => "once",
+                    ApprovalResponse::Always => "always",
+                    ApprovalResponse::No => "deny",
+                };
+                hooks
+                    .fire_post_approval_response(&tool_name, decision_str)
+                    .await;
+            }
+
             mgr.record_decision(&tool_name, &tool_args, decision, &decision_channel);
 
             if decision == ApprovalResponse::No {
@@ -1262,6 +1285,28 @@ impl Agent {
             &mut tool_args,
             approval_requirement == ApprovalRequirement::Approved,
         );
+
+        // ── Hermes-parity lifecycle hooks (start side) ────────────────
+        // subagent_start must fire BEFORE the delegate tool executes so
+        // observers see the correct ordering (hermes `subagent_start`).
+        // The matching subagent_stop fires after execution below.
+        let mut delegate_hook_name: Option<String> = None;
+        if let Some(ref hooks) = self.hook_runner
+            && tool_name == "delegate"
+        {
+            let agent_name = tool_args
+                .get("agent")
+                .and_then(|v| v.as_str())
+                .unwrap_or("delegate")
+                .to_string();
+            let prompt = tool_args
+                .get("prompt")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string();
+            hooks.fire_subagent_start(&agent_name, 0, &prompt).await;
+            delegate_hook_name = Some(agent_name);
+        }
 
         // First try to find tool in static registry, then in activated MCP tools.
         let (result, success) =
@@ -1335,6 +1380,24 @@ impl Agent {
             hooks
                 .fire_after_tool_call(&tool_name, &tool_result_obj, duration)
                 .await;
+        } // ── Hermes-parity lifecycle hooks (stop side) ─────────────────
+        // subagent_stop fires after the delegate tool completes; skill tools
+        // are registered with the `skill_name__tool_name` prefix (see
+        // register_skill_tools), so a tool name that starts with a known
+        // skill name + "__" is a skill-sourced tool call — reported through
+        // on_skill_lifecycle.
+        if let Some(ref hooks) = self.hook_runner {
+            if let Some(agent_name) = delegate_hook_name {
+                hooks.fire_subagent_stop(&agent_name, 0, success).await;
+            } else if let Some(skill) = self
+                .skills
+                .iter()
+                .find(|s| tool_name.starts_with(&format!("{}__", s.name)))
+            {
+                hooks
+                    .fire_skill_lifecycle(&skill.name, "tool_call", success)
+                    .await;
+            }
         }
 
         ToolExecutionResult {
@@ -1502,6 +1565,13 @@ impl Agent {
                         cache_type: "response".into(),
                         tokens_saved: 0,
                     });
+                    // Cache holds raw text; apply the transform hook on the
+                    // hit path too so cached and fresh runs behave identically.
+                    let cached = if let Some(ref hooks) = self.hook_runner {
+                        hooks.run_transform_llm_output(cached).await
+                    } else {
+                        cached
+                    };
                     self.history
                         .push(ConversationMessage::Chat(ChatMessage::assistant(
                             cached.clone(),
@@ -1566,7 +1636,10 @@ impl Agent {
                     continue;
                 }
 
-                // Store in response cache (text-only, no tool calls)
+                // Store the RAW text in the response cache (text-only, no
+                // tool calls) — the cache key does not include the active
+                // hook set, so caching post-transform text would leak a
+                // previous plugin's rewrite into later uncached runs.
                 if let (Some(cache), Some(key)) = (&self.response_cache, &cache_key) {
                     let token_count = response
                         .usage
@@ -1576,6 +1649,18 @@ impl Agent {
                     #[allow(clippy::cast_possible_truncation)]
                     let _ = cache.put(key, &effective_model, &final_text, token_count as u32);
                 }
+
+                // ── Hook: transform_llm_output (first non-None wins) ──
+                // Mirrors hermes-agent `transform_llm_output`: a plugin may
+                // replace the assistant response text (vocabulary/personality
+                // transformation). Applies after the empty-response retry
+                // ladder so plugins never mask the retry, and after the cache
+                // write so only raw text is ever cached.
+                let final_text = if let Some(ref hooks) = self.hook_runner {
+                    hooks.run_transform_llm_output(final_text).await
+                } else {
+                    final_text
+                };
 
                 self.history
                     .push(ConversationMessage::Chat(ChatMessage::assistant(
@@ -1740,6 +1825,13 @@ impl Agent {
                         cache_type: "response".into(),
                         tokens_saved: 0,
                     });
+                    // Cache holds raw text; apply the transform hook on the
+                    // hit path too so cached and fresh runs behave identically.
+                    let cached = if let Some(ref hooks) = self.hook_runner {
+                        hooks.run_transform_llm_output(cached).await
+                    } else {
+                        cached
+                    };
                     self.history
                         .push(ConversationMessage::Chat(ChatMessage::assistant(
                             cached.clone(),
@@ -2057,7 +2149,8 @@ impl Agent {
                     continue;
                 }
 
-                // Store in response cache
+                // Store the RAW text in the response cache (parity with the
+                // non-streaming `turn` path — only raw text is ever cached).
                 if let (Some(cache), Some(key)) = (&self.response_cache, &cache_key) {
                     let token_count = response
                         .usage
@@ -2067,6 +2160,15 @@ impl Agent {
                     #[allow(clippy::cast_possible_truncation)]
                     let _ = cache.put(key, &effective_model, &final_text, token_count as u32);
                 }
+
+                // ── Hook: transform_llm_output (first non-None wins) ──
+                // Mirrors hermes-agent `transform_llm_output`; parity with the
+                // non-streaming `turn` path.
+                let final_text = if let Some(ref hooks) = self.hook_runner {
+                    hooks.run_transform_llm_output(final_text).await
+                } else {
+                    final_text
+                };
 
                 // If we didn't stream, send the full response as a single chunk
                 if !got_stream && !final_text.is_empty() {

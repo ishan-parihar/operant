@@ -285,6 +285,33 @@ impl PluginHost {
             .collect()
     }
 
+    /// Get memory-capable plugins.
+    ///
+    /// A memory plugin exposes the `MemoryProvider` hook surface (prefetch,
+    /// sync_turn, tool_schemas) as WASM exports. Only one memory plugin may
+    /// be active at a time — the runtime enforces that when it resolves the
+    /// memory provider from config (hermes-agent `MemoryManager` parity:
+    /// "Only ONE external provider is allowed at a time").
+    pub fn memory_plugins(&self) -> Vec<&PluginManifest> {
+        self.loaded
+            .values()
+            .filter(|p| p.manifest.capabilities.contains(&PluginCapability::Memory))
+            .map(|p| &p.manifest)
+            .collect()
+    }
+
+    /// Get memory-capable plugins with their resolved WASM file paths.
+    /// Returns `(manifest, resolved_wasm_path)` tuples for building a
+    /// WASM-backed `MemoryProvider`. Memory plugins without a `wasm_path`
+    /// are skipped.
+    pub fn memory_plugin_details(&self) -> Vec<(&PluginManifest, &Path)> {
+        self.loaded
+            .values()
+            .filter(|p| p.manifest.capabilities.contains(&PluginCapability::Memory))
+            .filter_map(|p| p.wasm_path.as_deref().map(|wp| (&p.manifest, wp)))
+            .collect()
+    }
+
     /// Get skill-capable plugins paired with the absolute path to their `skills/`
     /// directory. Plugins without an existing `skills/` subdirectory are skipped.
     ///
@@ -737,6 +764,61 @@ capabilities = ["tool"]
         assert!(host.tool_plugins().is_empty());
         assert!(host.tool_plugin_details().is_empty());
         assert!(host.channel_plugins().is_empty());
+        assert!(host.memory_plugins().is_empty());
         assert_eq!(host.skill_plugins().len(), 1);
+    }
+
+    fn write_memory_plugin(plugins_base: &Path, plugin_name: &str) {
+        let plugin_dir = plugins_base.join(plugin_name);
+        std::fs::create_dir_all(&plugin_dir).unwrap();
+        std::fs::write(
+            plugin_dir.join("manifest.toml"),
+            format!(
+                "name = \"{plugin_name}\"\nversion = \"0.1.0\"\nwasm_path = \"memory.wasm\"\ncapabilities = [\"memory\"]\npermissions = [\"memory_read\", \"memory_write\"]\n"
+            ),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn test_memory_plugin_discovery() {
+        let dir = tempdir().unwrap();
+        let plugins_base = dir.path().join("plugins");
+        write_memory_plugin(&plugins_base, "my-memory");
+
+        let host = PluginHost::new(dir.path()).unwrap();
+        assert_eq!(host.memory_plugins().len(), 1);
+        assert_eq!(host.memory_plugins()[0].name, "my-memory");
+
+        // memory_plugin_details pairs the manifest with the wasm path.
+        let details = host.memory_plugin_details();
+        assert_eq!(details.len(), 1);
+        assert_eq!(details[0].0.name, "my-memory");
+        assert!(details[0].1.ends_with("memory.wasm"));
+
+        // Memory plugins are NOT tool or channel plugins.
+        assert!(host.tool_plugins().is_empty());
+        assert!(host.channel_plugins().is_empty());
+        assert!(host.skill_plugins().is_empty());
+    }
+
+    #[test]
+    fn test_memory_plugin_without_wasm_path_is_skipped_in_details() {
+        let dir = tempdir().unwrap();
+        let plugins_base = dir.path().join("plugins");
+        // Memory capability without wasm_path — invalid shape for non-skill
+        // plugins, so discovery rejects it entirely.
+        write_memory_plugin(&plugins_base, "no-wasm");
+        // Remove the wasm file reference by rewriting the manifest.
+        std::fs::write(
+            plugins_base.join("no-wasm").join("manifest.toml"),
+            "name = \"no-wasm\"\nversion = \"0.1.0\"\ncapabilities = [\"memory\"]\n",
+        )
+        .unwrap();
+
+        let host = PluginHost::new(dir.path()).unwrap();
+        // validate_manifest_shape rejects non-skill plugins without wasm_path.
+        assert!(host.list_plugins().is_empty());
+        assert!(host.memory_plugin_details().is_empty());
     }
 }

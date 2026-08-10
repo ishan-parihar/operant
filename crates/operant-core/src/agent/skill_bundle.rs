@@ -29,7 +29,8 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock, RwLock};
+use std::time::SystemTime;
 
 use serde::Deserialize;
 use tracing::{debug, warn};
@@ -227,11 +228,70 @@ pub fn scan_bundles() -> HashMap<String, SkillBundle> {
 
     bundles
 }
+/// Cached scan result keyed by the resolved directory path + mtime.
+struct BundleCache {
+    /// The resolved bundles directory this cache entry belongs to, so a
+    /// directory change (test env override, future config switch) can never
+    /// serve stale data from a previous directory even when mtimes coincide.
+    dir: PathBuf,
+    /// `None` when the bundles directory does not exist.
+    dir_mtime: Option<SystemTime>,
+    bundles: Arc<HashMap<String, SkillBundle>>,
+}
 
-/// Get all bundles, using a cached scan result.
-pub fn get_skill_bundles() -> &'static HashMap<String, SkillBundle> {
-    static CACHE: OnceLock<HashMap<String, SkillBundle>> = OnceLock::new();
-    CACHE.get_or_init(scan_bundles)
+static BUNDLE_CACHE: OnceLock<RwLock<Option<BundleCache>>> = OnceLock::new();
+
+fn bundle_cache() -> &'static RwLock<Option<BundleCache>> {
+    BUNDLE_CACHE.get_or_init(|| RwLock::new(None))
+}
+
+/// Current mtime of the bundles directory, if it exists.
+fn bundles_dir_mtime(dir: &Path) -> Option<SystemTime> {
+    std::fs::metadata(dir).and_then(|m| m.modified()).ok()
+}
+
+/// Get all bundles using a cached scan result.
+///
+/// The cache is mtime-aware: if the bundles directory changes on disk
+/// (a bundle was added, edited, or removed), the next call transparently
+/// rescans. New bundles therefore appear without a process restart —
+/// unlike the previous `OnceLock` cache, which froze the scan for the
+/// lifetime of the process.
+pub fn get_skill_bundles() -> Arc<HashMap<String, SkillBundle>> {
+    let dir = bundles_dir();
+    let current_mtime = bundles_dir_mtime(&dir);
+
+    // Fast path: cached scan matches the current directory AND path.
+    {
+        let guard = bundle_cache().read().expect("Bundle cache lock poisoned");
+        if let Some(cache) = guard.as_ref()
+            && cache.dir == dir
+            && cache.dir_mtime == current_mtime
+        {
+            return Arc::clone(&cache.bundles);
+        }
+    }
+
+    refresh_skill_bundles()
+}
+
+/// Force a rescan of the bundles directory, replacing the cache.
+///
+/// Returns the fresh map. Callers that mutate the bundles directory
+/// (e.g. a `/bundle` listing that wants to show just-added bundles)
+/// can invoke this to bypass the mtime fast path.
+pub fn refresh_skill_bundles() -> Arc<HashMap<String, SkillBundle>> {
+    let dir = bundles_dir();
+    let dir_mtime = bundles_dir_mtime(&dir);
+    let bundles = Arc::new(scan_bundles());
+    let fresh = BundleCache {
+        dir,
+        dir_mtime,
+        bundles: Arc::clone(&bundles),
+    };
+    let mut guard = bundle_cache().write().expect("Bundle cache lock poisoned");
+    *guard = Some(fresh);
+    bundles
 }
 
 /// Resolve a user-typed command to its canonical bundle slash key.
@@ -249,9 +309,9 @@ pub fn resolve_bundle_command_key(command: &str) -> Option<String> {
     }
 }
 
-/// Return a sorted list of bundle info for display.
-pub fn list_bundles() -> Vec<&'static SkillBundle> {
-    let mut bundles: Vec<&'static SkillBundle> = get_skill_bundles().values().collect();
+/// Return a sorted list of bundle info for display (owned clones).
+pub fn list_bundles() -> Vec<SkillBundle> {
+    let mut bundles: Vec<SkillBundle> = get_skill_bundles().values().cloned().collect();
     bundles.sort_by(|a, b| a.slug.cmp(&b.slug));
     bundles
 }
@@ -363,17 +423,76 @@ mod tests {
         assert!(result.is_none());
     }
 
+    // These tests mutate the process-wide OPERANT_BUNDLES_DIR env var, so
+    // they must not run concurrently with each other (the test harness runs
+    // tests on parallel threads by default). Serialize them with a shared
+    // Mutex to prevent cross-test interference.
+    fn bundles_env_lock() -> &'static std::sync::Mutex<()> {
+        static LOCK: OnceLock<std::sync::Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| std::sync::Mutex::new(()))
+    }
+
     #[test]
     fn test_list_bundles_empty_when_no_dir() {
+        let _guard = bundles_env_lock().lock().unwrap();
         // When OPERANT_BUNDLES_DIR points to a non-existent dir, should return empty
+        let old = std::env::var("OPERANT_BUNDLES_DIR").ok();
+        // Unique per-process path so stale leftovers from earlier runs can't
+        // make the `!dir.exists()` assertion flaky.
+        let dir =
+            std::env::temp_dir().join(format!("nonexistent_bundles_test_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        // SAFETY: env var manipulation in single-threaded test context
+        unsafe {
+            std::env::set_var("OPERANT_BUNDLES_DIR", &dir);
+        }
+        assert!(!dir.exists());
+        assert!(get_skill_bundles().is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+        // SAFETY: env var manipulation in single-threaded test context
+        unsafe {
+            if let Some(v) = old {
+                std::env::set_var("OPERANT_BUNDLES_DIR", v);
+            } else {
+                std::env::remove_var("OPERANT_BUNDLES_DIR");
+            }
+        }
+    }
+
+    #[test]
+    fn bundle_cache_refreshes_when_directory_mtime_changes() {
+        let _guard = bundles_env_lock().lock().unwrap();
+        // Regression: the old OnceLock cache froze the scan for the process
+        // lifetime — a bundle added at runtime never appeared. The mtime-aware
+        // cache must pick up new files on the next get_skill_bundles() call.
         let old = std::env::var("OPERANT_BUNDLES_DIR").ok();
         // SAFETY: env var manipulation in single-threaded test context
         unsafe {
-            std::env::set_var("OPERANT_BUNDLES_DIR", "/tmp/nonexistent_bundles_test_dir");
+            std::env::set_var(
+                "OPERANT_BUNDLES_DIR",
+                "/tmp/operant_bundle_cache_refresh_test",
+            );
         }
-        // Can't easily test the cache, but scan_bundles should return empty
         let dir = bundles_dir();
-        assert!(!dir.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        assert!(get_skill_bundles().is_empty());
+
+        // Add a bundle and force a cache refresh (mtime granularity is coarse
+        // on some filesystems, so call refresh explicitly to stay deterministic).
+        std::fs::write(
+            dir.join("one.yaml"),
+            "name: one\ndescription: first\nskills:\n  - demo\n",
+        )
+        .unwrap();
+        let fresh = refresh_skill_bundles();
+        assert!(fresh.contains_key("/one"));
+
+        // get_skill_bundles returns the current map.
+        assert!(get_skill_bundles().contains_key("/one"));
+
+        let _ = std::fs::remove_dir_all(&dir);
         // SAFETY: env var manipulation in single-threaded test context
         unsafe {
             if let Some(v) = old {

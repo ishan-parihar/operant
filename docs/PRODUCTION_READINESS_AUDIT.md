@@ -248,8 +248,74 @@ now wired end-to-end (hermes `build_skill_invocation_message` parity):
 `workspace-lint`) trip the `skills_guard` security scanner when installed via
 `skills install` (dangerous-verdict shell patterns) — the scanner is doing
 its job; importing them requires explicit review or `--force` on a clean
-verdict. `skill_bundle.rs` `get_skill_bundles` uses a `OnceLock` cache that
-is populated once per process — new bundles require a restart to appear.
+verdict.
+
+---
+
+## 6.3 Plugin architecture + memory-plugin audit (vs hermes-agent) — 2026-08-10
+
+Audited operant's plugin + memory infrastructure against hermes-agent's
+(`hermes_cli/plugins.py` VALID_HOOKS, `agent/agent_plugins.py`, the
+`plugins/memory/*` plugin family) to confirm hermes plugins are plug-and-play.
+
+### 6.3.1 Memory provider integration — ✅ implemented & wired
+
+The memory-plugin *infrastructure* is implemented and effective:
+
+| Piece | Status |
+|-------|--------|
+| `operant-memory` trait (`Memory`), provider backends (InMemory, SQLite/vector, agent-memory), response cache | ✅ |
+| `MemoryProvider` bridge (hermes `memory_provider.py` parity) | ✅ `operant-core/src/memory_provider.rs` |
+| Memory wired into the agent: `memory_loader.load_context` on every turn + `auto_save` user-msg store | ✅ `Agent::turn` / `turn_streamed` |
+| Memory-review nudge (`memory_nudge_interval`) + skill-creation nudge | ✅ `fire_evolution_triggers` |
+| Session-scoped namespace (`memory_session_id`) | ✅ |
+| **WASM plugin `Memory` capability consumed** | ✅ **new** — `plugin_memory.rs` bridges `PluginCapability::Memory` → `MemoryProvider` in `load_memory_manager` |
+
+### 6.3.2 Plugin architecture parity (hermes VALID_HOOKS → operant HookHandler)
+
+Hermes defines 27 `VALID_HOOKS`. Operant's `HookHandler` trait + `HookRunner`
+now cover the full set relevant to the runtime agent:
+
+| hermes hook | operant hook | Wired |
+|-------------|-------------|-------|
+| `pre_tool_call` | `before_tool_call` (modifying/cancel) | ✅ agent + loop |
+| `post_tool_call` | `on_after_tool_call` (void) | ✅ agent + loop |
+| `pre_llm_call` | `before_llm_call` (modifying) | ✅ |
+| `post_llm_call` | `on_llm_output` (void) | ✅ |
+| `transform_llm_output` | `transform_llm_output` (first non-None wins) | ✅ **new** — `turn` + `turn_streamed` final text |
+| `on_session_start` / `on_session_end` | same | runner surface (gateway path) |
+| `on_session_reset` | `on_session_reset` | **new** — runner surface (mirrors session_start/end wiring) |
+| `on_skill_lifecycle` | `on_skill_lifecycle` | ✅ **new** — fired per skill-sourced tool call (`skill__tool`) |
+| `subagent_start` / `subagent_stop` | same | ✅ **new** — fired around `delegate` tool execution |
+| `pre_approval_request` / `post_approval_response` | same | ✅ **new** — fired around approval prompts in `execute_tool_call` |
+| `pre_gateway_dispatch` | `on_message_received` (modifying) | ✅ |
+| `on_message_sending` | `on_message_sending` (modifying) | ✅ |
+| kanban_* / pre_verify / api_request_* | n/a (no kanban/verify feature) | — |
+
+All new hooks are default no-ops, so existing handlers are unaffected; a
+hermes plugin implementing any of these callbacks can be ported 1:1.
+Regression coverage: `hooks::runner::tests::hermes_parity_lifecycle_hooks_dispatch`
+(33 hook tests green).
+
+### 6.3.3 WASM plugin tools — ✅ new bridge
+
+`PluginHost` (`operant-plugins`) loads WASM plugins, but their tools were
+never surfaced into the agent's `ToolRegistry`. New `plugin_tools.rs`:
+
+- Adapts `operant-api` `WasmTool` → `OperantTool` (schema + name + execute).
+- `register_plugin_tools` is called from CLI `build_registry` when the
+  `plugins-wasm` feature is on.
+- `list_plugin_tools` surfaces plugin-provided tools in `operant plugins list`.
+- Plugin tool names are namespaced `plugin:<name>:<tool>` to avoid collisions.
+
+### 6.3.4 Skill-bundle cache — ✅ fixed
+
+`get_skill_bundles` was a process-lifetime `OnceLock` — new bundles needed a
+restart. It is now an **mtime-aware refreshable cache** (`BundleCache` with
+dir mtime + `refresh_skill_bundles()` force-rescan), and the TUI `/bundle`
+and `/skill` open paths refresh caches + typeahead names so newly installed
+skills/bundles appear immediately. Tests serialized via a shared lock;
+self-cleaning temp dirs (5/5 bundle tests green).
 
 ---
 

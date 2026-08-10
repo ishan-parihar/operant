@@ -50,6 +50,10 @@ mod gateway_commands;
 mod gateway_platforms;
 mod gateway_runner;
 mod mcp_serve;
+#[cfg(feature = "plugins-wasm")]
+mod plugin_memory;
+#[cfg(feature = "plugins-wasm")]
+mod plugin_tools;
 pub mod plugins_install;
 mod post_setup;
 mod prompt_helpers;
@@ -721,6 +725,16 @@ pub(crate) async fn build_registry(
         }
     }
 
+    // WASM plugin tools: discover tool-capable plugins and register their
+    // WasmTools into the registry (feature `plugins-wasm`). Best-effort — a
+    // broken plugin is skipped, never fatal to startup.
+    #[cfg(feature = "plugins-wasm")]
+    {
+        if let Err(e) = plugin_tools::register_plugin_tools(&registry, config).await {
+            tracing::warn!(error = %e, "plugin tool registration failed (non-fatal)");
+        }
+    }
+
     // Register the agentmemory MCP server so the full 53-tool memory
     // surface (memory_smart_search, memory_save, memory_sessions, ...) is
     // available to the agent whenever the agentmemory provider is active.
@@ -1091,6 +1105,28 @@ pub(crate) async fn load_memory_manager(
 
     let cfg = operant_core::config::runtime_config();
     if cfg.memory.enabled && cfg.memory.provider != "builtin" && cfg.memory.provider != "disabled" {
+        // WASM memory plugin (memory.provider = "plugin:<name>"): a plugin
+        // declaring the `memory` capability backs the MemoryProvider trait,
+        // hermes-agent `plugins/memory/<name>` parity. When no plugin
+        // matches, fall through to the compiled-in factory below.
+        //
+        // Uses the ACTIVE runtime config (`cfg`) — which already carries the
+        // `--config` path + CLI overrides — so plugin dirs always resolve
+        // from the config the user actually launched with, never a fresh
+        // default-config reload.
+        #[cfg(feature = "plugins-wasm")]
+        if let Some(plugin_provider) =
+            plugin_memory::build_plugin_memory_provider(&cfg.memory.provider, &cfg).await
+        {
+            let name = plugin_provider.name().to_string();
+            let init = plugin_provider.clone();
+            tokio::spawn(async move {
+                if let Err(e) = init.initialize("main").await {
+                    tracing::warn!(provider = %name, error = %e, "Memory plugin init failed");
+                }
+            });
+            return Ok((memory_manager, Some(plugin_provider)));
+        }
         let provider =
             operant_core::memory_provider::build_memory_provider(&cfg.memory.provider, storage_dir);
         let name = provider.name().to_string();
