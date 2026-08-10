@@ -223,6 +223,9 @@ impl AgentMemoryProvider {
 
         // Wait for warmup: poll health every 250ms up to
         // SPAWN_WARMUP_TIMEOUT (fast bring-up, feels instant to the user).
+        // Fail fast if our spawned child exits during warmup — the typical
+        // cause is a stale/other server already squatting on the port, in
+        // which case polling for the full timeout is wasted time.
         let deadline = tokio::time::Instant::now() + SPAWN_WARMUP_TIMEOUT;
         while tokio::time::Instant::now() < deadline {
             if self.check_health().await {
@@ -231,6 +234,19 @@ impl AgentMemoryProvider {
                     self.base_url
                 );
                 return true;
+            }
+            {
+                let mut spawned = self.spawned.lock().await;
+                if let Some(child) = spawned.as_mut()
+                    && child.try_wait().ok().flatten().is_some()
+                {
+                    tracing::warn!(
+                        "agentmemory auto-spawned server exited during warmup — is {} already in use by another server?",
+                        self.base_url
+                    );
+                    *spawned = None;
+                    return false;
+                }
             }
             tokio::time::sleep(Duration::from_millis(250)).await;
         }
