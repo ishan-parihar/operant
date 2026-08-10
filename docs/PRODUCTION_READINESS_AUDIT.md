@@ -437,7 +437,7 @@ deferral mechanism at all.
   test/connect`) and after a restart. Provider tools keep the memory surface
   covered in the meantime.
 
-### 6.5.3 operant-channels orchestrator config-schema gap — ⚠️ documented, fix deferred
+### 6.5.3 operant-channels orchestrator config-schema gap — ✅ MCP injection implemented
 
 **Root cause:** two parallel config systems.
 
@@ -445,24 +445,31 @@ deferral mechanism at all.
 |---|---|---|
 | Used by | CLI paths: TUI, `run`, `chat`, gateway runner (`create_runtime_agent` → `build_agent_core`) | operant-runtime agent, operant-channels, operant-gateway |
 | Memory | hermes-parity `MemoryProvider` trait (`agentmemory`/`builtin`/`plugin:<n>`) | `operant_memory::Memory` trait (sqlite/qdrant/markdown/none) — **no agentmemory provider** |
-| MCP | `ensure_default_mcp_servers()` injects agentmemory server (now deferred) | `mcp.deferred_loading` + `DeferredMcpToolSet` (tool_search), but **no agentmemory injection** |
+| MCP | `ensure_default_mcp_servers()` injects agentmemory server (now deferred) | `ensure_default_mcp_servers()` now injects the agentmemory server (see below); `mcp.deferred_loading` + `DeferredMcpToolSet` (tool_search) |
 | Hermes parity | ✅ plugin hooks + lifecycle | memory/MCP surface is a different (newer) architecture |
 
-The channels orchestrator (`operant-channels/src/orchestrator/mod.rs`,
-`McpRegistry::connect_all(&config.mcp.servers)`) and the runtime agent
-therefore never see the agentmemory MCP server, and their memory backend
-cannot be `provider = "agentmemory"`. The CLI gateway is unaffected (it
-uses the `AppConfig` path). The gap matters only for deployments running
-the runtime-daemon / channels-orchestrator path with agentmemory.
+**Fix (this commit):** `operant_config::schema::Config` gained
+`ensure_default_mcp_servers()`, called from `Config::load_or_init()` (both
+the existing-config and fresh-init paths) before validation. It appends an
+`agentmemory` stdio server (`npx -y @agentmemory/mcp`, env
+`AGENTMEMORY_URL`/`AGENTMEMORY_SECRET` read from the environment, default
+`http://localhost:3111`) when `mcp.enabled` is true, `memory.backend ==
+"agentmemory"`, and no `agentmemory` server is already configured
+(idempotent). Because the schema's `deferred_loading` flag is global and
+defaults to `true`, the injected server automatically joins the deferred
+toolset — the runtime daemon / channels orchestrator (`McpRegistry`)
+exposes `memory_*` tools via `tool_search` without ever spawning `npx
+@agentmemory/mcp` at boot.
 
-**Recommended fix (when that path is exercised):** add an
-`ensure_default_mcp_servers()` equivalent in the operant-config schema load
-(append an `agentmemory` stdio server to `config.mcp.servers` when the
-memory backend selects agentmemory) and either (a) port the hermes-parity
-`MemoryProvider` hooks into the runtime agent, or (b) keep the two systems
-separate and document that agentmemory is a CLI-path feature. This is an
-architectural decision (unifying the two config/memory stacks), not a
-surgical bug.
+**Remaining (architectural, not surgical):** the runtime agent's memory
+layer (`operant_memory::Memory`) still has no agentmemory provider —
+`memory.backend = "agentmemory"` resolves to the custom extension-point
+profile there. If a runtime-daemon deployment needs the hermes-parity
+`MemoryProvider` hooks (`prefetch`/`sync_turn`/`on_pre_compress`), port
+those into the runtime agent (option (a) of the original recommendation);
+otherwise the injected MCP server gives the model the memory tool surface
+while the CLI path keeps the full provider. Unifying the two config/memory
+stacks remains a deliberate, larger refactor.
 
 
 ## 7. Verification summary

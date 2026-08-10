@@ -5510,7 +5510,7 @@ pub enum SearchMode {
 #[prefix = "memory"]
 #[allow(clippy::struct_excessive_bools)]
 pub struct MemoryConfig {
-    /// Where conversations, notes, and memories live. `sqlite` = embedded DB with optional vector + keyword hybrid search (fast, self-contained, default pick); `markdown` = plain-text files you can read and edit by hand (portable but no vector search); `lucid` = sync with the external `lucid-memory` CLI; `qdrant` = dedicated vector DB via `[memory.qdrant]` or `QDRANT_URL` env var; `none` = disable memory entirely.
+    /// Where conversations, notes, and memories live. `sqlite` = embedded DB with optional vector + keyword hybrid search (fast, self-contained, default pick); `markdown` = plain-text files you can read and edit by hand (portable but no vector search); `lucid` = sync with the external `lucid-memory` CLI; `qdrant` = dedicated vector DB via `[memory.qdrant]` or `QDRANT_URL` env var; `agentmemory` = select agentmemory as the semantic memory backend (injects the native `agentmemory` MCP server into `[mcp.servers]` as a deferred server; the runtime memory layer maps it to the custom extension-point profile); `none` = disable memory entirely.
     pub backend: String,
     /// Auto-save what *you* tell Operant into memory as conversation history — the agent's own replies are not saved. Turn off if you want memory to only hold things you explicitly record via the memory tool.
     pub auto_save: bool,
@@ -10415,6 +10415,7 @@ impl Config {
             config.decrypt_secrets(&store)?;
 
             config.apply_env_overrides();
+            config.ensure_default_mcp_servers();
             config.validate()?;
             tracing::info!(
                 path = %config.config_path.display(),
@@ -10440,6 +10441,7 @@ impl Config {
             }
 
             config.apply_env_overrides();
+            config.ensure_default_mcp_servers();
             config.validate()?;
             tracing::info!(
                 path = %config.config_path.display(),
@@ -10450,6 +10452,61 @@ impl Config {
             );
             Ok(config)
         }
+    }
+
+    /// Inject the agentmemory MCP server into `config.mcp.servers` when MCP
+    /// is enabled (`mcp.enabled`), the memory backend selects agentmemory
+    /// (`memory.backend == "agentmemory"`), and no `agentmemory` server is
+    /// already configured.
+    ///
+    /// Mirrors `operant_core::config::ensure_default_mcp_servers` (the CLI/
+    /// `AppConfig` path) so the runtime daemon / gateway / channels-orchestrator
+    /// path — which loads `operant_config::schema::Config` — exposes the same
+    /// native-MCP agentmemory surface. The schema's `mcp.deferred_loading`
+    /// flag is global and defaults to `true`, so an appended server
+    /// automatically joins the deferred toolset (`DeferredMcpToolSet` +
+    /// `tool_search`) and never spawns `npx @agentmemory/mcp` at boot.
+    ///
+    /// The schema `[memory]` section has no agentmemory-specific URL/secret
+    /// fields; the server reads `AGENTMEMORY_URL` from the environment and
+    /// falls back to the agentmemory default (`http://localhost:3111`),
+    /// mirroring the AppConfig default.
+    pub fn ensure_default_mcp_servers(&mut self) {
+        if !self.mcp.enabled {
+            return;
+        }
+        // Schema-world equivalent of the AppConfig `provider == "agentmemory"`
+        // trigger: the `[memory] backend` key selects agentmemory.
+        if self.memory.backend != "agentmemory" {
+            return;
+        }
+        if self.mcp.servers.iter().any(|s| s.name == "agentmemory") {
+            return;
+        }
+
+        let url = std::env::var("AGENTMEMORY_URL")
+            .ok()
+            .filter(|u| !u.trim().is_empty())
+            .unwrap_or_else(|| "http://localhost:3111".to_string());
+        let mut env = std::collections::HashMap::new();
+        env.insert("AGENTMEMORY_URL".to_string(), url);
+        if let Some(secret) = std::env::var("AGENTMEMORY_SECRET")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+        {
+            env.insert("AGENTMEMORY_SECRET".to_string(), secret);
+        }
+
+        self.mcp.servers.push(McpServerConfig {
+            name: "agentmemory".to_string(),
+            transport: McpTransport::Stdio,
+            url: None,
+            command: "npx".to_string(),
+            args: vec!["-y".to_string(), "@agentmemory/mcp".to_string()],
+            env,
+            headers: std::collections::HashMap::new(),
+            tool_timeout_secs: None,
+        });
     }
 
     fn lookup_model_provider_profile(
@@ -19007,6 +19064,74 @@ allowed_users = []
         // (Wider per-entry path routing through Vec<T> requires a
         // future generalization of route_hashmap_path-equivalent for
         // List sections; tracked as future work.)
+    }
+
+    #[test]
+    async fn ensure_default_mcp_servers_injects_agentmemory_when_backend_selects_it() {
+        // Mirrors operant_core::config::ensure_default_mcp_servers (AppConfig
+        // path) for the schema Config used by the runtime daemon/gateway.
+        let mut config = Config::default();
+        config.mcp.enabled = true;
+        config.memory.backend = "agentmemory".to_string();
+
+        config.ensure_default_mcp_servers();
+
+        assert_eq!(config.mcp.servers.len(), 1);
+        let server = &config.mcp.servers[0];
+        assert_eq!(server.name, "agentmemory");
+        assert_eq!(server.transport, McpTransport::Stdio);
+        assert_eq!(server.command, "npx");
+        assert_eq!(
+            server.args,
+            vec!["-y".to_string(), "@agentmemory/mcp".to_string()]
+        );
+        assert_eq!(
+            server.env.get("AGENTMEMORY_URL").map(String::as_str),
+            Some("http://localhost:3111")
+        );
+
+        // Idempotent: a second call must not duplicate the server.
+        config.ensure_default_mcp_servers();
+        assert_eq!(config.mcp.servers.len(), 1);
+    }
+
+    #[test]
+    async fn ensure_default_mcp_servers_noop_without_agentmemory_backend() {
+        let mut config = Config::default();
+        config.mcp.enabled = true;
+        config.memory.backend = "sqlite".to_string();
+
+        config.ensure_default_mcp_servers();
+        assert!(config.mcp.servers.is_empty());
+
+        // Disabled MCP also prevents injection even with the backend set.
+        config.memory.backend = "agentmemory".to_string();
+        config.mcp.enabled = false;
+        config.ensure_default_mcp_servers();
+        assert!(config.mcp.servers.is_empty());
+    }
+
+    #[test]
+    async fn ensure_default_mcp_servers_skips_when_user_configured() {
+        let mut config = Config::default();
+        config.mcp.enabled = true;
+        config.memory.backend = "agentmemory".to_string();
+        config.mcp.servers.push(McpServerConfig {
+            name: "agentmemory".to_string(),
+            transport: McpTransport::Stdio,
+            url: None,
+            command: "custom".to_string(),
+            args: vec![],
+            env: std::collections::HashMap::new(),
+            headers: std::collections::HashMap::new(),
+            tool_timeout_secs: None,
+        });
+
+        config.ensure_default_mcp_servers();
+
+        // User's own agentmemory server is preserved untouched.
+        assert_eq!(config.mcp.servers.len(), 1);
+        assert_eq!(config.mcp.servers[0].command, "custom");
     }
 
     #[test]
