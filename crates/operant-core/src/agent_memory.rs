@@ -67,11 +67,23 @@ static BLOCKING_CLIENT: std::sync::OnceLock<reqwest::blocking::Client> = std::sy
 
 fn shared_blocking_client() -> &'static reqwest::blocking::Client {
     BLOCKING_CLIENT.get_or_init(|| {
-        reqwest::blocking::Client::builder()
-            .timeout(SYNC_HOOK_TIMEOUT)
-            .user_agent("operant-agentmemory")
-            .build()
-            .expect("reqwest blocking client build cannot fail")
+        // reqwest::blocking::Client::build() constructs an internal tokio
+        // runtime and immediately drops it during initialization. When that
+        // first build happens on a tokio worker thread (e.g. `fire_and_forget`
+        // lazily initializing it from inside the MemorySyncExecutor worker),
+        // the drop panics with tokio's "Cannot drop a runtime in a context
+        // where blocking is not allowed". Build on a plain std thread so the
+        // internal runtime is created and torn down outside any async context
+        // — safe no matter which async path triggers the first call.
+        std::thread::spawn(|| {
+            reqwest::blocking::Client::builder()
+                .timeout(SYNC_HOOK_TIMEOUT)
+                .user_agent("operant-agentmemory")
+                .build()
+                .expect("reqwest blocking client build cannot fail")
+        })
+        .join()
+        .expect("reqwest blocking client build thread panicked")
     })
 }
 

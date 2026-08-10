@@ -229,13 +229,38 @@ impl OpenAIClient {
         let max_delay = self.config.rate_limit.max_delay_secs;
 
         for attempt in 1..=max_retries {
-            let response = self
+            // Retry transient network errors at the transport level (e.g.
+            // connection reset, TLS drop, proxy close) with exponential
+            // backoff — mirroring `execute_with_retry`. Previously a failed
+            // `send()` propagated immediately via `?`, wasting the retry
+            // budget even though the failure was transient. Providers like
+            // kilo.ai's gateway frequently drop connections before the first
+            // byte arrives, so this is a real production path.
+            let response = match self
                 .http_client
                 .post(url.clone())
                 .headers(headers.clone())
                 .json(&request)
                 .send()
-                .await?;
+                .await
+            {
+                Ok(response) => response,
+                Err(e) => {
+                    if attempt < max_retries {
+                        let delay_s = exponential_backoff_secs(attempt, base_delay, max_delay);
+                        warn!(
+                            model = %model,
+                            attempt,
+                            delay_secs = delay_s,
+                            error = %e,
+                            "Streaming network error, retrying",
+                        );
+                        tokio::time::sleep(Duration::from_secs(delay_s)).await;
+                        continue;
+                    }
+                    return Err(Error::Network(e));
+                }
+            };
 
             let status = response.status();
             if status.is_success() {
@@ -1196,6 +1221,82 @@ mod tests {
         // This will succeed even without env vars (uses defaults)
         let client = OpenAIClient::from_env();
         assert!(client.is_ok());
+    }
+
+    // ── iter-330: chat_streaming transport-retry tests ────────────────
+
+    #[tokio::test]
+    async fn chat_streaming_retries_transient_connection_drop() {
+        // Regression for the live-test failure where kilo.ai (and similar
+        // gateway providers) drop the connection before the first byte of
+        // the SSE body arrives. `chat_streaming` previously propagated the
+        // `send()` error immediately via `?`, wasting the retry budget.
+        //
+        // The mock server: (1) accepts the first connection, reads the
+        // request, then closes it WITHOUT responding (transport drop), and
+        // (2) on the second connection serves a valid SSE stream. The client
+        // must transparently retry and consume the stream.
+        use futures::StreamExt;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let server = tokio::spawn(async move {
+            // First connection: accept, read the request, close without
+            // responding — simulates a provider dropping the connection.
+            if let Ok((mut sock, _)) = listener.accept().await {
+                let mut buf = [0u8; 4096];
+                let _ = sock.read(&mut buf).await;
+                drop(sock);
+            }
+            // Second connection: serve a valid SSE response.
+            if let Ok((mut sock, _)) = listener.accept().await {
+                let body = "data: {\"id\":\"1\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"demo\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hello\"},\"finish_reason\":null}]}\n\ndata: [DONE]\n";
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = sock.write_all(response.as_bytes()).await;
+                let _ = sock.shutdown().await;
+            }
+        });
+
+        let config = ClientConfig {
+            base_url: format!("http://{addr}"),
+            api_key: Some("test-key".into()),
+            timeout: Duration::from_secs(10),
+            max_context_length: 8000,
+            rate_limit: crate::config::RateLimitSettings {
+                max_retries: 2,
+                base_delay_secs: 0,
+                max_delay_secs: 1,
+                bucket_capacity: 100,
+                bucket_refill_rate: 100.0,
+            },
+        };
+        let client = OpenAIClient::new(config);
+
+        let mut stream = client
+            .chat_streaming("demo", &[Message::user("hi")], None, None, None)
+            .await
+            .expect("chat_streaming should retry the dropped connection and succeed");
+
+        let mut got = String::new();
+        while let Some(chunk) = stream.next().await {
+            if let Ok(event) = chunk
+                && let Some(content) = event.choices.first().and_then(|c| c.delta.content.clone())
+            {
+                got.push_str(&content);
+            }
+        }
+        assert_eq!(
+            got, "Hello",
+            "SSE content should be consumed after the retry"
+        );
+        server.abort();
     }
 
     // --- classify_http_error tests ---

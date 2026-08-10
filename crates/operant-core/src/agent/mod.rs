@@ -1279,7 +1279,7 @@ impl OperantAgent {
             let llm_start = std::time::Instant::now();
             let mut stream_extra_content = None;
             let response = if request.stream {
-                let stream = match self.client.chat_streaming(request).await {
+                let mut stream = match self.client.chat_streaming(request).await {
                     Ok(s) => s,
                     Err(e) => {
                         // ── Context overflow auto-compression (iter-63) ───────
@@ -1336,7 +1336,44 @@ impl OperantAgent {
                         }
                     }
                 };
-                let (text, reasoning, tcs, extra) = self.process_stream(stream).await?;
+                // ── Mid-stream drop recovery (hermes parity) ─────────────
+                // Providers that close the SSE connection before the full
+                // body arrives surface a transport error (reqwest's "error
+                // decoding response body") from the stream. hermes-agent
+                // explicitly retries these drops (_log_stream_retry /
+                // _emit_stream_drop) instead of aborting the turn; we mirror
+                // that here with the turn's existing retry budget. Only
+                // retryable, non-compress, non-rotate failures re-issue the
+                // request.
+                let processed = loop {
+                    match self.process_stream(stream).await {
+                        Ok(processed) => break processed,
+                        Err(e) => {
+                            let classified = FallbackModelClient::classify_error(&e);
+                            let retryable = classified.retryable
+                                && !classified.should_compress
+                                && !classified.should_rotate_credential;
+                            if retryable && retry_state.consume_retry() {
+                                self.iteration_budget.refund();
+                                warn!(
+                                    error = %e,
+                                    retry = retry_state.retry_count,
+                                    max = retry_state.max_retries,
+                                    "Stream dropped mid-read — re-issuing LLM request"
+                                );
+                                let tools = self.registry.get_schemas().await;
+                                let retry_request =
+                                    ChatRequest::new(self.effective_model(), messages.clone())
+                                        .with_tools(tools)
+                                        .with_stream(self.config.stream);
+                                stream = self.client.chat_streaming(retry_request).await?;
+                            } else {
+                                return Err(e);
+                            }
+                        }
+                    }
+                };
+                let (text, reasoning, tcs, extra) = processed;
                 stream_extra_content = extra;
                 Ok((text, reasoning, tcs))
             } else {
@@ -2989,11 +3026,15 @@ If nothing needs updating, say 'Nothing to save.' and stop.\n\n{}",
         });
 
         if let Some(err) = stream_error {
-            // Surface the original stream error (not a generic "Stream
-            // processing failed" string) so the caller can see what went
-            // wrong. Trajectory saving is handled by the caller (run()) when
-            // this error propagates up — see the Err(e) arm in the run() loop.
-            return Err(Error::Agent(format!("Stream processing failed: {err}")));
+            // Surface the ORIGINAL stream error (e.g. reqwest's "error
+            // decoding response body" when a provider closes the SSE
+            // connection mid-body) rather than wrapping it in a generic
+            // "Stream processing failed" Agent error. The raw variant
+            // (`Error::Network`) classifies as retryable, which the run()
+            // loop uses to re-issue the request (hermes-parity stream-drop
+            // recovery). Trajectory saving is handled by the caller (run())
+            // when this error propagates up.
+            return Err(err);
         }
 
         // iter-247: emit Usage/Cost for streaming the same way
@@ -3754,6 +3795,7 @@ pub mod clients;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use async_trait::async_trait;
     use serial_test::serial;
 
     #[test]
@@ -3992,6 +4034,91 @@ mod tests {
         assert_eq!(reasoning, "need tool");
         assert_eq!(tool_calls.len(), 1);
         assert_eq!(tool_calls[0].function.name, "datetime");
+    }
+
+    // ── iter-330: mid-stream drop recovery (hermes parity) ─────────────
+
+    /// Mock client whose first streaming attempt dies mid-read with a
+    /// transport error (like a provider closing the SSE connection before
+    /// the body completes) and whose second attempt succeeds. Used to verify
+    /// the run() loop re-issues the request instead of aborting the turn.
+    struct DropThenOkClient {
+        calls: std::sync::atomic::AtomicUsize,
+    }
+
+    #[async_trait]
+    impl ModelClient for DropThenOkClient {
+        fn provider_name(&self) -> &str {
+            "mock-drop-then-ok"
+        }
+
+        async fn chat(&self, _request: ChatRequest) -> Result<ChatResponse> {
+            Err(Error::Agent("non-streaming not used in drop test".into()))
+        }
+
+        async fn chat_streaming(
+            &self,
+            _request: ChatRequest,
+        ) -> Result<BoxStream<'static, Result<StreamChunk>>> {
+            let call = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if call == 0 {
+                // First call: a stream that immediately yields a transport
+                // error (reqwest "error decoding response body" analogue).
+                let err = reqwest::Client::new()
+                    .get("http://127.0.0.1:9/")
+                    .send()
+                    .await
+                    .unwrap_err();
+                let stream = futures::stream::once(async move { Err(Error::Network(err)) });
+                Ok(Box::pin(stream))
+            } else {
+                // Second call: a valid stream with final content.
+                let stream = futures::stream::iter(vec![Ok(StreamChunk::new(
+                    Some("retried answer".to_string()),
+                    None,
+                    None,
+                ))]);
+                Ok(Box::pin(stream))
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn run_retries_mid_stream_drop_and_succeeds() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db = Database::init(temp_dir.path().join("drop_test.sqlite")).unwrap();
+
+        let config = AgentConfig {
+            model: "demo".to_string(),
+            max_iterations: 3,
+            tool_timeout: Duration::from_secs(5),
+            request_timeout: Duration::from_secs(10),
+            system_prompt: Some("You are a test agent.".to_string()),
+            stream: true,
+            context_window: 8000,
+            max_healing_attempts: 1,
+            fallback_models: Vec::new(),
+            fallback_on_errors: false,
+            approval_mode: "off".to_string(),
+            record_trajectories: false,
+            skill_nudge_interval: 0,
+            memory_review_interval: 0,
+            max_retries: 3,
+        };
+        let agent = OperantAgent::new(
+            config,
+            Box::new(DropThenOkClient {
+                calls: std::sync::atomic::AtomicUsize::new(0),
+            }),
+            ToolRegistry::new(Duration::from_secs(1)),
+            Arc::new(db),
+        );
+
+        let result = agent
+            .run("hello".to_string())
+            .await
+            .expect("run() should retry the mid-stream drop and return the retried answer");
+        assert_eq!(result.content, "retried answer");
     }
 
     #[test]
