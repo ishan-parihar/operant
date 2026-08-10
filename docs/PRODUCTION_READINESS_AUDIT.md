@@ -319,6 +319,57 @@ self-cleaning temp dirs (5/5 bundle tests green).
 
 ---
 
+## 6.4 agentmemory default + native MCP + hermes-plugin lifecycle parity (2026-08-10)
+
+**Request:** Make `https://github.com/rohitg00/agentmemory` the default, integrate it
+through the hermes-agent memory plugin contract, and register it as a native MCP
+server.
+
+### Parity audit — operant `AgentMemoryProvider` vs hermes plugin (`integrations/hermes`)
+
+| Hermes plugin hook            | REST call                 | operant before | operant now         |
+|-------------------------------|---------------------------|----------------|---------------------|
+| `initialize(session_id)`      | `POST session/start`      | server-warmup only | ✅ session/start + scope capture |
+| `system_prompt_block()`       | `POST context` (sync)     | static text    | ✅ live context, static fallback |
+| `prefetch(query)`             | `POST smart-search`       | ✅             | ✅ (unchanged)      |
+| `sync_turn(user, assistant)`  | `POST observe`            | `POST remember` (wrong shape) | ✅ observe + hookType payload |
+| `on_session_end(messages)`    | `POST session/end`        | not impl.      | ✅ fire-and-forget  |
+| `on_pre_compress(messages)`   | `POST context` (sync)     | not impl.      | ✅ returns context  |
+| `on_memory_write(add/update)` | `POST remember` (type:fact)| not impl.      | ✅ bg mirror        |
+| `queue_prefetch(query)`       | `POST smart-search` (bg)  | not impl.      | ✅ bg queue         |
+| `on_session_switch`           | `POST session/start`      | not impl.      | ✅ id rotation + re-register |
+
+**Sync-hook design:** sync hooks use a shared static `reqwest::blocking` client with a
+5s timeout, gated on reachability (never stalls the agent loop on a dead server);
+fire-and-forget hooks (`session/end`, `remember` mirror, `smart-search` queue,
+`session/start` on switch) run on a background thread exactly like the plugin's
+`_api_bg`. Per-provider blocking clients were avoided deliberately: they would be
+dropped inside async runtimes and panic (tokio "Cannot drop a runtime in a context
+where blocking is not allowed").
+
+### Native MCP registration
+
+- **Before:** the agentmemory MCP server was a CLI-only special case in
+  `build_registry` (main.rs) — the runtime-agent `connect_all` and gateway
+  paths never saw it unless the user hand-configured it.
+- **After:** `config::ensure_default_mcp_servers()` runs inside
+  `load_app_config()` and injects an `agentmemory` stdio server
+  (`npx -y @agentmemory/mcp`, env `AGENTMEMORY_URL` + optional
+  `AGENTMEMORY_SECRET`) into `config.mcp.servers` whenever
+  `memory.provider == "agentmemory"` (the default) and no user-configured
+  server exists. Every `AppConfig`-driven agent-construction path (CLI
+  registry, runtime-agent `connect_all`, operant-cli gateway runner) picks it
+  up through the generic config-driven MCP connect loop — native, not
+  special-cased. The now-redundant main.rs block was removed. Users who
+  configured their own `agentmemory` server (or disabled it) keep their entry
+  untouched.
+  
+  **Coverage note:** the separate `operant-channels` orchestrator uses its own
+  `operant_config::schema::Config` type (not `AppConfig`), so the injection
+  does not flow into that subsystem. If a deployment runs the channels
+  orchestrator and needs the agentmemory tools there, add the server under
+  `[mcp.servers]` in that config explicitly.
+
 ## 7. Verification summary
 
 ```

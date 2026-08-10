@@ -2009,14 +2009,23 @@ impl OperantAgent {
                 "Preflight compression: estimated tokens exceed threshold"
             );
             // Memory provider: on_pre_compress hook.
-            // Extract insights from messages about to be compressed so the
-            // compression summary preserves important context.
+            // Extract insights from messages about to be compressed and
+            // prepend them as a user context block so the downstream
+            // compression/decay preserves what the memory provider still
+            // considers important. Mirrors hermes-agent's plugin behavior
+            // (insert `[agentmemory context before compaction]` at index 0).
             if let Some(provider) = &self.memory_provider {
                 let insights = provider.on_pre_compress(&messages);
                 if !insights.is_empty() {
                     tracing::debug!(
                         insights_len = insights.len(),
                         "Memory provider pre-compress insights captured"
+                    );
+                    messages.insert(
+                        0,
+                        crate::client::Message::user(format!(
+                            "[memory context before compaction]\n{insights}"
+                        )),
                     );
                 }
             }

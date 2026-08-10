@@ -735,48 +735,10 @@ pub(crate) async fn build_registry(
         }
     }
 
-    // Register the agentmemory MCP server so the full 53-tool memory
-    // surface (memory_smart_search, memory_save, memory_sessions, ...) is
-    // available to the agent whenever the agentmemory provider is active.
-    // Skipped when the user already configured an "agentmemory" server.
-    if config.memory.enabled && config.memory.provider == "agentmemory" {
-        let already = mcp_manager.contains("agentmemory").await;
-        let configured = config
-            .mcp
-            .servers
-            .iter()
-            .any(|s| s.name == "agentmemory" && s.enabled);
-        if !already && !configured {
-            let server_url = config
-                .memory
-                .agentmemory_url
-                .clone()
-                .filter(|s| !s.trim().is_empty())
-                .unwrap_or_else(|| "http://localhost:3111".to_string());
-            let mut env = std::collections::HashMap::new();
-            env.insert("AGENTMEMORY_URL".to_string(), server_url);
-            match mcp_manager
-                .add_stdio_server(
-                    "agentmemory".to_string(),
-                    "npx".to_string(),
-                    vec!["-y".to_string(), "@agentmemory/mcp".to_string()],
-                    env,
-                )
-                .await
-            {
-                Ok(()) => {
-                    mcp_manager.sync_tools_to_registry(&registry).await;
-                    tracing::info!("agentmemory MCP server registered (memory tools available)");
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        error = %e,
-                        "agentmemory MCP server registration failed (non-fatal)"
-                    );
-                }
-            }
-        }
-    }
+    // The agentmemory MCP server is injected natively at config load
+    // (config::ensure_default_mcp_servers) whenever the agentmemory memory
+    // provider is active, so it flows through the generic config-driven
+    // connect loop below like any other server. No CLI special case needed.
 
     let disabled_tools: std::collections::HashSet<String> =
         config.tools.disabled_tools.iter().cloned().collect();

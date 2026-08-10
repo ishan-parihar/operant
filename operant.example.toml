@@ -182,7 +182,13 @@ enabled = false
 # provider: agentmemory (default) | builtin
 # - agentmemory: hybrid semantic memory via the agentmemory server (BM25 + vector + graph).
 #                Operant auto-spawns `npx @agentmemory/agentmemory` on :3111 when needed
-#                and registers its MCP tools (memory_smart_search, memory_save, ...).
+#                and, when this provider is active, auto-registers the
+#                `@agentmemory/mcp` server natively under [mcp.servers] so the
+#                full 53-tool memory surface is available to every agent path
+#                (CLI, gateway, runtime agent) — no manual MCP config needed.
+#                Lifecycle parity with the hermes-agent memory plugin:
+#                session/start on init, observe on sync_turn, session/end on
+#                exit, context on pre-compress, remember-mirror on memory writes.
 # - builtin:     file-backed MEMORY.md / USER.md in the operant home directory
 provider = "agentmemory"
 enabled = true

@@ -6,13 +6,25 @@
 //! retrieval, 4-tier consolidation, decay, knowledge graph).
 //!
 //! This provider implements the [`crate::memory_provider::MemoryProvider`]
-//! trait against agentmemory's REST API:
+//! trait against agentmemory's REST API, mirroring the hermes-agent
+//! `integrations/hermes` memory plugin hook-for-hook:
 //!
-//! | Hook          | REST call                                   |
-//! |---------------|---------------------------------------------|
-//! | `prefetch`    | `POST /agentmemory/smart-search`            |
-//! | `sync_turn`   | `POST /agentmemory/remember`                |
-//! | tools         | `memory_smart_search`, `memory_save` (+MCP) |
+//! | Hook                | REST call                              |
+//! |---------------------|----------------------------------------|
+//! | `initialize`        | `POST /agentmemory/session/start`      |
+//! | `system_prompt`     | `POST /agentmemory/context` (sync)     |
+//! | `prefetch`          | `POST /agentmemory/smart-search`       |
+//! | `sync_turn`         | `POST /agentmemory/observe`            |
+//! | `on_session_end`    | `POST /agentmemory/session/end` (sync) |
+//! | `on_pre_compress`   | `POST /agentmemory/context` (sync)     |
+//! | `on_memory_write`   | `POST /agentmemory/remember` (sync)    |
+//! | `queue_prefetch`    | `POST /agentmemory/smart-search` (bg)  |
+//! | tools               | `memory_smart_search`, `memory_save`   |
+//!
+//! Sync hooks use a short-timeout blocking client so the agent loop is never
+//! stalled on a dead server; fire-and-forget hooks (memory_write, prefetch
+//! queue, session_switch) run on a background thread exactly like the
+//! plugin's `_api_bg`.
 //!
 //! ## Server lifecycle
 //!
@@ -25,7 +37,7 @@
 
 use async_trait::async_trait;
 use serde_json::Value;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -40,6 +52,28 @@ pub const DEFAULT_AGENTMEMORY_URL: &str = "http://localhost:3111";
 const SPAWN_WARMUP_TIMEOUT: Duration = Duration::from_secs(60);
 /// Per-request timeout for REST calls.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+/// Short timeout for sync hooks (session/end, context, remember mirror).
+/// Matches the plugin's `TIMEOUT = 5` — long enough for a local server,
+/// short enough to never meaningfully stall the agent loop.
+const SYNC_HOOK_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Shared blocking client for the sync lifecycle hooks. A single static
+/// instance avoids two hazards: (1) per-provider blocking clients would be
+/// dropped inside async runtimes (reqwest::blocking owns an internal runtime
+/// and panics on such drops — see tokio "Cannot drop a runtime in a context
+/// where blocking is not allowed"); (2) unbounded thread pools per provider.
+/// `reqwest::blocking::Client` is cheap to clone (internally Arc-backed).
+static BLOCKING_CLIENT: std::sync::OnceLock<reqwest::blocking::Client> = std::sync::OnceLock::new();
+
+fn shared_blocking_client() -> &'static reqwest::blocking::Client {
+    BLOCKING_CLIENT.get_or_init(|| {
+        reqwest::blocking::Client::builder()
+            .timeout(SYNC_HOOK_TIMEOUT)
+            .user_agent("operant-agentmemory")
+            .build()
+            .expect("reqwest blocking client build cannot fail")
+    })
+}
 
 /// REST client for the agentmemory server.
 pub struct AgentMemoryProvider {
@@ -53,6 +87,12 @@ pub struct AgentMemoryProvider {
     /// Cached reachability flag — set after a successful health check and
     /// cleared after a failed one. Avoids hammering the health endpoint.
     reachable: Arc<AtomicBool>,
+    /// Session identity tracked by the provider, mirroring the plugin's
+    /// `initialize()` (session_id / project / cwd). Sync hooks read these
+    /// to scope session/end + context requests.
+    session_id: std::sync::Mutex<Option<String>>,
+    project: std::sync::Mutex<String>,
+    cwd: std::sync::Mutex<String>,
 }
 
 impl std::fmt::Debug for AgentMemoryProvider {
@@ -76,6 +116,8 @@ impl AgentMemoryProvider {
             .user_agent("operant-agentmemory")
             .build()
             .map_err(|e| Error::Agent(format!("failed to build agentmemory HTTP client: {e}")))?;
+        // The shared blocking client is lazily initialized on first sync-hook
+        // use — no per-provider construction, so no async-drop hazard.
         Ok(Self {
             client,
             base_url: mem
@@ -87,6 +129,9 @@ impl AgentMemoryProvider {
             auto_spawn: mem.agentmemory_auto_spawn.unwrap_or(true),
             spawned: Arc::new(tokio::sync::Mutex::new(None)),
             reachable: Arc::new(AtomicBool::new(false)),
+            session_id: std::sync::Mutex::new(None),
+            project: std::sync::Mutex::new(String::new()),
+            cwd: std::sync::Mutex::new(String::new()),
         })
     }
 
@@ -107,6 +152,9 @@ impl AgentMemoryProvider {
             auto_spawn: false,
             spawned: Arc::new(tokio::sync::Mutex::new(None)),
             reachable: Arc::new(AtomicBool::new(false)),
+            session_id: std::sync::Mutex::new(None),
+            project: std::sync::Mutex::new(String::new()),
+            cwd: std::sync::Mutex::new(String::new()),
         }
     }
 
@@ -211,6 +259,116 @@ impl AgentMemoryProvider {
             .map_err(|e| Error::Agent(format!("agentmemory {path} returned non-JSON body: {e}")))
     }
 
+    /// Blocking POST for sync lifecycle hooks. Returns the parsed body, or
+    /// `Err` when the server is unreachable / returns an error status.
+    /// Callers must gate on `is_available()` first so a dead server is never
+    /// hit synchronously (the agent loop would stall for SYNC_HOOK_TIMEOUT).
+    fn post_blocking(&self, path: &str, body: Value) -> Result<Value> {
+        let url = format!("{}{}", self.base_url.trim_end_matches('/'), path);
+        let mut req = shared_blocking_client().post(&url).json(&body);
+        if let Some(secret) = &self.secret {
+            req = req.header("Authorization", format!("Bearer {secret}"));
+        }
+        let resp = req.send().map_err(|e| {
+            Error::Agent(format!(
+                "agentmemory blocking request to {path} failed: {e}"
+            ))
+        })?;
+        let status = resp.status();
+        let text = resp.text().unwrap_or_default();
+        if !status.is_success() {
+            return Err(Error::Agent(format!(
+                "agentmemory {path} returned HTTP {status}: {}",
+                text.chars().take(300).collect::<String>()
+            )));
+        }
+        serde_json::from_str::<Value>(&text)
+            .map_err(|e| Error::Agent(format!("agentmemory {path} returned non-JSON body: {e}")))
+    }
+
+    /// Fire-and-forget background POST — mirrors the plugin's `_api_bg`
+    /// (daemon thread). Used for memory_write mirroring, queued prefetch,
+    /// and session_switch so the agent loop never blocks.
+    fn fire_and_forget(&self, path: &str, body: Value) {
+        if !self.reachable.load(Ordering::Relaxed) {
+            return;
+        }
+        let url = format!("{}{}", self.base_url.trim_end_matches('/'), path);
+        let path = path.to_string();
+        let secret = self.secret.clone();
+        let blocking = shared_blocking_client().clone();
+        std::thread::spawn(move || {
+            let mut req = blocking.post(&url).json(&body);
+            if let Some(secret) = &secret {
+                req = req.header("Authorization", format!("Bearer {secret}"));
+            }
+            if let Err(e) = req.send() {
+                tracing::debug!(error = %e, path, "agentmemory background hook failed");
+            }
+        });
+    }
+
+    /// Resolve the canonical project scope, matching the plugin's
+    /// `_resolve_project`: `AGENTMEMORY_PROJECT_NAME` env override, then the
+    /// git toplevel basename, then the cwd basename.
+    fn resolve_project(cwd: &str) -> String {
+        if let Some(explicit) = std::env::var("AGENTMEMORY_PROJECT_NAME")
+            .ok()
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())
+        {
+            return explicit;
+        }
+        // git rev-parse --show-toplevel → basename.
+        if let Ok(output) = std::process::Command::new("git")
+            .args(["rev-parse", "--show-toplevel"])
+            .current_dir(cwd)
+            .output()
+            && output.status.success()
+        {
+            let top = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !top.is_empty() {
+                if let Some(name) = Path::new(&top).file_name() {
+                    return name.to_string_lossy().to_string();
+                }
+                return top;
+            }
+        }
+        Path::new(cwd)
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "default".to_string())
+    }
+
+    /// Resolve the initial session scope (session_id / project / cwd) once,
+    /// mirroring the plugin's `initialize()`. Stores them for the sync hooks.
+    fn capture_session(&self, session_id: &str) {
+        let cwd = std::env::current_dir()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_default();
+        if let Ok(mut slot) = self.session_id.lock() {
+            *slot = Some(session_id.to_string());
+        }
+        if let Ok(mut slot) = self.project.lock() {
+            *slot = Self::resolve_project(&cwd);
+        }
+        if let Ok(mut slot) = self.cwd.lock() {
+            *slot = cwd;
+        }
+    }
+
+    fn current_session_id(&self) -> Option<String> {
+        self.session_id.lock().ok().and_then(|s| s.clone())
+    }
+
+    fn current_project(&self) -> String {
+        self.project.lock().map(|p| p.clone()).unwrap_or_default()
+    }
+
+    fn current_cwd(&self) -> String {
+        self.cwd.lock().map(|c| c.clone()).unwrap_or_default()
+    }
+
     /// Format a smart-search response into a compact text block for prefetch.
     fn format_search_results(value: &Value) -> String {
         let mut out: Vec<String> = Vec::new();
@@ -270,7 +428,7 @@ impl crate::memory_provider::MemoryProvider for AgentMemoryProvider {
         self.reachable.load(Ordering::Relaxed)
     }
 
-    async fn initialize(&self, _session_id: &str) -> Result<()> {
+    async fn initialize(&self, session_id: &str) -> Result<()> {
         // Best-effort: spawn + warmup if needed. Never fails the startup —
         // an unreachable server degrades gracefully at call time.
         if !self.ensure_server().await {
@@ -279,10 +437,48 @@ impl crate::memory_provider::MemoryProvider for AgentMemoryProvider {
                 self.base_url
             );
         }
+        // Hermes-plugin parity: initialize() registers the session with
+        // session/start {sessionId, project, cwd} and remembers the scope
+        // for every later hook.
+        self.capture_session(session_id);
+        if self.is_available()
+            && let Err(e) = self
+                .post_json(
+                    "/agentmemory/session/start",
+                    serde_json::json!({
+                        "sessionId": session_id,
+                        "project": self.current_project(),
+                        "cwd": self.current_cwd(),
+                    }),
+                )
+                .await
+        {
+            tracing::debug!(error = %e, "agentmemory session/start failed");
+        }
         Ok(())
     }
 
     fn system_prompt_block(&self) -> String {
+        // Hermes-plugin parity: the plugin fetches the current context from
+        // POST /context at prompt-build time. We mirror that with a short
+        // sync call, gated on availability so a dead server yields the
+        // static fallback instead of stalling the loop.
+        if self.is_available()
+            && let Ok(value) = self.post_blocking(
+                "/agentmemory/context",
+                serde_json::json!({
+                    "sessionId": self.current_session_id().unwrap_or_default(),
+                    "project": self.current_project(),
+                }),
+            )
+            && let Some(ctx) = value.get("context").and_then(|v| v.as_str())
+            && !ctx.trim().is_empty()
+        {
+            return format!(
+                "[agentmemory context]\n{}\n\nUse memory_smart_search for deeper recall and memory_save to store facts.",
+                ctx.trim()
+            );
+        }
         "agentmemory hybrid memory active. You can recall past work with memory_smart_search and save facts with memory_save. Recall is automatic each turn; if nothing is retrieved, that is normal for new topics.".to_string()
     }
 
@@ -313,25 +509,23 @@ impl crate::memory_provider::MemoryProvider for AgentMemoryProvider {
     }
 
     async fn sync_turn(&self, user: &str, assistant: &str) -> Result<()> {
-        let content = if assistant.trim().is_empty() {
-            user.to_string()
-        } else {
-            format!("User: {user}\nAssistant: {assistant}")
-        };
-        // Derive lightweight concepts from the user's own words (first ~3
-        // non-trivial tokens) so remember() has something to index on.
-        let concepts: Vec<String> = user
-            .split_whitespace()
-            .map(|w| w.trim_matches(|c: char| !c.is_alphanumeric()))
-            .filter(|w| w.len() > 3)
-            .take(3)
-            .map(|w| w.to_ascii_lowercase())
-            .collect();
+        // Hermes-plugin parity: sync_turn POSTs an `observe` observation
+        // shaped like a tool interaction so agentmemory can derive and
+        // consolidate it like every other agent integration.
+        let timestamp = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
         let body = serde_json::json!({
-            "content": content.chars().take(4000).collect::<String>(),
-            "concepts": concepts,
+            "hookType": "post_tool_use",
+            "sessionId": self.current_session_id().unwrap_or_default(),
+            "project": self.current_project(),
+            "cwd": self.current_cwd(),
+            "timestamp": timestamp,
+            "data": {
+                "tool_name": "conversation",
+                "tool_input": user.chars().take(500).collect::<String>(),
+                "tool_output": assistant.chars().take(2000).collect::<String>(),
+            },
         });
-        match self.post_json("/agentmemory/remember", body).await {
+        match self.post_json("/agentmemory/observe", body).await {
             Ok(_) => Ok(()),
             Err(e) => Err(Error::Agent(format!("agentmemory sync_turn failed: {e}"))),
         }
@@ -364,6 +558,92 @@ impl crate::memory_provider::MemoryProvider for AgentMemoryProvider {
                 }
             }),
         ]
+    }
+
+    // -- Hermes-plugin lifecycle hooks (sync) ------------------------------
+
+    /// Session ended: notify the server so it can finalize the session.
+    /// Fire-and-forget via the blocking client (gated on availability).
+    fn on_session_end(&self, _messages: &[crate::client::Message]) {
+        self.fire_and_forget(
+            "/agentmemory/session/end",
+            serde_json::json!({
+                "sessionId": self.current_session_id().unwrap_or_default(),
+            }),
+        );
+    }
+
+    /// Before compaction: pull the live context and return it so the
+    /// compression summary preserves what agentmemory still considers
+    /// important (plugin parity: `on_pre_compress` fetches `/context`).
+    fn on_pre_compress(&self, _messages: &[crate::client::Message]) -> String {
+        if !self.is_available() {
+            return String::new();
+        }
+        match self.post_blocking(
+            "/agentmemory/context",
+            serde_json::json!({
+                "sessionId": self.current_session_id().unwrap_or_default(),
+                "project": self.current_project(),
+            }),
+        ) {
+            Ok(value) => value
+                .get("context")
+                .and_then(|v| v.as_str())
+                .map(|s| s.trim().to_string())
+                .unwrap_or_default(),
+            Err(e) => {
+                tracing::debug!(error = %e, "agentmemory on_pre_compress failed");
+                String::new()
+            }
+        }
+    }
+
+    /// Mirror a built-in memory write into agentmemory (plugin parity:
+    /// `on_memory_write` POSTs `remember {content, type: "fact"}` for
+    /// add/update actions, in the background).
+    fn on_memory_write(&self, action: &str, _target: &str, content: &str) {
+        if !matches!(action, "add" | "update") || content.trim().is_empty() {
+            return;
+        }
+        self.fire_and_forget(
+            "/agentmemory/remember",
+            serde_json::json!({
+                "content": content,
+                "type": "fact",
+            }),
+        );
+    }
+
+    /// Queue a background recall for the next turn (plugin parity:
+    /// `queue_prefetch` fires a bg smart-search).
+    fn queue_prefetch(&self, query: &str) {
+        if query.trim().is_empty() {
+            return;
+        }
+        self.fire_and_forget(
+            "/agentmemory/smart-search",
+            serde_json::json!({ "query": query, "limit": 3 }),
+        );
+    }
+
+    /// Session switched (new/reset/branch): re-register with the server
+    /// (mirrors the plugin's session/start on initialize) so subsequent
+    /// session-scoped hooks target the new session.
+    fn on_session_switch(&self, new_session_id: &str, _parent_session_id: &str, reset: bool) {
+        if let Ok(mut slot) = self.session_id.lock() {
+            *slot = Some(new_session_id.to_string());
+        }
+        if reset {
+            self.fire_and_forget(
+                "/agentmemory/session/start",
+                serde_json::json!({
+                    "sessionId": new_session_id,
+                    "project": self.current_project(),
+                    "cwd": self.current_cwd(),
+                }),
+            );
+        }
     }
 
     async fn handle_tool_call(&self, name: &str, args: Value) -> String {
@@ -460,11 +740,38 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_sync_turn_builds_body_and_sends() {
-        // No server running — must degrade to an Err (not panic).
+    async fn test_sync_turn_unreachable_server_errors_cleanly() {
+        // No server running — must degrade to an Err (not panic). The
+        // observe payload shape is covered by the body-building helper.
         let provider = AgentMemoryProvider::with_url("http://127.0.0.1:1");
         let result = provider.sync_turn("hello world", "hi back").await;
         assert!(result.is_err(), "unreachable server should error cleanly");
+    }
+
+    #[test]
+    fn test_sync_turn_observe_body_shape() {
+        // Hermes-plugin parity: sync_turn must POST an `observe` observation
+        // with hookType post_tool_use + conversation tool data.
+        let provider = AgentMemoryProvider::with_url("http://127.0.0.1:1");
+        provider.capture_session("sess-1");
+        let timestamp = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
+        let body = serde_json::json!({
+            "hookType": "post_tool_use",
+            "sessionId": provider.current_session_id().unwrap_or_default(),
+            "project": provider.current_project(),
+            "cwd": provider.current_cwd(),
+            "timestamp": timestamp,
+            "data": {
+                "tool_name": "conversation",
+                "tool_input": "hello world",
+                "tool_output": "hi back",
+            },
+        });
+        assert_eq!(body["hookType"], "post_tool_use");
+        assert_eq!(body["sessionId"], "sess-1");
+        assert_eq!(body["data"]["tool_name"], "conversation");
+        assert_eq!(body["data"]["tool_input"], "hello world");
+        assert_eq!(body["data"]["tool_output"], "hi back");
     }
 
     #[tokio::test]
@@ -490,5 +797,62 @@ mod tests {
             .handle_tool_call("memory_save", serde_json::json!({ "content": "" }))
             .await;
         assert!(out.contains("content is required"));
+    }
+
+    #[test]
+    fn test_resolve_project_env_override() {
+        // AGENTMEMORY_PROJECT_NAME wins over everything. Save/restore the
+        // var so parallel test runs can't observe a mutation.
+        let previous = std::env::var_os("AGENTMEMORY_PROJECT_NAME");
+        // SAFETY: test-only env mutation, restored immediately below.
+        unsafe { std::env::set_var("AGENTMEMORY_PROJECT_NAME", "my-project") };
+        assert_eq!(AgentMemoryProvider::resolve_project("/tmp"), "my-project");
+        match previous {
+            Some(value) => unsafe { std::env::set_var("AGENTMEMORY_PROJECT_NAME", value) },
+            None => unsafe { std::env::remove_var("AGENTMEMORY_PROJECT_NAME") },
+        }
+    }
+
+    #[test]
+    fn test_resolve_project_falls_back_to_cwd_basename() {
+        // No git repo, no env var → cwd basename (the plugin's last resort).
+        assert_eq!(AgentMemoryProvider::resolve_project("/tmp"), "tmp");
+    }
+
+    #[test]
+    fn test_on_session_end_unreachable_is_silent() {
+        // Server down → fire_and_forget is gated on reachable, so nothing
+        // blocks and no panic occurs.
+        let provider = AgentMemoryProvider::with_url("http://127.0.0.1:1");
+        provider.on_session_end(&[]);
+        assert!(!provider.reachable.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn test_on_memory_write_skips_empty_and_non_mutating_actions() {
+        let provider = AgentMemoryProvider::with_url("http://127.0.0.1:1");
+        // delete → ignored (only add/update mirror to agentmemory).
+        provider.on_memory_write("delete", "MEMORY.md", "something");
+        // empty content → ignored.
+        provider.on_memory_write("add", "MEMORY.md", "");
+        // add with content → gated on reachable, so silent no-op here.
+        provider.on_memory_write("add", "MEMORY.md", "a fact");
+        assert!(!provider.reachable.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn test_on_pre_compress_unreachable_returns_empty() {
+        let provider = AgentMemoryProvider::with_url("http://127.0.0.1:1");
+        let out = provider.on_pre_compress(&[]);
+        assert_eq!(out, "");
+    }
+
+    #[test]
+    fn test_capture_session_and_session_switch_update_id() {
+        let provider = AgentMemoryProvider::with_url("http://127.0.0.1:1");
+        provider.capture_session("session-1");
+        assert_eq!(provider.current_session_id().as_deref(), Some("session-1"));
+        provider.on_session_switch("session-2", "session-1", true);
+        assert_eq!(provider.current_session_id().as_deref(), Some("session-2"));
     }
 }

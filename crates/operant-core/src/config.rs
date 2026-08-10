@@ -952,33 +952,81 @@ pub fn runtime_config() -> AppConfig {
 }
 
 pub fn load_app_config(explicit: Option<&Path>) -> Result<LoadedConfig> {
-    if let Some(path) = explicit {
+    let (mut config, source) = if let Some(path) = explicit {
         if !path.exists() {
             return Err(Error::Config(format!(
                 "Config file '{}' was not found. Pass a valid --config path or create operant.toml.",
                 path.display()
             )));
         }
-
-        return Ok(LoadedConfig {
-            config: parse_config_file(path)?,
-            source: Some(path.to_path_buf()),
-        });
-    }
-
-    for path in default_config_paths() {
-        if path.exists() {
-            return Ok(LoadedConfig {
-                config: parse_config_file(&path)?,
-                source: Some(path),
-            });
+        (parse_config_file(path)?, Some(path.to_path_buf()))
+    } else {
+        let mut found = None;
+        for path in default_config_paths() {
+            if path.exists() {
+                found = Some(path);
+                break;
+            }
         }
-    }
+        match found {
+            Some(path) => (parse_config_file(&path)?, Some(path)),
+            None => (AppConfig::default(), None),
+        }
+    };
 
-    Ok(LoadedConfig {
-        config: AppConfig::default(),
-        source: None,
-    })
+    // Native-MCP registration: when the agentmemory memory provider is
+    // active, ensure an `agentmemory` stdio MCP server exists in the config
+    // so EVERY agent-construction path (CLI registry, runtime-agent
+    // connect_all, gateway orchestrator) exposes the full 53-tool memory
+    // surface. Users who configured their own server (or deliberately
+    // disabled it) keep their entry untouched.
+    ensure_default_mcp_servers(&mut config);
+
+    Ok(LoadedConfig { config, source })
+}
+
+/// Inject the agentmemory MCP server into `config.mcp.servers` when the
+/// agentmemory memory provider is active and no `agentmemory` server is
+/// already configured. This makes the memory tools a native, config-driven
+/// MCP server instead of a CLI-only special case (hermes-agent plugin
+/// parity: agentmemory registers itself as an MCP server the same way the
+/// hermes plugin's docs configure `@agentmemory/mcp`).
+pub fn ensure_default_mcp_servers(config: &mut AppConfig) {
+    if !(config.memory.enabled && config.memory.provider == "agentmemory") {
+        return;
+    }
+    if config.mcp.servers.iter().any(|s| s.name == "agentmemory") {
+        return;
+    }
+    let server_url = config
+        .memory
+        .agentmemory_url
+        .clone()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| "http://localhost:3111".to_string());
+    let mut env = HashMap::new();
+    env.insert("AGENTMEMORY_URL".to_string(), server_url);
+    // Propagate the optional shared secret so the MCP tools authenticate
+    // exactly like the REST hooks (parity: the plugin's MCP server reads
+    // AGENTMEMORY_SECRET from its environment).
+    if let Some(secret) = config
+        .memory
+        .agentmemory_secret
+        .clone()
+        .filter(|s| !s.trim().is_empty())
+    {
+        env.insert("AGENTMEMORY_SECRET".to_string(), secret);
+    }
+    config.mcp.servers.push(McpServerConfig {
+        name: "agentmemory".to_string(),
+        transport: McpTransportKind::Stdio,
+        url: None,
+        auth_token: None,
+        command: Some("npx".to_string()),
+        args: vec!["-y".to_string(), "@agentmemory/mcp".to_string()],
+        env,
+        enabled: true,
+    });
 }
 
 pub fn default_config_paths() -> Vec<PathBuf> {
@@ -1339,6 +1387,84 @@ obscura_stealth = false
         let text = error.to_string();
         assert!(text.contains("Invalid TOML"));
         assert!(text.contains("expected"));
+    }
+
+    #[test]
+    fn ensure_default_mcp_servers_injects_agentmemory_when_provider_active() {
+        // Default config has provider=agentmemory → the agentmemory stdio
+        // MCP server is injected natively so all agent paths expose the
+        // 53-tool memory surface.
+        let mut config = AppConfig::default();
+        assert!(config.memory.enabled);
+        assert_eq!(config.memory.provider, "agentmemory");
+        ensure_default_mcp_servers(&mut config);
+
+        let server = config
+            .mcp
+            .servers
+            .iter()
+            .find(|s| s.name == "agentmemory")
+            .expect("agentmemory server should be injected");
+        assert!(server.enabled);
+        assert_eq!(server.transport, McpTransportKind::Stdio);
+        assert_eq!(server.command.as_deref(), Some("npx"));
+        assert!(server.args.iter().any(|a| a == "@agentmemory/mcp"));
+        assert_eq!(
+            server.env.get("AGENTMEMORY_URL").map(String::as_str),
+            Some("http://localhost:3111")
+        );
+    }
+
+    #[test]
+    fn ensure_default_mcp_servers_respects_custom_url_and_existing_server() {
+        // Custom agentmemory_url + secret flow into the injected server env.
+        let mut config = AppConfig::default();
+        config.memory.agentmemory_url = Some("http://127.0.0.1:9999".to_string());
+        config.memory.agentmemory_secret = Some("s3cret".to_string());
+        ensure_default_mcp_servers(&mut config);
+        let server = config
+            .mcp
+            .servers
+            .iter()
+            .find(|s| s.name == "agentmemory")
+            .expect("agentmemory server should be injected");
+        assert_eq!(
+            server.env.get("AGENTMEMORY_URL").map(String::as_str),
+            Some("http://127.0.0.1:9999")
+        );
+        assert_eq!(
+            server.env.get("AGENTMEMORY_SECRET").map(String::as_str),
+            Some("s3cret"),
+            "configured secret must reach the injected MCP server env"
+        );
+
+        // A user-configured agentmemory server is never duplicated, even if
+        // they deliberately disabled it.
+        let mut config = AppConfig::default();
+        config.mcp.servers.push(McpServerConfig {
+            name: "agentmemory".to_string(),
+            enabled: false,
+            ..Default::default()
+        });
+        ensure_default_mcp_servers(&mut config);
+        assert_eq!(
+            config
+                .mcp
+                .servers
+                .iter()
+                .filter(|s| s.name == "agentmemory")
+                .count(),
+            1,
+            "existing agentmemory server must not be duplicated"
+        );
+    }
+
+    #[test]
+    fn ensure_default_mcp_servers_noop_for_builtin_provider() {
+        let mut config = AppConfig::default();
+        config.memory.provider = "builtin".to_string();
+        ensure_default_mcp_servers(&mut config);
+        assert!(config.mcp.servers.is_empty());
     }
 
     #[test]
