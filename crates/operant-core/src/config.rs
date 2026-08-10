@@ -803,6 +803,10 @@ pub struct AuxiliaryModelConfig {
 pub struct AuxiliaryModels {
     pub vision: Option<AuxiliaryModelConfig>,
     pub compression: Option<AuxiliaryModelConfig>,
+    /// LLM post-processing slot for `web_extract`. Currently **inert**: the
+    /// IGS-backed `web_extract` tool returns raw markdown directly (no LLM
+    /// summarization step), so this slot only takes effect once an
+    /// LLM-backed extractor is wired to it.
     pub web_extract: Option<AuxiliaryModelConfig>,
     pub image_gen: Option<AuxiliaryModelConfig>,
     pub embeddings: Option<AuxiliaryModelConfig>,

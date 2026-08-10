@@ -5510,7 +5510,7 @@ pub enum SearchMode {
 #[prefix = "memory"]
 #[allow(clippy::struct_excessive_bools)]
 pub struct MemoryConfig {
-    /// Where conversations, notes, and memories live. `sqlite` = embedded DB with optional vector + keyword hybrid search (fast, self-contained, default pick); `markdown` = plain-text files you can read and edit by hand (portable but no vector search); `lucid` = sync with the external `lucid-memory` CLI; `qdrant` = dedicated vector DB via `[memory.qdrant]` or `QDRANT_URL` env var; `agentmemory` = select agentmemory as the semantic memory backend (injects the native `agentmemory` MCP server into `[mcp.servers]` as a deferred server; the runtime memory layer maps it to the custom extension-point profile); `none` = disable memory entirely.
+    /// Where conversations, notes, and memories live. `sqlite` = embedded DB with optional vector + keyword hybrid search (fast, self-contained, default pick); `markdown` = plain-text files you can read and edit by hand (portable but no vector search); `lucid` = sync with the external `lucid-memory` CLI; `qdrant` = dedicated vector DB via `[memory.qdrant]` or `QDRANT_URL` env var; `agentmemory` = select agentmemory as the semantic memory backend (injects the native `agentmemory` MCP server into `[mcp.servers]` as a deferred server; the runtime memory layer uses the `agentmemory` REST backend via `AGENTMEMORY_URL`/`AGENTMEMORY_SECRET`); `none` = disable memory entirely.
     pub backend: String,
     /// Auto-save what *you* tell Operant into memory as conversation history — the agent's own replies are not saved. Turn off if you want memory to only hold things you explicitly record via the memory tool.
     pub auto_save: bool,

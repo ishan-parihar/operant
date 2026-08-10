@@ -23,6 +23,48 @@ fn press_key(code: KeyCode, modifiers: KeyModifiers) -> KeyEvent {
     }
 }
 
+// ---- MCP reconnect tick-drain tests (iter-326) ----
+
+#[test]
+fn drain_mcp_reconnect_status_renders_without_keystroke() {
+    let mut app = make_app();
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    app.mcp_reconnect_rx = Some(rx);
+    assert!(app.status_message.is_none());
+
+    // Simulate the background reconnect task posting updates — the drain
+    // runs on every frame (including tick frames with no input), so the
+    // completion message must surface with zero keystrokes.
+    tx.send("MCP reconnect initiated...".to_string()).unwrap();
+    tx.send(
+        "MCP reconnect complete in 1.9s — agentmemory backend: up, 53 tool(s) synced".to_string(),
+    )
+    .unwrap();
+
+    app.drain_mcp_reconnect_status();
+    assert_eq!(
+        app.status_message.as_deref(),
+        Some("MCP reconnect complete in 1.9s — agentmemory backend: up, 53 tool(s) synced")
+    );
+
+    // The channel is drained to empty — a second drain is a no-op and the
+    // last message still wins.
+    app.drain_mcp_reconnect_status();
+    assert_eq!(
+        app.status_message.as_deref(),
+        Some("MCP reconnect complete in 1.9s — agentmemory backend: up, 53 tool(s) synced")
+    );
+}
+
+#[test]
+fn drain_mcp_reconnect_status_is_noop_without_channel() {
+    let mut app = make_app();
+    app.mcp_reconnect_rx = None;
+    // Must not panic when no reconnect task ever ran.
+    app.drain_mcp_reconnect_status();
+    assert!(app.status_message.is_none());
+}
+
 // ---- normalize_char_with_shift tests ----
 
 #[test]

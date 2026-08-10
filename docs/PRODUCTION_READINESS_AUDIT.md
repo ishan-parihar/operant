@@ -100,13 +100,15 @@ igs-rust's `ObscuraManager` has no binary-path knob — only `IGS_CONFIG_DIR` (w
 
 ---
 
-## 6. Remaining gaps / recommendations (no code change yet)
+## 6. Remaining gaps / recommendations (all resolved — 2026-08-11)
 
 1. **~~Manual smoke test~~ — DONE via the live agentic-loop test (section 6b).** The user asked operant itself to exercise the tools; see the results and the two defects it flushed out (CDP persistent-socket bug, browser_cdp params-string bug).
-2. **igs-rust feature (upstream):** add a `binaryPath`/`OBSCURA_BIN` override to `ObscuraManager` so the sharing is bidirectional and configurable on the IGS side too (e.g. point IGS at `~/.operant/bin/obscura` or a user-chosen path). Out of operant's control; noted for the igs-rust repo.
-3. **`operant-tools` crate:** a second `WebSearchTool` exists at `crates/operant-tools/src/web_search_tool.rs` (plus an `operant-browser`-style naming in docs). Confirm whether `operant-tools` is wired into the runtime tool registry or is dead weight for the next dead-code pass.
-4. **Windows Obscura asset matching** only handles x86_64 (no aarch64-windows entry) — fine for now, note for cross-compile targets.
-5. **`web_extract` auxiliary model** slot exists in config but the IGS path returns raw markdown (no LLM post-processing) — intended; document that `auxiliary_models.web_extract` only applies when an LLM-backed extractor is wired.
+2. **~~igs-rust bidirectional binary override~~ — RESOLVED on both sides.** igs-rust already ships `ObscuraManager::explicit_binary_path()` honoring `OBSCURA_BIN` (env) then `obscura.binary_path` (v1.0.3+). This audit also added `OBSCURA_BIN` support to operant's `ObscuraProvider::resolve_obscura_binary()` with identical precedence (env → config → IGS-managed → operant-managed), so the sharing is now **bidirectional and configurable from either side**. 2 new precedence tests.
+3. **~~operant-tools `WebSearchTool`~~ — CONFIRMED WIRED, not dead weight.** `operant-runtime/src/tools/mod.rs` re-exports `operant_tools::web_search_tool::WebSearchTool` into the runtime tool registry (and `operant-tool-call-parser`/`operant-channels` reference the name). It is the runtime-stack equivalent of `operant-core::tools::web_tools::WebSearchTool` (CLI stack) — parallel-stack duplication, both wired, no removal warranted.
+4. **~~Windows Obscura asset matching~~ — FIXED.** `find_matching_asset` now maps `(windows, aarch64)` in addition to x86_64.
+5. **`web_extract` auxiliary model** slot is intentionally inert (IGS returns raw markdown; no LLM post-processing). Documented on the `auxiliary_models.web_extract` field (`operant-core/src/config.rs`).
+6. **Markdown renderer hygiene — FIXED.** Removed leftover per-frame `/tmp/render_markdown_*.log` debug writes from `tui/messages/markdown.rs` (a render-path file-I/O defect; the mimo-newline diagnostics they served are covered by the existing `normalize_markdown_newlines` tests).
+7. **Tick-based status-drain — now unit-tested.** `drain_mcp_reconnect_status` extracted from the inline frame-drain and covered by 2 unit tests (renders without a keystroke; no-op without a channel).
 
 ---
 
@@ -484,15 +486,20 @@ toolset — the runtime daemon / channels orchestrator (`McpRegistry`)
 exposes `memory_*` tools via `tool_search` without ever spawning `npx
 @agentmemory/mcp` at boot.
 
-**Remaining (architectural, not surgical):** the runtime agent's memory
-layer (`operant_memory::Memory`) still has no agentmemory provider —
-`memory.backend = "agentmemory"` resolves to the custom extension-point
-profile there. If a runtime-daemon deployment needs the hermes-parity
-`MemoryProvider` hooks (`prefetch`/`sync_turn`/`on_pre_compress`), port
-those into the runtime agent (option (a) of the original recommendation);
-otherwise the injected MCP server gives the model the memory tool surface
-while the CLI path keeps the full provider. Unifying the two config/memory
-stacks remains a deliberate, larger refactor.
+**Resolved (2026-08-11):** the runtime agent's memory layer now has a real
+agentmemory provider. New `operant-memory::AgentMemory` backend implements
+the `Memory` trait against the agentmemory REST API (`store` →
+`/agentmemory/remember`, `recall`/`get`/`list` → `/agentmemory/smart-search`,
+`health_check` → `/agentmemory/health`, env-configured via
+`AGENTMEMORY_URL`/`AGENTMEMORY_SECRET`), replacing the silent
+custom-extension-point → markdown fallback. `memory.backend =
+"agentmemory"` now selects it in `classify_memory_backend`, it is offered in
+`selectable_memory_backends()`, and `forget`/`count` return clear
+"unsupported by the agentmemory REST API" errors (the plugin only mirrors
+add/update writes; the verified REST surface is remember/smart-search/
+observe/context/session). Unifying the two config/memory stacks (CLI
+`MemoryProvider` trait vs runtime `Memory` trait) remains a deliberate,
+larger refactor — but each stack now has a first-class agentmemory provider.
 
 
 ## 7. Verification summary

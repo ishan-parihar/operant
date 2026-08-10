@@ -524,6 +524,19 @@ impl App {
 
     /// Run the TUI event loop. Returns `Some(input)` when the user submits
     /// a message, or `None` when the user quits.
+    /// Drain MCP reconnect status messages from the background reconnect
+    /// task. Runs on EVERY frame (tick drain) so a completion message
+    /// renders the moment it is posted — no keystroke required. The last
+    /// message wins; the channel is drained to empty so a burst of updates
+    /// collapses to the final state. (iter-326 — tick-based status drain.)
+    fn drain_mcp_reconnect_status(&mut self) {
+        if let Some(ref mut rx) = self.mcp_reconnect_rx {
+            while let Ok(msg) = rx.try_recv() {
+                self.status_message = Some(msg);
+            }
+        }
+    }
+
     /// Spawn the /mcp reconnect task: re-add all enabled servers by
     /// transport (HTTP/streamable-HTTP via `add_server`, stdio via
     /// `add_stdio_server`), warm the agentmemory backend first so its MCP
@@ -891,11 +904,7 @@ impl App {
             // — so the completion message renders the moment the task
             // finishes, without requiring a keystroke. (iter-326 —
             // tick-based status drain.)
-            if let Some(ref mut rx) = self.mcp_reconnect_rx {
-                while let Ok(msg) = rx.try_recv() {
-                    self.status_message = Some(msg);
-                }
-            }
+            self.drain_mcp_reconnect_status();
 
             // Drain voice transcription events (non-blocking).
             // When the background recording/transcription task emits a

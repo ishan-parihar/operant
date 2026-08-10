@@ -24,6 +24,8 @@ pub const MEMORY_CONTEXT_OPEN: &str = "[Memory context]";
 /// Closing delimiter for recalled memory injected into provider context.
 pub const MEMORY_CONTEXT_CLOSE: &str = "[/Memory context]";
 
+/// agentmemory REST backend (hybrid semantic memory via the local server).
+pub mod agentmemory;
 /// Audit-trail decorator backend (logs all operations to SQLite).
 #[allow(unused_imports)]
 pub mod audit;
@@ -78,6 +80,8 @@ pub mod traits;
 /// Vector math: cosine similarity, serialization, hybrid merge.
 pub mod vector;
 
+#[allow(unused_imports)]
+pub use agentmemory::AgentMemory;
 #[allow(unused_imports)]
 pub use audit::AuditedMemory;
 #[allow(unused_imports)]
@@ -173,6 +177,7 @@ where
         MemoryBackendKind::Qdrant | MemoryBackendKind::Markdown => {
             Ok(Box::new(MarkdownMemory::new(workspace_dir)))
         }
+        MemoryBackendKind::AgentMemory => Ok(Box::new(AgentMemory::new()?)),
         MemoryBackendKind::None => Ok(Box::new(NoneMemory::new())),
         MemoryBackendKind::Unknown => {
             tracing::warn!(
@@ -492,9 +497,13 @@ pub fn create_memory_with_storage_and_routes(
 /// Factory for migration tooling: build a backend (rejecting `none`)
 /// using default SQLite construction.
 pub fn create_memory_for_migration(backend: &str, workspace_dir: &Path) -> Result<Box<dyn Memory>> {
-    if matches!(classify_memory_backend(backend), MemoryBackendKind::None) {
+    if matches!(
+        classify_memory_backend(backend),
+        MemoryBackendKind::None | MemoryBackendKind::AgentMemory
+    ) {
         return Err(Error::message(
-            "memory backend 'none' disables persistence; choose sqlite, lucid, or markdown before migration",
+            "memory backend 'none' disables persistence and 'agentmemory' is an external service; \
+             choose sqlite, lucid, or markdown before migration",
         ));
     }
 
@@ -635,6 +644,35 @@ mod tests {
             error.to_string().contains("memory-postgres"),
             "error should mention the feature flag: {error}"
         );
+    }
+
+    #[test]
+    fn factory_agentmemory_uses_real_backend() {
+        let tmp = TempDir::new().unwrap();
+        let cfg = MemoryConfig {
+            backend: "agentmemory".into(),
+            ..MemoryConfig::default()
+        };
+        let mem = create_memory(&cfg, tmp.path(), None).unwrap();
+        assert_eq!(mem.name(), "agentmemory");
+        // Lazy construction: no server contact at boot, so creation must
+        // succeed even when the server is unreachable (per-call errors
+        // instead of failing boot).
+    }
+
+    #[tokio::test]
+    async fn factory_agentmemory_health_check_dead_server_is_false() {
+        let tmp = TempDir::new().unwrap();
+        let cfg = MemoryConfig {
+            backend: "agentmemory".into(),
+            ..MemoryConfig::default()
+        };
+        let mem = create_memory(&cfg, tmp.path(), None).unwrap();
+        assert_eq!(mem.name(), "agentmemory");
+        // 127.0.0.1:1 is an unroutable port unless a server is bound there,
+        // so health must report false without panicking.
+        let backend = AgentMemory::with_url("http://127.0.0.1:1", None);
+        assert!(!backend.health_check().await);
     }
 
     #[test]

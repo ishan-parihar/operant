@@ -170,36 +170,8 @@ pub fn render_markdown(text: &str, width: u16) -> Vec<Line<'static>> {
     // NOTE: This destroys markdown paragraph breaks (double \n), but the
     // garbled mid-word fragmentation is worse. The word_wrap function
     // handles line-breaking at the correct width.
-    // DEBUG: trace what text reaches render_markdown
-    {
-        let has_n = text.contains('\n');
-        let has_r = text.contains('\r');
-        if has_n || has_r {
-            let preview = if text.len() > 300 { &text[..300] } else { text };
-            let _ = std::fs::write(
-                "/tmp/render_markdown_debug.log",
-                format!(
-                    "DEBUG render_markdown: len={}, has_n={}, has_r={}, preview={:?}\n",
-                    text.len(),
-                    has_n,
-                    has_r,
-                    preview
-                ),
-            );
-        }
-    }
     let text = normalize_markdown_newlines(text).replace('\r', "");
     let all_lines: Vec<&str> = text.lines().collect();
-    // DEBUG: trace after sanitization
-    {
-        let has_n = text.contains('\n');
-        if has_n {
-            let _ = std::fs::write(
-                "/tmp/render_markdown_after_debug.log",
-                format!("AFTER sanitize: still has \\n! len={}\n", text.len()),
-            );
-        }
-    }
     let mut lines: Vec<Line<'static>> = Vec::new();
     let mut in_code_block = false;
     let mut code_lang = String::new();

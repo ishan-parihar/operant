@@ -178,15 +178,20 @@ impl ObscuraProvider {
 
     /// Resolve the Obscura binary to execute, in order:
     ///
-    /// 1. `tools.obscura_binary_path` config override
-    /// 2. The binary the IGS integration manages — `$IGS_CONFIG_DIR/bin/obscura`
+    /// 1. `OBSCURA_BIN` environment variable — mirrors igs-rust's
+    ///    `ObscuraManager::explicit_binary_path()` precedence exactly, so the
+    ///    sharing is **bidirectional**: whichever side points the other at its
+    ///    binary via env wins, and both run the same file.
+    /// 2. `tools.obscura_binary_path` config override
+    /// 3. The binary the IGS integration manages — `$IGS_CONFIG_DIR/bin/obscura`
     ///    or `~/.config/igs-mcp/bin/obscura`. igs-rust's `ObscuraManager`
-    ///    (`src/obscura.rs`) hardcodes that location and auto-downloads from
-    ///    the same `h4ckf0r0day/obscura` releases operant uses, so reusing it
-    ///    keeps the `browser` tool and the IGS web tools (web_search,
-    ///    web_scrape, web_extract, web.crawl) on the *exact same* binary —
-    ///    one download, no version drift.
-    /// 3. The operant-managed copy at `~/.operant/bin/obscura` (fallback for
+    ///    (`src/obscura.rs`) manages that location (honoring `OBSCURA_BIN`/
+    ///    `obscura.binary_path`) and auto-downloads from the same
+    ///    `h4ckf0r0day/obscura` releases operant uses, so reusing it keeps the
+    ///    `browser` tool and the IGS web tools (web_search, web_scrape,
+    ///    web_extract, web.crawl) on the *exact same* binary — one download,
+    ///    no version drift.
+    /// 4. The operant-managed copy at `~/.operant/bin/obscura` (fallback for
     ///    machines that never installed IGS).
     ///
     /// Returns the first path that exists; `None` when no binary is installed
@@ -197,11 +202,31 @@ impl ObscuraProvider {
     }
 
     /// Testable core of [`Self::resolve_obscura_binary`]: resolution order is
-    /// `config_override` → IGS-managed binary → operant-managed copy.
+    /// `OBSCURA_BIN` env → `config_override` → IGS-managed binary →
+    /// operant-managed copy.
     fn resolve_obscura_binary_with(
         config_override: Option<&std::path::Path>,
     ) -> Option<std::path::PathBuf> {
-        // 1. Explicit config override (must be a real file, not a directory).
+        // 1. OBSCURA_BIN env override (igs-rust precedence: env first). Must
+        //    be a real file — a missing env path falls through with a warning
+        //    so a stale env var can't silently break the browser.
+        if let Ok(env_bin) = std::env::var("OBSCURA_BIN")
+            && !env_bin.trim().is_empty()
+        {
+            let path = std::path::PathBuf::from(env_bin);
+            if path.is_file() {
+                tracing::debug!(
+                    path = %path.display(),
+                    "using OBSCURA_BIN override (shared with IGS)"
+                );
+                return Some(path);
+            }
+            tracing::warn!(
+                path = %path.display(),
+                "OBSCURA_BIN does not exist — falling back"
+            );
+        }
+        // 2. Explicit config override (must be a real file, not a directory).
         if let Some(path) = config_override {
             if path.is_file() {
                 return Some(path.to_path_buf());
@@ -211,12 +236,12 @@ impl ObscuraProvider {
                 "configured tools.obscura_binary_path does not exist — falling back"
             );
         }
-        // 2. IGS-managed binary (shared with the IGS integration).
+        // 3. IGS-managed binary (shared with the IGS integration).
         let igs_bin = Self::igs_config_dir().join("bin").join("obscura");
         if igs_bin.exists() {
             return Some(igs_bin);
         }
-        // 3. Operant-managed copy.
+        // 4. Operant-managed copy.
         let own = Self::default_bin_path();
         own.exists().then_some(own)
     }
@@ -329,6 +354,7 @@ impl ObscuraProvider {
             ("macos", "x86_64") => ("macos", "x86_64"),
             ("macos", "aarch64") => ("macos", "aarch64"),
             ("windows", "x86_64") => ("windows", "x86_64"),
+            ("windows", "aarch64") => ("windows", "aarch64"),
             _ => {
                 return Err(Error::Agent(format!(
                     "Unsupported platform: {} on {}",
@@ -858,6 +884,54 @@ mod tests {
         let _env = set_env_igs_config_dir(&dir);
         let result = ObscuraProvider::resolve_obscura_binary_with(Some(&missing));
         assert_eq!(result, Some(bin));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn resolve_obscura_bin_env_wins_over_config_and_igs() {
+        let _guard = env_lock().lock().unwrap();
+        let dir = temp_dir("env-bin");
+        let env_bin = dir.join("env-obscura");
+        std::fs::write(&env_bin, b"").unwrap();
+        let igs_bin = dir.join("igs-bin").join("obscura");
+        std::fs::create_dir_all(igs_bin.parent().unwrap()).unwrap();
+        std::fs::write(&igs_bin, b"").unwrap();
+        let _env = set_env_igs_config_dir(&dir.join("igs-bin"));
+        let previous = std::env::var_os("OBSCURA_BIN");
+        // SAFETY: test-only env mutation under exclusive lock; restored below.
+        unsafe { std::env::set_var("OBSCURA_BIN", &env_bin) };
+        let result = ObscuraProvider::resolve_obscura_binary_with(Some(&igs_bin));
+        match previous {
+            Some(value) => unsafe { std::env::set_var("OBSCURA_BIN", value) },
+            None => unsafe { std::env::remove_var("OBSCURA_BIN") },
+        }
+        assert_eq!(
+            result,
+            Some(env_bin),
+            "OBSCURA_BIN must win over both the config override and the IGS-managed binary"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn resolve_missing_obscura_bin_env_falls_through_to_config() {
+        let _guard = env_lock().lock().unwrap();
+        let dir = temp_dir("env-bin-missing");
+        let config_bin = dir.join("config-obscura");
+        std::fs::write(&config_bin, b"").unwrap();
+        let previous = std::env::var_os("OBSCURA_BIN");
+        // SAFETY: test-only env mutation under exclusive lock; restored below.
+        unsafe { std::env::set_var("OBSCURA_BIN", dir.join("nope")) };
+        let result = ObscuraProvider::resolve_obscura_binary_with(Some(&config_bin));
+        match previous {
+            Some(value) => unsafe { std::env::set_var("OBSCURA_BIN", value) },
+            None => unsafe { std::env::remove_var("OBSCURA_BIN") },
+        }
+        assert_eq!(
+            result,
+            Some(config_bin),
+            "a stale OBSCURA_BIN must not shadow a valid config override"
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 
