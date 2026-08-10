@@ -1610,8 +1610,10 @@ impl McpManager {
     ///
     /// Each tool is registered as `mcp_{server_name}/{tool_name}` to avoid
     /// collisions with built-in tools. Previously registered MCP tools are
-    /// unregistered before re-syncing.
-    pub async fn sync_tools_to_registry(&self, registry: &ToolRegistry) {
+    /// unregistered before re-syncing. Returns the number of namespaced
+    /// tools registered, so callers (e.g. the TUI /mcp reconnect task) can
+    /// surface a precise "N tools synced" completion message.
+    pub async fn sync_tools_to_registry(&self, registry: &ToolRegistry) -> usize {
         // Unregister all previously synced tools
         let mut prev_names = self.registered_tool_names.write().await;
         for name in prev_names.iter() {
@@ -1621,6 +1623,7 @@ impl McpManager {
 
         // Register current tools with namespaced names
         let servers = self.servers.read().await;
+        let mut registered = 0usize;
         for (server_name, transport) in servers.iter() {
             if !transport.is_connected().await {
                 continue;
@@ -1634,9 +1637,11 @@ impl McpManager {
                     .is_ok()
                 {
                     prev_names.push(name);
+                    registered += 1;
                 }
             }
         }
+        registered
     }
 }
 
@@ -1664,5 +1669,53 @@ mod tests {
     async fn test_mcp_manager_empty() {
         let manager = McpManager::new();
         assert!(manager.server_names().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_sync_tools_to_registry_returns_registered_count() {
+        // Fabricate a connected HTTP client with two tools. The fields are
+        // Arc-shared and reachable from this child test module.
+        let client = McpClient::new("http://localhost:9999", None);
+        *client.connected.write().await = true;
+        let def = |name: &str| McpToolDefinition {
+            name: name.to_string(),
+            description: "test tool".to_string(),
+            input_schema: serde_json::json!({ "type": "object" }),
+        };
+        client
+            .tools
+            .write()
+            .await
+            .push(McpTool::new(client.clone(), def("search")));
+        client
+            .tools
+            .write()
+            .await
+            .push(McpTool::new(client.clone(), def("save")));
+
+        let manager = McpManager::new();
+        manager
+            .servers
+            .write()
+            .await
+            .insert("test-server".to_string(), McpTransport::Http(client));
+
+        let registry = ToolRegistry::new(std::time::Duration::from_secs(10));
+        let count = manager.sync_tools_to_registry(&registry).await;
+        assert_eq!(count, 2, "both tools must be registered");
+
+        // Tools are namespaced mcp_{server}_{tool} in the live registry.
+        let names: Vec<String> = registry
+            .get_schemas()
+            .await
+            .iter()
+            .map(|s| s.name.clone())
+            .collect();
+        assert!(names.iter().any(|n| n == "mcp_test_server_search"));
+        assert!(names.iter().any(|n| n == "mcp_test_server_save"));
+
+        // Re-syncing is idempotent and reports the same count.
+        let count2 = manager.sync_tools_to_registry(&registry).await;
+        assert_eq!(count2, 2);
     }
 }

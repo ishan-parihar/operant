@@ -490,6 +490,10 @@ impl TuiApp {
             // Clone of the agent's live registry so /mcp reconnect can
             // materialize MCP tools mid-session via sync_tools_to_registry.
             self.app.core_tool_registry = Some(agent.registry());
+            // Handle to the agent's memory provider so the /mcp reconnect
+            // task can ensure the agentmemory backend is up before
+            // connecting its MCP server (fast reconnect).
+            self.app.core_memory_provider = agent.memory_provider();
         }
 
         // Create the user-question channel and register the sender with
@@ -580,6 +584,9 @@ impl TuiApp {
                             // Send-safe ToolRegistry handle so deferred MCP
                             // servers materialize their tools mid-session.
                             let registry_clone = self.app.core_tool_registry.clone();
+                            // Send-safe memory provider handle so the task
+                            // can warm the agentmemory backend first.
+                            let memory_provider_clone = self.app.core_memory_provider.clone();
                             // Extract server configs into Send-safe tuples.
                             let server_configs: Vec<McpServerConfigTuple> = self
                                 .app
@@ -602,12 +609,50 @@ impl TuiApp {
                                 .collect();
                             // Status channel so the background task can report
                             // what reconnected (and what failed) back to the
-                            // run loop, which drains it like bridge_state_rx.
+                            // run loop. Drained EVERY frame (tick drain) so
+                            // the completion message renders without a
+                            // keystroke.
                             let (reconnect_tx, reconnect_rx) =
                                 tokio::sync::mpsc::unbounded_channel::<String>();
                             self.app.mcp_reconnect_rx = Some(reconnect_rx);
                             tokio::spawn(async move {
                                 use operant_core::config::McpTransportKind;
+                                let started = std::time::Instant::now();
+                                // Ensure the agentmemory REST backend is up
+                                // BEFORE connecting its MCP stdio server: the
+                                // MCP server's initialize handshake completes
+                                // in <1s against a live backend, but retries
+                                // for minutes against a cold one (the
+                                // observed 2.5-min reconnect). The provider
+                                // auto-spawns the backend when
+                                // memory.agentmemory_auto_spawn is enabled
+                                // (default). (iter-326 — native agent-memory
+                                // lifecycle management.)
+                                let mut backend_status = String::new();
+                                if let Some(ref provider) = memory_provider_clone
+                                    && provider.name() == "agentmemory"
+                                {
+                                    let was_up = provider.check_health().await;
+                                    // Time-box the backend warmup to 15s so a
+                                    // genuinely unreachable backend (missing
+                                    // npx, auto_spawn disabled) fails fast
+                                    // with a clear status instead of blocking
+                                    // the reconnect for the full 60s
+                                    // SPAWN_WARMUP_TIMEOUT.
+                                    let ensured = tokio::time::timeout(
+                                        std::time::Duration::from_secs(15),
+                                        provider.ensure_server(),
+                                    )
+                                    .await
+                                    .unwrap_or(false);
+                                    backend_status = if was_up {
+                                        "agentmemory backend: already up".to_string()
+                                    } else if ensured {
+                                        "agentmemory backend: spawned".to_string()
+                                    } else {
+                                        "agentmemory backend: unreachable".to_string()
+                                    };
+                                }
                                 let mut reconnected = Vec::new();
                                 let mut failures = Vec::new();
                                 for (
@@ -660,13 +705,15 @@ impl TuiApp {
                                 // (incl. any deferred ones the user just
                                 // reconnected) into the live registry so the
                                 // next turn sees them without a restart.
-                                let mut tools_synced = false;
-                                if let Some(registry) = registry_clone {
-                                    mcp_clone.sync_tools_to_registry(&registry).await;
-                                    tools_synced = true;
+                                // sync_tools_to_registry returns the count of
+                                // namespaced tools registered.
+                                let mut tool_count = 0usize;
+                                if let Some(ref registry) = registry_clone {
+                                    tool_count = mcp_clone.sync_tools_to_registry(registry).await;
                                 }
+                                let elapsed = started.elapsed().as_secs_f64();
                                 let mut msg = format!(
-                                    "MCP reconnect complete — {} server(s) reconnected: {}.",
+                                    "MCP reconnect complete in {elapsed:.1}s — {} server(s) reconnected: {}.",
                                     reconnected.len(),
                                     if reconnected.is_empty() {
                                         "none".to_string()
@@ -674,7 +721,14 @@ impl TuiApp {
                                         reconnected.join(", ")
                                     }
                                 );
-                                if !tools_synced {
+                                if !backend_status.is_empty() {
+                                    msg.push_str(&format!(" {}", backend_status));
+                                }
+                                if registry_clone.is_some() {
+                                    msg.push_str(&format!(
+                                        " {tool_count} tool(s) synced to the agent registry."
+                                    ));
+                                } else {
                                     msg.push_str(" (tools not synced — no live registry attached)");
                                 }
                                 if !failures.is_empty() {
@@ -713,14 +767,6 @@ impl TuiApp {
                             self.app
                                 .transcript_version
                                 .set(self.app.transcript_version.get().wrapping_add(1));
-                        }
-                    }
-
-                    // Poll MCP reconnect status messages from the background
-                    // reconnect task (what reconnected, what failed).
-                    if let Some(ref mut rx) = self.app.mcp_reconnect_rx {
-                        while let Ok(msg) = rx.try_recv() {
-                            self.app.status_message = Some(msg);
                         }
                     }
 
@@ -937,6 +983,10 @@ impl TuiApp {
             // Clone of the agent's live registry so /mcp reconnect can
             // materialize MCP tools mid-session via sync_tools_to_registry.
             self.app.core_tool_registry = Some(agent.registry());
+            // Handle to the agent's memory provider so the /mcp reconnect
+            // task can ensure the agentmemory backend is up before
+            // connecting its MCP server (fast reconnect).
+            self.app.core_memory_provider = agent.memory_provider();
         }
 
         let (uq_tx, uq_rx) = tokio::sync::mpsc::unbounded_channel::<

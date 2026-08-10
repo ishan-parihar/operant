@@ -175,8 +175,11 @@ impl AgentMemoryProvider {
     }
 
     /// Auto-spawn the agentmemory server if enabled and not already running.
-    /// Returns true when a server is (or just became) reachable.
-    async fn ensure_server(&self) -> bool {
+    /// Returns true when a server is (or just became) reachable. Public so
+    /// the TUI /mcp reconnect path can warm the backend before connecting
+    /// the MCP stdio server; the `MemoryProvider::ensure_server` trait
+    /// method delegates here. (iter-326 — native lifecycle management.)
+    pub async fn ensure_backend(&self) -> bool {
         if self.check_health().await {
             return true;
         }
@@ -218,7 +221,8 @@ impl AgentMemoryProvider {
         }
         drop(spawned);
 
-        // Wait for warmup: poll health every 1s up to SPAWN_WARMUP_TIMEOUT.
+        // Wait for warmup: poll health every 250ms up to
+        // SPAWN_WARMUP_TIMEOUT (fast bring-up, feels instant to the user).
         let deadline = tokio::time::Instant::now() + SPAWN_WARMUP_TIMEOUT;
         while tokio::time::Instant::now() < deadline {
             if self.check_health().await {
@@ -228,7 +232,7 @@ impl AgentMemoryProvider {
                 );
                 return true;
             }
-            tokio::time::sleep(Duration::from_secs(1)).await;
+            tokio::time::sleep(Duration::from_millis(250)).await;
         }
         tracing::warn!(
             "agentmemory server did not become reachable within {SPAWN_WARMUP_TIMEOUT:?}"
@@ -428,10 +432,22 @@ impl crate::memory_provider::MemoryProvider for AgentMemoryProvider {
         self.reachable.load(Ordering::Relaxed)
     }
 
+    async fn check_health(&self) -> bool {
+        // Explicit UFCS to the inherent HTTP probe (refreshes the cached
+        // reachable flag) — avoids relying on inherent-over-trait method
+        // shadowing, which a future refactor could silently break.
+        AgentMemoryProvider::check_health(self).await
+    }
+
+    async fn ensure_server(&self) -> bool {
+        // Delegate to the inherent spawn/health lifecycle helper.
+        self.ensure_backend().await
+    }
+
     async fn initialize(&self, session_id: &str) -> Result<()> {
         // Best-effort: spawn + warmup if needed. Never fails the startup —
         // an unreachable server degrades gracefully at call time.
-        if !self.ensure_server().await {
+        if !self.ensure_backend().await {
             tracing::warn!(
                 "agentmemory not reachable at {} — memory hooks will no-op until the server starts",
                 self.base_url

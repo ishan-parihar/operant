@@ -217,8 +217,15 @@ pub struct App {
     /// (iter-93 reconnect parity — wire stdio reconnect + tool sync.)
     pub core_tool_registry: Option<operant_core::tools::ToolRegistry>,
     /// Receiver for status messages produced by the background MCP reconnect
-    /// task. Drained in the run loop (mirrors bridge_state_rx).
+    /// task. Drained every frame (tick drain) so the completion message
+    /// renders without requiring a keystroke.
     pub mcp_reconnect_rx: Option<tokio::sync::mpsc::UnboundedReceiver<String>>,
+    /// Handle to the agent's long-term memory provider so the /mcp reconnect
+    /// task can ensure the agentmemory backend is up before connecting its
+    /// MCP server — fast reconnect instead of a cold-backend wait.
+    /// (iter-326 — native agent-memory lifecycle management.)
+    pub core_memory_provider:
+        Option<std::sync::Arc<dyn operant_core::memory_provider::MemoryProvider>>,
     /// Agent steer queue handle. Set by TuiApp::run after create_runtime_agent.
     /// When the user types while a turn is streaming, the input is pushed here
     /// so the agent sees it as a steer directive at the next iteration boundary.
@@ -705,6 +712,18 @@ impl App {
                     // "[user dismissed the question]".
                     self.ask_user_dialog
                         .open(req.question, req.choices, req.reply_tx);
+                }
+            }
+
+            // Drain MCP reconnect status messages from the background
+            // reconnect task (what reconnected, what failed, tools synced).
+            // This runs on EVERY frame — including tick frames with no input
+            // — so the completion message renders the moment the task
+            // finishes, without requiring a keystroke. (iter-326 —
+            // tick-based status drain.)
+            if let Some(ref mut rx) = self.mcp_reconnect_rx {
+                while let Ok(msg) = rx.try_recv() {
+                    self.status_message = Some(msg);
                 }
             }
 

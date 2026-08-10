@@ -443,6 +443,23 @@ deferral mechanism at all.
   `&str` Values, await hoisted out of a `debug!` field), which also unblocks
   stdio MCP in any future `tokio::spawn` context.
 
+  **Fixed (iter-326 — native agent-memory lifecycle + fast reconnect):**
+  - The reconnect task now warms the agentmemory REST backend **before**
+    connecting its MCP stdio server: `MemoryProvider::ensure_server`
+    (default `true`; agentmemory overrides with health-check + managed
+    auto-spawn via `agentmemory_auto_spawn`) is called first, so the MCP
+    initialize handshake completes in <1s instead of the observed ~2.5 min
+    cold-backend wait. `check_health`/`ensure_server` became defaulted
+    trait methods (`AgentMemoryProvider::ensure_backend` is the public
+    inherent lifecycle helper); `OperantAgent::memory_provider()` exposes
+    the provider to the TUI, stored as `App::core_memory_provider`.
+  - The completion message is now rich: elapsed time, per-server outcome,
+    agentmemory backend state (already up / spawned / unreachable), and the
+    exact tool count from `sync_tools_to_registry` (now returns `usize`).
+  - Status channels are drained **every frame** (tick drain in `App::run`,)
+    not only on input — the reconnect completion renders the moment it
+    finishes, no keystroke needed.
+
 ### 6.5.3 operant-channels orchestrator config-schema gap — ✅ MCP injection implemented
 
 **Root cause:** two parallel config systems.

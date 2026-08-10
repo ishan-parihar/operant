@@ -552,6 +552,14 @@ impl OperantAgent {
         self.registry.clone()
     }
 
+    /// Return the attached long-term memory provider (if any). The TUI uses
+    /// this to warm the agentmemory backend before a mid-session /mcp
+    /// reconnect, so the MCP initialize handshake completes fast.
+    /// (iter-326 — native agent-memory lifecycle management.)
+    pub fn memory_provider(&self) -> Option<Arc<dyn crate::memory_provider::MemoryProvider>> {
+        self.memory_provider.clone()
+    }
+
     pub fn steer_queue_handle(&self) -> Arc<tokio::sync::Mutex<Vec<String>>> {
         Arc::clone(&self.steer_queue)
     }

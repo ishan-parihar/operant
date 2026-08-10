@@ -190,6 +190,26 @@ pub trait MemoryProvider: Send + Sync {
     /// Connect, create tables, warm up.  Called once at startup.
     async fn initialize(&self, session_id: &str) -> Result<()>;
 
+    /// Probe whether the provider's backing service is currently reachable.
+    /// Default: the cached availability flag (file-backed providers are
+    /// always available). Providers with a live service (agentmemory)
+    /// override with a real health probe that updates the cached flag.
+    /// (iter-326 — lets the /mcp reconnect path report backend state.)
+    async fn check_health(&self) -> bool {
+        self.is_available()
+    }
+
+    /// Ensure the provider's backing service is reachable, spawning it when
+    /// the provider supports managed auto-spawn (e.g. agentmemory's REST
+    /// server). Returns true when the service is (or just became) ready.
+    /// Default: always ready — file-backed providers have no external
+    /// service. (iter-326 — lets the /mcp reconnect path warm the
+    /// agentmemory backend BEFORE connecting its MCP server, so the MCP
+    /// initialize handshake completes in <1s instead of minutes.)
+    async fn ensure_server(&self) -> bool {
+        true
+    }
+
     /// Static text for the system prompt (instructions / status line).
     fn system_prompt_block(&self) -> String {
         String::new()
@@ -418,5 +438,22 @@ mod tests {
     fn test_build_disabled_falls_back_to_builtin() {
         let p = build_memory_provider("disabled", std::path::PathBuf::from("/tmp"));
         assert_eq!(p.name(), "builtin");
+    }
+
+    #[tokio::test]
+    async fn test_trait_defaults_check_health_and_ensure_server() {
+        // Providers without a managed external service must report
+        // availability via the cached flag (check_health default) and be
+        // always-ready for the /mcp reconnect warm-up (ensure_server
+        // default). (iter-326 — native agent-memory lifecycle.)
+        let p = build_memory_provider("builtin", std::path::PathBuf::from("/tmp"));
+        assert!(
+            p.check_health().await,
+            "builtin default check_health must report is_available()"
+        );
+        assert!(
+            p.ensure_server().await,
+            "builtin default ensure_server must be always-ready"
+        );
     }
 }
