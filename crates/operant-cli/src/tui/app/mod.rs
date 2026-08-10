@@ -524,6 +524,167 @@ impl App {
 
     /// Run the TUI event loop. Returns `Some(input)` when the user submits
     /// a message, or `None` when the user quits.
+    /// Spawn the /mcp reconnect task: re-add all enabled servers by
+    /// transport (HTTP/streamable-HTTP via `add_server`, stdio via
+    /// `add_stdio_server`), warm the agentmemory backend first so its MCP
+    /// initialize handshake completes in <1s, sync the live `ToolRegistry`,
+    /// and report a rich completion message through `mcp_reconnect_rx` —
+    /// drained every frame (tick-based status drain), so it renders
+    /// without a keystroke. Dispatched from the inner loop so the MCP
+    /// panel 'r' key acts immediately, without waiting for a prompt
+    /// submit. (iter-326 — native agent-memory lifecycle + tick drain.)
+    fn start_mcp_reconnect(&mut self) {
+        let Some(ref mcp) = self.core_mcp_manager else {
+            self.status_message =
+                Some("MCP reconnect requested but no McpManager is attached.".to_string());
+            return;
+        };
+        // Send-safe copy of each server config, moved into the spawned
+        // task (the AppConfig itself contains non-Send tracing types via
+        // the McpManager's internal spans). Aliased so the tuple isn't
+        // repeated inline (clippy::type_complexity).
+        type ServerCfg = (
+            String,
+            operant_core::config::McpTransportKind,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Vec<String>,
+            std::collections::HashMap<String, String>,
+            bool,
+        );
+        let mcp_clone = std::sync::Arc::clone(mcp);
+        // Send-safe ToolRegistry handle so deferred MCP servers
+        // materialize their tools mid-session.
+        let registry_clone = self.core_tool_registry.clone();
+        // Send-safe memory provider handle so the task can warm the
+        // agentmemory backend first.
+        let memory_provider_clone = self.core_memory_provider.clone();
+        let server_configs: Vec<ServerCfg> = self
+            .config
+            .mcp
+            .servers
+            .iter()
+            .map(|s| {
+                (
+                    s.name.clone(),
+                    s.transport.clone(),
+                    s.url.clone(),
+                    s.auth_token.clone(),
+                    s.command.clone(),
+                    s.args.clone(),
+                    s.env.clone(),
+                    s.enabled,
+                )
+            })
+            .collect();
+        // Status channel so the background task can report what reconnected
+        // (and what failed) back to the run loop. Drained EVERY frame (tick
+        // drain) so the completion message renders without a keystroke.
+        let (reconnect_tx, reconnect_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        self.mcp_reconnect_rx = Some(reconnect_rx);
+        tokio::spawn(async move {
+            use operant_core::config::McpTransportKind;
+            let started = std::time::Instant::now();
+            // Ensure the agentmemory REST backend is up BEFORE connecting
+            // its MCP stdio server: the MCP server's initialize handshake
+            // completes in <1s against a live backend, but retries for
+            // minutes against a cold one (the observed 2.5-min reconnect).
+            // The provider auto-spawns the backend when
+            // memory.agentmemory_auto_spawn is enabled (default).
+            let mut backend_status = String::new();
+            if let Some(ref provider) = memory_provider_clone
+                && provider.name() == "agentmemory"
+            {
+                let was_up = provider.check_health().await;
+                // Time-box the backend warmup to 15s so a genuinely
+                // unreachable backend (missing npx, auto_spawn disabled)
+                // fails fast with a clear status instead of blocking the
+                // reconnect for the full 60s SPAWN_WARMUP_TIMEOUT.
+                let ensured = tokio::time::timeout(
+                    std::time::Duration::from_secs(15),
+                    provider.ensure_server(),
+                )
+                .await
+                .unwrap_or(false);
+                backend_status = if was_up {
+                    "agentmemory backend: already up".to_string()
+                } else if ensured {
+                    "agentmemory backend: spawned".to_string()
+                } else {
+                    "agentmemory backend: unreachable".to_string()
+                };
+            }
+            let mut reconnected = Vec::new();
+            let mut failures = Vec::new();
+            for (name, transport, url, auth_token, command, args, env, enabled) in server_configs {
+                if !enabled {
+                    continue;
+                }
+                // Remove first (no-op if not present).
+                let _ = mcp_clone.remove_server(&name).await;
+                // Re-add based on transport.
+                let result = match transport {
+                    McpTransportKind::Http | McpTransportKind::StreamableHttp => {
+                        if let Some(url) = url {
+                            mcp_clone.add_server(&name, url, auth_token).await
+                        } else {
+                            Err(operant_core::error::Error::Agent(format!(
+                                "no URL configured for {name}"
+                            )))
+                        }
+                    }
+                    McpTransportKind::Stdio => match command {
+                        Some(command) => {
+                            mcp_clone.add_stdio_server(&name, command, args, env).await
+                        }
+                        None => Err(operant_core::error::Error::Agent(format!(
+                            "no command configured for stdio server {name}"
+                        ))),
+                    },
+                };
+                match result {
+                    Ok(()) => reconnected.push(name),
+                    Err(e) => failures.push(format!("{name}: {e}")),
+                }
+            }
+            // Materialize tools for every connected server (incl. any
+            // deferred ones the user just reconnected) into the live
+            // registry so the next turn sees them without a restart.
+            // sync_tools_to_registry returns the count of namespaced tools.
+            let mut tool_count = 0usize;
+            if let Some(ref registry) = registry_clone {
+                tool_count = mcp_clone.sync_tools_to_registry(registry).await;
+            }
+            let elapsed = started.elapsed().as_secs_f64();
+            let mut msg = format!(
+                "MCP reconnect complete in {elapsed:.1}s — {} server(s) reconnected: {}.",
+                reconnected.len(),
+                if reconnected.is_empty() {
+                    "none".to_string()
+                } else {
+                    reconnected.join(", ")
+                }
+            );
+            if !backend_status.is_empty() {
+                msg.push_str(&format!(" {}", backend_status));
+            }
+            if registry_clone.is_some() {
+                msg.push_str(&format!(
+                    " {tool_count} tool(s) synced to the agent registry."
+                ));
+            } else {
+                msg.push_str(" (tools not synced — no live registry attached)");
+            }
+            if !failures.is_empty() {
+                msg.push_str(&format!(" Failed: {}", failures.join("; ")));
+            }
+            let _ = reconnect_tx.send(msg);
+        });
+        self.status_message =
+            Some("MCP reconnect initiated — servers will reconnect in the background.".to_string());
+    }
+
     pub fn run<B: ratatui::backend::Backend>(
         &mut self,
         terminal: &mut Terminal<B>,
@@ -713,6 +874,15 @@ impl App {
                     self.ask_user_dialog
                         .open(req.question, req.choices, req.reply_tx);
                 }
+            }
+
+            // Dispatch a pending /mcp reconnect request immediately. The
+            // MCP panel 'r' key sets this flag; App::run only returns to
+            // the adapter on prompt submit, so the dispatch must happen
+            // here — on the very next frame after the keypress — instead
+            // of waiting for the next Enter. (iter-326 — 'r' acts now.)
+            if self.take_pending_mcp_reconnect() {
+                self.start_mcp_reconnect();
             }
 
             // Drain MCP reconnect status messages from the background
