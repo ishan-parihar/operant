@@ -5,10 +5,12 @@ use super::config::Settings;
 use crate::commands::CommandResult;
 
 /// Send-safe copy of an MCP server config, moved into spawned tasks:
-/// (name, url, auth_token, args, env, enabled). Aliased so the spawned-task
-/// tuple isn't repeated inline (clippy::type_complexity).
+/// (name, transport, url, auth_token, command, args, env, enabled). Aliased
+/// so the spawned-task tuple isn't repeated inline (clippy::type_complexity).
 type McpServerConfigTuple = (
     String,
+    operant_core::config::McpTransportKind,
+    Option<String>,
     Option<String>,
     Option<String>,
     Vec<String>,
@@ -485,6 +487,9 @@ impl TuiApp {
         self.app.core_mcp_manager = Some(std::sync::Arc::new(mcp_manager));
         if let Some(ref agent) = agent {
             self.app.steer_queue_handle = Some(agent.steer_queue_handle());
+            // Clone of the agent's live registry so /mcp reconnect can
+            // materialize MCP tools mid-session via sync_tools_to_registry.
+            self.app.core_tool_registry = Some(agent.registry());
         }
 
         // Create the user-question channel and register the sender with
@@ -563,14 +568,18 @@ impl TuiApp {
                         ));
                     }
                     if self.app.take_pending_mcp_reconnect() {
-                        // Real MCP reconnect: re-add all configured servers.
+                        // Real MCP reconnect: re-add all configured servers,
+                        // then sync their tools into the live ToolRegistry.
                         // (iter-93 — closes the /mcp reconnect parity gap.)
                         // We extract the server configs into a plain Vec of
-                        // tuples first (so the async block doesn't capture
-                        // the AppConfig, which contains non-Send tracing
-                        // types via the McpManager's internal spans).
+                        // Send-safe tuples first (so the async block doesn't
+                        // capture the AppConfig, which contains non-Send
+                        // tracing types via the McpManager's internal spans).
                         if let Some(ref mcp) = self.app.core_mcp_manager {
                             let mcp_clone = std::sync::Arc::clone(mcp);
+                            // Send-safe ToolRegistry handle so deferred MCP
+                            // servers materialize their tools mid-session.
+                            let registry_clone = self.app.core_tool_registry.clone();
                             // Extract server configs into Send-safe tuples.
                             let server_configs: Vec<McpServerConfigTuple> = self
                                 .app
@@ -581,32 +590,97 @@ impl TuiApp {
                                 .map(|s| {
                                     (
                                         s.name.clone(),
+                                        s.transport.clone(),
                                         s.url.clone(),
                                         s.auth_token.clone(),
+                                        s.command.clone(),
                                         s.args.clone(),
                                         s.env.clone(),
                                         s.enabled,
                                     )
                                 })
                                 .collect();
+                            // Status channel so the background task can report
+                            // what reconnected (and what failed) back to the
+                            // run loop, which drains it like bridge_state_rx.
+                            let (reconnect_tx, reconnect_rx) =
+                                tokio::sync::mpsc::unbounded_channel::<String>();
+                            self.app.mcp_reconnect_rx = Some(reconnect_rx);
                             tokio::spawn(async move {
-                                for (name, url, auth_token, args, env, enabled) in server_configs {
+                                use operant_core::config::McpTransportKind;
+                                let mut reconnected = Vec::new();
+                                let mut failures = Vec::new();
+                                for (
+                                    name,
+                                    transport,
+                                    url,
+                                    auth_token,
+                                    command,
+                                    args,
+                                    env,
+                                    enabled,
+                                ) in server_configs
+                                {
                                     if !enabled {
                                         continue;
                                     }
                                     // Remove first (no-op if not present).
                                     let _ = mcp_clone.remove_server(&name).await;
                                     // Re-add based on transport.
-                                    if let Some(url) = url {
-                                        let _ = mcp_clone.add_server(&name, url, auth_token).await;
+                                    let result = match transport {
+                                        McpTransportKind::Http
+                                        | McpTransportKind::StreamableHttp => {
+                                            if let Some(url) = url {
+                                                mcp_clone.add_server(&name, url, auth_token).await
+                                            } else {
+                                                Err(operant_core::error::Error::Agent(format!(
+                                                    "no URL configured for {name}"
+                                                )))
+                                            }
+                                        }
+                                        McpTransportKind::Stdio => match command {
+                                            Some(command) => {
+                                                mcp_clone
+                                                    .add_stdio_server(&name, command, args, env)
+                                                    .await
+                                            }
+                                            None => {
+                                                Err(operant_core::error::Error::Agent(format!(
+                                                    "no command configured for stdio server {name}"
+                                                )))
+                                            }
+                                        },
+                                    };
+                                    match result {
+                                        Ok(()) => reconnected.push(name),
+                                        Err(e) => failures.push(format!("{name}: {e}")),
                                     }
-                                    // Note: stdio servers need a command, which
-                                    // we didn't capture here. SSE servers need
-                                    // add_sse_server. For now, HTTP is the
-                                    // primary path; stdio/SSE reconnect is a
-                                    // future enhancement.
-                                    let _ = (args, env);
                                 }
+                                // Materialize tools for every connected server
+                                // (incl. any deferred ones the user just
+                                // reconnected) into the live registry so the
+                                // next turn sees them without a restart.
+                                let mut tools_synced = false;
+                                if let Some(registry) = registry_clone {
+                                    mcp_clone.sync_tools_to_registry(&registry).await;
+                                    tools_synced = true;
+                                }
+                                let mut msg = format!(
+                                    "MCP reconnect complete — {} server(s) reconnected: {}.",
+                                    reconnected.len(),
+                                    if reconnected.is_empty() {
+                                        "none".to_string()
+                                    } else {
+                                        reconnected.join(", ")
+                                    }
+                                );
+                                if !tools_synced {
+                                    msg.push_str(" (tools not synced — no live registry attached)");
+                                }
+                                if !failures.is_empty() {
+                                    msg.push_str(&format!(" Failed: {}", failures.join("; ")));
+                                }
+                                let _ = reconnect_tx.send(msg);
                             });
                             self.app.status_message = Some(
                                 "MCP reconnect initiated — servers will reconnect in the background.".to_string()
@@ -639,6 +713,14 @@ impl TuiApp {
                             self.app
                                 .transcript_version
                                 .set(self.app.transcript_version.get().wrapping_add(1));
+                        }
+                    }
+
+                    // Poll MCP reconnect status messages from the background
+                    // reconnect task (what reconnected, what failed).
+                    if let Some(ref mut rx) = self.app.mcp_reconnect_rx {
+                        while let Ok(msg) = rx.try_recv() {
+                            self.app.status_message = Some(msg);
                         }
                     }
 
@@ -852,6 +934,9 @@ impl TuiApp {
         self.app.core_mcp_manager = Some(std::sync::Arc::new(mcp_manager));
         if let Some(ref agent) = agent {
             self.app.steer_queue_handle = Some(agent.steer_queue_handle());
+            // Clone of the agent's live registry so /mcp reconnect can
+            // materialize MCP tools mid-session via sync_tools_to_registry.
+            self.app.core_tool_registry = Some(agent.registry());
         }
 
         let (uq_tx, uq_rx) = tokio::sync::mpsc::unbounded_channel::<

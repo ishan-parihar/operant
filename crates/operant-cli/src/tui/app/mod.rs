@@ -210,6 +210,15 @@ pub struct App {
     /// (iter-93 — closes the /mcp reconnect parity gap.)
     /// (iter-208 — also used by load_mcp_servers for live tool/status data.)
     pub core_mcp_manager: Option<Arc<operant_core::mcp::McpManager>>,
+    /// Live ToolRegistry handle cloned from the agent, used to materialize
+    /// MCP tools mid-session. After a /mcp reconnect, the run loop calls
+    /// `McpManager::sync_tools_to_registry` on this handle so deferred
+    /// servers' tools appear without restarting operant.
+    /// (iter-93 reconnect parity — wire stdio reconnect + tool sync.)
+    pub core_tool_registry: Option<operant_core::tools::ToolRegistry>,
+    /// Receiver for status messages produced by the background MCP reconnect
+    /// task. Drained in the run loop (mirrors bridge_state_rx).
+    pub mcp_reconnect_rx: Option<tokio::sync::mpsc::UnboundedReceiver<String>>,
     /// Agent steer queue handle. Set by TuiApp::run after create_runtime_agent.
     /// When the user types while a turn is streaming, the input is pushed here
     /// so the agent sees it as a steer directive at the next iteration boundary.

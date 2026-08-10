@@ -127,6 +127,8 @@ impl App {
             bridge_state_rx: Some(bridge_state_rx),
             bridge_state_tx: Some(bridge_state_tx),
             core_mcp_manager: None,
+            core_tool_registry: None,
+            mcp_reconnect_rx: None,
             steer_queue_handle: None,
             pending_mcp_reconnect: false,
             pending_mcp_panel_auth: None,

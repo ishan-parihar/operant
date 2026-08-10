@@ -546,7 +546,10 @@ impl McpStdioClient {
 
     /// Connect to the MCP server by spawning the child process and initializing
     pub async fn connect(&self) -> Result<()> {
-        info!(command = %self.command, "Spawning MCP stdio server");
+        // Pass `&str` (not `%`) so the tracing field is Send-safe across the
+        // awaits below — `%` would capture a non-'static `Arguments` and make
+        // this future !Send (blocks tokio::spawn of stdio MCP reconnect).
+        info!(command = self.command.as_str(), "Spawning MCP stdio server");
 
         let mut cmd = tokio::process::Command::new(&self.command);
         cmd.args(&self.args)
@@ -608,22 +611,22 @@ impl McpStdioClient {
             Some(negotiated) => {
                 if negotiated != init_response.protocol_version.as_str() {
                     debug!(
-                        server_version = %init_response.protocol_version,
-                        negotiated_version = %negotiated,
+                        server_version = init_response.protocol_version.as_str(),
+                        negotiated_version = negotiated,
                         "MCP stdio server returned a non-exact version match — using negotiated version"
                     );
                 }
                 debug!(
-                    server = %init_response.server_info.name,
-                    version = %init_response.server_info.version,
-                    protocol = %negotiated,
+                    server = init_response.server_info.name.as_str(),
+                    version = init_response.server_info.version.as_str(),
+                    protocol = negotiated,
                     "MCP stdio server initialized"
                 );
             }
             None => {
                 warn!(
-                    server_version = %init_response.protocol_version,
-                    supported = ?MCP_SUPPORTED_VERSIONS,
+                    server_version = init_response.protocol_version.as_str(),
+                    supported = format!("{MCP_SUPPORTED_VERSIONS:?}").as_str(),
                     "MCP stdio server returned an unsupported protocolVersion. Continuing with best-effort compatibility."
                 );
             }
@@ -645,7 +648,10 @@ impl McpStdioClient {
         self.list_tools().await?;
 
         *self.connected.write().await = true;
-        info!(command = %self.command, "Connected to MCP stdio server");
+        info!(
+            command = self.command.as_str(),
+            "Connected to MCP stdio server"
+        );
 
         Ok(())
     }
@@ -661,13 +667,20 @@ impl McpStdioClient {
         // Kill child process if still running
         if let Some(mut child) = self.child.write().await.take() {
             if let Err(e) = child.kill().await {
-                warn!(error = %e, "Failed to kill MCP stdio server process");
+                let err = e.to_string();
+                warn!(
+                    error = err.as_str(),
+                    "Failed to kill MCP stdio server process"
+                );
             } else {
                 debug!("MCP stdio server process killed");
             }
         }
 
-        info!(command = %self.command, "Disconnected from MCP stdio server");
+        info!(
+            command = self.command.as_str(),
+            "Disconnected from MCP stdio server"
+        );
         Ok(())
     }
 
@@ -691,10 +704,12 @@ impl McpStdioClient {
 
         *self.tools.write().await = tools;
 
-        debug!(
-            count = self.tools.read().await.len(),
-            "Listed MCP stdio tools"
-        );
+        // Hoist the count out of the tracing macro — an `.await` inside a
+        // macro field captures a non-Send `dyn tracing::Value` across the
+        // await and makes this future !Send (blocks stdio MCP reconnect
+        // in a tokio::spawn).
+        let count = self.tools.read().await.len();
+        debug!(count, "Listed MCP stdio tools");
         Ok(self
             .tools
             .read()
@@ -848,10 +863,10 @@ impl McpStdioClient {
                 }
                 "notifications/progress" | "notifications/cancelled" => {
                     // Server-side notifications — log and ignore.
-                    debug!(method = %method, "MCP server notification received");
+                    debug!(method = method, "MCP server notification received");
                 }
                 _ => {
-                    debug!(method = %method, "Unknown MCP server request — ignoring");
+                    debug!(method = method, "Unknown MCP server request — ignoring");
                 }
             }
 

@@ -540,6 +540,18 @@ impl OperantAgent {
     /// `Option<Arc<tokio::sync::Mutex<Vec<String>>>>` field and pushes to it
     /// when the user types while a turn is streaming. (iter-92 — closes the
     /// /steer parity gap.)
+    /// Clone of the agent's live `ToolRegistry` handle.
+    ///
+    /// The registry shares its internal tool map via `Arc`, so a clone is a
+    /// cheap handle: tools registered through it (e.g. `McpManager::
+    /// sync_tools_to_registry` after a mid-session MCP reconnect) become
+    /// visible to the agent on its next turn, since `get_schemas()` reads
+    /// the shared map per iteration. (iter-93 reconnect parity — lets the
+    /// TUI materialize deferred MCP tools without restarting operant.)
+    pub fn registry(&self) -> ToolRegistry {
+        self.registry.clone()
+    }
+
     pub fn steer_queue_handle(&self) -> Arc<tokio::sync::Mutex<Vec<String>>> {
         Arc::clone(&self.steer_queue)
     }

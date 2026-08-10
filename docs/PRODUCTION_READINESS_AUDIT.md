@@ -429,13 +429,19 @@ deferral mechanism at all.
   registered nowhere in the CLI path (dead code); the tools existed only via
   the MCP server.
 
-  **Known limitation (documented, not a defect):** the TUI `/mcp` reconnect
-  path currently only re-adds HTTP servers (stdio reconnect is an explicit
-  "future enhancement") and does not re-run `sync_tools_to_registry` — so a
-  deferred stdio server cannot be materialized into the *live* registry
-  mid-session. It connects fine in a separate process (`operant mcp
-  test/connect`) and after a restart. Provider tools keep the memory surface
-  covered in the meantime.
+  **Fixed (iter-93 reconnect parity):** the TUI `/mcp` reconnect path now
+  re-adds *all* configured transports — HTTP / streamable-HTTP via
+  `add_server`, stdio via `add_stdio_server` (command + args + env) — then
+  re-runs `McpManager::sync_tools_to_registry` against the agent's live
+  `ToolRegistry` handle (`OperantAgent::registry()` clone; the tool map is
+  shared via `Arc`, so `get_schemas()` picks up the new tools on the next
+  turn). A deferred stdio server (e.g. the injected agentmemory server) can
+  therefore be materialized mid-session with `/mcp r` — no restart needed.
+  The background task reports what reconnected/failed through a status
+  channel drained in the run loop. As a side effect, `McpStdioClient`'s
+  async futures were made `Send`-safe (tracing `%`-captures replaced with
+  `&str` Values, await hoisted out of a `debug!` field), which also unblocks
+  stdio MCP in any future `tokio::spawn` context.
 
 ### 6.5.3 operant-channels orchestrator config-schema gap — ✅ MCP injection implemented
 
