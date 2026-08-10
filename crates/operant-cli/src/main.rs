@@ -1121,6 +1121,11 @@ async fn run_non_tui(
         println!("Trajectory recording enabled — run will be saved to ~/.operant/trajectories/");
     }
     let response = agent.run(query.to_string()).await?;
+    // Drain pending memory hooks (sync_turn → /observe, session/end) before
+    // the process exits. The MemorySyncExecutor is a background tokio task —
+    // without a drain the runtime is torn down mid-write and the observation
+    // is lost (reproduced in live testing; hermes _drain_sync_executor parity).
+    agent.shutdown_memory_executor().await;
     println!("{}", response.content);
     Ok(())
 }
@@ -1265,6 +1270,10 @@ async fn chat_non_tui(config: &AppConfig, system_prompt: Option<&str>) -> Result
             Err(error) => eprintln!("Error: {}\n", error),
         }
     }
+
+    // Drain pending memory hooks (sync_turn → /observe, session/end) before
+    // the interactive session exits (hermes _drain_sync_executor parity).
+    agent.shutdown_memory_executor().await;
 
     Ok(())
 }
