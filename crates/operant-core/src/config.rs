@@ -339,6 +339,12 @@ pub struct McpServerConfig {
     pub args: Vec<String>,
     pub env: std::collections::HashMap<String, String>,
     pub enabled: bool,
+    /// Connect lazily: skip the eager autoload connect at agent startup.
+    /// The server stays available on demand via `operant mcp` / the MCP
+    /// tooling. Used for the injected agentmemory server so an operant
+    /// invocation never spawns `npx @agentmemory/mcp` unless the user
+    /// actually connects it (hermes lazy-MCP parity).
+    pub deferred: bool,
 }
 
 impl Default for McpServerConfig {
@@ -352,6 +358,7 @@ impl Default for McpServerConfig {
             args: Vec::new(),
             env: std::collections::HashMap::new(),
             enabled: true,
+            deferred: false,
         }
     }
 }
@@ -1026,6 +1033,9 @@ pub fn ensure_default_mcp_servers(config: &mut AppConfig) {
         args: vec!["-y".to_string(), "@agentmemory/mcp".to_string()],
         env,
         enabled: true,
+        // Deferred (lazy): the provider's own memory tools are registered
+        // directly, so we never want to spawn npx on every agent startup.
+        deferred: true,
     });
 }
 
@@ -1409,6 +1419,9 @@ obscura_stealth = false
         assert_eq!(server.transport, McpTransportKind::Stdio);
         assert_eq!(server.command.as_deref(), Some("npx"));
         assert!(server.args.iter().any(|a| a == "@agentmemory/mcp"));
+        // Deferred (lazy): never spawn npx on agent startup — the provider's
+        // own memory tools are registered directly instead.
+        assert!(server.deferred);
         assert_eq!(
             server.env.get("AGENTMEMORY_URL").map(String::as_str),
             Some("http://localhost:3111")

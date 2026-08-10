@@ -1596,20 +1596,15 @@ impl OperantAgent {
                                 });
                             }
                         }
-                        // Queue background prefetch with 8s timeout.
-                        // Matches hermes-agent's _prefetch_provider timeout.
+                        // Memory provider: queue background recall for the
+                        // NEXT turn (hermes `queue_prefetch_all` call-site
+                        // parity). The authoritative search runs in prefetch()
+                        // at the top of the next turn; queue_prefetch is a
+                        // non-blocking hook the provider can use to warm its
+                        // backend — a slow provider can never block the
+                        // turn-completion path.
                         if let Some(provider) = &self.memory_provider {
-                            let pf = provider.clone();
-                            let q = user_query.clone();
-                            tokio::spawn(async move {
-                                let _ = tokio::time::timeout(
-                                    std::time::Duration::from_secs(8),
-                                    async move {
-                                        pf.prefetch(&q).await;
-                                    },
-                                )
-                                .await;
-                            });
+                            provider.queue_prefetch(&user_query);
                         }
 
                         // Emit AgentEnd hook

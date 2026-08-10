@@ -90,6 +90,9 @@ transport = "stdio"
 command = "npx"
 args = ["-y", "@modelcontextprotocol/server-filesystem", "."]
 enabled = false
+# deferred = true   # skip the eager autoload connect at startup; connect on
+#                   # demand via `operant mcp` (the injected agentmemory server
+#                   # is deferred by default)
 [mcp.servers.env]
 # EXAMPLE_ROOT = "C:/workspace"
 

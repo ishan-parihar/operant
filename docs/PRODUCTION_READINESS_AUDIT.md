@@ -369,6 +369,101 @@ where blocking is not allowed").
   does not flow into that subsystem. If a deployment runs the channels
   orchestrator and needs the agentmemory tools there, add the server under
   `[mcp.servers]` in that config explicitly.
+  
+  **Deferred (lazy) connect (2026-08-10):** the injected server now carries
+  `deferred: true` — it is **not** auto-connected at startup (previously
+  every `operant` invocation spawned `npx @agentmemory/mcp`). The memory
+  provider's own tool schemas (`memory_smart_search`, `memory_save`) are
+  registered directly into the registry via `memory_provider_tools.rs`, so
+  the memory surface stays available without the MCP server (hermes plugin
+  parity — the plugin registers memory tools independently of MCP). The
+  deferred server remains connectable on demand via `operant mcp`.
+
+## 6.5 Remaining plugin-parity gaps — context management, MCP deferral, orchestrator schema (2026-08-10)
+
+Three parity gaps were investigated this session. Two are fixed; one is
+architectural and documented with a recommended path.
+
+### 6.5.1 Context management: `queue_prefetch` was dead code — ✅ fixed
+
+**Hermes reference** (`agent/memory_manager.py`): after every completed turn
+`run_agent.py` calls `sync_all()` **and** `queue_prefetch_all()` (background
+worker, non-blocking). The authoritative recall runs in `prefetch_all()` at
+the start of the *next* turn; `queue_prefetch` just warms the provider so a
+slow backend never blocks the turn-completion path.
+
+**Operant before:** the post-turn hook spawned a full `provider.prefetch()`
+with an 8s timeout — a duplicate live search whose result was discarded
+(the next turn re-runs `prefetch()` anyway). The `queue_prefetch` hook
+(implemented in `AgentMemoryProvider` as a bg `smart-search`) was **never
+called** — dead code.
+
+**Fix (`agent/mod.rs`):** the post-turn hook now calls
+`provider.queue_prefetch(&user_query)` — hermes `queue_prefetch_all` parity.
+The pre-turn `prefetch()` (with `<memory_context>` injection) is unchanged.
+
+### 6.5.2 MCP deferred loading for the injected agentmemory server — ✅ fixed
+
+**Problem:** the CLI path (`build_registry`, main.rs) eagerly connected
+*every* enabled MCP server at agent construction. With the agentmemory
+server injected by default, **every** `operant` invocation (TUI, `run`,
+`chat`, gateway) spawned `npx -y @agentmemory/mcp` at startup — npx
+resolution + process spawn latency and churn even when the 53 memory MCP
+tools were never used. Hermes does lazy MCP reconnect; the newer
+`operant_config::schema::Config` path already has `mcp.deferred_loading`
+(default true) + `DeferredMcpToolSet`, but the CLI/`AppConfig` path had no
+deferral mechanism at all.
+
+**Fix:**
+- `McpServerConfig.deferred: bool` (default `false`, serde-default) added to
+  `AppConfig`.
+- `ensure_default_mcp_servers()` injects the agentmemory server with
+  `deferred: true`.
+- `build_registry` skips `deferred` servers in the eager autoload loop;
+  they stay connectable on demand via `operant mcp` / the MCP tooling.
+- **New `memory_provider_tools.rs`:** the memory provider's own
+  `tool_schemas()` (`memory_smart_search`, `memory_save`, …) are registered
+  directly into the registry as `OperantTool`s dispatching to
+  `handle_tool_call()` — so the model keeps the memory surface without the
+  MCP server (hermes plugin parity). Previously these provider schemas were
+  registered nowhere in the CLI path (dead code); the tools existed only via
+  the MCP server.
+
+  **Known limitation (documented, not a defect):** the TUI `/mcp` reconnect
+  path currently only re-adds HTTP servers (stdio reconnect is an explicit
+  "future enhancement") and does not re-run `sync_tools_to_registry` — so a
+  deferred stdio server cannot be materialized into the *live* registry
+  mid-session. It connects fine in a separate process (`operant mcp
+  test/connect`) and after a restart. Provider tools keep the memory surface
+  covered in the meantime.
+
+### 6.5.3 operant-channels orchestrator config-schema gap — ⚠️ documented, fix deferred
+
+**Root cause:** two parallel config systems.
+
+| | `AppConfig` (operant-core) | `operant_config::schema::Config` (operant-config) |
+|---|---|---|
+| Used by | CLI paths: TUI, `run`, `chat`, gateway runner (`create_runtime_agent` → `build_agent_core`) | operant-runtime agent, operant-channels, operant-gateway |
+| Memory | hermes-parity `MemoryProvider` trait (`agentmemory`/`builtin`/`plugin:<n>`) | `operant_memory::Memory` trait (sqlite/qdrant/markdown/none) — **no agentmemory provider** |
+| MCP | `ensure_default_mcp_servers()` injects agentmemory server (now deferred) | `mcp.deferred_loading` + `DeferredMcpToolSet` (tool_search), but **no agentmemory injection** |
+| Hermes parity | ✅ plugin hooks + lifecycle | memory/MCP surface is a different (newer) architecture |
+
+The channels orchestrator (`operant-channels/src/orchestrator/mod.rs`,
+`McpRegistry::connect_all(&config.mcp.servers)`) and the runtime agent
+therefore never see the agentmemory MCP server, and their memory backend
+cannot be `provider = "agentmemory"`. The CLI gateway is unaffected (it
+uses the `AppConfig` path). The gap matters only for deployments running
+the runtime-daemon / channels-orchestrator path with agentmemory.
+
+**Recommended fix (when that path is exercised):** add an
+`ensure_default_mcp_servers()` equivalent in the operant-config schema load
+(append an `agentmemory` stdio server to `config.mcp.servers` when the
+memory backend selects agentmemory) and either (a) port the hermes-parity
+`MemoryProvider` hooks into the runtime agent, or (b) keep the two systems
+separate and document that agentmemory is a CLI-path feature. This is an
+architectural decision (unifying the two config/memory stacks), not a
+surgical bug.
+
 
 ## 7. Verification summary
 

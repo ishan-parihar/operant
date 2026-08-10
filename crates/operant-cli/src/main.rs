@@ -50,6 +50,7 @@ mod gateway_commands;
 mod gateway_platforms;
 mod gateway_runner;
 mod mcp_serve;
+mod memory_provider_tools;
 #[cfg(feature = "plugins-wasm")]
 mod plugin_memory;
 #[cfg(feature = "plugins-wasm")]
@@ -753,7 +754,15 @@ pub(crate) async fn build_registry(
     }
 
     if config.mcp.autoload {
-        for server in config.mcp.servers.iter().filter(|server| server.enabled) {
+        // Deferred servers (e.g. the injected agentmemory server) are NOT
+        // connected here — they would spawn `npx @agentmemory/mcp` on every
+        // invocation. They stay connectable on demand via `operant mcp`.
+        for server in config
+            .mcp
+            .servers
+            .iter()
+            .filter(|server| server.enabled && !server.deferred)
+        {
             if !mcp_manager.contains(&server.name).await {
                 connect_mcp_server(mcp_manager, server).await?;
             }
@@ -841,6 +850,14 @@ async fn build_agent_core(
     .await?;
     let agent_config = agent_config(config, behavior, system_prompt);
     let (memory_manager, memory_provider) = load_repo_memory_manager().await?;
+
+    // Hermes-plugin parity: register the memory provider's own tool schemas
+    // (memory_smart_search, memory_save, ...) directly in the registry. The
+    // injected agentmemory MCP server is deferred (lazy), so these keep the
+    // memory surface available to the model without spawning npx at startup.
+    if let Some(provider) = &memory_provider {
+        memory_provider_tools::register_provider_tools(&registry, provider.clone()).await;
+    }
 
     let mut skill_manager = SkillManager::new(skills_dir.to_path_buf());
     if let Err(e) = skill_manager.load_all() {
