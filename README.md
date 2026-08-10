@@ -1,6 +1,7 @@
 # Operant
 
 ![Rust](https://img.shields.io/badge/Rust-1.89+-orange?logo=rust)
+[![CI](https://github.com/ishan-parihar/operant/actions/workflows/ci.yml/badge.svg)](https://github.com/ishan-parihar/operant/actions/workflows/ci.yml)
 ![Edition](https://img.shields.io/badge/Edition-2024-blueviolet)
 ![License](https://img.shields.io/badge/License-MIT_OR_Apache--2.0-green)
 ![MCP](https://img.shields.io/badge/MCP-1.0-orange?logo=modelcontextprotocol)
