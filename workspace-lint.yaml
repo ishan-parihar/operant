@@ -1,307 +1,230 @@
-version: 1
-root:
-  allow:
-  - Cargo.toml
-  - Cargo.lock
-  - rust-toolchain.toml
-  - operant.example.toml
-  - README.md
-  - LICENSE
-  - LICENSE-*
-  - NOTICE
-  - SECURITY.md
-  - AGENTS.md
-  - CLAUDE.md
-  - CHANGELOG.md
-  - TODO.md
-  - BUGS.md
-  - .gitignore
-  - .gitattributes
-  - .rustfmt.toml
-  - .clippy.toml
-  - rustfmt.toml
-  - clippy.toml
-  - workspace-lint.yaml
-  - .env.example
-  - .github/**
-  - target/**
-  - .vscode/**
-  - .idea/**
-  required_dirs:
-  - crates
-  - scripts
-  allow_dirs:
-  - crates
-  - scripts
-  - assets
-  - docs
-  - tests
-  - skills
-  - .github
-  - .vscode
-  - .idea
-  - target
-  - .sisyphus
-  - .superpowers
-  - .git
-  - graphify-out
-  - local
-crates:
-  required_members:
-  - operant-core
-  - operant-cli
-  required_files:
-  - Cargo.toml
-  - src/lib.rs
-  - src/main.rs
-  crate_types:
-    operant-core: lib
-    operant-cli: bin
-  allow_src_patterns:
-  - src/**/*.rs
-  - src/**/mod.rs
-  - tests/**/*.rs
-  - benches/**/*.rs
-  - examples/**/*.rs
-placement:
-- pattern: '*.md'
-  allowed_dirs:
-  - docs
-  - crates/*/docs
-  - crates/*/examples
-  - assets
-  - crates/*/web
-  - crates/*/src/agent/personality_templates/**
-  exceptions:
-  - README.md
-  - CHANGELOG.md
-  - TODO.md
-  - BUGS.md
-  - AGENTS.md
-  - CLAUDE.md
-  - SECURITY.md
-  - NOTICE
-  - LICENSE
-  - LICENSE-*
-  - PULL_REQUEST_TEMPLATE.md
-  - ISSUE_TEMPLATE/bug_report.md
-  - ISSUE_TEMPLATE/feature_request.md
-  - crates/operant-runtime/src/agent/personality_templates/AGENTS.md
-  - crates/operant-runtime/src/agent/personality_templates/AGENTS.no-memory.md
-  - crates/operant-runtime/src/agent/personality_templates/HEARTBEAT.md
-  - crates/operant-runtime/src/agent/personality_templates/IDENTITY.md
-  - crates/operant-runtime/src/agent/personality_templates/MEMORY.md
-  - crates/operant-runtime/src/agent/personality_templates/SOUL.md
-  - crates/operant-runtime/src/agent/personality_templates/TOOLS.md
-  - crates/operant-runtime/src/agent/personality_templates/USER.md
-  - crates/operant-cli/web/README.md
-  - docs/audits/TUI_AUDIT_REPORT.md
-  - docs/audits/UX_AUDIT_REPORT.md
-  - docs/audits/SETUP_TUI_AUDIT.md
-  - docs/audits/SLASH_COMMAND_AUDIT.md
-  exclude_dirs:
-  - target/**
-  - .github/**
-  - .superpowers/**
-  - skills/**
-  - .memsearch/**
-  - .contexty/**
-  - .sisyphus/**
-  - .hive/**
-  - .cortexkit/**
-  - graphify-out/**
-  - node_modules/**
-  - local/**
-  - .github/**
-  - crates/operant-cli/web/node_modules/**
-- pattern: test_*.txt
-  allowed_dirs:
-  - tests
-  - crates/*/tests
-  action: move_to_tests
-- pattern: test_*.txt
-  allowed_dirs:
-  - tests
-  - crates/*/tests
-  action: move_to_tests
-- pattern: test_output.txt
-  allowed_dirs:
-  - tests
-  - crates/*/tests
-  action: move_to_tests
-- pattern: '*.db'
-  allowed_dirs:
-  - target
-  - tmp
-  - crates/*/target
-  action: move_to_target
-- pattern: '*.sqlite'
-  allowed_dirs:
-  - target
-  - tmp
-  - crates/*/target
-  action: move_to_target
-- pattern: SESSION_SUMMARY_*.md
-  allowed_dirs:
-  - docs/sessions
-  - docs/audits
-  action: move_to_docs_sessions
-- pattern: '*_AUDIT_*.md'
-  allowed_dirs:
-  - docs/audits
-  action: move_to_docs_audits
-  exceptions:
-  - docs/audits/TUI_AUDIT_REPORT.md
-  - docs/audits/UX_AUDIT_REPORT.md
-  - docs/audits/SETUP_TUI_AUDIT.md
-  - docs/audits/SLASH_COMMAND_AUDIT.md
-- pattern: '*_AUDIT_REPORT.md'
-  allowed_dirs:
-  - docs/audits
-  action: move_to_docs_audits
-  exceptions:
-  - docs/audits/TUI_AUDIT_REPORT.md
-  - docs/audits/UX_AUDIT_REPORT.md
-  - docs/audits/SETUP_TUI_AUDIT.md
-  - docs/audits/SLASH_COMMAND_AUDIT.md
-- pattern: '*_REPORT.md'
-  allowed_dirs:
-  - docs/reports
-  action: move_to_docs_reports
-  exceptions:
-  - docs/audits/TUI_AUDIT_REPORT.md
-  - docs/audits/UX_AUDIT_REPORT.md
-  - docs/audits/SETUP_TUI_AUDIT.md
-  - docs/audits/SLASH_COMMAND_AUDIT.md
-- pattern: '*_AUDIT.md'
-  allowed_dirs:
-  - docs/audits
-  action: move_to_docs_audits
-  exceptions:
-  - docs/audits/TUI_AUDIT_REPORT.md
-  - docs/audits/UX_AUDIT_REPORT.md
-  - docs/audits/SETUP_TUI_AUDIT.md
-  - docs/audits/SLASH_COMMAND_AUDIT.md
-- pattern: SETUP_*.md
-  allowed_dirs:
-  - docs/guides
-  action: move_to_docs_guides
-  exceptions:
-  - docs/audits/TUI_AUDIT_REPORT.md
-  - docs/audits/UX_AUDIT_REPORT.md
-  - docs/audits/SETUP_TUI_AUDIT.md
-  - docs/audits/SLASH_COMMAND_AUDIT.md
-- pattern: SLASH_COMMAND_*.md
-  allowed_dirs:
-  - docs/reference
-  action: move_to_docs_reference
-  exceptions:
-  - docs/audits/TUI_AUDIT_REPORT.md
-  - docs/audits/UX_AUDIT_REPORT.md
-  - docs/audits/SETUP_TUI_AUDIT.md
-  - docs/audits/SLASH_COMMAND_AUDIT.md
-- pattern: TODO.md
-  allowed_dirs:
-  - docs/project
-  - .
-  exceptions:
-  - TODO.md
-- pattern: '*.sh'
-  allowed_dirs:
-  - scripts
-  - crates/*/scripts
-  action: move_to_scripts
-- pattern: '*.example.toml'
-  allowed_dirs:
-  - .
-  - crates/*
-  exceptions:
-  - operant.example.toml
-naming:
-  crate_dirs: kebab-case
-  source_files: snake_case
-  test_files:
-    pattern: ^(test_.*|.*_test)\.rs$
-  bench_files:
-    pattern: ^(bench_.*|.*_bench)\.rs$
-  example_files:
-    pattern: ^.*\.rs$
-forbidden:
-- '**/__pycache__/**'
-- '**/*.pyc'
-- '**/.DS_Store'
-- '**/Thumbs.db'
-- '**/*.log'
-- '*.tmp'
-- '*.temp'
-- '*.bak'
-- '*.backup'
-- '**/node_modules/**'
+project:
+  name: "operant"
+  type: "rust-hermes"
+
 structure:
-  crate_layout:
-    required:
-    - src
-    optional:
-    - tests
-    - benches
-    - examples
-    - docs
-    - scripts
-    - Cargo.toml
-    - README.md
-  docs_structure:
-    required_dirs:
-    - sessions
-    - audits
-    - guides
-    - reference
-    - reports
-    - architecture
-gitignore:
-  required_patterns:
-  - target/
-  - '*.db'
-  - '*.sqlite'
-  - '*.sqlite3'
-  - .env
-  - .env.*
-  - '*.log'
-  - '*.tmp'
-  - '*.bak'
-  - '*.backup'
-  - __pycache__/
-  - '*.pyc'
-  - .DS_Store
-  - Thumbs.db
-  - node_modules/
-  - .sisyphus/
-  - .superpowers/
-  - test_output.txt
-  - test_file.txt
-  - test_infra.txt
-  - test_db*.sqlite
-  - test_db*.sqlite3
-  - hermes*.db
-severity:
-  error:
-  - forbidden_pattern
-  - required_file_missing
-  - required_dir_missing
-  - gitignore_missing_pattern
-  - wrong_placement
-  warning:
-  - naming_convention
-  - orphan_file
-  - empty_dir
-  info:
-  - unused_crate
-  - missing_docs_dir
-fix_actions:
-  move_to_tests: tests/
-  move_to_target: target/
-  move_to_docs_sessions: docs/sessions/
-  move_to_docs_audits: docs/audits/
-  move_to_docs_reports: docs/reports/
-  move_to_docs_guides: docs/guides/
-  move_to_docs_reference: docs/reference/
-  move_to_scripts: scripts/
+  canonical:
+    - path: "crates"
+      purpose: "Crate workspace"
+    - path: "tests"
+      purpose: "Test files"
+    - path: "docs"
+      purpose: "Documentation, audits, and plans"
+    - path: "scripts"
+      purpose: "Utility scripts"
+    - path: "skills"
+      purpose: "AI agent skills"
+    - path: "assets"
+      purpose: "Assets"
+
+rules:
+  root:
+    forbidden_files:
+      - "*.log"
+      - "*.bak"
+      - "*.tmp"
+      - "*.old"
+      - "*.orig"
+      - "*.rej"
+      - "*.swp"
+      - "*.pid"
+      - "*.out"
+      - "*.err"
+      - "*~"
+      - "AUDIT*"
+      - "PLAN*"
+      - "*REPORT*"
+      - "*_v[0-9]*"
+      - "*ROADMAP*"
+      - "*GUIDE*"
+      - "*UPGRADE*"
+      - "*DIAGNOSTICS*"
+      - "*INTELLIGENCE*"
+      - "TOOL_ANALYSIS*"
+      - "IMPLEMENTATION_*"
+      - "AGENT_GUIDE*"
+      - "error.log"
+      - "lifeos.config.json"
+    allowed_root_files:
+      - ".clippy.toml"
+      - ".editorconfig"
+      - ".env.example"
+      - ".eslintrc*"
+      - ".gitattributes"
+      - ".gitignore"
+      - ".gitmodules"
+      - ".impeccable.md"
+      - ".node-version"
+      - ".nvmrc"
+      - ".oh-my-opencode-pi-stats.json"
+      - ".prettierrc*"
+      - ".python-version"
+      - ".rustfmt.toml"
+      - "AGENTS.md"
+      - "BUGS.md"
+      - "CHANGELOG.md"
+      - "CLAUDE.md"
+      - "CODE_OF_CONDUCT.md"
+      - "CONTRIBUTING.md"
+      - "COPYING"
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - "DEAD_CODE_AUDIT.md"
+      - "Dockerfile"
+      - "Justfile"
+      - "LICENSE"
+      - "LICENSE-*"
+      - "LICENSE-APACHE"
+      - "LICENSE-MIT"
+      - "LICENSE.md"
+      - "Makefile"
+      - "NOTICE"
+      - "Pipfile"
+      - "README.md"
+      - "SECURITY.md"
+      - "TODO.md"
+      - "VERSION"
+      - "bun.lock"
+      - "capacitor.config.json"
+      - "clippy.toml"
+      - "docker-compose.yaml"
+      - "docker-compose.yml"
+      - "go.mod"
+      - "go.sum"
+      - "install.sh"
+      - "lifeos.config.default.json"
+      - "operant.example.toml"
+      - "package-lock.json"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "pyproject.toml"
+      - "requirements.txt"
+      - "rust-toolchain.toml"
+      - "setup.cfg"
+      - "setup.py"
+      - "svelte.config.js"
+      - "tsconfig.json"
+      - "tsup.config.ts"
+      - "vite.config.ts"
+      - "workspace-lint.yaml"
+      - "wrangler.toml"
+      - "yarn.lock"
+
+  files:
+    "*.md":
+      preferred_dir: "docs"
+      exclude_dirs:
+        - ".agents"
+        - ".claude"
+        - ".contexty"
+        - ".cortexkit"
+        - ".cursor"
+        - ".devin"
+        - ".gemini"
+        - ".github"
+        - ".grader"
+        - ".hive"
+        - ".impeccable"
+        - ".memsearch"
+        - ".oh-my-opencode"
+        - ".plans"
+        - ".serena"
+        - ".sisyphus"
+        - ".subtaskify"
+        - ".superpowers"
+        - "assets"
+        - "crates"
+        - "docs"
+        - "examples"
+        - "graphify-out"
+        - "local"
+        - "node_modules"
+        - "optional-skills"
+        - "plans"
+        - "plugins"
+        - "scripts"
+        - "skill-bundles"
+        - "skill-registry"
+        - "skills"
+        - "target"
+        - "tests"
+    "*.py":
+      preferred_dir: "scripts"
+      exclude_dirs:
+        - ".agents"
+        - ".claude"
+        - ".contexty"
+        - ".cortexkit"
+        - ".cursor"
+        - ".devin"
+        - ".gemini"
+        - ".github"
+        - ".grader"
+        - ".hive"
+        - ".impeccable"
+        - ".memsearch"
+        - ".oh-my-opencode"
+        - ".plans"
+        - ".serena"
+        - ".sisyphus"
+        - ".subtaskify"
+        - ".superpowers"
+        - "assets"
+        - "crates"
+        - "docs"
+        - "examples"
+        - "graphify-out"
+        - "local"
+        - "node_modules"
+        - "optional-skills"
+        - "plans"
+        - "plugins"
+        - "scripts"
+        - "skill-bundles"
+        - "skill-registry"
+        - "skills"
+        - "target"
+        - "tests"
+    "*.rs":
+      preferred_dir: "src"
+      exclude_dirs:
+        - ".agents"
+        - ".claude"
+        - ".contexty"
+        - ".cortexkit"
+        - ".cursor"
+        - ".devin"
+        - ".gemini"
+        - ".github"
+        - ".grader"
+        - ".hive"
+        - ".impeccable"
+        - ".memsearch"
+        - ".oh-my-opencode"
+        - ".plans"
+        - ".serena"
+        - ".sisyphus"
+        - ".subtaskify"
+        - ".superpowers"
+        - "assets"
+        - "crates"
+        - "docs"
+        - "examples"
+        - "graphify-out"
+        - "local"
+        - "node_modules"
+        - "optional-skills"
+        - "plans"
+        - "plugins"
+        - "scripts"
+        - "skill-bundles"
+        - "skill-registry"
+        - "skills"
+        - "target"
+        - "tests"
+
+  directories:
+    forbidden_patterns:
+      - "^\\s"
+      - "\\s$"
+
