@@ -9,7 +9,7 @@
 ![MCP](https://img.shields.io/badge/MCP-1.0-orange?logo=modelcontextprotocol)
 ![Local](https://img.shields.io/badge/local--first-34d399)
 
-**Your terminal-native AI agent.** Persistent memory, 50+ tools, skills, MCP, and messaging channels — built in Rust, run from your shell, and fully under your control.
+**Your terminal-native AI agent.** Persistent memory, 60+ tools, skills, MCP, and messaging channels — built in Rust, run from your shell, and fully under your control.
 
 ![Operant hero](assets/readme/hero.svg)
 
@@ -97,7 +97,7 @@ operant
 | Capability | Implementation |
 |---|---|
 | **Memory** | `agentmemory` hybrid semantic memory (BM25 + vector + graph), auto-spawned; or `builtin` file memory (`MEMORY.md` / `USER.md`) |
-| **Tools** | 50+ JSON-schema tools: fs, git, web (IGS search/scrape/extract), browser (CDP), shell, code, http, memory, skills, cron, kanban, process, notes, checkpoints |
+| **Tools** | 60+ JSON-schema tools: fs, git, web (IGS search/scrape/extract), browser (CDP), shell, code, http, memory, skills, cron, kanban, process, notes, checkpoints |
 | **Browser** | Stealth **Obscura** CDP — persistent socket, page sessions, shared binary with IGS web tools |
 | **Skills** | Directory import with recursive security scan · bundles · autoload · curator |
 | **Models** | Any OpenAI-compatible endpoint (`base_url`), local llama.cpp, Ollama; fallback chains + token-bucket rate limiting |
@@ -192,7 +192,7 @@ Architecture, porting notes, and parity decisions live in [`AGENTS.md`](AGENTS.m
 
 ## License
 
-MIT **or** Apache-2.0 — see [LICENSE](LICENSE).
+MIT **or** Apache-2.0 — see [LICENSE-MIT](LICENSE-MIT) or [LICENSE-APACHE](LICENSE-APACHE).
 
 ---
 
