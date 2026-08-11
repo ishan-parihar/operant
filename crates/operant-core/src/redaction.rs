@@ -107,6 +107,8 @@ struct RedactPatterns {
     url_userinfo: Regex,
     /// Sensitive query params `?key=…&token=…`.
     url_query_param: Regex,
+    /// JSON field assignments: `"api_key": "value"` (hermes `_JSON_FIELD_RE`).
+    json_field: Regex,
 }
 
 fn patterns() -> &'static RedactPatterns {
@@ -211,6 +213,16 @@ fn patterns() -> &'static RedactPatterns {
         )
         .expect("valid url-query-param regex");
 
+        // JSON field assignments — redact the string value of a secret-keyed
+        // field regardless of the value's shape (hermes `_JSON_FIELD_RE`
+        // parity). Handles `"key": "value"` (with or without surrounding
+        // whitespace). Catches plain passwords that carry no recognizable
+        // prefix and would otherwise slip through the token-prefix rules.
+        let json_field = Regex::new(
+            r#"(?i)"((?:api[_-]?key|access[_-]?token|auth[_-]?token|token|secret|password|passwd|pwd|client[_-]?secret|private[_-]?key|credential))"\s*:\s*"([^"]*)""#,
+        )
+        .expect("valid json-field regex");
+
         RedactPatterns {
             token_prefix,
             env_assign,
@@ -221,6 +233,7 @@ fn patterns() -> &'static RedactPatterns {
             telegram,
             url_userinfo,
             url_query_param,
+            json_field,
         }
     })
 }
@@ -228,8 +241,102 @@ fn patterns() -> &'static RedactPatterns {
 /// Apply secret redaction to arbitrary text. Pure function — always applies
 /// the patterns regardless of the runtime toggle (callers that want the
 /// toggle use [`redact_sensitive_text_if_enabled`]).
+/// Cheap pre-screen: skip the full regex pipeline when the text can't
+/// possibly contain a secret. Mirrors hermes's `_PREFIX_SUBSTRINGS`
+/// short-circuit — the dotall private-key regex is the expensive pass, and
+/// it (like the others) only fires when one of these substrings is present.
+///
+/// The needle set is a *superset* of every trigger the regexes can fire on
+/// (derived from each token-prefix's leading characters + the keyword list +
+/// structural markers), so a real secret is never skipped — a false positive
+/// merely costs a regex pass, which is the pre-screen's safe direction.
+fn needs_redaction(input: &str) -> bool {
+    const NEEDLES: [&str; 60] = [
+        // Leading chars of every token prefix (lowercased).
+        "sk-",
+        "sk_",
+        "ghp",
+        "gith",
+        "gho",
+        "ghu",
+        "ghs",
+        "ghr",
+        "xox",
+        "aiza",
+        "pplx",
+        "fal_",
+        "fc-",
+        "bb_l",
+        "gaaa",
+        "akia",
+        "sk_l",
+        "sk_t",
+        "rk_l",
+        "sg.",
+        "hf_",
+        "r8_",
+        "npm",
+        "pypi",
+        "dop_",
+        "doo_",
+        "tvly",
+        "exa_",
+        "gsk_",
+        "xai-",
+        "ntn_",
+        "fw-",
+        "fw_",
+        "fpk_",
+        "glpa",
+        "gloa",
+        "gldt",
+        "glrt",
+        "glcb",
+        "glpt",
+        "glag",
+        "gr13",
+        "mem0",
+        "reta",
+        "am_",
+        "hsk-",
+        // Keywords (env-assign, auth-header, JSON-field triggers).
+        "key",
+        "token",
+        "secret",
+        "password",
+        "passwd",
+        "pwd",
+        "auth",
+        "credential",
+        "bearer",
+        // Structural markers: private keys, URLs, userinfo, ENV `=`.
+        "begin",
+        "eyj",
+        "://",
+        "=",
+        "@",
+    ];
+    let lower: std::borrow::Cow<'_, str> = if input.bytes().any(|b| b.is_ascii_uppercase()) {
+        std::borrow::Cow::Owned(input.to_ascii_lowercase())
+    } else {
+        std::borrow::Cow::Borrowed(input)
+    };
+    if NEEDLES.iter().any(|n| lower.contains(n)) {
+        return true;
+    }
+    // Telegram bot-token shape `<8-10 digits>:<35 chars>` — the body may be
+    // all-same-case, so it carries none of the keyword/prefix needles above.
+    static DIGITS_COLON: OnceLock<Regex> = OnceLock::new();
+    DIGITS_COLON
+        .get_or_init(|| Regex::new(r"\d{8,10}:").expect("valid digits-colon regex"))
+        .is_match(input)
+}
+
+/// Apply secret redaction to arbitrary text. Pure function — always applies
+/// the patterns regardless of the runtime toggle (callers that want the
+/// toggle use [`redact_sensitive_text_if_enabled`]).
 pub fn redact_sensitive_text(input: &str) -> String {
-    if input.is_empty() {
+    if input.is_empty() || !needs_redaction(input) {
         return input.to_string();
     }
     let p = patterns();
@@ -260,6 +367,14 @@ pub fn redact_sensitive_text(input: &str) -> String {
     out = p
         .url_query_param
         .replace_all(&out, "${1}[REDACTED]")
+        .into_owned();
+
+    // JSON field assignments — keep the `"key":`, mask the quoted value.
+    // `$1` is the bare key (the surrounding quotes live outside the capture),
+    // so re-emit them in the replacement.
+    out = p
+        .json_field
+        .replace_all(&out, r#""$1": "[REDACTED]""#)
         .into_owned();
 
     // Auth headers — keep the `Authorization: Bearer ` prefix.
@@ -434,6 +549,47 @@ mod tests {
         let out = redact_sensitive_text("https://api.example.com/v1?api_key=sk-abc123&x=1");
         assert!(!out.contains("sk-abc123"));
         assert!(out.contains("api_key=[REDACTED]"));
+    }
+
+    #[test]
+    fn redacts_json_field_plain_value() {
+        // Plain secrets with no recognizable prefix (hermes `_JSON_FIELD_RE`
+        // parity) — would previously leak through the token-prefix rules.
+        let out = redact_sensitive_text(r#"{"api_key": "hunter2", "password": "p@ss"}"#);
+        assert!(!out.contains("hunter2"));
+        assert!(!out.contains("p@ss"));
+        assert!(out.contains(r#""api_key": "[REDACTED]""#), "got: {out}");
+    }
+
+    #[test]
+    fn redacts_json_field_with_whitespace() {
+        let out = redact_sensitive_text(r#"{ "client_secret" : "abc123" }"#);
+        assert!(!out.contains("abc123"));
+        assert!(
+            out.contains(r#""client_secret": "[REDACTED]""#),
+            "got: {out}"
+        );
+    }
+
+    #[test]
+    fn redacts_json_token_field() {
+        let out = redact_sensitive_text(r#"{"token": "plain-value-123"}"#);
+        assert!(!out.contains("plain-value-123"));
+        assert!(out.contains(r#""token": "[REDACTED]""#), "got: {out}");
+    }
+
+    #[test]
+    fn json_field_preserves_other_fields() {
+        let out = redact_sensitive_text(r#"{"api_key": "hunter2", "role": "admin"}"#);
+        assert!(out.contains("admin"));
+        assert!(!out.contains("hunter2"));
+    }
+
+    #[test]
+    fn prescreen_skips_plain_text() {
+        // The fast-path pre-screen must not change plain prose.
+        let text = "The quick brown fox jumps over the lazy dog.";
+        assert_eq!(redact_sensitive_text(text), text);
     }
 
     #[test]
