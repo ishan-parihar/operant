@@ -4794,11 +4794,13 @@ dependencies = [
 name = "operant-core"
 version = "0.1.4"
 dependencies = [
+ "aes",
  "anyhow",
  "async-trait",
  "axum",
  "base64",
  "bytes",
+ "cbc",
  "cc",
  "chrono",
  "constant_time_eq",

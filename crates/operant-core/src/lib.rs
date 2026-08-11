@@ -51,6 +51,7 @@ pub mod client;
 pub mod config;
 pub mod context_files;
 pub mod context_management;
+pub mod cookies;
 pub mod credential_pool;
 pub mod cronjobs;
 pub mod curator;

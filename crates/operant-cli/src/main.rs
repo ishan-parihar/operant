@@ -9,6 +9,7 @@ mod cmd_channel;
 mod cmd_checkpoints;
 mod cmd_completion;
 mod cmd_config;
+mod cmd_cookies;
 mod cmd_cron;
 mod cmd_curator;
 mod cmd_dashboard;
@@ -238,6 +239,12 @@ enum Commands {
         /// Output as JSON (for scripting/CI)
         #[arg(long, global = true)]
         json: bool,
+    },
+    /// Import / export / list browser cookies for the Obscura session
+    /// (multi-browser cookie import from Chrome, Brave, Edge, Firefox, …)
+    Cookies {
+        #[command(subcommand)]
+        cmd: cmd_cookies::CookiesSubcommand,
     },
     /// Manage installed skills
     Skills {
@@ -1522,6 +1529,9 @@ async fn main() -> Result<()> {
         Some(Commands::Mcp { cmd, json }) => {
             let mcp_manager = operant_core::mcp::McpManager::new();
             cmd_mcp::handle_mcp_command(&loaded.config, &mcp_manager, cmd.clone(), *json).await?;
+        }
+        Some(Commands::Cookies { cmd }) => {
+            cmd_cookies::handle_cookies_command(cmd.clone()).await?;
         }
         Some(Commands::Skills { cmd, json }) => {
             cmd_skills::handle_skills_command(&loaded.config, cmd.clone(), *json).await?;

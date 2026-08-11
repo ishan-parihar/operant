@@ -32,7 +32,7 @@ use tokio::net::TcpStream;
 use tokio::process::{Child, Command};
 use tokio::sync::{Mutex, OnceCell, oneshot};
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async, tungstenite::Message};
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::browser_provider::ObscuraProvider;
 use crate::error::{Error, Result};
@@ -218,12 +218,37 @@ impl CdpBrowserSession {
         // per-connection page/session state.
         let socket = CdpSocket::connect(&ws_url).await?;
         info!(%ws_url, "Obscura CDP session ready");
-        Ok(Self {
+
+        // Auto-load the persistent cookie store into the fresh session so
+        // previously imported browser cookies (accounts) apply immediately
+        // without re-importing or re-logging-in. (Re-applied again in
+        // `ensure_page` once a page target exists — obscura only applies
+        // cookies set while a page is live.)
+        let session = Self {
             ws_url,
             child,
             page: Mutex::new(None),
             socket,
-        })
+        };
+        session.apply_stored_cookies().await;
+        Ok(session)
+    }
+
+    /// Load the persistent cookie store and inject it into the session at
+    /// browser level. Best-effort: a missing/unreadable store or a server
+    /// that rejects the endpoint is logged, never fatal.
+    async fn apply_stored_cookies(&self) {
+        let stored = crate::cookies::load_cookie_store();
+        if stored.is_empty() {
+            return;
+        }
+        let params = serde_json::json!({
+            "cookies": stored.iter().map(|c| c.to_cdp_value()).collect::<Vec<_>>()
+        });
+        match self.send(None, "Storage.setCookies", params).await {
+            Ok(_) => info!(count = stored.len(), "auto-loaded cookies from store"),
+            Err(e) => warn!(error = %e, "failed to auto-load cookies from store"),
+        }
     }
 
     /// Browser-level CDP endpoint for raw tools / diagnostics.
@@ -319,6 +344,12 @@ impl CdpBrowserSession {
         // Enable domains best-effort so Page.navigate / Runtime.evaluate are
         // reliably serviced (some builds reject methods on non-enabled domains).
         let _ = self.page_cmd(&page, "Page.enable", json!({})).await;
+
+        // Re-apply stored cookies once a page target exists. Obscura applies
+        // browser-level Storage.setCookies to pages created BEFORE the set,
+        // so cookies loaded at `start()` (when no page exists yet) must be
+        // re-injected here so the first real page actually carries them.
+        self.apply_stored_cookies().await;
         let _ = self.page_cmd(&page, "Runtime.enable", json!({})).await;
         *guard = Some(PageTarget {
             target_id: page.target_id.clone(),
@@ -428,6 +459,104 @@ pub async fn send_shared_session_cmd(
 ) -> Result<Value> {
     let session = get_or_start_shared_session().await?;
     session.send(session_id, method, params).await
+}
+
+/// Import cookies into the shared Obscura session via CDP `Storage.setCookies`,
+/// then persist them to the cookie store so every future session (new
+/// process) auto-loads them — the multi-browser import keeps accounts usable
+/// without re-login across runs.
+///
+/// Returns the number of cookies successfully applied. Browser-level method
+/// (no page session required) — verified against Obscura `serve --stealth`.
+pub async fn import_cookies(cookies: &[crate::cookies::Cookie]) -> Result<usize> {
+    if cookies.is_empty() {
+        return Ok(0);
+    }
+    // Persist first so even a session-start failure keeps the import.
+    crate::cookies::save_cookie_store(cookies);
+    let session = get_or_start_shared_session().await?;
+    let mut applied = 0usize;
+    // Try the batch endpoint first; fall back to per-cookie `Network.setCookie`
+    // if the server rejects the batch (some CDP servers only implement one).
+    let params = serde_json::json!({
+        "cookies": cookies.iter().map(|c| c.to_cdp_value()).collect::<Vec<_>>()
+    });
+    match session.send(None, "Storage.setCookies", params).await {
+        Ok(_) => applied = cookies.len(),
+        Err(_) => {
+            for c in cookies {
+                let ok = session
+                    .send(None, "Network.setCookie", c.to_cdp_value())
+                    .await
+                    .is_ok();
+                if ok {
+                    applied += 1;
+                }
+            }
+        }
+    }
+    Ok(applied)
+}
+
+/// Export all cookies currently in the shared Obscura session via CDP
+/// `Storage.getCookies`, normalized to the operant [`crate::cookies::Cookie`]
+/// model. Falls back to the persistent cookie store when the session reports
+/// none (fresh process before any import).
+pub async fn export_cookies() -> Result<Vec<crate::cookies::Cookie>> {
+    let session = get_or_start_shared_session().await?;
+    let resp = session
+        .send(None, "Storage.getCookies", serde_json::json!({}))
+        .await?;
+    let cookies = resp
+        .get("result")
+        .and_then(|r| r.get("cookies"))
+        .and_then(|c| c.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let out = cookies
+        .iter()
+        .filter_map(|v| {
+            Some(crate::cookies::Cookie {
+                name: v.get("name")?.as_str()?.to_string(),
+                value: v.get("value")?.as_str()?.to_string(),
+                domain: v
+                    .get("domain")
+                    .and_then(|d| d.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                path: v
+                    .get("path")
+                    .and_then(|p| p.as_str())
+                    .unwrap_or("/")
+                    .to_string(),
+                expires: v.get("expires").and_then(|e| e.as_f64()).map(|f| f as i64),
+                secure: v.get("secure").and_then(|s| s.as_bool()).unwrap_or(false),
+                http_only: v.get("httpOnly").and_then(|h| h.as_bool()).unwrap_or(false),
+                same_site: v
+                    .get("sameSite")
+                    .and_then(|s| s.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+            })
+        })
+        .collect::<Vec<_>>();
+    if !out.is_empty() {
+        return Ok(out);
+    }
+    // Session has none (fresh process): fall back to the persistent store so
+    // `operant cookies list` reflects what the next session will load.
+    Ok(crate::cookies::load_cookie_store())
+}
+
+/// Clear all cookies in the shared Obscura session via CDP `Storage.clearCookies`
+/// and wipe the persistent store.
+pub async fn clear_cookies() -> Result<()> {
+    crate::cookies::clear_cookie_store();
+    let session = get_or_start_shared_session().await?;
+    session
+        .send(None, "Storage.clearCookies", serde_json::json!({}))
+        .await?;
+    Ok(())
 }
 
 /// Resolve the shared session's current page session id, creating a page if

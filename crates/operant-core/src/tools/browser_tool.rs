@@ -60,6 +60,124 @@ impl BrowserTool {
         provider.execute(command, args).await
     }
 
+    /// Handle the cookie commands (`cookies_import` / `cookies_list` /
+    /// `cookies_clear`) against the shared Obscura CDP session. Lets the
+    /// agent import browser cookies (multi-browser) so authenticated
+    /// sessions work without manual login.
+    async fn handle_cookie_command(&self, args: &BrowserArgs) -> ToolResult {
+        match args.command.as_str() {
+            "cookies_list" => {
+                let cookies = match crate::obscura_cdp::export_cookies().await {
+                    Ok(c) => c,
+                    Err(e) => return ToolResult::error(self.name(), format!("CDP error: {e}")),
+                };
+                return ToolResult::success(
+                    self.name(),
+                    serde_json::json!({
+                        "cookie_count": cookies.len(),
+                        "cookies": cookies.iter().map(|c| serde_json::json!({
+                            "domain": c.domain,
+                            "name": c.name,
+                            "secure": c.secure,
+                            "httpOnly": c.http_only,
+                            "expires": c.expires,
+                        })).collect::<Vec<_>>(),
+                    }),
+                );
+            }
+            "cookies_clear" => match crate::obscura_cdp::clear_cookies().await {
+                Ok(()) => {
+                    return ToolResult::success(
+                        self.name(),
+                        serde_json::json!({ "cleared": true }),
+                    );
+                }
+                Err(e) => return ToolResult::error(self.name(), format!("CDP error: {e}")),
+            },
+            _ => {}
+        }
+
+        // cookies_import
+        let source = match args.cookie_file.as_deref() {
+            Some(s) => s,
+            None => {
+                return ToolResult::error(
+                    self.name(),
+                    "cookies_import requires 'cookie_file' (a cookies.txt/JSON file path or a browser name: chrome, brave, edge, firefox, ...)",
+                );
+            }
+        };
+
+        let path = std::path::Path::new(source);
+        let cookies = if path.exists() {
+            // File import — auto-detect cookies.txt vs JSON by first char.
+            match std::fs::read_to_string(path) {
+                Ok(text) => {
+                    let trimmed = text.trim_start();
+                    if trimmed.starts_with('[') || trimmed.starts_with('{') {
+                        crate::cookies::parse_json_cookies(&text)
+                    } else {
+                        crate::cookies::parse_netscape_cookies_txt(&text)
+                    }
+                }
+                Err(e) => {
+                    return ToolResult::error(self.name(), format!("Failed to read {source}: {e}"));
+                }
+            }
+        } else {
+            // Browser-name import.
+            let found = match crate::cookies::find_browser_cookie_source(source) {
+                Some(f) => f,
+                None => {
+                    return ToolResult::error(
+                        self.name(),
+                        format!(
+                            "No cookie database found for browser '{source}'. Supported: chrome, chromium, brave, edge, vivaldi, opera, firefox"
+                        ),
+                    );
+                }
+            };
+            let (label, db, local_state) = found;
+            if label == "firefox" {
+                crate::cookies::read_firefox_cookies(&db)
+            } else {
+                crate::cookies::read_chromium_cookies(&db, local_state.as_deref())
+            }
+        };
+
+        if cookies.is_empty() {
+            return ToolResult::error(
+                self.name(),
+                format!(
+                    "No cookies parsed from '{source}'. For Chromium browsers with keyring encryption, export a cookies.txt and import that file instead."
+                ),
+            );
+        }
+
+        if args.dry_run.unwrap_or(false) {
+            return ToolResult::success(
+                self.name(),
+                serde_json::json!({
+                    "dry_run": true,
+                    "cookie_count": cookies.len(),
+                    "domains": cookies.iter().map(|c| c.domain.clone()).collect::<std::collections::HashSet<_>>(),
+                }),
+            );
+        }
+
+        match crate::obscura_cdp::import_cookies(&cookies).await {
+            Ok(applied) => ToolResult::success(
+                self.name(),
+                serde_json::json!({
+                    "applied": applied,
+                    "total": cookies.len(),
+                    "message": format!("Applied {applied}/{} cookies to the Obscura session", cookies.len()),
+                }),
+            ),
+            Err(e) => ToolResult::error(self.name(), format!("CDP error: {e}")),
+        }
+    }
+
     async fn handle_accessibility_tree(&self, args: &BrowserArgs) -> ToolResult {
         let cdp_url = args
             .cdp_url
@@ -110,6 +228,11 @@ struct BrowserArgs {
     cdp_url: Option<String>,
     /// For `accessibility_tree`: if true, render full tree instead of compact.
     full: Option<bool>,
+    /// For `cookies_import`: path to a cookies.txt / JSON export file, or a
+    /// browser name (chrome, brave, edge, firefox, …) to read directly.
+    cookie_file: Option<String>,
+    /// For `cookies_import` with a browser name: dry-run, don't apply.
+    dry_run: Option<bool>,
 }
 
 #[async_trait]
@@ -130,6 +253,9 @@ impl OperantTool for BrowserTool {
          - firecrawl: Firecrawl scrape API (FIRECRAWL_API_KEY)\n\
          Commands: navigate (url), snapshot, click (selector), type (selector, text),\n\
          scroll (text=direction), accessibility_tree. Use snapshot to read a page.\n\
+         Cookie commands: cookies_import (cookie_file=<cookies.txt|JSON path> or <browser name>),\n\
+         cookies_list, cookies_clear — import cookies from Chrome/Brave/Edge/Firefox so\n\
+         authenticated accounts work without manual login.\n\
          Supports accessibility_tree command for CDP-based accessibility tree extraction with ref selectors."
     }
 
@@ -160,6 +286,9 @@ impl OperantTool for BrowserTool {
                 return ToolResult::error(self.name(), "Missing 'text' for type");
             }
             "navigate" | "snapshot" | "click" | "type" | "scroll" => {}
+            "cookies_import" | "cookies_list" | "cookies_clear" => {
+                return self.handle_cookie_command(&args).await;
+            }
             _ => {
                 return ToolResult::error(
                     self.name(),
