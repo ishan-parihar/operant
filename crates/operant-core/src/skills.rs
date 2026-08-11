@@ -104,7 +104,20 @@ impl SkillManager {
 
             match load_skill(&path) {
                 Ok(skill) => {
+                    // Index by both the frontmatter name and the directory
+                    // name so lookups by either resolve (a skill's directory
+                    // can differ from its `name:` frontmatter, e.g. the
+                    // `cli` dir with name `inference-sh-cli`). Without the
+                    // directory alias, `skills audit` misreports such skills
+                    // as "Failed to parse SKILL.md".
                     self.skills.insert(skill.name.clone(), skill.clone());
+                    let dir_key = path
+                        .file_name()
+                        .map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_else(|| skill.name.clone());
+                    if dir_key != skill.name {
+                        self.skills.insert(dir_key, skill.clone());
+                    }
                     loaded.push(skill);
                 }
                 Err(_) => {

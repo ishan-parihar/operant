@@ -1411,6 +1411,20 @@ async fn main() -> Result<()> {
     apply_cli_overrides(&cli, &mut loaded.config);
     install_runtime_config(loaded.config.clone());
 
+    // First-run bootstrap: seed the bundled skill pool (ships with operant)
+    // into the user skills directory when it is empty or missing. No-op once
+    // the user has any skill installed; `operant skills seed --force` re-runs.
+    // Best-effort — a missing pool must never block startup.
+    {
+        let skills_dir = &loaded.config.skills.root_dir;
+        let empty = std::fs::read_dir(skills_dir)
+            .map(|mut entries| entries.next().is_none())
+            .unwrap_or(true);
+        if empty && let Err(e) = cmd_skills::seed_bundled_skills(&loaded.config, None, false) {
+            tracing::debug!(error = %e, "bundled skill seeding skipped (non-fatal)");
+        }
+    }
+
     // Wire delegation config to SubAgentTool statics
     if let Some(depth) = cli_config.delegation.max_spawn_depth {
         operant_core::tools::sub_agent_tool::set_max_spawn_depth(depth);

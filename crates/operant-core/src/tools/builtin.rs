@@ -21,6 +21,7 @@ pub use super::browser_tool::BrowserTool;
 pub use super::checkpoint_tool::CheckpointTool;
 pub use super::clarify_tool::ClarifyTool;
 pub use super::code_execution::CodeExecutionTool;
+pub use super::config_tool::ConfigManageTool;
 pub use super::cron_tool::CronTool;
 pub use super::datetime_tool::{DateTimeTool, TimestampTool};
 pub use super::debug_helpers::{EchoTool, EnvVarTool, SystemInfoTool};
@@ -88,6 +89,7 @@ pub async fn register_builtin_tools(
     registry.register(WebCrawlTool).await?;
     registry.register(XaiHttpTool).await?;
     registry.register(CodeExecutionTool).await?;
+    registry.register(ConfigManageTool).await?;
     registry.register(CronTool::new(cron_db)).await?;
     registry.register(KanbanTool::new(kanban_db)).await?;
     registry.register(MemoryStoreTool).await?;
@@ -223,6 +225,7 @@ pub fn builtin_tool_names() -> Vec<&'static str> {
         "checkpoint",
         "clarify",
         "code_execution",
+        "config_manage",
         "cron",
         "datetime",
         "echo",

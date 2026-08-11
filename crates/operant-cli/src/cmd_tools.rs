@@ -63,6 +63,25 @@ async fn handle_list(config: &AppConfig, _platform: Option<String>) -> Result<()
         None,
     )
     .await?;
+
+    // Hermes-plugin parity: surface the active memory provider's own tools
+    // (memory_smart_search / memory_save for agentmemory) so `operant tools
+    // list` reflects the exact agent-visible toolset (the run path registers
+    // these in build_agent_core; here we mirror that for the listing).
+    if config.memory.enabled
+        && config.memory.provider != "builtin"
+        && config.memory.provider != "disabled"
+    {
+        let (_memory_manager, memory_provider) = crate::load_repo_memory_manager().await?;
+        if let Some(provider) = memory_provider {
+            // The provider is background-initialized by load_repo_memory_manager;
+            // synchronously warm it so is_available() is true and the tools
+            // actually appear in the listing (matches the run path's surface).
+            provider.ensure_server().await;
+            crate::memory_provider_tools::register_provider_tools(&registry, provider).await;
+        }
+    }
+
     let tools = registry.get_schemas().await;
 
     if tools.is_empty() {

@@ -97,6 +97,17 @@ pub enum SkillsSubcommand {
         #[command(subcommand)]
         command: MarketCommand,
     },
+    /// Seed the user skills directory from the bundled pool (ships with
+    /// operant). No-op when skills are already installed.
+    Seed {
+        /// Bundled source directory (defaults to the repo `skills/` pool
+        /// or `$OPERANT_BUNDLED_SKILLS_DIR`)
+        #[arg(long)]
+        source: Option<String>,
+        /// Re-copy bundled skills even when the target already has skills
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 /// Marketplace subcommands (iter-133 — closes the ponytail-audit gap
@@ -170,7 +181,176 @@ pub async fn handle_skills_command(
         SkillsSubcommand::Tap { command } => handle_tap_command(config, command),
         SkillsSubcommand::Toggle { name } => toggle_skill(config, &name),
         SkillsSubcommand::Market { command } => handle_market_command(config, command).await,
+        SkillsSubcommand::Seed { source, force } => {
+            seed_bundled_skills(config, source.as_deref(), force)?;
+            Ok(())
+        }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Bundled skill seeding (hermes parity: pack a pool of skills with operant)
+// ---------------------------------------------------------------------------
+
+/// Locate the bundled skill pool directory.
+///
+/// Resolution order:
+/// 1. `$OPERANT_BUNDLED_SKILLS_DIR` environment override.
+/// 2. Repo checkout: `<repo>/skills` next to the crate (dev builds).
+/// 3. Installed layout: `<exe_dir>/../skills` (packaged beside the binary).
+fn bundled_skills_dir() -> Option<PathBuf> {
+    if let Ok(dir) = std::env::var("OPERANT_BUNDLED_SKILLS_DIR")
+        && !dir.trim().is_empty()
+    {
+        let p = PathBuf::from(dir);
+        if p.join("SKILL.md").exists() || p.is_dir() {
+            return Some(p);
+        }
+    }
+
+    // Dev builds: repo `skills/` (CARGO_MANIFEST_DIR/crates/operant-cli → ../..).
+    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let mut candidates = vec![manifest.join("../../skills"), manifest.join("../skills")];
+    if let Some(exe_dir) = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(Path::to_path_buf))
+    {
+        candidates.push(exe_dir.join("../skills"));
+    }
+    candidates
+        .into_iter()
+        .find(|candidate| is_skill_pool_dir(candidate))
+}
+
+/// True when a directory looks like a skill pool: either flat skills
+/// (SKILL.md directly inside) or categorized skills (subdirs each with
+/// their own SKILL.md).
+fn is_skill_pool_dir(dir: &Path) -> bool {
+    if !dir.is_dir() {
+        return false;
+    }
+    if dir.join("SKILL.md").exists() {
+        return true;
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return false;
+    };
+    for entry in entries.flatten() {
+        if entry.path().join("SKILL.md").exists() {
+            return true;
+        }
+    }
+    false
+}
+
+/// Copy the bundled skill pool into the user skills directory.
+///
+/// Skips skills that already exist in the target (unless `force`), so it is
+/// safe to run on every startup. Returns the number of skills seeded.
+pub fn seed_bundled_skills(config: &AppConfig, source: Option<&str>, force: bool) -> Result<usize> {
+    let source_dir = match source {
+        Some(s) => PathBuf::from(s),
+        None => match bundled_skills_dir() {
+            Some(dir) => dir,
+            None => {
+                println!(
+                    "{}",
+                    style("No bundled skill pool found. Install skills with 'operant skills install <name>' or set OPERANT_BUNDLED_SKILLS_DIR.")
+                        .yellow()
+                );
+                return Ok(0);
+            }
+        },
+    };
+
+    if !source_dir.is_dir() {
+        anyhow::bail!(
+            "Bundled skills source '{}' is not a directory",
+            source_dir.display()
+        );
+    }
+
+    let target_dir = &config.skills.root_dir;
+    std::fs::create_dir_all(target_dir).with_context(|| {
+        format!(
+            "Failed to create skills directory '{}'",
+            target_dir.display()
+        )
+    })?;
+
+    let mut copied = 0usize;
+    let mut skipped = 0usize;
+
+    for entry in std::fs::read_dir(&source_dir)
+        .with_context(|| format!("Failed to read '{}'", source_dir.display()))?
+    {
+        let entry = entry?;
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let Some(_name) = path.file_name().map(|n| n.to_string_lossy().to_string()) else {
+            continue;
+        };
+
+        // Category dir (contains DESCRIPTION.md + skill subdirs) vs a single
+        // skill dir (contains SKILL.md directly).
+        let skills: Vec<PathBuf> = if path.join("SKILL.md").exists() {
+            vec![path.clone()]
+        } else {
+            std::fs::read_dir(&path)
+                .map(|entries| {
+                    entries
+                        .filter_map(|e| e.ok())
+                        .map(|e| e.path())
+                        .filter(|p| p.is_dir() && p.join("SKILL.md").exists())
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+
+        for skill in skills {
+            let Some(skill_name) = skill.file_name().map(|n| n.to_string_lossy().to_string())
+            else {
+                continue;
+            };
+            let target = target_dir.join(&skill_name);
+            if target.exists() && !force {
+                skipped += 1;
+                continue;
+            }
+            copy_dir(&skill, &target)?;
+            copied += 1;
+        }
+    }
+
+    println!(
+        "{} Seeded bundled skills: {} copied, {} already present{}",
+        style("✓").green(),
+        copied,
+        skipped,
+        if force { " (forced)" } else { "" }
+    );
+    Ok(copied)
+}
+
+/// Recursively copy a directory.
+fn copy_dir(src: &Path, dst: &Path) -> Result<()> {
+    if !src.is_dir() {
+        anyhow::bail!("Not a directory: {}", src.display());
+    }
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let src_path = entry.path();
+        let dst_path = dst.join(entry.file_name());
+        if src_path.is_dir() {
+            copy_dir(&src_path, &dst_path)?;
+        } else {
+            std::fs::copy(&src_path, &dst_path)?;
+        }
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
