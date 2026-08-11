@@ -441,6 +441,11 @@ pub struct App {
     pub rate_limit_5h_pct: Option<f32>,
     /// Rate limit info — 7-day window usage percentage (0–100).
     pub rate_limit_7day_pct: Option<f32>,
+    /// Shared runtime retry/health metrics (stream-drop retries,
+    /// empty-content retries, memory-sync failures). Set by TuiApp::enter
+    /// to the same `Arc` given to the agent; the footer renders a compact
+    /// status pill from `snapshot()` each frame.
+    pub retry_metrics: std::sync::Arc<operant_core::runtime_metrics::RuntimeMetrics>,
     /// Active worktree name (if in a worktree). Rendered in the footer.
     /// Active worktree branch (if in a worktree). Rendered in the footer.
     /// Agent type badge: "agent" | "coordinator" | "subagent".

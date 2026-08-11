@@ -259,6 +259,12 @@ pub struct OperantAgent {
     /// Iteration budget: thread-safe consume/refund counter matching
     /// hermes-agent's `IterationBudget` class.
     iteration_budget: Arc<IterationBudget>,
+    /// Shared runtime retry/health metrics (stream drops, re-issues,
+    /// empty-content retries, memory-sync failures). The CLI/TUI holds the
+    /// same `Arc` and renders a status pill from `snapshot()` each frame;
+    /// the agent bumps the counters at the existing warn! points so the
+    /// aggregation hook adds no extra logging of its own.
+    metrics: Arc<crate::runtime_metrics::RuntimeMetrics>,
     /// LLM-based context compressor. When set, context overflow errors
     /// trigger LLM summarization (summarize middle turns via auxiliary model)
     /// before falling back to deterministic decay/eviction. Matches
@@ -369,6 +375,7 @@ impl OperantAgent {
                 },
             )),
             iteration_budget: Arc::new(IterationBudget::new(max_iter)),
+            metrics: Arc::new(crate::runtime_metrics::RuntimeMetrics::new()),
             llm_compressor: None,
             credential_pool: None,
             active_credential_id: Arc::new(std::sync::RwLock::new(None)),
@@ -418,6 +425,7 @@ impl OperantAgent {
                 },
             )),
             iteration_budget: Arc::new(IterationBudget::new(max_iter)),
+            metrics: Arc::new(crate::runtime_metrics::RuntimeMetrics::new()),
             llm_compressor: None,
             credential_pool: None,
             active_credential_id: Arc::new(std::sync::RwLock::new(None)),
@@ -434,6 +442,23 @@ impl OperantAgent {
     pub fn with_observer(mut self, observer: Arc<dyn Observer>) -> Self {
         self.observer = Some(observer);
         self
+    }
+
+    /// Share an external runtime-metrics registry with the agent loop (and
+    /// the memory sync executor it creates). The CLI/TUI passes the same
+    /// `Arc` it renders a status pill from, so stream-drop retries and
+    /// memory-sync failures become visible live. When unset, the agent
+    /// keeps its own internal registry (metrics still increment, they just
+    /// aren't observed externally).
+    pub fn with_metrics(mut self, metrics: Arc<crate::runtime_metrics::RuntimeMetrics>) -> Self {
+        self.metrics = metrics;
+        self
+    }
+
+    /// The agent's shared runtime-metrics registry. The TUI reads this to
+    /// render the retry/health pill; tests can assert counter increments.
+    pub fn metrics(&self) -> Arc<crate::runtime_metrics::RuntimeMetrics> {
+        Arc::clone(&self.metrics)
     }
 
     /// Attach a memory manager for long-term memory injection and session distillation.
@@ -462,7 +487,10 @@ impl OperantAgent {
             .memory_sync_executor
             .lock()
             .expect("memory_sync_executor mutex poisoned — programmer error") = Some(
-            crate::memory_provider::MemorySyncExecutor::new(memory_provider.clone()),
+            crate::memory_provider::MemorySyncExecutor::new_with_metrics(
+                memory_provider.clone(),
+                Some(self.metrics.clone()),
+            ),
         );
         self.memory_provider = Some(memory_provider);
         self
@@ -1355,6 +1383,12 @@ impl OperantAgent {
                                 && !classified.should_rotate_credential;
                             if retryable && retry_state.consume_retry() {
                                 self.iteration_budget.refund();
+                                // Aggregation hook: bump the shared retry
+                                // counters so the TUI status pill can show
+                                // stream-drop activity live. (The warn! below
+                                // is the log side of the same event.)
+                                self.metrics.record_stream_drop();
+                                self.metrics.record_stream_retry();
                                 warn!(
                                     error = %e,
                                     retry = retry_state.retry_count,
@@ -1472,6 +1506,7 @@ impl OperantAgent {
                         && empty_content_retries < self.config.max_retries
                     {
                         empty_content_retries += 1;
+                        self.metrics.record_empty_content_retry();
                         warn!(
                             "Empty assistant response — retrying ({}/{})",
                             empty_content_retries, self.config.max_retries
@@ -4119,6 +4154,59 @@ mod tests {
             .await
             .expect("run() should retry the mid-stream drop and return the retried answer");
         assert_eq!(result.content, "retried answer");
+    }
+
+    /// The retry-metrics aggregation hook must bump the shared counters at
+    /// the same points the loop logs its stream-drop warnings — this is what
+    /// the TUI status pill renders. Guards the runtime_metrics wiring end to
+    /// end through a real run() (drop once, retry, succeed).
+    #[tokio::test]
+    async fn run_records_stream_retry_metrics() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db = Database::init(temp_dir.path().join("metrics_test.sqlite")).unwrap();
+
+        let config = AgentConfig {
+            model: "demo".to_string(),
+            max_iterations: 3,
+            tool_timeout: Duration::from_secs(5),
+            request_timeout: Duration::from_secs(10),
+            system_prompt: Some("You are a test agent.".to_string()),
+            stream: true,
+            context_window: 8000,
+            max_healing_attempts: 1,
+            fallback_models: Vec::new(),
+            fallback_on_errors: false,
+            approval_mode: "off".to_string(),
+            record_trajectories: false,
+            skill_nudge_interval: 0,
+            memory_review_interval: 0,
+            max_retries: 3,
+        };
+        let agent = OperantAgent::new(
+            config,
+            Box::new(DropThenOkClient {
+                calls: std::sync::atomic::AtomicUsize::new(0),
+            }),
+            ToolRegistry::new(Duration::from_secs(1)),
+            Arc::new(db),
+        );
+
+        let result = agent
+            .run("hello".to_string())
+            .await
+            .expect("run() should survive the drop and succeed");
+        assert_eq!(result.content, "retried answer");
+
+        // The aggregation hook must have recorded exactly one drop + one
+        // re-issue (the second chat_streaming call succeeded cleanly).
+        let snap = agent.metrics().snapshot();
+        assert_eq!(snap.stream_drops, 1, "one mid-stream drop recorded");
+        assert_eq!(snap.stream_retries, 1, "one re-issue recorded");
+        assert!(snap.has_any());
+        assert!(snap.last_stream_retry_at > 0, "retry timestamp set");
+        // Memory and empty-content counters stay untouched on this path.
+        assert_eq!(snap.memory_sync_failures, 0);
+        assert_eq!(snap.empty_content_retries, 0);
     }
 
     #[test]

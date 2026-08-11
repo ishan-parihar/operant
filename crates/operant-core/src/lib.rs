@@ -81,6 +81,7 @@ pub mod process_registry;
 pub mod profile;
 pub mod rate_limiter;
 pub mod runtime_adapter;
+pub mod runtime_metrics;
 pub mod schema;
 pub mod security;
 pub mod skill_marketplace;

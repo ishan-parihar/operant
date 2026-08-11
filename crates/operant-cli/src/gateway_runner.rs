@@ -591,6 +591,7 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
         event_tx,
         &mcp_manager,
         &app_config.skills.root_dir,
+        None, // gateway has no status bar; the agent keeps its internal registry
     )
     .await?;
     // Wire the permission channel so the agent can request approval for

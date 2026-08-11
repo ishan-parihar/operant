@@ -490,6 +490,59 @@ pub(crate) fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
             ));
         }
 
+        // 4b. Retry/health metrics pill — stream-drop retries, empty-content
+        // retries, and memory-sync failures aggregated from the agent loop
+        // and the memory sync executor. Hidden when the session is healthy;
+        // colored by recency (red = memory failures in the last 60s,
+        // yellow = stream retries, dim = stale history).
+        // (retry-metrics hook — makes resilience activity visible.)
+        {
+            let snap = app.retry_metrics.snapshot();
+            if snap.has_any() {
+                if !parts.is_empty() {
+                    parts.push(Span::raw("  "));
+                }
+                let now_ms = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_millis() as u64)
+                    .unwrap_or(0);
+                let mem_recent = now_ms.saturating_sub(snap.last_memory_failure_at) < 60_000;
+                let stream_recent = now_ms.saturating_sub(snap.last_stream_retry_at) < 60_000
+                    || now_ms.saturating_sub(snap.last_empty_content_retry_at) < 60_000;
+
+                let mut pill = String::new();
+                if snap.stream_retries > 0 {
+                    pill.push_str(&format!("\u{21bb}{}", snap.stream_retries));
+                }
+                if snap.empty_content_retries > 0 {
+                    if !pill.is_empty() {
+                        pill.push(' ');
+                    }
+                    pill.push_str(&format!("\u{2205}{}", snap.empty_content_retries));
+                }
+                if snap.memory_sync_failures > 0 {
+                    if !pill.is_empty() {
+                        pill.push(' ');
+                    }
+                    pill.push_str(&format!("mem\u{2717}{}", snap.memory_sync_failures));
+                }
+                if snap.memory_jobs_dropped > 0 {
+                    if !pill.is_empty() {
+                        pill.push(' ');
+                    }
+                    pill.push_str(&format!("drp:{}", snap.memory_jobs_dropped));
+                }
+                let color = if mem_recent {
+                    Color::Red
+                } else if stream_recent {
+                    Color::Yellow
+                } else {
+                    Color::DarkGray
+                };
+                parts.push(Span::styled(pill, Style::default().fg(color)));
+            }
+        }
+
         // 5. Vim mode — displayed on the left side as "-- MODE --"; nothing extra on right.
 
         // (iter-142: agent_type_badge + worktree_branch render deleted — fields were always None)

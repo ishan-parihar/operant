@@ -10,6 +10,11 @@ pub struct TuiApp {
     /// Whether to skip EnableMouseCapture in the TUI setup. Set by the
     /// --no-mouse CLI flag. (Bug #24 from iter-82 audit.)
     no_mouse: bool,
+    /// Shared runtime retry/health metrics registry. Created once here,
+    /// cloned into `App::retry_metrics` (footer rendering) and into the
+    /// agent via `create_runtime_agent` (counter bumps), so the status bar
+    /// reflects live stream-drop/memory-sync activity.
+    metrics: std::sync::Arc<operant_core::runtime_metrics::RuntimeMetrics>,
 }
 
 impl TuiApp {
@@ -353,6 +358,12 @@ impl TuiApp {
         let mut app =
             crate::tui::app::App::new(app_config, settings, cost_tracker, command_registry);
 
+        // Share the runtime-metrics registry with the footer so stream-drop
+        // retries and memory-sync failures render as a status pill. The same
+        // Arc is passed to create_runtime_agent below (see TuiApp::run).
+        let metrics = std::sync::Arc::new(operant_core::runtime_metrics::RuntimeMetrics::new());
+        app.retry_metrics = std::sync::Arc::clone(&metrics);
+
         // Wire the voice-mode notice: if audio input is available (e.g. not
         // an SSH session, ffmpeg/arecord installed) and the user hasn't
         // enabled voice mode yet, show a one-time hint on startup.
@@ -384,6 +395,7 @@ impl TuiApp {
             app,
             initial_query,
             no_mouse,
+            metrics,
         })
     }
 
@@ -457,6 +469,7 @@ impl TuiApp {
                 agent_tx,
                 &mcp_manager,
                 &skills_dir,
+                Some(std::sync::Arc::clone(&self.metrics)),
             )
             .await
             {
@@ -776,6 +789,7 @@ impl TuiApp {
                     agent_tx,
                     &mcp_manager,
                     &skills_dir,
+                    Some(std::sync::Arc::clone(&self.metrics)),
                 )
                 .await
                 {

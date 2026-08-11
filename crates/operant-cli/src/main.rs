@@ -885,6 +885,7 @@ pub(crate) async fn create_runtime_agent(
     event_tx: mpsc::Sender<AgentEvent>,
     mcp_manager: &McpManager,
     skills_dir: &Path,
+    metrics: Option<std::sync::Arc<operant_core::runtime_metrics::RuntimeMetrics>>,
 ) -> Result<OperantAgent> {
     let core = build_agent_core(
         config,
@@ -932,6 +933,12 @@ pub(crate) async fn create_runtime_agent(
             threshold_percent: config.agent.context_compression_threshold,
             ..Default::default()
         });
+        // Share the external runtime-metrics registry (created by the TUI)
+        // so stream-drop retries and memory-sync failures surface in the
+        // status bar. When None, the agent keeps its own internal registry.
+        if let Some(metrics) = metrics {
+            agent = agent.with_metrics(metrics);
+        }
         // Attach the long-term memory provider so turn/session hooks fire
         // (sync_turn, prefetch, on_session_end, ...). Closes audit gap F1.
         if let Some(provider) = core.memory_provider {
@@ -1181,6 +1188,7 @@ async fn chat_non_tui(config: &AppConfig, system_prompt: Option<&str>) -> Result
         event_tx,
         &mcp_manager,
         &config.skills.root_dir,
+        None,
     )
     .await?;
 

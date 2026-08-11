@@ -33,6 +33,11 @@ use crate::error::Result;
 pub struct MemorySyncExecutor {
     tx: mpsc::Sender<SyncJob>,
     handle: Option<tokio::task::JoinHandle<()>>,
+    /// Shared runtime-metrics registry. When set, sync_turn failures and
+    /// channel-full job drops are counted so the TUI status bar can surface
+    /// memory-backend health. The agent passes its own registry via
+    /// `with_metrics`; standalone usage (tests) leaves it unset.
+    metrics: Option<Arc<crate::runtime_metrics::RuntimeMetrics>>,
 }
 
 enum SyncJob {
@@ -60,11 +65,23 @@ impl MemorySyncExecutor {
     /// dedicated background task. The channel capacity (256) bounds
     /// memory to ~256 pending writes before backpressure kicks in.
     pub fn new(provider: Arc<dyn MemoryProvider>) -> Self {
+        Self::new_with_metrics(provider, None)
+    }
+
+    /// Create the executor with a shared runtime-metrics registry threaded
+    /// into the worker. The agent uses this so sync_turn failures and
+    /// channel-full drops are counted for the TUI status bar; standalone
+    /// callers (tests) pass `None`.
+    pub fn new_with_metrics(
+        provider: Arc<dyn MemoryProvider>,
+        metrics: Option<Arc<crate::runtime_metrics::RuntimeMetrics>>,
+    ) -> Self {
         let (tx, rx) = mpsc::channel(256);
-        let handle = tokio::spawn(Self::run_loop(provider, rx));
+        let handle = tokio::spawn(Self::run_loop(provider, metrics.clone(), rx));
         Self {
             tx,
             handle: Some(handle),
+            metrics,
         }
     }
 
@@ -78,6 +95,9 @@ impl MemorySyncExecutor {
             })
             .is_err()
         {
+            if let Some(m) = &self.metrics {
+                m.record_memory_jobs_dropped();
+            }
             tracing::warn!("MemorySyncExecutor: sync_turn channel full — job dropped");
         }
     }
@@ -93,6 +113,9 @@ impl MemorySyncExecutor {
             })
             .is_err()
         {
+            if let Some(m) = &self.metrics {
+                m.record_memory_jobs_dropped();
+            }
             tracing::warn!("MemorySyncExecutor: memory_write channel full — job dropped");
         }
     }
@@ -107,6 +130,9 @@ impl MemorySyncExecutor {
             })
             .is_err()
         {
+            if let Some(m) = &self.metrics {
+                m.record_memory_jobs_dropped();
+            }
             tracing::warn!("MemorySyncExecutor: delegation channel full — job dropped");
         }
     }
@@ -125,6 +151,9 @@ impl MemorySyncExecutor {
             .try_send(SyncJob::SessionEnd { messages: limited })
             .is_err()
         {
+            if let Some(m) = &self.metrics {
+                m.record_memory_jobs_dropped();
+            }
             tracing::warn!("MemorySyncExecutor: session_end channel full — job dropped");
         }
     }
@@ -143,11 +172,18 @@ impl MemorySyncExecutor {
     }
 
     /// Background worker loop: processes jobs in FIFO order.
-    async fn run_loop(provider: Arc<dyn MemoryProvider>, mut rx: mpsc::Receiver<SyncJob>) {
+    async fn run_loop(
+        provider: Arc<dyn MemoryProvider>,
+        metrics: Option<Arc<crate::runtime_metrics::RuntimeMetrics>>,
+        mut rx: mpsc::Receiver<SyncJob>,
+    ) {
         while let Some(job) = rx.recv().await {
             match job {
                 SyncJob::SyncTurn { user, assistant } => {
                     if let Err(e) = provider.sync_turn(&user, &assistant).await {
+                        if let Some(m) = &metrics {
+                            m.record_memory_sync_failure();
+                        }
                         tracing::warn!(error = %e, "MemorySyncExecutor: sync_turn failed");
                     }
                 }

@@ -260,6 +260,9 @@ impl App {
             context_used_tokens: 0,
             rate_limit_5h_pct: None,
             rate_limit_7day_pct: None,
+            // Replaced by TuiApp::enter with the shared registry so the
+            // footer reflects the live agent's counters.
+            retry_metrics: std::sync::Arc::new(operant_core::runtime_metrics::RuntimeMetrics::new()),
             thinking_expanded: std::collections::HashSet::new(),
             last_msg_area: Cell::new(ratatui::layout::Rect::default()),
             last_selectable_area: Cell::new(ratatui::layout::Rect::default()),
