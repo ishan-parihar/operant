@@ -211,7 +211,9 @@ pub trait MemoryProvider: Send + Sync {
     }
 
     /// Static text for the system prompt (instructions / status line).
-    fn system_prompt_block(&self) -> String {
+    /// NOTE: must be async — providers (agentmemory) fetch live context
+    /// over HTTP, and build_messages runs inside the tokio runtime.
+    async fn system_prompt_block(&self) -> String {
         String::new()
     }
 
@@ -314,7 +316,7 @@ impl MemoryProvider for BuiltinProvider {
         Ok(())
     }
 
-    fn system_prompt_block(&self) -> String {
+    async fn system_prompt_block(&self) -> String {
         "Built-in file memory active (MEMORY.md / USER.md).".to_string()
     }
 

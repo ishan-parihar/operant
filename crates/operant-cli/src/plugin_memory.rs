@@ -118,7 +118,7 @@ impl MemoryProvider for PluginMemoryProvider {
         Ok(())
     }
 
-    fn system_prompt_block(&self) -> String {
+    async fn system_prompt_block(&self) -> String {
         format!(
             "Plugin memory active ({}). Recall with prefetch; save with sync_turn.",
             self.name

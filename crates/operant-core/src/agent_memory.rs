@@ -502,19 +502,24 @@ impl crate::memory_provider::MemoryProvider for AgentMemoryProvider {
         Ok(())
     }
 
-    fn system_prompt_block(&self) -> String {
+    async fn system_prompt_block(&self) -> String {
         // Hermes-plugin parity: the plugin fetches the current context from
         // POST /context at prompt-build time. We mirror that with a short
-        // sync call, gated on availability so a dead server yields the
-        // static fallback instead of stalling the loop.
+        // async call (build_messages runs inside the tokio runtime, so a
+        // blocking reqwest here panics with "Cannot drop a runtime in a
+        // context where blocking is not allowed"), gated on availability so
+        // a dead server yields the static fallback instead of stalling the
+        // loop.
         if self.is_available()
-            && let Ok(value) = self.post_blocking(
-                "/agentmemory/context",
-                serde_json::json!({
-                    "sessionId": self.current_session_id().unwrap_or_default(),
-                    "project": self.current_project(),
-                }),
-            )
+            && let Ok(value) = self
+                .post_json(
+                    "/agentmemory/context",
+                    serde_json::json!({
+                        "sessionId": self.current_session_id().unwrap_or_default(),
+                        "project": self.current_project(),
+                    }),
+                )
+                .await
             && let Some(ctx) = value.get("context").and_then(|v| v.as_str())
             && !ctx.trim().is_empty()
         {

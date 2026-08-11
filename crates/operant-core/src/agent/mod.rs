@@ -1973,7 +1973,7 @@ impl OperantAgent {
         // cache parity path.
         let mut frozen_prefix = self.build_frozen_prefix();
         if let Some(provider) = &self.memory_provider {
-            let block = provider.system_prompt_block();
+            let block = provider.system_prompt_block().await;
             if !block.trim().is_empty() {
                 frozen_prefix.push_str("\n\n");
                 frozen_prefix.push_str(block.trim());
