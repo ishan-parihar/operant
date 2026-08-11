@@ -221,9 +221,12 @@ impl CdpBrowserSession {
 
         // Auto-load the persistent cookie store into the fresh session so
         // previously imported browser cookies (accounts) apply immediately
-        // without re-importing or re-logging-in. (Re-applied again in
-        // `ensure_page` once a page target exists — obscura only applies
-        // cookies set while a page is live.)
+        // without re-importing or re-logging-in. This MUST happen before any
+        // page target exists: obscura only makes browser-level
+        // Storage.setCookies visible to pages created AFTER the set (a set
+        // performed on a live page is never seen by that page, even after
+        // navigation). `ensure_page` therefore must NOT re-apply (verified
+        // live: set-before-page = authenticated, set-after-page = anonymous).
         let session = Self {
             ws_url,
             child,
@@ -237,17 +240,31 @@ impl CdpBrowserSession {
     /// Load the persistent cookie store and inject it into the session at
     /// browser level. Best-effort: a missing/unreadable store or a server
     /// that rejects the endpoint is logged, never fatal.
+    ///
+    /// Cookies are sent in chunks of 400: obscura (like real Chromium CDP)
+    /// rejects oversized single `Storage.setCookies` frames, and a multi-
+    /// hundred-cookie store must still load completely.
     async fn apply_stored_cookies(&self) {
         let stored = crate::cookies::load_cookie_store();
         if stored.is_empty() {
             return;
         }
-        let params = serde_json::json!({
-            "cookies": stored.iter().map(|c| c.to_cdp_value()).collect::<Vec<_>>()
-        });
-        match self.send(None, "Storage.setCookies", params).await {
-            Ok(_) => info!(count = stored.len(), "auto-loaded cookies from store"),
-            Err(e) => warn!(error = %e, "failed to auto-load cookies from store"),
+        let mut applied = 0usize;
+        for chunk in stored.chunks(400) {
+            let params = serde_json::json!({
+                "cookies": chunk.iter().map(|c| c.to_cdp_value()).collect::<Vec<_>>()
+            });
+            match self.send(None, "Storage.setCookies", params).await {
+                Ok(_) => applied += chunk.len(),
+                Err(e) => warn!(error = %e, "failed to auto-load cookies (chunk)"),
+            }
+        }
+        if applied > 0 {
+            info!(
+                applied,
+                total = stored.len(),
+                "auto-loaded cookies from store"
+            );
         }
     }
 
@@ -345,11 +362,12 @@ impl CdpBrowserSession {
         // reliably serviced (some builds reject methods on non-enabled domains).
         let _ = self.page_cmd(&page, "Page.enable", json!({})).await;
 
-        // Re-apply stored cookies once a page target exists. Obscura applies
-        // browser-level Storage.setCookies to pages created BEFORE the set,
-        // so cookies loaded at `start()` (when no page exists yet) must be
-        // re-injected here so the first real page actually carries them.
-        self.apply_stored_cookies().await;
+        // Deliberately NO cookie re-apply here. `start()` already loaded the
+        // store at browser level before any page existed, and obscura only
+        // makes those cookies visible to pages created AFTER the set — so
+        // this page inherits them automatically. Re-applying now would be a
+        // set-after-page, which obscura never reflects on this page (even
+        // after navigation) and would silently leave the session logged out.
         let _ = self.page_cmd(&page, "Runtime.enable", json!({})).await;
         *guard = Some(PageTarget {
             target_id: page.target_id.clone(),
@@ -476,25 +494,33 @@ pub async fn import_cookies(cookies: &[crate::cookies::Cookie]) -> Result<usize>
     crate::cookies::save_cookie_store(cookies);
     let session = get_or_start_shared_session().await?;
     let mut applied = 0usize;
-    // Try the batch endpoint first; fall back to per-cookie `Network.setCookie`
-    // if the server rejects the batch (some CDP servers only implement one).
-    let params = serde_json::json!({
-        "cookies": cookies.iter().map(|c| c.to_cdp_value()).collect::<Vec<_>>()
-    });
-    match session.send(None, "Storage.setCookies", params).await {
-        Ok(_) => applied = cookies.len(),
-        Err(_) => {
-            for c in cookies {
-                let ok = session
-                    .send(None, "Network.setCookie", c.to_cdp_value())
-                    .await
-                    .is_ok();
-                if ok {
-                    applied += 1;
+    // Batch in chunks of 400 (oversized single frames get rejected); fall
+    // back to per-cookie `Network.setCookie` only if a chunk is rejected.
+    for chunk in cookies.chunks(400) {
+        let params = serde_json::json!({
+            "cookies": chunk.iter().map(|c| c.to_cdp_value()).collect::<Vec<_>>()
+        });
+        match session.send(None, "Storage.setCookies", params).await {
+            Ok(_) => applied += chunk.len(),
+            Err(_) => {
+                for c in chunk {
+                    let ok = session
+                        .send(None, "Network.setCookie", c.to_cdp_value())
+                        .await
+                        .is_ok();
+                    if ok {
+                        applied += 1;
+                    }
                 }
             }
         }
     }
+    // Cookies set at browser level only reach pages created AFTER the set.
+    // If the session already has a page target (e.g. a mid-session import via
+    // the cookie_import tool), forget it so the next ensure_page() creates a
+    // fresh page that inherits the freshly applied jar. The abandoned target
+    // lingers harmlessly — the agent re-navigates anyway.
+    *session.page.lock().await = None;
     Ok(applied)
 }
 
