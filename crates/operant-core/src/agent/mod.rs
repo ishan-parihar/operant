@@ -1737,10 +1737,20 @@ impl OperantAgent {
 
                     // Add tool results to messages and persist them (truncated)
                     for result in tool_results {
+                        // Secret redaction (hermes `redact.py` parity): tool
+                        // output can carry env assignments, API keys, JWT
+                        // tokens, connection strings, etc. from terminal
+                        // output or file reads. Redact before the text is
+                        // pushed to the LLM-bound message list, persisted to
+                        // the session DB, or written to the trajectory.
                         let content = if result.success {
-                            truncate_tool_result(&result.name, &result.content)
+                            crate::redaction::redact_sensitive_text_if_enabled(
+                                &truncate_tool_result(&result.name, &result.content),
+                            )
                         } else {
-                            result.error.as_deref().unwrap_or("Error").to_string()
+                            crate::redaction::redact_sensitive_text_if_enabled(
+                                result.error.as_deref().unwrap_or("Error"),
+                            )
                         };
 
                         // ── Memory write mirroring (hermes parity) ────────

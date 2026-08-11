@@ -444,6 +444,14 @@ impl OpenAIClient {
     ) -> Result<serde_json::Value> {
         let mut api_messages: Vec<Value> = messages.iter().map(|m| m.to_value()).collect();
 
+        // Secret redaction (hermes `redact.py` parity): scrub sensitive
+        // content from every message before it reaches the provider. Only
+        // text `content` / `reasoning` fields are redacted — structured
+        // tool-call arguments are left verbatim (the model needs those).
+        for msg in api_messages.iter_mut() {
+            crate::redaction::redact_api_message_content(msg);
+        }
+
         // Apply Anthropic prompt caching for OpenRouter-compatible endpoints.
         // When the base URL contains "openrouter", apply the system_and_3
         // caching strategy (system prompt + last 3 non-system messages) to

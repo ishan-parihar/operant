@@ -1377,6 +1377,11 @@ async fn main() -> Result<()> {
         CliConfig::default()
     });
 
+    // Secret redaction toggle (hermes `HERMES_REDACT_SECRETS` parity). The
+    // core loop redacts tool output / message content at the LLM boundary;
+    // honor `security.redact_secrets` (default true) from CLI config.
+    operant_core::redaction::set_redact_enabled(cli_config.security.redact_secrets.unwrap_or(true));
+
     // Load core AppConfig (TOML-based) and layer on any values from CliConfig
     let mut loaded = load_app_config(cli.config.as_deref())?;
 

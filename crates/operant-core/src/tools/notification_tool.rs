@@ -102,6 +102,61 @@ impl OperantTool for ApprovalTool {
 
         let reason = args.get("reason").and_then(|v| v.as_str());
 
+        // Interactive approval (hermes parity): when an interactive surface is
+        // attached (TUI ask-user dialog, or a gateway channel that handles
+        // user questions), block and surface the request as a yes/no prompt.
+        // The operator's answer flows back through the same user_question
+        // channel the `clarify` tool uses. In non-interactive (CLI/headless)
+        // mode, fall back to a `pending` result — the runtime's own
+        // pre-execution ApprovalManager gates dangerous tools regardless.
+        let full_request = match reason {
+            Some(r) => format!("{request}\n\nReason: {r}"),
+            None => request.to_string(),
+        };
+        if let Some(reply_rx) = crate::user_question::try_send_user_question(
+            full_request,
+            Some(vec!["approve".to_string(), "deny".to_string()]),
+        ) {
+            match reply_rx.await {
+                Ok(answer) => {
+                    let approved = answer.trim().eq_ignore_ascii_case("approve")
+                        || answer.trim().eq_ignore_ascii_case("yes")
+                        || answer.trim().eq_ignore_ascii_case("y");
+                    if approved {
+                        return ToolResult::success(
+                            "approval_request",
+                            json!({
+                                "success": true,
+                                "request": request,
+                                "reason": reason,
+                                "status": "approved",
+                                "approved": true
+                            }),
+                        );
+                    }
+                    return ToolResult::success(
+                        "approval_request",
+                        json!({
+                            "success": false,
+                            "request": request,
+                            "reason": reason,
+                            "status": "denied",
+                            "approved": false
+                        }),
+                    );
+                }
+                Err(_) => {
+                    // Operator dismissed the prompt (Esc) — treat as denied.
+                    return ToolResult::error(
+                        "approval_request",
+                        "approval request dismissed by the user",
+                    );
+                }
+            }
+        }
+
+        // Non-interactive fallback: surface the pending request; the runtime
+        // approval gate still applies to dangerous tools.
         ToolResult::success(
             "approval_request",
             json!({
@@ -109,7 +164,7 @@ impl OperantTool for ApprovalTool {
                 "request": request,
                 "reason": reason,
                 "status": "pending",
-                "hint": "Use approval_respond to approve or deny"
+                "hint": "Approval is handled interactively when a TUI or gateway channel is attached; otherwise the runtime approval gate applies."
             }),
         )
     }
