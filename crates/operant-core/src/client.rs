@@ -785,12 +785,38 @@ pub struct ToolCall {
 /// subsequent argument chunks. The agent would then see an empty `arguments`
 /// string and produce `Invalid JSON: EOF while parsing a value at line 1
 /// column 0` for every tool call.
+///
+/// Some gateways (e.g. opencode.ai/zen) additionally emit explicit `null`
+/// values (`"name":null`) on continuation deltas instead of omitting the key.
+/// `#[serde(default)]` alone only covers MISSING keys — an explicit `null`
+/// still errors with "invalid type: null, expected a string", which made
+/// `parse_sse_event` drop every continuation event and silently discard all
+/// argument fragments. `deserialize_with` treats both `null` and a missing
+/// key as an empty string.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolCallFunction {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_string_or_null")]
     pub name: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_string_or_null")]
     pub arguments: String,
+}
+
+/// Deserialize a `String` field, mapping JSON `null` (or a missing key) to an
+/// empty string instead of failing. OpenAI-compatible streaming gateways emit
+/// `"name":null` / `"arguments":null` on tool-call continuation deltas; this
+/// keeps the whole SSE event parseable so incremental argument fragments are
+/// accumulated rather than dropped.
+///
+/// Note: the return type is fully qualified because this crate defines its own
+/// `error::Result` alias that would otherwise shadow `std::result::Result`.
+fn de_string_or_null<'de, D>(deserializer: D) -> std::result::Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    match Option::<String>::deserialize(deserializer) {
+        Ok(value) => Ok(value.unwrap_or_default()),
+        Err(e) => Err(serde::de::Error::custom(e)),
+    }
 }
 
 /// Chat completion response (non-streaming)
@@ -1432,5 +1458,57 @@ mod tests {
 
         assert_eq!(request["max_tokens"], 4096);
         assert!(request.get("temperature").is_none());
+    }
+
+    #[test]
+    fn tool_call_function_tolerates_explicit_null_fields() {
+        // Regression: opencode.ai/zen emits continuation deltas with explicit
+        // `null` values ("name":null, "arguments":null) instead of omitting
+        // the keys. Previously `#[serde(default)]` only handled missing keys,
+        // so every continuation delta failed to deserialize, `parse_sse_event`
+        // dropped the whole event, and all incremental argument fragments were
+        // silently lost — the agent saw tool calls with empty arguments.
+        let payload = r#"{"index":0,"id":null,"type":"function","function":{"name":null,"arguments":"\"query\": \"rus"}}"#;
+        let delta: StreamingToolCallDelta =
+            serde_json::from_str(payload).expect("null fields must deserialize to empty strings");
+        assert_eq!(delta.function.as_ref().unwrap().name, "");
+        assert_eq!(
+            delta.function.as_ref().unwrap().arguments,
+            r#""query": "rus"#
+        );
+    }
+
+    #[test]
+    fn tool_call_function_tolerates_null_arguments_fragment() {
+        // Some gateways send `"arguments":null` on deltas that carry no
+        // argument fragment at all (e.g. a second tool call's bare
+        // registration delta). Must not fail the whole SSE event.
+        let payload = r#"{"index":1,"id":"call_2","type":"function","function":{"name":"b","arguments":null}}"#;
+        let delta: StreamingToolCallDelta =
+            serde_json::from_str(payload).expect("null arguments must deserialize");
+        assert_eq!(delta.function.as_ref().unwrap().name, "b");
+        assert_eq!(delta.function.as_ref().unwrap().arguments, "");
+    }
+
+    #[test]
+    fn tool_call_function_null_fields_survive_sse_event_parse() {
+        // Regression: continuation deltas with explicit `name:null` must not
+        // make `try_parse_next_sse_event` drop the whole event (which used to
+        // discard every argument fragment). Feed the exact opencode.ai/zen
+        // continuation delta through the real SSE parser.
+        let mut buffer = String::from(
+            r#"data: {"id":"router-1","object":"chat.completion.chunk","created":1786472552,"model":"deepseek-v4-flash-free","choices":[{"index":0,"finish_reason":null,"logprobs":null,"delta":{"role":null,"content":null,"reasoning_content":null,"tool_calls":[{"index":0,"id":null,"type":"function","function":{"name":null,"arguments":"\"query\": \"rus"}}]}}],"usage":null}
+
+"#,
+        );
+        let event = try_parse_next_sse_event(&mut buffer, false)
+            .expect("null-name delta must parse into an SSE event");
+        let deltas = &event.choices[0].delta.tool_calls;
+        let calls = deltas.as_ref().expect("tool_calls present");
+        assert_eq!(calls.len(), 1);
+        assert_eq!(
+            calls[0].function.as_ref().unwrap().arguments,
+            r#""query": "rus"#
+        );
     }
 }

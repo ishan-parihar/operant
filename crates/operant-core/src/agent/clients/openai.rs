@@ -363,4 +363,34 @@ mod tests {
         assert_eq!(calls[0].id, "call_b");
         assert_eq!(calls[1].id, "call_a");
     }
+
+    #[test]
+    fn null_name_deltas_accumulate_into_full_arguments() {
+        // Regression for opencode.ai/zen: continuation deltas carry explicit
+        // `name:null` (previously a hard deserialization error that made
+        // parse_sse_event drop the event, discarding every argument fragment).
+        // Three events, first with id+name, next two with only argument
+        // fragments, must merge into one tool call with full JSON arguments.
+        let events = [
+            r#"{"id":"evt1","object":"chat.completion.chunk","created":0,"model":"m","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_64763002df6e4fe7b61c8004","type":"function","function":{"name":"web_search","arguments":""}}]}}]}"#,
+            r#"{"id":"evt2","object":"chat.completion.chunk","created":0,"model":"m","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":null,"type":"function","function":{"name":null,"arguments":"{"}}]}}]}"#,
+            r#"{"id":"evt3","object":"chat.completion.chunk","created":0,"model":"m","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":null,"type":"function","function":{"name":null,"arguments":"\"query\": \"rust async 2026\"}"}}]}}]}"#,
+        ];
+        let mut state = StreamToolCallIndex::default();
+        let mut merged: Vec<ToolCall> = Vec::new();
+        for payload in events {
+            let event: ChatStreamEvent = serde_json::from_str(payload).unwrap();
+            if let Some(calls) = extract_tool_calls_from_stream_event(&event, &mut state) {
+                for tc in calls {
+                    crate::agent::merge_stream_tool_call(&mut merged, tc);
+                }
+            }
+        }
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].function.name, "web_search");
+        assert_eq!(
+            merged[0].function.arguments,
+            r#"{"query": "rust async 2026"}"#
+        );
+    }
 }
