@@ -292,40 +292,123 @@ fn aes128_cbc_decrypt(key: &[u8; 16], iv: &[u8; 16], data: &[u8]) -> Option<Vec<
     Some(out[..out.len() - pad].to_vec())
 }
 
-/// Decrypt a Chromium-family `encrypted_value` blob (AES-128-CBC, "v10"
-/// prefix) with the key from `Local State` (`os_crypt.encrypted_key`).
+/// Derive the Chromium v10 decryption key for a profile.
 ///
-/// On Linux, when the OS keyring is unavailable Chromium falls back to a
-/// hardcoded "peanuts" password; when a keyring is used the real key is
-/// stored in `Local State` base64-encoded with a "DPAPI" prefix (Windows) or
-/// a raw prefix. This implements the standard Linux scheme:
-/// - `encrypted_key` in Local State: base64, prefixed `DPAPI` on Windows.
-/// - AES-128-CBC decrypt of the key blob with key = SHA256("peanuts")[..16]
-///   and IV = 16 zero bytes (Chromium's `OSCrypt::DecryptString`).
-fn chromium_decryption_key(local_state_path: &std::path::Path) -> Option<Vec<u8>> {
+/// Resolution order (standard Linux Chromium scheme):
+/// 1. `os_crypt.encrypted_key` in Local State — base64 blob, AES-128-CBC
+///    wrapped with key = SHA256("peanuts")[:16], IV = 16 zeros. On Windows
+///    the blob carries a "DPAPI" prefix; on Linux there is none.
+/// 2. The OS keyring (Linux): Chromium stores the raw AES key in the
+///    Secret Service / KWallet when `encrypted_key` is absent. Queried via
+///    the `secret-tool` CLI if present (schema
+///    `chrome_libsecret_os_crypt_password_v2` / `_v1`, application
+///    `chrome`/`chromium`/`brave`/`edge`).
+/// 3. The hardcoded "peanuts" fallback key (older headless profiles).
+fn chromium_decryption_key(local_state_path: Option<&std::path::Path>) -> Option<Vec<u8>> {
     use sha2::{Digest, Sha256};
 
-    let local_state: Value =
-        serde_json::from_str(&std::fs::read_to_string(local_state_path).ok()?).ok()?;
-    let enc_key_b64 = local_state
-        .get("os_crypt")?
-        .get("encrypted_key")?
-        .as_str()?;
-    let enc_key =
-        base64::Engine::decode(&base64::engine::general_purpose::STANDARD, enc_key_b64).ok()?;
-    // Strip the "DPAPI" prefix (Windows). On Linux there is no prefix.
-    let key_blob = if enc_key.starts_with(b"DPAPI") {
-        &enc_key[5..]
-    } else {
-        &enc_key[..]
-    };
+    let peanuts: [u8; 16] = Sha256::digest(b"peanuts")[..16].try_into().ok()?;
 
-    // Chromium's Linux fallback: the key blob is itself AES-128-CBC
-    // encrypted with key = SHA256("peanuts")[:16], IV = 16 zeros.
-    let key_material = Sha256::digest(b"peanuts");
-    let aes_key: &[u8; 16] = &key_material[..16].try_into().ok()?;
-    let iv = [0u8; 16];
-    aes128_cbc_decrypt(aes_key, &iv, key_blob)
+    // 1. Local State `encrypted_key` (Windows DPAPI blob / Linux wrapped key).
+    if let Some(ls) = local_state_path {
+        let local_state: Value = serde_json::from_str(&std::fs::read_to_string(ls).ok()?).ok()?;
+        if let Some(enc_key_b64) = local_state
+            .get("os_crypt")
+            .and_then(|o| o.get("encrypted_key"))
+            .and_then(|k| k.as_str())
+            .and_then(|b64| {
+                base64::Engine::decode(&base64::engine::general_purpose::STANDARD, b64).ok()
+            })
+            .and_then(|enc_key| {
+                let key_blob = if enc_key.starts_with(b"DPAPI") {
+                    &enc_key[5..]
+                } else {
+                    &enc_key[..]
+                };
+                aes128_cbc_decrypt(&peanuts, &[0u8; 16], key_blob)
+            })
+        {
+            return Some(enc_key_b64);
+        }
+    }
+
+    // 2. Linux OS keyring (secret service / kwallet).
+    if let Some(key) = chromium_keyring_key() {
+        return Some(key);
+    }
+
+    // 3. Peanuts fallback (headless / no-keyring profiles).
+    Some(peanuts.to_vec())
+}
+
+/// Query the Linux OS keyring for the Chromium v10 key via `secret-tool`.
+///
+/// Returns the raw key when found. `None` when the tool is unavailable, the
+/// keyring has no matching entry, or the secret isn't a plausible key.
+fn chromium_keyring_key() -> Option<Vec<u8>> {
+    use std::process::Command;
+
+    let secret_tool = which_secret_tool()?;
+    let schemas = [
+        "chrome_libsecret_os_crypt_password_v2",
+        "chrome_libsecret_os_crypt_password_v1",
+    ];
+    let apps = ["brave", "chrome", "chromium", "edge"];
+    for schema in schemas {
+        for app in apps {
+            let out = Command::new(&secret_tool)
+                .args(["search", "--all"])
+                .arg(format!("xdg:schema {schema}"))
+                .arg(format!("application {app}"))
+                .output()
+                .ok()?;
+            let text = String::from_utf8_lossy(&out.stdout);
+            if let Some(secret) = parse_secret_tool_secret(&text) {
+                // The keyring secret is the raw 16/32-byte key (sometimes
+                // base64-encoded by some distros).
+                let raw = secret.as_bytes();
+                if raw.len() >= 16 {
+                    return Some(raw[..16].to_vec());
+                }
+                if let Some(dec) = base64::Engine::decode(
+                    &base64::engine::general_purpose::STANDARD,
+                    secret.trim(),
+                )
+                .ok()
+                .filter(|d| d.len() >= 16)
+                {
+                    return Some(dec[..16].to_vec());
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Locate the `secret-tool` binary on PATH.
+fn which_secret_tool() -> Option<std::path::PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    for dir in std::env::split_paths(&path) {
+        let cand = dir.join("secret-tool");
+        if cand.is_file() {
+            return Some(cand);
+        }
+    }
+    None
+}
+
+/// Extract the `secret = ...` value from `secret-tool search --all` output.
+fn parse_secret_tool_secret(text: &str) -> Option<String> {
+    // Output blocks look like:
+    //   [keyring]\n  label = ...\n  secret = <value>\n  created = ...
+    let mut secret = None;
+    for line in text.lines() {
+        let line = line.trim();
+        if let Some(rest) = line.strip_prefix("secret =") {
+            secret = Some(rest.trim().to_string());
+        }
+    }
+    secret
 }
 
 fn chromium_decrypt_value(encrypted: &[u8], key: &[u8]) -> Option<String> {
@@ -340,27 +423,41 @@ fn chromium_decrypt_value(encrypted: &[u8], key: &[u8]) -> Option<String> {
     String::from_utf8(aes128_cbc_decrypt(key, &iv, payload)?).ok()
 }
 
+/// Diagnostic summary of a Chromium cookie-DB read.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct ChromiumReadReport {
+    /// Total rows in the `cookies` table.
+    pub total_rows: usize,
+    /// Cookies successfully decrypted / read as plaintext.
+    pub decrypted: usize,
+    /// Rows using v11+ app-bound encryption (undecryptable by design).
+    pub app_bound: usize,
+    /// Rows with unrecognized / undecryptable payloads.
+    pub undecryptable: usize,
+}
+
 /// Read a Chromium-family `Cookies` SQLite DB (Chrome/Brave/Edge/…).
-/// Requires the matching `Local State` for v10 decryption. Returns cookies
-/// with decrypted values; undecryptable rows are skipped.
-pub fn read_chromium_cookies(
+/// Returns the decrypted cookies plus a diagnostic report. Undecryptable
+/// rows (v11 app-bound, unknown keyring) are counted, not silently dropped.
+pub fn read_chromium_cookies_report(
     db_path: &std::path::Path,
     local_state_path: Option<&std::path::Path>,
-) -> Vec<Cookie> {
-    let key = local_state_path.and_then(chromium_decryption_key);
+) -> (Vec<Cookie>, ChromiumReadReport) {
+    let mut report = ChromiumReadReport::default();
+    let key = chromium_decryption_key(local_state_path);
     let conn = match rusqlite::Connection::open_with_flags(
         db_path,
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
     ) {
         Ok(c) => c,
-        Err(_) => return Vec::new(),
+        Err(_) => return (Vec::new(), report),
     };
     let mut stmt = match conn.prepare(
         "SELECT host_key, name, value, encrypted_value, path, expires_utc, \
          is_secure, is_httponly, samesite FROM cookies",
     ) {
         Ok(s) => s,
-        Err(_) => return Vec::new(),
+        Err(_) => return (Vec::new(), report),
     };
     let rows = stmt
         .query_map([], |row| {
@@ -381,19 +478,28 @@ pub fn read_chromium_cookies(
     let mut cookies = Vec::new();
     if let Some(rows) = rows {
         for row in rows.flatten() {
+            report.total_rows += 1;
             let (host, name, plain, encrypted, path, expires_utc, secure, http_only, same_site) =
                 row;
             let value = if !encrypted.is_empty() {
+                if encrypted.len() >= 3 && &encrypted[..3] == b"v11" {
+                    report.app_bound += 1;
+                    continue; // App-bound encryption: not decryptable by design.
+                }
                 match key
                     .as_deref()
                     .and_then(|k| chromium_decrypt_value(&encrypted, k))
                 {
                     Some(v) => v,
-                    None => continue, // Undecryptable (keyring-bound profile).
+                    None => {
+                        report.undecryptable += 1;
+                        continue;
+                    }
                 }
             } else {
                 plain
             };
+            report.decrypted += 1;
             // Chrome expiry is microseconds since 1601-01-01.
             let expires = if expires_utc > 0 {
                 Some(chromium_time_to_unix(expires_utc))
@@ -422,7 +528,16 @@ pub fn read_chromium_cookies(
             });
         }
     }
-    cookies
+    (cookies, report)
+}
+
+/// Convenience wrapper returning just the cookies (see
+/// [`read_chromium_cookies_report`]).
+pub fn read_chromium_cookies(
+    db_path: &std::path::Path,
+    local_state_path: Option<&std::path::Path>,
+) -> Vec<Cookie> {
+    read_chromium_cookies_report(db_path, local_state_path).0
 }
 
 /// Convert a Chromium "microseconds since 1601" timestamp to Unix seconds.
@@ -635,5 +750,79 @@ mod tests {
     fn chromium_missing_db_returns_empty() {
         let cookies = read_chromium_cookies(std::path::Path::new("/nonexistent/Cookies"), None);
         assert!(cookies.is_empty());
+    }
+
+    #[test]
+    fn parses_secret_tool_output() {
+        let text = "[keyring]\n  label = Chrome Safe Storage\n  secret = S0VZX1ZBTFVFISEhIQ==\n  created = 2024-01-01\n";
+        assert_eq!(
+            parse_secret_tool_secret(text).as_deref(),
+            Some("S0VZX1ZBTFVFISEhIQ==")
+        );
+    }
+
+    #[test]
+    fn chromium_keyring_key_base64_decodes() {
+        // Base64 of "KEY_VALUE_123456" (16 bytes) — must decode to the raw key.
+        let _secret = "S0VZX1ZBTFVFXzEyMzQ1Ng==";
+        let decoded =
+            base64::Engine::decode(&base64::engine::general_purpose::STANDARD, _secret).unwrap();
+        assert_eq!(decoded.len(), 16);
+        assert_eq!(decoded, b"KEY_VALUE_123456");
+    }
+
+    #[test]
+    fn chromium_read_report_counts_app_bound() {
+        // Build a synthetic Cookies DB in a temp dir: one v11 app-bound row
+        // (undecryptable by design) and one plaintext row.
+        let dir = std::env::temp_dir().join(format!("cookies-report-test-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let db = dir.join("Cookies");
+        let _ = std::fs::remove_file(&db);
+        {
+            let conn = rusqlite::Connection::open(&db).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE cookies (host_key TEXT NOT NULL, name TEXT NOT NULL, \
+                 value TEXT NOT NULL, path TEXT NOT NULL, expires_utc INTEGER NOT NULL, \
+                 is_secure INTEGER NOT NULL, is_httponly INTEGER NOT NULL, \
+                 last_access_utc INTEGER NOT NULL DEFAULT 0, has_expires INTEGER NOT NULL \
+                 DEFAULT 1, is_persistent INTEGER NOT NULL DEFAULT 1, priority INTEGER \
+                 NOT NULL DEFAULT 1, encrypted_value BLOB NOT NULL, firstpartyonly \
+                 INTEGER NOT NULL DEFAULT 0, samesite INTEGER NOT NULL DEFAULT 0, \
+                 source_scheme INTEGER NOT NULL DEFAULT 0, source_port INTEGER NOT NULL \
+                 DEFAULT -1, is_same_party INTEGER NOT NULL DEFAULT 0)",
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO cookies (host_key, name, value, path, expires_utc, \
+                 is_secure, is_httponly, encrypted_value, samesite) VALUES \
+                 (?1, ?2, ?3, ?4, 0, 0, 0, ?5, 1)",
+                rusqlite::params![
+                    ".appbound.example",
+                    "sid",
+                    "",
+                    "/",
+                    b"v11\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00".to_vec()
+                ],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO cookies (host_key, name, value, path, expires_utc, \
+                 is_secure, is_httponly, encrypted_value, samesite) VALUES \
+                 (?1, ?2, ?3, ?4, 0, 0, 0, ?5, 1)",
+                rusqlite::params![".plain.example", "pref", "dark", "/", Vec::<u8>::new()],
+            )
+            .unwrap();
+        }
+
+        let (cookies, report) = read_chromium_cookies_report(&db, None);
+        assert_eq!(report.total_rows, 2);
+        assert_eq!(report.app_bound, 1);
+        assert_eq!(report.decrypted, 1);
+        assert_eq!(cookies.len(), 1);
+        assert_eq!(cookies[0].domain, ".plain.example");
+        assert_eq!(cookies[0].value, "dark");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

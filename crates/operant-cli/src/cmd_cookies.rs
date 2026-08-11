@@ -77,14 +77,40 @@ fn load_cookies(file: Option<PathBuf>, browser: Option<String>) -> Result<Vec<Co
         let cookies = if label == "firefox" {
             cookies::read_firefox_cookies(&db)
         } else {
-            let cookies = cookies::read_chromium_cookies(&db, local_state.as_deref());
+            let (cookies, report) =
+                cookies::read_chromium_cookies_report(&db, local_state.as_deref());
             if cookies.is_empty() {
+                let mut hints = Vec::new();
+                if report.app_bound > 0 {
+                    hints.push(format!(
+                        "{label} encrypts {} cookies with app-bound encryption \
+                         (v11) — a deliberate anti-cookie-theft layer that only \
+                         the browser itself can decrypt.",
+                        report.app_bound
+                    ));
+                }
+                if report.undecryptable > 0 || report.total_rows == 0 {
+                    let n = report.undecryptable;
+                    hints.push(format!(
+                        "{n} cookie(s) use a key stored in the \
+                         OS keyring that could not be resolved on this machine."
+                    ));
+                }
                 anyhow::bail!(
-                    "Read 0 cookies from {label} ({}). The profile likely uses \
-                     OS-keyring encryption this build can't decrypt. Export a \
-                     cookies.txt from the browser and import it with \
-                     `operant cookies import <file>` instead.",
-                    db.display()
+                    "Read 0 cookies from {label} ({}). {}\n\nThe universal fix for \
+                     app-bound/keyring profiles: export a cookies.txt from the \
+                     browser (e.g. with the 'Get cookies.txt LOCALLY' or \
+                     'Cookie-Editor' extension) and import it with \
+                     `operant cookies import <file>`.",
+                    db.display(),
+                    hints.join(" ")
+                );
+            }
+            if report.app_bound > 0 || report.undecryptable > 0 {
+                eprintln!(
+                    "Note: skipped {} app-bound + {} undecryptable cookie(s) \
+                     (modern Chromium anti-theft encryption).",
+                    report.app_bound, report.undecryptable
                 );
             }
             cookies
