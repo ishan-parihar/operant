@@ -9,7 +9,7 @@
 ![MCP](https://img.shields.io/badge/MCP-1.0-orange?logo=modelcontextprotocol)
 ![Local](https://img.shields.io/badge/local--first-34d399)
 
-**Your terminal-native AI agent.** Persistent memory, 60+ tools, skills, MCP, and messaging channels — built in Rust, run from your shell, and fully under your control.
+**Your terminal-native AI agent.** Persistent memory, 60+ JSON-schema tools, skills, MCP, and messaging channels — built in Rust, run from your shell, and fully under your control.
 
 ![Operant hero](assets/readme/hero.svg)
 
@@ -32,14 +32,6 @@ One-shot runs need no TUI at all:
 ```bash
 operant run --query "Audit the browser stack: check IGS web tools and the CDP browser"
 ```
-
----
-
-## Proof
-
-| TUI session | Chat view |
-|:---:|:---:|
-| ![TUI](assets/main.png) | ![Chat](assets/chat.png) |
 
 ---
 
