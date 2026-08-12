@@ -2,7 +2,9 @@
 //!
 //! Each tool calls `AftBridge::call(command, params)` under the hood,
 //! translating the agent's tool-call args into aft's NDJSON protocol
-//! and aft's response back into a `ToolResult`.
+//! (v0.49.x: params FLAT at top level, except `bash` which is nested and
+//! async — see [`AftBridge::bash`]) and aft's flat response back into a
+//! `ToolResult`.
 //!
 //! Tools are registered via `register_aft_tools()`, which takes an
 //! `AftBridgePool` shared across all tools. The pool lazily spawns one
@@ -26,7 +28,10 @@ use crate::tools::{OperantTool, ToolContext, ToolRegistry, ToolResult};
 /// Register all AFT tools with a registry, sharing the given bridge pool.
 ///
 /// The pool lazily spawns one aft subprocess per project root. Call this
-/// once at startup if AFT is enabled in config.
+/// once at startup if AFT is enabled in config. Registration is best-effort:
+/// every tool is registered regardless of whether the binary resolves —
+/// failures surface at call time, and the CLI keeps native tools as a
+/// fallback (natural degradation, no tool-less agent).
 pub async fn register_aft_tools(registry: &ToolRegistry, pool: Arc<AftBridgePool>) -> Result<()> {
     registry
         .register(AftReadTool { pool: pool.clone() })
@@ -56,7 +61,7 @@ pub async fn register_aft_tools(registry: &ToolRegistry, pool: Arc<AftBridgePool
         .register(AftInspectTool { pool: pool.clone() })
         .await?;
     registry
-        .register(AftCallgraphTool { pool: pool.clone() })
+        .register(AftCallersTool { pool: pool.clone() })
         .await?;
     registry
         .register(AftGrepTool { pool: pool.clone() })
@@ -70,7 +75,16 @@ pub async fn register_aft_tools(registry: &ToolRegistry, pool: Arc<AftBridgePool
     registry
         .register(AftAstReplaceTool { pool: pool.clone() })
         .await?;
-    registry.register(AftSafetyTool { pool }).await?;
+    registry
+        .register(AftCheckpointTool { pool: pool.clone() })
+        .await?;
+    registry
+        .register(AftListCheckpointsTool { pool: pool.clone() })
+        .await?;
+    registry
+        .register(AftUndoTool { pool: pool.clone() })
+        .await?;
+    registry.register(AftStatusTool { pool }).await?;
     Ok(())
 }
 
@@ -85,6 +99,18 @@ fn project_root_from_context(context: &ToolContext) -> std::path::PathBuf {
         .unwrap_or_else(|| {
             std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
         })
+}
+
+/// Strip protocol noise (id/success/code) from an aft response so the
+/// model sees only meaningful payload (content/output/text/message/…).
+fn response_payload(response: &Value) -> Value {
+    let mut out = response.clone();
+    if let Some(obj) = out.as_object_mut() {
+        obj.remove("id");
+        obj.remove("success");
+        obj.remove("code");
+    }
+    out
 }
 
 /// Execute an aft command via the bridge pool and convert the response
@@ -102,10 +128,7 @@ async fn execute_aft_command(
         Err(e) => return ToolResult::error(tool_name, format!("aft bridge spawn failed: {}", e)),
     };
     match bridge.call(command, params).await {
-        Ok(response) => {
-            let result = response.get("result").cloned().unwrap_or(response);
-            ToolResult::success(tool_name, result)
-        }
+        Ok(response) => ToolResult::success(tool_name, response_payload(&response)),
         Err(e) => ToolResult::error(tool_name, format!("aft {}: {}", command, e)),
     }
 }
@@ -133,7 +156,7 @@ impl OperantTool for AftReadTool {
         "aft_read"
     }
     fn description(&self) -> &str {
-        "Read a file's contents using aft (tree-sitter-aware). Supports optional line ranges. More efficient than basic file_read for large files."
+        "Read a file's contents using aft (tree-sitter-aware). Supports optional line ranges. Returns content prefixed with line numbers plus truncation metadata. More efficient than basic file_read for large files."
     }
     fn schema(&self) -> ToolSchema {
         ToolSchema::from_type::<AftReadArgs>("aft_read", "Read a file via aft")
@@ -143,12 +166,12 @@ impl OperantTool for AftReadTool {
             Ok(a) => a,
             Err(e) => return ToolResult::error("aft_read", format!("Invalid arguments: {}", e)),
         };
-        let mut params = serde_json::json!({ "filePath": args.file_path });
+        let mut params = serde_json::json!({ "file": args.file_path });
         if let Some(start) = args.start_line {
-            params["startLine"] = json!(start);
+            params["start_line"] = json!(start);
         }
         if let Some(end) = args.end_line {
-            params["endLine"] = json!(end);
+            params["end_line"] = json!(end);
         }
         execute_aft_command(&self.pool, &context, "aft_read", "read", params).await
     }
@@ -161,8 +184,6 @@ pub struct AftSearchTool {
 #[derive(JsonSchema, Deserialize)]
 struct AftSearchArgs {
     query: String,
-    #[serde(default)]
-    file_pattern: Option<String>,
 }
 
 #[async_trait]
@@ -171,7 +192,7 @@ impl OperantTool for AftSearchTool {
         "aft_search"
     }
     fn description(&self) -> &str {
-        "Semantic + trigram full-text search across the project. Returns matching file paths + line numbers + snippets. More accurate than basic file_search."
+        "Semantic + trigram full-text search across the project. Returns matching file paths + line numbers + snippets (lexical fallback when the semantic index is not enabled). More accurate than basic file_search."
     }
     fn schema(&self) -> ToolSchema {
         ToolSchema::from_type::<AftSearchArgs>("aft_search", "Search code via aft")
@@ -181,11 +202,14 @@ impl OperantTool for AftSearchTool {
             Ok(a) => a,
             Err(e) => return ToolResult::error("aft_search", format!("Invalid arguments: {}", e)),
         };
-        let mut params = serde_json::json!({ "query": args.query });
-        if let Some(fp) = args.file_pattern {
-            params["filePattern"] = json!(fp);
-        }
-        execute_aft_command(&self.pool, &context, "aft_search", "search", params).await
+        execute_aft_command(
+            &self.pool,
+            &context,
+            "aft_search",
+            "semantic_search",
+            json!({ "query": args.query }),
+        )
+        .await
     }
 }
 
@@ -204,7 +228,7 @@ impl OperantTool for AftOutlineTool {
         "aft_outline"
     }
     fn description(&self) -> &str {
-        "Get the tree-sitter symbol outline of a file (functions, classes, methods, etc. with line ranges). Useful for understanding file structure without reading the whole file."
+        "Get the tree-sitter symbol outline of a file (functions, classes, methods, etc.). Useful for understanding file structure without reading the whole file."
     }
     fn schema(&self) -> ToolSchema {
         ToolSchema::from_type::<AftOutlineArgs>("aft_outline", "Get file outline via aft")
@@ -214,8 +238,14 @@ impl OperantTool for AftOutlineTool {
             Ok(a) => a,
             Err(e) => return ToolResult::error("aft_outline", format!("Invalid arguments: {}", e)),
         };
-        let params = serde_json::json!({ "filePath": args.file_path });
-        execute_aft_command(&self.pool, &context, "aft_outline", "outline", params).await
+        execute_aft_command(
+            &self.pool,
+            &context,
+            "aft_outline",
+            "outline",
+            json!({ "file": args.file_path }),
+        )
+        .await
     }
 }
 
@@ -245,8 +275,14 @@ impl OperantTool for AftZoomTool {
             Ok(a) => a,
             Err(e) => return ToolResult::error("aft_zoom", format!("Invalid arguments: {}", e)),
         };
-        let params = serde_json::json!({ "filePath": args.file_path, "symbol": args.symbol });
-        execute_aft_command(&self.pool, &context, "aft_zoom", "zoom", params).await
+        execute_aft_command(
+            &self.pool,
+            &context,
+            "aft_zoom",
+            "zoom",
+            json!({ "file": args.file_path, "symbol": args.symbol }),
+        )
+        .await
     }
 }
 
@@ -258,8 +294,6 @@ pub struct AftInspectTool {
 struct AftInspectArgs {
     #[serde(default)]
     path: Option<String>,
-    #[serde(default)]
-    depth: Option<usize>,
 }
 
 #[async_trait]
@@ -268,7 +302,7 @@ impl OperantTool for AftInspectTool {
         "aft_inspect"
     }
     fn description(&self) -> &str {
-        "Inspect codebase health: dead code, unused imports, complexity hotspots, dependency cycles. Returns a structured report."
+        "Inspect codebase health: dead code, unused imports, complexity hotspots, dependency cycles. Returns a structured report. Runs the configure handshake automatically."
     }
     fn schema(&self) -> ToolSchema {
         ToolSchema::from_type::<AftInspectArgs>("aft_inspect", "Inspect codebase health via aft")
@@ -278,51 +312,48 @@ impl OperantTool for AftInspectTool {
             Ok(a) => a,
             Err(e) => return ToolResult::error("aft_inspect", format!("Invalid arguments: {}", e)),
         };
-        let mut params = serde_json::json!({});
+        let mut params = json!({});
         if let Some(p) = args.path {
             params["path"] = json!(p);
-        }
-        if let Some(d) = args.depth {
-            params["depth"] = json!(d);
         }
         execute_aft_command(&self.pool, &context, "aft_inspect", "inspect", params).await
     }
 }
 
-pub struct AftCallgraphTool {
+pub struct AftCallersTool {
     pool: Arc<AftBridgePool>,
 }
 
 #[derive(JsonSchema, Deserialize)]
-struct AftCallgraphArgs {
+struct AftCallersArgs {
+    file_path: String,
     symbol: String,
-    #[serde(default)]
-    direction: Option<String>,
 }
 
 #[async_trait]
-impl OperantTool for AftCallgraphTool {
+impl OperantTool for AftCallersTool {
     fn name(&self) -> &str {
-        "aft_callgraph"
+        "aft_callers"
     }
     fn description(&self) -> &str {
-        "Get the call graph for a symbol (who calls it, what it calls). Uses LSP + tree-sitter for accurate cross-file navigation."
+        "Find the callers of a symbol within a file (who calls it). Uses tree-sitter for accurate cross-file navigation. Runs the configure handshake automatically."
     }
     fn schema(&self) -> ToolSchema {
-        ToolSchema::from_type::<AftCallgraphArgs>("aft_callgraph", "Get call graph via aft")
+        ToolSchema::from_type::<AftCallersArgs>("aft_callers", "Get callers via aft")
     }
     async fn execute(&self, args: Value, context: ToolContext) -> ToolResult {
-        let args: AftCallgraphArgs = match serde_json::from_value(args) {
+        let args: AftCallersArgs = match serde_json::from_value(args) {
             Ok(a) => a,
-            Err(e) => {
-                return ToolResult::error("aft_callgraph", format!("Invalid arguments: {}", e));
-            }
+            Err(e) => return ToolResult::error("aft_callers", format!("Invalid arguments: {}", e)),
         };
-        let mut params = serde_json::json!({ "symbol": args.symbol });
-        if let Some(d) = args.direction {
-            params["direction"] = json!(d);
-        }
-        execute_aft_command(&self.pool, &context, "aft_callgraph", "callgraph", params).await
+        execute_aft_command(
+            &self.pool,
+            &context,
+            "aft_callers",
+            "callers",
+            json!({ "file": args.file_path, "symbol": args.symbol }),
+        )
+        .await
     }
 }
 
@@ -333,8 +364,6 @@ pub struct AftGrepTool {
 #[derive(JsonSchema, Deserialize)]
 struct AftGrepArgs {
     pattern: String,
-    #[serde(default)]
-    path: Option<String>,
 }
 
 #[async_trait]
@@ -353,11 +382,14 @@ impl OperantTool for AftGrepTool {
             Ok(a) => a,
             Err(e) => return ToolResult::error("aft_grep", format!("Invalid arguments: {}", e)),
         };
-        let mut params = serde_json::json!({ "pattern": args.pattern });
-        if let Some(p) = args.path {
-            params["path"] = json!(p);
-        }
-        execute_aft_command(&self.pool, &context, "aft_grep", "grep", params).await
+        execute_aft_command(
+            &self.pool,
+            &context,
+            "aft_grep",
+            "grep",
+            json!({ "pattern": args.pattern }),
+        )
+        .await
     }
 }
 
@@ -368,8 +400,6 @@ pub struct AftGlobTool {
 #[derive(JsonSchema, Deserialize)]
 struct AftGlobArgs {
     pattern: String,
-    #[serde(default)]
-    path: Option<String>,
 }
 
 #[async_trait]
@@ -388,11 +418,14 @@ impl OperantTool for AftGlobTool {
             Ok(a) => a,
             Err(e) => return ToolResult::error("aft_glob", format!("Invalid arguments: {}", e)),
         };
-        let mut params = serde_json::json!({ "pattern": args.pattern });
-        if let Some(p) = args.path {
-            params["path"] = json!(p);
-        }
-        execute_aft_command(&self.pool, &context, "aft_glob", "glob", params).await
+        execute_aft_command(
+            &self.pool,
+            &context,
+            "aft_glob",
+            "glob",
+            json!({ "pattern": args.pattern }),
+        )
+        .await
     }
 }
 
@@ -404,7 +437,7 @@ pub struct AftAstSearchTool {
 struct AftAstSearchArgs {
     pattern: String,
     #[serde(default)]
-    language: Option<String>,
+    lang: Option<String>,
 }
 
 #[async_trait]
@@ -413,7 +446,7 @@ impl OperantTool for AftAstSearchTool {
         "aft_ast_search"
     }
     fn description(&self) -> &str {
-        "AST pattern search (ast-grep) across the project. Match code structure, not just text. E.g. find all 'if ($X == null) return' patterns."
+        "AST pattern search across the project. Match code structure, not just text (e.g. find all 'if ($X == null)' patterns)."
     }
     fn schema(&self) -> ToolSchema {
         ToolSchema::from_type::<AftAstSearchArgs>("aft_ast_search", "AST search via aft")
@@ -425,9 +458,9 @@ impl OperantTool for AftAstSearchTool {
                 return ToolResult::error("aft_ast_search", format!("Invalid arguments: {}", e));
             }
         };
-        let mut params = serde_json::json!({ "pattern": args.pattern });
-        if let Some(l) = args.language {
-            params["language"] = json!(l);
+        let mut params = json!({ "pattern": args.pattern });
+        if let Some(l) = args.lang {
+            params["lang"] = json!(l);
         }
         execute_aft_command(&self.pool, &context, "aft_ast_search", "ast_search", params).await
     }
@@ -453,7 +486,7 @@ impl OperantTool for AftWriteTool {
         "aft_write"
     }
     fn description(&self) -> &str {
-        "Write/create a file via aft. Creates parent directories if needed. Safer than basic file_write — validates paths and handles symlinks."
+        "Write/create a file via aft. Creates parent directories if needed, validates paths, and snapshots a backup for undo. Safer than basic file_write."
     }
     fn schema(&self) -> ToolSchema {
         ToolSchema::from_type::<AftWriteArgs>("aft_write", "Write a file via aft")
@@ -463,8 +496,14 @@ impl OperantTool for AftWriteTool {
             Ok(a) => a,
             Err(e) => return ToolResult::error("aft_write", format!("Invalid arguments: {}", e)),
         };
-        let params = serde_json::json!({ "filePath": args.file_path, "content": args.content });
-        execute_aft_command(&self.pool, &context, "aft_write", "write", params).await
+        execute_aft_command(
+            &self.pool,
+            &context,
+            "aft_write",
+            "write",
+            json!({ "file": args.file_path, "content": args.content }),
+        )
+        .await
     }
 }
 
@@ -477,8 +516,6 @@ struct AftEditArgs {
     file_path: String,
     old_string: String,
     new_string: String,
-    #[serde(default)]
-    replace_all: Option<bool>,
 }
 
 #[async_trait]
@@ -487,7 +524,7 @@ impl OperantTool for AftEditTool {
         "aft_edit"
     }
     fn description(&self) -> &str {
-        "AST-aware string replacement in a file via aft. More robust than basic patch — handles whitespace normalization and validates the edit doesn't break syntax."
+        "Literal match-and-replace in a file via aft (edit_match). Replaces every occurrence of old_string with new_string and snapshots a backup for undo. More robust than basic patch — validates the edit and reports backup metadata."
     }
     fn schema(&self) -> ToolSchema {
         ToolSchema::from_type::<AftEditArgs>("aft_edit", "Edit a file via aft")
@@ -497,15 +534,18 @@ impl OperantTool for AftEditTool {
             Ok(a) => a,
             Err(e) => return ToolResult::error("aft_edit", format!("Invalid arguments: {}", e)),
         };
-        let mut params = serde_json::json!({
-            "filePath": args.file_path,
-            "oldString": args.old_string,
-            "newString": args.new_string,
-        });
-        if let Some(ra) = args.replace_all {
-            params["replaceAll"] = json!(ra);
-        }
-        execute_aft_command(&self.pool, &context, "aft_edit", "edit", params).await
+        execute_aft_command(
+            &self.pool,
+            &context,
+            "aft_edit",
+            "edit_match",
+            json!({
+                "file": args.file_path,
+                "match": args.old_string,
+                "replacement": args.new_string,
+            }),
+        )
+        .await
     }
 }
 
@@ -515,7 +555,6 @@ pub struct AftApplyPatchTool {
 
 #[derive(JsonSchema, Deserialize)]
 struct AftApplyPatchArgs {
-    file_path: String,
     patch: String,
 }
 
@@ -525,7 +564,7 @@ impl OperantTool for AftApplyPatchTool {
         "aft_apply_patch"
     }
     fn description(&self) -> &str {
-        "Apply a unified diff patch to a file via aft. Validates the patch applies cleanly before writing."
+        "Apply a patch to the project via aft. The patch uses the '*** Begin Patch / *** Update File: <path>' format (aft's own patch dialect — not unified diff). Reports hunks applied, partial/failed status, and a diff."
     }
     fn schema(&self) -> ToolSchema {
         ToolSchema::from_type::<AftApplyPatchArgs>("aft_apply_patch", "Apply a patch via aft")
@@ -537,13 +576,12 @@ impl OperantTool for AftApplyPatchTool {
                 return ToolResult::error("aft_apply_patch", format!("Invalid arguments: {}", e));
             }
         };
-        let params = serde_json::json!({ "filePath": args.file_path, "patch": args.patch });
         execute_aft_command(
             &self.pool,
             &context,
             "aft_apply_patch",
             "apply_patch",
-            params,
+            json!({ "patch_text": args.patch }),
         )
         .await
     }
@@ -556,9 +594,9 @@ pub struct AftAstReplaceTool {
 #[derive(JsonSchema, Deserialize)]
 struct AftAstReplaceArgs {
     pattern: String,
-    replacement: String,
+    rewrite: String,
     #[serde(default)]
-    language: Option<String>,
+    lang: Option<String>,
 }
 
 #[async_trait]
@@ -567,7 +605,7 @@ impl OperantTool for AftAstReplaceTool {
         "aft_ast_replace"
     }
     fn description(&self) -> &str {
-        "AST pattern replacement (ast-grep) across the project. Replace code structure, not just text. E.g. rename a function call pattern across all files."
+        "AST pattern replacement across the project. Replace code structure, not just text (e.g. rename a call pattern across all files). `rewrite` is the replacement template."
     }
     fn schema(&self) -> ToolSchema {
         ToolSchema::from_type::<AftAstReplaceArgs>("aft_ast_replace", "AST replace via aft")
@@ -579,10 +617,9 @@ impl OperantTool for AftAstReplaceTool {
                 return ToolResult::error("aft_ast_replace", format!("Invalid arguments: {}", e));
             }
         };
-        let mut params =
-            serde_json::json!({ "pattern": args.pattern, "replacement": args.replacement });
-        if let Some(l) = args.language {
-            params["language"] = json!(l);
+        let mut params = json!({ "pattern": args.pattern, "rewrite": args.rewrite });
+        if let Some(l) = args.lang {
+            params["lang"] = json!(l);
         }
         execute_aft_command(
             &self.pool,
@@ -608,8 +645,6 @@ struct AftBashArgs {
     command: String,
     #[serde(default)]
     timeout_ms: Option<u64>,
-    #[serde(default)]
-    background: Option<bool>,
 }
 
 #[async_trait]
@@ -618,7 +653,7 @@ impl OperantTool for AftBashTool {
         "aft_bash"
     }
     fn description(&self) -> &str {
-        "Execute a bash command via aft. Supports PTY mode, output compression, and background execution. More capable than basic terminal — handles long-running commands and large outputs gracefully."
+        "Execute a bash command via aft. Uses aft's async task model (bash → bash_completed) with output compression and token accounting. More capable than basic terminal — handles long-running commands and large outputs gracefully. Response includes exit_code, output_preview, and compression stats."
     }
     fn schema(&self) -> ToolSchema {
         ToolSchema::from_type::<AftBashArgs>("aft_bash", "Run bash via aft")
@@ -628,54 +663,139 @@ impl OperantTool for AftBashTool {
             Ok(a) => a,
             Err(e) => return ToolResult::error("aft_bash", format!("Invalid arguments: {}", e)),
         };
-        let mut params = serde_json::json!({ "command": args.command });
-        if let Some(t) = args.timeout_ms {
-            params["timeoutMs"] = json!(t);
+        let project_root = project_root_from_context(&context);
+        let bridge = match self.pool.get(&project_root).await {
+            Ok(b) => b,
+            Err(e) => {
+                return ToolResult::error("aft_bash", format!("aft bridge spawn failed: {}", e));
+            }
+        };
+        match bridge.bash(&args.command, args.timeout_ms).await {
+            Ok(response) => {
+                let mut payload = response_payload(&response);
+                // Surface the completion frame's output preview as `output`
+                // so the model sees the shell result regardless of shape.
+                if payload.get("output").is_none()
+                    && let Some(preview) = payload.get("output_preview").and_then(|v| v.as_str())
+                {
+                    payload["output"] = json!(preview);
+                }
+                ToolResult::success("aft_bash", payload)
+            }
+            Err(e) => ToolResult::error("aft_bash", format!("aft bash: {}", e)),
         }
-        if let Some(b) = args.background {
-            params["background"] = json!(b);
-        }
-        execute_aft_command(&self.pool, &context, "aft_bash", "bash", params).await
     }
 }
 
-pub struct AftSafetyTool {
+// ---------------------------------------------------------------------------
+// Safety tools (recover from bad edits)
+// ---------------------------------------------------------------------------
+
+pub struct AftCheckpointTool {
     pool: Arc<AftBridgePool>,
 }
 
 #[derive(JsonSchema, Deserialize)]
-struct AftSafetyArgs {
-    op: String,
-    #[serde(default)]
-    checkpoint_name: Option<String>,
-    #[serde(default)]
-    restore_target: Option<String>,
+struct AftCheckpointArgs {
+    name: String,
 }
 
 #[async_trait]
-impl OperantTool for AftSafetyTool {
+impl OperantTool for AftCheckpointTool {
     fn name(&self) -> &str {
-        "aft_safety"
+        "aft_checkpoint"
     }
     fn description(&self) -> &str {
-        "Safety operations: undo last edit, create checkpoint, restore from checkpoint, list checkpoints, view edit history. Use to recover from bad edits."
+        "Create a named checkpoint snapshot of the project state. Use before risky multi-file edits so they can be undone later."
     }
     fn schema(&self) -> ToolSchema {
-        ToolSchema::from_type::<AftSafetyArgs>("aft_safety", "Safety operations via aft")
+        ToolSchema::from_type::<AftCheckpointArgs>("aft_checkpoint", "Create checkpoint via aft")
     }
     async fn execute(&self, args: Value, context: ToolContext) -> ToolResult {
-        let args: AftSafetyArgs = match serde_json::from_value(args) {
+        let args: AftCheckpointArgs = match serde_json::from_value(args) {
             Ok(a) => a,
-            Err(e) => return ToolResult::error("aft_safety", format!("Invalid arguments: {}", e)),
+            Err(e) => {
+                return ToolResult::error("aft_checkpoint", format!("Invalid arguments: {}", e));
+            }
         };
-        let mut params = serde_json::json!({ "op": args.op });
-        if let Some(n) = args.checkpoint_name {
-            params["checkpointName"] = json!(n);
-        }
-        if let Some(r) = args.restore_target {
-            params["restoreTarget"] = json!(r);
-        }
-        execute_aft_command(&self.pool, &context, "aft_safety", "safety", params).await
+        execute_aft_command(
+            &self.pool,
+            &context,
+            "aft_checkpoint",
+            "checkpoint",
+            json!({ "name": args.name }),
+        )
+        .await
+    }
+}
+
+pub struct AftListCheckpointsTool {
+    pool: Arc<AftBridgePool>,
+}
+
+#[async_trait]
+impl OperantTool for AftListCheckpointsTool {
+    fn name(&self) -> &str {
+        "aft_list_checkpoints"
+    }
+    fn description(&self) -> &str {
+        "List all aft checkpoints (name, file count, created timestamp)."
+    }
+    fn schema(&self) -> ToolSchema {
+        ToolSchema::from_type::<serde_json::Value>(
+            "aft_list_checkpoints",
+            "List checkpoints via aft",
+        )
+    }
+    async fn execute(&self, _args: Value, context: ToolContext) -> ToolResult {
+        execute_aft_command(
+            &self.pool,
+            &context,
+            "aft_list_checkpoints",
+            "list_checkpoints",
+            json!({}),
+        )
+        .await
+    }
+}
+
+pub struct AftUndoTool {
+    pool: Arc<AftBridgePool>,
+}
+
+#[async_trait]
+impl OperantTool for AftUndoTool {
+    fn name(&self) -> &str {
+        "aft_undo"
+    }
+    fn description(&self) -> &str {
+        "Undo the last aft write/edit operation, restoring the pre-edit backup. Returns what was restored. Use to recover from bad edits."
+    }
+    fn schema(&self) -> ToolSchema {
+        ToolSchema::from_type::<serde_json::Value>("aft_undo", "Undo last edit via aft")
+    }
+    async fn execute(&self, _args: Value, context: ToolContext) -> ToolResult {
+        execute_aft_command(&self.pool, &context, "aft_undo", "undo", json!({})).await
+    }
+}
+
+pub struct AftStatusTool {
+    pool: Arc<AftBridgePool>,
+}
+
+#[async_trait]
+impl OperantTool for AftStatusTool {
+    fn name(&self) -> &str {
+        "aft_status"
+    }
+    fn description(&self) -> &str {
+        "Check the aft bridge health/status. Returns aft's status payload. Use to verify the IDE-grade tool backend is alive."
+    }
+    fn schema(&self) -> ToolSchema {
+        ToolSchema::from_type::<serde_json::Value>("aft_status", "aft bridge status")
+    }
+    async fn execute(&self, _args: Value, context: ToolContext) -> ToolResult {
+        execute_aft_command(&self.pool, &context, "aft_status", "status", json!({})).await
     }
 }
 
@@ -741,12 +861,15 @@ mod tests {
             Box::new(AftOutlineTool { pool: pool.clone() }),
             Box::new(AftZoomTool { pool: pool.clone() }),
             Box::new(AftInspectTool { pool: pool.clone() }),
-            Box::new(AftCallgraphTool { pool: pool.clone() }),
+            Box::new(AftCallersTool { pool: pool.clone() }),
             Box::new(AftGrepTool { pool: pool.clone() }),
             Box::new(AftGlobTool { pool: pool.clone() }),
             Box::new(AftAstSearchTool { pool: pool.clone() }),
             Box::new(AftAstReplaceTool { pool: pool.clone() }),
-            Box::new(AftSafetyTool { pool }),
+            Box::new(AftCheckpointTool { pool: pool.clone() }),
+            Box::new(AftListCheckpointsTool { pool: pool.clone() }),
+            Box::new(AftUndoTool { pool: pool.clone() }),
+            Box::new(AftStatusTool { pool }),
         ];
         for tool in &tools {
             assert!(

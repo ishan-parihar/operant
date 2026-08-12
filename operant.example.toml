@@ -129,7 +129,12 @@ registry_timeout_secs = 30
 event_channel_size = 100
 # disabled_tools = ["spotify_playback", "homeassistant"]
 # disabled_toolsets = ["messaging", "media", "smart_home"]
-aft_enabled = false
+# AFT (Agent File Tools) IDE-grade coding tools: 18 aft_* tools backed by
+# an aft subprocess (tree-sitter outline/zoom/search, AST edit/patch,
+# undo/checkpoints). Auto-downloaded from GitHub releases when not installed.
+# The native file/terminal tools are only disabled when the bridge is proven
+# live, so a missing/broken aft always falls back to the built-in tools.
+aft_enabled = true
 # IGS-backed web tools (web_scrape, web_extract) + igs browser provider.
 # Install the binary: curl -sSL https://raw.githubusercontent.com/ishan-parihar/igs-rust/master/scripts/install.sh | bash
 igs_enabled = true

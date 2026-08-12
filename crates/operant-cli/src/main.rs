@@ -701,35 +701,85 @@ pub(crate) async fn build_registry(
     // MemoryProvider hook — see load_memory_manager / create_runtime_agent.
 
     // Register AFT (Agent File Tools) if enabled in config.
-    // AFT provides 15 IDE-grade coding tools (tree-sitter outline/zoom/
-    // search/callgraph, AST-aware edit/refactor, safety undo/checkpoints)
+    // AFT provides 18 IDE-grade coding tools (tree-sitter outline/zoom/
+    // semantic search/callers, AST-aware edit/patch, safety undo/checkpoints)
     // via a subprocess that auto-updates from GitHub releases.
+    //
+    // Natural fallback: the basic file/terminal tools are ONLY disabled
+    // when the aft bridge is proven live (a bounded ping through a spawned
+    // bridge succeeds). If the binary is missing, broken, or the network
+    // stalls, the native tools stay registered — the agent is never left
+    // tool-less (audit finding: the old code disabled natives on the mere
+    // success of registration, which happens even when the bridge later
+    // fails to spawn).
+    //
+    // The replaced names are merged into `disabled_tools` BELOW — calling
+    // `registry.disable_tool()` here is insufficient because the later
+    // `set_disabled_tools(config...)` REPLACES the whole disabled set,
+    // silently re-enabling them (found while verifying the fallback path).
+    let mut aft_replaced_tools: Vec<String> = Vec::new();
     if config.tools.aft_enabled {
         let pool = std::sync::Arc::new(operant_core::aft_bridge::AftBridgePool::new());
-        match operant_core::tools::register_aft_tools(&registry, pool).await {
+        match operant_core::tools::register_aft_tools(&registry, pool.clone()).await {
             Ok(()) => {
-                tracing::info!("AFT tools registered (15 IDE-grade coding tools)");
-                // When AFT is enabled, disable the basic file/terminal tools
-                // to avoid duplication. AFT provides superior versions:
-                //   aft_read → replaces file_read
-                //   aft_write → replaces file_write
-                //   aft_edit → replaces patch
-                //   aft_bash → replaces terminal
-                //   aft_search → replaces file_search
-                //   aft_glob → replaces file_list
-                for tool in &[
-                    "file_read",
-                    "file_write",
-                    "patch",
-                    "terminal",
-                    "file_search",
-                    "file_list",
-                ] {
-                    registry.disable_tool(tool).await;
+                tracing::info!("AFT tools registered (18 IDE-grade coding tools)");
+                let project_root =
+                    std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+                let bridge_live = async {
+                    match pool.get(&project_root).await {
+                        Ok(bridge) => bridge
+                            .call("ping", serde_json::json!({}))
+                            .await
+                            .map(|_| true)
+                            .map_err(|e| {
+                                tracing::warn!(error = %e, "AFT ping failed");
+                                e
+                            })
+                            .is_ok(),
+                        Err(e) => {
+                            tracing::warn!(error = %e, "AFT bridge unavailable at startup");
+                            false
+                        }
+                    }
+                };
+                let live =
+                    match tokio::time::timeout(std::time::Duration::from_secs(10), bridge_live)
+                        .await
+                    {
+                        Ok(live) => live,
+                        Err(_) => {
+                            tracing::warn!(
+                                "AFT bridge ping timed out (10s) — keeping native tools"
+                            );
+                            false
+                        }
+                    };
+                if live {
+                    // AFT provides superior versions of the basic tools:
+                    //   aft_read → file_read, aft_write → file_write,
+                    //   aft_edit → patch, aft_bash → terminal,
+                    //   aft_search → file_search, aft_glob → file_list
+                    aft_replaced_tools.extend([
+                        "file_read".to_string(),
+                        "file_write".to_string(),
+                        "patch".to_string(),
+                        "terminal".to_string(),
+                        "file_search".to_string(),
+                        "file_list".to_string(),
+                    ]);
+                    tracing::info!(
+                        "AFT verified live — basic file/terminal tools disabled (aft replaces them)"
+                    );
+                } else {
+                    tracing::warn!(
+                        "AFT not operational at startup — keeping native tools as fallback"
+                    );
                 }
-                tracing::info!("Basic file/terminal tools disabled (replaced by AFT)");
             }
-            Err(e) => tracing::warn!(error = %e, "AFT tool registration failed (non-fatal)"),
+            Err(e) => tracing::warn!(
+                error = %e,
+                "AFT tool registration failed (non-fatal) — native tools remain"
+            ),
         }
     }
 
@@ -748,10 +798,14 @@ pub(crate) async fn build_registry(
     // provider is active, so it flows through the generic config-driven
     // connect loop below like any other server. No CLI special case needed.
 
-    let disabled_tools: std::collections::HashSet<String> =
+    let mut disabled_tools: std::collections::HashSet<String> =
         config.tools.disabled_tools.iter().cloned().collect();
     let disabled_toolsets: std::collections::HashSet<String> =
         config.tools.disabled_toolsets.iter().cloned().collect();
+
+    // Merge the AFT-replaced native tools into the config-driven set so a
+    // single `set_disabled_tools` (which REPLACES, not unions) applies both.
+    disabled_tools.extend(aft_replaced_tools);
 
     if !disabled_tools.is_empty() {
         registry.set_disabled_tools(disabled_tools).await;

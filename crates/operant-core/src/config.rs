@@ -601,10 +601,12 @@ pub struct ToolSettings {
     pub disabled_tools: Vec<String>,
     pub disabled_toolsets: Vec<String>,
     /// Whether to enable AFT (Agent File Tools) IDE-grade coding tools.
-    /// When true, operant registers 15 aft_* tools that communicate
-    /// with an aft subprocess (auto-downloaded from GitHub releases).
-    /// When false (default), only the basic built-in file tools are
-    /// available.
+    /// When true, operant registers 18 aft_* tools that communicate with
+    /// an aft subprocess (auto-downloaded from GitHub releases when not
+    /// installed). Defaults to true; the CLI verifies the bridge is live
+    /// before hiding the native file/terminal tools, so a broken/missing
+    /// aft always falls back to the built-in tools.
+    #[serde(default = "default_true")]
     pub aft_enabled: bool,
     /// Whether to register the IGS-backed web tools (web_scrape,
     /// web_extract) and the `igs` browser provider. Requires the `igs`
@@ -657,7 +659,7 @@ impl Default for ToolSettings {
             stt: SttSettings::default(),
             disabled_tools: Vec::new(),
             disabled_toolsets: Vec::new(),
-            aft_enabled: false,
+            aft_enabled: true,
             igs_enabled: true,
             igs_binary_path: None,
             obscura_binary_path: None,
