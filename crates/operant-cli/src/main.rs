@@ -798,6 +798,30 @@ pub(crate) async fn build_registry(
     // provider is active, so it flows through the generic config-driven
     // connect loop below like any other server. No CLI special case needed.
 
+    // LCM context-engine tools: when agent.context_engine = "lcm" the
+    // lossless DAG is active, so expose lcm_recall / lcm_stats to the model.
+    // This engine instance is a read-only peer of the one attached to the
+    // agent (same WAL database file) — recall is consistent either way.
+    if config.agent.context_engine.as_str() == "lcm" {
+        match operant_core::context::LcmContextEngine::new(lcm_config(config)) {
+            Ok(engine) => {
+                let engine = std::sync::Arc::new(engine);
+                match operant_core::tools::register_lcm_tools(&registry, engine).await {
+                    Ok(()) => tracing::info!(
+                        "LCM tools registered (lcm_recall / lcm_stats) — lossless DAG active"
+                    ),
+                    Err(e) => {
+                        tracing::warn!(error = %e, "LCM tool registration failed (non-fatal)")
+                    }
+                }
+            }
+            Err(e) => tracing::warn!(
+                error = %e,
+                "LCM engine init failed for tools — lcm_recall/lcm_stats unavailable"
+            ),
+        }
+    }
+
     let mut disabled_tools: std::collections::HashSet<String> =
         config.tools.disabled_tools.iter().cloned().collect();
     let disabled_toolsets: std::collections::HashSet<String> =
@@ -1080,6 +1104,21 @@ pub(crate) async fn create_agent_without_events(
     })
 }
 
+/// Derive the LCM engine config from the `agent` settings table.
+///
+/// Shared by the registry tool wiring and the agent engine so the db-path
+/// default and tail budget can never drift between the two instances.
+fn lcm_config(config: &AppConfig) -> operant_core::context::LcmConfig {
+    operant_core::context::LcmConfig {
+        db_path: config
+            .agent
+            .context_lcm_db
+            .clone()
+            .unwrap_or_else(|| operant_core::platform::operant_home().join("lcm.db")),
+        tail_tokens: config.agent.context_lcm_tail_tokens,
+    }
+}
+
 /// Build the configured context engine (`agent.context_engine`).
 ///   - `"compact"` (default) → `None`: deterministic decay + eviction.
 ///   - `"lcm"` → the lossless DAG engine; a broken init falls back to
@@ -1089,27 +1128,16 @@ fn build_context_engine(
 ) -> Option<std::sync::Arc<dyn operant_core::context::ContextEngine>> {
     match config.agent.context_engine.as_str() {
         "compact" | "" => None, // built-in default — no engine attached
-        "lcm" => {
-            let db_path = config
-                .agent
-                .context_lcm_db
-                .clone()
-                .unwrap_or_else(|| operant_core::platform::operant_home().join("lcm.db"));
-            let lcm_cfg = operant_core::context::LcmConfig {
-                db_path,
-                tail_tokens: config.agent.context_lcm_tail_tokens,
-            };
-            match operant_core::context::LcmContextEngine::new(lcm_cfg) {
-                Ok(engine) => {
-                    tracing::info!("LCM context engine active (lossless DAG + fresh tail)");
-                    Some(std::sync::Arc::new(engine))
-                }
-                Err(e) => {
-                    tracing::warn!(error = %e, "LCM context engine init failed — using compact");
-                    None
-                }
+        "lcm" => match operant_core::context::LcmContextEngine::new(lcm_config(config)) {
+            Ok(engine) => {
+                tracing::info!("LCM context engine active (lossless DAG + fresh tail)");
+                Some(std::sync::Arc::new(engine))
             }
-        }
+            Err(e) => {
+                tracing::warn!(error = %e, "LCM context engine init failed — using compact");
+                None
+            }
+        },
         other => {
             tracing::warn!(
                 engine = other,
