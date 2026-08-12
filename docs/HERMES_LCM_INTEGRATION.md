@@ -170,19 +170,23 @@ installs" stays clean).
   choice) with the schema above.
 - Unit tests: ingest → assemble budget math; D0 never summarized; FTS insert.
 
-### P1 — Rollups (replace lossy eviction when LCM on) ✅ (on-demand)
+### P1 — Rollups (replace lossy eviction when LCM on) ✅
 - `rollup.rs` `build_rollup` with injectable async `Summarizer` (hermes
   `Summarizer = Callable` parity) — day/week/month UTC windows, deterministic
-  truncation (200 nodes / 24k chars), idempotent `ON CONFLICT` upsert.
+  truncation (200 nodes / 24k chars, char-boundary-safe), idempotent
+  `ON CONFLICT` upsert.
 - `lcm_rollups` table (hermes `rollup_store.py` shape): session, period_kind,
   period_start, summary, source_count, created_at; PK dedups refreshes.
 - CLI: `operant context rollup <session> --period day|week|month --date YYYY-MM-DD`
   (real model client via `client_config`) + `operant context rollups <session>`
   listing + `context status` shows the global rollup count.
+- **Compaction wiring**: `assemble()` now injects stored rollups into the
+  over-budget context (block after the placeholder, token-budget accounted,
+  `context_lcm_rollups_inject` flag, default on). Verified by real-agent
+  integration test: stored rollup → `build_messages` carries the summary.
 - **Deferred (YAGNI until a concrete need):** background maintenance
-  scheduler, build leases/generations, and wiring rollups into `assemble()`'s
-  compaction placeholder — the lossless DAG already keeps everything;
-  rollups are operator-facing derived state today.
+  scheduler + build leases/generations — the lossless DAG already keeps
+  everything; rollups are injected when present, built on demand via CLI.
 
 ### P2 — Recall tools + assertions
 - `lcm_recall` / `lcm_recall_round` / `lcm_assert` / `lcm_status` registered

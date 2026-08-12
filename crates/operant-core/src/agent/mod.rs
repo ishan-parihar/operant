@@ -4003,6 +4003,7 @@ mod tests {
             auto_recall: true,
             auto_recall_limit: 3,
             auto_recall_max_chars: 4_000,
+            rollups_inject: true,
         })
         .unwrap();
 
@@ -4052,6 +4053,113 @@ mod tests {
         assert!(
             system.contains("September 14th, 2027"),
             "evidence must carry the recalled fact, got system: {system:?}"
+        );
+    }
+
+    #[serial]
+    #[tokio::test]
+    async fn lcm_engine_injects_stored_rollup_into_build_messages() {
+        // P1 end-to-end: with the LCM engine attached and a stored rollup in
+        // lcm_rollups, an over-budget build_messages() must inject the rollup
+        // summary block into the assembled context (auto-recall OFF so the
+        // rollup is the ONLY path the fact can reach the model).
+        use crate::agent::clients::openai::OpenAIModelClient;
+        use crate::client::OpenAIClient;
+        use crate::context::{ContextEngine, LcmConfig, LcmContextEngine, rollup};
+
+        let dir =
+            std::env::temp_dir().join(format!("operant_lcm_rollup_test_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let engine = LcmContextEngine::new(LcmConfig {
+            db_path: dir.join("lcm.db"),
+            // Tiny tail so the context always overflows and compacts.
+            tail_tokens: 10,
+            auto_recall: false,
+            auto_recall_limit: 3,
+            auto_recall_max_chars: 4_000,
+            rollups_inject: true,
+        })
+        .unwrap();
+
+        // Seed the DAG with a prior-turn fact, then build a real stored
+        // rollup over it (echo summarizer → summary contains the fact).
+        engine
+            .ingest_turn(
+                "agent-rollup-test",
+                &[
+                    crate::client::Message::user(
+                        "the deploy freeze window is every Friday after 3pm UTC",
+                    ),
+                    crate::client::Message::assistant("noted: freeze starts Friday 15:00 UTC"),
+                ],
+            )
+            .await
+            .unwrap();
+        let echo = |t: String| async move { Ok(format!("ROLLUP[{t}]")) };
+        rollup::build_rollup(
+            &engine,
+            "agent-rollup-test",
+            rollup::RollupPeriod::Day,
+            None,
+            echo,
+        )
+        .await
+        .unwrap()
+        .expect("rollup built");
+
+        // Small context window forces compaction: effective budget is
+        // context_window - 4096 (response reserve), and the frozen prefix +
+        // workspace context alone far exceeds that, so assemble() must compact
+        // and inject the stored rollup.
+        let agent_cfg = AgentConfig {
+            context_window: 8_000,
+            ..AgentConfig::default()
+        };
+        let db = Database::init(std::path::PathBuf::from("test_db_lcm_rollup.sqlite")).unwrap();
+        let agent = OperantAgent::new(
+            agent_cfg,
+            Box::new(OpenAIModelClient::new(OpenAIClient::new(
+                crate::client::ClientConfig::default(),
+            ))),
+            ToolRegistry::new(Duration::from_secs(1)),
+            Arc::new(db),
+        )
+        .with_persistent_session("agent-rollup-test".to_string())
+        .with_context_engine(Arc::new(engine));
+
+        // A fresh user turn — the conversation is small but the frozen system
+        // prefix plus the turn pushes it over the 10-token tail budget, so
+        // compaction fires and the stored rollup is injected.
+        agent
+            .add_message(crate::client::Message::user(
+                "When does the deploy freeze start?",
+            ))
+            .await;
+        let messages = agent.build_messages("agent-rollup-test").await.unwrap();
+        let system: String = messages
+            .iter()
+            .filter(|m| m.role == crate::client::Role::System)
+            .map(|m| m.content.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            system.contains("LCM rollups of earlier context"),
+            "rollup block must be injected, got system: {system:?}"
+        );
+        assert!(
+            system.contains("deploy freeze window is every Friday"),
+            "rollup summary must carry the stored fact, got system: {system:?}"
+        );
+        // The D0 fresh tail must never be starved by the injected rollup:
+        // the user's own turn is the freshest content and must survive.
+        let all_content: String = messages
+            .iter()
+            .map(|m| m.content.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            all_content.contains("When does the deploy freeze start?"),
+            "freshest user turn must survive compaction, got: {all_content:?}"
         );
     }
 

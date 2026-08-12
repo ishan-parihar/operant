@@ -1125,6 +1125,7 @@ pub(crate) fn lcm_config(config: &AppConfig) -> operant_core::context::LcmConfig
         auto_recall: config.agent.context_lcm_auto_recall,
         auto_recall_limit: config.agent.context_lcm_auto_recall_limit,
         auto_recall_max_chars: config.agent.context_lcm_auto_recall_max_chars,
+        rollups_inject: config.agent.context_lcm_rollups_inject,
     }
 }
 

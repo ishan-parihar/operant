@@ -218,6 +218,12 @@ pub struct BehaviorSettings {
     /// Hard cap on the injected evidence block, in characters (default 4000).
     #[serde(default = "default_lcm_auto_recall_max_chars")]
     pub context_lcm_auto_recall_max_chars: usize,
+    /// P1 rollup-in-compaction: when the LCM engine compacts an over-budget
+    /// context, inject stored day/week/month rollup summaries instead of a
+    /// bare placeholder marker. Default on — rollups are only injected when
+    /// they already exist (built via `operant context rollup`).
+    #[serde(default = "default_true")]
+    pub context_lcm_rollups_inject: bool,
 }
 
 fn default_fallback_on_errors() -> bool {
@@ -275,6 +281,7 @@ impl Default for BehaviorSettings {
             context_lcm_auto_recall: true,
             context_lcm_auto_recall_limit: 3,
             context_lcm_auto_recall_max_chars: 4_000,
+            context_lcm_rollups_inject: true,
         }
     }
 }

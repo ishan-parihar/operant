@@ -56,6 +56,12 @@ pub struct LcmConfig {
     pub auto_recall_limit: usize,
     /// Hard cap on the injected evidence block, in characters.
     pub auto_recall_max_chars: usize,
+    /// P1 rollup-in-compaction: when the assembled context is over budget,
+    /// inject stored day/week/month rollup summaries instead of a bare
+    /// placeholder marker (hermes `LCM_TEMPORAL_ROLLUPS_ENABLED` parity).
+    /// Rollups are only injected when they already exist in `lcm_rollups`
+    /// (built via `operant context rollup`); never built on the fly here.
+    pub rollups_inject: bool,
 }
 
 impl Default for LcmConfig {
@@ -66,6 +72,7 @@ impl Default for LcmConfig {
             auto_recall: true,
             auto_recall_limit: 3,
             auto_recall_max_chars: 4_000,
+            rollups_inject: true,
         }
     }
 }
@@ -80,6 +87,7 @@ pub struct LcmContextEngine {
     auto_recall: bool,
     auto_recall_limit: usize,
     auto_recall_max_chars: usize,
+    rollups_inject: bool,
 }
 
 impl std::fmt::Debug for LcmContextEngine {
@@ -88,6 +96,7 @@ impl std::fmt::Debug for LcmContextEngine {
             .field("db_path", &self.db_path)
             .field("tail_tokens", &self.tail_tokens)
             .field("auto_recall", &self.auto_recall)
+            .field("rollups_inject", &self.rollups_inject)
             .finish()
     }
 }
@@ -139,6 +148,7 @@ impl LcmContextEngine {
             auto_recall: config.auto_recall,
             auto_recall_limit: config.auto_recall_limit.clamp(1, 10),
             auto_recall_max_chars: config.auto_recall_max_chars.max(256),
+            rollups_inject: config.rollups_inject,
         })
     }
 
@@ -276,6 +286,41 @@ impl LcmContextEngine {
             out.push(r.map_err(|e| Error::Agent(format!("lcm: list_rollups row: {e}")))?);
         }
         Ok(out)
+    }
+
+    /// Build a bounded system block of stored rollups for `session_id`,
+    /// newest period first. Returns `None` when the session has no rollups
+    /// (so the caller keeps the bare placeholder). Rollups are injected
+    /// verbatim from `lcm_rollups` — never rebuilt here.
+    fn build_rollup_context(&self, session_id: &str) -> Result<Option<Message>> {
+        let rollups = self.list_rollups(session_id)?;
+        if rollups.is_empty() {
+            return Ok(None);
+        }
+        let mut block = String::new();
+        let mut budget = self.auto_recall_max_chars;
+        let mut added = false;
+        for r in rollups {
+            let snippet: String = r.summary.chars().take(400).collect();
+            let entry = format!(
+                "- [{} {} · {} nodes] {}\n",
+                r.period_kind, r.period_start, r.source_count, snippet
+            );
+            if entry.len() > budget {
+                break;
+            }
+            budget -= entry.len();
+            block.push_str(&entry);
+            added = true;
+        }
+        if !added {
+            return Ok(None);
+        }
+        let body = format!(
+            "[LCM rollups of earlier context (temporal summaries of the lossless \
+             DAG — verbatim history is still recallable via lcm_recall):]\n{block}"
+        );
+        Ok(Some(Message::system(body)))
     }
 
     /// Count stored rollups across ALL sessions (diagnostics/CLI surface).
@@ -545,31 +590,50 @@ impl ContextEngine for LcmContextEngine {
         };
         if crate::context_management::estimate_total_tokens(&with_evidence) <= budget_tokens {
             return Ok(with_evidence);
-        } // 4. D0 fresh tail kept verbatim; older messages compacted into a
-        //    placeholder (P1 fills it with real day/week/month LLM rollups).
-        //    Reserve tail budget for the evidence block so the assembled
-        //    context never exceeds the intended budget even when compacting.
+        } // 4. D0 fresh tail kept verbatim; older messages compacted. P1: when
+        //    stored rollups exist, inject them instead of a bare placeholder
+        //    so the model sees real summaries of the compacted history.
+        //    Reserve tail budget for the evidence + rollup blocks so the
+        //    assembled context never exceeds the intended budget. Rollup
+        //    reservation is capped at half the tail budget so the D0 fresh
+        //    tail can never be starved by injected summaries.
         let evidence_tokens = evidence
             .as_ref()
             .map(crate::context_management::estimate_message_tokens)
             .unwrap_or(0);
-        let tail_budget = self
-            .tail_tokens
-            .min(budget_tokens)
-            .saturating_sub(evidence_tokens);
+        let rollup_block = if self.rollups_inject {
+            self.build_rollup_context(session_id)?
+        } else {
+            None
+        };
+        let rollup_tokens = rollup_block
+            .as_ref()
+            .map(crate::context_management::estimate_message_tokens)
+            .unwrap_or(0);
+        let base_tail = self.tail_tokens.min(budget_tokens);
+        let rollup_reserve = rollup_tokens.min(base_tail / 2);
+        let tail_budget = base_tail
+            .saturating_sub(evidence_tokens)
+            .saturating_sub(rollup_reserve);
         let (mut kept, compacted_count, compacted_tokens) =
             split_for_lcm(with_evidence, tail_budget);
 
+        let sys_count = kept.iter().take_while(|m| m.role == Role::System).count();
         let placeholder = Message::system(format!(
             "[LCM lossless context: {} earlier message(s) (~{} tokens) are preserved verbatim in the DAG at {}. Use the lcm_recall tool to retrieve any of them — nothing was deleted.]",
             compacted_count,
             compacted_tokens,
             self.db_path.display()
         ));
-        kept.insert(1, placeholder);
-        // Pre-answer evidence still rides along after the placeholder.
+        kept.insert(sys_count, placeholder);
+        // Rollups (when present) ride after the placeholder as real
+        // summaries of the compacted history.
+        if let Some(block) = rollup_block {
+            kept.insert(sys_count + 1, block);
+        }
+        // Pre-answer evidence still rides along last.
         if let Some(block) = evidence {
-            kept.insert(2, block);
+            kept.insert(sys_count + 2, block);
         }
         Ok(kept)
     }
@@ -779,6 +843,7 @@ mod tests {
             auto_recall: true,
             auto_recall_limit: 3,
             auto_recall_max_chars: 4_000,
+            rollups_inject: true,
         })
         .unwrap();
         (engine, format!("{}", db_path.display()))
@@ -893,6 +958,74 @@ mod tests {
             hits.iter().any(|h| h.role == "tool"),
             "non-LCM hits-shaped tool output must be recallable, got: {:?}",
             hits
+        );
+    }
+
+    #[tokio::test]
+    async fn assemble_injects_stored_rollups_when_over_budget() {
+        // P1: with a stored rollup present, an over-budget assemble must
+        // inject the rollup summary block (index 2) alongside the placeholder.
+        let (engine, _) = test_db();
+        let mut base = vec![Message::system("you are a test agent")];
+        for i in 0..20 {
+            base.push(Message::user(format!(
+                "message number {i} with some filler content to consume tokens"
+            )));
+        }
+        engine.ingest_turn("s1", &base).await.unwrap();
+        // Build a real stored rollup (fake summarizer; the injected block
+        // reads lcm_rollups, so the summary text must appear in the output).
+        let summarizer = |t: String| async move {
+            let len = t.len();
+            Ok(format!("ROLLUP_SUMMARY[{len} chars]"))
+        };
+        crate::context::rollup::build_rollup(
+            &engine,
+            "s1",
+            crate::context::rollup::RollupPeriod::Day,
+            None,
+            summarizer,
+        )
+        .await
+        .unwrap()
+        .expect("rollup built");
+
+        let out = engine.assemble("s1", base, 150).await.unwrap();
+        assert_eq!(out[0].role, Role::System);
+        assert!(out[1].content.contains("LCM lossless context"));
+        assert!(
+            out[2].content.contains("LCM rollups of earlier context"),
+            "rollup block must be injected at index 2, got: {:?}",
+            out
+        );
+        assert!(out[2].content.contains("ROLLUP_SUMMARY["));
+        assert!(
+            out[2].content.contains("- [day "),
+            "rollup entry must carry the day prefix"
+        );
+        assert!(
+            out.iter().any(|m| m.content.contains("message number 19")),
+            "the freshest message must survive in the D0 tail"
+        );
+    }
+
+    #[tokio::test]
+    async fn assemble_rollups_inject_disabled_keeps_placeholder_only() {
+        // When rollups_inject is off (or no rollups exist), the assembled
+        // context keeps only the bare placeholder — no rollup block.
+        let (engine, _) = test_db();
+        let mut base = vec![Message::system("you are a test agent")];
+        for i in 0..20 {
+            base.push(Message::user(format!(
+                "message number {i} with some filler content to consume tokens"
+            )));
+        }
+        let out = engine.assemble("s1", base, 150).await.unwrap();
+        assert!(out[1].content.contains("LCM lossless context"));
+        assert!(
+            !out.iter()
+                .any(|m| m.content.contains("LCM rollups of earlier context")),
+            "no rollup block without stored rollups"
         );
     }
 
@@ -1062,6 +1195,7 @@ mod tests {
             auto_recall: false,
             auto_recall_limit: 3,
             auto_recall_max_chars: 4_000,
+            rollups_inject: true,
         })
         .unwrap();
         let seed = vec![Message::user("remember: key=alpha")];

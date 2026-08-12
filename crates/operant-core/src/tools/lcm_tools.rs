@@ -196,6 +196,7 @@ mod tests {
             auto_recall: false,
             auto_recall_limit: 3,
             auto_recall_max_chars: 4_000,
+            rollups_inject: true,
         })
         .unwrap();
         Arc::new(engine)
@@ -279,6 +280,7 @@ mod tests {
             auto_recall: false,
             auto_recall_limit: 3,
             auto_recall_max_chars: 4_000,
+            rollups_inject: true,
         })
         .unwrap();
         let reader = LcmContextEngine::new(crate::context::LcmConfig {
@@ -287,6 +289,7 @@ mod tests {
             auto_recall: false,
             auto_recall_limit: 3,
             auto_recall_max_chars: 4_000,
+            rollups_inject: true,
         })
         .unwrap();
 

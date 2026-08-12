@@ -43,6 +43,7 @@ context_compression = false
 # context_lcm_auto_recall = true
 # context_lcm_auto_recall_limit = 3
 # context_lcm_auto_recall_max_chars = 4000
+# context_lcm_rollups_inject = true
 session_reset = "never"
 # system_prompt = "You are Hermes."
 # Fallback models tried in order when the primary model fails (rate-limited, unavailable, etc.)
