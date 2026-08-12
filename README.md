@@ -1,7 +1,7 @@
 # Operant
 
 ![Rust](https://img.shields.io/badge/Rust-1.89+-orange?logo=rust)
-![LOC](https://img.shields.io/badge/LOC-537K-informational?style=flat-square)
+![LOC](https://img.shields.io/badge/LOC-548K-informational?style=flat-square)
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen)
 [![CI](https://github.com/ishan-parihar/operant/actions/workflows/ci.yml/badge.svg)](https://github.com/ishan-parihar/operant/actions/workflows/ci.yml)
 ![Edition](https://img.shields.io/badge/Edition-2024-blueviolet)
