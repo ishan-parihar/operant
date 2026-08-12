@@ -182,6 +182,138 @@ where
     }))
 }
 
+/// Report from a rollup maintenance pass.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct MaintenanceReport {
+    /// Sessions scanned for missing rollups.
+    pub sessions_scanned: usize,
+    /// Day rollups built.
+    pub days_built: usize,
+    /// Week rollups built.
+    pub weeks_built: usize,
+    /// Month rollups built.
+    pub months_built: usize,
+    /// Periods already present and skipped (idempotent).
+    pub skipped_existing: usize,
+    /// Periods with no source content (nothing to summarize).
+    pub skipped_empty: usize,
+}
+
+impl MaintenanceReport {
+    pub fn total_built(&self) -> usize {
+        self.days_built + self.weeks_built + self.months_built
+    }
+}
+
+/// Run one rollup maintenance pass across every session in the DAG (or a
+/// single session when `only_session` is `Some`): build missing day/week/month
+/// rollups for recent periods, skipping periods that already have a rollup
+/// (hermes `run_rollup_maintenance` dedup semantics).
+///
+/// `lookback_days`: how far back (UTC) to cover, applied per period kind
+/// (e.g. 7 → today's day-rollup plus the last 6 days). Summarizer errors for
+/// a single period are swallowed and counted — one bad LLM call never aborts
+/// the whole pass.
+pub async fn run_rollup_maintenance<F, Fut>(
+    engine: &LcmContextEngine,
+    only_session: Option<&str>,
+    lookback_days: u32,
+    summarizer: F,
+) -> Result<MaintenanceReport>
+where
+    F: Fn(String) -> Fut + Clone,
+    Fut: Future<Output = Result<String>>,
+{
+    let today = Utc::now().date_naive();
+    let mut report = MaintenanceReport::default();
+
+    let sessions = match only_session {
+        Some(sid) => vec![(sid.to_string(), 0, 0_i64)],
+        None => engine.list_sessions()?,
+    };
+    for (session_id, _count, _last_ts) in sessions {
+        if only_session.is_some() {
+            // Only scan the explicit session; other sessions are untouched.
+        }
+        report.sessions_scanned += 1;
+
+        // Day: each of the last `lookback_days` days.
+        for offset in 0..lookback_days.max(1) {
+            let anchor = today - Duration::days(offset as i64);
+            report = build_missing(
+                engine,
+                &session_id,
+                RollupPeriod::Day,
+                anchor,
+                summarizer.clone(),
+                report,
+            )
+            .await?;
+        }
+        // Week: Mondays of the last `lookback_days`/7 weeks (at least 1).
+        for w in 0..(lookback_days / 7).max(1) {
+            let anchor = today - Duration::days(w as i64 * 7);
+            report = build_missing(
+                engine,
+                &session_id,
+                RollupPeriod::Week,
+                anchor,
+                summarizer.clone(),
+                report,
+            )
+            .await?;
+        }
+        // Month: 1sts of the last `lookback_days`/30 months (at least 1).
+        for m in 0..(lookback_days / 30).max(1) {
+            let anchor = today - Duration::days(m as i64 * 30);
+            report = build_missing(
+                engine,
+                &session_id,
+                RollupPeriod::Month,
+                anchor,
+                summarizer.clone(),
+                report,
+            )
+            .await?;
+        }
+    }
+    Ok(report)
+}
+
+/// Build one period if missing; fold the outcome into `report`.
+async fn build_missing<F, Fut>(
+    engine: &LcmContextEngine,
+    session_id: &str,
+    period: RollupPeriod,
+    anchor: chrono::NaiveDate,
+    summarizer: F,
+    mut report: MaintenanceReport,
+) -> Result<MaintenanceReport>
+where
+    F: Fn(String) -> Fut,
+    Fut: Future<Output = Result<String>>,
+{
+    let period_start = period.period_start(anchor);
+    let start_key = period_start.format("%Y-%m-%d").to_string();
+    if engine
+        .has_rollup(session_id, period.kind(), &start_key)
+        .unwrap_or(false)
+    {
+        report.skipped_existing += 1;
+        return Ok(report);
+    }
+    match build_rollup(engine, session_id, period, Some(anchor), summarizer).await {
+        Ok(Some(_)) => match period {
+            RollupPeriod::Day => report.days_built += 1,
+            RollupPeriod::Week => report.weeks_built += 1,
+            RollupPeriod::Month => report.months_built += 1,
+        },
+        Ok(None) => report.skipped_empty += 1,
+        Err(_) => report.skipped_empty += 1, // one bad period never aborts
+    }
+    Ok(report)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -326,6 +458,68 @@ mod tests {
         .expect("has sources");
         assert!(out.source_count > 0);
         assert!(out.summary.starts_with("SUMMARY["));
+    }
+
+    #[tokio::test]
+    async fn maintenance_builds_missing_and_skips_existing() {
+        let (engine, _) = test_engine();
+        engine
+            .ingest_turn(
+                "sess_maint",
+                &[
+                    Message::user("deploy policy: biweekly on wednesdays"),
+                    Message::assistant("deploys every two weeks"),
+                ],
+            )
+            .await
+            .unwrap();
+        let echo = |t: String| async move { Ok(format!("ECHO[{t}]")) };
+
+        // First pass: nothing exists → day built, week/month have content too.
+        let r1 = run_rollup_maintenance(&engine, None, 1, echo)
+            .await
+            .unwrap();
+        assert_eq!(r1.sessions_scanned, 1);
+        assert_eq!(r1.days_built, 1, "day rollup for today");
+        assert!(r1.total_built() >= 1);
+
+        // Second pass: everything already exists → no new builds, all skipped.
+        let r2 = run_rollup_maintenance(&engine, None, 1, echo)
+            .await
+            .unwrap();
+        assert_eq!(r2.total_built(), 0, "idempotent second pass");
+        assert!(r2.skipped_existing >= 1);
+    }
+
+    #[tokio::test]
+    async fn maintenance_scopes_to_one_session() {
+        let (engine, _) = test_engine();
+        engine
+            .ingest_turn("sess_a", &[Message::user("alpha content")])
+            .await
+            .unwrap();
+        engine
+            .ingest_turn("sess_b", &[Message::user("beta content")])
+            .await
+            .unwrap();
+        let echo = |t: String| async move { Ok(format!("ECHO[{t}]")) };
+
+        // only_session="sess_a" must build for a alone, never touching b.
+        let r = run_rollup_maintenance(&engine, Some("sess_a"), 1, echo)
+            .await
+            .unwrap();
+        assert_eq!(r.sessions_scanned, 1);
+        // lookback_days=1 covers day + week + month anchors for sess_a.
+        assert_eq!(
+            engine.list_rollups("sess_a").unwrap().len(),
+            3,
+            "sess_a built"
+        );
+        assert_eq!(
+            engine.list_rollups("sess_b").unwrap().len(),
+            0,
+            "sess_b untouched"
+        );
     }
 
     #[test]

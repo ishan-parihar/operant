@@ -259,6 +259,28 @@ impl LcmContextEngine {
     }
 
     /// List stored rollups for a session, newest period first.
+    /// True when a rollup exists for (session, period_kind, period_start).
+    /// Used by maintenance passes to skip already-built periods without
+    /// re-summarizing (hermes `rollup_store.py` dedup semantics).
+    pub fn has_rollup(
+        &self,
+        session_id: &str,
+        period_kind: &str,
+        period_start: &str,
+    ) -> Result<bool> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        conn.query_row(
+            "SELECT 1 FROM lcm_rollups WHERE session_id = ?1 AND period_kind = ?2 AND period_start = ?3",
+            params![session_id, period_kind, period_start],
+            |_| Ok(()),
+        )
+        .map(|_| true)
+        .or_else(|e| match e {
+            rusqlite::Error::QueryReturnedNoRows => Ok(false),
+            other => Err(Error::Agent(format!("lcm: has_rollup failed: {other}"))),
+        })
+    }
+
     pub fn list_rollups(
         &self,
         session_id: &str,

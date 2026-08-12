@@ -53,6 +53,18 @@ pub enum ContextSubcommand {
         /// Session id
         session: String,
     },
+
+    /// Run a rollup maintenance pass: build missing day/week/month rollups
+    /// for every session (or one) over recent periods
+    RollupMaintenance {
+        /// Only build for this session id (default: all sessions in the DAG)
+        #[arg(long)]
+        session: Option<String>,
+
+        /// How many days back to cover (default: 7)
+        #[arg(long, default_value_t = 7)]
+        lookback_days: u32,
+    },
 }
 
 /// Dispatch a context subcommand.
@@ -147,6 +159,62 @@ pub async fn handle_context_command(config: &AppConfig, cmd: ContextSubcommand) 
                     print!("{}", render_rollup(&r));
                 }
             }
+        }
+        ContextSubcommand::RollupMaintenance {
+            session,
+            lookback_days,
+        } => {
+            let engine = engine_from_config(config)?;
+            let client = OpenAIClient::new(crate::client_config(config));
+            let model = config.agent.model.clone();
+            if model.is_empty() {
+                anyhow::bail!(
+                    "agent.model not configured — set model = \"...\" in your config to use rollup maintenance"
+                );
+            }
+            let summarizer = move |transcript: String| {
+                let client = client.clone();
+                let model = model.clone();
+                async move {
+                    let msgs = vec![
+                        Message::system(
+                            "You are a lossless temporal summarizer. Summarize the \
+                             following conversation excerpt into concise key facts \
+                             and decisions. Preserve names, numbers, and dates \
+                             exactly. Output only the summary.",
+                        ),
+                        Message::user(transcript),
+                    ];
+                    let resp = client
+                        .chat(&model, &msgs, None, Some(1024), Some(0.2))
+                        .await
+                        .map_err(|e| {
+                            operant_core::error::Error::Agent(format!(
+                                "rollup LLM call failed: {e}"
+                            ))
+                        })?;
+                    let content = resp
+                        .choices
+                        .first()
+                        .and_then(|c| c.message.content.clone())
+                        .unwrap_or_default();
+                    Ok(content.trim().to_string())
+                }
+            };
+            let report = rollup::run_rollup_maintenance(
+                &engine,
+                session.as_deref(),
+                lookback_days,
+                summarizer,
+            )
+            .await?;
+            println!("Rollup maintenance pass complete:");
+            println!("  sessions scanned : {}", report.sessions_scanned);
+            println!("  days built       : {}", report.days_built);
+            println!("  weeks built      : {}", report.weeks_built);
+            println!("  months built     : {}", report.months_built);
+            println!("  skipped existing : {}", report.skipped_existing);
+            println!("  skipped empty    : {}", report.skipped_empty);
         }
     }
     Ok(())

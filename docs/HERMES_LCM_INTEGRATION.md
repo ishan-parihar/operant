@@ -184,9 +184,16 @@ installs" stays clean).
   over-budget context (block after the placeholder, token-budget accounted,
   `context_lcm_rollups_inject` flag, default on). Verified by real-agent
   integration test: stored rollup → `build_messages` carries the summary.
+- **On-demand maintenance pass** ✅: `run_rollup_maintenance` (hermes
+  `run_rollup_maintenance` dedup semantics) scans DAG sessions and builds
+  missing day/week/month rollups over a lookback window, skipping periods
+  that already have a rollup; surfaced as `operant context rollup-maintenance
+  [--session S] [--lookback-days N]`. Verified live: 2 sessions scanned →
+  day/week/month built with correct anchors, re-run fully idempotent.
 - **Deferred (YAGNI until a concrete need):** background maintenance
-  scheduler + build leases/generations — the lossless DAG already keeps
-  everything; rollups are injected when present, built on demand via CLI.
+  *scheduler* (autonomous worker) + build leases/generations — the lossless
+  DAG already keeps everything; rollups are injected when present, built on
+  demand via CLI or the maintenance pass.
 
 ### P2 — Recall tools + assertions
 - `lcm_recall` / `lcm_recall_round` / `lcm_assert` / `lcm_status` registered
@@ -208,9 +215,11 @@ installs" stays clean).
 ### P4 — CLI + metrics ✅ (partial)
 - `operant context status|sessions|recall <q> [--limit N]` — implemented
   (`cmd_context.rs`). Read-only operator surface over the same DAG file.
-- `rollup`/`rebuild` and DAG-stats-in-status-bar remain as stretch — the
-  agent-facing `lcm_recall`/`lcm_stats` tools already cover the runtime
-  path; a status-bar widget adds UI plumbing with no functional gain yet.
+- `rollup-maintenance` ✅ — on-demand maintenance pass over all (or one)
+  session, building missing day/week/month rollups (hermes `run_rollup_maintenance`
+  parity). DAG-stats-in-status-bar remains as stretch — the agent-facing
+  `lcm_recall`/`lcm_stats` tools already cover the runtime path; a status-bar
+  widget adds UI plumbing with no functional gain yet.
 
 **YAGNI note:** skip the auxiliary-session, placeholder-ledger, and bypass
 mixins (hermes-specific multi-session orchestration) until a concrete need
