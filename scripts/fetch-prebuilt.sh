@@ -19,5 +19,5 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 echo "[fetch-prebuilt] delegating to install-browser-deps.sh"
-bash "$SCRIPT_DIR/install-browser-deps.sh" "$@"
+bash "$SCRIPT_DIR/install-browser-deps.sh"
 echo "[fetch-prebuilt] done."

@@ -18,7 +18,9 @@ echo "=== Installing Browser Dependencies (igs + obscura) ==="
 # The agent's IGS web tools and the shared obscura browser are driven via the
 # `igs` and `obscura` CLIs on PATH. Provision them globally (idempotent; reuses
 # the IGS-managed obscura so browser + IGS share one binary).
-bash "$(dirname "$0")/install-browser-deps.sh"
+# Best-effort: browser deps are optional — never abort operant's install if
+# the download is unavailable (offline / unsupported platform).
+bash "$(dirname "$0")/install-browser-deps.sh" || echo "WARN: browser deps provisioning failed (non-fatal)"
 
 echo ""
 echo "=== Installation Complete ==="

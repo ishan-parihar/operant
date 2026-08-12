@@ -126,9 +126,17 @@ download_tar_gz() {
 install_igs() {
   local platform tag asset url
   platform="$(detect_platform)"
-  [[ "$platform" == "unsupported" ]] && fail "unsupported platform"
+  if [[ "$platform" == "unsupported" ]]; then
+    log "WARN: unsupported platform — skipping igs (non-fatal)"
+    return 0
+  fi
   tag="${IGS_TAG:-$(latest_tag "$IGS_REPO")}"
-  [[ -z "$tag" ]] && fail "could not resolve latest igs tag (offline?)"
+  if [[ -z "$tag" ]]; then
+    log "WARN: could not resolve latest igs tag (offline?) — skipping (non-fatal)"
+    return 0
+  fi
+  # Download URLs always use the v-prefixed tag; pins may omit it.
+  [[ "$tag" == v* ]] || tag="v$tag"
 
   if command -v igs &>/dev/null; then
     local have
@@ -160,9 +168,12 @@ install_igs() {
 
 # ─── 2. obscura (shared with IGS) ───────────────────────────────────────────
 install_obscura() {
-  local platform tag asset url src=""
+  local platform tag asset url
   platform="$(detect_platform)"
-  [[ "$platform" == "unsupported" ]] && fail "unsupported platform"
+  if [[ "$platform" == "unsupported" ]]; then
+    log "WARN: unsupported platform — skipping obscura (non-fatal)"
+    return 0
+  fi
 
   # Prefer the IGS-managed copy when present — this is the SAME binary IGS
   # web tools use (single-binary guarantee for browser + IGS).
@@ -186,7 +197,11 @@ install_obscura() {
   fi
 
   tag="${OBSCURA_TAG:-$(latest_tag "$OBSCURA_REPO")}"
-  [[ -z "$tag" ]] && fail "could not resolve latest obscura tag (offline?)"
+  if [[ -z "$tag" ]]; then
+    log "WARN: could not resolve latest obscura tag (offline?) — skipping (non-fatal)"
+    return 0
+  fi
+  [[ "$tag" == v* ]] || tag="v$tag"
   asset="$(obscura_asset "$platform")"
   url="https://github.com/$OBSCURA_REPO/releases/download/$tag/$asset"
   log "  downloading stealth obscura $tag ($asset)"
@@ -204,10 +219,12 @@ log "global bin dir: $GLOBAL_BIN_DIR"
 install_igs
 install_obscura
 
+report_bin() { command -v "$1" 2>/dev/null || { [[ -x "$GLOBAL_BIN_DIR/$1" ]] && echo "$GLOBAL_BIN_DIR/$1" || echo MISSING; }; }
+
 log ""
 log "── Summary ──"
-log "  igs:      $(command -v igs || echo MISSING)"
-log "  obscura:  $(command -v obscura || echo MISSING)"
+log "  igs:      $(report_bin igs)"
+log "  obscura:  $(report_bin obscura)"
 log ""
 if ! path_on_path "$GLOBAL_BIN_DIR"; then
   log "NOTE: $GLOBAL_BIN_DIR is not on PATH. Add it, e.g.:"
