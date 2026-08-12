@@ -49,6 +49,7 @@ pub mod approval;
 pub mod browser_provider;
 pub mod client;
 pub mod config;
+pub mod context;
 pub mod context_files;
 pub mod context_management;
 pub mod cookies;

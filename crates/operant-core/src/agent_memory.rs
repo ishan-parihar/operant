@@ -758,6 +758,10 @@ mod tests {
     use super::*;
     use crate::memory_provider::MemoryProvider;
 
+    /// Serializes tests that mutate `AGENTMEMORY_PROJECT_NAME` — env vars are
+    /// process-global, so concurrent mutation races with readers.
+    static PROJECT_NAME_ENV_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn test_format_search_results_known_shape() {
         let value = serde_json::json!({
@@ -852,6 +856,7 @@ mod tests {
     fn test_resolve_project_env_override() {
         // AGENTMEMORY_PROJECT_NAME wins over everything. Save/restore the
         // var so parallel test runs can't observe a mutation.
+        let _guard = PROJECT_NAME_ENV_MUTEX.lock().unwrap();
         let previous = std::env::var_os("AGENTMEMORY_PROJECT_NAME");
         // SAFETY: test-only env mutation, restored immediately below.
         unsafe { std::env::set_var("AGENTMEMORY_PROJECT_NAME", "my-project") };
@@ -865,6 +870,7 @@ mod tests {
     #[test]
     fn test_resolve_project_falls_back_to_cwd_basename() {
         // No git repo, no env var → cwd basename (the plugin's last resort).
+        let _guard = PROJECT_NAME_ENV_MUTEX.lock().unwrap();
         assert_eq!(AgentMemoryProvider::resolve_project("/tmp"), "tmp");
     }
 

@@ -31,6 +31,14 @@ max_healing_attempts = 3
 show_reasoning = true
 tool_progress = "auto"
 context_compression = false
+# Context engine used to assemble the per-call message list (hermes-lcm parity):
+#   - "compact" (default): deterministic decay + lossy eviction when over budget
+#   - "lcm": lossless SQLite DAG + fresh-tail (D0) assembly; older messages are
+#     preserved verbatim and retrievable via lcm_recall. Opt-in — P0 ships the
+#     DAG + tail; P1 adds day/week/month LLM rollups (docs/HERMES_LCM_INTEGRATION.md)
+# context_engine = "compact"
+# context_lcm_db = "~/.operant/lcm.db"
+# context_lcm_tail_tokens = 12000
 session_reset = "never"
 # system_prompt = "You are Hermes."
 # Fallback models tried in order when the primary model fails (rate-limited, unavailable, etc.)

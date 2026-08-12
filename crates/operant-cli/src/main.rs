@@ -994,6 +994,12 @@ pub(crate) async fn create_runtime_agent(
             threshold_percent: config.agent.context_compression_threshold,
             ..Default::default()
         });
+        // Pluggable context engine (hermes-lcm parity): when configured
+        // (agent.context_engine = "lcm"), build_messages assembles via the
+        // lossless DAG + fresh-tail engine instead of lossy eviction.
+        if let Some(engine) = build_context_engine(config) {
+            agent = agent.with_context_engine(engine);
+        }
         // Share the external runtime-metrics registry (created by the TUI)
         // so stream-drop retries and memory-sync failures surface in the
         // status bar. When None, the agent keeps its own internal registry.
@@ -1058,6 +1064,11 @@ pub(crate) async fn create_agent_without_events(
             threshold_percent: config.agent.context_compression_threshold,
             ..Default::default()
         });
+        // Pluggable context engine (hermes-lcm parity) — same gate as the
+        // runtime agent path.
+        if let Some(engine) = build_context_engine(config) {
+            agent = agent.with_context_engine(engine);
+        }
         // Attach the long-term memory provider so turn/session hooks fire
         // (sync_turn, prefetch, on_session_end, ...). Closes audit gap F1.
         if let Some(provider) = core.memory_provider {
@@ -1067,6 +1078,46 @@ pub(crate) async fn create_agent_without_events(
         agent = attach_credential_pool(agent, &provider, config);
         agent
     })
+}
+
+/// Build the configured context engine (`agent.context_engine`).
+///   - `"compact"` (default) → `None`: deterministic decay + eviction.
+///   - `"lcm"` → the lossless DAG engine; a broken init falls back to
+///     compact (never fatal). Matches hermes `context.engine: lcm`.
+fn build_context_engine(
+    config: &AppConfig,
+) -> Option<std::sync::Arc<dyn operant_core::context::ContextEngine>> {
+    match config.agent.context_engine.as_str() {
+        "compact" | "" => None, // built-in default — no engine attached
+        "lcm" => {
+            let db_path = config
+                .agent
+                .context_lcm_db
+                .clone()
+                .unwrap_or_else(|| operant_core::platform::operant_home().join("lcm.db"));
+            let lcm_cfg = operant_core::context::LcmConfig {
+                db_path,
+                tail_tokens: config.agent.context_lcm_tail_tokens,
+            };
+            match operant_core::context::LcmContextEngine::new(lcm_cfg) {
+                Ok(engine) => {
+                    tracing::info!("LCM context engine active (lossless DAG + fresh tail)");
+                    Some(std::sync::Arc::new(engine))
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "LCM context engine init failed — using compact");
+                    None
+                }
+            }
+        }
+        other => {
+            tracing::warn!(
+                engine = other,
+                "unknown agent.context_engine \"{other}\" — using compact"
+            );
+            None
+        }
+    }
 }
 
 /// Build and attach a credential pool when configured, seeded from the

@@ -189,6 +189,22 @@ pub struct BehaviorSettings {
     /// `creation_nudge_interval` (default 10).
     #[serde(default = "default_creation_nudge_interval")]
     pub creation_nudge_interval: usize,
+
+    /// Context engine used to assemble the per-call message list.
+    ///   - `"compact"` (default): deterministic decay + `evict_to_budget`
+    ///     (current behavior — lossy when over budget).
+    ///   - `"lcm"`: lossless DAG + fresh-tail assembly (hermes-lcm parity;
+    ///     see docs/HERMES_LCM_INTEGRATION.md). Opt-in — the default is
+    ///     unchanged until rollups ship in P1.
+    #[serde(default = "default_context_engine")]
+    pub context_engine: String,
+    /// SQLite path for the LCM lossless DAG (default `~/.operant/lcm.db`).
+    #[serde(default)]
+    pub context_lcm_db: Option<PathBuf>,
+    /// Fresh-tail (D0) token budget kept verbatim by the LCM engine.
+    /// Older messages are compacted into the DAG and recallable verbatim.
+    #[serde(default = "default_context_lcm_tail_tokens")]
+    pub context_lcm_tail_tokens: usize,
 }
 
 fn default_fallback_on_errors() -> bool {
@@ -201,6 +217,14 @@ fn default_memory_nudge_interval() -> usize {
 
 fn default_creation_nudge_interval() -> usize {
     10
+}
+
+fn default_context_engine() -> String {
+    "compact".to_string()
+}
+
+fn default_context_lcm_tail_tokens() -> usize {
+    12_000
 }
 
 impl Default for BehaviorSettings {
@@ -224,6 +248,9 @@ impl Default for BehaviorSettings {
             fallback_on_errors: true,
             memory_nudge_interval: 10,
             creation_nudge_interval: 10,
+            context_engine: "compact".to_string(),
+            context_lcm_db: None,
+            context_lcm_tail_tokens: 12_000,
         }
     }
 }

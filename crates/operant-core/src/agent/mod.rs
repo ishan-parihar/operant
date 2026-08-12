@@ -270,6 +270,10 @@ pub struct OperantAgent {
     /// before falling back to deterministic decay/eviction. Matches
     /// hermes-agent's `ContextCompressor` pattern.
     llm_compressor: Option<tokio::sync::Mutex<llm_compressor::LlmCompressor>>,
+    /// Pluggable context engine (hermes-lcm parity). When set,
+    /// `build_messages()` calls `engine.assemble(...)` instead of the lossy
+    /// `evict_to_budget` step — lossless DAG + fresh-tail assembly.
+    context_engine: Option<std::sync::Arc<dyn crate::context::ContextEngine>>,
     /// Credential pool for multi-key failover and rotation.
     /// When set, auth/rate-limit errors trigger automatic credential
     /// rotation via pool.invalidate() + pool.select(). Matches
@@ -377,6 +381,7 @@ impl OperantAgent {
             iteration_budget: Arc::new(IterationBudget::new(max_iter)),
             metrics: Arc::new(crate::runtime_metrics::RuntimeMetrics::new()),
             llm_compressor: None,
+            context_engine: None,
             credential_pool: None,
             active_credential_id: Arc::new(std::sync::RwLock::new(None)),
             rotation_cooldown_until: Arc::new(std::sync::RwLock::new(0.0)),
@@ -427,6 +432,7 @@ impl OperantAgent {
             iteration_budget: Arc::new(IterationBudget::new(max_iter)),
             metrics: Arc::new(crate::runtime_metrics::RuntimeMetrics::new()),
             llm_compressor: None,
+            context_engine: None,
             credential_pool: None,
             active_credential_id: Arc::new(std::sync::RwLock::new(None)),
             rotation_cooldown_until: Arc::new(std::sync::RwLock::new(0.0)),
@@ -667,6 +673,17 @@ impl OperantAgent {
         self.llm_compressor = Some(tokio::sync::Mutex::new(llm_compressor::LlmCompressor::new(
             config,
         )));
+        self
+    }
+
+    /// Attach a pluggable context engine (hermes-lcm parity). When set,
+    /// the engine assembles the per-call message list (lossless DAG + fresh
+    /// tail) instead of the default lossy eviction.
+    pub fn with_context_engine(
+        mut self,
+        engine: std::sync::Arc<dyn crate::context::ContextEngine>,
+    ) -> Self {
+        self.context_engine = Some(engine);
         self
     }
 
@@ -2133,9 +2150,34 @@ impl OperantAgent {
             );
         }
 
-        // Standard eviction: remove oldest messages within tiers until
-        // the total fits within the effective budget.
-        messages = crate::context_management::evict_to_budget(messages, effective_budget);
+        // Context engine hook (hermes-lcm parity): when a lossless engine is
+        // attached, it assembles the final list (D0 fresh tail kept verbatim,
+        // older context compacted into the DAG and recallable) INSTEAD of the
+        // lossy eviction below.
+        if let Some(engine) = &self.context_engine {
+            let session_id = self.persistent_session_id.as_deref().unwrap_or("default");
+            // `assemble` consumes `messages`; on failure fall back to lossy
+            // eviction over the raw conversation history (rare error path).
+            match engine
+                .assemble(session_id, messages, effective_budget)
+                .await
+            {
+                Ok(assembled) => messages = assembled,
+                Err(e) => {
+                    warn!(error = %e, engine = engine.name(),
+                          "context engine assemble failed — falling back to lossy eviction");
+                    let history = self.conversation.read().await;
+                    messages = crate::context_management::evict_to_budget(
+                        history.clone(),
+                        effective_budget,
+                    );
+                }
+            }
+        } else {
+            // Standard eviction: remove oldest messages within tiers until
+            // the total fits within the effective budget.
+            messages = crate::context_management::evict_to_budget(messages, effective_budget);
+        }
 
         let seq_repairs = message_safety::repair_message_sequence(&mut messages);
         if seq_repairs > 0 {
