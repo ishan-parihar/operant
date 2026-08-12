@@ -39,6 +39,10 @@ context_compression = false
 # context_engine = "compact"
 # context_lcm_db = "~/.operant/lcm.db"
 # context_lcm_tail_tokens = 12000
+# P3 adaptive auto-recall: inject top DAG evidence for the current question.
+# context_lcm_auto_recall = true
+# context_lcm_auto_recall_limit = 3
+# context_lcm_auto_recall_max_chars = 4000
 session_reset = "never"
 # system_prompt = "You are Hermes."
 # Fallback models tried in order when the primary model fails (rate-limited, unavailable, etc.)

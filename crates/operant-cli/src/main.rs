@@ -1116,6 +1116,9 @@ fn lcm_config(config: &AppConfig) -> operant_core::context::LcmConfig {
             .clone()
             .unwrap_or_else(|| operant_core::platform::operant_home().join("lcm.db")),
         tail_tokens: config.agent.context_lcm_tail_tokens,
+        auto_recall: config.agent.context_lcm_auto_recall,
+        auto_recall_limit: config.agent.context_lcm_auto_recall_limit,
+        auto_recall_max_chars: config.agent.context_lcm_auto_recall_max_chars,
     }
 }
 

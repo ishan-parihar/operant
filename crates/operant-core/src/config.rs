@@ -205,6 +205,19 @@ pub struct BehaviorSettings {
     /// Older messages are compacted into the DAG and recallable verbatim.
     #[serde(default = "default_context_lcm_tail_tokens")]
     pub context_lcm_tail_tokens: usize,
+    /// P3 adaptive auto-recall: when the LCM engine assembles the context,
+    /// run one bounded retrieval round against the latest user message and
+    /// inject the top hits as a system "pre-answer evidence" block (hermes
+    /// `adaptive_retrieval.py` / pre-answer evidence parity). Default on —
+    /// costs one FTS query per turn.
+    #[serde(default = "default_true")]
+    pub context_lcm_auto_recall: bool,
+    /// Max nodes auto-recalled and injected per assemble (default 3).
+    #[serde(default = "default_lcm_auto_recall_limit")]
+    pub context_lcm_auto_recall_limit: usize,
+    /// Hard cap on the injected evidence block, in characters (default 4000).
+    #[serde(default = "default_lcm_auto_recall_max_chars")]
+    pub context_lcm_auto_recall_max_chars: usize,
 }
 
 fn default_fallback_on_errors() -> bool {
@@ -225,6 +238,14 @@ fn default_context_engine() -> String {
 
 fn default_context_lcm_tail_tokens() -> usize {
     12_000
+}
+
+fn default_lcm_auto_recall_limit() -> usize {
+    3
+}
+
+fn default_lcm_auto_recall_max_chars() -> usize {
+    4_000
 }
 
 impl Default for BehaviorSettings {
@@ -251,6 +272,9 @@ impl Default for BehaviorSettings {
             context_engine: "compact".to_string(),
             context_lcm_db: None,
             context_lcm_tail_tokens: 12_000,
+            context_lcm_auto_recall: true,
+            context_lcm_auto_recall_limit: 3,
+            context_lcm_auto_recall_max_chars: 4_000,
         }
     }
 }

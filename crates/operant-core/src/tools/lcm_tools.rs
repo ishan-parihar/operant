@@ -193,6 +193,9 @@ mod tests {
         let engine = LcmContextEngine::new(crate::context::LcmConfig {
             db_path: dir.join("lcm-tools-test.db"),
             tail_tokens: 100,
+            auto_recall: false,
+            auto_recall_limit: 3,
+            auto_recall_max_chars: 4_000,
         })
         .unwrap();
         Arc::new(engine)
@@ -273,11 +276,17 @@ mod tests {
         let writer = LcmContextEngine::new(crate::context::LcmConfig {
             db_path: db_path.clone(),
             tail_tokens: 100,
+            auto_recall: false,
+            auto_recall_limit: 3,
+            auto_recall_max_chars: 4_000,
         })
         .unwrap();
         let reader = LcmContextEngine::new(crate::context::LcmConfig {
             db_path: db_path.clone(),
             tail_tokens: 100,
+            auto_recall: false,
+            auto_recall_limit: 3,
+            auto_recall_max_chars: 4_000,
         })
         .unwrap();
 

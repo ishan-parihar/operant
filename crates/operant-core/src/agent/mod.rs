@@ -3984,6 +3984,77 @@ mod tests {
         assert!(system.contains("[fact] User prefers concise answers"));
         assert!(system.contains("</long_term_memory>"));
     }
+    #[serial]
+    #[tokio::test]
+    async fn lcm_engine_injects_auto_recall_evidence_into_build_messages() {
+        // P3 end-to-end: with the LCM engine attached (context_engine=lcm),
+        // build_messages() auto-recalls relevant prior DAG content and injects
+        // it as a system evidence block — no manual lcm_recall needed.
+        use crate::agent::clients::openai::OpenAIModelClient;
+        use crate::client::OpenAIClient;
+        use crate::context::{ContextEngine, LcmContextEngine};
+
+        let dir =
+            std::env::temp_dir().join(format!("operant_lcm_agent_test_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let engine = LcmContextEngine::new(crate::context::LcmConfig {
+            db_path: dir.join("lcm.db"),
+            tail_tokens: 12_000,
+            auto_recall: true,
+            auto_recall_limit: 3,
+            auto_recall_max_chars: 4_000,
+        })
+        .unwrap();
+
+        // Seed the DAG with a prior-turn fact (session-scoped).
+        engine
+            .ingest_turn(
+                "agent-lcm-test",
+                &[crate::client::Message::user(
+                    "the launch date for project Phoenix is September 14th, 2027",
+                )],
+            )
+            .await
+            .unwrap();
+
+        let db = Database::init(std::path::PathBuf::from("test_db_lcm.sqlite")).unwrap();
+        let agent = OperantAgent::new(
+            AgentConfig::default(),
+            Box::new(OpenAIModelClient::new(OpenAIClient::new(
+                crate::client::ClientConfig::default(),
+            ))),
+            ToolRegistry::new(Duration::from_secs(1)),
+            Arc::new(db),
+        )
+        .with_persistent_session("agent-lcm-test".to_string())
+        .with_context_engine(Arc::new(engine));
+
+        // A fresh turn asking about the fact — the agent has NOT seen the
+        // prior turn in its own conversation, only the DAG knows it.
+        // (Mirrors turn_context: the user query is added to the conversation
+        // before build_messages runs, so auto-recall has a query to use.)
+        agent
+            .add_message(crate::client::Message::user(
+                "What is the launch date for project Phoenix?",
+            ))
+            .await;
+        let messages = agent.build_messages("agent-lcm-test").await.unwrap();
+        let system: String = messages
+            .iter()
+            .filter(|m| m.role == crate::client::Role::System)
+            .map(|m| m.content.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            system.contains("LCM recalled evidence"),
+            "auto-recall evidence block must be injected, got system: {system:?}"
+        );
+        assert!(
+            system.contains("September 14th, 2027"),
+            "evidence must carry the recalled fact, got system: {system:?}"
+        );
+    }
+
     #[test]
     fn think_router_splits_inline_think_blocks() {
         let mut router = ThinkBlockRouter::default();

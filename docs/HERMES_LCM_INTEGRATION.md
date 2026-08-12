@@ -188,10 +188,14 @@ installs" stays clean).
 - Adaptive retrieval round-state in memory.
 
 ### P3 — Auto-recall + vector backend (optional, stretch)
-- On `assemble`, if `context_lcm_auto_recall`, run one retrieval round against
-  the new user message and inject top evidence as a system block (hermes
-  "pre-answer evidence").
-- `vector_store.rs` parity with an embedder via the model client.
+- ✅ **Implemented**: on `assemble`, one bounded retrieval round against the
+  latest user message injects top evidence as a system block (hermes
+  "pre-answer evidence"). Config: `context_lcm_auto_recall` (default true),
+  `context_lcm_auto_recall_limit` (3), `context_lcm_auto_recall_max_chars`
+  (4000). OR-term FTS query (stopword + FTS5-reserved-keyword filtered),
+  majority-overlap dedup vs visible context, evidence token budget reserved
+  during compaction. 13 unit tests + real-agent integration test + live E2E.
+- ⏳ `vector_store.rs` parity with an embedder via the model client (stretch).
 
 ### P4 — CLI + metrics
 - `operant context status|rollup|recall <q>|rebuild` (mirrors lcm `command.py`).

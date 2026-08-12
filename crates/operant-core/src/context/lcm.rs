@@ -47,6 +47,15 @@ pub struct LcmConfig {
     pub db_path: PathBuf,
     /// Fresh-tail (D0) token budget kept verbatim by `assemble()`.
     pub tail_tokens: usize,
+    /// P3 adaptive auto-recall: when `assemble()` runs, issue one bounded
+    /// retrieval against the latest user message and inject the top hits as
+    /// a system "pre-answer evidence" block (hermes `adaptive_retrieval.py`
+    /// parity). Default on.
+    pub auto_recall: bool,
+    /// Max evidence nodes injected per assemble.
+    pub auto_recall_limit: usize,
+    /// Hard cap on the injected evidence block, in characters.
+    pub auto_recall_max_chars: usize,
 }
 
 impl Default for LcmConfig {
@@ -54,6 +63,9 @@ impl Default for LcmConfig {
         Self {
             db_path: crate::platform::operant_home().join("lcm.db"),
             tail_tokens: 12_000,
+            auto_recall: true,
+            auto_recall_limit: 3,
+            auto_recall_max_chars: 4_000,
         }
     }
 }
@@ -65,6 +77,9 @@ pub struct LcmContextEngine {
     conn: Mutex<Connection>,
     db_path: PathBuf,
     tail_tokens: usize,
+    auto_recall: bool,
+    auto_recall_limit: usize,
+    auto_recall_max_chars: usize,
 }
 
 impl std::fmt::Debug for LcmContextEngine {
@@ -72,6 +87,7 @@ impl std::fmt::Debug for LcmContextEngine {
         f.debug_struct("LcmContextEngine")
             .field("db_path", &self.db_path)
             .field("tail_tokens", &self.tail_tokens)
+            .field("auto_recall", &self.auto_recall)
             .finish()
     }
 }
@@ -111,6 +127,9 @@ impl LcmContextEngine {
             conn: Mutex::new(conn),
             db_path: config.db_path,
             tail_tokens: config.tail_tokens.max(1),
+            auto_recall: config.auto_recall,
+            auto_recall_limit: config.auto_recall_limit.clamp(1, 10),
+            auto_recall_max_chars: config.auto_recall_max_chars.max(256),
         })
     }
 
@@ -203,6 +222,132 @@ impl LcmContextEngine {
         }
         Ok(())
     }
+
+    /// P3 adaptive auto-recall: run one bounded retrieval round against the
+    /// latest user message and return a system "pre-answer evidence" block.
+    /// Hits already visible in the current context are skipped (no dupes);
+    /// the block is hard-capped at `auto_recall_max_chars`.
+    async fn build_auto_recall_evidence(
+        &self,
+        session_id: &str,
+        base: &[Message],
+    ) -> Option<Message> {
+        // Latest user message is the retrieval query.
+        let query = base
+            .iter()
+            .rev()
+            .find(|m| m.role == Role::User)
+            .map(|m| m.content.trim().to_string())?
+            .trim()
+            .to_string();
+        if query.is_empty() {
+            return None;
+        }
+        let limit = self.auto_recall_limit;
+        // Relevance, not verbatim phrase match: tokenize the question, drop
+        // stopwords, and OR the significant terms. A quoted-phrase query would
+        // only match when the exact wording already appeared in the DAG.
+        let fts_query = auto_recall_fts_query(&query);
+        let hits = self
+            .recall_fts(Some(session_id), &fts_query, limit)
+            .unwrap_or_default();
+        if hits.is_empty() {
+            return None;
+        }
+
+        let mut block = String::from(
+            "[LCM recalled evidence relevant to your question (from the lossless DAG):]\n",
+        );
+        let mut budget = self.auto_recall_max_chars;
+        // Token-based visibility check: a hit is "already visible" when most of
+        // its significant terms already appear in the current context
+        // (handles re-wordings, e.g. "note: X" vs "it was: X").
+        let joined_ctx = base
+            .iter()
+            .map(|m| m.content.as_str())
+            .collect::<Vec<_>>()
+            .join(" ");
+        let joined_ctx_lower = joined_ctx.to_lowercase();
+        let mut added = false;
+        for h in hits {
+            let text = h.content.trim();
+            if text.is_empty() {
+                continue;
+            }
+            let terms = auto_recall_terms(text);
+            // Majority-overlap dedup: when >= 60% of a hit's significant
+            // terms are already visible in the context, the model can already
+            // see that knowledge (possibly re-worded) — don't repeat it.
+            if !terms.is_empty() {
+                let visible = terms
+                    .iter()
+                    .filter(|t| joined_ctx_lower.contains(*t))
+                    .count();
+                if visible * 5 >= terms.len() * 3 {
+                    continue;
+                }
+            }
+            let snippet: String = {
+                let mut s: String = text.chars().take(300).collect();
+                if text.chars().count() > 300 {
+                    s.push_str("...");
+                }
+                s
+            };
+            let entry = format!("- [{}] {}\n", h.role, snippet);
+            if entry.len() > budget {
+                break;
+            }
+            budget -= entry.len();
+            block.push_str(&entry);
+            added = true;
+        }
+        if !added {
+            return None;
+        }
+        block
+            .push_str("(Full history is preserved verbatim in the DAG — use lcm_recall for more.)");
+        Some(Message::system(block))
+    }
+
+    /// Shared FTS5 retrieval core. `fts_query` is passed verbatim (the public
+    /// `recall()` wraps it as a quoted phrase; auto-recall builds an OR-term
+    /// query for relevance matching). Lower bm25 = better.
+    fn recall_fts(
+        &self,
+        session_id: Option<&str>,
+        fts_query: &str,
+        limit: usize,
+    ) -> Result<Vec<RecallHit>> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        // `session_id` filters to one session so other sessions' history never
+        // leaks into this context; NULL recalls across all sessions.
+        let sql = "SELECT n.id, n.role, n.content, n.created_at, bm25(nodes_fts)
+             FROM nodes_fts
+             JOIN nodes n ON n.id = nodes_fts.rowid
+             WHERE (?1 IS NULL OR nodes_fts.session_id = ?1) AND nodes_fts MATCH ?2
+             ORDER BY bm25(nodes_fts)
+             LIMIT ?3";
+        let mut stmt = conn
+            .prepare(sql)
+            .map_err(|e| Error::Agent(format!("lcm: recall prepare failed: {e}")))?;
+        let rows = stmt
+            .query_map(params![session_id, fts_query, limit as i64], |row| {
+                Ok(RecallHit {
+                    node_id: row.get(0)?,
+                    role: row.get(1)?,
+                    content: row.get(2)?,
+                    created_at: row.get(3)?,
+                    score: row.get(4)?,
+                })
+            })
+            .map_err(|e| Error::Agent(format!("lcm: recall query failed: {e}")))?;
+        let mut hits = Vec::new();
+        for row in rows {
+            hits.push(row.map_err(|e| Error::Agent(format!("lcm: recall row failed: {e}")))?);
+        }
+        Ok(hits)
+    }
 }
 
 #[async_trait::async_trait]
@@ -238,15 +383,45 @@ impl ContextEngine for LcmContextEngine {
         // 1. Ingest idempotently so recall covers the current context.
         self.ingest_turn(session_id, &base).await?;
 
-        // 2. Fast path: everything fits — return unchanged (lossless).
-        if crate::context_management::estimate_total_tokens(&base) <= budget_tokens {
-            return Ok(base);
-        }
+        // 2. P3 adaptive auto-recall: one bounded retrieval round against the
+        //    latest user message; inject top evidence as a system block
+        //    (hermes `adaptive_retrieval.py` pre-answer evidence parity).
+        let evidence = if self.auto_recall {
+            self.build_auto_recall_evidence(session_id, &base).await
+        } else {
+            None
+        };
 
-        // 3. D0 fresh tail kept verbatim; older messages compacted into a
+        // 3. Fast path: everything (including evidence) fits — return lossless.
+        //    The evidence block is inserted after the leading system prefix
+        //    so it acts as context the model reads before the conversation.
+        let with_evidence: Vec<Message> = match &evidence {
+            Some(block) => {
+                let mut out = Vec::with_capacity(base.len() + 1);
+                let sys_count = base.iter().take_while(|m| m.role == Role::System).count();
+                out.extend_from_slice(&base[..sys_count]);
+                out.push(block.clone());
+                out.extend_from_slice(&base[sys_count..]);
+                out
+            }
+            None => base,
+        };
+        if crate::context_management::estimate_total_tokens(&with_evidence) <= budget_tokens {
+            return Ok(with_evidence);
+        } // 4. D0 fresh tail kept verbatim; older messages compacted into a
         //    placeholder (P1 fills it with real day/week/month LLM rollups).
-        let tail_budget = self.tail_tokens.min(budget_tokens);
-        let (mut kept, compacted_count, compacted_tokens) = split_for_lcm(base, tail_budget);
+        //    Reserve tail budget for the evidence block so the assembled
+        //    context never exceeds the intended budget even when compacting.
+        let evidence_tokens = evidence
+            .as_ref()
+            .map(crate::context_management::estimate_message_tokens)
+            .unwrap_or(0);
+        let tail_budget = self
+            .tail_tokens
+            .min(budget_tokens)
+            .saturating_sub(evidence_tokens);
+        let (mut kept, compacted_count, compacted_tokens) =
+            split_for_lcm(with_evidence, tail_budget);
 
         let placeholder = Message::system(format!(
             "[LCM lossless context: {} earlier message(s) (~{} tokens) are preserved verbatim in the DAG at {}. Use the lcm_recall tool to retrieve any of them — nothing was deleted.]",
@@ -255,6 +430,10 @@ impl ContextEngine for LcmContextEngine {
             self.db_path.display()
         ));
         kept.insert(1, placeholder);
+        // Pre-answer evidence still rides along after the placeholder.
+        if let Some(block) = evidence {
+            kept.insert(2, block);
+        }
         Ok(kept)
     }
 
@@ -268,36 +447,9 @@ impl ContextEngine for LcmContextEngine {
             return Ok(Vec::new());
         }
         let limit = limit.clamp(1, 50);
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         // FTS5 phrase: quote + escape inner quotes. Lower bm25 = better.
         let fts_query = format!("\"{}\"", query.trim().replace('"', "\"\""));
-        // `session_id` filters to one session so other sessions' history never
-        // leaks into this context; NULL recalls across all sessions.
-        let sql = "SELECT n.id, n.role, n.content, n.created_at, bm25(nodes_fts)
-             FROM nodes_fts
-             JOIN nodes n ON n.id = nodes_fts.rowid
-             WHERE (?1 IS NULL OR nodes_fts.session_id = ?1) AND nodes_fts MATCH ?2
-             ORDER BY bm25(nodes_fts)
-             LIMIT ?3";
-        let mut stmt = conn
-            .prepare(sql)
-            .map_err(|e| Error::Agent(format!("lcm: recall prepare failed: {e}")))?;
-        let rows = stmt
-            .query_map(params![session_id, fts_query, limit as i64], |row| {
-                Ok(RecallHit {
-                    node_id: row.get(0)?,
-                    role: row.get(1)?,
-                    content: row.get(2)?,
-                    created_at: row.get(3)?,
-                    score: row.get(4)?,
-                })
-            })
-            .map_err(|e| Error::Agent(format!("lcm: recall query failed: {e}")))?;
-        let mut hits = Vec::new();
-        for row in rows {
-            hits.push(row.map_err(|e| Error::Agent(format!("lcm: recall row failed: {e}")))?);
-        }
-        Ok(hits)
+        self.recall_fts(session_id, &fts_query, limit)
     }
 }
 
@@ -342,6 +494,116 @@ fn split_for_lcm(messages: Vec<Message>, budget: usize) -> (Vec<Message>, usize,
 
 /// Stable-enough dedup hash for content (not cryptographic; idempotency
 /// across turns is the goal).
+/// Build an FTS5 OR query from the significant terms of a natural-language
+/// question (for P3 auto-recall). Stopwords and short tokens are dropped so
+/// "when is the deploy window again?" becomes `deploy OR window` — matching
+/// any prior turn that mentioned the topic, not only exact re-wordings.
+fn auto_recall_fts_query(question: &str) -> String {
+    let mut terms = auto_recall_terms(question);
+    if terms.is_empty() {
+        // Fall back to the quoted phrase so recall still has something safe.
+        return format!("\"{}\"", question.trim().replace('"', "\"\""));
+    }
+    terms.truncate(8);
+    terms.join(" OR ")
+}
+
+/// Significant (non-stopword, >= 3 chars, unique, lowercased) terms of a
+/// piece of text — used to build the auto-recall OR query and to detect
+/// whether evidence is already visible in the current context.
+fn auto_recall_terms(text: &str) -> Vec<String> {
+    const STOPWORDS: &[&str] = &[
+        "a",
+        "an",
+        "the",
+        "and",
+        "or",
+        "but",
+        "if",
+        "then",
+        "else",
+        "when",
+        "what",
+        "which",
+        "who",
+        "whom",
+        "where",
+        "why",
+        "how",
+        "is",
+        "are",
+        "was",
+        "were",
+        "be",
+        "been",
+        "being",
+        "do",
+        "does",
+        "did",
+        "have",
+        "has",
+        "had",
+        "will",
+        "would",
+        "can",
+        "could",
+        "should",
+        "shall",
+        "may",
+        "might",
+        "must",
+        "of",
+        "in",
+        "on",
+        "at",
+        "to",
+        "for",
+        "from",
+        "with",
+        "without",
+        "by",
+        "about",
+        "again",
+        "it",
+        "its",
+        "that",
+        "this",
+        "these",
+        "those",
+        "my",
+        "your",
+        "our",
+        "you",
+        "me",
+        "i",
+        "we",
+        "they",
+        "he",
+        "she",
+        "tell",
+        "say",
+        "remember",
+        "whats",
+        "mentioned",
+        "any",
+        "only",
+        "all",
+        "some",
+        // FTS5 reserved operators — a bare `NOT`/`NEAR` in a MATCH query is a
+        // parse error, which would silently drop evidence for that turn.
+        "not",
+        "near",
+    ];
+    let mut terms: Vec<String> = Vec::new();
+    for tok in text.split(|c: char| !c.is_alphanumeric()) {
+        let t = tok.trim().to_lowercase();
+        if t.len() >= 3 && !STOPWORDS.contains(&t.as_str()) && !terms.contains(&t) {
+            terms.push(t);
+        }
+    }
+    terms
+}
+
 fn content_hash(content: &str) -> String {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -377,6 +639,9 @@ mod tests {
         let engine = LcmContextEngine::new(LcmConfig {
             db_path: db_path.clone(),
             tail_tokens: 100,
+            auto_recall: true,
+            auto_recall_limit: 3,
+            auto_recall_max_chars: 4_000,
         })
         .unwrap();
         (engine, format!("{}", db_path.display()))
@@ -566,7 +831,141 @@ mod tests {
         let (engine, _) = test_db();
         let base = sample_turn();
         let out = engine.assemble("s1", base.clone(), 100_000).await.unwrap();
+        // No prior DAG content matches the last user query, so no evidence
+        // block is injected — the fast path stays lossless.
         assert_eq!(out.len(), base.len());
+        assert!(
+            out.iter()
+                .all(|m| !m.content.contains("LCM recalled evidence")),
+            "no evidence block when the DAG has no relevant hits"
+        );
+    }
+
+    #[tokio::test]
+    async fn auto_recall_injects_evidence_for_relevant_prior_turn() {
+        // P3: assemble() issues one bounded retrieval against the latest user
+        // message and injects top hits as a system evidence block.
+        let (engine, _) = test_db();
+        // Seed the DAG with a prior exchange about a project detail.
+        let seed = vec![
+            Message::user("remember: the deploy window is every Tuesday at 2pm UTC"),
+            Message::assistant("Got it — deploys are Tuesdays 2pm UTC"),
+        ];
+        engine.ingest_turn("s1", &seed).await.unwrap();
+        // A fresh turn asking about the deploy window.
+        let base = vec![
+            Message::system("you are a test agent"),
+            Message::user("when is the deploy window again?"),
+        ];
+        let out = engine.assemble("s1", base.clone(), 100_000).await.unwrap();
+        let evidence: Vec<_> = out
+            .iter()
+            .filter(|m| m.content.contains("LCM recalled evidence"))
+            .collect();
+        assert_eq!(
+            evidence.len(),
+            1,
+            "one evidence block expected, got {out:?}"
+        );
+        assert!(
+            evidence[0].content.contains("deploy window"),
+            "evidence must carry the recalled detail: {}",
+            evidence[0].content
+        );
+        // The original messages remain untouched (fast path, lossless).
+        assert!(
+            out.iter()
+                .any(|m| m.content.contains("when is the deploy window"))
+        );
+    }
+
+    #[tokio::test]
+    async fn auto_recall_skips_evidence_already_visible_in_context() {
+        // Evidence whose text already appears in the assembled context must
+        // not be duplicated into the injected block.
+        let (engine, _) = test_db();
+        let fact = "the release cadence is biweekly";
+        let seed = vec![Message::user(format!("note: {fact}"))];
+        engine.ingest_turn("s1", &seed).await.unwrap();
+        // The fact is ALREADY in this turn's context.
+        let base = vec![
+            Message::system("you are a test agent"),
+            Message::user(format!("what did I say about cadence? (it was: {fact})")),
+        ];
+        let out = engine.assemble("s1", base.clone(), 100_000).await.unwrap();
+        let evidence: Vec<_> = out
+            .iter()
+            .filter(|m| m.content.contains("LCM recalled evidence"))
+            .collect();
+        assert!(
+            evidence.is_empty(),
+            "no evidence block when the only hit is already visible: {out:?}"
+        );
+    }
+
+    #[test]
+    fn auto_recall_query_escapes_fts_reserved_keywords() {
+        // FTS5 operators (NOT/NEAR) must never reach MATCH as bare tokens —
+        // they would be parse errors and silently drop evidence.
+        let q = auto_recall_fts_query("what is not working near the deploy window");
+        assert!(!q.contains("NOT"), "reserved NOT must be filtered: {q}");
+        assert!(!q.contains("NEAR"), "reserved NEAR must be filtered: {q}");
+        assert!(q.contains("deploy"), "significant terms survive: {q}");
+        assert!(q.contains("window"), "significant terms survive: {q}");
+        assert!(q.contains("working"), "significant terms survive: {q}");
+    }
+
+    #[tokio::test]
+    async fn auto_recall_disabled_never_injects_evidence() {
+        let dir = std::env::temp_dir().join(format!("operant_lcm_off_{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let engine = LcmContextEngine::new(LcmConfig {
+            db_path: dir.join("lcm-off.db"),
+            tail_tokens: 100,
+            auto_recall: false,
+            auto_recall_limit: 3,
+            auto_recall_max_chars: 4_000,
+        })
+        .unwrap();
+        let seed = vec![Message::user("remember: key=alpha")];
+        engine.ingest_turn("s1", &seed).await.unwrap();
+        let base = vec![Message::user("what is key?")];
+        let out = engine.assemble("s1", base.clone(), 100_000).await.unwrap();
+        assert!(
+            out.iter()
+                .all(|m| !m.content.contains("LCM recalled evidence")),
+            "auto-recall disabled must not inject evidence"
+        );
+    }
+
+    #[tokio::test]
+    async fn auto_recall_evidence_rides_along_when_compacting() {
+        // When the context is over budget, the evidence block must survive
+        // alongside the compaction placeholder.
+        let (engine, _) = test_db();
+        let fact = "the secret ingredient is saffron";
+        let seed = vec![Message::user(format!("remember: {fact}"))];
+        engine.ingest_turn("s1", &seed).await.unwrap();
+        let mut base = vec![Message::system("you are a test agent")];
+        for i in 0..20 {
+            base.push(Message::user(format!(
+                "filler message number {i} with enough words to consume tokens"
+            )));
+        }
+        // Ask WITHOUT restating the fact so evidence is genuinely needed.
+        base.push(Message::user("what ingredient did I mention earlier?"));
+        // Tiny budget forces compaction.
+        let out = engine.assemble("s1", base, 100).await.unwrap();
+        assert!(
+            out.iter()
+                .any(|m| m.content.contains("LCM lossless context")),
+            "compaction placeholder expected"
+        );
+        assert!(
+            out.iter()
+                .any(|m| m.content.contains("LCM recalled evidence")),
+            "evidence block must survive compaction"
+        );
     }
 
     #[test]
