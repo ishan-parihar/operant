@@ -219,6 +219,16 @@ pub fn discover_browser_cookie_sources()
             ".config/BraveSoftware/Brave-Browser",
             ".config/BraveSoftware/Brave-Browser",
         ),
+        (
+            "brave-beta",
+            ".config/BraveSoftware/Brave-Beta",
+            ".config/BraveSoftware/Brave-Beta",
+        ),
+        (
+            "brave-origin-beta",
+            ".config/BraveSoftware/Brave-Origin-Beta",
+            ".config/BraveSoftware/Brave-Origin-Beta",
+        ),
         ("edge", ".config/microsoft-edge", ".config/microsoft-edge"),
         ("vivaldi", ".config/vivaldi", ".config/vivaldi"),
         ("opera", ".config/opera", ".config/opera"),
@@ -241,6 +251,17 @@ pub fn discover_browser_cookie_sources()
             let db = entry.path().join("cookies.sqlite");
             if db.exists() {
                 out.push(("firefox".to_string(), db, None));
+            }
+        }
+    }
+
+    // Zen Browser: a Firefox fork with profiles under ~/.zen.
+    let zen_dir = home.join(".zen");
+    if let Ok(entries) = std::fs::read_dir(&zen_dir) {
+        for entry in entries.flatten() {
+            let db = entry.path().join("cookies.sqlite");
+            if db.exists() {
+                out.push(("zen".to_string(), db, None));
             }
         }
     }
@@ -436,6 +457,84 @@ pub struct ChromiumReadReport {
     pub undecryptable: usize,
 }
 
+/// A read-only SQLite connection to a browser cookie DB, with an optional
+/// snapshot temp-dir guard kept alive for the connection's lifetime.
+struct CookieDb {
+    conn: rusqlite::Connection,
+    _guard: Option<TempDirGuard>,
+}
+
+impl std::ops::Deref for CookieDb {
+    type Target = rusqlite::Connection;
+    fn deref(&self) -> &rusqlite::Connection {
+        &self.conn
+    }
+}
+
+/// Removes a snapshot directory when dropped.
+struct TempDirGuard {
+    dir: std::path::PathBuf,
+}
+
+impl Drop for TempDirGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
+
+/// Open a browser cookie SQLite DB read-only, handling the live-browser
+/// WAL case: a running browser keeps uncommitted rows in `-wal` / `-shm`
+/// siblings that a read-only connection cannot see (returns 0 rows). When a
+/// `-wal` file exists, snapshot the trio into a private temp dir and open
+/// the copy so WAL data is included. The temp dir is removed when the
+/// returned [`CookieDb`] is dropped (after the connection is closed).
+fn open_cookie_db_readonly(db_path: &std::path::Path) -> Option<CookieDb> {
+    let wal_path = {
+        let mut p = db_path.as_os_str().to_owned();
+        p.push("-wal");
+        std::path::PathBuf::from(p)
+    };
+
+    let (target, guard) = if wal_path.exists() {
+        // Snapshot db + wal + shm into a unique temp dir.
+        let dir = std::env::temp_dir().join(format!(
+            "operant-cookies-{}-{:x}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        let _ = std::fs::create_dir_all(&dir);
+        let copy = dir.join("cookies.sqlite");
+        if std::fs::copy(db_path, &copy).is_err() {
+            return None;
+        }
+        for suffix in ["-wal", "-shm"] {
+            let src = {
+                let mut p = db_path.as_os_str().to_owned();
+                p.push(suffix);
+                std::path::PathBuf::from(p)
+            };
+            if src.exists() {
+                let _ = std::fs::copy(&src, dir.join(format!("cookies.sqlite{suffix}")));
+            }
+        }
+        (copy, Some(TempDirGuard { dir }))
+    } else {
+        (db_path.to_path_buf(), None)
+    };
+
+    let conn =
+        rusqlite::Connection::open_with_flags(&target, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .ok()?;
+
+    Some(CookieDb {
+        conn,
+        _guard: guard,
+    })
+}
+
 /// Read a Chromium-family `Cookies` SQLite DB (Chrome/Brave/Edge/…).
 /// Returns the decrypted cookies plus a diagnostic report. Undecryptable
 /// rows (v11 app-bound, unknown keyring) are counted, not silently dropped.
@@ -445,13 +544,10 @@ pub fn read_chromium_cookies_report(
 ) -> (Vec<Cookie>, ChromiumReadReport) {
     let mut report = ChromiumReadReport::default();
     let key = chromium_decryption_key(local_state_path);
-    let conn = match rusqlite::Connection::open_with_flags(
-        db_path,
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-    ) {
-        Ok(c) => c,
-        Err(_) => return (Vec::new(), report),
+    let Some(db) = open_cookie_db_readonly(db_path) else {
+        return (Vec::new(), report);
     };
+    let conn = &db.conn;
     let mut stmt = match conn.prepare(
         "SELECT host_key, name, value, encrypted_value, path, expires_utc, \
          is_secure, is_httponly, samesite FROM cookies",
@@ -548,13 +644,10 @@ fn chromium_time_to_unix(micros_since_1601: i64) -> i64 {
 
 /// Read a Firefox `cookies.sqlite` DB (plaintext values).
 pub fn read_firefox_cookies(db_path: &std::path::Path) -> Vec<Cookie> {
-    let conn = match rusqlite::Connection::open_with_flags(
-        db_path,
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-    ) {
-        Ok(c) => c,
-        Err(_) => return Vec::new(),
+    let Some(db) = open_cookie_db_readonly(db_path) else {
+        return Vec::new();
     };
+    let conn = &db.conn;
     let mut stmt = match conn.prepare(
         "SELECT host, name, value, path, expiry, isSecure, isHttpOnly, sameSite FROM moz_cookies",
     ) {
@@ -595,7 +688,15 @@ pub fn read_firefox_cookies(db_path: &std::path::Path) -> Vec<Cookie> {
                 } else {
                     path
                 },
-                expires: (expiry > 0).then_some(expiry),
+                // Firefox stores Unix seconds; Zen Browser (a Firefox fork)
+                // stores Unix **milliseconds**. Detect by magnitude and
+                // normalize to seconds so CDP `expires` is valid (a raw ms
+                // value looks like year ~59000 and the browser rejects it).
+                expires: (expiry > 0).then_some(if expiry > 100_000_000_000 {
+                    expiry / 1000
+                } else {
+                    expiry
+                }),
                 secure: secure != 0,
                 http_only: http_only != 0,
                 same_site: same_site_str.to_string(),
@@ -744,6 +845,52 @@ mod tests {
         // No firefox profile here — the function must tolerate a missing file.
         let cookies = read_firefox_cookies(std::path::Path::new("/nonexistent/cookies.sqlite"));
         assert!(cookies.is_empty());
+    }
+
+    #[test]
+    fn zen_millisecond_expiry_normalized_to_seconds() {
+        // Zen Browser stores expiry in Unix milliseconds; the CDP `expires`
+        // field takes seconds. A raw ms value must be divided by 1000.
+        let dir = std::env::temp_dir().join(format!("zen-expiry-test-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let db = dir.join("cookies.sqlite");
+        let _ = std::fs::remove_file(&db);
+        {
+            let conn = rusqlite::Connection::open(&db).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE moz_cookies (id INTEGER PRIMARY KEY, baseDomain TEXT, \
+                 appId INTEGER, inBrowserElement INTEGER, host TEXT, name TEXT, value TEXT, \
+                 hostOnly INTEGER, path TEXT, isSecure INTEGER, isHttpOnly INTEGER, \
+                 sameSite INTEGER, rawSameSite INTEGER, schemeMap INTEGER, isSameParty \
+                 INTEGER, expiry INTEGER, lastAccessed INTEGER, creationTime INTEGER, \
+                 isSession INTEGER)",
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO moz_cookies (host, name, value, path, isSecure, isHttpOnly, \
+                 sameSite, expiry) VALUES (?1, ?2, ?3, '/', 1, 1, 1, ?4)",
+                rusqlite::params![".x.com", "auth_token", "tok", 1_816_377_848_809i64],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO moz_cookies (host, name, value, path, isSecure, isHttpOnly, \
+                 sameSite, expiry) VALUES (?1, ?2, ?3, '/', 0, 0, 0, ?4)",
+                rusqlite::params![".github.com", "session", "s", 0i64],
+            )
+            .unwrap();
+        }
+
+        let cookies = read_firefox_cookies(&db);
+        assert_eq!(cookies.len(), 2);
+        let token = cookies.iter().find(|c| c.name == "auth_token").unwrap();
+        // ms 1_816_377_848_809 -> seconds 1_816_377_848 (valid Unix seconds).
+        assert_eq!(token.expires, Some(1_816_377_848));
+        assert!(token.secure);
+        assert!(token.http_only);
+        let session = cookies.iter().find(|c| c.name == "session").unwrap();
+        assert_eq!(session.expires, None, "expiry 0 = session cookie");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

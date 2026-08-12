@@ -28,7 +28,8 @@ pub enum CookiesSubcommand {
         /// Path to a cookies.txt / JSON export file.
         file: Option<PathBuf>,
         /// Import directly from a browser's cookie database:
-        /// chrome, chromium, brave, edge, vivaldi, opera, firefox.
+        /// chrome, chromium, brave, brave-beta, brave-origin-beta, edge,
+        /// vivaldi, opera, firefox, zen.
         #[arg(long)]
         browser: Option<String>,
         /// Show the cookies that would be imported without applying them.
@@ -74,7 +75,8 @@ fn load_cookies(file: Option<PathBuf>, browser: Option<String>) -> Result<Vec<Co
             )
         })?;
         let (label, db, local_state) = found;
-        let cookies = if label == "firefox" {
+        let cookies = if label == "firefox" || label == "zen" {
+            // Firefox-family (Firefox, Zen Browser): plaintext values.
             cookies::read_firefox_cookies(&db)
         } else {
             let (cookies, report) =
