@@ -9,6 +9,7 @@ mod cmd_channel;
 mod cmd_checkpoints;
 mod cmd_completion;
 mod cmd_config;
+mod cmd_context;
 mod cmd_cookies;
 mod cmd_cron;
 mod cmd_curator;
@@ -303,6 +304,11 @@ enum Commands {
     Memory {
         #[command(subcommand)]
         cmd: cmd_memory::MemorySubcommand,
+    },
+    /// Inspect the context engine (lossless DAG)
+    Context {
+        #[command(subcommand)]
+        cmd: cmd_context::ContextSubcommand,
     },
     /// Manage profiles
     Profile {
@@ -1108,7 +1114,7 @@ pub(crate) async fn create_agent_without_events(
 ///
 /// Shared by the registry tool wiring and the agent engine so the db-path
 /// default and tail budget can never drift between the two instances.
-fn lcm_config(config: &AppConfig) -> operant_core::context::LcmConfig {
+pub(crate) fn lcm_config(config: &AppConfig) -> operant_core::context::LcmConfig {
     operant_core::context::LcmConfig {
         db_path: config
             .agent
@@ -1692,6 +1698,9 @@ async fn main() -> Result<()> {
         }
         Some(Commands::Memory { cmd }) => {
             cmd_memory::handle_memory_command(&loaded.config, cmd.clone()).await?;
+        }
+        Some(Commands::Context { cmd }) => {
+            cmd_context::handle_context_command(&loaded.config, cmd.clone()).await?;
         }
         Some(Commands::Profile { cmd }) => {
             cmd_profile::handle_profile_command(&loaded.config, cmd.clone()).await?;

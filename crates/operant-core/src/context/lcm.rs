@@ -151,6 +151,32 @@ impl LcmContextEngine {
             .map_err(|e| Error::Agent(format!("lcm: node_count_global failed: {e}")))
     }
 
+    /// List all sessions in the DAG with node counts and last-activity
+    /// timestamps, newest first (diagnostics/CLI surface).
+    pub fn list_sessions(&self) -> Result<Vec<(String, usize, i64)>> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let mut stmt = conn
+            .prepare(
+                "SELECT session_id, COUNT(*), MAX(created_at) FROM nodes \
+                 GROUP BY session_id ORDER BY MAX(created_at) DESC",
+            )
+            .map_err(|e| Error::Agent(format!("lcm: list_sessions prepare failed: {e}")))?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)? as usize,
+                    row.get::<_, i64>(2)?,
+                ))
+            })
+            .map_err(|e| Error::Agent(format!("lcm: list_sessions query failed: {e}")))?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r.map_err(|e| Error::Agent(format!("lcm: list_sessions row: {e}")))?);
+        }
+        Ok(out)
+    }
+
     /// Count DAG nodes for a session (diagnostics/tests).
     pub fn node_count(&self, session_id: &str) -> Result<usize> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());

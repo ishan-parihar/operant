@@ -197,9 +197,12 @@ installs" stays clean).
   during compaction. 13 unit tests + real-agent integration test + live E2E.
 - ⏳ `vector_store.rs` parity with an embedder via the model client (stretch).
 
-### P4 — CLI + metrics
-- `operant context status|rollup|recall <q>|rebuild` (mirrors lcm `command.py`).
-- Emit DAG stats into the existing runtime-metrics status bar.
+### P4 — CLI + metrics ✅ (partial)
+- `operant context status|sessions|recall <q> [--limit N]` — implemented
+  (`cmd_context.rs`). Read-only operator surface over the same DAG file.
+- `rollup`/`rebuild` and DAG-stats-in-status-bar remain as stretch — the
+  agent-facing `lcm_recall`/`lcm_stats` tools already cover the runtime
+  path; a status-bar widget adds UI plumbing with no functional gain yet.
 
 **YAGNI note:** skip the auxiliary-session, placeholder-ledger, and bypass
 mixins (hermes-specific multi-session orchestration) until a concrete need
