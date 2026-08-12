@@ -641,7 +641,7 @@ fn create_model_client(
     }
 }
 
-fn client_config(config: &AppConfig) -> ClientConfig {
+pub(crate) fn client_config(config: &AppConfig) -> ClientConfig {
     ClientConfig::from(&config.client)
 }
 

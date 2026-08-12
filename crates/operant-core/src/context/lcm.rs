@@ -120,7 +120,16 @@ impl LcmContextEngine {
              CREATE UNIQUE INDEX IF NOT EXISTS idx_nodes_dedup
                  ON nodes(session_id, position, content_hash);
              CREATE VIRTUAL TABLE IF NOT EXISTS nodes_fts
-                 USING fts5(content, session_id UNINDEXED);",
+                 USING fts5(content, session_id UNINDEXED);
+             CREATE TABLE IF NOT EXISTS lcm_rollups (
+                 session_id TEXT NOT NULL,
+                 period_kind TEXT NOT NULL,
+                 period_start TEXT NOT NULL,
+                 summary TEXT NOT NULL,
+                 source_count INTEGER NOT NULL DEFAULT 0,
+                 created_at INTEGER NOT NULL,
+                 PRIMARY KEY (session_id, period_kind, period_start)
+             );",
         )
         .map_err(|e| Error::Agent(format!("lcm: schema bootstrap failed: {e}")))?;
         Ok(Self {
@@ -175,6 +184,108 @@ impl LcmContextEngine {
             out.push(r.map_err(|e| Error::Agent(format!("lcm: list_sessions row: {e}")))?);
         }
         Ok(out)
+    }
+
+    /// Fetch verbatim node contents in a [start_ms, end_ms) window, oldest
+    /// first, capped at `limit`. Only message nodes (never derived rollups)
+    /// are included — rollups never feed rollups.
+    pub fn nodes_in_window(
+        &self,
+        session_id: &str,
+        start_ms: i64,
+        end_ms: i64,
+        limit: usize,
+    ) -> Result<Vec<String>> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let mut stmt = conn
+            .prepare(
+                "SELECT content FROM nodes WHERE session_id = ?1 AND kind = 'message' \
+                 AND created_at >= ?2 AND created_at < ?3 ORDER BY created_at, id LIMIT ?4",
+            )
+            .map_err(|e| Error::Agent(format!("lcm: nodes_in_window prepare failed: {e}")))?;
+        let rows = stmt
+            .query_map(params![session_id, start_ms, end_ms, limit as i64], |row| {
+                row.get::<_, String>(0)
+            })
+            .map_err(|e| Error::Agent(format!("lcm: nodes_in_window failed: {e}")))?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r.map_err(|e| Error::Agent(format!("lcm: nodes_in_window row: {e}")))?);
+        }
+        Ok(out)
+    }
+
+    /// Upsert a rollup summary for (session, period, start). Returns the
+    /// stored `created_at` millis (updated on refresh).
+    pub fn upsert_rollup(
+        &self,
+        session_id: &str,
+        period_kind: &str,
+        period_start: &str,
+        summary: &str,
+        source_count: usize,
+    ) -> Result<i64> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let now = now_millis();
+        conn.execute(
+            "INSERT INTO lcm_rollups
+                 (session_id, period_kind, period_start, summary, source_count, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT(session_id, period_kind, period_start) DO UPDATE SET
+                 summary = excluded.summary,
+                 source_count = excluded.source_count,
+                 created_at = excluded.created_at",
+            params![
+                session_id,
+                period_kind,
+                period_start,
+                summary,
+                source_count as i64,
+                now
+            ],
+        )
+        .map_err(|e| Error::Agent(format!("lcm: upsert_rollup failed: {e}")))?;
+        Ok(now)
+    }
+
+    /// List stored rollups for a session, newest period first.
+    pub fn list_rollups(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<crate::context::rollup::RollupSummary>> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let mut stmt = conn
+            .prepare(
+                "SELECT period_kind, period_start, summary, source_count, created_at \
+                 FROM lcm_rollups WHERE session_id = ?1 ORDER BY period_start DESC",
+            )
+            .map_err(|e| Error::Agent(format!("lcm: list_rollups prepare failed: {e}")))?;
+        let rows = stmt
+            .query_map(params![session_id], |row| {
+                Ok(crate::context::rollup::RollupSummary {
+                    period_kind: row.get(0)?,
+                    period_start: row.get(1)?,
+                    summary: row.get(2)?,
+                    source_count: row.get::<_, i64>(3)? as usize,
+                    created_at: row.get(4)?,
+                })
+            })
+            .map_err(|e| Error::Agent(format!("lcm: list_rollups failed: {e}")))?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r.map_err(|e| Error::Agent(format!("lcm: list_rollups row: {e}")))?);
+        }
+        Ok(out)
+    }
+
+    /// Count stored rollups across ALL sessions (diagnostics/CLI surface).
+    pub fn rollup_count_global(&self) -> Result<usize> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        conn.query_row("SELECT COUNT(*) FROM lcm_rollups", [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .map(|n| n as usize)
+        .map_err(|e| Error::Agent(format!("lcm: rollup_count_global failed: {e}")))
     }
 
     /// Count DAG nodes for a session (diagnostics/tests).

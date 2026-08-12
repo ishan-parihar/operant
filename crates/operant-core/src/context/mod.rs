@@ -14,6 +14,7 @@
 //! adaptive recall, assertions) and the P0–P4 roadmap.
 
 pub mod lcm;
+pub mod rollup;
 
 use crate::client::Message;
 use crate::error::Result;
