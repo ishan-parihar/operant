@@ -197,6 +197,8 @@ pub struct MaintenanceReport {
     pub skipped_existing: usize,
     /// Periods with no source content (nothing to summarize).
     pub skipped_empty: usize,
+    /// Summarizer failures swallowed (one bad LLM call never aborts a pass).
+    pub errors: usize,
 }
 
 impl MaintenanceReport {
@@ -232,9 +234,6 @@ where
         None => engine.list_sessions()?,
     };
     for (session_id, _count, _last_ts) in sessions {
-        if only_session.is_some() {
-            // Only scan the explicit session; other sessions are untouched.
-        }
         report.sessions_scanned += 1;
 
         // Day: each of the last `lookback_days` days.
@@ -263,9 +262,14 @@ where
             )
             .await?;
         }
-        // Month: 1sts of the last `lookback_days`/30 months (at least 1).
+        // Month: 1sts of the last `lookback_days`/30 calendar months (at
+        // least 1). Uses checked_sub_months — a fixed 30-day stride would
+        // skip short months (e.g. Feb when today is Mar 1) or revisit the
+        // same month (Jan 31 → Jan 1 twice).
         for m in 0..(lookback_days / 30).max(1) {
-            let anchor = today - Duration::days(m as i64 * 30);
+            let anchor = today
+                .checked_sub_months(chrono::Months::new(m))
+                .unwrap_or(today);
             report = build_missing(
                 engine,
                 &session_id,
@@ -309,7 +313,7 @@ where
             RollupPeriod::Month => report.months_built += 1,
         },
         Ok(None) => report.skipped_empty += 1,
-        Err(_) => report.skipped_empty += 1, // one bad period never aborts
+        Err(_) => report.errors += 1, // one bad period never aborts the pass
     }
     Ok(report)
 }

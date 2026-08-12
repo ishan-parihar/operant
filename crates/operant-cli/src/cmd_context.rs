@@ -215,6 +215,7 @@ pub async fn handle_context_command(config: &AppConfig, cmd: ContextSubcommand) 
             println!("  months built     : {}", report.months_built);
             println!("  skipped existing : {}", report.skipped_existing);
             println!("  skipped empty    : {}", report.skipped_empty);
+            println!("  errors           : {}", report.errors);
         }
     }
     Ok(())
