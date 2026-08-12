@@ -137,7 +137,10 @@ pub async fn build_turn_context(agent: &OperantAgent, user_query: &str) -> Resul
         })?;
 
     // ── 6. Message building (system prompt + preflight compression) ──
-    let messages = agent.build_messages().await?;
+    // Pass the resolved session key so the context engine's DAG ingestion
+    // uses the SAME key as the run loop's progressive/eager ingest (a
+    // `"default"` fallback would duplicate every node under two session ids).
+    let messages = agent.build_messages(&session_id).await?;
 
     debug!(
         session_id = %session_id,

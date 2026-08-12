@@ -1035,6 +1035,19 @@ impl OperantAgent {
                     )
                     .await;
                 }
+                // ── Eager LCM ingest (budget-exhausted path) ──────────────
+                // Mirrors the TextResponse exit: commit the turn (history +
+                // grace response) so the DAG is up to date before returning.
+                if let Some(engine) = &self.context_engine {
+                    let mut turn = messages.to_vec();
+                    turn.push(result.clone());
+                    if let Err(e) = engine.ingest_turn(session_id, &turn).await {
+                        tracing::warn!(
+                            error = %e,
+                            "LCM eager turn ingest failed (non-fatal)"
+                        );
+                    }
+                }
                 self.emit(AgentEvent::Done {
                     message: result.clone(),
                 })
@@ -1727,6 +1740,22 @@ impl OperantAgent {
                                 .await;
                         }
 
+                        // ── Eager LCM ingest (hermes context_engine parity) ──
+                        // Commit the COMPLETED turn into the lossless DAG NOW
+                        // (not only at the next build_messages), so the final
+                        // assistant response is immediately recallable by the
+                        // following turn via lcm_recall. Idempotent by
+                        // (session, position, content_hash) — safe to run.
+                        if let Some(engine) = &self.context_engine {
+                            // Borrow — `messages` is not used after this point.
+                            if let Err(e) = engine.ingest_turn(&session_id, &messages).await {
+                                tracing::warn!(
+                                    error = %e,
+                                    "LCM eager turn ingest failed (non-fatal)"
+                                );
+                            }
+                        }
+
                         return Ok(result);
                     }
 
@@ -1748,6 +1777,22 @@ impl OperantAgent {
                         .iter()
                         .map(|tc| (tc.id.clone(), tc.function.arguments.clone()))
                         .collect();
+
+                    // ── Progressive LCM ingest (hermes context_engine parity) ──
+                    // Commit the accumulated conversation (including the
+                    // assistant message just pushed above) into the lossless
+                    // DAG BEFORE executing tools, so a same-iteration tool
+                    // call like `lcm_recall` can find statements the model
+                    // just made. Idempotent by (session, position,
+                    // content_hash) — safe to run every iteration.
+                    if let Some(engine) = &self.context_engine
+                        && let Err(e) = engine.ingest_turn(&session_id, &messages).await
+                    {
+                        tracing::warn!(
+                            error = %e,
+                            "LCM progressive ingest failed (non-fatal)"
+                        );
+                    }
 
                     // Execute tools and add results
                     let tool_results = self.execute_tools(tool_calls).await?;
@@ -2008,7 +2053,7 @@ impl OperantAgent {
     ///
     /// Ported from hermes-agent's `turn_context.py` preflight compression
     /// pattern: estimate → check threshold → compress → fit within budget.
-    async fn build_messages(&self) -> Result<Vec<Message>> {
+    async fn build_messages(&self, session_id: &str) -> Result<Vec<Message>> {
         let mut messages = Vec::new();
 
         // ── Prompt-cache stability (iter-39) ─────────────────────────────
@@ -2154,8 +2199,13 @@ impl OperantAgent {
         // attached, it assembles the final list (D0 fresh tail kept verbatim,
         // older context compacted into the DAG and recallable) INSTEAD of the
         // lossy eviction below.
+        //
+        // The session key is the one resolved by turn_context for this run
+        // (NOT a `"default"` fallback) so DAG ingestion uses the SAME key as
+        // the loop's progressive/eager ingest — otherwise the same turn is
+        // stored twice under two session keys (wasted storage + scoped recall
+        // misses).
         if let Some(engine) = &self.context_engine {
-            let session_id = self.persistent_session_id.as_deref().unwrap_or("default");
             // `assemble` consumes `messages`; on failure fall back to lossy
             // eviction over the raw conversation history (rare error path).
             match engine
@@ -3918,7 +3968,7 @@ mod tests {
         )
         .with_memory_manager(memory_manager);
 
-        let messages = agent.build_messages().await.unwrap();
+        let messages = agent.build_messages("test-session").await.unwrap();
         // iter-39: the system prompt is now split into a frozen prefix
         // (base prompt + skills) and a volatile suffix (memory + workspace
         // context). Long-term memory lands in the second system message,

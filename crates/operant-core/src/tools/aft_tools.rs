@@ -729,6 +729,13 @@ impl OperantTool for AftCheckpointTool {
     }
 }
 
+/// Argument-less tools need a real object schema (`type: "object"` with
+/// empty properties) — `serde_json::Value` produces `type: null`, which
+/// strict OpenAI-compatible providers (e.g. opencode.ai) reject with
+/// "Invalid schema ... got 'type: null'" (found in live loop testing).
+#[derive(JsonSchema, Deserialize)]
+struct EmptyArgs {}
+
 pub struct AftListCheckpointsTool {
     pool: Arc<AftBridgePool>,
 }
@@ -742,10 +749,7 @@ impl OperantTool for AftListCheckpointsTool {
         "List all aft checkpoints (name, file count, created timestamp)."
     }
     fn schema(&self) -> ToolSchema {
-        ToolSchema::from_type::<serde_json::Value>(
-            "aft_list_checkpoints",
-            "List checkpoints via aft",
-        )
+        ToolSchema::from_type::<EmptyArgs>("aft_list_checkpoints", "List checkpoints via aft")
     }
     async fn execute(&self, _args: Value, context: ToolContext) -> ToolResult {
         execute_aft_command(
@@ -772,7 +776,7 @@ impl OperantTool for AftUndoTool {
         "Undo the last aft write/edit operation, restoring the pre-edit backup. Returns what was restored. Use to recover from bad edits."
     }
     fn schema(&self) -> ToolSchema {
-        ToolSchema::from_type::<serde_json::Value>("aft_undo", "Undo last edit via aft")
+        ToolSchema::from_type::<EmptyArgs>("aft_undo", "Undo last edit via aft")
     }
     async fn execute(&self, _args: Value, context: ToolContext) -> ToolResult {
         execute_aft_command(&self.pool, &context, "aft_undo", "undo", json!({})).await
@@ -792,7 +796,7 @@ impl OperantTool for AftStatusTool {
         "Check the aft bridge health/status. Returns aft's status payload. Use to verify the IDE-grade tool backend is alive."
     }
     fn schema(&self) -> ToolSchema {
-        ToolSchema::from_type::<serde_json::Value>("aft_status", "aft bridge status")
+        ToolSchema::from_type::<EmptyArgs>("aft_status", "aft bridge status")
     }
     async fn execute(&self, _args: Value, context: ToolContext) -> ToolResult {
         execute_aft_command(&self.pool, &context, "aft_status", "status", json!({})).await

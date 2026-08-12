@@ -36,7 +36,7 @@ use std::sync::Mutex;
 
 use rusqlite::{Connection, params};
 
-use crate::client::Message;
+use crate::client::{Message, Role};
 use crate::context::{ContextEngine, RecallHit};
 use crate::error::{Error, Result};
 
@@ -114,6 +114,24 @@ impl LcmContextEngine {
         })
     }
 
+    /// DAG database path (diagnostics/tool surface).
+    pub fn db_path(&self) -> &std::path::Path {
+        &self.db_path
+    }
+
+    /// D0 fresh-tail token budget (diagnostics/tool surface).
+    pub fn tail_tokens(&self) -> usize {
+        self.tail_tokens
+    }
+
+    /// Count DAG nodes across ALL sessions (diagnostics/tool surface).
+    pub fn node_count_global(&self) -> Result<usize> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        conn.query_row("SELECT COUNT(*) FROM nodes", [], |row| row.get::<_, i64>(0))
+            .map(|n| n as usize)
+            .map_err(|e| Error::Agent(format!("lcm: node_count_global failed: {e}")))
+    }
+
     /// Count DAG nodes for a session (diagnostics/tests).
     pub fn node_count(&self, session_id: &str) -> Result<usize> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
@@ -138,7 +156,27 @@ impl LcmContextEngine {
         position: usize,
         msg: &Message,
     ) -> Result<()> {
-        let hash = content_hash(&msg.content);
+        // Do NOT index LCM diagnostic tool outputs (lcm_recall / lcm_stats).
+        // They are identified by the `_lcm_tool` marker the tools embed in
+        // their JSON envelope (NOT by content sniffing, which could drop a
+        // legitimate tool that happens to return a `hits`-shaped payload).
+        // Ingesting them would create a self-referential feedback loop:
+        // recall results get indexed, then match future recalls, drowning
+        // out real conversation content and inflating node counts.
+        if msg.role == Role::Tool && msg.content.contains("\"_lcm_tool\":") {
+            return Ok(());
+        }
+        // Lossless-DAG guarantee: index the FULL text the model produced.
+        // Assistant messages that carry tool calls keep their visible text in
+        // `reasoning` (content is ""), and observations stated there must be
+        // recallable via lcm_recall. Merge content + reasoning so nothing the
+        // agent said is ever lost from the store.
+        let searchable = match (&msg.reasoning, msg.content.trim().is_empty()) {
+            (Some(r), true) => r.trim().to_string(),
+            (Some(r), false) => format!("{}\n{}", msg.content, r),
+            _ => msg.content.clone(),
+        };
+        let hash = content_hash(&searchable);
         let inserted = conn
             .execute(
                 "INSERT OR IGNORE INTO nodes
@@ -148,7 +186,7 @@ impl LcmContextEngine {
                     session_id,
                     position as i64,
                     msg.role.as_str(),
-                    msg.content,
+                    &searchable,
                     hash,
                     now_millis()
                 ],
@@ -159,7 +197,7 @@ impl LcmContextEngine {
             // Mirror the nodes rowid into FTS so recall can join back.
             conn.execute(
                 "INSERT INTO nodes_fts (rowid, content, session_id) VALUES (?1, ?2, ?3)",
-                params![id, msg.content, session_id],
+                params![id, &searchable, session_id],
             )
             .map_err(|e| Error::Agent(format!("lcm: fts insert failed: {e}")))?;
         }
@@ -368,6 +406,92 @@ mod tests {
         engine.ingest_turn("s2", &turn).await.unwrap();
         assert_eq!(engine.node_count("s1").unwrap(), 4);
         assert_eq!(engine.node_count("s2").unwrap(), 4);
+    }
+
+    #[tokio::test]
+    async fn assistant_reasoning_is_indexed_and_recallable() {
+        // Assistant messages that carry tool calls keep their visible text in
+        // `reasoning` (content is ""). The lossless DAG must index that text
+        // so observations stated in reasoning are recallable.
+        let (engine, _) = test_db();
+        let turn = vec![
+            Message::user("remember a fact"),
+            Message::assistant("")
+                .with_reasoning("The magic number for this session is forty-two-point-seven"),
+            Message::tool("call_1", "{}"),
+        ];
+        engine.ingest_turn("s1", &turn).await.unwrap();
+        let hits = engine.recall(Some("s1"), "magic number", 5).await.unwrap();
+        assert!(
+            hits.iter()
+                .any(|h| h.content.contains("forty-two-point-seven")),
+            "reasoning text must be recallable, got: {:?}",
+            hits
+        );
+        // Content-bearing messages keep their content AND reasoning indexed.
+        let turn2 =
+            vec![Message::assistant("visible answer").with_reasoning("private note about zebras")];
+        engine.ingest_turn("s1", &turn2).await.unwrap();
+        let hits2 = engine.recall(Some("s1"), "zebras", 5).await.unwrap();
+        assert!(
+            hits2
+                .iter()
+                .any(|h| h.content.contains("private note about zebras")),
+            "reasoning on content-bearing messages must be indexed, got: {:?}",
+            hits2
+        );
+    }
+    #[tokio::test]
+    async fn lcm_diagnostic_tool_outputs_are_not_indexed() {
+        // lcm_recall / lcm_stats JSON outputs (marked `_lcm_tool`) must never
+        // be ingested — they are self-referential and would pollute recalls.
+        let (engine, _) = test_db();
+        let turn = vec![
+            Message::user("go"),
+            Message::tool(
+                "call_1",
+                "{\"_lcm_tool\":\"lcm_recall\",\"hits\":[{\"content\":\"some old recall\"}]}",
+            ),
+            Message::tool("call_2", "{\"_lcm_tool\":\"lcm_stats\",\"dag_nodes\":7}"),
+            Message::tool("call_3", "{\"byte_size\":70,\"complete\":true}"), // normal tool output
+        ];
+        engine.ingest_turn("s1", &turn).await.unwrap();
+        assert_eq!(
+            engine.node_count("s1").unwrap(),
+            2,
+            "only user + normal tool output"
+        );
+        // A recall must not surface the diagnostic JSON.
+        let hits = engine.recall(Some("s1"), "dag_nodes", 5).await.unwrap();
+        assert!(
+            hits.is_empty(),
+            "diagnostic JSON must not be recallable, got: {:?}",
+            hits
+        );
+    }
+
+    #[tokio::test]
+    async fn non_lcm_hits_shaped_tool_output_is_still_indexed() {
+        // A legitimate tool that returns a `hits`-shaped payload (e.g. a
+        // future memory/search tool) must NOT be dropped — the diagnostic
+        // filter keys on the `_lcm_tool` marker, not on content shape.
+        let (engine, _) = test_db();
+        let turn = vec![
+            Message::user("go"),
+            Message::tool("call_1", "{\"hits\":[{\"title\":\"search result\"}]}"),
+        ];
+        engine.ingest_turn("s1", &turn).await.unwrap();
+        assert_eq!(
+            engine.node_count("s1").unwrap(),
+            2,
+            "user + hits-shaped tool output"
+        );
+        let hits = engine.recall(Some("s1"), "search result", 5).await.unwrap();
+        assert!(
+            hits.iter().any(|h| h.role == "tool"),
+            "non-LCM hits-shaped tool output must be recallable, got: {:?}",
+            hits
+        );
     }
 
     #[tokio::test]
