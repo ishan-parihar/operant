@@ -816,7 +816,14 @@ pub(crate) async fn build_registry(
                 // register lcm_vector_recall with a real OpenAI-compatible
                 // embedder over the same client.
                 let embedder = config.agent.context_lcm_embedding_model.as_ref().map(|m| {
-                    let client = OpenAIClient::new(client_config(config));
+                    // A dedicated embeddings endpoint (context_lcm_embedding_base_url)
+                    // overrides the chat provider; otherwise the same client
+                    // (base URL + key) serves both.
+                    let mut ccfg = client_config(config);
+                    if let Some(eb) = &config.agent.context_lcm_embedding_base_url {
+                        ccfg.base_url = eb.clone();
+                    }
+                    let client = OpenAIClient::new(ccfg);
                     std::sync::Arc::new(operant_core::context::OpenAIEmbedder::new(
                         client,
                         m.clone(),

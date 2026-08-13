@@ -48,6 +48,9 @@ context_compression = false
 # context_lcm_rollup_interval_minutes = 0
 # Embedding model for lcm_vector_recall (empty = tool not registered).
 # context_lcm_embedding_model = "text-embedding-3-small"
+# Optional separate embeddings endpoint (e.g. local Ollama). Empty = reuse
+# the chat provider's base URL and key.
+# context_lcm_embedding_base_url = "http://localhost:11434/v1"
 session_reset = "never"
 # system_prompt = "You are Hermes."
 # Fallback models tried in order when the primary model fails (rate-limited, unavailable, etc.)

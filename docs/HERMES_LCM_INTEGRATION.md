@@ -234,10 +234,19 @@ installs" stays clean).
   (keyed by model, so a model change re-embeds), and returns top-N by
   cosine similarity — surfacing reworded matches with no exact word overlap.
   Registered only when `agent.context_lcm_embedding_model` is set (tool
-  surface stays clean otherwise). Tested with a deterministic hash-trick
-  mock embedder (ranking + cache-hit behavior). **Live E2E not possible on
-  the current free-tier provider** (no `/embeddings` endpoint — verified
-  via probe); works with any OpenAI-compatible embeddings provider.
+  surface stays clean otherwise). Config: `context_lcm_embedding_model`
+  and `context_lcm_embedding_base_url` (defaults to the chat provider's
+  base URL; point it at any OpenAI-compatible `/embeddings` endpoint,
+  e.g. `http://localhost:11434/v1` for local Ollama). Tested with a
+  deterministic hash-trick mock embedder (ranking + cache-hit behavior).
+  **Live E2E verified** against a local Ollama `all-minilm:latest`
+  (`/v1/embeddings` returns proper vectors): a phrase stated in process A
+  was retrieved by a fresh process B via the reworded query `"special
+  numeric startup value"` (no exact-word overlap) — prior-session nodes
+  ranked #1 (node 147, sim 0.327) and #2–3 (nodes 139/141) with
+  `lcm_embeddings` caching 54 vectors under `all-minilm:latest`. The
+  free-tier opencode provider itself has no `/embeddings` endpoint (HTML
+  fallback), which is exactly why the base URL is configurable.
 
 ### P4 — CLI + metrics ✅ (partial)
 - `operant context status|sessions|recall <q> [--limit N]` — implemented

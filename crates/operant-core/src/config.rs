@@ -237,6 +237,11 @@ pub struct BehaviorSettings {
     /// endpoint.
     #[serde(default)]
     pub context_lcm_embedding_model: Option<String>,
+    /// Base URL for the embeddings endpoint when it differs from the chat
+    /// provider (e.g. a local Ollama at `http://localhost:11434/v1`). Empty
+    /// (default) reuses the chat provider's base URL and key.
+    #[serde(default)]
+    pub context_lcm_embedding_base_url: Option<String>,
 }
 
 fn default_fallback_on_errors() -> bool {
@@ -301,6 +306,7 @@ impl Default for BehaviorSettings {
             context_lcm_rollups_inject: true,
             context_lcm_rollup_interval_minutes: 0,
             context_lcm_embedding_model: None,
+            context_lcm_embedding_base_url: None,
         }
     }
 }
