@@ -246,7 +246,17 @@ installs" stays clean).
   ranked #1 (node 147, sim 0.327) and #2–3 (nodes 139/141) with
   `lcm_embeddings` caching 54 vectors under `all-minilm:latest`. The
   free-tier opencode provider itself has no `/embeddings` endpoint (HTML
-  fallback), which is exactly why the base URL is configurable.
+  fallback),  which is exactly why the base URL is configurable.
+- ✅ **Comprehensive single-session E2E (9/9 PASS)** — one agentic run
+  exercised the complete AFT + LCM surface together against the live
+  Ollama config: `lcm_stats` (engine=lcm) · `lcm_assert` save id=5 →
+  query active status=verified, 0 contradictions · `lcm_recall`
+  (5 hits) · `lcm_recall_round` (complete=true) · `lcm_vector_recall`
+  (top sim 0.2314, all-minilm) · `aft_status` (degraded=false) ·
+  `aft_read` (35 006 bytes) · `aft_outline` (30+ symbols). AFT binary
+  auto-resolved from cache `~/.operant/aft/aft-v0.49.4/aft`; scheduler
+  active (minutes=60); DB after run: 63 nodes / 7 rollups / 5
+  assertions / 58 embedding vectors.
 
 ### P4 — CLI + metrics ✅ (partial)
 - `operant context status|sessions|recall <q> [--limit N]` — implemented
