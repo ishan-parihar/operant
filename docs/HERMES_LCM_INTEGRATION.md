@@ -195,12 +195,21 @@ installs" stays clean).
   DAG already keeps everything; rollups are injected when present, built on
   demand via CLI or the maintenance pass.
 
-### P2 — Recall tools + assertions
-- `lcm_recall` / `lcm_recall_round` / `lcm_assert` / `lcm_status` registered
-  through the existing `builtin.rs` gate (`config.agent.context_engine`).
-- `assertion_extraction` lightweight port: extract `role: claim` pairs on
-  ingest, rebuild on demand.
-- Adaptive retrieval round-state in memory.
+### P2 — Recall tools + assertions ✅
+- `lcm_recall` / `lcm_stats` registered through the existing `builtin.rs`
+  gate (`config.agent.context_engine`).
+- `lcm_assert` ✅ — durable assertion store (`lcm_assertions` table;
+  hermes `assertion_store.py` parity, conflict-preserving). Save/query a
+  fact; query resolves the active state (latest per unique object) and
+  reports contradictions (distinct active objects per predicate).
+- `lcm_recall_round` ✅ — multi-round evidence-gated recall (`adaptive.rs`;
+  hermes `adaptive_retrieval.py` lightweight parity): in-memory registry
+  keyed by `retrieval_id`, TTL-purged, MAX 3 rounds; each round returns
+  exact verbatim evidence (cumulative across rounds) + search leads, and
+  `complete` flips once the evidence requirement is met.
+- Deferred (YAGNI): LLM-driven `assertion_extraction` on ingest and
+  cross-session persisted adaptive state — the DAG + explicit save/query
+  surface already covers the durable-facts need.
 
 ### P3 — Auto-recall + vector backend (optional, stretch)
 - ✅ **Implemented**: on `assemble`, one bounded retrieval round against the

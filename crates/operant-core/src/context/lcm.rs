@@ -138,7 +138,19 @@ impl LcmContextEngine {
                  source_count INTEGER NOT NULL DEFAULT 0,
                  created_at INTEGER NOT NULL,
                  PRIMARY KEY (session_id, period_kind, period_start)
-             );",
+             );
+             CREATE TABLE IF NOT EXISTS lcm_assertions (
+                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                 session_id TEXT NOT NULL,
+                 subject TEXT NOT NULL,
+                 predicate TEXT NOT NULL,
+                 object_value TEXT NOT NULL,
+                 speaker_role TEXT NOT NULL DEFAULT 'assistant',
+                 source_node_id INTEGER,
+                 created_at INTEGER NOT NULL
+             );
+             CREATE INDEX IF NOT EXISTS idx_assertions_lookup
+                 ON lcm_assertions(session_id, subject, predicate);",
         )
         .map_err(|e| Error::Agent(format!("lcm: schema bootstrap failed: {e}")))?;
         Ok(Self {
@@ -279,6 +291,76 @@ impl LcmContextEngine {
             rusqlite::Error::QueryReturnedNoRows => Ok(false),
             other => Err(Error::Agent(format!("lcm: has_rollup failed: {other}"))),
         })
+    }
+
+    /// Store one durable assertion (fact) — hermes `assertion_store.py`
+    /// `write_assertions` parity (conflict-preserving: history is kept, the
+    /// latest state per unique object wins in `query_assertion_state`).
+    /// Returns the new row id.
+    pub fn assert_assertion(
+        &self,
+        session_id: &str,
+        subject: &str,
+        predicate: &str,
+        object_value: &str,
+        speaker_role: &str,
+        source_node_id: Option<i64>,
+    ) -> Result<i64> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        conn.execute(
+            "INSERT INTO lcm_assertions
+                 (session_id, subject, predicate, object_value, speaker_role, source_node_id, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                session_id,
+                subject,
+                predicate,
+                object_value,
+                speaker_role,
+                source_node_id,
+                now_millis()
+            ],
+        )
+        .map_err(|e| Error::Agent(format!("lcm: assert_assertion failed: {e}")))?;
+        Ok(conn.last_insert_rowid())
+    }
+
+    /// Query stored assertions for `(session, subject[, predicate])`, newest
+    /// first. The caller resolves "active" state (latest per unique object).
+    pub fn query_assertion_state(
+        &self,
+        session_id: &str,
+        subject: &str,
+        predicate: Option<&str>,
+    ) -> Result<Vec<crate::context::AssertionRecord>> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, subject, predicate, object_value, speaker_role, \
+                        source_node_id, created_at \
+                 FROM lcm_assertions \
+                 WHERE session_id = ?1 AND subject = ?2 AND (?3 IS NULL OR predicate = ?3) \
+                 ORDER BY created_at DESC, id DESC",
+            )
+            .map_err(|e| Error::Agent(format!("lcm: query_assertion_state prepare failed: {e}")))?;
+        let rows = stmt
+            .query_map(params![session_id, subject, predicate], |row| {
+                Ok(crate::context::AssertionRecord {
+                    id: row.get(0)?,
+                    subject: row.get(1)?,
+                    predicate: row.get(2)?,
+                    object_value: row.get(3)?,
+                    speaker_role: row.get(4)?,
+                    source_node_id: row.get(5)?,
+                    created_at: row.get(6)?,
+                })
+            })
+            .map_err(|e| Error::Agent(format!("lcm: query_assertion_state failed: {e}")))?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r.map_err(|e| Error::Agent(format!("lcm: query_assertion_state row: {e}")))?);
+        }
+        Ok(out)
     }
 
     pub fn list_rollups(

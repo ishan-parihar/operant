@@ -13,13 +13,34 @@
 //! See `docs/HERMES_LCM_INTEGRATION.md` for the full design (rollups,
 //! adaptive recall, assertions) and the P0–P4 roadmap.
 
+pub mod adaptive;
 pub mod lcm;
 pub mod rollup;
 
 use crate::client::Message;
 use crate::error::Result;
 
+pub use adaptive::{AdaptiveRetrievalRegistry, RetrievalRound};
 pub use lcm::{LcmConfig, LcmContextEngine};
+
+/// One stored durable assertion (hermes `assertion_store.py` row parity).
+#[derive(Debug, Clone)]
+pub struct AssertionRecord {
+    /// Row id in `lcm_assertions`.
+    pub id: i64,
+    /// Subject key (e.g. `project:hermes`, `user`, `assistant:self`).
+    pub subject: String,
+    /// Predicate key (e.g. `prefers`, `uses`, `deadline`).
+    pub predicate: String,
+    /// Object value — the fact itself.
+    pub object_value: String,
+    /// Speaker role recorded with the fact.
+    pub speaker_role: String,
+    /// DAG node the fact was sourced from, when known.
+    pub source_node_id: Option<i64>,
+    /// Unix millis when the assertion was stored.
+    pub created_at: i64,
+}
 
 /// A single recall hit from a context engine's store.
 #[derive(Debug, Clone)]

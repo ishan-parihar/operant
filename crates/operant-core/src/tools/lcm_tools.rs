@@ -165,6 +165,298 @@ impl OperantTool for LcmStatsTool {
     }
 }
 
+/// Store or query durable assertions (hermes `assertion_store.py` parity,
+/// lightweight). `action = "save"` records a fact; `action = "query"`
+/// returns stored facts plus the resolved active state (latest per unique
+/// object) and any contradictions (distinct active objects for a predicate).
+#[derive(JsonSchema, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LcmAssertArgs {
+    /// `save` (record a fact) or `query` (retrieve facts).
+    pub action: String,
+    /// Subject key of the fact, e.g. `project:hermes`, `user`, `assistant:self`.
+    pub subject: String,
+    /// Predicate key, e.g. `prefers`, `uses`, `deadline`. Optional on query.
+    pub predicate: Option<String>,
+    /// Object value — the fact itself. Required when action = `save`.
+    pub object: Option<String>,
+    /// Scope to a session id; omitted = global fact scope shared across sessions.
+    pub session: Option<String>,
+    /// Speaker role recorded with a saved fact (`user`|`assistant`|`tool`).
+    pub speaker: Option<String>,
+}
+
+pub struct LcmAssertTool {
+    engine: Arc<LcmContextEngine>,
+}
+
+impl LcmAssertTool {
+    pub fn new(engine: Arc<LcmContextEngine>) -> Self {
+        Self { engine }
+    }
+}
+
+#[async_trait::async_trait]
+impl OperantTool for LcmAssertTool {
+    fn name(&self) -> &str {
+        "lcm_assert"
+    }
+
+    fn description(&self) -> &str {
+        "Store or query durable assertions (facts) in the lossless context store. Save a fact with action=save to persist it across sessions; query with action=query to retrieve stored facts for a subject, including which facts are currently active and any contradictions. Use to remember durable user preferences, project decisions, or constraints."
+    }
+
+    fn schema(&self) -> ToolSchema {
+        ToolSchema::from_type::<LcmAssertArgs>("lcm_assert", "Store or query durable facts")
+    }
+
+    async fn execute(&self, args: Value, _context: ToolContext) -> ToolResult {
+        let args: LcmAssertArgs = match serde_json::from_value(args) {
+            Ok(a) => a,
+            Err(e) => {
+                return ToolResult::error("lcm_assert", format!("Invalid arguments: {e}"));
+            }
+        };
+        if args.subject.trim().is_empty() {
+            return ToolResult::error("lcm_assert", "subject is required");
+        }
+        let scope = args.session.unwrap_or_else(|| "global".to_string());
+        match args.action.trim().to_lowercase().as_str() {
+            "save" => {
+                let predicate = args.predicate.as_deref().unwrap_or("states").trim();
+                let object = args.object.as_deref().unwrap_or("").trim();
+                if object.is_empty() {
+                    return ToolResult::error(
+                        "lcm_assert",
+                        "object is required when action = save",
+                    );
+                }
+                let speaker = args.speaker.as_deref().unwrap_or("assistant");
+                match self.engine.assert_assertion(
+                    &scope,
+                    &args.subject,
+                    predicate,
+                    object,
+                    speaker,
+                    None,
+                ) {
+                    Ok(id) => ToolResult::success(
+                        "lcm_assert",
+                        json!({
+                            "_lcm_tool": "lcm_assert",
+                            "action": "save",
+                            "saved": true,
+                            "assertion_id": id,
+                            "subject": args.subject,
+                            "predicate": predicate,
+                            "object": object,
+                        }),
+                    ),
+                    Err(e) => ToolResult::error("lcm_assert", format!("save failed: {e}")),
+                }
+            }
+            "query" => match self.engine.query_assertion_state(
+                &scope,
+                &args.subject,
+                args.predicate.as_deref(),
+            ) {
+                Ok(records) => {
+                    // Active = latest record per (predicate, object_value);
+                    // contradictions = predicates with >1 distinct active object.
+                    let mut active: Vec<&crate::context::AssertionRecord> = Vec::new();
+                    let mut seen: std::collections::HashMap<(String, String), bool> =
+                        std::collections::HashMap::new();
+                    for r in &records {
+                        seen.entry((r.predicate.clone(), r.object_value.clone()))
+                            .or_insert(true);
+                    }
+                    for r in &records {
+                        let key = (r.predicate.clone(), r.object_value.clone());
+                        if seen.get(&key) == Some(&true) {
+                            seen.insert(key, false);
+                            active.push(r);
+                        }
+                    }
+                    let mut contradictions: Vec<String> = Vec::new();
+                    let mut objects_by_pred: std::collections::HashMap<&str, usize> =
+                        std::collections::HashMap::new();
+                    for r in &active {
+                        *objects_by_pred.entry(r.predicate.as_str()).or_insert(0) += 1;
+                    }
+                    for (p, n) in objects_by_pred {
+                        if n > 1 {
+                            contradictions.push(p.to_string());
+                        }
+                    }
+                    let rendered: Vec<Value> = records
+                        .iter()
+                        .map(|r| {
+                            json!({
+                                "id": r.id,
+                                "subject": r.subject,
+                                "predicate": r.predicate,
+                                "object": r.object_value,
+                                "speaker": r.speaker_role,
+                                "created_at": r.created_at,
+                            })
+                        })
+                        .collect();
+                    let active_rendered: Vec<Value> = active
+                        .iter()
+                        .map(|r| {
+                            json!({
+                                "subject": r.subject,
+                                "predicate": r.predicate,
+                                "object": r.object_value,
+                            })
+                        })
+                        .collect();
+                    ToolResult::success(
+                        "lcm_assert",
+                        json!({
+                            "_lcm_tool": "lcm_assert",
+                            "action": "query",
+                            "scope": scope,
+                            "subject": args.subject,
+                            "assertions": rendered,
+                            "active": active_rendered,
+                            "contradictions": contradictions,
+                            "total": records.len(),
+                        }),
+                    )
+                }
+                Err(e) => ToolResult::error("lcm_assert", format!("query failed: {e}")),
+            },
+            other => ToolResult::error(
+                "lcm_assert",
+                format!("unknown action `{other}` — use save or query"),
+            ),
+        }
+    }
+}
+
+/// Multi-round evidence-gated recall (hermes `adaptive_retrieval.py` parity,
+/// lightweight). Omit `retrievalId` to start a new retrieval; pass the
+/// returned id (optionally refining `query`) to continue until `complete`.
+#[derive(JsonSchema, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LcmRecallRoundArgs {
+    /// Omit to start a new retrieval; pass the returned id to continue.
+    pub retrieval_id: Option<String>,
+    /// Search query. Required on start; optional refinement on continue.
+    pub query: Option<String>,
+    /// Distinct verbatim evidences required (1..=5, default 2).
+    pub evidence_required: Option<usize>,
+    /// Scope to a session id; omitted = global DAG.
+    pub session: Option<String>,
+}
+
+pub struct LcmRecallRoundTool {
+    engine: Arc<LcmContextEngine>,
+    registry: crate::context::AdaptiveRetrievalRegistry,
+}
+
+impl LcmRecallRoundTool {
+    pub fn new(engine: Arc<LcmContextEngine>) -> Self {
+        Self {
+            engine,
+            registry: crate::context::AdaptiveRetrievalRegistry::new(),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl OperantTool for LcmRecallRoundTool {
+    fn name(&self) -> &str {
+        "lcm_recall_round"
+    }
+
+    fn description(&self) -> &str {
+        "Multi-round evidence-gated recall over the lossless DAG. Start with a query (omit retrievalId); each round returns exact verbatim evidence plus search leads and a `complete` flag. If not complete, call again with the returned retrievalId, optionally refining the query, until you have gathered the required evidence. Use when one-shot recall did not surface enough proof."
+    }
+
+    fn schema(&self) -> ToolSchema {
+        ToolSchema::from_type::<LcmRecallRoundArgs>(
+            "lcm_recall_round",
+            "Multi-round evidence-gated recall",
+        )
+    }
+
+    async fn execute(&self, args: Value, _context: ToolContext) -> ToolResult {
+        let args: LcmRecallRoundArgs = match serde_json::from_value(args) {
+            Ok(a) => a,
+            Err(e) => {
+                return ToolResult::error("lcm_recall_round", format!("Invalid arguments: {e}"));
+            }
+        };
+        let session = args.session.as_deref();
+        match &args.retrieval_id {
+            None => {
+                let query = args.query.as_deref().unwrap_or("").trim();
+                if query.is_empty() {
+                    return ToolResult::error(
+                        "lcm_recall_round",
+                        "query is required when starting a retrieval",
+                    );
+                }
+                let req = args.evidence_required.unwrap_or(2);
+                match self.registry.start(&self.engine, session, query, req).await {
+                    Ok(round) => {
+                        let mut payload = round_json(round);
+                        if let Some(obj) = payload.as_object_mut() {
+                            obj.insert("_lcm_tool".into(), json!("lcm_recall_round"));
+                        }
+                        ToolResult::success("lcm_recall_round", payload)
+                    }
+                    Err(e) => ToolResult::error("lcm_recall_round", format!("round failed: {e}")),
+                }
+            }
+            Some(id) => match self
+                .registry
+                .next_round(&self.engine, session, id, args.query.as_deref())
+                .await
+            {
+                Ok(Some(round)) => {
+                    let mut payload = round_json(round);
+                    if let Some(obj) = payload.as_object_mut() {
+                        obj.insert("_lcm_tool".into(), json!("lcm_recall_round"));
+                    }
+                    ToolResult::success("lcm_recall_round", payload)
+                }
+                Ok(None) => ToolResult::error(
+                    "lcm_recall_round",
+                    format!(
+                        "unknown or expired retrieval_id `{id}` — start a new retrieval by omitting retrievalId"
+                    ),
+                ),
+                Err(e) => ToolResult::error("lcm_recall_round", format!("round failed: {e}")),
+            },
+        }
+    }
+}
+
+/// Serialize a retrieval round into the JSON payload returned to the model.
+fn round_json(round: crate::context::RetrievalRound) -> Value {
+    json!({
+        "retrieval_id": round.retrieval_id,
+        "round_number": round.round_number,
+        "evidence_required": round.evidence_required,
+        "complete": round.complete,
+        "evidence": round.evidence_found.iter().map(|e| json!({
+            "node_id": e.node_id,
+            "role": e.role,
+            "snippet": e.snippet,
+            "score": e.score,
+        })).collect::<Vec<_>>(),
+        "leads": round.leads.iter().map(|l| json!({
+            "node_id": l.node_id,
+            "role": l.role,
+            "snippet": l.snippet,
+            "score": l.score,
+        })).collect::<Vec<_>>(),
+    })
+}
+
 /// Register the LCM tools into a registry. Only meaningful when the LCM
 /// engine is actually attached (config `agent.context_engine = "lcm"`).
 pub async fn register_lcm_tools(
@@ -174,7 +466,11 @@ pub async fn register_lcm_tools(
     registry
         .register(LcmRecallTool::new(engine.clone()))
         .await?;
-    registry.register(LcmStatsTool::new(engine)).await?;
+    registry.register(LcmStatsTool::new(engine.clone())).await?;
+    registry
+        .register(LcmAssertTool::new(engine.clone()))
+        .await?;
+    registry.register(LcmRecallRoundTool::new(engine)).await?;
     Ok(())
 }
 
@@ -306,5 +602,176 @@ mod tests {
             hits.iter().any(|h| h.content.contains("cross-connection")),
             "second engine instance must see nodes written by the first (WAL)"
         );
+    }
+
+    #[tokio::test]
+    async fn lcm_assert_save_then_query_roundtrips_fact() {
+        let engine = test_engine();
+        let tool = LcmAssertTool::new(engine.clone());
+
+        let saved = tool
+            .execute(
+                serde_json::json!({
+                    "action": "save",
+                    "subject": "project:hermes",
+                    "predicate": "prefers",
+                    "object": "Rust over Python",
+                    "session": "sess_a",
+                }),
+                ToolContext::default(),
+            )
+            .await;
+        assert!(saved.success, "save must succeed: {:?}", saved);
+        let saved_parsed = saved.parse_content::<serde_json::Value>().unwrap();
+        assert_eq!(saved_parsed["saved"], serde_json::json!(true));
+
+        let queried = tool
+            .execute(
+                serde_json::json!({
+                    "action": "query",
+                    "subject": "project:hermes",
+                    "session": "sess_a",
+                }),
+                ToolContext::default(),
+            )
+            .await;
+        assert!(queried.success);
+        let q = queried.parse_content::<serde_json::Value>().unwrap();
+        assert_eq!(q["total"], serde_json::json!(1));
+        assert_eq!(
+            q["assertions"][0]["object"],
+            serde_json::json!("Rust over Python")
+        );
+        assert_eq!(q["active"][0]["predicate"], serde_json::json!("prefers"));
+        assert!(
+            q["contradictions"].as_array().unwrap().is_empty(),
+            "one fact, no contradictions"
+        );
+    }
+
+    #[tokio::test]
+    async fn lcm_assert_detects_contradictions_and_requires_object_on_save() {
+        let engine = test_engine();
+        let tool = LcmAssertTool::new(engine.clone());
+        // Two saves of the same predicate with different objects = contradiction.
+        for obj in ["vim", "emacs"] {
+            let out = tool
+                .execute(
+                    serde_json::json!({
+                        "action": "save",
+                        "subject": "user",
+                        "predicate": "editor",
+                        "object": obj,
+                    }),
+                    ToolContext::default(),
+                )
+                .await;
+            assert!(out.success, "save {obj} must succeed");
+        }
+        let queried = tool
+            .execute(
+                serde_json::json!({ "action": "query", "subject": "user" }),
+                ToolContext::default(),
+            )
+            .await;
+        let q = queried.parse_content::<serde_json::Value>().unwrap();
+        assert_eq!(q["total"], serde_json::json!(2));
+        assert_eq!(q["active"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            q["contradictions"],
+            serde_json::json!(["editor"]),
+            "two distinct active objects for `editor`"
+        );
+
+        // Save without object must error.
+        let bad = tool
+            .execute(
+                serde_json::json!({
+                    "action": "save",
+                    "subject": "user",
+                    "predicate": "editor",
+                }),
+                ToolContext::default(),
+            )
+            .await;
+        assert!(!bad.success, "save without object must error");
+        // Unknown action must error.
+        let bad_action = tool
+            .execute(
+                serde_json::json!({"action": "delete", "subject": "user"}),
+                ToolContext::default(),
+            )
+            .await;
+        assert!(!bad_action.success, "unknown action must error");
+    }
+
+    #[tokio::test]
+    async fn lcm_recall_round_multi_round_evidence_gathering() {
+        let engine = test_engine();
+        let tool = LcmRecallRoundTool::new(engine.clone());
+        let turn = vec![
+            crate::client::Message::assistant("First fact: alpha is set to one."),
+            crate::client::Message::assistant("Second fact: beta is set to two."),
+            crate::client::Message::assistant("Third fact: gamma is set to three."),
+        ];
+        engine.ingest_turn("sess_round", &turn).await.unwrap();
+
+        // Start: requirement of 2; round 1 gathers exact phrase evidence only.
+        let start = tool
+            .execute(
+                serde_json::json!({
+                    "query": "alpha",
+                    "evidenceRequired": 2,
+                    "session": "sess_round",
+                }),
+                ToolContext::default(),
+            )
+            .await;
+        assert!(start.success, "start must succeed: {:?}", start);
+        let r1 = start.parse_content::<serde_json::Value>().unwrap();
+        assert_eq!(r1["round_number"], serde_json::json!(1));
+        assert_eq!(r1["complete"], serde_json::json!(false));
+        let id = r1["retrieval_id"].as_str().unwrap().to_string();
+
+        // Continue with a refined query; gather the beta fact as evidence.
+        let cont = tool
+            .execute(
+                serde_json::json!({
+                    "retrievalId": id,
+                    "query": "beta",
+                    "session": "sess_round",
+                }),
+                ToolContext::default(),
+            )
+            .await;
+        assert!(cont.success);
+        let r2 = cont.parse_content::<serde_json::Value>().unwrap();
+        assert_eq!(r2["round_number"], serde_json::json!(2));
+        assert!(
+            r2["evidence"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|e| e["snippet"].as_str().unwrap().contains("beta")),
+            "round 2 evidence must include the beta fact"
+        );
+        assert_eq!(r2["complete"], serde_json::json!(true));
+    }
+
+    #[tokio::test]
+    async fn lcm_recall_round_requires_query_on_start_and_rejects_unknown_id() {
+        let engine = test_engine();
+        let tool = LcmRecallRoundTool::new(engine.clone());
+        let out = tool
+            .execute(serde_json::json!({}), ToolContext::default())
+            .await;
+        assert!(!out.success, "start without query must error");
+        let bad = tool
+            .execute(
+                serde_json::json!({"retrievalId": "retr_nope"}),
+                ToolContext::default(),
+            )
+            .await;
+        assert!(!bad.success, "unknown retrieval id must error");
     }
 }
