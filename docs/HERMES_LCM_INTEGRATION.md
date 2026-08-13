@@ -276,6 +276,18 @@ installs" stays clean).
   auto-resolved from cache `~/.operant/aft/aft-v0.49.4/aft`; scheduler
   active (minutes=60); DB after run: 63 nodes / 7 rollups / 5
   assertions / 58 embedding vectors.
+- ✅ **Comprehensive E2E v2 including the extract action (9/9 PASS)** —
+  one agentic run over the same live config with
+  `context_lcm_assertion_extraction = true`: `lcm_stats` (engine=lcm,
+  dag_nodes=84) · `lcm_assert` save (id=17) · **`lcm_assert extract`
+  mined 3 facts live** (subject `project` → `stack`/`preferred_editor`/
+  `deploy_cadence`) · `lcm_assert` query returned them in active state,
+  0 contradictions · `lcm_recall` (5 hits) · `lcm_recall_round`
+  (complete=true) · `lcm_vector_recall` (top sim 0.4369) · `aft_status`
+  (ready, v0.49.4) · `aft_outline` on a real Rust source (41 symbols
+  with line ranges — a `.toml` config file is correctly rejected as a
+  non-source extension). DB after run: 95 nodes / 12 rollups / 20
+  assertions / 90 embedding vectors; scheduler active (minutes=60).
 
 ### P4 — CLI + metrics ✅ (partial)
 - `operant context status|sessions|recall <q> [--limit N]` — implemented
