@@ -242,6 +242,14 @@ pub struct BehaviorSettings {
     /// (default) reuses the chat provider's base URL and key.
     #[serde(default)]
     pub context_lcm_embedding_base_url: Option<String>,
+    /// P3 LLM-driven assertion extraction (hermes `assertion_extraction.py`
+    /// `ModelAssertionExtractor` parity, opt-in): when true, the
+    /// `lcm_assert` tool's `action = "extract"` mines durable
+    /// (subject, predicate, object) facts out of the most recent DAG nodes
+    /// and persists them to the assertion store. Off by default — costs one
+    /// LLM call per extract invocation.
+    #[serde(default)]
+    pub context_lcm_assertion_extraction: bool,
 }
 
 fn default_fallback_on_errors() -> bool {
@@ -307,6 +315,7 @@ impl Default for BehaviorSettings {
             context_lcm_rollup_interval_minutes: 0,
             context_lcm_embedding_model: None,
             context_lcm_embedding_base_url: None,
+            context_lcm_assertion_extraction: false,
         }
     }
 }

@@ -51,6 +51,11 @@ context_compression = false
 # Optional separate embeddings endpoint (e.g. local Ollama). Empty = reuse
 # the chat provider's base URL and key.
 # context_lcm_embedding_base_url = "http://localhost:11434/v1"
+# LLM-driven assertion extraction (hermes ModelAssertionExtractor parity,
+# opt-in): when true, `lcm_assert action=extract` mines durable facts from
+# recent DAG nodes and persists them to the assertion store. Off by default
+# (costs one LLM call per extract).
+# context_lcm_assertion_extraction = true
 session_reset = "never"
 # system_prompt = "You are Hermes."
 # Fallback models tried in order when the primary model fails (rate-limited, unavailable, etc.)

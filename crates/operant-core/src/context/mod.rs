@@ -14,6 +14,7 @@
 //! adaptive recall, assertions) and the P0–P4 roadmap.
 
 pub mod adaptive;
+pub mod assertion_extract;
 pub mod embedder;
 pub mod lcm;
 pub mod rollup;
@@ -22,6 +23,7 @@ use crate::client::Message;
 use crate::error::Result;
 
 pub use adaptive::{AdaptiveRetrievalRegistry, RetrievalRound};
+pub use assertion_extract::{AssertionExtractor, ExtractedAssertion, LlmAssertionExtractor};
 pub use embedder::{Embedder, MockEmbedder, OpenAIEmbedder};
 pub use lcm::{LcmConfig, LcmContextEngine};
 

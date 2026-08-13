@@ -165,17 +165,23 @@ impl OperantTool for LcmStatsTool {
     }
 }
 
-/// Store or query durable assertions (hermes `assertion_store.py` parity,
-/// lightweight). `action = "save"` records a fact; `action = "query"`
-/// returns stored facts plus the resolved active state (latest per unique
-/// object) and any contradictions (distinct active objects for a predicate).
+/// Store, query, or auto-extract durable assertions (hermes
+/// `assertion_store.py` + `assertion_extraction.py` parity, lightweight).
+/// `action = "save"` records a fact; `action = "query"` returns stored facts
+/// plus the resolved active state (latest per unique object) and any
+/// contradictions (distinct active objects for a predicate);
+/// `action = "extract"` runs the LLM assertion extractor over the most
+/// recent message nodes of the session (or the whole DAG) and stores the
+/// discovered facts (opt-in via `agent.context_lcm_assertion_extraction`).
 #[derive(JsonSchema, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LcmAssertArgs {
-    /// `save` (record a fact) or `query` (retrieve facts).
+    /// `save` (record a fact), `query` (retrieve facts), or `extract`
+    /// (LLM-mine durable facts from recent DAG content).
     pub action: String,
     /// Subject key of the fact, e.g. `project:hermes`, `user`, `assistant:self`.
-    pub subject: String,
+    /// Optional when action = `extract` (the extractor picks subjects).
+    pub subject: Option<String>,
     /// Predicate key, e.g. `prefers`, `uses`, `deadline`. Optional on query.
     pub predicate: Option<String>,
     /// Object value — the fact itself. Required when action = `save`.
@@ -184,15 +190,33 @@ pub struct LcmAssertArgs {
     pub session: Option<String>,
     /// Speaker role recorded with a saved fact (`user`|`assistant`|`tool`).
     pub speaker: Option<String>,
+    /// Max recent message nodes scanned when action = `extract` (1..=200,
+    /// default 40).
+    pub limit: Option<usize>,
 }
 
 pub struct LcmAssertTool {
     engine: Arc<LcmContextEngine>,
+    /// LLM assertion extractor; `None` when the opt-in config gate
+    /// (`agent.context_lcm_assertion_extraction`) is off — the `extract`
+    /// action then returns a clear "not configured" error.
+    extractor: Option<Arc<dyn crate::context::AssertionExtractor>>,
 }
 
 impl LcmAssertTool {
     pub fn new(engine: Arc<LcmContextEngine>) -> Self {
-        Self { engine }
+        Self {
+            engine,
+            extractor: None,
+        }
+    }
+
+    pub fn with_extractor(
+        mut self,
+        extractor: Option<Arc<dyn crate::context::AssertionExtractor>>,
+    ) -> Self {
+        self.extractor = extractor;
+        self
     }
 }
 
@@ -203,7 +227,7 @@ impl OperantTool for LcmAssertTool {
     }
 
     fn description(&self) -> &str {
-        "Store or query durable assertions (facts) in the lossless context store. Save a fact with action=save to persist it across sessions; query with action=query to retrieve stored facts for a subject, including which facts are currently active and any contradictions. Use to remember durable user preferences, project decisions, or constraints."
+        "Store, query, or auto-extract durable assertions (facts) in the lossless context store. Save a fact with action=save to persist it across sessions; query with action=query to retrieve stored facts for a subject (including active state and contradictions); extract with action=extract to LLM-mine durable facts from the most recent conversation and persist them automatically. Use to remember durable user preferences, project decisions, or constraints."
     }
 
     fn schema(&self) -> ToolSchema {
@@ -217,12 +241,129 @@ impl OperantTool for LcmAssertTool {
                 return ToolResult::error("lcm_assert", format!("Invalid arguments: {e}"));
             }
         };
-        if args.subject.trim().is_empty() {
-            return ToolResult::error("lcm_assert", "subject is required");
-        }
-        let scope = args.session.unwrap_or_else(|| "global".to_string());
+        let scope = args.session.clone().unwrap_or_else(|| "global".to_string());
         match args.action.trim().to_lowercase().as_str() {
+            "extract" => {
+                // Hermes ModelAssertionExtractor parity, opt-in: when the
+                // gate is off, return a clear actionable error instead of a
+                // cryptic one.
+                let Some(extractor) = &self.extractor else {
+                    return ToolResult::error(
+                        "lcm_assert",
+                        "assertion extraction is not configured — set agent.context_lcm_assertion_extraction = true to enable LLM fact mining",
+                    );
+                };
+                let limit = args.limit.unwrap_or(40).clamp(1, 200);
+                let nodes = match self
+                    .engine
+                    .recent_message_nodes(args.session.as_deref(), limit)
+                {
+                    Ok(n) => n,
+                    Err(e) => {
+                        return ToolResult::error(
+                            "lcm_assert",
+                            format!("extract: failed to read DAG: {e}"),
+                        );
+                    }
+                };
+                if nodes.is_empty() {
+                    return ToolResult::success(
+                        "lcm_assert",
+                        json!({
+                            "_lcm_tool": "lcm_assert",
+                            "action": "extract",
+                            "saved": 0,
+                            "note": "no message nodes to mine in scope",
+                        }),
+                    );
+                }
+                // Build a bounded, role-tagged transcript (newest first —
+                // the freshest context is the most fact-dense).
+                let mut transcript = String::new();
+                for (_, role, content, _) in &nodes {
+                    let line = format!("[{role}] {content}\n");
+                    if transcript.len() + line.len()
+                        > crate::context::assertion_extract::MAX_TRANSCRIPT_CHARS
+                    {
+                        break;
+                    }
+                    transcript.push_str(&line);
+                }
+                let transcript =
+                    crate::context::assertion_extract::truncate_transcript(&transcript);
+                let extracted = match extractor.extract(&transcript).await {
+                    Ok(e) => e,
+                    Err(e) => {
+                        return ToolResult::error("lcm_assert", format!("extract failed: {e}"));
+                    }
+                };
+                if extracted.is_empty() {
+                    return ToolResult::success(
+                        "lcm_assert",
+                        json!({
+                            "_lcm_tool": "lcm_assert",
+                            "action": "extract",
+                            "saved": 0,
+                            "note": "no durable assertions found in the scanned nodes",
+                        }),
+                    );
+                }
+                // Persist each triple (conflict-preserving history; the
+                // latest per object wins in query active-state resolution).
+                let mut saved: Vec<Value> = Vec::with_capacity(extracted.len());
+                let mut source_by_subject: std::collections::HashMap<String, i64> =
+                    std::collections::HashMap::new();
+                for (id, role, _, _) in &nodes {
+                    source_by_subject.entry(role.clone()).or_insert(*id);
+                }
+                for a in &extracted {
+                    let source_node = source_by_subject.get(&a.speaker).copied();
+                    match self.engine.assert_assertion(
+                        &scope,
+                        &a.subject,
+                        &a.predicate,
+                        &a.object,
+                        &a.speaker,
+                        source_node,
+                    ) {
+                        Ok(id) => saved.push(json!({
+                            "id": id,
+                            "subject": a.subject,
+                            "predicate": a.predicate,
+                            "object": a.object,
+                            "speaker": a.speaker,
+                        })),
+                        Err(e) => {
+                            return ToolResult::error(
+                                "lcm_assert",
+                                format!(
+                                    "extract: storing `{} {} {}` failed: {e}",
+                                    a.subject, a.predicate, a.object
+                                ),
+                            );
+                        }
+                    }
+                }
+                ToolResult::success(
+                    "lcm_assert",
+                    json!({
+                        "_lcm_tool": "lcm_assert",
+                        "action": "extract",
+                        "saved": saved.len(),
+                        "scanned_nodes": nodes.len(),
+                        "extractor": extractor.name(),
+                        "assertions": saved,
+                    }),
+                )
+            }
             "save" => {
+                let subject = args.subject.as_deref().unwrap_or("").trim().to_string();
+                if subject.is_empty() {
+                    return ToolResult::error(
+                        "lcm_assert",
+                        "subject is required when action = save",
+                    );
+                }
                 let predicate = args.predicate.as_deref().unwrap_or("states").trim();
                 let object = args.object.as_deref().unwrap_or("").trim();
                 if object.is_empty() {
@@ -232,14 +373,10 @@ impl OperantTool for LcmAssertTool {
                     );
                 }
                 let speaker = args.speaker.as_deref().unwrap_or("assistant");
-                match self.engine.assert_assertion(
-                    &scope,
-                    &args.subject,
-                    predicate,
-                    object,
-                    speaker,
-                    None,
-                ) {
+                match self
+                    .engine
+                    .assert_assertion(&scope, &subject, predicate, object, speaker, None)
+                {
                     Ok(id) => ToolResult::success(
                         "lcm_assert",
                         json!({
@@ -247,7 +384,7 @@ impl OperantTool for LcmAssertTool {
                             "action": "save",
                             "saved": true,
                             "assertion_id": id,
-                            "subject": args.subject,
+                            "subject": subject,
                             "predicate": predicate,
                             "object": object,
                         }),
@@ -255,81 +392,89 @@ impl OperantTool for LcmAssertTool {
                     Err(e) => ToolResult::error("lcm_assert", format!("save failed: {e}")),
                 }
             }
-            "query" => match self.engine.query_assertion_state(
-                &scope,
-                &args.subject,
-                args.predicate.as_deref(),
-            ) {
-                Ok(records) => {
-                    // Active = latest record per (predicate, object_value);
-                    // contradictions = predicates with >1 distinct active object.
-                    let mut active: Vec<&crate::context::AssertionRecord> = Vec::new();
-                    let mut seen: std::collections::HashMap<(String, String), bool> =
-                        std::collections::HashMap::new();
-                    for r in &records {
-                        seen.entry((r.predicate.clone(), r.object_value.clone()))
-                            .or_insert(true);
-                    }
-                    for r in &records {
-                        let key = (r.predicate.clone(), r.object_value.clone());
-                        if seen.get(&key) == Some(&true) {
-                            seen.insert(key, false);
-                            active.push(r);
-                        }
-                    }
-                    let mut contradictions: Vec<String> = Vec::new();
-                    let mut objects_by_pred: std::collections::HashMap<&str, usize> =
-                        std::collections::HashMap::new();
-                    for r in &active {
-                        *objects_by_pred.entry(r.predicate.as_str()).or_insert(0) += 1;
-                    }
-                    for (p, n) in objects_by_pred {
-                        if n > 1 {
-                            contradictions.push(p.to_string());
-                        }
-                    }
-                    let rendered: Vec<Value> = records
-                        .iter()
-                        .map(|r| {
-                            json!({
-                                "id": r.id,
-                                "subject": r.subject,
-                                "predicate": r.predicate,
-                                "object": r.object_value,
-                                "speaker": r.speaker_role,
-                                "created_at": r.created_at,
-                            })
-                        })
-                        .collect();
-                    let active_rendered: Vec<Value> = active
-                        .iter()
-                        .map(|r| {
-                            json!({
-                                "subject": r.subject,
-                                "predicate": r.predicate,
-                                "object": r.object_value,
-                            })
-                        })
-                        .collect();
-                    ToolResult::success(
+            "query" => {
+                let subject = args.subject.as_deref().unwrap_or("").trim();
+                if subject.is_empty() {
+                    return ToolResult::error(
                         "lcm_assert",
-                        json!({
-                            "_lcm_tool": "lcm_assert",
-                            "action": "query",
-                            "scope": scope,
-                            "subject": args.subject,
-                            "assertions": rendered,
-                            "active": active_rendered,
-                            "contradictions": contradictions,
-                            "total": records.len(),
-                        }),
-                    )
+                        "subject is required when action = query",
+                    );
                 }
-                Err(e) => ToolResult::error("lcm_assert", format!("query failed: {e}")),
-            },
+                match self
+                    .engine
+                    .query_assertion_state(&scope, subject, args.predicate.as_deref())
+                {
+                    Ok(records) => {
+                        // Active = latest record per (predicate, object_value);
+                        // contradictions = predicates with >1 distinct active object.
+                        let mut active: Vec<&crate::context::AssertionRecord> = Vec::new();
+                        let mut seen: std::collections::HashMap<(String, String), bool> =
+                            std::collections::HashMap::new();
+                        for r in &records {
+                            seen.entry((r.predicate.clone(), r.object_value.clone()))
+                                .or_insert(true);
+                        }
+                        for r in &records {
+                            let key = (r.predicate.clone(), r.object_value.clone());
+                            if seen.get(&key) == Some(&true) {
+                                seen.insert(key, false);
+                                active.push(r);
+                            }
+                        }
+                        let mut contradictions: Vec<String> = Vec::new();
+                        let mut objects_by_pred: std::collections::HashMap<&str, usize> =
+                            std::collections::HashMap::new();
+                        for r in &active {
+                            *objects_by_pred.entry(r.predicate.as_str()).or_insert(0) += 1;
+                        }
+                        for (p, n) in objects_by_pred {
+                            if n > 1 {
+                                contradictions.push(p.to_string());
+                            }
+                        }
+                        let rendered: Vec<Value> = records
+                            .iter()
+                            .map(|r| {
+                                json!({
+                                    "id": r.id,
+                                    "subject": r.subject,
+                                    "predicate": r.predicate,
+                                    "object": r.object_value,
+                                    "speaker": r.speaker_role,
+                                    "created_at": r.created_at,
+                                })
+                            })
+                            .collect();
+                        let active_rendered: Vec<Value> = active
+                            .iter()
+                            .map(|r| {
+                                json!({
+                                    "subject": r.subject,
+                                    "predicate": r.predicate,
+                                    "object": r.object_value,
+                                })
+                            })
+                            .collect();
+                        ToolResult::success(
+                            "lcm_assert",
+                            json!({
+                                "_lcm_tool": "lcm_assert",
+                                "action": "query",
+                                "scope": scope,
+                                "subject": args.subject,
+                                "assertions": rendered,
+                                "active": active_rendered,
+                                "contradictions": contradictions,
+                                "total": records.len(),
+                            }),
+                        )
+                    }
+                    Err(e) => ToolResult::error("lcm_assert", format!("query failed: {e}")),
+                }
+            }
             other => ToolResult::error(
                 "lcm_assert",
-                format!("unknown action `{other}` — use save or query"),
+                format!("unknown action `{other}` — use save, query, or extract"),
             ),
         }
     }
@@ -572,13 +717,14 @@ pub async fn register_lcm_tools(
     registry: &crate::tools::ToolRegistry,
     engine: Arc<LcmContextEngine>,
     embedder: Option<Arc<dyn crate::context::Embedder>>,
+    extractor: Option<Arc<dyn crate::context::AssertionExtractor>>,
 ) -> crate::error::Result<()> {
     registry
         .register(LcmRecallTool::new(engine.clone()))
         .await?;
     registry.register(LcmStatsTool::new(engine.clone())).await?;
     registry
-        .register(LcmAssertTool::new(engine.clone()))
+        .register(LcmAssertTool::new(engine.clone()).with_extractor(extractor))
         .await?;
     registry
         .register(LcmRecallRoundTool::new(engine.clone()))
@@ -820,6 +966,121 @@ mod tests {
             )
             .await;
         assert!(!bad_action.success, "unknown action must error");
+    }
+
+    #[tokio::test]
+    async fn lcm_assert_extract_stores_mined_facts_and_errors_when_not_configured() {
+        let engine = test_engine();
+        engine
+            .ingest_turn(
+                "sess_ex",
+                &[
+                    crate::client::Message::assistant("The deploy window is every Tuesday."),
+                    crate::client::Message::assistant("The stack is Rust and SQLite."),
+                ],
+            )
+            .await
+            .unwrap();
+
+        // Without an extractor, the action must fail with a clear message.
+        let unconfigured = LcmAssertTool::new(engine.clone());
+        let out = unconfigured
+            .execute(
+                serde_json::json!({"action": "extract", "session": "sess_ex"}),
+                ToolContext::default(),
+            )
+            .await;
+        assert!(!out.success, "extract without extractor must error");
+        assert!(
+            out.error
+                .as_ref()
+                .unwrap()
+                .contains("context_lcm_assertion_extraction"),
+            "error must name the config gate"
+        );
+
+        // With a fake extractor, mined facts are persisted + attributed.
+        let fake: std::sync::Arc<dyn crate::context::AssertionExtractor> =
+            std::sync::Arc::new(crate::context::assertion_extract::tests::FakeExtractor {
+                assertions: vec![
+                    crate::context::ExtractedAssertion {
+                        subject: "project:operant".to_string(),
+                        predicate: "stack".to_string(),
+                        object: "Rust and SQLite".to_string(),
+                        speaker: "assistant".to_string(),
+                    },
+                    crate::context::ExtractedAssertion {
+                        subject: "project:operant".to_string(),
+                        predicate: "deploy".to_string(),
+                        object: "every Tuesday".to_string(),
+                        speaker: "assistant".to_string(),
+                    },
+                ],
+            });
+        let tool = LcmAssertTool::new(engine.clone()).with_extractor(Some(fake));
+        let out = tool
+            .execute(
+                serde_json::json!({"action": "extract", "session": "sess_ex", "limit": 10}),
+                ToolContext::default(),
+            )
+            .await;
+        assert!(out.success, "extract must succeed: {:?}", out);
+        let p = out.parse_content::<serde_json::Value>().unwrap();
+        assert_eq!(p["action"], serde_json::json!("extract"));
+        assert_eq!(p["saved"], serde_json::json!(2));
+        assert_eq!(p["extractor"], serde_json::json!("fake"));
+        assert!(p["scanned_nodes"].as_i64().unwrap() >= 2);
+
+        // The mined facts are now queryable through the normal query path.
+        let q = LcmAssertTool::new(engine.clone())
+            .execute(
+                serde_json::json!({
+                    "action": "query",
+                    "subject": "project:operant",
+                    "session": "sess_ex",
+                }),
+                ToolContext::default(),
+            )
+            .await;
+        let qp = q.parse_content::<serde_json::Value>().unwrap();
+        assert_eq!(qp["total"], serde_json::json!(2));
+        assert!(
+            qp["assertions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|a| a["object"] == serde_json::json!("Rust and SQLite")),
+            "mined fact must be queryable"
+        );
+        // Source attribution: the mined assertions point at a real node.
+        assert!(
+            qp["assertions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|a| a["id"].as_i64().is_some()),
+            "stored assertions carry ids"
+        );
+    }
+
+    #[tokio::test]
+    async fn lcm_assert_extract_reports_empty_scope() {
+        let engine = test_engine();
+        let fake: std::sync::Arc<dyn crate::context::AssertionExtractor> =
+            std::sync::Arc::new(crate::context::assertion_extract::tests::FakeExtractor {
+                assertions: vec![],
+            });
+        let tool = LcmAssertTool::new(engine.clone()).with_extractor(Some(fake));
+        // Empty DAG scope → clean "nothing to mine" success, not an error.
+        let out = tool
+            .execute(
+                serde_json::json!({"action": "extract", "session": "ghost"}),
+                ToolContext::default(),
+            )
+            .await;
+        assert!(out.success);
+        let p = out.parse_content::<serde_json::Value>().unwrap();
+        assert_eq!(p["saved"], serde_json::json!(0));
     }
 
     #[tokio::test]

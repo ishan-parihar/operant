@@ -243,6 +243,41 @@ impl LcmContextEngine {
         Ok(out)
     }
 
+    /// Fetch the most recent `limit` message nodes of `session` (or the
+    /// whole DAG when `session` is None), newest first, as
+    /// `(id, role, content, created_at)`. Used by assertion extraction to
+    /// mine durable facts out of recent conversation (never derived
+    /// rollup nodes).
+    pub fn recent_message_nodes(
+        &self,
+        session: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<(i64, String, String, i64)>> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, role, content, created_at FROM nodes \
+                 WHERE (?1 IS NULL OR session_id = ?1) AND kind = 'message' \
+                 ORDER BY created_at DESC, id DESC LIMIT ?2",
+            )
+            .map_err(|e| Error::Agent(format!("lcm: recent_message_nodes prepare: {e}")))?;
+        let rows = stmt
+            .query_map(params![session, limit.max(1) as i64], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, i64>(3)?,
+                ))
+            })
+            .map_err(|e| Error::Agent(format!("lcm: recent_message_nodes failed: {e}")))?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r.map_err(|e| Error::Agent(format!("lcm: recent_message_nodes row: {e}")))?);
+        }
+        Ok(out)
+    }
+
     /// Upsert a rollup summary for (session, period, start). Returns the
     /// stored `created_at` millis (updated on refresh).
     pub fn upsert_rollup(
