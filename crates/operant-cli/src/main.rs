@@ -729,6 +729,14 @@ pub(crate) async fn build_registry(
         match operant_core::tools::register_aft_tools(&registry, pool.clone()).await {
             Ok(()) => {
                 tracing::info!("AFT tools registered (18 IDE-grade coding tools)");
+                // Callgraph-dependent tools (aft_callers, and aft_inspect's
+                // dead-code projection) must wait out the persisted callgraph
+                // cold-build on first use — the bridge retries the request
+                // with backoff. Grant them a window that covers that build
+                // instead of the generic 30s tool timeout, which killed them
+                // mid-build in live testing.
+                registry.set_tool_timeout("aft_callers", std::time::Duration::from_secs(180));
+                registry.set_tool_timeout("aft_inspect", std::time::Duration::from_secs(180));
                 let project_root =
                     std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
                 let bridge_live = async {

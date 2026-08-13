@@ -160,6 +160,22 @@ fn operant_home() -> PathBuf {
 const UNAVAILABLE_MARKER: &str = ".unavailable";
 const UNAVAILABLE_RETRY_AFTER: Duration = Duration::from_secs(6 * 3600);
 
+/// How many times `send_request` retries a transient `callgraph_building`
+/// response before surfacing the error to the caller.
+const CALLGRAPH_BUILD_RETRIES: usize = 6;
+/// Base delay (ms) for the exponential backoff on callgraph cold-build
+/// retries (1.5s · 2^attempt — worst case ~95s, far under the 600s
+/// request timeout).
+const CALLGRAPH_RETRY_BASE_MS: u64 = 1500;
+
+/// True when an aft error reports the transient callgraph cold-build state
+/// (`code = callgraph_building`). The store is persisted and built in the
+/// background, so the correct behavior is to retry shortly (as aft's own
+/// message instructs), not to fail the tool call.
+fn is_callgraph_building_error(e: &crate::error::Error) -> bool {
+    e.to_string().contains("callgraph_building")
+}
+
 fn aft_unavailable_marker() -> PathBuf {
     operant_home()
         .join(AFT_STORAGE_DIR)
@@ -600,7 +616,43 @@ impl AftBridge {
 
     /// Write a fully-formed request and await its response, extracting
     /// aft errors (`success:false` + `code`/`message`) into [`Error`].
+    ///
+    /// Retries a bounded number of times when aft reports a transient
+    /// cold-build state (`callgraph_building`): the callgraph store is
+    /// persisted and built in the background, and aft's own error message
+    /// tells callers to "retry shortly". Surfacing that to the model as a
+    /// hard failure would make `aft_callers` / `aft_inspect` (dead-code)
+    /// unusable on a fresh store, so the bridge waits out the build with
+    /// exponential backoff (matching the CLI `aft warmup --areas callgraph`
+    /// intent, but without requiring an extra warmup step).
     async fn send_request(&self, request: serde_json::Value) -> Result<serde_json::Value> {
+        let mut attempt = 0usize;
+        loop {
+            match self.send_request_once(request.clone()).await {
+                Err(e) if is_callgraph_building_error(&e) => {
+                    if attempt >= CALLGRAPH_BUILD_RETRIES {
+                        return Err(e);
+                    }
+                    attempt += 1;
+                    // Exponential backoff: 1.5s, 3s, 6s, 12s, 24s, 48s —
+                    // bounded by the retry count above (~95s worst case),
+                    // well under the 600s request timeout.
+                    let delay_ms = CALLGRAPH_RETRY_BASE_MS.saturating_mul(1u64 << (attempt - 1));
+                    tracing::info!(
+                        command = %request["command"].as_str().unwrap_or(""),
+                        attempt,
+                        delay_ms,
+                        "aft: callgraph store building — retrying request"
+                    );
+                    tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+                }
+                other => return other,
+            }
+        }
+    }
+
+    /// Single write-and-await request exchange (no retry).
+    async fn send_request_once(&self, request: serde_json::Value) -> Result<serde_json::Value> {
         let id = request["id"].as_str().unwrap_or("").to_string();
         let command = request["command"].as_str().unwrap_or("").to_string();
         let line = serde_json::to_string(&request)
@@ -816,6 +868,36 @@ mod tests {
     fn filetime_set(_path: &Path, _time: std::time::SystemTime) {
         // Windows filetime manipulation is more involved; the aged-marker
         // assertion is best-effort there.
+    }
+
+    #[test]
+    fn callgraph_building_error_is_detected() {
+        // The retry gate keys on the aft error code string.
+        let building = crate::error::Error::Agent(
+            "aft callers: [callgraph_building] callers: callgraph store is building in the background; retry shortly".to_string(),
+        );
+        assert!(is_callgraph_building_error(&building));
+
+        let other = crate::error::Error::Agent("aft read: file not found".to_string());
+        assert!(!is_callgraph_building_error(&other));
+    }
+
+    #[test]
+    fn callgraph_retry_backoff_is_bounded() {
+        // Worst-case retry budget: 6 retries with exponential backoff from a
+        // 1.5s base ≈ 1.5+3+6+12+24+48 = 94.5s — comfortably under the 600s
+        // single-request timeout, so a stuck store can never hang a request.
+        let total_ms: u64 = (0..CALLGRAPH_BUILD_RETRIES)
+            .map(|attempt| CALLGRAPH_RETRY_BASE_MS.saturating_mul(1u64 << attempt))
+            .sum();
+        assert!(
+            total_ms < 600_000,
+            "retry budget {total_ms}ms must stay under the 600s request timeout"
+        );
+        assert!(
+            total_ms > 90_000,
+            "retry budget {total_ms}ms should give the store a real chance to build"
+        );
     }
 
     #[test]
