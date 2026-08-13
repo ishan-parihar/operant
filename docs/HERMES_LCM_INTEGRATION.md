@@ -226,7 +226,18 @@ installs" stays clean).
   (4000). OR-term FTS query (stopword + FTS5-reserved-keyword filtered),
   majority-overlap dedup vs visible context, evidence token budget reserved
   during compaction. 13 unit tests + real-agent integration test + live E2E.
-- ⏳ `vector_store.rs` parity with an embedder via the model client (stretch).
+- ✅ **Vector recall** (`embedder.rs` + `lcm_vector_recall` tool): hermes
+  `embedding_provider.py`/`vector_store.py` parity, bounded. `Embedder`
+  trait + `OpenAIEmbedder` over the client's new `/embeddings` method;
+  `LcmContextEngine::vector_recall` embeds the query and the candidate pool
+  (most recent 200 message nodes), caches vectors in `lcm_embeddings`
+  (keyed by model, so a model change re-embeds), and returns top-N by
+  cosine similarity — surfacing reworded matches with no exact word overlap.
+  Registered only when `agent.context_lcm_embedding_model` is set (tool
+  surface stays clean otherwise). Tested with a deterministic hash-trick
+  mock embedder (ranking + cache-hit behavior). **Live E2E not possible on
+  the current free-tier provider** (no `/embeddings` endpoint — verified
+  via probe); works with any OpenAI-compatible embeddings provider.
 
 ### P4 — CLI + metrics ✅ (partial)
 - `operant context status|sessions|recall <q> [--limit N]` — implemented

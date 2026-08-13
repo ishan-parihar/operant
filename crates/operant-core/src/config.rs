@@ -231,6 +231,12 @@ pub struct BehaviorSettings {
     /// `operant context rollup-maintenance` manually instead.
     #[serde(default = "default_lcm_rollup_interval_minutes")]
     pub context_lcm_rollup_interval_minutes: u64,
+    /// P3 vector recall: embedding model for `lcm_vector_recall` (hermes
+    /// `embedding_provider.py` parity). Empty (default) disables the vector
+    /// tool — the provider must expose the OpenAI-compatible `/embeddings`
+    /// endpoint.
+    #[serde(default)]
+    pub context_lcm_embedding_model: Option<String>,
 }
 
 fn default_fallback_on_errors() -> bool {
@@ -294,6 +300,7 @@ impl Default for BehaviorSettings {
             context_lcm_auto_recall_max_chars: 4_000,
             context_lcm_rollups_inject: true,
             context_lcm_rollup_interval_minutes: 0,
+            context_lcm_embedding_model: None,
         }
     }
 }

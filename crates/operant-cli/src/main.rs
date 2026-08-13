@@ -812,9 +812,19 @@ pub(crate) async fn build_registry(
         match operant_core::context::LcmContextEngine::new(lcm_config(config)) {
             Ok(engine) => {
                 let engine = std::sync::Arc::new(engine);
-                match operant_core::tools::register_lcm_tools(&registry, engine).await {
+                // P3 vector recall: when an embedding model is configured,
+                // register lcm_vector_recall with a real OpenAI-compatible
+                // embedder over the same client.
+                let embedder = config.agent.context_lcm_embedding_model.as_ref().map(|m| {
+                    let client = OpenAIClient::new(client_config(config));
+                    std::sync::Arc::new(operant_core::context::OpenAIEmbedder::new(
+                        client,
+                        m.clone(),
+                    )) as std::sync::Arc<dyn operant_core::context::Embedder>
+                });
+                match operant_core::tools::register_lcm_tools(&registry, engine, embedder).await {
                     Ok(()) => tracing::info!(
-                        "LCM tools registered (lcm_recall / lcm_stats) — lossless DAG active"
+                        "LCM tools registered (lcm_recall / lcm_stats / lcm_assert / lcm_recall_round) — lossless DAG active"
                     ),
                     Err(e) => {
                         tracing::warn!(error = %e, "LCM tool registration failed (non-fatal)")

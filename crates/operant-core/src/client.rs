@@ -67,6 +67,19 @@ pub struct OpenAIClient {
     rate_limiter: RateLimiter,
 }
 
+/// Response envelope for the OpenAI-compatible `/embeddings` endpoint.
+#[derive(Debug, Deserialize)]
+pub struct EmbeddingsResponse {
+    pub data: Vec<EmbeddingData>,
+}
+
+/// One embedding result; `index` matches the input order.
+#[derive(Debug, Deserialize)]
+pub struct EmbeddingData {
+    pub index: usize,
+    pub embedding: Vec<f32>,
+}
+
 impl OpenAIClient {
     /// Create a new OpenAI client
     pub fn new(config: ClientConfig) -> Self {
@@ -190,6 +203,38 @@ impl OpenAIClient {
 
         debug!(usage = ?response.usage, "Chat response received");
         Ok(response)
+    }
+
+    /// OpenAI-compatible embeddings request. Returns one vector per input,
+    /// ordered by the server's `index` field. Uses the same rate-limit/retry
+    /// path as `chat`, so a transient transport failure is retried with
+    /// backoff instead of failing the call.
+    #[instrument(skip(self, inputs), fields(model = % model, n = inputs.len()))]
+    pub async fn embeddings(&self, model: &str, inputs: &[String]) -> Result<Vec<Vec<f32>>> {
+        if inputs.is_empty() {
+            return Ok(Vec::new());
+        }
+        let base = self.config.base_url.trim_end_matches('/');
+        let url = reqwest::Url::parse(&format!("{base}/embeddings"))
+            .map_err(|e| Error::InvalidUrl(e.to_string()))?;
+        let headers = self.build_headers()?;
+        let request = serde_json::json!({ "model": model, "input": inputs });
+        let (status, body) = self
+            .execute_with_retry(model, url, headers, request)
+            .await?;
+        if !status.is_success() {
+            error!(status = %status, body = %body, "Embeddings request failed");
+            return Err(classify_http_error(status.as_u16(), &body));
+        }
+        let parsed: EmbeddingsResponse = serde_json::from_str(&body)
+            .map_err(|e| Error::ParseResponse(format!("{}: {}", e, body)))?;
+        let mut out: Vec<Vec<f32>> = vec![Vec::new(); parsed.data.len()];
+        for d in parsed.data {
+            if d.index < out.len() {
+                out[d.index] = d.embedding;
+            }
+        }
+        Ok(out)
     }
 
     /// Send a streaming chat completion request with rate-limit checking.

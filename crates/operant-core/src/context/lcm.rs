@@ -150,7 +150,13 @@ impl LcmContextEngine {
                  created_at INTEGER NOT NULL
              );
              CREATE INDEX IF NOT EXISTS idx_assertions_lookup
-                 ON lcm_assertions(session_id, subject, predicate);",
+                 ON lcm_assertions(session_id, subject, predicate);
+             CREATE TABLE IF NOT EXISTS lcm_embeddings (
+                 node_id INTEGER PRIMARY KEY,
+                 model TEXT NOT NULL,
+                 vector TEXT NOT NULL,
+                 created_at INTEGER NOT NULL
+             );",
         )
         .map_err(|e| Error::Agent(format!("lcm: schema bootstrap failed: {e}")))?;
         Ok(Self {
@@ -359,6 +365,141 @@ impl LcmContextEngine {
         let mut out = Vec::new();
         for r in rows {
             out.push(r.map_err(|e| Error::Agent(format!("lcm: query_assertion_state row: {e}")))?);
+        }
+        Ok(out)
+    }
+
+    /// P3 vector recall (hermes `vector_store.py` / `embedding_provider.py`
+    /// parity, bounded): embed the query via `embedder`, embed the candidate
+    /// node pool (cached in `lcm_embeddings`, keyed by model so a model
+    /// change re-embeds), and return the top `limit` nodes by cosine
+    /// similarity. Candidates are the most recent message nodes of the
+    /// session (or the whole DAG when `session` is None), capped at
+    /// `MAX_VECTOR_CANDIDATES`. Returns `RecallHit`-shaped results so the
+    /// tool renders identically to `lcm_recall`.
+    pub async fn vector_recall(
+        &self,
+        embedder: &dyn crate::context::Embedder,
+        session: Option<&str>,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<crate::context::RecallHit>> {
+        const MAX_VECTOR_CANDIDATES: usize = 200;
+        const BATCH: usize = 32;
+        const VEC_DIM_CAP: usize = 4096;
+
+        if query.trim().is_empty() {
+            return Ok(Vec::new());
+        }
+        let query_emb = embedder.embed(&[query.trim().to_string()]).await?;
+        let Some(query_emb) = query_emb.into_iter().next() else {
+            return Ok(Vec::new());
+        };
+        if query_emb.is_empty() || query_emb.len() > VEC_DIM_CAP {
+            return Ok(Vec::new());
+        }
+
+        // Phase 1 — read candidates and cached vectors under the lock, then
+        // release it BEFORE embedding (rusqlite `Connection` is not Send, so
+        // the guard cannot be held across an await).
+        let (candidates, mut vectors, missing) = {
+            let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+            let mut stmt = conn
+                .prepare(
+                    "SELECT id, role, content, created_at FROM nodes \
+                     WHERE (?1 IS NULL OR session_id = ?1) AND kind = 'message' \
+                     ORDER BY created_at DESC, id DESC LIMIT ?2",
+                )
+                .map_err(|e| Error::Agent(format!("lcm: vector candidates prepare: {e}")))?;
+            let rows = stmt
+                .query_map(params![session, MAX_VECTOR_CANDIDATES as i64], |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, i64>(3)?,
+                    ))
+                })
+                .map_err(|e| Error::Agent(format!("lcm: vector candidates failed: {e}")))?;
+            let mut candidates: Vec<(i64, String, String, i64)> = Vec::new();
+            for r in rows {
+                candidates.push(r.map_err(|e| Error::Agent(format!("lcm: vector row: {e}")))?);
+            }
+            let model = embedder.model_id().to_string();
+            let mut vectors: Vec<Option<Vec<f32>>> = vec![None; candidates.len()];
+            let mut missing: Vec<usize> = Vec::new();
+            for (i, (id, _, _, _)) in candidates.iter().enumerate() {
+                let cached: Option<String> = conn
+                    .query_row(
+                        "SELECT vector FROM lcm_embeddings WHERE node_id = ?1 AND model = ?2",
+                        params![id, &model],
+                        |r| r.get(0),
+                    )
+                    .ok();
+                match cached {
+                    Some(raw) => {
+                        if let Ok(v) = serde_json::from_str::<Vec<f32>>(&raw) {
+                            vectors[i] = Some(v);
+                        } else {
+                            missing.push(i);
+                        }
+                    }
+                    None => missing.push(i),
+                }
+            }
+            (candidates, vectors, missing)
+        };
+        if candidates.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Phase 2 — embed the missing candidates (no lock held), keeping the
+        // fresh vectors in memory for ranking.
+        let model = embedder.model_id().to_string();
+        for chunk in missing.chunks(BATCH) {
+            let texts: Vec<String> = chunk.iter().map(|&i| candidates[i].2.clone()).collect();
+            let embs = embedder.embed(&texts).await?;
+            for (k, &i) in chunk.iter().enumerate() {
+                if let Some(v) = embs.get(k).filter(|v| !v.is_empty()) {
+                    vectors[i] = Some(v.clone());
+                }
+            }
+        }
+
+        // Phase 3 — persist the cache under a brief lock, then rank.
+        {
+            let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+            for (i, v) in vectors.iter().enumerate() {
+                if let Some(v) = v {
+                    let raw = serde_json::to_string(v).unwrap_or_default();
+                    let _ = conn.execute(
+                        "INSERT OR REPLACE INTO lcm_embeddings (node_id, model, vector, created_at) \
+                         VALUES (?1, ?2, ?3, ?4)",
+                        params![candidates[i].0, &model, raw, now_millis()],
+                    );
+                }
+            }
+        }
+
+        // Cosine rank and return the top `limit` as RecallHits.
+        let mut scored: Vec<(f32, usize)> = Vec::with_capacity(candidates.len());
+        for (i, v) in vectors.iter().enumerate() {
+            if let Some(v) = v {
+                let sim = crate::context::embedder::cosine_similarity(&query_emb, v);
+                scored.push((sim, i));
+            }
+        }
+        scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+        let mut out = Vec::with_capacity(limit);
+        for (sim, i) in scored.into_iter().take(limit) {
+            let (id, role, content, created_at) = &candidates[i];
+            out.push(crate::context::RecallHit {
+                node_id: *id,
+                role: role.clone(),
+                content: content.clone(),
+                created_at: *created_at,
+                score: sim as f64,
+            });
         }
         Ok(out)
     }
@@ -1358,5 +1499,70 @@ mod tests {
         assert!(last.content.contains("message 9") || last.content.contains("message 9 content"));
         // Front is the system message, tail follows.
         assert!(kept[1].content.starts_with("message "));
+    }
+
+    #[tokio::test]
+    async fn vector_recall_ranks_semantic_matches_and_caches() {
+        let (engine, _) = test_db();
+        let turn = vec![
+            Message::assistant("The deploy pipeline uses rsync over ssh"),
+            Message::assistant("The weather in paris is rainy today"),
+            Message::assistant("Alpha beta gamma project roadmap"),
+        ];
+        engine.ingest_turn("s1", &turn).await.unwrap();
+
+        let embedder = crate::context::MockEmbedder::default();
+        // First query: embeds query (1) + all 3 candidates (3) = 4 calls.
+        let hits = engine
+            .vector_recall(&embedder, Some("s1"), "deploy pipeline rsync", 3)
+            .await
+            .unwrap();
+        assert!(!hits.is_empty(), "vector recall must return hits");
+        assert!(
+            hits[0].content.contains("rsync"),
+            "semantic top hit should be the rsync node, got: {}",
+            hits[0].content
+        );
+        assert_eq!(
+            embedder.calls.load(std::sync::atomic::Ordering::Relaxed),
+            4,
+            "query + 3 candidates embedded once"
+        );
+
+        // Second query: embeddings are cached, only the new query is embedded.
+        let before = embedder.calls.load(std::sync::atomic::Ordering::Relaxed);
+        let _ = engine
+            .vector_recall(&embedder, Some("s1"), "rainy paris weather", 2)
+            .await
+            .unwrap();
+        let after = embedder.calls.load(std::sync::atomic::Ordering::Relaxed);
+        assert_eq!(
+            after - before,
+            1,
+            "only the query is embedded when candidates are cached (cache hit)"
+        );
+    }
+
+    #[tokio::test]
+    async fn vector_recall_surfaces_reworded_matches_without_exact_words() {
+        let (engine, _) = test_db();
+        let turn = vec![
+            Message::assistant("The magic number for this session is forty-two-point-seven"),
+            Message::assistant("Unrelated chatter about lunch plans"),
+        ];
+        engine.ingest_turn("s1", &turn).await.unwrap();
+        let embedder = crate::context::MockEmbedder::default();
+        // No exact word overlap with the magic-number node, but tokens
+        // (magic/number/session) overlap the query's intent.
+        let hits = engine
+            .vector_recall(&embedder, Some("s1"), "session magic value", 1)
+            .await
+            .unwrap();
+        assert!(!hits.is_empty());
+        assert!(
+            hits[0].content.contains("forty-two-point-seven"),
+            "reworded semantic match must surface, got: {}",
+            hits[0].content
+        );
     }
 }

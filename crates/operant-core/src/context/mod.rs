@@ -14,6 +14,7 @@
 //! adaptive recall, assertions) and the P0–P4 roadmap.
 
 pub mod adaptive;
+pub mod embedder;
 pub mod lcm;
 pub mod rollup;
 
@@ -21,6 +22,7 @@ use crate::client::Message;
 use crate::error::Result;
 
 pub use adaptive::{AdaptiveRetrievalRegistry, RetrievalRound};
+pub use embedder::{Embedder, MockEmbedder, OpenAIEmbedder};
 pub use lcm::{LcmConfig, LcmContextEngine};
 
 /// One stored durable assertion (hermes `assertion_store.py` row parity).

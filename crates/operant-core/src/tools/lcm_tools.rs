@@ -456,12 +456,122 @@ fn round_json(round: crate::context::RetrievalRound) -> Value {
         })).collect::<Vec<_>>(),
     })
 }
+/// Vector recall over the DAG (hermes `vector_store.py` parity, bounded).
+/// Registered only when an embedding model is configured
+/// (`agent.context_lcm_embedding_model`) — the tool surface stays clean when
+/// the provider cannot embed.
+#[derive(JsonSchema, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LcmVectorRecallArgs {
+    /// Query to embed and match by semantic similarity.
+    pub query: String,
+    /// Max hits to return (1..=20, default 5).
+    pub limit: Option<usize>,
+    /// Scope to a session id; omitted = semantic search across the whole DAG.
+    pub session: Option<String>,
+}
+
+pub struct LcmVectorRecallTool {
+    engine: Arc<LcmContextEngine>,
+    embedder: Arc<dyn crate::context::Embedder>,
+}
+
+impl LcmVectorRecallTool {
+    pub fn new(engine: Arc<LcmContextEngine>, embedder: Arc<dyn crate::context::Embedder>) -> Self {
+        Self { engine, embedder }
+    }
+}
+
+#[async_trait::async_trait]
+impl OperantTool for LcmVectorRecallTool {
+    fn name(&self) -> &str {
+        "lcm_vector_recall"
+    }
+
+    fn description(&self) -> &str {
+        "Semantic recall over the lossless DAG: embed the query and return the most similar verbatim nodes by cosine similarity, even when they share no exact words with the query. Complements lcm_recall (exact FTS). Use when reworded phrasing should still match earlier conversation."
+    }
+
+    fn schema(&self) -> ToolSchema {
+        ToolSchema::from_type::<LcmVectorRecallArgs>(
+            "lcm_vector_recall",
+            "Semantic (vector) recall over the DAG",
+        )
+    }
+
+    async fn execute(&self, args: Value, _context: ToolContext) -> ToolResult {
+        let args: LcmVectorRecallArgs = match serde_json::from_value(args) {
+            Ok(a) => a,
+            Err(e) => {
+                return ToolResult::error("lcm_vector_recall", format!("Invalid arguments: {e}"));
+            }
+        };
+        if args.query.trim().is_empty() {
+            return ToolResult::error("lcm_vector_recall", "query is required");
+        }
+        let limit = args.limit.unwrap_or(5).clamp(1, 20);
+        match self
+            .engine
+            .vector_recall(
+                self.embedder.as_ref(),
+                args.session.as_deref(),
+                &args.query,
+                limit,
+            )
+            .await
+        {
+            Ok(hits) => {
+                if hits.is_empty() {
+                    return ToolResult::success(
+                        "lcm_vector_recall",
+                        json!({
+                            "_lcm_tool": "lcm_vector_recall",
+                            "hits": [],
+                            "note": "no candidate nodes to embed",
+                        }),
+                    );
+                }
+                let nodes: Vec<Value> = hits
+                    .iter()
+                    .map(|h| {
+                        let mut content = h.content.clone();
+                        if content.chars().count() > 600 {
+                            content = content.chars().take(600).collect::<String>();
+                            content.push_str("...[truncated]");
+                        }
+                        json!({
+                            "node_id": h.node_id,
+                            "role": h.role,
+                            "content": content,
+                            "created_at": h.created_at,
+                            "similarity": h.score,
+                        })
+                    })
+                    .collect();
+                ToolResult::success(
+                    "lcm_vector_recall",
+                    json!({
+                        "_lcm_tool": "lcm_vector_recall",
+                        "hits": nodes,
+                        "total_hits": hits.len(),
+                        "model": self.embedder.model_id(),
+                    }),
+                )
+            }
+            Err(e) => ToolResult::error("lcm_vector_recall", format!("vector recall failed: {e}")),
+        }
+    }
+}
 
 /// Register the LCM tools into a registry. Only meaningful when the LCM
 /// engine is actually attached (config `agent.context_engine = "lcm"`).
+/// `embedder` is `None` when no embedding model is configured — the vector
+/// tool is then not registered (hermes registers vector tools only when an
+/// embedding provider is active).
 pub async fn register_lcm_tools(
     registry: &crate::tools::ToolRegistry,
     engine: Arc<LcmContextEngine>,
+    embedder: Option<Arc<dyn crate::context::Embedder>>,
 ) -> crate::error::Result<()> {
     registry
         .register(LcmRecallTool::new(engine.clone()))
@@ -470,7 +580,14 @@ pub async fn register_lcm_tools(
     registry
         .register(LcmAssertTool::new(engine.clone()))
         .await?;
-    registry.register(LcmRecallRoundTool::new(engine)).await?;
+    registry
+        .register(LcmRecallRoundTool::new(engine.clone()))
+        .await?;
+    if let Some(embedder) = embedder {
+        registry
+            .register(LcmVectorRecallTool::new(engine, embedder))
+            .await?;
+    }
     Ok(())
 }
 
@@ -773,5 +890,44 @@ mod tests {
             )
             .await;
         assert!(!bad.success, "unknown retrieval id must error");
+    }
+
+    #[tokio::test]
+    async fn lcm_vector_recall_ranks_and_validates() {
+        let engine = test_engine();
+        let embedder: std::sync::Arc<dyn crate::context::Embedder> =
+            std::sync::Arc::new(crate::context::MockEmbedder::default());
+        let tool = LcmVectorRecallTool::new(engine.clone(), embedder);
+        let turn = vec![
+            crate::client::Message::assistant("the deployment uses rsync over ssh"),
+            crate::client::Message::assistant("irrelevant filler about the weather"),
+        ];
+        engine.ingest_turn("sess_vec", &turn).await.unwrap();
+
+        let out = tool
+            .execute(
+                serde_json::json!({
+                    "query": "deploy rsync",
+                    "limit": 2,
+                    "session": "sess_vec",
+                }),
+                ToolContext::default(),
+            )
+            .await;
+        assert!(out.success, "vector recall must succeed: {:?}", out);
+        let parsed = out.parse_content::<serde_json::Value>().unwrap();
+        let hits = parsed["hits"].as_array().unwrap();
+        assert!(!hits.is_empty(), "must return ranked hits");
+        assert!(
+            hits[0]["content"].as_str().unwrap().contains("rsync"),
+            "top hit is the semantic match"
+        );
+        assert_eq!(parsed["model"], serde_json::json!("mock"));
+
+        // Empty query must error.
+        let bad = tool
+            .execute(serde_json::json!({ "query": "" }), ToolContext::default())
+            .await;
+        assert!(!bad.success, "empty query must error");
     }
 }
