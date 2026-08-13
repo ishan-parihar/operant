@@ -46,8 +46,15 @@ context_compression = false
 # context_lcm_rollups_inject = true
 # Background rollup maintenance every N minutes (0 = disabled, default).
 # context_lcm_rollup_interval_minutes = 0
-# Embedding model for lcm_vector_recall (empty = tool not registered).
-# context_lcm_embedding_model = "text-embedding-3-small"
+# Embedding model for lcm_vector_recall. Empty (default) = the tool is NOT
+# registered — LCM works fully without any external embedding model (FTS
+# recall, rollups and assertions are all local). Options:
+#   * "local:hash"  — zero-dependency built-in embedder (no network calls)
+#   * any model name — OpenAI-compatible /embeddings endpoint; REQUIRES the
+#     provider to expose it. Prefer setting context_lcm_embedding_base_url
+#     to a dedicated embeddings endpoint, otherwise the chat provider's base
+#     URL and key are reused (warned at startup).
+# context_lcm_embedding_model = "local:hash"
 # Optional separate embeddings endpoint (e.g. local Ollama). Empty = reuse
 # the chat provider's base URL and key.
 # context_lcm_embedding_base_url = "http://localhost:11434/v1"

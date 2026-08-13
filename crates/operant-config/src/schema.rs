@@ -5529,10 +5529,18 @@ pub struct MemoryConfig {
     /// Source of embedding vectors for semantic search. `none` = keyword-only retrieval (no API calls, no vector cost); `openai` = OpenAI's embedding API; `custom:URL` = any OpenAI-compatible embedding endpoint (LiteLLM, local gateway, etc.).
     #[serde(default = "default_embedding_provider")]
     pub embedding_provider: String,
-    /// Embedding model identifier — must match a model your chosen embedding provider serves (e.g. `text-embedding-3-small` for OpenAI). Changing this invalidates existing embeddings; you'll need to re-index.
+    /// Embedding model identifier — must match a model your chosen embedding
+    /// provider serves (e.g. `text-embedding-3-small` for OpenAI). Empty
+    /// (default) = no external embedding model is assumed; the default
+    /// `embedding_provider = "none"` then yields keyword-only retrieval with
+    /// zero external dependencies. Changing this invalidates existing
+    /// embeddings; you'll need to re-index.
     #[serde(default = "default_embedding_model")]
     pub embedding_model: String,
-    /// Vector width produced by the embedding model — must match the model's native dimension or vectors won't store correctly. Look up the number on the provider's model page.
+    /// Vector width produced by the embedding model — must match the model's
+    /// native dimension or vectors won't store correctly. `0` (default)
+    /// means "unconfigured" and pairs with the empty default model. Look up
+    /// the number on the provider's model page.
     #[serde(default = "default_embedding_dims")]
     pub embedding_dimensions: usize,
     /// How heavily vector (semantic) similarity counts when `search_mode = hybrid`. Raise toward 1.0 to favor meaning-based matches; lower it to lean on keyword overlap instead.
@@ -5698,10 +5706,14 @@ fn default_conversation_retention_days() -> u32 {
     30
 }
 fn default_embedding_model() -> String {
-    "text-embedding-3-small".into()
+    // Empty by default: no external embedding model is ever assumed, so
+    // operant runs with zero embedding dependencies out of the box (hermes
+    // parity — hermes has no embedding provider at all; semantic memory is
+    // server/plugin-side). Users opt into one explicitly.
+    String::new()
 }
 fn default_embedding_dims() -> usize {
-    1536
+    0
 }
 fn default_vector_weight() -> f64 {
     0.7

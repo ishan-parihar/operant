@@ -152,13 +152,20 @@ impl LcmContextEngine {
              CREATE INDEX IF NOT EXISTS idx_assertions_lookup
                  ON lcm_assertions(session_id, subject, predicate);
              CREATE TABLE IF NOT EXISTS lcm_embeddings (
-                 node_id INTEGER PRIMARY KEY,
+                 node_id INTEGER NOT NULL,
                  model TEXT NOT NULL,
                  vector TEXT NOT NULL,
-                 created_at INTEGER NOT NULL
-             );",
+                 created_at INTEGER NOT NULL,
+                 PRIMARY KEY (node_id, model)
+             );
+             -- One-time migration: earlier builds keyed lcm_embeddings on
+             -- node_id alone, so INSERT OR REPLACE silently clobbered the
+             -- other model's cached vector on a model change. It is a pure
+             -- cache (rebuildable), so a legacy single-column PK is simply
+             -- rebuilt as (node_id, model). See migrate_embeddings_pk below.",
         )
         .map_err(|e| Error::Agent(format!("lcm: schema bootstrap failed: {e}")))?;
+        migrate_embeddings_pk(&conn)?;
         Ok(Self {
             conn: Mutex::new(conn),
             db_path: config.db_path,
@@ -489,24 +496,34 @@ impl LcmContextEngine {
         }
 
         // Phase 2 — embed the missing candidates (no lock held), keeping the
-        // fresh vectors in memory for ranking.
+        // fresh vectors in memory for ranking. Only finite, dimension-
+        // consistent vectors are kept: a NaN/Inf or wrong-length vector from
+        // the provider would poison the cache and rank garbage (cosine of a
+        // NaN is NaN and never matches anything).
         let model = embedder.model_id().to_string();
         for chunk in missing.chunks(BATCH) {
             let texts: Vec<String> = chunk.iter().map(|&i| candidates[i].2.clone()).collect();
             let embs = embedder.embed(&texts).await?;
             for (k, &i) in chunk.iter().enumerate() {
-                if let Some(v) = embs.get(k).filter(|v| !v.is_empty()) {
+                let Some(v) = embs.get(k) else {
+                    continue;
+                };
+                if v.len() == query_emb.len() && v.iter().all(|x| x.is_finite()) {
                     vectors[i] = Some(v.clone());
                 }
             }
         }
 
-        // Phase 3 — persist the cache under a brief lock, then rank.
+        // Phase 3 — persist the cache under a brief lock, then rank. Skip
+        // rows whose serialization fails (serde_json can't encode NaN) so we
+        // never store a corrupted blob that would force a re-embed loop.
         {
             let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
             for (i, v) in vectors.iter().enumerate() {
                 if let Some(v) = v {
-                    let raw = serde_json::to_string(v).unwrap_or_default();
+                    let Ok(raw) = serde_json::to_string(v) else {
+                        continue;
+                    };
                     let _ = conn.execute(
                         "INSERT OR REPLACE INTO lcm_embeddings (node_id, model, vector, created_at) \
                          VALUES (?1, ?2, ?3, ?4)",
@@ -1099,6 +1116,61 @@ fn now_millis() -> i64 {
         .unwrap_or(0)
 }
 
+/// One-time migration for the `lcm_embeddings` cache table.
+///
+/// Earlier builds declared `node_id INTEGER PRIMARY KEY`, but every read
+/// keys on `(node_id, model)` — so when the embedding model changed,
+/// `INSERT OR REPLACE` on the same node_id silently destroyed the other
+/// model's cached vector, forcing a full re-embed and defeating the cache
+/// (F1). The table is a pure cache (rebuildable), so a legacy single-column
+/// PK is dropped and recreated as a composite `(node_id, model)` PK. No-op
+/// on fresh databases.
+fn migrate_embeddings_pk(conn: &Connection) -> Result<()> {
+    let legacy = {
+        let mut stmt = conn
+            .prepare("SELECT pk FROM pragma_table_info('lcm_embeddings') WHERE name = 'node_id'")
+            .map_err(|e| Error::Agent(format!("lcm: pk inspect prepare failed: {e}")))?;
+        let mut single = false;
+        for pk in stmt
+            .query_map([], |r| r.get::<_, i64>(0))
+            .map_err(|e| Error::Agent(format!("lcm: pk inspect query failed: {e}")))?
+        {
+            // In the legacy table node_id alone was pk=1 (single-column PK);
+            // in the composite table node_id is pk=1 AND model is pk=2 — we
+            // detect the legacy shape by checking there is no second PK column.
+            if pk.is_ok() {
+                single = true;
+            }
+        }
+        if !single {
+            return Ok(());
+        }
+        // Confirm the composite is missing: node_id pk=1 with model pk=0.
+        let model_pk: i64 = conn
+            .query_row(
+                "SELECT pk FROM pragma_table_info('lcm_embeddings') WHERE name = 'model'",
+                [],
+                |r| r.get(0),
+            )
+            .map_err(|e| Error::Agent(format!("lcm: model pk inspect failed: {e}")))?;
+        model_pk == 0
+    };
+    if legacy {
+        conn.execute_batch(
+            "DROP TABLE IF EXISTS lcm_embeddings;
+             CREATE TABLE lcm_embeddings (
+                 node_id INTEGER NOT NULL,
+                 model TEXT NOT NULL,
+                 vector TEXT NOT NULL,
+                 created_at INTEGER NOT NULL,
+                 PRIMARY KEY (node_id, model)
+             );",
+        )
+        .map_err(|e| Error::Agent(format!("lcm: embeddings PK migration failed: {e}")))?;
+    }
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -1599,5 +1671,150 @@ mod tests {
             "reworded semantic match must surface, got: {}",
             hits[0].content
         );
+    }
+
+    #[tokio::test]
+    async fn vector_cache_is_keyed_by_model_not_node_alone() {
+        // F1 regression: lcm_embeddings used node_id as its sole PK while
+        // every lookup keys on (node_id, model) — a model change silently
+        // clobbered the other model's cached vectors, forcing a full
+        // re-embed on the next query with the previous model. With the
+        // composite PK, each model's vectors coexist.
+        let (engine, _) = test_db();
+        let turn = vec![Message::assistant(
+            "The deploy pipeline uses rsync over ssh",
+        )];
+        engine.ingest_turn("s1", &turn).await.unwrap();
+
+        // Model A caches its vectors.
+        let a = crate::context::MockEmbedder::default();
+        let hits_a = engine
+            .vector_recall(&a, Some("s1"), "deploy rsync", 1)
+            .await
+            .unwrap();
+        assert!(!hits_a.is_empty());
+        let a_calls_after_first = a.calls.load(std::sync::atomic::Ordering::Relaxed);
+
+        // Model B embeds the same node with a different model id — this must
+        // NOT destroy model A's cache row.
+        let b = crate::context::MockEmbedder::default();
+        let _ = engine
+            .vector_recall(&b, Some("s1"), "deploy rsync", 1)
+            .await
+            .unwrap();
+
+        // Back to model A: the cached vectors must still be there — only the
+        // query gets embedded, candidates are cache hits.
+        let before = a.calls.load(std::sync::atomic::Ordering::Relaxed);
+        assert_eq!(
+            a_calls_after_first, before,
+            "model A's cache must survive model B's writes"
+        );
+        let hits_a2 = engine
+            .vector_recall(&a, Some("s1"), "deploy rsync", 1)
+            .await
+            .unwrap();
+        assert!(!hits_a2.is_empty());
+    }
+
+    #[tokio::test]
+    async fn vector_recall_skips_nonfinite_and_wrong_len_embeds() {
+        // F2 regression: a NaN/Inf or dimension-mismatched vector from the
+        // provider must never be cached (serde_json can't serialize NaN —
+        // the old unwrap_or_default wrote a corrupt blob that forced an
+        // endless re-embed) and must not rank garbage.
+        let (engine, _) = test_db();
+        let turn = vec![Message::assistant("alpha beta gamma project roadmap")];
+        engine.ingest_turn("s1", &turn).await.unwrap();
+
+        // A mock embedder that returns a NaN vector for one input.
+        struct NaNEmbedder;
+        #[async_trait::async_trait]
+        impl crate::context::Embedder for NaNEmbedder {
+            fn model_id(&self) -> &str {
+                "nan-model"
+            }
+            async fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+                Ok(texts
+                    .iter()
+                    .map(|t| {
+                        let mut v = vec![0.0f32; 32];
+                        v[0] = f32::NAN;
+                        let _ = t;
+                        v
+                    })
+                    .collect())
+            }
+        }
+        let hits = engine
+            .vector_recall(&NaNEmbedder, Some("s1"), "alpha beta", 1)
+            .await
+            .unwrap();
+        assert!(
+            hits.is_empty(),
+            "non-finite vectors must be skipped, not ranked"
+        );
+        // The cache must not contain a poisoned row for this model.
+        let conn = engine.conn.lock().unwrap();
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM lcm_embeddings WHERE model = 'nan-model'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 0, "NaN vectors must never be persisted");
+    }
+
+    #[test]
+    fn embeddings_pk_migration_rebuilds_legacy_single_column_pk() {
+        // F1 migration: a database created by an older build (node_id as the
+        // sole PK) must be rebuilt with the composite (node_id, model) PK.
+        let dir = std::env::temp_dir().join(format!(
+            "operant_lcm_migrate_{}_{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let db_path = dir.join("lcm-legacy.db");
+        let conn = Connection::open(&db_path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE lcm_embeddings (
+                 node_id INTEGER PRIMARY KEY,
+                 model TEXT NOT NULL,
+                 vector TEXT NOT NULL,
+                 created_at INTEGER NOT NULL
+             );",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO lcm_embeddings (node_id, model, vector, created_at) VALUES (1, 'a', '[1.0]', 0)",
+            [],
+        )
+        .unwrap();
+        // Run the migration directly.
+        migrate_embeddings_pk(&conn).unwrap();
+        let pk_cols: Vec<i64> = {
+            let mut stmt = conn
+                .prepare("SELECT pk FROM pragma_table_info('lcm_embeddings') ORDER BY pk")
+                .unwrap();
+            stmt.query_map([], |r| r.get::<_, i64>(0))
+                .unwrap()
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .unwrap()
+        };
+        assert!(
+            pk_cols.contains(&1) && pk_cols.contains(&2),
+            "composite PK (node_id pk=1, model pk=2) expected, got {pk_cols:?}"
+        );
+        // Both columns are now part of the PK.
+        let composite: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('lcm_embeddings') WHERE pk > 0",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(composite, 2, "exactly two PK columns after migration");
     }
 }

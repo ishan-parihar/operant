@@ -228,11 +228,36 @@ impl OpenAIClient {
         }
         let parsed: EmbeddingsResponse = serde_json::from_str(&body)
             .map_err(|e| Error::ParseResponse(format!("{}: {}", e, body)))?;
+        // Strict contract: the response must contain exactly one vector per
+        // input, index-aligned. Anything less (partial batch, out-of-order
+        // indices, provider quirk) is a provider bug — fail loudly instead
+        // of silently returning empty vectors that would corrupt recall
+        // ranking downstream (lcm vector_recall treats an empty vector as
+        // "candidate skipped" without any diagnostic).
+        if parsed.data.len() != inputs.len() {
+            return Err(Error::ParseResponse(format!(
+                "embeddings: expected {} vectors for {} inputs, got {}",
+                inputs.len(),
+                inputs.len(),
+                parsed.data.len()
+            )));
+        }
         let mut out: Vec<Vec<f32>> = vec![Vec::new(); parsed.data.len()];
         for d in parsed.data {
-            if d.index < out.len() {
-                out[d.index] = d.embedding;
+            if d.index >= out.len() {
+                return Err(Error::ParseResponse(format!(
+                    "embeddings: index {} out of range for {} inputs",
+                    d.index,
+                    inputs.len()
+                )));
             }
+            if d.embedding.is_empty() {
+                return Err(Error::ParseResponse(format!(
+                    "embeddings: empty vector at index {}",
+                    d.index
+                )));
+            }
+            out[d.index] = d.embedding;
         }
         Ok(out)
     }
@@ -1562,6 +1587,106 @@ mod tests {
         assert_eq!(
             calls[0].function.as_ref().unwrap().arguments,
             r#""query": "rus"#
+        );
+    }
+
+    /// Raw-TCP embeddings server helper: replies to POST /embeddings with
+    /// the given JSON body.
+    async fn embeddings_server(body: String) -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut buf = vec![0u8; 4096];
+            let _ = sock.read(&mut buf).await;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            let _ = sock.write_all(response.as_bytes()).await;
+            let _ = sock.shutdown().await;
+        });
+        format!("http://{addr}")
+    }
+
+    #[tokio::test]
+    async fn embeddings_returns_vector_per_input_in_order() {
+        let body = r#"{"data":[
+            {"index":0,"embedding":[0.1,0.2,0.3]},
+            {"index":1,"embedding":[0.4,0.5,0.6]}
+        ]}"#
+        .to_string();
+        let base = embeddings_server(body).await;
+        let client = OpenAIClient::new(ClientConfig {
+            base_url: base,
+            ..Default::default()
+        });
+        let out = client
+            .embeddings("test-model", &["a".to_string(), "b".to_string()])
+            .await
+            .unwrap();
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0], vec![0.1, 0.2, 0.3]);
+        assert_eq!(out[1], vec![0.4, 0.5, 0.6]);
+    }
+
+    #[tokio::test]
+    async fn embeddings_rejects_partial_response() {
+        // F3 regression: a provider returning fewer vectors than requested
+        // must fail loudly instead of silently returning empty vectors that
+        // would be skipped downstream in lcm vector_recall.
+        let body = r#"{"data":[{"index":0,"embedding":[0.1,0.2,0.3]}]}"#.to_string();
+        let base = embeddings_server(body).await;
+        let client = OpenAIClient::new(ClientConfig {
+            base_url: base,
+            ..Default::default()
+        });
+        let err = client
+            .embeddings("test-model", &["a".to_string(), "b".to_string()])
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("expected 2 vectors"),
+            "partial response must be rejected, got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn embeddings_rejects_out_of_range_index() {
+        let body = r#"{"data":[{"index":7,"embedding":[0.1]}]}"#.to_string();
+        let base = embeddings_server(body).await;
+        let client = OpenAIClient::new(ClientConfig {
+            base_url: base,
+            ..Default::default()
+        });
+        let err = client
+            .embeddings("test-model", &["a".to_string()])
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("out of range"),
+            "out-of-range index must be rejected, got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn embeddings_rejects_empty_vector() {
+        let body = r#"{"data":[{"index":0,"embedding":[]}]}"#.to_string();
+        let base = embeddings_server(body).await;
+        let client = OpenAIClient::new(ClientConfig {
+            base_url: base,
+            ..Default::default()
+        });
+        let err = client
+            .embeddings("test-model", &["a".to_string()])
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("empty vector"),
+            "empty vector must be rejected, got: {err}"
         );
     }
 }

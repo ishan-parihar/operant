@@ -813,12 +813,32 @@ pub(crate) async fn build_registry(
             Ok(engine) => {
                 let engine = std::sync::Arc::new(engine);
                 // P3 vector recall: when an embedding model is configured,
-                // register lcm_vector_recall with a real OpenAI-compatible
-                // embedder over the same client.
+                // register lcm_vector_recall with an embedder. "local:hash"
+                // uses the zero-dependency built-in (no external embedding
+                // service); anything else is an OpenAI-compatible /embeddings
+                // endpoint, defaulting to the chat provider's base URL and
+                // key unless context_lcm_embedding_base_url overrides it.
                 let embedder = config.agent.context_lcm_embedding_model.as_ref().map(|m| {
-                    // A dedicated embeddings endpoint (context_lcm_embedding_base_url)
-                    // overrides the chat provider; otherwise the same client
-                    // (base URL + key) serves both.
+                    if m.trim() == "local:hash" {
+                        tracing::info!(
+                            "lcm_vector_recall: using zero-dependency local:hash embedder"
+                        );
+                        return std::sync::Arc::new(
+                            operant_core::context::LocalHashEmbedder::default(),
+                        )
+                            as std::sync::Arc<dyn operant_core::context::Embedder>;
+                    }
+                    if config.agent.context_lcm_embedding_base_url.is_none() {
+                        // The /embeddings call goes to the chat provider's
+                        // endpoint. Many chat-only providers don't expose it
+                        // — warn loudly so the failure isn't mysterious.
+                        tracing::warn!(
+                            "lcm_vector_recall: embedding model '{m}' will use the chat provider's \
+                             base URL and key for /embeddings (set \
+                             agent.context_lcm_embedding_base_url to a dedicated embeddings \
+                             endpoint, or use \"local:hash\" for a zero-dependency embedder)"
+                        );
+                    }
                     let mut ccfg = client_config(config);
                     if let Some(eb) = &config.agent.context_lcm_embedding_base_url {
                         ccfg.base_url = eb.clone();

@@ -167,12 +167,19 @@ impl EmbeddingProvider for OpenAiEmbedding {
 /// Factory: resolve a provider key (`openai`, `openrouter`, `custom:<url>`)
 /// into a boxed [`EmbeddingProvider`]; anything else falls back to
 /// [`NoopEmbedding`].
+///
+/// An empty `model` always yields [`NoopEmbedding`] — a provider string alone
+/// must never cause outbound embedding calls (zero external dependencies
+/// unless the operator explicitly names a model).
 pub fn create_embedding_provider(
     provider: &str,
     api_key: Option<&str>,
     model: &str,
     dims: usize,
 ) -> Box<dyn EmbeddingProvider> {
+    if model.trim().is_empty() {
+        return Box::new(NoopEmbedding);
+    }
     match provider {
         "openai" => {
             let key = api_key.unwrap_or("");
@@ -365,5 +372,28 @@ mod tests {
             p.embeddings_url(),
             "https://my-api.example.com/api/v2/embeddings"
         );
+    }
+
+    #[test]
+    fn empty_model_never_creates_external_provider() {
+        // F4 guard: a provider string alone must never cause outbound
+        // embedding calls. Without a model, every provider key resolves to
+        // the no-op embedder (zero external dependencies unless the operator
+        // explicitly names a model).
+        for provider in ["openai", "openrouter", "custom:https://example.com"] {
+            let p = create_embedding_provider(provider, Some("sk-test"), "", 1536);
+            assert_eq!(
+                p.name(),
+                "none",
+                "provider {provider} with empty model must no-op"
+            );
+        }
+    }
+
+    #[test]
+    fn named_model_resolves_real_provider() {
+        let p =
+            create_embedding_provider("openai", Some("sk-test"), "text-embedding-3-small", 1536);
+        assert_eq!(p.name(), "openai", "a named model opts into the provider");
     }
 }

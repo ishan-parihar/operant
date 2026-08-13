@@ -67,6 +67,34 @@ pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
     (dot / denom) as f32
 }
 
+/// Zero-dependency local embedder (hermes parity: no external embedding
+/// model is ever required). Select with
+/// `agent.context_lcm_embedding_model = "local:hash"` — the hash-trick
+/// (token-bucket hashing) gives deterministic, token-overlap-sensitive
+/// vectors with NO network calls, so `lcm_vector_recall` works fully
+/// offline. Quality is below a real semantic model (it cannot match
+/// paraphrases), but it is a functional, dependency-free fallback.
+pub struct LocalHashEmbedder {
+    dim: usize,
+}
+
+impl Default for LocalHashEmbedder {
+    fn default() -> Self {
+        Self { dim: 512 }
+    }
+}
+
+#[async_trait::async_trait]
+impl Embedder for LocalHashEmbedder {
+    fn model_id(&self) -> &str {
+        "local:hash"
+    }
+
+    async fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+        Ok(texts.iter().map(|t| hash_embed(t, self.dim)).collect())
+    }
+}
+
 /// Deterministic, token-overlap-sensitive mock embedder for tests. Two texts
 /// sharing tokens get higher cosine similarity than unrelated texts, so the
 /// ranking behavior is testable without a network.
@@ -184,5 +212,32 @@ mod tests {
         // The embedder surface returns crate Result; sanity-check the error
         // type flows (prevents accidental Result alias drift).
         let _: Result<Vec<Vec<f32>>> = Err(Error::Agent("embedder: test error".to_string()));
+    }
+
+    #[tokio::test]
+    async fn local_hash_embedder_is_deterministic_and_rankable() {
+        // Zero-dependency embedder: same text -> near-1 similarity, and it
+        // ranks token-overlapping text above unrelated text, offline.
+        let local = LocalHashEmbedder::default();
+        let a = local
+            .embed(&["deploy pipeline rsync over ssh".to_string()])
+            .await
+            .unwrap();
+        let b = local
+            .embed(&["deploy pipeline rsync over ssh".to_string()])
+            .await
+            .unwrap();
+        let c = local
+            .embed(&["the weather in paris is rainy today".to_string()])
+            .await
+            .unwrap();
+        let same = cosine_similarity(&a[0], &b[0]);
+        let unrelated = cosine_similarity(&a[0], &c[0]);
+        assert!(same > 0.999, "identical text must be near-1, got {same}");
+        assert!(
+            unrelated < same,
+            "unrelated text must rank lower: {unrelated} < {same}"
+        );
+        assert_eq!(local.model_id(), "local:hash");
     }
 }
