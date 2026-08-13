@@ -4004,6 +4004,8 @@ mod tests {
             auto_recall_limit: 3,
             auto_recall_max_chars: 4_000,
             rollups_inject: true,
+            ignore_session_patterns: Vec::new(),
+            readonly_sessions: Vec::new(),
         })
         .unwrap();
 
@@ -4078,6 +4080,8 @@ mod tests {
             auto_recall_limit: 3,
             auto_recall_max_chars: 4_000,
             rollups_inject: true,
+            ignore_session_patterns: Vec::new(),
+            readonly_sessions: Vec::new(),
         })
         .unwrap();
 

@@ -1206,6 +1206,8 @@ pub(crate) fn lcm_config(config: &AppConfig) -> operant_core::context::LcmConfig
         auto_recall_limit: config.agent.context_lcm_auto_recall_limit,
         auto_recall_max_chars: config.agent.context_lcm_auto_recall_max_chars,
         rollups_inject: config.agent.context_lcm_rollups_inject,
+        ignore_session_patterns: config.agent.context_lcm_ignore_session_patterns.clone(),
+        readonly_sessions: config.agent.context_lcm_readonly_sessions.clone(),
     }
 }
 

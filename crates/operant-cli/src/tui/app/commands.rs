@@ -332,6 +332,49 @@ impl App {
                 self.session_list_pending = true;
                 true
             }
+            // /branch — open the session branching overlay (hermes /branch
+            // parity). The overlay was previously only reachable via a
+            // keybinding; the slash arm makes it discoverable.
+            "branch" => {
+                self.session_branching.open(vec![], self.messages.len());
+                true
+            }
+            // /status — session/model/token summary (hermes /status parity).
+            // Rendered as a system annotation so it persists in the
+            // transcript instead of flashing in the status bar.
+            "status" => {
+                let model = if self.model_name.is_empty() {
+                    "(unset)".to_string()
+                } else {
+                    self.model_name.clone()
+                };
+                let provider = self
+                    .active_provider
+                    .clone()
+                    .unwrap_or_else(|| "(default)".to_string());
+                let title = self
+                    .session_title
+                    .clone()
+                    .unwrap_or_else(|| "(untitled)".to_string());
+                let streaming = if self.is_streaming {
+                    "streaming"
+                } else {
+                    "idle"
+                };
+                let summary = format!(
+                    "Session status — model: {model} · provider: {provider} · title: {title} · \
+                     messages: {} · tokens: {} · cost: ${:.4} · {streaming}",
+                    self.messages.len(),
+                    self.token_count,
+                    self.cost_usd,
+                );
+                self.push_system_message(
+                    summary.clone(),
+                    crate::tui::app::enums::SystemMessageStyle::Info,
+                );
+                self.status_message = Some(summary);
+                true
+            }
             "clear" => {
                 self.messages.clear();
                 self.system_annotations.clear();

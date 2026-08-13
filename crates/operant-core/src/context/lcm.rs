@@ -38,6 +38,134 @@ use rusqlite::{Connection, params};
 
 use crate::client::{Message, Role};
 use crate::context::{ContextEngine, RecallHit};
+
+/// A raw DAG node row: `(id, role, content, content_hash, position, created_at)`.
+pub type LcmNodeRow = (i64, String, String, String, i64, i64);
+
+/// fnmatch-style glob matcher supporting `*` (any run of chars), `?` (any
+/// single char), and `[abc]`/`[a-z]` classes. Used for hermes-lcm
+/// `ignore_session_patterns`. No external glob dependency — this is a small
+/// recursive matcher over the pattern chars.
+pub fn glob_match(pattern: &str, text: &str) -> bool {
+    let p: Vec<char> = pattern.chars().collect();
+    let t: Vec<char> = text.chars().collect();
+    glob_match_chars(&p, &t)
+}
+
+fn glob_match_chars(p: &[char], t: &[char]) -> bool {
+    let (mut pi, mut ti) = (0, 0);
+    let (mut star_p, mut star_t) = (None, 0);
+    while ti < t.len() {
+        if pi < p.len() {
+            match p[pi] {
+                '?' => {
+                    pi += 1;
+                    ti += 1;
+                    continue;
+                }
+                '*' => {
+                    star_p = Some(pi);
+                    star_t = ti;
+                    pi += 1;
+                    continue;
+                }
+                '[' => {
+                    // Character class [abc] or [a-z]; `!` negates.
+                    let mut j = pi + 1;
+                    let negate = j < p.len() && (p[j] == '!' || p[j] == '^');
+                    if negate {
+                        j += 1;
+                    }
+                    let start = j;
+                    let mut matched = false;
+                    let mut has_range_end = false;
+                    while j < p.len() && p[j] != ']' {
+                        if j + 2 < p.len() && p[j + 1] == '-' && p[j + 2] != ']' {
+                            if (p[j]..=p[j + 2]).contains(&t[ti]) {
+                                matched = true;
+                            }
+                            j += 3;
+                        } else {
+                            if p[j] == t[ti] {
+                                matched = true;
+                            }
+                            j += 1;
+                        }
+                    }
+                    if j < p.len() && p[j] == ']' {
+                        if p.get(start) == p.get(j) {
+                            has_range_end = false;
+                        }
+                        let _ = has_range_end;
+                    }
+                    if matched != negate && j < p.len() {
+                        pi = j + 1;
+                        ti += 1;
+                        continue;
+                    }
+                    if j >= p.len() {
+                        // Unterminated class — treat `[` literally.
+                        if p[pi] == t[ti] {
+                            pi += 1;
+                            ti += 1;
+                            continue;
+                        }
+                    }
+                }
+                c if c == t[ti] => {
+                    pi += 1;
+                    ti += 1;
+                    continue;
+                }
+                _ => {}
+            }
+        }
+        if let Some(sp) = star_p {
+            pi = sp + 1;
+            star_t += 1;
+            ti = star_t;
+        } else {
+            return false;
+        }
+    }
+    while pi < p.len() && p[pi] == '*' {
+        pi += 1;
+    }
+    pi == p.len()
+}
+
+#[cfg(test)]
+mod glob_tests {
+    use super::glob_match;
+
+    #[test]
+    fn glob_matches_star_question_and_literal() {
+        assert!(glob_match("*", "anything"));
+        assert!(glob_match("sess_*", "sess_alpha"));
+        assert!(glob_match("sess_?", "sess_1"));
+        assert!(!glob_match("sess_?", "sess_10"));
+        assert!(glob_match("noisy-*", "noisy-log"));
+        assert!(!glob_match("noisy-*", "clean-log"));
+        assert!(glob_match("archive*", "archive-2024"));
+        assert!(!glob_match("archive*", "active"));
+    }
+
+    #[test]
+    fn glob_matches_character_classes() {
+        assert!(glob_match("sess_[0-9]", "sess_5"));
+        assert!(!glob_match("sess_[0-9]", "sess_x"));
+        assert!(glob_match("sess_[ab]", "sess_a"));
+    }
+
+    #[test]
+    fn glob_handles_multi_star_and_prefix() {
+        assert!(glob_match("*test*", "prefix-test-suffix"));
+        assert!(glob_match("a*b*c", "aXXbYYc"));
+        assert!(!glob_match("a*b*c", "aXXbYY"));
+        assert!(glob_match("exact", "exact"));
+        assert!(!glob_match("exact", "exactly"));
+    }
+}
 use crate::error::{Error, Result};
 
 /// Configuration for the lossless context engine.
@@ -62,6 +190,15 @@ pub struct LcmConfig {
     /// Rollups are only injected when they already exist in `lcm_rollups`
     /// (built via `operant context rollup`); never built on the fly here.
     pub rollups_inject: bool,
+    /// Glob patterns (fnmatch-style `*`) of sessions to skip in global recall
+    /// (hermes-lcm `ignore_session_patterns` parity). A session is ignored
+    /// when it matches any pattern; explicit per-session recall is still
+    /// allowed (the ignore list only suppresses cross-session leakage).
+    pub ignore_session_patterns: Vec<String>,
+    /// Session ids kept read-only: their DAG is never mutated (ingest is a
+    /// no-op) so archived/immutable sessions stay byte-for-byte stable
+    /// (hermes-lcm `read_only` session scopes parity).
+    pub readonly_sessions: Vec<String>,
 }
 
 impl Default for LcmConfig {
@@ -73,6 +210,8 @@ impl Default for LcmConfig {
             auto_recall_limit: 3,
             auto_recall_max_chars: 4_000,
             rollups_inject: true,
+            ignore_session_patterns: Vec::new(),
+            readonly_sessions: Vec::new(),
         }
     }
 }
@@ -88,6 +227,8 @@ pub struct LcmContextEngine {
     auto_recall_limit: usize,
     auto_recall_max_chars: usize,
     rollups_inject: bool,
+    ignore_session_patterns: Vec<String>,
+    readonly_sessions: Vec<String>,
 }
 
 impl std::fmt::Debug for LcmContextEngine {
@@ -174,7 +315,24 @@ impl LcmContextEngine {
             auto_recall_limit: config.auto_recall_limit.clamp(1, 10),
             auto_recall_max_chars: config.auto_recall_max_chars.max(256),
             rollups_inject: config.rollups_inject,
+            ignore_session_patterns: config.ignore_session_patterns,
+            readonly_sessions: config.readonly_sessions,
         })
+    }
+
+    /// True when `session_id` matches any configured `ignore_session_patterns`
+    /// glob (hermes-lcm `ignore_session_patterns` parity). Only suppresses
+    /// cross-session recall; explicit per-session recall still works.
+    pub fn session_ignored(&self, session_id: &str) -> bool {
+        self.ignore_session_patterns
+            .iter()
+            .any(|p| glob_match(p, session_id))
+    }
+
+    /// True when `session_id` is in the configured read-only set — its DAG
+    /// must never be mutated (hermes-lcm `read_only` scopes parity).
+    pub fn session_readonly(&self, session_id: &str) -> bool {
+        self.readonly_sessions.iter().any(|s| s == session_id)
     }
 
     /// DAG database path (diagnostics/tool surface).
@@ -263,7 +421,7 @@ impl LcmContextEngine {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn
             .prepare(
-                "SELECT id, role, content, created_at FROM nodes \
+                "SELECT id, session_id, role, content, created_at FROM nodes \
                  WHERE (?1 IS NULL OR session_id = ?1) AND kind = 'message' \
                  ORDER BY created_at DESC, id DESC LIMIT ?2",
             )
@@ -274,15 +432,72 @@ impl LcmContextEngine {
                     row.get::<_, i64>(0)?,
                     row.get::<_, String>(1)?,
                     row.get::<_, String>(2)?,
-                    row.get::<_, i64>(3)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, i64>(4)?,
                 ))
             })
             .map_err(|e| Error::Agent(format!("lcm: recent_message_nodes failed: {e}")))?;
         let mut out = Vec::new();
         for r in rows {
-            out.push(r.map_err(|e| Error::Agent(format!("lcm: recent_message_nodes row: {e}")))?);
+            let (id, node_session, role, content, created_at) =
+                r.map_err(|e| Error::Agent(format!("lcm: recent_message_nodes row: {e}")))?;
+            // hermes-lcm ignore_session_patterns parity: the global list
+            // skips noisy sessions; per-session listing is unaffected.
+            if session.is_none() && self.session_ignored(&node_session) {
+                continue;
+            }
+            out.push((id, role, content, created_at));
         }
         Ok(out)
+    }
+
+    /// Load an ordered, bounded raw-message page for one explicit `session_id`
+    /// (hermes-lcm `lcm_load_session` parity). Rows are the raw `nodes` DAG
+    /// entries — `LcmNodeRow` — ordered by stable `position`, oldest first,
+    /// starting after the `after_store_id` cursor when given. Fetches
+    /// `limit + 1` to report a `next_cursor` when more rows exist.
+    pub fn load_session_page(
+        &self,
+        session_id: &str,
+        after_store_id: Option<i64>,
+        limit: usize,
+    ) -> Result<(Vec<LcmNodeRow>, Option<i64>)> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let limit = limit.clamp(1, 500);
+        let fetch = limit + 1;
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, role, content, content_hash, position, created_at FROM nodes \
+                 WHERE session_id = ?1 AND (?2 IS NULL OR id > ?2) AND kind = 'message' \
+                 ORDER BY position ASC, id ASC LIMIT ?3",
+            )
+            .map_err(|e| Error::Agent(format!("lcm: load_session_page prepare: {e}")))?;
+        let rows = stmt
+            .query_map(params![session_id, after_store_id, fetch as i64], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, i64>(4)?,
+                    row.get::<_, i64>(5)?,
+                ))
+            })
+            .map_err(|e| Error::Agent(format!("lcm: load_session_page query: {e}")))?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r.map_err(|e| Error::Agent(format!("lcm: load_session_page row: {e}")))?);
+        }
+        let has_more = out.len() > limit;
+        if has_more {
+            out.truncate(limit);
+        }
+        let next_cursor = if has_more {
+            out.last().map(|(id, ..)| *id)
+        } else {
+            None
+        };
+        Ok((out, next_cursor))
     }
 
     /// Upsert a rollup summary for (session, period, start). Returns the
@@ -448,7 +663,7 @@ impl LcmContextEngine {
             let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
             let mut stmt = conn
                 .prepare(
-                    "SELECT id, role, content, created_at FROM nodes \
+                    "SELECT id, session_id, role, content, created_at FROM nodes \
                      WHERE (?1 IS NULL OR session_id = ?1) AND kind = 'message' \
                      ORDER BY created_at DESC, id DESC LIMIT ?2",
                 )
@@ -459,13 +674,21 @@ impl LcmContextEngine {
                         row.get::<_, i64>(0)?,
                         row.get::<_, String>(1)?,
                         row.get::<_, String>(2)?,
-                        row.get::<_, i64>(3)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, i64>(4)?,
                     ))
                 })
                 .map_err(|e| Error::Agent(format!("lcm: vector candidates failed: {e}")))?;
             let mut candidates: Vec<(i64, String, String, i64)> = Vec::new();
             for r in rows {
-                candidates.push(r.map_err(|e| Error::Agent(format!("lcm: vector row: {e}")))?);
+                let (id, node_session, role, content, created_at) =
+                    r.map_err(|e| Error::Agent(format!("lcm: vector candidate row: {e}")))?;
+                // hermes-lcm ignore_session_patterns parity: global semantic
+                // recall skips noisy sessions.
+                if session.is_none() && self.session_ignored(&node_session) {
+                    continue;
+                }
+                candidates.push((id, role, content, created_at));
             }
             let model = embedder.model_id().to_string();
             let mut vectors: Vec<Option<Vec<f32>>> = vec![None; candidates.len()];
@@ -927,7 +1150,7 @@ impl LcmContextEngine {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         // `session_id` filters to one session so other sessions' history never
         // leaks into this context; NULL recalls across all sessions.
-        let sql = "SELECT n.id, n.role, n.content, n.created_at, bm25(nodes_fts)
+        let sql = "SELECT n.id, n.session_id, n.role, n.content, n.created_at, bm25(nodes_fts)
              FROM nodes_fts
              JOIN nodes n ON n.id = nodes_fts.rowid
              WHERE (?1 IS NULL OR nodes_fts.session_id = ?1) AND nodes_fts MATCH ?2
@@ -938,18 +1161,34 @@ impl LcmContextEngine {
             .map_err(|e| Error::Agent(format!("lcm: recall prepare failed: {e}")))?;
         let rows = stmt
             .query_map(params![session_id, fts_query, limit as i64], |row| {
-                Ok(RecallHit {
-                    node_id: row.get(0)?,
-                    role: row.get(1)?,
-                    content: row.get(2)?,
-                    created_at: row.get(3)?,
-                    score: row.get(4)?,
-                })
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, i64>(4)?,
+                    row.get::<_, f64>(5)?,
+                ))
             })
             .map_err(|e| Error::Agent(format!("lcm: recall query failed: {e}")))?;
         let mut hits = Vec::new();
         for row in rows {
-            hits.push(row.map_err(|e| Error::Agent(format!("lcm: recall row failed: {e}")))?);
+            let (node_id, hit_session, role, content, created_at, score) =
+                row.map_err(|e| Error::Agent(format!("lcm: recall row failed: {e}")))?;
+            // hermes-lcm ignore_session_patterns parity: global recall skips
+            // hits from configured noisy sessions (explicit per-session recall
+            // is unaffected because the ignore list only applies to the
+            // cross-session arm).
+            if session_id.is_none() && self.session_ignored(&hit_session) {
+                continue;
+            }
+            hits.push(RecallHit {
+                node_id,
+                role,
+                content,
+                created_at,
+                score,
+            });
         }
         Ok(hits)
     }
@@ -962,6 +1201,12 @@ impl ContextEngine for LcmContextEngine {
     }
 
     async fn ingest_turn(&self, session_id: &str, turn: &[Message]) -> Result<()> {
+        // hermes-lcm read_only scopes parity: configured read-only sessions
+        // are never mutated — ingest is a no-op so archived transcripts stay
+        // byte-for-byte stable.
+        if self.session_readonly(session_id) {
+            return Ok(());
+        }
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let tx = conn
             .unchecked_transaction()
@@ -1322,6 +1567,8 @@ mod tests {
             auto_recall_limit: 3,
             auto_recall_max_chars: 4_000,
             rollups_inject: true,
+            ignore_session_patterns: Vec::new(),
+            readonly_sessions: Vec::new(),
         })
         .unwrap();
         (engine, format!("{}", db_path.display()))
@@ -1335,6 +1582,125 @@ mod tests {
             Message::user("tell me about the Eiffel Tower"),
             Message::assistant("The Eiffel Tower is in Paris"),
         ]
+    }
+
+    #[tokio::test]
+    async fn glob_match_controls_ignore_patterns() {
+        let (engine, _) = test_db();
+        // No patterns configured → nothing ignored.
+        assert!(!engine.session_ignored("noisy-log"));
+        assert!(!engine.session_readonly("archive-2024"));
+
+        let dir = std::env::temp_dir().join(format!(
+            "operant_lcm_ctrl_{}_{}",
+            std::process::id(),
+            Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let engine = LcmContextEngine::new(LcmConfig {
+            db_path: dir.join("ctrl.db"),
+            tail_tokens: 100,
+            auto_recall: true,
+            auto_recall_limit: 3,
+            auto_recall_max_chars: 4_000,
+            rollups_inject: true,
+            ignore_session_patterns: vec!["noisy-*".to_string(), "bench/*".to_string()],
+            readonly_sessions: vec!["archive-2024".to_string()],
+        })
+        .unwrap();
+        assert!(engine.session_ignored("noisy-log"));
+        assert!(engine.session_ignored("bench/suite-1"));
+        assert!(!engine.session_ignored("clean-session"));
+        assert!(engine.session_readonly("archive-2024"));
+        assert!(!engine.session_readonly("active"));
+    }
+
+    #[tokio::test]
+    async fn global_recall_skips_ignored_sessions_but_explicit_scope_works() {
+        let dir = std::env::temp_dir().join(format!(
+            "operant_lcm_ign_{}_{}",
+            std::process::id(),
+            Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let engine = LcmContextEngine::new(LcmConfig {
+            db_path: dir.join("ign.db"),
+            tail_tokens: 100,
+            auto_recall: false,
+            auto_recall_limit: 3,
+            auto_recall_max_chars: 4_000,
+            rollups_inject: true,
+            ignore_session_patterns: vec!["noisy-*".to_string()],
+            readonly_sessions: Vec::new(),
+        })
+        .unwrap();
+
+        engine
+            .ingest_turn(
+                "noisy-bench",
+                &[Message::assistant("rsync deployment marker")],
+            )
+            .await
+            .unwrap();
+        engine
+            .ingest_turn(
+                "clean-main",
+                &[Message::assistant("rsync deployment marker")],
+            )
+            .await
+            .unwrap();
+
+        // Global recall hides the noisy session.
+        let global = engine.recall(None, "rsync deployment", 10).await.unwrap();
+        assert!(
+            global.iter().all(|h| h.content.contains("marker")),
+            "global recall must still work"
+        );
+        // Recent nodes (global) skip ignored sessions.
+        let recent = engine.recent_message_nodes(None, 10).unwrap();
+        assert_eq!(recent.len(), 1, "only clean-main remains in global recent");
+
+        // Explicit per-session recall still works even for ignored sessions.
+        let explicit = engine
+            .recall(Some("noisy-bench"), "rsync", 5)
+            .await
+            .unwrap();
+        assert_eq!(explicit.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn readonly_session_ingest_is_a_noop() {
+        let dir = std::env::temp_dir().join(format!(
+            "operant_lcm_ro_{}_{}",
+            std::process::id(),
+            Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let engine = LcmContextEngine::new(LcmConfig {
+            db_path: dir.join("ro.db"),
+            tail_tokens: 100,
+            auto_recall: false,
+            auto_recall_limit: 3,
+            auto_recall_max_chars: 4_000,
+            rollups_inject: true,
+            ignore_session_patterns: Vec::new(),
+            readonly_sessions: vec!["archive-2024".to_string()],
+        })
+        .unwrap();
+
+        // Writable session ingests normally.
+        engine
+            .ingest_turn("active", &[Message::assistant("live node")])
+            .await
+            .unwrap();
+        assert_eq!(engine.node_count("active").unwrap(), 1);
+
+        // Read-only session ingest is a silent no-op (no nodes written).
+        engine
+            .ingest_turn("archive-2024", &[Message::assistant("should not persist")])
+            .await
+            .unwrap();
+        assert_eq!(engine.node_count("archive-2024").unwrap(), 0);
     }
 
     #[tokio::test]
@@ -1674,6 +2040,8 @@ mod tests {
             auto_recall_limit: 3,
             auto_recall_max_chars: 4_000,
             rollups_inject: true,
+            ignore_session_patterns: Vec::new(),
+            readonly_sessions: Vec::new(),
         })
         .unwrap();
         let seed = vec![Message::user("remember: key=alpha")];

@@ -250,6 +250,17 @@ pub struct BehaviorSettings {
     /// LLM call per extract invocation.
     #[serde(default)]
     pub context_lcm_assertion_extraction: bool,
+    /// hermes-lcm `ignore_session_patterns` parity: glob patterns (fnmatch
+    /// `*`/`?`/`[...]`) of sessions to skip in global DAG recall (FTS,
+    /// vector, recent). Explicit per-session recall is unaffected. Empty
+    /// (default) recalls across every session.
+    #[serde(default)]
+    pub context_lcm_ignore_session_patterns: Vec<String>,
+    /// hermes-lcm `read_only` session scopes parity: session ids that must
+    /// never be mutated — ingest is a no-op so archived transcripts stay
+    /// byte-for-byte stable. Empty (default) allows all sessions to write.
+    #[serde(default)]
+    pub context_lcm_readonly_sessions: Vec<String>,
 }
 
 fn default_fallback_on_errors() -> bool {
@@ -316,6 +327,8 @@ impl Default for BehaviorSettings {
             context_lcm_embedding_model: None,
             context_lcm_embedding_base_url: None,
             context_lcm_assertion_extraction: false,
+            context_lcm_ignore_session_patterns: Vec::new(),
+            context_lcm_readonly_sessions: Vec::new(),
         }
     }
 }

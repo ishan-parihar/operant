@@ -863,6 +863,121 @@ impl OperantTool for LcmDoctorTool {
     }
 }
 
+/// Load an ordered, bounded raw-message transcript page for one explicit
+/// session (hermes-lcm `lcm_load_session` parity). Paged with an
+/// `after_store_id` cursor; the returned `next_cursor` continues the page.
+#[derive(JsonSchema, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LcmLoadSessionArgs {
+    /// The session id whose raw transcript to page through.
+    pub session_id: String,
+    /// Cursor: resume after this node id (omit for the first page).
+    pub after_store_id: Option<i64>,
+    /// Max rows per page (1..=200, default 50).
+    pub limit: Option<usize>,
+    /// Include exact slice refs (`content_hash` + `position`) for each row
+    /// (opt-in; default false keeps the payload lean).
+    #[serde(default)]
+    pub include_exact_ref: bool,
+}
+
+pub struct LcmLoadSessionTool {
+    engine: Arc<LcmContextEngine>,
+}
+
+impl LcmLoadSessionTool {
+    pub fn new(engine: Arc<LcmContextEngine>) -> Self {
+        Self { engine }
+    }
+}
+
+#[async_trait::async_trait]
+impl OperantTool for LcmLoadSessionTool {
+    fn name(&self) -> &str {
+        "lcm_load_session"
+    }
+
+    fn description(&self) -> &str {
+        "Load an ordered, bounded page of the raw message transcript for one explicit session_id from the lossless DAG. Paged with afterStoreId (the returned nextCursor continues). Opt into includeExactRef=true for content hashes + positions. Use to read exactly what was said in a past session, message by message."
+    }
+
+    fn schema(&self) -> ToolSchema {
+        ToolSchema::from_type::<LcmLoadSessionArgs>(
+            "lcm_load_session",
+            "Load a paged raw session transcript",
+        )
+    }
+
+    async fn execute(&self, args: Value, _context: ToolContext) -> ToolResult {
+        let args: LcmLoadSessionArgs = match serde_json::from_value(args) {
+            Ok(a) => a,
+            Err(e) => {
+                return ToolResult::error("lcm_load_session", format!("Invalid arguments: {e}"));
+            }
+        };
+        let session_id = args.session_id.trim();
+        if session_id.is_empty() {
+            return ToolResult::error("lcm_load_session", "session_id is required");
+        }
+        let limit = args.limit.unwrap_or(50).clamp(1, 200);
+        match self
+            .engine
+            .load_session_page(session_id, args.after_store_id, limit)
+        {
+            Ok((rows, next_cursor)) => {
+                if rows.is_empty() {
+                    let note = if next_cursor.is_none() && args.after_store_id.is_some() {
+                        "end of transcript reached — no more rows after the cursor"
+                    } else {
+                        "no message nodes found for this session"
+                    };
+                    return ToolResult::success(
+                        "lcm_load_session",
+                        json!({
+                            "_lcm_tool": "lcm_load_session",
+                            "session_id": session_id,
+                            "rows": [],
+                            "next_cursor": null,
+                            "note": note,
+                        }),
+                    );
+                }
+                let rendered: Vec<Value> = rows
+                    .iter()
+                    .map(|(id, role, content, hash, position, created_at)| {
+                        let mut obj = json!({
+                            "store_id": id,
+                            "role": role,
+                            "content": content,
+                            "created_at": created_at,
+                        });
+                        if args.include_exact_ref
+                            && let Some(obj) = obj.as_object_mut()
+                        {
+                            obj.insert("content_hash".into(), json!(hash));
+                            obj.insert("position".into(), json!(position));
+                        }
+                        obj
+                    })
+                    .collect();
+                ToolResult::success(
+                    "lcm_load_session",
+                    json!({
+                        "_lcm_tool": "lcm_load_session",
+                        "session_id": session_id,
+                        "rows": rendered,
+                        "next_cursor": next_cursor,
+                        "page_size": rows.len(),
+                        "include_exact_ref": args.include_exact_ref,
+                        "hint": "Pass nextCursor as afterStoreId to load the next page.",
+                    }),
+                )
+            }
+            Err(e) => ToolResult::error("lcm_load_session", format!("page load failed: {e}")),
+        }
+    }
+}
+
 /// `embedder` is `None` when no embedding model is configured — the vector
 /// tool is then not registered (hermes registers vector tools only when an
 /// embedding provider is active).
@@ -887,6 +1002,9 @@ pub async fn register_lcm_tools(
         .await?;
     registry
         .register(LcmDoctorTool::new(engine.clone()))
+        .await?;
+    registry
+        .register(LcmLoadSessionTool::new(engine.clone()))
         .await?;
     if let Some(embedder) = embedder {
         registry
@@ -915,6 +1033,8 @@ mod tests {
             auto_recall_limit: 3,
             auto_recall_max_chars: 4_000,
             rollups_inject: true,
+            ignore_session_patterns: Vec::new(),
+            readonly_sessions: Vec::new(),
         })
         .unwrap();
         Arc::new(engine)
@@ -1110,6 +1230,8 @@ mod tests {
             auto_recall_limit: 3,
             auto_recall_max_chars: 4_000,
             rollups_inject: true,
+            ignore_session_patterns: Vec::new(),
+            readonly_sessions: Vec::new(),
         })
         .unwrap();
         let reader = LcmContextEngine::new(crate::context::LcmConfig {
@@ -1119,6 +1241,8 @@ mod tests {
             auto_recall_limit: 3,
             auto_recall_max_chars: 4_000,
             rollups_inject: true,
+            ignore_session_patterns: Vec::new(),
+            readonly_sessions: Vec::new(),
         })
         .unwrap();
 
@@ -1404,6 +1528,104 @@ mod tests {
             "round 2 evidence must include the beta fact"
         );
         assert_eq!(r2["complete"], serde_json::json!(true));
+    }
+
+    #[tokio::test]
+    async fn lcm_load_session_pages_through_a_transcript() {
+        let engine = test_engine();
+        let tool = LcmLoadSessionTool::new(engine.clone());
+        let turn = vec![
+            crate::client::Message::user("first question"),
+            crate::client::Message::assistant("first answer"),
+            crate::client::Message::user("second question"),
+            crate::client::Message::assistant("second answer"),
+        ];
+        engine.ingest_turn("sess_load", &turn).await.unwrap();
+
+        // Page 1: 2 rows, cursor returned. (serde camelCase: sessionId)
+        let p1 = tool
+            .execute(
+                serde_json::json!({ "sessionId": "sess_load", "limit": 2 }),
+                ToolContext::default(),
+            )
+            .await;
+        assert!(p1.success, "page 1 must succeed: {:?}", p1);
+        let r1 = p1.parse_content::<serde_json::Value>().unwrap();
+        let rows1 = r1["rows"].as_array().unwrap();
+        assert_eq!(rows1.len(), 2);
+        assert_eq!(rows1[0]["content"], serde_json::json!("first question"));
+        assert_eq!(rows1[1]["content"], serde_json::json!("first answer"));
+        let cursor = r1["next_cursor"].as_i64().unwrap();
+
+        // Page 2 continues after the cursor (oldest-first ordering).
+        let p2 = tool
+            .execute(
+                serde_json::json!({
+                    "sessionId": "sess_load",
+                    "afterStoreId": cursor,
+                    "limit": 2,
+                }),
+                ToolContext::default(),
+            )
+            .await;
+        assert!(p2.success, "page 2 must succeed: {:?}", p2);
+        let r2 = p2.parse_content::<serde_json::Value>().unwrap();
+        let rows2 = r2["rows"].as_array().unwrap();
+        assert_eq!(rows2.len(), 2);
+        assert_eq!(rows2[0]["content"], serde_json::json!("second question"));
+        assert_eq!(rows2[1]["content"], serde_json::json!("second answer"));
+        assert!(r2["next_cursor"].is_null(), "no third page");
+    }
+
+    #[tokio::test]
+    async fn lcm_load_session_include_exact_ref_and_empty_session() {
+        let engine = test_engine();
+        let tool = LcmLoadSessionTool::new(engine.clone());
+        engine
+            .ingest_turn(
+                "sess_ref",
+                &[crate::client::Message::assistant("hello dag")],
+            )
+            .await
+            .unwrap();
+
+        // includeExactRef=true surfaces content_hash + position.
+        let out = tool
+            .execute(
+                serde_json::json!({
+                    "sessionId": "sess_ref",
+                    "includeExactRef": true,
+                }),
+                ToolContext::default(),
+            )
+            .await;
+        assert!(out.success);
+        let p = out.parse_content::<serde_json::Value>().unwrap();
+        let row = &p["rows"][0];
+        assert!(row["content_hash"].is_string());
+        assert!(row["position"].is_i64());
+        assert_eq!(p["include_exact_ref"], serde_json::json!(true));
+
+        // Unknown session → clean empty result, not an error.
+        let ghost = tool
+            .execute(
+                serde_json::json!({ "sessionId": "ghost-session" }),
+                ToolContext::default(),
+            )
+            .await;
+        assert!(ghost.success);
+        let g = ghost.parse_content::<serde_json::Value>().unwrap();
+        assert!(g["rows"].as_array().unwrap().is_empty());
+        assert!(g["note"].as_str().unwrap().contains("no message nodes"));
+
+        // Empty session_id → error.
+        let bad = tool
+            .execute(
+                serde_json::json!({ "sessionId": "" }),
+                ToolContext::default(),
+            )
+            .await;
+        assert!(!bad.success);
     }
 
     #[tokio::test]

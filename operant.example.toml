@@ -63,6 +63,14 @@ context_compression = false
 # recent DAG nodes and persists them to the assertion store. Off by default
 # (costs one LLM call per extract).
 # context_lcm_assertion_extraction = true
+# hermes-lcm session controls (ignore_session_patterns / read_only parity):
+#   ignore patterns — globs of sessions skipped in GLOBAL recall (FTS,
+#   vector, recent); explicit per-session recall is unaffected. Use to stop
+#   noisy/benchmark sessions from leaking into the active context.
+# context_lcm_ignore_session_patterns = ["noisy-*", "bench/*"]
+#   read-only sessions — ids whose DAG is never mutated (ingest is a no-op),
+#   keeping archived transcripts byte-for-byte stable.
+# context_lcm_readonly_sessions = ["archive-2024"]
 session_reset = "never"
 # system_prompt = "You are Hermes."
 # Fallback models tried in order when the primary model fails (rate-limited, unavailable, etc.)

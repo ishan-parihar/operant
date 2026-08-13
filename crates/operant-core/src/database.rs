@@ -844,28 +844,44 @@ impl Database {
     /// Search sessions by content query (using FTS5).
     /// Returns session IDs and matching content snippets.
     pub fn search_sessions(&self, query: &str, limit: usize) -> Result<Vec<SessionSearchResult>> {
+        self.search_sessions_filtered(query, None, limit)
+    }
+
+    /// FTS5 session search with an optional role filter (`user`/`assistant`/
+    /// `tool`). hermes `session_search` role_filter parity. `role = None`
+    /// matches every role (backwards compatible with `search_sessions`).
+    pub fn search_sessions_filtered(
+        &self,
+        query: &str,
+        role: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<SessionSearchResult>> {
         let conn = self.lock_conn()?;
 
-        // Use FTS5 to find matching messages, join to get session info
+        // Use FTS5 to find matching messages, join to get session info.
+        // `m.id` rides along so callers can open a message window around the
+        // match (scroll mode) without a second FTS pass.
         let mut stmt = conn
             .prepare(
-                "SELECT m.session_id, m.content, s.title, s.ended_at
+                "SELECT m.id, m.session_id, m.role, m.content, s.title, s.ended_at
                  FROM messages m
                  JOIN messages_fts fts ON m.id = fts.rowid
                  JOIN sessions s ON m.session_id = s.id
-                 WHERE messages_fts MATCH ?1
+                 WHERE messages_fts MATCH ?1 AND (?2 IS NULL OR m.role = ?2)
                  ORDER BY rank
-                 LIMIT ?2",
+                 LIMIT ?3",
             )
             .map_err(|e| Error::Agent(format!("Failed to prepare search: {}", e)))?;
 
         let rows = stmt
-            .query_map(params![query, limit], |row| {
+            .query_map(params![query, role, limit], |row| {
                 Ok(SessionSearchResult {
-                    session_id: row.get(0)?,
-                    content: row.get(1)?,
-                    title: row.get(2)?,
-                    updated_at: row.get(3)?,
+                    message_id: row.get(0)?,
+                    session_id: row.get(1)?,
+                    role: row.get(2)?,
+                    content: row.get(3)?,
+                    title: row.get(4)?,
+                    updated_at: row.get(5)?,
                 })
             })
             .map_err(|e| Error::Agent(format!("Search query error: {}", e)))?;
@@ -877,12 +893,114 @@ impl Database {
         Ok(results)
     }
 
-    /// Delete a session and all its messages.
-    pub fn delete_session(&self, session_id: &str) -> Result<()> {
+    /// Fetch a bounded window of messages around `around_id` in a session
+    /// (hermes `session_search` scroll-mode parity: `session_id` +
+    /// `around_message_id` + `window`). Returns `window` messages before the
+    /// anchor and `window` after, merged in ascending id order (oldest first).
+    /// Never returns messages from another session.
+    pub fn get_session_message_window(
+        &self,
+        session_id: &str,
+        around_id: i64,
+        window: usize,
+    ) -> Result<Vec<MessageData>> {
         let conn = self.lock_conn()?;
-        conn.execute("DELETE FROM sessions WHERE id = ?1", params![session_id])
-            .map_err(|e| Error::Agent(format!("Failed to delete session: {}", e)))?;
-        Ok(())
+        let window = window.clamp(1, 200) as i64;
+        let cols = "id, session_id, role, content, tool_call_id, tool_calls, tool_name,
+                    timestamp, token_count, finish_reason, reasoning, reasoning_content,
+                    reasoning_details, codex_reasoning_items, codex_message_items,
+                    platform_message_id, observed, active";
+        let mut before = conn
+            .prepare(&format!(
+                "SELECT {cols} FROM messages
+                 WHERE session_id = ?1 AND id <= ?2
+                 ORDER BY id DESC LIMIT ?3"
+            ))
+            .map_err(|e| Error::Agent(format!("Failed to prepare window before: {}", e)))?;
+        let mut after = conn
+            .prepare(&format!(
+                "SELECT {cols} FROM messages
+                 WHERE session_id = ?1 AND id > ?2
+                 ORDER BY id ASC LIMIT ?3"
+            ))
+            .map_err(|e| Error::Agent(format!("Failed to prepare window after: {}", e)))?;
+
+        let read = |stmt: &mut rusqlite::Statement| -> Result<Vec<MessageData>> {
+            let rows = stmt
+                .query_map(params![session_id, around_id, window], |row| {
+                    Ok(MessageData {
+                        id: row.get(0)?,
+                        session_id: row.get(1)?,
+                        role: row.get(2)?,
+                        content: row.get(3)?,
+                        tool_call_id: row.get(4)?,
+                        tool_calls: row.get(5)?,
+                        tool_name: row.get(6)?,
+                        timestamp: row.get(7)?,
+                        token_count: row.get(8)?,
+                        finish_reason: row.get(9)?,
+                        reasoning: row.get(10)?,
+                        reasoning_content: row.get(11)?,
+                        reasoning_details: row.get(12)?,
+                        codex_reasoning_items: row.get(13)?,
+                        codex_message_items: row.get(14)?,
+                        platform_message_id: row.get(15)?,
+                        observed: row.get(16)?,
+                        active: row.get(17)?,
+                    })
+                })
+                .map_err(|e| Error::Agent(format!("Window query error: {}", e)))?;
+            let mut out = Vec::new();
+            for row in rows {
+                out.push(row.map_err(|e| Error::Agent(format!("Window row error: {}", e)))?);
+            }
+            Ok(out)
+        };
+
+        let mut before_msgs = read(&mut before)?;
+        before_msgs.reverse(); // DESC → oldest-first
+        let after_msgs = read(&mut after)?;
+        before_msgs.extend(after_msgs);
+        Ok(before_msgs)
+    }
+
+    /// Delete a session, all its messages (via FK cascade), and every child
+    /// session in the branch lineage (hermes `get_session_delete_targets`
+    /// parity) — branching must never leave orphaned descendants behind.
+    /// Returns the number of sessions deleted.
+    pub fn delete_session(&self, session_id: &str) -> Result<usize> {
+        let mut conn = self.lock_conn()?;
+        let tx = conn
+            .transaction()
+            .map_err(|e| Error::Agent(format!("Failed to begin delete tx: {}", e)))?;
+        // Collect the full child lineage iteratively (depth-first, arbitrary
+        // order). FK messages cascade is automatic per row.
+        let mut to_delete: Vec<String> = vec![session_id.to_string()];
+        let mut idx = 0;
+        while idx < to_delete.len() {
+            let parent = &to_delete[idx];
+            let mut stmt = tx
+                .prepare("SELECT id FROM sessions WHERE parent_session_id = ?1")
+                .map_err(|e| Error::Agent(format!("Failed to prepare child scan: {}", e)))?;
+            let rows = stmt
+                .query_map(params![parent], |row| row.get::<_, String>(0))
+                .map_err(|e| Error::Agent(format!("Failed to query children: {}", e)))?;
+            for r in rows {
+                let child = r.map_err(|e| Error::Agent(format!("Child row error: {}", e)))?;
+                if !to_delete.iter().any(|s| s == &child) {
+                    to_delete.push(child);
+                }
+            }
+            idx += 1;
+        }
+        let count = to_delete.len();
+        for sid in &to_delete {
+            tx.execute("DELETE FROM sessions WHERE id = ?1", params![sid])
+                .map_err(|e| Error::Agent(format!("Failed to delete session: {}", e)))?;
+        }
+        tx.commit()
+            .map_err(|e| Error::Agent(format!("Failed to commit session delete: {}", e)))?;
+        Ok(count)
     }
 
     // === Checkpoint Management ===
@@ -1693,6 +1811,10 @@ pub struct DatabaseSession {
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct SessionSearchResult {
     pub session_id: String,
+    /// Rowid of the matching message — lets callers build a scroll window
+    /// around the hit (hermes `session_search` around_message_id parity).
+    pub message_id: i64,
+    pub role: String,
     pub content: String,
     pub title: Option<String>,
     pub updated_at: String,
