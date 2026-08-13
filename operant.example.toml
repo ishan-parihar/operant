@@ -44,6 +44,8 @@ context_compression = false
 # context_lcm_auto_recall_limit = 3
 # context_lcm_auto_recall_max_chars = 4000
 # context_lcm_rollups_inject = true
+# Background rollup maintenance every N minutes (0 = disabled, default).
+# context_lcm_rollup_interval_minutes = 0
 session_reset = "never"
 # system_prompt = "You are Hermes."
 # Fallback models tried in order when the primary model fails (rate-limited, unavailable, etc.)

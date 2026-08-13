@@ -175,31 +175,7 @@ pub async fn handle_context_command(config: &AppConfig, cmd: ContextSubcommand) 
             let summarizer = move |transcript: String| {
                 let client = client.clone();
                 let model = model.clone();
-                async move {
-                    let msgs = vec![
-                        Message::system(
-                            "You are a lossless temporal summarizer. Summarize the \
-                             following conversation excerpt into concise key facts \
-                             and decisions. Preserve names, numbers, and dates \
-                             exactly. Output only the summary.",
-                        ),
-                        Message::user(transcript),
-                    ];
-                    let resp = client
-                        .chat(&model, &msgs, None, Some(1024), Some(0.2))
-                        .await
-                        .map_err(|e| {
-                            operant_core::error::Error::Agent(format!(
-                                "rollup LLM call failed: {e}"
-                            ))
-                        })?;
-                    let content = resp
-                        .choices
-                        .first()
-                        .and_then(|c| c.message.content.clone())
-                        .unwrap_or_default();
-                    Ok(content.trim().to_string())
-                }
+                crate::rollup_summarize(transcript, client, model)
             };
             let report = rollup::run_rollup_maintenance(
                 &engine,

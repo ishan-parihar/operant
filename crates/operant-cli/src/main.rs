@@ -1141,7 +1141,9 @@ fn build_context_engine(
         "lcm" => match operant_core::context::LcmContextEngine::new(lcm_config(config)) {
             Ok(engine) => {
                 tracing::info!("LCM context engine active (lossless DAG + fresh tail)");
-                Some(std::sync::Arc::new(engine))
+                let engine = std::sync::Arc::new(engine);
+                spawn_lcm_maintenance_if_configured(config, &engine);
+                Some(engine)
             }
             Err(e) => {
                 tracing::warn!(error = %e, "LCM context engine init failed — using compact");
@@ -1156,6 +1158,65 @@ fn build_context_engine(
             None
         }
     }
+}
+
+/// One LLM rollup summarizer call (shared by the `context rollup` CLI and
+/// the background maintenance scheduler so the prompt can never drift).
+pub(crate) async fn rollup_summarize(
+    transcript: String,
+    client: OpenAIClient,
+    model: String,
+) -> operant_core::error::Result<String> {
+    let msgs = vec![
+        operant_core::client::Message::system(
+            "You are a lossless temporal summarizer. Summarize the \
+             following conversation excerpt into concise key facts \
+             and decisions. Preserve names, numbers, and dates \
+             exactly. Output only the summary.",
+        ),
+        operant_core::client::Message::user(transcript),
+    ];
+    let resp = client
+        .chat(&model, &msgs, None, Some(1024), Some(0.2))
+        .await
+        .map_err(|e| operant_core::error::Error::Agent(format!("rollup LLM call failed: {e}")))?;
+    let content = resp
+        .choices
+        .first()
+        .and_then(|c| c.message.content.clone())
+        .unwrap_or_default();
+    Ok(content.trim().to_string())
+}
+
+/// Spawn the background rollup maintenance task when configured
+/// (`context_lcm_rollup_interval_minutes > 0`): one immediate pass, then
+/// every interval — hermes `_RollupMaintenanceScheduler` parity, bounded.
+fn spawn_lcm_maintenance_if_configured(
+    config: &AppConfig,
+    engine: &std::sync::Arc<operant_core::context::LcmContextEngine>,
+) {
+    let minutes = config.agent.context_lcm_rollup_interval_minutes;
+    if minutes == 0 {
+        return;
+    }
+    let model = config.agent.model.clone();
+    if model.is_empty() {
+        tracing::warn!("lcm rollup maintenance skipped: agent.model not configured");
+        return;
+    }
+    let client = OpenAIClient::new(client_config(config));
+    let summarizer = move |transcript: String| {
+        let client = client.clone();
+        let model = model.clone();
+        rollup_summarize(transcript, client, model)
+    };
+    operant_core::context::rollup::spawn_rollup_maintenance(
+        engine.clone(),
+        std::time::Duration::from_secs(minutes * 60),
+        7,
+        summarizer,
+    );
+    tracing::info!(minutes, "lcm rollup maintenance scheduler active");
 }
 
 /// Build and attach a credential pool when configured, seeded from the

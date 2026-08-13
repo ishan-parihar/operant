@@ -190,10 +190,17 @@ installs" stays clean).
   that already have a rollup; surfaced as `operant context rollup-maintenance
   [--session S] [--lookback-days N]`. Verified live: 2 sessions scanned →
   day/week/month built with correct anchors, re-run fully idempotent.
-- **Deferred (YAGNI until a concrete need):** background maintenance
-  *scheduler* (autonomous worker) + build leases/generations — the lossless
-  DAG already keeps everything; rollups are injected when present, built on
-  demand via CLI or the maintenance pass.
+- **Background maintenance scheduler** ✅: `spawn_rollup_maintenance`
+  (hermes `_RollupMaintenanceScheduler` parity, bounded) — one immediate
+  pass, then every `context_lcm_rollup_interval_minutes` (0 = disabled,
+  default); empty windows skip the summarizer, a bad pass is logged and
+  swallowed. Wired in `build_context_engine` with the shared
+  `rollup_summarize` LLM helper (also used by the CLI, so prompts can never
+  drift). Live-verified: deleting a stored month rollup, a plain `operant
+  run` with the scheduler enabled rebuilt it automatically (2 → 3).
+- **Deferred (YAGNI until a concrete need):** build leases/generations —
+  the lossless DAG already keeps everything; rollups are injected when
+  present, built on demand via CLI, the maintenance pass, or the scheduler.
 
 ### P2 — Recall tools + assertions ✅
 - `lcm_recall` / `lcm_stats` registered through the existing `builtin.rs`

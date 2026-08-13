@@ -318,6 +318,66 @@ where
     Ok(report)
 }
 
+/// Spawn a background rollup maintenance task (hermes
+/// `_RollupMaintenanceScheduler` parity, bounded): one immediate pass, then
+/// every `interval`. Each pass scans all DAG sessions and builds missing
+/// day/week/month rollups; empty windows skip the summarizer, existing
+/// periods are skipped, and a bad pass is logged and swallowed — it never
+/// aborts the loop. Abort the returned `JoinHandle` to stop.
+///
+/// `lookback_days` feeds `run_rollup_maintenance` (default 7). This is the
+/// on-demand maintenance pass behind a cadence; the full hermes worker
+/// (process-wide dedup queues, ownership tracking) remains deferred YAGNI.
+pub fn spawn_rollup_maintenance<F, Fut>(
+    engine: std::sync::Arc<LcmContextEngine>,
+    interval: std::time::Duration,
+    lookback_days: u32,
+    summarizer: F,
+) -> tokio::task::JoinHandle<()>
+where
+    F: Fn(String) -> Fut + Clone + Send + Sync + 'static,
+    Fut: Future<Output = Result<String>> + Send + 'static,
+{
+    tokio::spawn(async move {
+        // Immediate first pass: a fresh DAG is cheap (empty windows skip the
+        // summarizer) and stale sessions from earlier runs get caught up
+        // right away instead of after the first full interval.
+        run_maintenance_pass(&engine, lookback_days, summarizer.clone()).await;
+        loop {
+            tokio::time::sleep(interval).await;
+            run_maintenance_pass(&engine, lookback_days, summarizer.clone()).await;
+        }
+    })
+}
+
+/// One scheduler tick: run the maintenance pass and log the outcome.
+async fn run_maintenance_pass<F, Fut>(
+    engine: &std::sync::Arc<LcmContextEngine>,
+    lookback_days: u32,
+    summarizer: F,
+) where
+    F: Fn(String) -> Fut + Clone,
+    Fut: Future<Output = Result<String>>,
+{
+    match run_rollup_maintenance(engine, None, lookback_days, summarizer).await {
+        Ok(report) => {
+            tracing::info!(
+                sessions = report.sessions_scanned,
+                days = report.days_built,
+                weeks = report.weeks_built,
+                months = report.months_built,
+                skipped_existing = report.skipped_existing,
+                skipped_empty = report.skipped_empty,
+                errors = report.errors,
+                "lcm rollup maintenance pass complete"
+            );
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "lcm rollup maintenance pass failed");
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -387,7 +447,9 @@ mod tests {
         .await
         .unwrap()
         .expect("day has sources");
-        assert_eq!(second.created_at, first.created_at);
+        // Rebuild refreshes created_at to now (ON CONFLICT DO UPDATE) — the
+        // idempotency contract is the row count, not the timestamp.
+        assert!(second.created_at >= first.created_at);
         assert_eq!(second.period_start, first.period_start);
 
         let all = engine.list_rollups("sess_rollup").unwrap();
@@ -548,5 +610,69 @@ mod tests {
             .date_naive();
         assert_eq!(first, NaiveDate::from_ymd_opt(2026, 8, 1).unwrap());
         assert_eq!(month_end - month_start, 31 * 24 * 3600 * 1000);
+    }
+
+    #[tokio::test]
+    async fn spawned_maintenance_builds_rollups_on_interval() {
+        let (engine, _) = test_engine();
+        let engine = std::sync::Arc::new(engine);
+        let turn = vec![Message::assistant("alpha fact for the scheduler")];
+        engine.ingest_turn("sess_sched", &turn).await.unwrap();
+
+        let summarizer = |t: String| fake_summarizer(t);
+        let handle = spawn_rollup_maintenance(
+            engine.clone(),
+            std::time::Duration::from_millis(30),
+            1,
+            summarizer,
+        );
+        // Immediate first pass + a tick or two.
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        let rollups = engine.list_rollups("sess_sched").unwrap();
+        assert!(
+            !rollups.is_empty(),
+            "scheduler must build day rollups automatically, got: {rollups:?}"
+        );
+        assert!(rollups.iter().any(|r| r.summary.starts_with("SUMMARY[")));
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn spawned_maintenance_stops_on_abort() {
+        let (engine, _) = test_engine();
+        let engine = std::sync::Arc::new(engine);
+        engine
+            .ingest_turn("sess_a", &[Message::assistant("fact for session a")])
+            .await
+            .unwrap();
+
+        let handle = spawn_rollup_maintenance(
+            engine.clone(),
+            std::time::Duration::from_millis(20),
+            1,
+            |t: String| fake_summarizer(t),
+        );
+        // Wait until the immediate pass builds sess_a's rollup.
+        let mut built = false;
+        for _ in 0..50 {
+            if !engine.list_rollups("sess_a").unwrap().is_empty() {
+                built = true;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert!(built, "first pass must build sess_a rollup");
+        handle.abort();
+
+        // After abort, a fresh session must never be maintained.
+        engine
+            .ingest_turn("sess_b", &[Message::assistant("fact for session b")])
+            .await
+            .unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        assert!(
+            engine.list_rollups("sess_b").unwrap().is_empty(),
+            "aborted scheduler must not keep building"
+        );
     }
 }

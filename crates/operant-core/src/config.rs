@@ -224,6 +224,13 @@ pub struct BehaviorSettings {
     /// they already exist (built via `operant context rollup`).
     #[serde(default = "default_true")]
     pub context_lcm_rollups_inject: bool,
+    /// P1 background rollup maintenance: interval in minutes between
+    /// automatic maintenance passes that build missing day/week/month
+    /// rollups for all DAG sessions (hermes `_RollupMaintenanceScheduler`
+    /// parity). `0` (default) disables the background task — run
+    /// `operant context rollup-maintenance` manually instead.
+    #[serde(default = "default_lcm_rollup_interval_minutes")]
+    pub context_lcm_rollup_interval_minutes: u64,
 }
 
 fn default_fallback_on_errors() -> bool {
@@ -254,6 +261,10 @@ fn default_lcm_auto_recall_max_chars() -> usize {
     4_000
 }
 
+fn default_lcm_rollup_interval_minutes() -> u64 {
+    0
+}
+
 impl Default for BehaviorSettings {
     fn default() -> Self {
         Self {
@@ -282,6 +293,7 @@ impl Default for BehaviorSettings {
             context_lcm_auto_recall_limit: 3,
             context_lcm_auto_recall_max_chars: 4_000,
             context_lcm_rollups_inject: true,
+            context_lcm_rollup_interval_minutes: 0,
         }
     }
 }
