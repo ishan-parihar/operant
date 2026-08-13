@@ -24,6 +24,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 
 use crate::client::{Message, OpenAIClient};
+use crate::context::LcmContextEngine;
 use crate::error::{Error, Result};
 
 /// One durable assertion extracted from conversation text.
@@ -46,6 +47,103 @@ pub const MAX_ASSERTIONS_PER_CALL: usize = 20;
 /// Hard cap on transcript characters fed to the extractor per call (mirrors
 /// the rollup summarizer's deterministic bound; char-boundary safe).
 pub const MAX_TRANSCRIPT_CHARS: usize = 24_000;
+
+/// One assertion persisted by [`run_assertion_extraction`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SavedAssertion {
+    /// Row id in `lcm_assertions`.
+    pub id: i64,
+    /// Canonical subject key.
+    pub subject: String,
+    /// Predicate key.
+    pub predicate: String,
+    /// The object value (the fact).
+    pub object: String,
+    /// Speaker attribution (`user` | `assistant` | `tool`).
+    pub speaker: String,
+}
+
+/// Outcome of one extraction run (tool or background scheduler).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ExtractionRunReport {
+    /// Message nodes scanned for the transcript.
+    pub scanned_nodes: usize,
+    /// Assertions persisted to the store.
+    pub saved: usize,
+    /// The persisted assertions (empty when nothing was mined).
+    pub assertions: Vec<SavedAssertion>,
+}
+
+/// Run one LLM assertion extraction over the recent message nodes of a
+/// session (or the whole DAG when `session` is `None`) and persist every
+/// mined triple — the shared backend of the `lcm_assert action="extract"`
+/// tool AND the background maintenance scheduler, so the two can never
+/// drift. Never errors on an empty scope or an empty extraction result:
+/// those are clean zero-saved reports, not failures.
+pub async fn run_assertion_extraction(
+    engine: &LcmContextEngine,
+    extractor: &dyn AssertionExtractor,
+    session: Option<&str>,
+    limit: usize,
+) -> Result<ExtractionRunReport> {
+    let limit = limit.clamp(1, 200);
+    let nodes = engine.recent_message_nodes(session, limit)?;
+    if nodes.is_empty() {
+        return Ok(ExtractionRunReport::default());
+    }
+    // Build a bounded, role-tagged transcript (newest first — the freshest
+    // context is the most fact-dense).
+    let mut transcript = String::new();
+    for (_, role, content, _) in &nodes {
+        let line = format!("[{role}] {content}\n");
+        if transcript.len() + line.len() > MAX_TRANSCRIPT_CHARS {
+            break;
+        }
+        transcript.push_str(&line);
+    }
+    let transcript = truncate_transcript(&transcript);
+    let extracted = extractor.extract(&transcript).await?;
+    if extracted.is_empty() {
+        return Ok(ExtractionRunReport {
+            scanned_nodes: nodes.len(),
+            ..ExtractionRunReport::default()
+        });
+    }
+
+    // Persist each triple (conflict-preserving history; the latest per
+    // object wins in query active-state resolution). Source attribution: the
+    // first node whose role matches the assertion's speaker.
+    let scope = session.unwrap_or("global").to_string();
+    let mut source_by_role: std::collections::HashMap<String, i64> =
+        std::collections::HashMap::new();
+    for (id, role, _, _) in &nodes {
+        source_by_role.entry(role.clone()).or_insert(*id);
+    }
+    let mut saved: Vec<SavedAssertion> = Vec::with_capacity(extracted.len());
+    for a in &extracted {
+        let source_node = source_by_role.get(&a.speaker).copied();
+        let id = engine.assert_assertion(
+            &scope,
+            &a.subject,
+            &a.predicate,
+            &a.object,
+            &a.speaker,
+            source_node,
+        )?;
+        saved.push(SavedAssertion {
+            id,
+            subject: a.subject.clone(),
+            predicate: a.predicate.clone(),
+            object: a.object.clone(),
+            speaker: a.speaker.clone(),
+        });
+    }
+    Ok(ExtractionRunReport {
+        scanned_nodes: nodes.len(),
+        saved: saved.len(),
+        assertions: saved,
+    })
+}
 
 /// Inject the extraction prompt into a chat call and decode the result.
 /// `client`/`model` are injected so the same client config that drives the

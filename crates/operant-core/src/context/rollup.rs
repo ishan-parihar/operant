@@ -378,6 +378,58 @@ async fn run_maintenance_pass<F, Fut>(
     }
 }
 
+/// Spawn a background assertion-extraction task (hermes `_assertion_extraction`
+/// maintenance parity, bounded): one immediate run, then every `interval`.
+/// Each run LLM-mines durable facts from the recent DAG message nodes and
+/// persists them — the same shared backend as `lcm_assert action="extract"`
+/// (`assertion_extract::run_assertion_extraction`), so manual and automatic
+/// mining can never drift. Empty scopes / no-fact results are clean no-ops;
+/// a failed pass is logged and swallowed — it never aborts the loop.
+/// Abort the returned `JoinHandle` to stop.
+pub fn spawn_assertion_extraction_scheduler(
+    engine: std::sync::Arc<LcmContextEngine>,
+    extractor: std::sync::Arc<dyn crate::context::AssertionExtractor>,
+    interval: std::time::Duration,
+    limit: usize,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        // Immediate first run: mine whatever is already in the DAG instead
+        // of waiting for the first full interval.
+        run_assertion_extraction_pass(&engine, extractor.clone(), limit).await;
+        loop {
+            tokio::time::sleep(interval).await;
+            run_assertion_extraction_pass(&engine, extractor.clone(), limit).await;
+        }
+    })
+}
+
+/// One assertion-extraction tick: mine durable facts and log the outcome.
+async fn run_assertion_extraction_pass(
+    engine: &std::sync::Arc<LcmContextEngine>,
+    extractor: std::sync::Arc<dyn crate::context::AssertionExtractor>,
+    limit: usize,
+) {
+    match crate::context::assertion_extract::run_assertion_extraction(
+        engine,
+        extractor.as_ref(),
+        None,
+        limit,
+    )
+    .await
+    {
+        Ok(report) => {
+            tracing::info!(
+                scanned = report.scanned_nodes,
+                saved = report.saved,
+                "lcm assertion extraction maintenance pass complete"
+            );
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "lcm assertion extraction maintenance pass failed");
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -673,6 +725,130 @@ mod tests {
         assert!(
             engine.list_rollups("sess_b").unwrap().is_empty(),
             "aborted scheduler must not keep building"
+        );
+    }
+
+    #[tokio::test]
+    async fn spawned_assertion_extraction_persists_mined_facts() {
+        let (engine, _) = test_engine();
+        let engine = std::sync::Arc::new(engine);
+        // Seed message nodes so the extractor has a transcript to mine.
+        engine
+            .ingest_turn(
+                "sess_assert",
+                &[
+                    Message::user("my preferred stack is Rust and SQLite"),
+                    Message::assistant("deploys run biweekly on wednesdays"),
+                ],
+            )
+            .await
+            .unwrap();
+
+        // Deterministic fake extractor (hermes `_assertion_extraction` seam):
+        // mines the same triples the real LLM would.
+        let fake: std::sync::Arc<dyn crate::context::AssertionExtractor> =
+            std::sync::Arc::new(crate::context::assertion_extract::tests::FakeExtractor {
+                assertions: vec![
+                    crate::context::assertion_extract::ExtractedAssertion {
+                        subject: "project".to_string(),
+                        predicate: "stack".to_string(),
+                        object: "Rust and SQLite".to_string(),
+                        speaker: "user".to_string(),
+                    },
+                    crate::context::assertion_extract::ExtractedAssertion {
+                        subject: "project".to_string(),
+                        predicate: "deploy_cadence".to_string(),
+                        object: "biweekly on wednesdays".to_string(),
+                        speaker: "assistant".to_string(),
+                    },
+                ],
+            });
+        let handle = spawn_assertion_extraction_scheduler(
+            engine.clone(),
+            fake,
+            std::time::Duration::from_millis(30),
+            40,
+        );
+        // Immediate first pass + a tick or two (mirrors the rollup scheduler
+        // test's timing budget).
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+
+        let rows = engine
+            .query_assertion_state("global", "project", None)
+            .unwrap();
+        assert!(
+            !rows.is_empty(),
+            "scheduler must persist mined facts automatically, got: {rows:?}"
+        );
+        assert!(
+            rows.iter()
+                .any(|r| r.predicate == "stack" && r.object_value == "Rust and SQLite"),
+            "mined stack fact must be queryable, got: {rows:?}"
+        );
+        assert!(
+            rows.iter()
+                .any(|r| r.predicate == "deploy_cadence"
+                    && r.object_value == "biweekly on wednesdays"),
+            "mined deploy_cadence fact must be queryable, got: {rows:?}"
+        );
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn spawned_assertion_extraction_stops_on_abort() {
+        let (engine, _) = test_engine();
+        let engine = std::sync::Arc::new(engine);
+        engine
+            .ingest_turn("sess_abort", &[Message::user("one fact: stack is Rust")])
+            .await
+            .unwrap();
+
+        let fake: std::sync::Arc<dyn crate::context::AssertionExtractor> =
+            std::sync::Arc::new(crate::context::assertion_extract::tests::FakeExtractor {
+                assertions: vec![crate::context::assertion_extract::ExtractedAssertion {
+                    subject: "project".to_string(),
+                    predicate: "stack".to_string(),
+                    object: "Rust".to_string(),
+                    speaker: "user".to_string(),
+                }],
+            });
+        let handle = spawn_assertion_extraction_scheduler(
+            engine.clone(),
+            fake,
+            std::time::Duration::from_millis(20),
+            40,
+        );
+        // Wait for the immediate pass to persist the fact.
+        let mut persisted = false;
+        for _ in 0..50 {
+            if !engine
+                .query_assertion_state("global", "project", None)
+                .unwrap()
+                .is_empty()
+            {
+                persisted = true;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert!(persisted, "immediate pass must mine the seeded fact");
+        handle.abort();
+
+        // After abort, new nodes must never be mined.
+        engine
+            .ingest_turn(
+                "sess_late",
+                &[Message::assistant("late fact: editor is neovim")],
+            )
+            .await
+            .unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        let rows = engine
+            .query_assertion_state("global", "project", Some("preferred_editor"))
+            .unwrap();
+        assert!(
+            rows.is_empty(),
+            "aborted scheduler must not keep mining, got: {rows:?}"
         );
     }
 }

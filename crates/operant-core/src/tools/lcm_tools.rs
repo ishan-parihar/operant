@@ -253,108 +253,50 @@ impl OperantTool for LcmAssertTool {
                         "assertion extraction is not configured — set agent.context_lcm_assertion_extraction = true to enable LLM fact mining",
                     );
                 };
-                let limit = args.limit.unwrap_or(40).clamp(1, 200);
-                let nodes = match self
-                    .engine
-                    .recent_message_nodes(args.session.as_deref(), limit)
+                // Shared backend with the background maintenance scheduler
+                // (hermes _assertion_extraction parity): scan the recent
+                // message nodes, LLM-mine durable facts, persist them.
+                let limit = args.limit.unwrap_or(40);
+                let report = match crate::context::assertion_extract::run_assertion_extraction(
+                    &self.engine,
+                    extractor.as_ref(),
+                    args.session.as_deref(),
+                    limit,
+                )
+                .await
                 {
-                    Ok(n) => n,
-                    Err(e) => {
-                        return ToolResult::error(
-                            "lcm_assert",
-                            format!("extract: failed to read DAG: {e}"),
-                        );
-                    }
-                };
-                if nodes.is_empty() {
-                    return ToolResult::success(
-                        "lcm_assert",
-                        json!({
-                            "_lcm_tool": "lcm_assert",
-                            "action": "extract",
-                            "saved": 0,
-                            "note": "no message nodes to mine in scope",
-                        }),
-                    );
-                }
-                // Build a bounded, role-tagged transcript (newest first —
-                // the freshest context is the most fact-dense).
-                let mut transcript = String::new();
-                for (_, role, content, _) in &nodes {
-                    let line = format!("[{role}] {content}\n");
-                    if transcript.len() + line.len()
-                        > crate::context::assertion_extract::MAX_TRANSCRIPT_CHARS
-                    {
-                        break;
-                    }
-                    transcript.push_str(&line);
-                }
-                let transcript =
-                    crate::context::assertion_extract::truncate_transcript(&transcript);
-                let extracted = match extractor.extract(&transcript).await {
-                    Ok(e) => e,
+                    Ok(r) => r,
                     Err(e) => {
                         return ToolResult::error("lcm_assert", format!("extract failed: {e}"));
                     }
                 };
-                if extracted.is_empty() {
-                    return ToolResult::success(
-                        "lcm_assert",
+                let assertions: Vec<Value> = report
+                    .assertions
+                    .iter()
+                    .map(|a| {
                         json!({
-                            "_lcm_tool": "lcm_assert",
-                            "action": "extract",
-                            "saved": 0,
-                            "note": "no durable assertions found in the scanned nodes",
-                        }),
-                    );
-                }
-                // Persist each triple (conflict-preserving history; the
-                // latest per object wins in query active-state resolution).
-                let mut saved: Vec<Value> = Vec::with_capacity(extracted.len());
-                let mut source_by_subject: std::collections::HashMap<String, i64> =
-                    std::collections::HashMap::new();
-                for (id, role, _, _) in &nodes {
-                    source_by_subject.entry(role.clone()).or_insert(*id);
-                }
-                for a in &extracted {
-                    let source_node = source_by_subject.get(&a.speaker).copied();
-                    match self.engine.assert_assertion(
-                        &scope,
-                        &a.subject,
-                        &a.predicate,
-                        &a.object,
-                        &a.speaker,
-                        source_node,
-                    ) {
-                        Ok(id) => saved.push(json!({
-                            "id": id,
+                            "id": a.id,
                             "subject": a.subject,
                             "predicate": a.predicate,
                             "object": a.object,
                             "speaker": a.speaker,
-                        })),
-                        Err(e) => {
-                            return ToolResult::error(
-                                "lcm_assert",
-                                format!(
-                                    "extract: storing `{} {} {}` failed: {e}",
-                                    a.subject, a.predicate, a.object
-                                ),
-                            );
-                        }
-                    }
+                        })
+                    })
+                    .collect();
+                let mut payload = json!({
+                    "_lcm_tool": "lcm_assert",
+                    "action": "extract",
+                    "saved": report.saved,
+                    "scanned_nodes": report.scanned_nodes,
+                    "extractor": extractor.name(),
+                    "assertions": assertions,
+                });
+                if report.saved == 0 && report.scanned_nodes == 0 {
+                    payload["note"] = json!("no message nodes to mine in scope");
+                } else if report.saved == 0 {
+                    payload["note"] = json!("no durable assertions found in the scanned nodes");
                 }
-                ToolResult::success(
-                    "lcm_assert",
-                    json!({
-                        "_lcm_tool": "lcm_assert",
-                        "action": "extract",
-                        "saved": saved.len(),
-                        "scanned_nodes": nodes.len(),
-                        "extractor": extractor.name(),
-                        "assertions": saved,
-                    }),
-                )
+                ToolResult::success("lcm_assert", payload)
             }
             "save" => {
                 let subject = args.subject.as_deref().unwrap_or("").trim().to_string();

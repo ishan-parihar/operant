@@ -1075,7 +1075,9 @@ pub(crate) async fn create_runtime_agent(
         // Pluggable context engine (hermes-lcm parity): when configured
         // (agent.context_engine = "lcm"), build_messages assembles via the
         // lossless DAG + fresh-tail engine instead of lossy eviction.
-        if let Some(engine) = build_context_engine(config) {
+        // Long-lived process (TUI / chat / gateway) → spawn background
+        // maintenance workers (rollups + assertion extraction).
+        if let Some(engine) = build_context_engine(config, true) {
             agent = agent.with_context_engine(engine);
         }
         // Share the external runtime-metrics registry (created by the TUI)
@@ -1143,8 +1145,10 @@ pub(crate) async fn create_agent_without_events(
             ..Default::default()
         });
         // Pluggable context engine (hermes-lcm parity) — same gate as the
-        // runtime agent path.
-        if let Some(engine) = build_context_engine(config) {
+        // runtime agent path. Bounded one-shot run / autonomous task → no
+        // LLM-fired maintenance workers (they'd be killed at process exit;
+        // see build_context_engine docs).
+        if let Some(engine) = build_context_engine(config, false) {
             agent = agent.with_context_engine(engine);
         }
         // Attach the long-term memory provider so turn/session hooks fire
@@ -1181,8 +1185,17 @@ pub(crate) fn lcm_config(config: &AppConfig) -> operant_core::context::LcmConfig
 ///   - `"compact"` (default) → `None`: deterministic decay + eviction.
 ///   - `"lcm"` → the lossless DAG engine; a broken init falls back to
 ///     compact (never fatal). Matches hermes `context.engine: lcm`.
+///
+/// `spawn_maintenance`: only LONG-LIVED processes (TUI / chat / gateway, via
+/// `create_runtime_agent`) spawn the LLM-fired background maintenance workers
+/// (rollups + assertion extraction). One-shot `operant run` / autonomous task
+/// runs are bounded — their immediate maintenance pass would start a ~170s
+/// LLM extraction call that gets killed at process exit (wasted provider
+/// billing, reproduced in live testing). Hermes runs maintenance only in its
+/// long-running agent loop, never per one-shot invocation.
 fn build_context_engine(
     config: &AppConfig,
+    spawn_maintenance: bool,
 ) -> Option<std::sync::Arc<dyn operant_core::context::ContextEngine>> {
     match config.agent.context_engine.as_str() {
         "compact" | "" => None, // built-in default — no engine attached
@@ -1190,7 +1203,9 @@ fn build_context_engine(
             Ok(engine) => {
                 tracing::info!("LCM context engine active (lossless DAG + fresh tail)");
                 let engine = std::sync::Arc::new(engine);
-                spawn_lcm_maintenance_if_configured(config, &engine);
+                if spawn_maintenance {
+                    spawn_lcm_maintenance_if_configured(config, &engine);
+                }
                 Some(engine)
             }
             Err(e) => {
@@ -1236,9 +1251,17 @@ pub(crate) async fn rollup_summarize(
     Ok(content.trim().to_string())
 }
 
-/// Spawn the background rollup maintenance task when configured
+/// Spawn the background maintenance tasks when configured
 /// (`context_lcm_rollup_interval_minutes > 0`): one immediate pass, then
 /// every interval — hermes `_RollupMaintenanceScheduler` parity, bounded.
+///
+/// Two workers share the cadence:
+///   1. rollup summarization (old message nodes → rollup nodes), and
+///   2. assertion extraction (the same opt-in LLM extractor that backs
+///      `lcm_assert action="extract"` mines durable facts from recent DAG
+///      nodes automatically, so the store stays fresh without the agent ever
+///      calling the tool — hermes `_assertion_extraction` maintenance
+///      parity).
 fn spawn_lcm_maintenance_if_configured(
     config: &AppConfig,
     engine: &std::sync::Arc<operant_core::context::LcmContextEngine>,
@@ -1249,9 +1272,11 @@ fn spawn_lcm_maintenance_if_configured(
     }
     let model = config.agent.model.clone();
     if model.is_empty() {
-        tracing::warn!("lcm rollup maintenance skipped: agent.model not configured");
+        tracing::warn!("lcm maintenance skipped: agent.model not configured");
         return;
     }
+    let interval = std::time::Duration::from_secs(minutes * 60);
+
     let client = OpenAIClient::new(client_config(config));
     let summarizer = move |transcript: String| {
         let client = client.clone();
@@ -1260,11 +1285,30 @@ fn spawn_lcm_maintenance_if_configured(
     };
     operant_core::context::rollup::spawn_rollup_maintenance(
         engine.clone(),
-        std::time::Duration::from_secs(minutes * 60),
+        interval,
         7,
         summarizer,
     );
     tracing::info!(minutes, "lcm rollup maintenance scheduler active");
+
+    // Assertion-extraction worker on the same cadence (hermes
+    // `_assertion_extraction` maintenance parity). Off when the opt-in gate
+    // is off — no extra LLM cost on stock installs.
+    if config.agent.context_lcm_assertion_extraction {
+        let llm = std::sync::Arc::new(OpenAIClient::new(client_config(config)));
+        let extractor: std::sync::Arc<dyn operant_core::context::AssertionExtractor> =
+            std::sync::Arc::new(operant_core::context::LlmAssertionExtractor::new(
+                llm,
+                config.agent.model.clone(),
+            ));
+        operant_core::context::rollup::spawn_assertion_extraction_scheduler(
+            engine.clone(),
+            extractor,
+            interval,
+            40,
+        );
+        tracing::info!(minutes, "lcm assertion extraction scheduler active");
+    }
 }
 
 /// Build and attach a credential pool when configured, seeded from the
