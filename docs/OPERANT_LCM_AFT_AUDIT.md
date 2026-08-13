@@ -196,18 +196,82 @@ callgraph store persists, so step 13 is now instant on subsequent runs.
 | `7674ff3a` | LCM embeddings fully optional (zero external deps); composite PK for `lcm_embeddings` + legacy migration |
 | `27e0b1db` | LCM background assertion-extraction scheduler + maintenance gating |
 
-## 6. Remaining recommendations (non-blocking)
+## 6. Iteration 2 — full 18-tool AFT sweep + LCM finalization (pushed in this iteration)
 
-1. **AFT warm-up on first configure** (nice-to-have): fire a `warmup --only
-   callgraph` in the background when a new project root is configured, so the first
-   `aft_callers` call is never cold. The retry already makes this invisible; the
-   warm-up would remove the ~95s worst case entirely.
-2. **LCM embedding backend**: the `local:hash` embedder is a solid offline default
-   (hash-based lexical similarity). A future `local:tfidf` or `local:bm25` backend
-   would improve ranking quality without external deps.
-3. **Observability**: `lcm_stats` and the TUI status bar could surface retry
-   metrics (stream drops, callgraph waits) — already partially tracked; wire into
-   the existing metrics hook.
+### 6.1 AFT — every tool tested in the live agentic loop
+
+Scratch workspace `/tmp/aft-scratch` (small Rust project with real call
+relations); model `nemotron-3.5-lightning-free` on the OpenCode endpoint
+(`deepseek-v4-flash-free` was quota-exhausted at test time). Result: **18/18
+tools operational**.
+
+| Tool | Live | | Tool | Live |
+|------|------|-|------|------|
+| aft_status | ✅ | | aft_write | ✅ |
+| aft_read | ✅ | | aft_edit | ✅ |
+| aft_search | ✅ | | aft_apply_patch | ✅ (format fixed) |
+| aft_outline | ✅ | | aft_ast_replace | ✅ (syntax fixed) |
+| aft_zoom | ✅ | | aft_bash | ✅ |
+| aft_grep | ✅ | | aft_checkpoint | ✅ |
+| aft_glob | ✅ | | aft_list_checkpoints | ✅ |
+| aft_ast_search | ✅ (syntax fixed) | | aft_undo | ✅ |
+| aft_callers | ✅ (warm store, 1.3s) | | aft_inspect | ✅ |
+
+**Three agent-guidance gaps found and fixed** (the tools were functional; the
+model was using the wrong input syntax — tool descriptions now document the
+exact formats):
+
+1. **`aft_apply_patch` format** — AFT's patch dialect, NOT unified diff:
+   `*** Begin Patch` / `*** Update File: <path>` (hunks under a bare `@@`
+   anchor line with space-prefixed context and `-`/`+` lines) / `*** Add
+   File:` / `*** Delete File:` / `*** End Patch`. Verified end-to-end (Add +
+   Update both apply on disk).
+2. **`aft_ast_search` / `aft_ast_replace` syntax** — ast-grep code patterns
+   (`console.log($MSG)`, `fn $NAME($$$ARGS)`), not plain text / node-kind
+   names; `lang` required. Verified against AFT's own fixtures.
+3. **`aft_callers` cold-store behavior** — an empty caller list on a fresh
+   project means the persisted callgraph is still building (the bridge waits
+   it out; `build_registry` → 2 real callers verified on the warm store).
+
+### 6.2 AFT warmup-on-configure — implemented
+
+Investigation: the subprocess is `kill_on_drop(true)`, so on a never-warmed
+root every fresh session paid the cold-build cost via retry, and a session
+exit could abort a mid-build. `AftBridgePool` now fires a **detached**
+`aft warmup --root <root> --only callgraph --timeout 600000` when it spawns a
+bridge for a new project root — non-blocking, deduped per root, warn-only on
+failure, and it survives operant exit (AFT's CLI returns ~immediately when the
+store is already warm, so re-firing is cheap).
+
+### 6.3 LCM — parity audit vs hermes-lcm source + finalization
+
+| hermes-lcm feature | operant status |
+|--------------------|----------------|
+| SQLite message store (raw preserved) | ✅ nodes table |
+| Depth-aware summary DAG + rollups | ✅ lcm_rollups (day/week/month) |
+| Fresh-tail protection (D0) | ✅ tail_tokens |
+| Rollup injection on budget exceed | ✅ rollups_inject |
+| Auto-recall | ✅ |
+| Assertions + background extraction | ✅ |
+| Semantic recall (cloud or local) | ✅ local:hash zero-dep default |
+| **`lcm_recall` FTS+vector RRF fusion** | ✅ **added this iteration** |
+| **`lcm_recent` temporal recall** | ✅ **added this iteration** |
+| **`lcm_doctor` health diagnostics** | ✅ **added this iteration** |
+| Sensitive redaction before storage | ✅ redaction.rs |
+| Externalization / session-controls / evidence-packing | out of scope (hermes-plugin memory extensions; YAGNI for operant core) |
+
+**bm25 decision: not needed.** hermes-lcm's `lcm_recall` fuses a full-text arm
+and a semantic arm with RRF. operant already has SQLite FTS5 (the lexical
+arm) and `local:hash`/remote vectors (the semantic arm) — the parity gap was
+the fusion, not a new embedder. `lcm_recall` now fuses both arms with RRF when
+an embedder is configured (FTS-only otherwise — backwards compatible).
+`local:hash` remains the correct zero-dependency default.
+
+Live verification (real DAG): `lcm_doctor` reports `integrity_check: ok`,
+314 nodes, 100% FTS coverage, 28 assertions, 239 embeddings, 12 rollups;
+`lcm_recent` returns day-period rollups; `lcm_recall` returns fused hits
+(vector-arm hit ranked alongside FTS bm25). New unit tests: RRF fusion
+(merge/dedupe/rerank), fused recall path, recent fallback, doctor health.
 
 ---
 
@@ -215,10 +279,12 @@ callgraph store persists, so step 13 is now instant on subsequent runs.
 
 Both integrations are **production-grade for deployment**:
 
-- LCM delivers the full hermes-lcm promise (lossless DAG, rollups, recall,
-  assertions, optional vectors) with **zero mandatory external dependencies**.
-- AFT exposes a rich 18-tool file-tools surface behind a pooled, self-healing
-  bridge with automatic binary provisioning and a persisted index — including the
-  cold-build wait-out fix from this audit.
-- All 23 tools are verified live inside the core agentic loop; the repository is
-  fully green (fmt, clippy -D warnings, 2,156+ tests) and pushed to origin/main.
+- **AFT**: all 18 tools verified in the live loop; input-format documentation
+  fixes make them reliably usable by the model; detached callgraph warmup
+  removes the cold-start wait; bridge retry covers the residual window.
+- **LCM**: core hermes-lcm parity complete — lossless DAG, rollups, fresh
+  tail, auto-recall, assertions, FTS+vector RRF fusion, temporal recall
+  (`lcm_recent`), diagnostics (`lcm_doctor`), zero mandatory external deps.
+- **Overall**: 7 LCM + 18 AFT = 25 tools live; repository fully green
+  (fmt, clippy -D warnings, core 1508 + CLI 652 tests) and pushed to
+  origin/main.

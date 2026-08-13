@@ -630,6 +630,132 @@ impl LcmContextEngine {
         .map_err(|e| Error::Agent(format!("lcm: rollup_count_global failed: {e}")))
     }
 
+    /// Global rollup listing (all sessions) for temporal recall — hermes-lcm
+    /// `lcm_recent` parity. Optionally filtered by period kind
+    /// (`day` / `week` / `month`), newest period first.
+    pub fn list_rollups_global(
+        &self,
+        period: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<crate::context::rollup::RollupSummary>> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let limit = limit.clamp(1, 50) as i64;
+        let rows: Vec<crate::context::rollup::RollupSummary> = match period {
+            Some(kind) => {
+                let mut stmt = conn
+                    .prepare(
+                        "SELECT period_kind, period_start, summary, source_count, created_at \
+                         FROM lcm_rollups WHERE period_kind = ?1 \
+                         ORDER BY period_start DESC, created_at DESC LIMIT ?2",
+                    )
+                    .map_err(|e| {
+                        Error::Agent(format!("lcm: list_rollups_global prepare failed: {e}"))
+                    })?;
+                let rows = stmt
+                    .query_map(params![kind, limit], |row| {
+                        Ok(crate::context::rollup::RollupSummary {
+                            period_kind: row.get(0)?,
+                            period_start: row.get(1)?,
+                            summary: row.get(2)?,
+                            source_count: row.get::<_, i64>(3)? as usize,
+                            created_at: row.get(4)?,
+                        })
+                    })
+                    .map_err(|e| {
+                        Error::Agent(format!("lcm: list_rollups_global query failed: {e}"))
+                    })?;
+                let mut out = Vec::new();
+                for r in rows {
+                    out.push(
+                        r.map_err(|e| Error::Agent(format!("lcm: list_rollups_global row: {e}")))?,
+                    );
+                }
+                out
+            }
+            None => {
+                let mut stmt = conn
+                    .prepare(
+                        "SELECT period_kind, period_start, summary, source_count, created_at \
+                         FROM lcm_rollups \
+                         ORDER BY period_start DESC, created_at DESC LIMIT ?1",
+                    )
+                    .map_err(|e| {
+                        Error::Agent(format!("lcm: list_rollups_global prepare failed: {e}"))
+                    })?;
+                let rows = stmt
+                    .query_map(params![limit], |row| {
+                        Ok(crate::context::rollup::RollupSummary {
+                            period_kind: row.get(0)?,
+                            period_start: row.get(1)?,
+                            summary: row.get(2)?,
+                            source_count: row.get::<_, i64>(3)? as usize,
+                            created_at: row.get(4)?,
+                        })
+                    })
+                    .map_err(|e| {
+                        Error::Agent(format!("lcm: list_rollups_global query failed: {e}"))
+                    })?;
+                let mut out = Vec::new();
+                for r in rows {
+                    out.push(
+                        r.map_err(|e| Error::Agent(format!("lcm: list_rollups_global row: {e}")))?,
+                    );
+                }
+                out
+            }
+        };
+        Ok(rows)
+    }
+
+    /// Database / index / lifecycle health diagnostics — hermes-lcm
+    /// `lcm_doctor` parity (compact). Runs SQLite integrity, table counts,
+    /// FTS coverage, and store size.
+    pub fn doctor(&self) -> Result<serde_json::Value> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let integrity: String = conn
+            .query_row("PRAGMA integrity_check", [], |row| row.get(0))
+            .map_err(|e| Error::Agent(format!("lcm: integrity_check failed: {e}")))?;
+        let count = |table: &str| -> Result<i64> {
+            conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                row.get(0)
+            })
+            .map_err(|e| Error::Agent(format!("lcm: count({table}) failed: {e}")))
+        };
+        let nodes = count("nodes")?;
+        let rollups = count("lcm_rollups")?;
+        let assertions = count("lcm_assertions")?;
+        let embeddings = count("lcm_embeddings")?;
+        let fts: i64 = conn
+            .query_row("SELECT COUNT(*) FROM nodes_fts", [], |row| row.get(0))
+            .map_err(|e| Error::Agent(format!("lcm: nodes_fts count failed: {e}")))?;
+        let page_count: i64 = conn
+            .query_row("PRAGMA page_count", [], |row| row.get(0))
+            .unwrap_or(-1);
+        let page_size: i64 = conn
+            .query_row("PRAGMA page_size", [], |row| row.get(0))
+            .unwrap_or(0);
+        let db_bytes = std::fs::metadata(&self.db_path)
+            .map(|m| m.len())
+            .unwrap_or(0);
+        Ok(serde_json::json!({
+            "engine": "lcm",
+            "db_path": self.db_path.to_string_lossy(),
+            "integrity_check": integrity,
+            "nodes": nodes,
+            "fts_indexed": fts,
+            "fts_coverage_pct": if nodes > 0 { (fts * 100) / nodes } else { 100 },
+            "rollups": rollups,
+            "assertions": assertions,
+            "embeddings": embeddings,
+            "db_size_bytes": db_bytes,
+            "db_pages": page_count,
+            "page_size": page_size,
+            "tail_tokens": self.tail_tokens,
+            "auto_recall": self.auto_recall,
+            "rollups_inject": self.rollups_inject,
+        }))
+    }
+
     /// Count DAG nodes for a session (diagnostics/tests).
     pub fn node_count(&self, session_id: &str) -> Result<usize> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());

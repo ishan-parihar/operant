@@ -799,6 +799,9 @@ impl AftBridge {
 #[derive(Default)]
 pub struct AftBridgePool {
     bridges: Mutex<HashMap<PathBuf, Arc<AftBridge>>>,
+    /// Project roots for which a detached callgraph warmup was already fired
+    /// in this process (dedupes duplicate warmups per root).
+    warming: Mutex<std::collections::HashSet<PathBuf>>,
 }
 
 impl AftBridgePool {
@@ -812,9 +815,61 @@ impl AftBridgePool {
         if let Some(bridge) = bridges.get(project_root) {
             return Ok(bridge.clone());
         }
-        let bridge = Arc::new(AftBridge::spawn(project_root.to_path_buf()).await?);
-        bridges.insert(project_root.to_path_buf(), bridge.clone());
+        let root = project_root.to_path_buf();
+        let bridge = Arc::new(AftBridge::spawn(root.clone()).await?);
+        bridges.insert(root.clone(), bridge.clone());
+        // Fire-and-forget: kick off the persisted callgraph cold-build for a
+        // fresh project root so aft_callers / aft_inspect(dead-code) are warm
+        // on first use — even if this operant session exits before it
+        // finishes (the detached warmup survives; the store persists).
+        self.warm_callgraph_detached(&root).await;
         Ok(bridge)
+    }
+
+    /// Best-effort detached `aft warmup --only callgraph` for a project root.
+    /// Never blocks or fails the caller: resolve the binary; if found, spawn
+    /// a detached process (no kill_on_drop) so the build outlives operant.
+    /// Deduped per root per process. AFT's warmup returns almost immediately
+    /// when the store is already warm, so re-firing is cheap.
+    async fn warm_callgraph_detached(&self, root: &Path) {
+        let mut warming = self.warming.lock().await;
+        if !warming.insert(root.to_path_buf()) {
+            return;
+        }
+        let binary = match resolve_aft_binary().await {
+            Ok(b) => b,
+            Err(e) => {
+                tracing::warn!(error = %e, "aft warmup: no binary to warm the callgraph");
+                return;
+            }
+        };
+        let root_s = root.to_string_lossy().to_string();
+        let bin_s = binary.to_string_lossy().to_string();
+        std::thread::spawn(move || {
+            let result = std::process::Command::new(&bin_s)
+                .args([
+                    "warmup",
+                    "--root",
+                    &root_s,
+                    "--only",
+                    "callgraph",
+                    "--timeout",
+                    "600000",
+                    "--quiet",
+                ])
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn();
+            match result {
+                Ok(_child) => {
+                    tracing::debug!(root = %root_s, "aft callgraph warmup spawned detached")
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, root = %root_s, "aft callgraph warmup spawn failed")
+                }
+            }
+        });
     }
 }
 

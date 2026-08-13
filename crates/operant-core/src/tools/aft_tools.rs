@@ -336,7 +336,7 @@ impl OperantTool for AftCallersTool {
         "aft_callers"
     }
     fn description(&self) -> &str {
-        "Find the callers of a symbol within a file (who calls it). Uses tree-sitter for accurate cross-file navigation. Runs the configure handshake automatically."
+        "Find the callers of a symbol within a file (who calls it). Uses tree-sitter for accurate cross-file navigation. On a fresh project the persisted callgraph store cold-builds on first use; the bridge waits it out automatically (up to ~2 min on large repos) before returning results — an empty caller list usually means the store is still building for this project."
     }
     fn schema(&self) -> ToolSchema {
         ToolSchema::from_type::<AftCallersArgs>("aft_callers", "Get callers via aft")
@@ -446,7 +446,7 @@ impl OperantTool for AftAstSearchTool {
         "aft_ast_search"
     }
     fn description(&self) -> &str {
-        "AST pattern search across the project. Match code structure, not just text (e.g. find all 'if ($X == null)' patterns)."
+        "AST pattern search across the project using ast-grep syntax. The pattern must be a CODE SNIPPET with $ metavariables (NOT plain text and NOT node-kind names): 'console.log($MSG)' matches all console.log calls, 'fn $NAME($$$ARGS)' matches function definitions, '$X == null' matches null checks. lang is required for accuracy (one of: rust, typescript, tsx, javascript, python, go, c, cpp, zig, csharp, solidity, vue, pascal, r, groovy, objc)."
     }
     fn schema(&self) -> ToolSchema {
         ToolSchema::from_type::<AftAstSearchArgs>("aft_ast_search", "AST search via aft")
@@ -564,7 +564,7 @@ impl OperantTool for AftApplyPatchTool {
         "aft_apply_patch"
     }
     fn description(&self) -> &str {
-        "Apply a patch to the project via aft. The patch uses the '*** Begin Patch / *** Update File: <path>' format (aft's own patch dialect — not unified diff). Reports hunks applied, partial/failed status, and a diff."
+        "Apply a patch to the project via aft. REQUIRED FORMAT (aft's own patch dialect, NOT unified diff): wrap the patch in '*** Begin Patch' ... '*** End Patch', then use one header per file: '*** Update File: <relative-path>' (existing file, hunk body with ' ' context lines, '-' old lines, '+' new lines under a bare '@@' line), '*** Add File: <relative-path>' (content lines prefixed '+'), or '*** Delete File: <relative-path>'. Example:\n*** Begin Patch\n*** Update File: src/main.rs\n@@\n fn main() {\n-    println!(\"old\");\n+    println!(\"new\");\n }\n*** End Patch\nThe '@@' line is a bare anchor (optional literal text after '@@' also works — never line ranges). Multiple files in one call are allowed. Reports hunks applied, partial/failed status, and a diff."
     }
     fn schema(&self) -> ToolSchema {
         ToolSchema::from_type::<AftApplyPatchArgs>("aft_apply_patch", "Apply a patch via aft")
@@ -605,7 +605,7 @@ impl OperantTool for AftAstReplaceTool {
         "aft_ast_replace"
     }
     fn description(&self) -> &str {
-        "AST pattern replacement across the project. Replace code structure, not just text (e.g. rename a call pattern across all files). `rewrite` is the replacement template."
+        "AST pattern replacement across the project using ast-grep syntax. pattern must be a CODE SNIPPET with $ metavariables (e.g. 'console.log($MSG)', 'fn $NAME($$$ARGS)'); rewrite is the replacement template reusing the same metavariables (e.g. 'console.warn($MSG)'). lang is required for accuracy (one of: rust, typescript, tsx, javascript, python, go, c, cpp, zig, csharp, solidity, vue, pascal, r, groovy, objc)."
     }
     fn schema(&self) -> ToolSchema {
         ToolSchema::from_type::<AftAstReplaceArgs>("aft_ast_replace", "AST replace via aft")

@@ -37,12 +37,51 @@ pub struct LcmRecallArgs {
 
 pub struct LcmRecallTool {
     engine: Arc<LcmContextEngine>,
+    embedder: Option<Arc<dyn crate::context::Embedder>>,
 }
 
 impl LcmRecallTool {
-    pub fn new(engine: Arc<LcmContextEngine>) -> Self {
-        Self { engine }
+    pub fn new(
+        engine: Arc<LcmContextEngine>,
+        embedder: Option<Arc<dyn crate::context::Embedder>>,
+    ) -> Self {
+        Self { engine, embedder }
     }
+}
+
+/// Reciprocal Rank Fusion (hermes-lcm parity: `lcm_recall` fuses its FTS and
+/// semantic arms with RRF). Each arm contributes `1/(K + rank)` — pure ranks,
+/// so the two arms need no score calibration (FTS bm25 is lower-is-better,
+/// cosine similarity is higher-is-better). Hits are deduped by node id.
+fn rrf_fuse(
+    fts: Vec<crate::context::RecallHit>,
+    vector: Vec<crate::context::RecallHit>,
+    limit: usize,
+) -> Vec<crate::context::RecallHit> {
+    const K: f64 = 60.0;
+    let mut scores: std::collections::HashMap<i64, f64> = std::collections::HashMap::new();
+    let mut hits: std::collections::HashMap<i64, crate::context::RecallHit> =
+        std::collections::HashMap::new();
+    let mut arms: Vec<Vec<crate::context::RecallHit>> = Vec::with_capacity(2);
+    if !fts.is_empty() {
+        arms.push(fts);
+    }
+    if !vector.is_empty() {
+        arms.push(vector);
+    }
+    for arm in arms {
+        for (rank, hit) in arm.into_iter().enumerate() {
+            *scores.entry(hit.node_id).or_insert(0.0) += 1.0 / (K + rank as f64 + 1.0);
+            hits.entry(hit.node_id).or_insert(hit);
+        }
+    }
+    let mut ranked: Vec<(i64, f64)> = scores.into_iter().collect();
+    ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    ranked
+        .into_iter()
+        .take(limit)
+        .filter_map(|(id, _)| hits.remove(&id))
+        .collect()
 }
 
 #[async_trait::async_trait]
@@ -71,52 +110,70 @@ impl OperantTool for LcmRecallTool {
         }
         let limit = args.limit.unwrap_or(5).clamp(1, 50);
         let session = args.session.as_deref();
-        match self.engine.recall(session, &args.query, limit).await {
-            Ok(hits) => {
-                if hits.is_empty() {
-                    return ToolResult::success(
-                        "lcm_recall",
-                        json!({
-                            "_lcm_tool": "lcm_recall",
-                            "hits": [],
-                            "note": "no matching nodes in the DAG",
-                        }),
-                    );
+        let fts_hits = match self.engine.recall(session, &args.query, limit).await {
+            Ok(hits) => hits,
+            Err(e) => return ToolResult::error("lcm_recall", format!("recall failed: {e}")),
+        };
+        // hermes-lcm parity: when an embedding backend is configured, fuse the
+        // FTS and semantic arms with Reciprocal Rank Fusion (RRF). RRF uses
+        // ranks only, so the two arms need no score calibration (bm25 is
+        // lower-is-better, cosine is higher-is-better). FTS-only otherwise.
+        let hits = match &self.embedder {
+            Some(embedder) => match self
+                .engine
+                .vector_recall(embedder.as_ref(), session, &args.query, limit)
+                .await
+            {
+                Ok(vector) if !vector.is_empty() => rrf_fuse(fts_hits, vector, limit),
+                Ok(_) => fts_hits,
+                Err(e) => {
+                    tracing::warn!(error = %e, "lcm_recall: semantic arm failed — FTS only");
+                    fts_hits
                 }
-                // Render at most MAX_RENDERED_HITS so the whole result stays
-                // well under the agent's tool-result truncation cap (4096
-                // bytes) even when the caller requests a large limit.
-                // Full-length content previously overflowed the cap and hid
-                // the later (often most relevant) hits from the model.
-                const MAX_RENDERED_HITS: usize = 5;
-                let rendered = hits.iter().take(MAX_RENDERED_HITS);
-                let nodes: Vec<Value> = rendered
-                    .map(|h| {
-                        let mut content = h.content.clone();
-                        if content.chars().count() > 600 {
-                            content = content.chars().take(600).collect::<String>();
-                            content.push_str("...[truncated]");
-                        }
-                        json!({
-                            "node_id": h.node_id,
-                            "role": h.role,
-                            "content": content,
-                            "created_at": h.created_at,
-                            "score": h.score,
-                        })
-                    })
-                    .collect();
-                ToolResult::success(
-                    "lcm_recall",
-                    json!({
-                        "_lcm_tool": "lcm_recall",
-                        "hits": nodes,
-                        "total_hits": hits.len(),
-                    }),
-                )
-            }
-            Err(e) => ToolResult::error("lcm_recall", format!("recall failed: {e}")),
+            },
+            None => fts_hits,
+        };
+        if hits.is_empty() {
+            return ToolResult::success(
+                "lcm_recall",
+                json!({
+                    "_lcm_tool": "lcm_recall",
+                    "hits": [],
+                    "note": "no matching nodes in the DAG",
+                }),
+            );
         }
+        // Render at most MAX_RENDERED_HITS so the whole result stays
+        // well under the agent's tool-result truncation cap (4096
+        // bytes) even when the caller requests a large limit.
+        // Full-length content previously overflowed the cap and hid
+        // the later (often most relevant) hits from the model.
+        const MAX_RENDERED_HITS: usize = 5;
+        let rendered = hits.iter().take(MAX_RENDERED_HITS);
+        let nodes: Vec<Value> = rendered
+            .map(|h| {
+                let mut content = h.content.clone();
+                if content.chars().count() > 600 {
+                    content = content.chars().take(600).collect::<String>();
+                    content.push_str("...[truncated]");
+                }
+                json!({
+                    "node_id": h.node_id,
+                    "role": h.role,
+                    "content": content,
+                    "created_at": h.created_at,
+                    "score": h.score,
+                })
+            })
+            .collect();
+        ToolResult::success(
+            "lcm_recall",
+            json!({
+                "_lcm_tool": "lcm_recall",
+                "hits": nodes,
+                "total_hits": hits.len(),
+            }),
+        )
     }
 }
 
@@ -652,6 +709,160 @@ impl OperantTool for LcmVectorRecallTool {
 
 /// Register the LCM tools into a registry. Only meaningful when the LCM
 /// engine is actually attached (config `agent.context_engine = "lcm"`).
+/// Temporal memory recall — hermes-lcm `lcm_recent` parity. Returns the most
+/// recent context summaries by natural UTC period (`day` / `week` / `month`),
+/// preferring ready rollups and falling back to the most recent message nodes
+/// when no rollup covers the period yet.
+#[derive(JsonSchema, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LcmRecentArgs {
+    /// Optional period kind filter: `day` | `week` | `month`. Omit for all.
+    pub period: Option<String>,
+    /// Max entries to return (1..=20, default 5).
+    pub limit: Option<usize>,
+}
+
+pub struct LcmRecentTool {
+    engine: Arc<LcmContextEngine>,
+}
+
+impl LcmRecentTool {
+    pub fn new(engine: Arc<LcmContextEngine>) -> Self {
+        Self { engine }
+    }
+}
+
+#[async_trait::async_trait]
+impl OperantTool for LcmRecentTool {
+    fn name(&self) -> &str {
+        "lcm_recent"
+    }
+
+    fn description(&self) -> &str {
+        "Retrieve recent context summaries by natural time period (day/week/month) from the lossless DAG. Prefers ready rollups; falls back to the most recent message nodes when no rollup exists yet. Use for temporal memory: what happened this week, last month, etc."
+    }
+
+    fn schema(&self) -> ToolSchema {
+        ToolSchema::from_type::<LcmRecentArgs>(
+            "lcm_recent",
+            "Recent context by natural time period",
+        )
+    }
+
+    async fn execute(&self, args: Value, _context: ToolContext) -> ToolResult {
+        let args: LcmRecentArgs = match serde_json::from_value(args) {
+            Ok(a) => a,
+            Err(e) => {
+                return ToolResult::error("lcm_recent", format!("Invalid arguments: {e}"));
+            }
+        };
+        let limit = args.limit.unwrap_or(5).clamp(1, 20);
+        let period = args.period.as_deref();
+        let rollups = match self.engine.list_rollups_global(period, limit) {
+            Ok(r) => r,
+            Err(e) => return ToolResult::error("lcm_recent", format!("rollup lookup failed: {e}")),
+        };
+        let entries: Vec<Value> = rollups
+            .iter()
+            .map(|r| {
+                json!({
+                    "type": "rollup",
+                    "period_kind": r.period_kind,
+                    "period_start": r.period_start,
+                    "summary": r.summary,
+                    "source_count": r.source_count,
+                    "created_at": r.created_at,
+                })
+            })
+            .collect();
+        // Fallback: no ready rollups → most recent message nodes (leaf
+        // summaries), time-bounded by the request limit.
+        let (entries, fallback) = if entries.is_empty() {
+            let nodes = match self.engine.recent_message_nodes(None, limit) {
+                Ok(n) => n,
+                Err(e) => {
+                    return ToolResult::error("lcm_recent", format!("node lookup failed: {e}"));
+                }
+            };
+            (
+                nodes
+                    .iter()
+                    .map(|(node_id, role, content, created_at)| {
+                        let mut snippet = content.clone();
+                        if snippet.chars().count() > 300 {
+                            snippet = snippet.chars().take(300).collect::<String>();
+                            snippet.push_str("...[truncated]");
+                        }
+                        json!({
+                            "type": "message",
+                            "node_id": node_id,
+                            "role": role,
+                            "snippet": snippet,
+                            "created_at": created_at,
+                        })
+                    })
+                    .collect::<Vec<Value>>(),
+                true,
+            )
+        } else {
+            (entries, false)
+        };
+        ToolResult::success(
+            "lcm_recent",
+            json!({
+                "_lcm_tool": "lcm_recent",
+                "period": period.unwrap_or("all"),
+                "rollup_fallback": fallback,
+                "entries": entries,
+                "total": entries.len(),
+            }),
+        )
+    }
+}
+
+/// DB / index / lifecycle health diagnostics — hermes-lcm `lcm_doctor` parity.
+#[derive(JsonSchema, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LcmDoctorArgs {}
+
+pub struct LcmDoctorTool {
+    engine: Arc<LcmContextEngine>,
+}
+
+impl LcmDoctorTool {
+    pub fn new(engine: Arc<LcmContextEngine>) -> Self {
+        Self { engine }
+    }
+}
+
+#[async_trait::async_trait]
+impl OperantTool for LcmDoctorTool {
+    fn name(&self) -> &str {
+        "lcm_doctor"
+    }
+
+    fn description(&self) -> &str {
+        "Run health diagnostics on the lossless DAG store: SQLite integrity check, node/rollup/assertion/embedding counts, FTS index coverage, and store size. Use to verify the context engine is healthy and detect drift or corruption early."
+    }
+
+    fn schema(&self) -> ToolSchema {
+        ToolSchema::from_type::<LcmDoctorArgs>("lcm_doctor", "LCM store health diagnostics")
+    }
+
+    async fn execute(&self, _args: Value, _context: ToolContext) -> ToolResult {
+        match self.engine.doctor() {
+            Ok(diag) => ToolResult::success(
+                "lcm_doctor",
+                json!({
+                    "_lcm_tool": "lcm_doctor",
+                    "diagnostics": diag,
+                }),
+            ),
+            Err(e) => ToolResult::error("lcm_doctor", format!("diagnostics failed: {e}")),
+        }
+    }
+}
+
 /// `embedder` is `None` when no embedding model is configured — the vector
 /// tool is then not registered (hermes registers vector tools only when an
 /// embedding provider is active).
@@ -662,7 +873,7 @@ pub async fn register_lcm_tools(
     extractor: Option<Arc<dyn crate::context::AssertionExtractor>>,
 ) -> crate::error::Result<()> {
     registry
-        .register(LcmRecallTool::new(engine.clone()))
+        .register(LcmRecallTool::new(engine.clone(), embedder.clone()))
         .await?;
     registry.register(LcmStatsTool::new(engine.clone())).await?;
     registry
@@ -670,6 +881,12 @@ pub async fn register_lcm_tools(
         .await?;
     registry
         .register(LcmRecallRoundTool::new(engine.clone()))
+        .await?;
+    registry
+        .register(LcmRecentTool::new(engine.clone()))
+        .await?;
+    registry
+        .register(LcmDoctorTool::new(engine.clone()))
         .await?;
     if let Some(embedder) = embedder {
         registry
@@ -703,10 +920,121 @@ mod tests {
         Arc::new(engine)
     }
 
+    fn hit(node_id: i64, content: &str) -> crate::context::RecallHit {
+        crate::context::RecallHit {
+            node_id,
+            role: "user".to_string(),
+            content: content.to_string(),
+            created_at: 1,
+            score: 0.0,
+        }
+    }
+
+    #[test]
+    fn rrf_fuse_merges_dedupes_and_reranks() {
+        // FTS arm ranks A best; vector arm ranks B best; C appears in both.
+        let fts = vec![hit(1, "a"), hit(2, "b"), hit(3, "c")];
+        let vector = vec![hit(4, "d"), hit(3, "c-vec"), hit(2, "b-vec")];
+        let fused = rrf_fuse(fts, vector, 5);
+        assert_eq!(fused.len(), 4, "overlap (node 3) must be deduped");
+        let ids: Vec<i64> = fused.iter().map(|h| h.node_id).collect();
+        // Rank sums: node2: 1/62 + 1/63 and node3: 1/63 + 1/62 are tied for
+        // first — both overlaps must lead, in either order.
+        let (a, b) = (ids[0], ids[1]);
+        assert!(
+            (a == 2 && b == 3) || (a == 3 && b == 2),
+            "both in-both-arms hits must lead, got {ids:?}"
+        );
+        // FTS-only arms degrade to plain ranking.
+        let solo = rrf_fuse(vec![hit(9, "x"), hit(8, "y")], Vec::new(), 5);
+        assert_eq!(solo.len(), 2);
+        assert_eq!(solo[0].node_id, 9);
+        // Empty both arms → empty.
+        assert!(rrf_fuse(Vec::new(), Vec::new(), 5).is_empty());
+    }
+
+    #[tokio::test]
+    async fn lcm_recall_fuses_fts_and_vector_when_embedder_present() {
+        let engine = test_engine();
+        let embedder: Arc<dyn crate::context::Embedder> =
+            Arc::new(crate::context::MockEmbedder::default());
+        let tool = LcmRecallTool::new(engine.clone(), Some(embedder.clone()));
+        let turn = vec![
+            crate::client::Message::assistant("the deployment uses rsync over ssh"),
+            crate::client::Message::assistant("irrelevant filler about the weather"),
+        ];
+        engine.ingest_turn("sess_fuse", &turn).await.unwrap();
+        let out = tool
+            .execute(
+                serde_json::json!({
+                    "query": "deploy rsync",
+                    "limit": 5,
+                    "session": "sess_fuse",
+                }),
+                ToolContext::default(),
+            )
+            .await;
+        assert!(out.success, "fused recall must succeed: {:?}", out);
+        let parsed = out.parse_content::<serde_json::Value>().unwrap();
+        let hits = parsed["hits"].as_array().unwrap();
+        assert!(!hits.is_empty(), "fused recall must return hits");
+        // Semantic arm is a mock (same vector for all), so FTS ranks first;
+        // the point is the tool still works with an embedder attached.
+        assert!(hits[0]["content"].as_str().unwrap().contains("rsync"));
+    }
+
+    #[tokio::test]
+    async fn lcm_recent_falls_back_to_recent_messages() {
+        let engine = test_engine();
+        let tool = LcmRecentTool::new(engine.clone());
+        let turn = vec![
+            crate::client::Message::assistant("alpha summary content"),
+            crate::client::Message::assistant("beta summary content"),
+        ];
+        engine.ingest_turn("sess_rec", &turn).await.unwrap();
+        let out = tool
+            .execute(serde_json::json!({ "limit": 3 }), ToolContext::default())
+            .await;
+        assert!(out.success, "lcm_recent must succeed: {:?}", out);
+        let parsed = out.parse_content::<serde_json::Value>().unwrap();
+        let entries = parsed["entries"].as_array().unwrap();
+        assert!(
+            !entries.is_empty(),
+            "must fall back to recent message nodes"
+        );
+        assert_eq!(parsed["rollup_fallback"], serde_json::json!(true));
+        // Bad period still returns a result (filtered or fallback).
+        let bad = tool
+            .execute(
+                serde_json::json!({ "period": "month", "limit": 3 }),
+                ToolContext::default(),
+            )
+            .await;
+        assert!(bad.success);
+    }
+
+    #[tokio::test]
+    async fn lcm_doctor_reports_store_health() {
+        let engine = test_engine();
+        let tool = LcmDoctorTool::new(engine.clone());
+        let turn = vec![crate::client::Message::assistant("seed node for doctor")];
+        engine.ingest_turn("sess_doc", &turn).await.unwrap();
+        let out = tool
+            .execute(serde_json::json!({}), ToolContext::default())
+            .await;
+        assert!(out.success, "lcm_doctor must succeed: {:?}", out);
+        let parsed = out.parse_content::<serde_json::Value>().unwrap();
+        let diag = &parsed["diagnostics"];
+        assert_eq!(diag["engine"], serde_json::json!("lcm"));
+        assert_eq!(diag["integrity_check"], serde_json::json!("ok"));
+        assert!(diag["nodes"].as_i64().unwrap() >= 1);
+        assert!(diag["fts_coverage_pct"].as_i64().unwrap() >= 0);
+    }
+
     #[tokio::test]
     async fn lcm_recall_returns_verbatim_hits() {
         let engine = test_engine();
-        let tool = LcmRecallTool::new(engine.clone());
+        let tool = LcmRecallTool::new(engine.clone(), None);
 
         // Seed the DAG.
         let turn = vec![
@@ -735,7 +1063,7 @@ mod tests {
 
     #[tokio::test]
     async fn lcm_recall_rejects_empty_query() {
-        let tool = LcmRecallTool::new(test_engine());
+        let tool = LcmRecallTool::new(test_engine(), None);
         let out = tool
             .execute(serde_json::json!({ "query": "" }), ToolContext::default())
             .await;

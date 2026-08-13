@@ -889,7 +889,7 @@ pub(crate) async fn build_registry(
                         registry
                             .set_tool_timeout("lcm_assert", std::time::Duration::from_secs(180));
                         tracing::info!(
-                            "LCM tools registered (lcm_recall / lcm_stats / lcm_assert / lcm_recall_round) — lossless DAG active"
+                            "LCM tools registered (lcm_recall / lcm_stats / lcm_assert / lcm_recall_round / lcm_recent / lcm_doctor) — lossless DAG active"
                         );
                     }
                     Err(e) => {
