@@ -251,18 +251,19 @@ struct ToolExecutor {
     pub(crate) timeout: Duration,
     /// Per-tool timeout overrides keyed by tool name. LLM-backed tools
     /// (e.g. `lcm_assert action="extract"`, which runs a reasoning-model
-    /// completion) legitimately exceed the generic 30s cap. A plain
-    /// `std::sync::Mutex` is fine: written once at boot from async context
-    /// (tokio's `blocking_write` would panic there) and read for a copy
-    /// on every execution (no await while held).
-    overrides: std::sync::Mutex<HashMap<String, Duration>>,
+    /// completion) legitimately exceed the generic 30s cap. An
+    /// `Arc<std::sync::Mutex>` is fine: written once at boot from async
+    /// context (tokio's `blocking_write` would panic there) and read for a
+    /// copy on every execution (no await while held); clones share the same
+    /// map so a boot-time override propagates to every registry copy.
+    overrides: Arc<std::sync::Mutex<HashMap<String, Duration>>>,
 }
 
 impl ToolExecutor {
     fn new(timeout: Duration) -> Self {
         Self {
             timeout,
-            overrides: std::sync::Mutex::new(HashMap::new()),
+            overrides: Arc::new(std::sync::Mutex::new(HashMap::new())),
         }
     }
 
@@ -326,13 +327,7 @@ impl Clone for ToolRegistry {
             disabled_toolsets: Arc::clone(&self.disabled_toolsets),
             executor: ToolExecutor {
                 timeout: self.executor.timeout,
-                overrides: std::sync::Mutex::new(
-                    self.executor
-                        .overrides
-                        .lock()
-                        .map(|o| o.clone())
-                        .unwrap_or_default(),
-                ),
+                overrides: Arc::clone(&self.executor.overrides),
             },
         }
     }

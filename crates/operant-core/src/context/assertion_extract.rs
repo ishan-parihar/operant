@@ -95,6 +95,21 @@ impl LlmAssertionExtractor {
             })
             .unwrap_or_default())
     }
+
+    /// One LLM completion + decode, returning the raw response, the parsed
+    /// assertions, and whether the response was valid JSON at all (so the
+    /// caller can tell "no facts" from "rambled in prose").
+    async fn extract_and_parse(
+        &self,
+        system: &str,
+        transcript: &str,
+    ) -> Result<(String, Vec<ExtractedAssertion>, bool)> {
+        let resp = self.extract_once(system, transcript).await?;
+        let trimmed = strip_code_fences(&resp).trim();
+        let was_valid = serde_json::from_str::<serde_json::Value>(trimmed).is_ok();
+        let parsed = parse_assertion_payload(&resp);
+        Ok((resp, parsed, was_valid))
+    }
 }
 
 #[async_trait]
@@ -105,13 +120,16 @@ impl AssertionExtractor for LlmAssertionExtractor {
 
     async fn extract(&self, transcript: &str) -> Result<Vec<ExtractedAssertion>> {
         let prompt = build_assertion_prompt("");
-        let resp = self.extract_once(&prompt, transcript).await?;
-        let mut parsed = parse_assertion_payload(&resp);
+        let (mut resp, mut parsed, was_valid) = self.extract_and_parse(&prompt, transcript).await?;
         // Bounded single retry (hermes payload-strictness parity, softened):
         // free-tier reasoning models sometimes ramble past the token budget
         // into prose with no JSON at all. A second call with a hard
         // "JSON ONLY" reinforcement recovers most of those — never loop.
-        if parsed.is_empty() && !resp.trim().is_empty() {
+        //
+        // The retry is gated on `!was_valid`: a legitimate `[]` /
+        // `{"assertions":[]}` ("no durable facts") must NOT trigger a second
+        // LLM call — that would amplify cost on the common no-facts case.
+        if parsed.is_empty() && !was_valid {
             tracing::debug!(
                 raw_len = resp.len(),
                 "lcm assertion extractor: non-parseable response, retrying with JSON-only reinforcement"
@@ -121,11 +139,11 @@ impl AssertionExtractor for LlmAssertionExtractor {
                  prose instead of JSON. Output ONLY the raw JSON array now — no \
                  explanation, no commentary, no markdown."
             );
-            if let Ok(retry) = self.extract_once(&reinforced, transcript).await {
-                let retried = parse_assertion_payload(&retry);
-                if !retried.is_empty() {
-                    parsed = retried;
-                }
+            if let Ok((retry, retried, _)) = self.extract_and_parse(&reinforced, transcript).await
+                && !retried.is_empty()
+            {
+                resp = retry;
+                parsed = retried;
             }
         }
         tracing::debug!(
@@ -443,6 +461,22 @@ pub(crate) mod tests {
         // The retry path depends on this: pure rambling prose must yield
         // zero assertions so the extractor knows to re-ask.
         assert!(parse_assertion_payload("We need to extract ONLY durable assertions from the conversation transcript. Let me think...").is_empty());
+    }
+
+    #[test]
+    fn empty_array_is_valid_json_not_a_retry_trigger() {
+        // A legitimate "no durable facts" answer (empty array / empty
+        // envelope) is VALID JSON — it must not look like a prose ramble
+        // that needs the expensive JSON-only retry.
+        let raw = "[]";
+        let trimmed = strip_code_fences(raw).trim();
+        assert!(serde_json::from_str::<serde_json::Value>(trimmed).is_ok());
+        assert!(parse_assertion_payload(raw).is_empty());
+
+        let raw = r#"{"assertions":[]}"#;
+        let trimmed = strip_code_fences(raw).trim();
+        assert!(serde_json::from_str::<serde_json::Value>(trimmed).is_ok());
+        assert!(parse_assertion_payload(raw).is_empty());
     }
 
     #[test]
