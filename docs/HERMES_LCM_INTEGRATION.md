@@ -214,9 +214,28 @@ installs" stays clean).
   keyed by `retrieval_id`, TTL-purged, MAX 3 rounds; each round returns
   exact verbatim evidence (cumulative across rounds) + search leads, and
   `complete` flips once the evidence requirement is met.
-- Deferred (YAGNI): LLM-driven `assertion_extraction` on ingest and
-  cross-session persisted adaptive state — the DAG + explicit save/query
-  surface already covers the durable-facts need.
+- `lcm_assert action="extract"` ✅ — **LLM-driven assertion extraction**
+  (hermes `assertion_extraction.py` `ModelAssertionExtractor` parity,
+  bounded): `assertion_extract.rs` (`AssertionExtractor` trait +
+  `LlmAssertionExtractor` over the shared OpenAI-compatible client),
+  `recent_message_nodes` engine scan, tolerant payload decode
+  (markdown fences / bare array / `{"assertions":[...]}` envelope /
+  JSON-salvage out of prose), canonicalized keys matching explicit
+  `save` keys, opt-in gate `agent.context_lcm_assertion_extraction`.
+  Live-verified end-to-end on the real DAG: a fresh process mined 3
+  durable facts (`project` → `stack` = "Rust and SQLite",
+  `deploy_cadence` = "biweekly on Wednesdays", `preferred_editor` =
+  "Neovim") from prior-session nodes and a follow-up query returned
+  them in active state with 0 contradictions. Live testing surfaced two
+  production fixes now in place: (1) reasoning models burn their token
+  budget on `reasoning_content` first, so the extractor uses 4096
+  max_tokens (hermes `max_tokens=4000` parity) with a
+  `reasoning_content` fallback and a bounded single JSON-only retry;
+  (2) `ToolRegistry` gained per-tool timeout overrides
+  (`set_tool_timeout`), and `lcm_assert` carries a 180s window so the
+  LLM call isn't killed by the generic 30s tool timeout.
+- Deferred (YAGNI): cross-session persisted adaptive state — the DAG +
+  explicit save/query/extract surface already covers the durable-facts need.
 
 ### P3 — Auto-recall + vector backend (optional, stretch)
 - ✅ **Implemented**: on `assemble`, one bounded retrieval round against the

@@ -829,10 +829,41 @@ pub(crate) async fn build_registry(
                         m.clone(),
                     )) as std::sync::Arc<dyn operant_core::context::Embedder>
                 });
-                match operant_core::tools::register_lcm_tools(&registry, engine, embedder).await {
-                    Ok(()) => tracing::info!(
-                        "LCM tools registered (lcm_recall / lcm_stats / lcm_assert / lcm_recall_round) — lossless DAG active"
-                    ),
+                // P3 assertion extraction (hermes ModelAssertionExtractor
+                // parity, opt-in): when `context_lcm_assertion_extraction` is
+                // true, lcm_assert gains action=extract — an LLM call over
+                // the main agent model mines durable facts from recent DAG
+                // nodes. Off by default (no extra LLM cost on stock installs).
+                let extractor = if config.agent.context_lcm_assertion_extraction {
+                    let llm = std::sync::Arc::new(OpenAIClient::new(client_config(config)));
+                    Some(
+                        std::sync::Arc::new(operant_core::context::LlmAssertionExtractor::new(
+                            llm,
+                            config.agent.model.clone(),
+                        ))
+                            as std::sync::Arc<dyn operant_core::context::AssertionExtractor>,
+                    )
+                } else {
+                    None
+                };
+                match operant_core::tools::register_lcm_tools(
+                    &registry, engine, embedder, extractor,
+                )
+                .await
+                {
+                    Ok(()) => {
+                        // lcm_assert action=extract runs a reasoning-model LLM
+                        // completion over recent DAG nodes — the generic 30s
+                        // tool timeout killed it mid-thought in live testing
+                        // (the model burns its budget on reasoning_content
+                        // first). Grant the tool a longer execution window;
+                        // save/query actions return in milliseconds regardless.
+                        registry
+                            .set_tool_timeout("lcm_assert", std::time::Duration::from_secs(180));
+                        tracing::info!(
+                            "LCM tools registered (lcm_recall / lcm_stats / lcm_assert / lcm_recall_round) — lossless DAG active"
+                        );
+                    }
                     Err(e) => {
                         tracing::warn!(error = %e, "LCM tool registration failed (non-fatal)")
                     }

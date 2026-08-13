@@ -244,14 +244,41 @@ impl ToolContext {
     }
 }
 
-/// Sandboxed tool executor with timeout support
+/// Sandboxed tool executor with timeout support. The default `timeout`
+/// applies to every tool unless an override is present (see
+/// [`ToolRegistry::set_tool_timeout`]).
 struct ToolExecutor {
     pub(crate) timeout: Duration,
+    /// Per-tool timeout overrides keyed by tool name. LLM-backed tools
+    /// (e.g. `lcm_assert action="extract"`, which runs a reasoning-model
+    /// completion) legitimately exceed the generic 30s cap. A plain
+    /// `std::sync::Mutex` is fine: written once at boot from async context
+    /// (tokio's `blocking_write` would panic there) and read for a copy
+    /// on every execution (no await while held).
+    overrides: std::sync::Mutex<HashMap<String, Duration>>,
 }
 
 impl ToolExecutor {
     fn new(timeout: Duration) -> Self {
-        Self { timeout }
+        Self {
+            timeout,
+            overrides: std::sync::Mutex::new(HashMap::new()),
+        }
+    }
+
+    fn set_override(&self, name: &str, timeout: Duration) {
+        if let Ok(mut overrides) = self.overrides.lock() {
+            overrides.insert(name.to_string(), timeout);
+        }
+    }
+
+    /// Effective timeout for a tool: the per-tool override when present,
+    /// otherwise the registry default.
+    fn timeout_for(&self, tool_name: &str) -> Duration {
+        self.overrides
+            .lock()
+            .map(|overrides| overrides.get(tool_name).copied().unwrap_or(self.timeout))
+            .unwrap_or(self.timeout)
     }
 
     async fn execute_with_timeout(
@@ -262,7 +289,8 @@ impl ToolExecutor {
         args: Value,
         context: ToolContext,
     ) -> ToolResult {
-        let result = timeout(self.timeout, tool.execute(args, context)).await;
+        let effective = self.timeout_for(&tool_name);
+        let result = timeout(effective, tool.execute(args, context)).await;
 
         match result {
             Ok(mut result) => {
@@ -272,11 +300,11 @@ impl ToolExecutor {
                 result
             }
             Err(_) => {
-                warn!(tool = %tool_name, timeout = ?self.timeout, "Tool execution timed out");
+                warn!(tool = %tool_name, timeout = ?effective, "Tool execution timed out");
                 ToolResult::error_with_name(
                     &tool_name,
                     &tool_call_id,
-                    format!("Tool timed out after {:?}", self.timeout),
+                    format!("Tool timed out after {:?}", effective),
                 )
             }
         }
@@ -296,7 +324,16 @@ impl Clone for ToolRegistry {
             tools: Arc::clone(&self.tools),
             disabled_names: Arc::clone(&self.disabled_names),
             disabled_toolsets: Arc::clone(&self.disabled_toolsets),
-            executor: ToolExecutor::new(self.executor.timeout),
+            executor: ToolExecutor {
+                timeout: self.executor.timeout,
+                overrides: std::sync::Mutex::new(
+                    self.executor
+                        .overrides
+                        .lock()
+                        .map(|o| o.clone())
+                        .unwrap_or_default(),
+                ),
+            },
         }
     }
 }
@@ -309,6 +346,13 @@ impl ToolRegistry {
             disabled_toolsets: Arc::new(RwLock::new(HashSet::new())),
             executor: ToolExecutor::new(timeout),
         }
+    }
+
+    /// Override the execution timeout for a single tool. LLM-backed tools
+    /// (e.g. `lcm_assert action="extract"`) may need a longer window than
+    /// the generic default; everything else keeps the registry timeout.
+    pub fn set_tool_timeout(&self, name: &str, timeout: Duration) {
+        self.executor.set_override(name, timeout);
     }
 
     #[instrument(skip(self, tool), fields(tool = % tool.name()))]
@@ -566,5 +610,83 @@ mod tests {
         assert!(result2.success);
         assert_eq!(result2.name, "my_tool");
         assert_eq!(result2.content, "42");
+    }
+
+    /// Per-tool timeout overrides: a tool with an override gets the longer
+    /// window; every other tool keeps the registry default. Regression for
+    /// the `lcm_assert action="extract"` live failure where the reasoning-
+    /// model LLM call was killed by the generic 30s tool timeout.
+    #[tokio::test]
+    async fn test_per_tool_timeout_override() {
+        let registry = ToolRegistry::new(Duration::from_secs(5));
+        registry.set_tool_timeout("slow_tool", Duration::from_secs(120));
+        assert_eq!(
+            registry.executor.timeout_for("slow_tool"),
+            Duration::from_secs(120)
+        );
+        assert_eq!(
+            registry.executor.timeout_for("other_tool"),
+            Duration::from_secs(5)
+        );
+
+        // Overrides survive registry clones (shared executor state).
+        let cloned = registry.clone();
+        assert_eq!(
+            cloned.executor.timeout_for("slow_tool"),
+            Duration::from_secs(120)
+        );
+    }
+
+    /// The override actually extends the execution window: a tool that would
+    /// time out under the default succeeds under its override.
+    #[tokio::test]
+    async fn test_override_extends_execution_window() {
+        struct SlowTool;
+        #[async_trait]
+        impl OperantTool for SlowTool {
+            fn name(&self) -> &str {
+                "slow_tool"
+            }
+            fn description(&self) -> &str {
+                "sleeps past the default timeout"
+            }
+            fn schema(&self) -> ToolSchema {
+                ToolSchema::from_type::<TestArgs>("slow_tool", "slow")
+            }
+            async fn execute(&self, _args: Value, _context: ToolContext) -> ToolResult {
+                tokio::time::sleep(Duration::from_millis(200)).await;
+                ToolResult::success("call_1", serde_json::json!({ "done": true }))
+            }
+        }
+
+        // Default timeout (50ms) → would time out.
+        let registry = ToolRegistry::new(Duration::from_millis(50));
+        registry.register(SlowTool).await.unwrap();
+        let result = registry
+            .execute(
+                "slow_tool",
+                "call_1",
+                serde_json::json!({}),
+                ToolContext::default(),
+            )
+            .await
+            .unwrap();
+        assert!(!result.success, "default short timeout must fail the tool");
+        assert!(result.error.unwrap_or_default().contains("timed out"));
+
+        // Override (500ms) → succeeds.
+        let registry = ToolRegistry::new(Duration::from_millis(50));
+        registry.set_tool_timeout("slow_tool", Duration::from_millis(500));
+        registry.register(SlowTool).await.unwrap();
+        let result = registry
+            .execute(
+                "slow_tool",
+                "call_1",
+                serde_json::json!({}),
+                ToolContext::default(),
+            )
+            .await
+            .unwrap();
+        assert!(result.success, "override must extend the execution window");
     }
 }
