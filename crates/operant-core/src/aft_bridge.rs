@@ -68,8 +68,7 @@
 //!   - `aft_status`        → status            (diagnostics: bridge health)
 //!
 //! ## Durable checkpoints
-//!
-//! Upstream AFT keeps checkpoints in memory only (a bridge crash drops them
+//!//! Upstream AFT keeps checkpoints in memory only (a bridge crash drops them
 //! all). operant ships a patched binary at `~/.operant/aft/aft-patched/aft`
 //! that persists checkpoints to disk and hydrates on startup, so
 //! `aft_list_checkpoints` / `aft_restore_checkpoint` survive process
