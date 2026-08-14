@@ -48,6 +48,26 @@ use self::turn_finalizer::{
     TurnExitReason, file_mutation_verifier_footer,
 };
 
+/// Skill-management principles injected into the frozen system prefix
+/// whenever a skill manager is attached.
+///
+/// Mirrors hermes-agent's `agent/prompt_builder.py::SKILLS_GUIDANCE` (injected
+/// whenever `skill_manage` is in the toolset). Without this block the agent
+/// treats skills as a static read-only catalog — it never creates skills for
+/// repeated workflows and never patches stale ones, which is the classic
+/// "drift into non-alignment" with healthy skill-management behavior.
+const SKILLS_GUIDANCE: &str = "
+
+## Skill Management Principles
+After completing a complex task (5+ tool calls), fixing a tricky error, or discovering a non-trivial workflow, save the approach as a skill with skill_manage so you can reuse it next time.
+When using a skill and finding it outdated, incomplete, or wrong, patch it immediately with skill_manage(action='patch') — don't wait to be asked. Skills that aren't maintained become liabilities.
+
+## Skill Safety Rule
+1. **UNAVAILABLE** — If a skill's content is missing, truncated, or shows a stale placeholder (e.g. after context compression), the instructions are inaccessible — treat the skill as unloaded.
+2. **RELOAD** — Before performing any action that depends on a skill, re-check its content with `skill_view(name='...')` if it was compressed, truncated, or is otherwise uncertain.
+3. **WAIT** — If a skill is loading or was just reloaded, wait for the reload confirmation before proceeding.
+4. **DEDUP** — After reloading, ignore any remaining stale placeholders for that same skill — they are historical artifacts from previous compactions and do not need further action.";
+
 /// Response from the user for tool permission requests
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ToolPermissionResponse {
@@ -987,6 +1007,10 @@ impl OperantAgent {
                 }
                 frozen.push_str("</available_skills>");
             }
+            // hermes parity: skill-management principles ride the same
+            // frozen prefix so the background-review fork inherits them
+            // for free (byte-stable => prompt cache hits preserved).
+            frozen.push_str(SKILLS_GUIDANCE);
         }
         frozen
     }
@@ -3941,6 +3965,67 @@ mod tests {
         assert_eq!(prefer_reported(0, 120), 120);
         // real reported prompt-token count wins over the heuristic
         assert_eq!(prefer_reported(5_000, 120), 5_000);
+    }
+
+    #[test]
+    fn frozen_prefix_injects_skill_guidance_when_skill_manager_attached() {
+        use crate::agent::clients::openai::OpenAIModelClient;
+        use crate::client::OpenAIClient;
+
+        let dir = tempfile::TempDir::new().unwrap();
+        let skills_dir = dir.path().join("skills");
+        std::fs::create_dir_all(&skills_dir).unwrap();
+        let skill_dir = skills_dir.join("demo-skill");
+        std::fs::create_dir(&skill_dir).unwrap();
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: demo-skill\ndescription: A demo skill\n---\n\n# Demo\n\nInstructions.\n",
+        )
+        .unwrap();
+        let mut skill_manager = SkillManager::new(skills_dir);
+        skill_manager.load_all().unwrap();
+
+        let db = Database::init(std::path::PathBuf::from("test_guidance.sqlite")).unwrap();
+        let agent = OperantAgent::new(
+            AgentConfig::default(),
+            Box::new(OpenAIModelClient::new(OpenAIClient::new(
+                crate::client::ClientConfig::default(),
+            ))),
+            ToolRegistry::new(Duration::from_secs(1)),
+            Arc::new(db),
+        )
+        .with_skill_manager(skill_manager);
+
+        let prefix = agent.build_frozen_prefix();
+        // Skills index still listed (progressive disclosure tier 1).
+        assert!(prefix.contains("<available_skills>"));
+        assert!(prefix.contains("demo-skill"));
+        // hermes SKILLS_GUIDANCE parity: the principles must ride along.
+        assert!(prefix.contains("## Skill Management Principles"));
+        assert!(prefix.contains("skill_manage"));
+        assert!(prefix.contains("Skills that aren't maintained become liabilities"));
+        assert!(prefix.contains("## Skill Safety Rule"));
+        assert!(prefix.contains("skill_view"));
+    }
+
+    #[test]
+    fn frozen_prefix_omits_guidance_without_skill_manager() {
+        use crate::agent::clients::openai::OpenAIModelClient;
+        use crate::client::OpenAIClient;
+
+        let db = Database::init(std::path::PathBuf::from("test_guidance_none.sqlite")).unwrap();
+        let agent = OperantAgent::new(
+            AgentConfig::default(),
+            Box::new(OpenAIModelClient::new(OpenAIClient::new(
+                crate::client::ClientConfig::default(),
+            ))),
+            ToolRegistry::new(Duration::from_secs(1)),
+            Arc::new(db),
+        );
+
+        let prefix = agent.build_frozen_prefix();
+        assert!(!prefix.contains("## Skill Management Principles"));
+        assert!(!prefix.contains("Skill Safety Rule"));
     }
 
     #[serial]

@@ -697,15 +697,23 @@ struct SkillManageArgs {
     content: Option<String>,
     /// Category for organize (create only)
     category: Option<String>,
-    /// Supporting file path (write_file/remove_file/patch)
+    /// Supporting file path (write_file/remove_file/patch).
+    ///
+    /// Accepted as `file_path` (snake_case, hermes convention) or `filePath`
+    /// (camelCase, operant schema convention).
+    #[serde(alias = "file_path")]
     file_path: Option<String>,
-    /// File content (write_file)
+    /// File content (write_file).
+    #[serde(alias = "file_content")]
     file_content: Option<String>,
-    /// Text to find (patch)
+    /// Text to find (patch).
+    #[serde(alias = "old_string")]
     old_string: Option<String>,
-    /// Replacement text (patch)
+    /// Replacement text (patch).
+    #[serde(alias = "new_string")]
     new_string: Option<String>,
-    /// Replace all occurrences (patch)
+    /// Replace all occurrences (patch).
+    #[serde(alias = "replace_all")]
     replace_all: Option<bool>,
 }
 
@@ -1504,6 +1512,42 @@ mod tests {
     fn test_find_skill_not_found() {
         let (_dir, skills_dir) = setup_test_env();
         assert!(find_skill(&skills_dir, "nonexistent").is_none());
+    }
+
+    #[test]
+    fn test_skill_manage_args_accept_both_naming_conventions() {
+        // hermes parity: models trained on hermes call snake_case keys
+        // (old_string/new_string), while operant's schema advertises
+        // camelCase (oldString/newString). Both must deserialize.
+        let camel: SkillManageArgs = serde_json::from_value(json!({
+            "action": "patch",
+            "name": "demo",
+            "oldString": "a",
+            "newString": "b",
+            "filePath": "references/x.md",
+            "fileContent": "hi",
+            "replaceAll": true
+        }))
+        .unwrap();
+        assert_eq!(camel.old_string.as_deref(), Some("a"));
+        assert_eq!(camel.new_string.as_deref(), Some("b"));
+        assert_eq!(camel.file_path.as_deref(), Some("references/x.md"));
+        assert_eq!(camel.replace_all, Some(true));
+
+        let snake: SkillManageArgs = serde_json::from_value(json!({
+            "action": "patch",
+            "name": "demo",
+            "old_string": "a",
+            "new_string": "b",
+            "file_path": "references/x.md",
+            "file_content": "hi",
+            "replace_all": false
+        }))
+        .unwrap();
+        assert_eq!(snake.old_string.as_deref(), Some("a"));
+        assert_eq!(snake.new_string.as_deref(), Some("b"));
+        assert_eq!(snake.file_path.as_deref(), Some("references/x.md"));
+        assert_eq!(snake.replace_all, Some(false));
     }
 
     #[test]
