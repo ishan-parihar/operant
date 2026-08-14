@@ -57,13 +57,13 @@ const PLACEHOLDER_MARKERS: &[&str] = &[
 
 /// Skills that ship with Operant and must never be modified by the background
 /// review agent. Matches hermes-agent's "bundled" + "hub-installed" protection.
-const PROTECTED_SKILL_PREFIXES: &[&str] = &[
-    "operant-agent",
-    "operant-dev",
-    "hermes-agent",
-    "hermes-dev",
-    "claw-dev",
-];
+///
+/// The bare `operant` prefix deliberately covers the entire bundled self-skill
+/// family in one entry (`operant`, `operant-skill-authoring`, and any future
+/// `operant-*` infra skill) — `operant-agent`/`operant-dev` are subsumed by it.
+/// Over-protection is conservative-safe: it only restrains the background
+/// reviewer and never blocks direct user-initiated edits.
+const PROTECTED_SKILL_PREFIXES: &[&str] = &["operant", "hermes-agent", "hermes-dev", "claw-dev"];
 
 #[expect(clippy::expect_used, reason = "infallible once-init / static init")]
 /// Characters allowed in skill names (filesystem-safe, URL-friendly).
@@ -176,7 +176,7 @@ enum ReviewGuardResult {
 /// Check if a background review is allowed to modify a skill.
 ///
 /// Rules (matching hermes-agent):
-/// 1. Bundled skills (operant-agent, hermes-agent, etc.) — NEVER edit.
+/// 1. Bundled skills (operant*, hermes-agent, etc.) — NEVER edit.
 /// 2. Hub-installed skills — NEVER edit.
 /// 3. Pinned skills — CAN be improved (pin only blocks delete/archive).
 /// 4. The review must have READ the skill before modifying it.
@@ -2497,6 +2497,21 @@ mod tests {
     #[test]
     fn test_validate_name_invalid_chars() {
         assert!(SkillManageTool::validate_name("My Skill!").is_some());
+    }
+
+    #[test]
+    fn test_self_skill_is_protected_from_background_review() {
+        // The bundled self-skill is named `operant` (not `operant-agent`);
+        // the infrastructure skills that ship with it must never be edited
+        // by the background review agent (hermes parity for bundled skills).
+        assert!(is_protected_skill("operant"));
+        assert!(is_protected_skill("operant-skill-authoring"));
+        assert!(is_protected_skill("operant-agent"));
+        assert!(is_protected_skill("hermes-agent"));
+        assert!(is_protected_skill("claw-dev"));
+        // Unrelated user skills stay editable.
+        assert!(!is_protected_skill("arxiv"));
+        assert!(!is_protected_skill("trading-systems"));
     }
 
     #[test]
