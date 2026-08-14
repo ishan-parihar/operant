@@ -2,6 +2,8 @@
 //!
 //! Tools for searching the web and fetching web content.
 
+use std::time::Duration;
+
 use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -64,32 +66,13 @@ impl OperantTool for WebSearchTool {
         // remaining available engines — so a rate-limited/anomaly-blocked
         // DuckDuckGo (or a keyless igs) no longer silently returns 0 results.
         let candidates = build_search_candidates(&settings, igs_available);
-        let mut used_provider = String::new();
-        let mut results: Vec<WebSearchResult> = Vec::new();
-        let mut last_error: Option<String> = None;
-        for provider in candidates {
-            used_provider = provider.name().to_string();
-            match provider.search(&args.query, num_results).await {
-                Ok(r) if !r.is_empty() => {
-                    results = r;
-                    break;
-                }
-                Ok(_) => {
-                    tracing::warn!(
-                        provider = %used_provider,
-                        "web search provider returned no results — trying next"
-                    );
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        provider = %used_provider,
-                        error = %e,
-                        "web search provider failed — trying next"
-                    );
-                    last_error = Some(e.to_string());
-                }
-            }
-        }
+        // Bound every provider to `search_timeout_secs`: a stalled engine
+        // (e.g. an igs subprocess whose own `igs_timeout_secs` can exceed the
+        // agent loop's tool timeout) must fail over to the next candidate
+        // instead of killing the whole search with a tool-level timeout.
+        let per_provider_timeout = Duration::from_secs(settings.search_timeout_secs.max(1));
+        let (results, used_provider, last_error) =
+            run_provider_chain(candidates, &args.query, num_results, per_provider_timeout).await;
 
         if results.is_empty() {
             // Every candidate either errored or returned nothing. Surface an
@@ -119,6 +102,56 @@ impl OperantTool for WebSearchTool {
             }),
         )
     }
+}
+
+/// Run the ordered provider chain, bounding every provider to
+/// `per_provider_timeout`. Returns `(results, used_provider, last_error)`:
+/// the first provider that returns non-empty results wins; empty results,
+/// errors, and timeouts all fall through to the next candidate.
+async fn run_provider_chain(
+    candidates: Vec<Box<dyn WebSearchProvider>>,
+    query: &str,
+    num_results: usize,
+    per_provider_timeout: Duration,
+) -> (Vec<WebSearchResult>, String, Option<String>) {
+    let mut used_provider = String::new();
+    let mut results: Vec<WebSearchResult> = Vec::new();
+    let mut last_error: Option<String> = None;
+    for provider in candidates {
+        used_provider = provider.name().to_string();
+        match tokio::time::timeout(per_provider_timeout, provider.search(query, num_results)).await
+        {
+            Ok(Ok(r)) if !r.is_empty() => {
+                results = r;
+                break;
+            }
+            Ok(Ok(_)) => {
+                tracing::warn!(
+                    provider = %used_provider,
+                    "web search provider returned no results — trying next"
+                );
+            }
+            Ok(Err(e)) => {
+                tracing::warn!(
+                    provider = %used_provider,
+                    error = %e,
+                    "web search provider failed — trying next"
+                );
+                last_error = Some(e.to_string());
+            }
+            Err(_elapsed) => {
+                tracing::warn!(
+                    provider = %used_provider,
+                    timeout = ?per_provider_timeout,
+                    "web search provider timed out — trying next"
+                );
+                last_error = Some(format!(
+                    "{used_provider} timed out after {per_provider_timeout:?}"
+                ));
+            }
+        }
+    }
+    (results, used_provider, last_error)
 }
 
 /// Build the ordered web-search provider chain (hermes
@@ -648,6 +681,60 @@ mod tests {
         let json = serde_json::to_string(&schema).unwrap();
         assert!(!json.is_empty());
         assert_eq!(schema.name, "web_search");
+    }
+
+    #[tokio::test]
+    async fn test_provider_chain_fails_over_on_timeout() {
+        // A provider that hangs past its budget must not block the chain:
+        // the next candidate runs and wins, and the timeout is surfaced.
+        struct SlowProvider;
+        #[async_trait]
+        impl WebSearchProvider for SlowProvider {
+            fn name(&self) -> &str {
+                "slow"
+            }
+            async fn search(
+                &self,
+                _q: &str,
+                _n: usize,
+            ) -> crate::error::Result<Vec<WebSearchResult>> {
+                tokio::time::sleep(Duration::from_secs(30)).await;
+                Ok(vec![])
+            }
+        }
+        struct FastProvider;
+        #[async_trait]
+        impl WebSearchProvider for FastProvider {
+            fn name(&self) -> &str {
+                "fast"
+            }
+            async fn search(
+                &self,
+                _q: &str,
+                _n: usize,
+            ) -> crate::error::Result<Vec<WebSearchResult>> {
+                Ok(vec![WebSearchResult {
+                    title: "hit".to_string(),
+                    url: "https://example.com".to_string(),
+                    snippet: "snippet".to_string(),
+                }])
+            }
+        }
+
+        let (results, used, err) = run_provider_chain(
+            vec![Box::new(SlowProvider), Box::new(FastProvider)],
+            "q",
+            5,
+            Duration::from_millis(50),
+        )
+        .await;
+        assert_eq!(used, "fast");
+        assert_eq!(results.len(), 1);
+        let err_text = err.unwrap_or_default();
+        assert!(
+            err_text.contains("timed out"),
+            "expected a timeout error, got: {err_text}"
+        );
     }
 
     #[test]
