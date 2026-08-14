@@ -393,6 +393,95 @@ fn resolve_skill_target(skill_dir: &Path, file_path: &str) -> Result<PathBuf, St
     Ok(target)
 }
 
+/// Recursively collect every file inside a skill directory (hermes parity:
+/// `rglob("*")` in `skills_tool.py`). Skips hidden entries, `node_modules`,
+/// and the `.archive` / `.hub` markers. `SKILL.md` itself is excluded by the
+/// caller. Returns paths relative to `skill_dir` so the model sees stable
+/// `references/x.md` / `scripts/y.sh` references.
+fn collect_skill_files(skill_dir: &Path) -> Vec<String> {
+    fn walk(dir: &Path, base: &Path, out: &mut Vec<String>) {
+        let Ok(entries) = fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with('.') || name == "node_modules" {
+                continue;
+            }
+            if path.is_dir() {
+                walk(&path, base, out);
+            } else if name != "SKILL.md"
+                && let Ok(rel) = path.strip_prefix(base)
+            {
+                out.push(rel.to_string_lossy().to_string());
+            }
+        }
+    }
+    let mut files = Vec::new();
+    walk(skill_dir, skill_dir, &mut files);
+    files.sort();
+    files
+}
+
+/// Parse a frontmatter tag value that may be a YAML list (`[a, b]`) or a
+/// comma-separated string (`a, b`). Mirrors hermes `_parse_tags`.
+fn parse_tags(value: &Value) -> Vec<String> {
+    match value {
+        Value::Array(arr) => arr
+            .iter()
+            .filter_map(|t| t.as_str().map(|s| s.trim().to_string()))
+            .filter(|s| !s.is_empty())
+            .collect(),
+        Value::String(s) => s
+            .split(',')
+            .map(|t| t.trim().trim_matches('"').trim_matches('\'').to_string())
+            .filter(|t| !t.is_empty())
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// Resolve tags the way hermes does: `metadata.<ns>.tags` (hermes ns first,
+/// then operant ns for ported skills) OR top-level `tags`. Falls back to
+/// `related_skills` from the same sources.
+fn frontmatter_tags(frontmatter: &Value) -> Vec<String> {
+    let meta = frontmatter.get("metadata");
+    for ns in ["hermes", "operant"] {
+        if let Some(tags) = meta
+            .and_then(|m| m.get(ns))
+            .and_then(|m| m.get("tags"))
+            .filter(|v| !v.is_null())
+            && !parse_tags(tags).is_empty()
+        {
+            return parse_tags(tags);
+        }
+    }
+    if let Some(tags) = frontmatter.get("tags") {
+        return parse_tags(tags);
+    }
+    Vec::new()
+}
+
+/// Resolve `related_skills` from metadata.<ns>.related_skills OR top-level.
+fn frontmatter_related_skills(frontmatter: &Value) -> Vec<String> {
+    let meta = frontmatter.get("metadata");
+    for ns in ["hermes", "operant"] {
+        if let Some(rel) = meta
+            .and_then(|m| m.get(ns))
+            .and_then(|m| m.get("related_skills"))
+            .filter(|v| !v.is_null())
+            && !parse_tags(rel).is_empty()
+        {
+            return parse_tags(rel);
+        }
+    }
+    if let Some(rel) = frontmatter.get("related_skills") {
+        return parse_tags(rel);
+    }
+    Vec::new()
+}
+
 /// Validate a file path for write_file / remove_file.
 fn validate_file_path(file_path: &str) -> Option<String> {
     if file_path.is_empty() {
@@ -649,24 +738,26 @@ impl OperantTool for SkillViewTool {
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string())
                     .unwrap_or_default();
-                let tags: Vec<String> = frontmatter
-                    .get("tags")
-                    .and_then(|v| v.as_array())
-                    .map(|arr| {
-                        arr.iter()
-                            .filter_map(|t| t.as_str().map(String::from))
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                // List supporting files
-                let supporting_files: Vec<String> = fs::read_dir(&skill_dir)
-                    .into_iter()
-                    .flatten()
-                    .filter_map(|e| e.ok())
-                    .filter(|e| e.file_type().map(|t| t.is_file()).unwrap_or(false))
-                    .map(|e| e.file_name().to_string_lossy().to_string())
-                    .filter(|n| n != "SKILL.md")
-                    .collect();
+                let tags = frontmatter_tags(&frontmatter);
+                let related_skills = frontmatter_related_skills(&frontmatter);
+                // Recursive support-file listing, categorized like hermes's
+                // `linked_files` (references/templates/assets/scripts).
+                let all_files = collect_skill_files(&skill_dir);
+                let supporting_files: Vec<String> = all_files.clone();
+                let mut linked_files = serde_json::Map::new();
+                for category in ["references", "templates", "assets", "scripts"] {
+                    // Match on the FIRST path component so a file directly under
+                    // the category dir counts, but a sibling like
+                    // `scripts-tools/x` never does.
+                    let in_category: Vec<String> = all_files
+                        .iter()
+                        .filter(|f| f.split('/').next().is_some_and(|first| first == category))
+                        .cloned()
+                        .collect();
+                    if !in_category.is_empty() {
+                        linked_files.insert(category.to_string(), json!(in_category));
+                    }
+                }
                 ToolResult::success(
                     "skill_view",
                     json!({
@@ -674,7 +765,9 @@ impl OperantTool for SkillViewTool {
                         "description": description,
                         "content": body,
                         "tags": tags,
+                        "related_skills": related_skills,
                         "supporting_files": supporting_files,
+                        "linked_files": Value::Object(linked_files),
                         "path": skill_md.to_string_lossy()
                     }),
                 )
@@ -1512,6 +1605,73 @@ mod tests {
     fn test_find_skill_not_found() {
         let (_dir, skills_dir) = setup_test_env();
         assert!(find_skill(&skills_dir, "nonexistent").is_none());
+    }
+
+    #[test]
+    fn test_frontmatter_tags_prefers_metadata_ns_then_top_level() {
+        // metadata.operant.tags wins over top-level tags (ported skills).
+        let fm: Value = serde_json::from_str(
+            "{\"name\": \"arxiv\", \"description\": \"d\", \"tags\": [\"top\"], \n\
+             \"metadata\": {\"operant\": {\"tags\": [\"Research\", \"Arxiv\"]}}}",
+        )
+        .unwrap();
+        assert_eq!(frontmatter_tags(&fm), vec!["Research", "Arxiv"]);
+
+        // hermes ns also honored (hermes-authored skills).
+        let fm2: Value =
+            serde_json::from_str("{\"metadata\": {\"hermes\": {\"tags\": [\"llm\"]}}}").unwrap();
+        assert_eq!(frontmatter_tags(&fm2), vec!["llm"]);
+
+        // Fallback to top-level only.
+        let fm3: Value = serde_json::from_str("{\"tags\": \"a, b\"}").unwrap();
+        assert_eq!(frontmatter_tags(&fm3), vec!["a", "b"]);
+
+        // Nothing at all.
+        let fm4: Value = serde_json::from_str("{}").unwrap();
+        assert!(frontmatter_tags(&fm4).is_empty());
+    }
+
+    #[test]
+    fn test_collect_skill_files_recursive_and_categorized() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let skill = dir.path().join("demo");
+        fs::create_dir_all(skill.join("scripts")).unwrap();
+        fs::create_dir_all(skill.join("references")).unwrap();
+        fs::write(skill.join("SKILL.md"), "---\nname: demo\n---\nbody").unwrap();
+        fs::write(skill.join("scripts/search.sh"), "#!/bin/sh").unwrap();
+        fs::write(skill.join("references/api.md"), "# API").unwrap();
+        fs::write(skill.join("notes.txt"), "root file").unwrap();
+        fs::create_dir(skill.join(".hidden")).unwrap();
+        fs::write(skill.join(".hidden/secret.md"), "hidden").unwrap();
+        // A sibling dir whose name merely PREFIXES a category must not count.
+        fs::create_dir_all(skill.join("scripts-tools")).unwrap();
+        fs::write(skill.join("scripts-tools/x.sh"), "#!\n").unwrap();
+
+        let files = collect_skill_files(&skill);
+        // SKILL.md and hidden entries excluded; nested + root files included.
+        assert!(!files.iter().any(|f| f == "SKILL.md"));
+        assert!(!files.iter().any(|f| f.starts_with(".hidden")));
+        assert!(files.contains(&"scripts/search.sh".to_string()));
+        assert!(files.contains(&"references/api.md".to_string()));
+        assert!(files.contains(&"notes.txt".to_string()));
+        assert!(files.is_sorted());
+
+        // Category filter used by linked_files: first path component must
+        // match exactly (a `scripts-tools/x` sibling must not count).
+        let scripts: Vec<String> = files
+            .iter()
+            .filter(|f| f.split('/').next().is_some_and(|first| first == "scripts"))
+            .cloned()
+            .collect();
+        assert_eq!(scripts, vec!["scripts/search.sh"]);
+        let no_false_positive: Vec<String> = files
+            .iter()
+            .filter(|f| f.split('/').next().is_some_and(|f| f == "assets"))
+            .cloned()
+            .collect();
+        assert!(no_false_positive.is_empty(), "no assets dir in fixture");
+        // `scripts-tools/x.sh` must NOT be categorized as `scripts`.
+        assert_eq!(scripts, vec!["scripts/search.sh"]);
     }
 
     #[test]

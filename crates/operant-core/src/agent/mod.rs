@@ -3764,11 +3764,48 @@ fn truncate_tool_result(tool_name: &str, content: &str) -> String {
                 serde_json::json!("[large data truncated]"),
             );
         }
-        let serialized = serde_json::to_string(&val).unwrap_or_default();
+        let mut serialized = serde_json::to_string(&*obj).unwrap_or_default();
         if serialized.len() <= MAX_TOOL_RESULT_LEN {
             return serialized;
         }
-        // Serialized JSON is still too long — fall through to safe truncate
+        // Still too long — truncate the largest string fields in place so the
+        // JSON stays valid and the trailing metadata keys survive. This is the
+        // skill_view parity fix: serde_json's default BTreeMap ordering puts
+        // bulky fields like "content" FIRST, so a naive head-truncate would
+        // drop the model-visible metadata (name, description, tags,
+        // supporting_files) that comes after it.
+        let mut string_fields: Vec<(String, usize)> = obj
+            .iter()
+            .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.len())))
+            .collect();
+        string_fields.sort_by_key(|(_, len)| std::cmp::Reverse(*len));
+        for (key, _len) in string_fields {
+            if serialized.len() <= MAX_TOOL_RESULT_LEN {
+                break;
+            }
+            let Some(current) = obj.get(&key).and_then(|v| v.as_str()) else {
+                continue;
+            };
+            // Budget for this field = the whole serialized JSON minus the
+            // other fields, minus room for the truncation marker.
+            let other_len = serialized.len() - current.len();
+            let budget = MAX_TOOL_RESULT_LEN.saturating_sub(other_len);
+            if budget <= 48 {
+                // Can't even fit a stub — drop the field entirely.
+                obj.remove(&key);
+            } else {
+                let kept = safe_truncate_str(current, budget - 32);
+                obj.insert(
+                    key.clone(),
+                    serde_json::json!(format!("{}... [truncated]", kept)),
+                );
+            }
+            serialized = serde_json::to_string(&*obj).unwrap_or_default();
+        }
+        if serialized.len() <= MAX_TOOL_RESULT_LEN {
+            return serialized;
+        }
+        // Final fallback: hard head-truncate (char-boundary-safe).
         return format!(
             "{}... [truncated, tool: {}]",
             safe_truncate_str(&serialized, MAX_TOOL_RESULT_LEN),
@@ -3965,6 +4002,48 @@ mod tests {
         assert_eq!(prefer_reported(0, 120), 120);
         // real reported prompt-token count wins over the heuristic
         assert_eq!(prefer_reported(5_000, 120), 5_000);
+    }
+
+    #[test]
+    fn truncate_tool_result_preserves_skill_view_metadata() {
+        // skill_view returns {name, description, content, tags,
+        // supporting_files, path}. serde_json's BTreeMap ordering puts the
+        // bulky "content" field first; a head-truncate would drop the
+        // metadata. The JSON-aware truncation must keep metadata intact and
+        // only bound the large content field.
+        let big_content = "x".repeat(10_000);
+        let result = serde_json::json!({
+            "name": "arxiv",
+            "description": "Search arXiv papers",
+            "content": big_content,
+            "tags": ["Research", "Academic"],
+            "supporting_files": ["scripts/search.sh"],
+            "path": "/tmp/skills/skills/arxiv/SKILL.md"
+        });
+        let truncated = truncate_tool_result("skill_view", &result.to_string());
+        assert!(truncated.len() <= MAX_TOOL_RESULT_LEN + 128);
+        // Metadata survives and remains machine-readable.
+        assert!(truncated.contains("\"name\":\"arxiv\""));
+        assert!(truncated.contains("Search arXiv papers"));
+        assert!(truncated.contains("Research"));
+        assert!(truncated.contains("scripts/search.sh"));
+        // The content field is bounded, not lost entirely.
+        assert!(truncated.contains("[truncated]"));
+        assert!(truncated.contains("xxx"));
+    }
+
+    #[test]
+    fn truncate_tool_result_keeps_small_results_untouched() {
+        let small = serde_json::json!({"name": "arxiv", "content": "short"}).to_string();
+        assert_eq!(truncate_tool_result("skill_view", &small), small);
+    }
+
+    #[test]
+    fn truncate_tool_result_falls_back_for_non_json() {
+        let big = "y".repeat(10_000);
+        let truncated = truncate_tool_result("terminal", &big);
+        assert!(truncated.len() <= MAX_TOOL_RESULT_LEN + 64);
+        assert!(truncated.contains("[truncated, tool: terminal]"));
     }
 
     #[test]
