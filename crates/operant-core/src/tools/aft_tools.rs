@@ -82,6 +82,12 @@ pub async fn register_aft_tools(registry: &ToolRegistry, pool: Arc<AftBridgePool
         .register(AftListCheckpointsTool { pool: pool.clone() })
         .await?;
     registry
+        .register(AftCheckpointPathsTool { pool: pool.clone() })
+        .await?;
+    registry
+        .register(AftRestoreCheckpointTool { pool: pool.clone() })
+        .await?;
+    registry
         .register(AftUndoTool { pool: pool.clone() })
         .await?;
     registry.register(AftStatusTool { pool }).await?;
@@ -763,6 +769,89 @@ impl OperantTool for AftListCheckpointsTool {
     }
 }
 
+#[derive(JsonSchema, Deserialize)]
+struct AftCheckpointNameArgs {
+    name: String,
+}
+
+pub struct AftCheckpointPathsTool {
+    pool: Arc<AftBridgePool>,
+}
+
+#[async_trait]
+impl OperantTool for AftCheckpointPathsTool {
+    fn name(&self) -> &str {
+        "aft_checkpoint_paths"
+    }
+    fn description(&self) -> &str {
+        "Preview which absolute file paths a checkpoint restore would write, without restoring anything. Use before aft_restore_checkpoint to check the blast radius."
+    }
+    fn schema(&self) -> ToolSchema {
+        ToolSchema::from_type::<AftCheckpointNameArgs>(
+            "aft_checkpoint_paths",
+            "Preview checkpoint paths via aft",
+        )
+    }
+    async fn execute(&self, args: Value, context: ToolContext) -> ToolResult {
+        let args: AftCheckpointNameArgs = match serde_json::from_value(args) {
+            Ok(a) => a,
+            Err(e) => {
+                return ToolResult::error(
+                    "aft_checkpoint_paths",
+                    format!("Invalid arguments: {}", e),
+                );
+            }
+        };
+        execute_aft_command(
+            &self.pool,
+            &context,
+            "aft_checkpoint_paths",
+            "checkpoint_paths",
+            json!({ "name": args.name }),
+        )
+        .await
+    }
+}
+
+pub struct AftRestoreCheckpointTool {
+    pool: Arc<AftBridgePool>,
+}
+
+#[async_trait]
+impl OperantTool for AftRestoreCheckpointTool {
+    fn name(&self) -> &str {
+        "aft_restore_checkpoint"
+    }
+    fn description(&self) -> &str {
+        "Restore all files from a previously created checkpoint (see aft_list_checkpoints for available names). Overwrites current file contents with the snapshotted versions and re-applies their permissions. Use after a bad multi-file edit to roll back to a known-good state."
+    }
+    fn schema(&self) -> ToolSchema {
+        ToolSchema::from_type::<AftCheckpointNameArgs>(
+            "aft_restore_checkpoint",
+            "Restore checkpoint via aft",
+        )
+    }
+    async fn execute(&self, args: Value, context: ToolContext) -> ToolResult {
+        let args: AftCheckpointNameArgs = match serde_json::from_value(args) {
+            Ok(a) => a,
+            Err(e) => {
+                return ToolResult::error(
+                    "aft_restore_checkpoint",
+                    format!("Invalid arguments: {}", e),
+                );
+            }
+        };
+        execute_aft_command(
+            &self.pool,
+            &context,
+            "aft_restore_checkpoint",
+            "restore_checkpoint",
+            json!({ "name": args.name }),
+        )
+        .await
+    }
+}
+
 pub struct AftUndoTool {
     pool: Arc<AftBridgePool>,
 }
@@ -872,6 +961,8 @@ mod tests {
             Box::new(AftAstReplaceTool { pool: pool.clone() }),
             Box::new(AftCheckpointTool { pool: pool.clone() }),
             Box::new(AftListCheckpointsTool { pool: pool.clone() }),
+            Box::new(AftCheckpointPathsTool { pool: pool.clone() }),
+            Box::new(AftRestoreCheckpointTool { pool: pool.clone() }),
             Box::new(AftUndoTool { pool: pool.clone() }),
             Box::new(AftStatusTool { pool }),
         ];

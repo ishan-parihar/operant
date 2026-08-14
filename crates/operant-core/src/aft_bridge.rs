@@ -62,8 +62,18 @@
 //!   - `aft_ast_replace`   → ast_replace       (motor: AST pattern rewrite)
 //!   - `aft_checkpoint`    → checkpoint        (safety: snapshot)
 //!   - `aft_list_checkpoints` → list_checkpoints (safety: list snapshots)
+//!   - `aft_checkpoint_paths` → checkpoint_paths (safety: preview snapshot paths)
+//!   - `aft_restore_checkpoint` → restore_checkpoint (safety: restore snapshot)
 //!   - `aft_undo`          → undo              (safety: revert last op)
 //!   - `aft_status`        → status            (diagnostics: bridge health)
+//!
+//! ## Durable checkpoints
+//!
+//! Upstream AFT keeps checkpoints in memory only (a bridge crash drops them
+//! all). operant ships a patched binary at `~/.operant/aft/aft-patched/aft`
+//! that persists checkpoints to disk and hydrates on startup, so
+//! `aft_list_checkpoints` / `aft_restore_checkpoint` survive process
+//! restarts. See [`resolve_aft_binary`] for the resolution order.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -83,20 +93,28 @@ use crate::error::{Error, Result};
 
 const AFT_REPO: &str = "cortexkit/aft";
 const AFT_STORAGE_DIR: &str = "aft";
+/// Directory (under the operant home) for a locally patched aft binary that
+/// must never be replaced by the auto-updater. operant ships durability
+/// fixes (e.g. persistent checkpoints) as `aft-patched/aft` until they land
+/// upstream; the auto-updater only ever writes into `aft-<version>/` dirs.
+const AFT_PATCHED_DIR: &str = "aft-patched";
 
 /// Resolve the aft binary path, downloading it if necessary.
 ///
 /// Resolution order (mirrors the opencode/pi adapter):
 /// 1. `AFT_BINARY` env var (explicit override)
-/// 2. `aft` on PATH (user-installed via `cargo install` or `npm i -g`)
-/// 3. Cached binary at `~/.operant/aft/aft-<version>/aft`
-/// 4. Download latest from GitHub releases → cache → use
+/// 2. Patched binary at `~/.operant/aft/aft-patched/aft` (locally-built
+///    with durability fixes that may not be upstream yet — never
+///    auto-updated)
+/// 3. `aft` on PATH (user-installed via `cargo install` or `npm i -g`)
+/// 4. Cached binary at `~/.operant/aft/aft-<version>/aft`
+/// 5. Download latest from GitHub releases → cache → use
 ///
 /// The auto-update check runs on first call per session: if the cached
 /// binary is older than 7 days, we re-check GitHub for a newer release
 /// and download it in the background. The current call uses the cached
 /// binary; subsequent calls pick up the updated binary on next bridge
-/// spawn.
+/// spawn. The patched dir is never touched by auto-update.
 pub async fn resolve_aft_binary() -> Result<PathBuf> {
     // 1. Explicit override
     if let Ok(path) = std::env::var("AFT_BINARY") {
@@ -106,12 +124,22 @@ pub async fn resolve_aft_binary() -> Result<PathBuf> {
         }
     }
 
-    // 2. On PATH
+    // 2. Patched binary (durability fixes, never auto-updated)
+    let patched = operant_home()
+        .join(AFT_STORAGE_DIR)
+        .join(AFT_PATCHED_DIR)
+        .join(if cfg!(windows) { "aft.exe" } else { "aft" });
+    if patched.exists() {
+        tracing::debug!(path = %patched.display(), "using patched aft binary");
+        return Ok(patched);
+    }
+
+    // 3. On PATH
     if let Ok(path) = which::which("aft") {
         return Ok(path);
     }
 
-    // 3. Cached binary
+    // 4. Cached binary
     let cache_dir = operant_home().join(AFT_STORAGE_DIR);
     if let Some(cached) = find_cached_binary(&cache_dir).await {
         // Kick off a background auto-update check (non-blocking).
@@ -208,7 +236,7 @@ async fn find_cached_binary(cache_dir: &Path) -> Option<PathBuf> {
     let mut stream = entries;
     while let Ok(Some(entry)) = stream.next_entry().await {
         let name = entry.file_name().to_string_lossy().to_string();
-        if !name.starts_with("aft-") {
+        if !name.starts_with("aft-") || name == AFT_PATCHED_DIR {
             continue;
         }
         let bin_path = entry
@@ -968,6 +996,15 @@ mod tests {
             "v0.49.x publishes raw binaries, not tarballs — got {}",
             name
         );
+    }
+
+    #[test]
+    fn find_cached_binary_skips_patched_dir() {
+        // The patched dir is resolved explicitly in `resolve_aft_binary`; it
+        // must not be considered by the version-based cache scan (and must
+        // never be clobbered by auto-update).
+        assert_eq!(AFT_PATCHED_DIR, "aft-patched");
+        assert_ne!(AFT_PATCHED_DIR, "aft-v0.49.4");
     }
 
     #[tokio::test]
