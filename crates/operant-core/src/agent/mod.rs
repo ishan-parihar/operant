@@ -74,7 +74,8 @@ Some skills are **meta-skills** (routers): their directory contains child skill 
 2. **Use the map when present.** If a `_map.md` exists in the router root, read it first (`skill_view(name='<parent>', file_path='_map.md')`) to jump straight to the right leaf — one map read + one leaf read.
 3. **Announce the leaf.** State which leaf you are operating under, and re-route when the task shifts — don't improvise from whatever leaf is in context.
 4. **Delegate branches.** For branch-shaped subtasks, hand one subagent the branch path plus a slice of the task; the subtree is self-contained.
-5. **Load ceiling.** Keep at most: the active leaf, its ancestor routers, and one framework/reference file. Needing more at once is a delegation signal, not a reason to load the tree.";
+5. **Load ceiling.** Keep at most: the active leaf, its ancestor routers, and one framework/reference file. Needing more at once is a delegation signal, not a reason to load the tree.
+6. **Regenerate the map after structural changes.** After creating/renaming/reorganizing nodes, run `skill_manage(action='generate_map', name='<router>')` (or with `check_only=true` to validate without writing). Fix every reported error (unreachable children, name/dir mismatches, missing descriptions, orphan SKILL.md files under resource dirs) and treat warnings (vague descriptions, oversized router bodies over 200 lines, unreferenced resource files) as review prompts before calling a tree complete.";
 
 /// Response from the user for tool permission requests
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -4095,6 +4096,8 @@ mod tests {
         assert!(prefix.contains("## Meta-Skill Routing"));
         assert!(prefix.contains("Route, don't do"));
         assert!(prefix.contains("skill_view(name='<parent>/<child>')"));
+        assert!(prefix.contains("Regenerate the map after structural changes"));
+        assert!(prefix.contains("check_only=true"));
         assert!(prefix.contains("## Skill Safety Rule"));
         assert!(prefix.contains("skill_view"));
     }
