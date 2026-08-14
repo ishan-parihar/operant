@@ -1,6 +1,8 @@
 ---
 name: remote-build-ssh
 description: Build Rust cargo binaries remotely on the ishanp build machine via SSH through a cloudflared tunnel. Use this skill whenever you need to compile a Rust project on a powerful remote machine, when the user says "build on the remote box", "compile remotely", "SSH and build", "deploy to build server", or any time you need to push code and produce binaries on the ishanp build server. Works for ANY Rust project — not just operant. Also use when setting up a new AI agent to access this build machine, or when troubleshooting SSH tunnel connectivity.
+metadata:
+  operant: {}
 ---
 
 # Remote Rust Build via SSH

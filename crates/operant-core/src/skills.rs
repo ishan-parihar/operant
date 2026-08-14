@@ -106,8 +106,7 @@ impl SkillManager {
                 Ok(skill) => {
                     // Index by both the frontmatter name and the directory
                     // name so lookups by either resolve (a skill's directory
-                    // can differ from its `name:` frontmatter, e.g. the
-                    // `cli` dir with name `inference-sh-cli`). Without the
+                    // can differ from its `name:` frontmatter). Without the
                     // directory alias, `skills audit` misreports such skills
                     // as "Failed to parse SKILL.md".
                     self.skills.insert(skill.name.clone(), skill.clone());

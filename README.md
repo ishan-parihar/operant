@@ -105,24 +105,30 @@ operant
 
 Skills are **markdown instruction packs** — the same mechanism hermes-agent uses — that the agent loads and injects into its context on demand. They teach operant *how to do* things (debugging protocols, git workflows, security methodology) so it behaves like an experienced operator rather than a generic model. Invoke one in the TUI with `/skill <name>`; the agent can also call the `skill` tool itself mid-loop.
 
-### Directory layout
-
-Operant ships a **categorized** pool in the repo, and installs it **flat** into the user skills directory (matching `operant skills seed`):
+### Directory layoutOperant ships a **categorized** pool in the repo, and installs it **flat** into the user skills directory (matching `operant skills seed`):
 
 ```
 repo:                                   installed (user):
 skills/                                 ~/.operant/skills/
 ├── devops/                             ├── cli/                 # skills are
-│   ├── cli/SKILL.md                    │   ├── docker-management/  # FLAT — each
+│   ├── cli/SKILL.md                     │   ├── docker-management/  # FLAT — each
 │   └── docker-management/SKILL.md      │   ├── …                  # leaf skill is
 ├── github/                             ├── systematic-debugging/  # a direct
 ├── mcp/                                ├── test-driven-development/ # subdir
 ├── productivity/                       ├── …
-├── research/                           └── <29 skills total>
+├── research/                           └── <84 skills total>
 ├── security/
 ├── software-development/
 ├── workspace-lint/
-└── remote-build-ssh/
+├── autonomous-ai-agents/               (hermes-core parity — apple, creative,
+├── apple/                               email, media, mlops, note-taking,
+├── creative/                            smart-home, social-media + operant
+├── email/                               self-skill)
+├── media/
+├── mlops/
+├── note-taking/
+├── smart-home/
+└── social-media/
 ```
 
 Each skill is a directory containing a `SKILL.md` (required) plus any reference files, scripts, and templates:

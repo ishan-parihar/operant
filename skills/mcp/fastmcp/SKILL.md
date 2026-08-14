@@ -172,7 +172,7 @@ Use `fastmcp discover` to inspect named MCP servers already configured on the ma
 
 When the goal is operant integration, either:
 
-- configure the server in `~/.operant/config.yaml` using the `native-mcp` skill, or
+- configure the server in `~/.operant/operant.toml` (see the `native-mcp` reference), or
 - keep using FastMCP CLI commands during development until the interface stabilizes
 
 ### 7. Deploy After the Local Contract Is Stable
@@ -293,7 +293,7 @@ This usually exposes naming mismatches, missing required arguments, or non-seria
 
 ### operant cannot see the deployed server
 
-The server-building part may be correct while the operant config is not. Load the `native-mcp` skill and configure the server in `~/.operant/config.yaml`, then restart operant.
+The server-building part may be correct while the operant config is not. Load the `native-mcp` reference and configure the server in `~/.operant/operant.toml`, then restart operant.
 
 ## References
 

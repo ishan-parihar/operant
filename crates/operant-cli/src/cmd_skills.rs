@@ -281,47 +281,28 @@ pub fn seed_bundled_skills(config: &AppConfig, source: Option<&str>, force: bool
     let mut copied = 0usize;
     let mut skipped = 0usize;
 
-    for entry in std::fs::read_dir(&source_dir)
-        .with_context(|| format!("Failed to read '{}'", source_dir.display()))?
-    {
-        let entry = entry?;
-        let path = entry.path();
-        if !path.is_dir() {
-            continue;
-        }
-        let Some(_name) = path.file_name().map(|n| n.to_string_lossy().to_string()) else {
+    // Collect every directory carrying a SKILL.md, recursing through nested
+    // categories (e.g. `mlops/evaluation/<skill>`). Each is flattened into the
+    // flat user skills dir by its leaf directory name — a category layout
+    // deeper than one level must never silently drop skills. Sorted so seeding
+    // order (and first-wins on same-leaf-name collisions) is deterministic
+    // across filesystems; a root-level SKILL.md would seed the pool itself as
+    // a single skill.
+    let mut skill_dirs = Vec::new();
+    collect_skill_dirs(&source_dir, &mut skill_dirs);
+    skill_dirs.sort();
+
+    for skill in skill_dirs {
+        let Some(skill_name) = skill.file_name().map(|n| n.to_string_lossy().to_string()) else {
             continue;
         };
-
-        // Category dir (contains DESCRIPTION.md + skill subdirs) vs a single
-        // skill dir (contains SKILL.md directly).
-        let skills: Vec<PathBuf> = if path.join("SKILL.md").exists() {
-            vec![path.clone()]
-        } else {
-            std::fs::read_dir(&path)
-                .map(|entries| {
-                    entries
-                        .filter_map(|e| e.ok())
-                        .map(|e| e.path())
-                        .filter(|p| p.is_dir() && p.join("SKILL.md").exists())
-                        .collect()
-                })
-                .unwrap_or_default()
-        };
-
-        for skill in skills {
-            let Some(skill_name) = skill.file_name().map(|n| n.to_string_lossy().to_string())
-            else {
-                continue;
-            };
-            let target = target_dir.join(&skill_name);
-            if target.exists() && !force {
-                skipped += 1;
-                continue;
-            }
-            copy_dir(&skill, &target)?;
-            copied += 1;
+        let target = target_dir.join(&skill_name);
+        if target.exists() && !force {
+            skipped += 1;
+            continue;
         }
+        copy_dir(&skill, &target)?;
+        copied += 1;
     }
 
     println!(
@@ -332,6 +313,25 @@ pub fn seed_bundled_skills(config: &AppConfig, source: Option<&str>, force: bool
         if force { " (forced)" } else { "" }
     );
     Ok(copied)
+}
+
+/// Recursively collect directories under `dir` that contain a SKILL.md.
+/// A directory that itself carries SKILL.md is a skill root and is not
+/// descended into further.
+fn collect_skill_dirs(dir: &Path, out: &mut Vec<PathBuf>) {
+    if dir.join("SKILL.md").is_file() {
+        out.push(dir.to_path_buf());
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let p = entry.path();
+        if p.is_dir() {
+            collect_skill_dirs(&p, out);
+        }
+    }
 }
 
 /// Recursively copy a directory.
@@ -1529,5 +1529,51 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(src);
         let _ = std::fs::remove_dir_all(dst);
+    }
+
+    #[test]
+    fn seed_bundled_skills_recurses_nested_categories() {
+        let pool = temp_dir("pool");
+        // Flat skill directly in the pool root.
+        std::fs::create_dir_all(pool.join("flat")).unwrap();
+        std::fs::write(
+            pool.join("flat").join("SKILL.md"),
+            "---\nname: flat\n---\n# flat\n",
+        )
+        .unwrap();
+        // Category -> direct skill.
+        std::fs::create_dir_all(pool.join("cat").join("one")).unwrap();
+        std::fs::write(
+            pool.join("cat").join("one").join("SKILL.md"),
+            "---\nname: one\n---\n# one\n",
+        )
+        .unwrap();
+        // NESTED category (cat2/sub/two) — the regression this guards against:
+        // a one-level walker silently drops it.
+        std::fs::create_dir_all(pool.join("cat2").join("sub").join("two")).unwrap();
+        std::fs::write(
+            pool.join("cat2").join("sub").join("two").join("SKILL.md"),
+            "---\nname: two\n---\n# two\n",
+        )
+        .unwrap();
+
+        let target = temp_dir("target");
+        let mut config = AppConfig::default();
+        config.skills.root_dir = target.clone();
+
+        let copied =
+            seed_bundled_skills(&config, Some(pool.to_string_lossy().as_ref()), false).unwrap();
+        assert_eq!(copied, 3);
+        assert!(target.join("flat").join("SKILL.md").exists());
+        assert!(target.join("one").join("SKILL.md").exists());
+        assert!(target.join("two").join("SKILL.md").exists());
+
+        // Idempotent re-seed: everything already present -> nothing copied.
+        let recopied =
+            seed_bundled_skills(&config, Some(pool.to_string_lossy().as_ref()), false).unwrap();
+        assert_eq!(recopied, 0);
+
+        let _ = std::fs::remove_dir_all(pool);
+        let _ = std::fs::remove_dir_all(target);
     }
 }

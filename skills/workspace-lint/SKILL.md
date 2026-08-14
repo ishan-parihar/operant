@@ -1,6 +1,8 @@
 ---
 name: workspace-lint
 description: Maintain a pristine, project-specific directory structure by enforcing rules declared in a root config file (e.g. `workspace-lint.yaml`). Use this skill proactively whenever an AI agent creates new files, scripts, docs, reports, logs, or artifacts in any project — every placement decision (where to put a `.py`, `.md`, `.mq5`, `.csv`, log file, or analysis report) should be checked against this skill's config before the file is written. Trigger on phrases like "organize files", "clean up directory", "where should I put this", "structure the workspace", "new script", "draft report", "save analysis to", "audit workspace", or any time you notice orphaned files at the project root, duplicate directories (e.g. `1. PHANTOM` and `PHANTOM`), stray build artifacts (`__pycache__`, `.pyc`, `.log`), or a project that looks "messy". Run the bundled validator (`scripts/workspace_lint.py`) after each iteration to catch drift early.
+metadata:
+  operant: {}
 ---
 
 # Workspace Lint

@@ -2,7 +2,7 @@
 # install-skills.sh — Seed the bundled skill pool into the user skills dir.
 #
 # Called automatically by `./scripts/install.sh` (and usable standalone), so a
-# packaged install ships the same 29-skill pool the repo ships — no network, no
+# packaged install ships the same 84-skill pool the repo ships — no network, no
 # marketplace fetch, works offline.
 #
 # Layout: the repo pool is CATEGORIZED (`skills/<category>/<skill>/SKILL.md`);
@@ -36,9 +36,6 @@ POOL_DIR="${OPERANT_BUNDLED_SKILLS_DIR:-$SCRIPT_DIR/../skills}"
 SKILLS_DIR="${HERMES_SKILLS_DIR:-${HERMES_HOME:-$HOME/.operant}/skills}"
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
-# True when a dir contains a skill (SKILL.md directly inside).
-has_skill() { [[ -f "$1/SKILL.md" ]]; }
-
 # Copy a single skill dir into the flat user skills dir (skip existing unless
 # forced). Mirrors cmd_skills::seed_bundled_skills semantics.
 copy_skill() {
@@ -71,23 +68,16 @@ seed_pool() {
     return 0
   fi
 
-  local entry sub
+  # Discover every dir carrying SKILL.md recursively (categories may nest at
+  # any depth) and flatten each leaf into the flat user skills dir.
+  local f d
   local copied=0
-  for entry in "$POOL_DIR"/*; do
-    [[ -d "$entry" ]] || continue
-    if has_skill "$entry"; then
-      # Flat skill directly in the pool root.
-      copy_skill "$entry"
-      copied=$((copied + 1))
-    else
-      # Category dir: every subdir carrying SKILL.md is a leaf skill.
-      for sub in "$entry"/*; do
-        [[ -d "$sub" && -f "$sub/SKILL.md" ]] || continue
-        copy_skill "$sub"
-        copied=$((copied + 1))
-      done
-    fi
-  done
+  while IFS= read -r f; do
+    d="$(dirname "$f")"
+    [[ -f "$d/SKILL.md" ]] || continue
+    copy_skill "$d"
+    copied=$((copied + 1))
+  done < <(find "$POOL_DIR" -mindepth 1 -name SKILL.md | sort -u)
   log "seeded $copied skill(s)"
 }
 
