@@ -66,7 +66,15 @@ When using a skill and finding it outdated, incomplete, or wrong, patch it immed
 1. **UNAVAILABLE** — If a skill's content is missing, truncated, or shows a stale placeholder (e.g. after context compression), the instructions are inaccessible — treat the skill as unloaded.
 2. **RELOAD** — Before performing any action that depends on a skill, re-check its content with `skill_view(name='...')` if it was compressed, truncated, or is otherwise uncertain.
 3. **WAIT** — If a skill is loading or was just reloaded, wait for the reload confirmation before proceeding.
-4. **DEDUP** — After reloading, ignore any remaining stale placeholders for that same skill — they are historical artifacts from previous compactions and do not need further action.";
+4. **DEDUP** — After reloading, ignore any remaining stale placeholders for that same skill — they are historical artifacts from previous compactions and do not need further action.
+
+## Meta-Skill Routing
+Some skills are **meta-skills** (routers): their directory contains child skill directories, each with its own SKILL.md, forming a tree. Only the router's description sits in the always-loaded list — everything below is reached by reading.
+1. **Route, don't do.** A router's body is a map of its children; real procedure text lives in leaves. Read the child with `skill_view(name='<parent>/<child>')` before acting on it.
+2. **Use the map when present.** If a `_map.md` exists in the router root, read it first (`skill_view(name='<parent>', file_path='_map.md')`) to jump straight to the right leaf — one map read + one leaf read.
+3. **Announce the leaf.** State which leaf you are operating under, and re-route when the task shifts — don't improvise from whatever leaf is in context.
+4. **Delegate branches.** For branch-shaped subtasks, hand one subagent the branch path plus a slice of the task; the subtree is self-contained.
+5. **Load ceiling.** Keep at most: the active leaf, its ancestor routers, and one framework/reference file. Needing more at once is a delegation signal, not a reason to load the tree.";
 
 /// Response from the user for tool permission requests
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -4083,6 +4091,10 @@ mod tests {
         assert!(prefix.contains("## Skill Management Principles"));
         assert!(prefix.contains("skill_manage"));
         assert!(prefix.contains("Skills that aren't maintained become liabilities"));
+        // meta-skill parity: the routing contract rides the same prefix.
+        assert!(prefix.contains("## Meta-Skill Routing"));
+        assert!(prefix.contains("Route, don't do"));
+        assert!(prefix.contains("skill_view(name='<parent>/<child>')"));
         assert!(prefix.contains("## Skill Safety Rule"));
         assert!(prefix.contains("skill_view"));
     }

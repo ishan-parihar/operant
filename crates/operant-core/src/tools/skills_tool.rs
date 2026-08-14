@@ -51,6 +51,40 @@ static VALID_NAME_RE: LazyLock<Regex> = LazyLock::new(|| {
 /// Subdirectories allowed for write_file / remove_file.
 const ALLOWED_SUBDIRS: &[&str] = &["references", "templates", "scripts", "assets"];
 
+/// Cheap check: does `dir` contain at least one non-skipped subdirectory?
+/// Used to avoid full tree walks for leaf skills (no children possible).
+fn dir_has_subdirs(dir: &Path) -> bool {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return false;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("")
+            .to_string();
+        if !is_skill_dir_skipped(&name) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Whether a directory should be skipped by the skill-tree walkers (hidden,
+/// build, vendored, or resource dirs are never skill nodes).
+fn is_skill_dir_skipped(dir_name: &str) -> bool {
+    dir_name.starts_with('.')
+        || dir_name.starts_with('_')
+        || dir_name == "node_modules"
+        || dir_name == ".archive"
+        || dir_name == ".hub"
+        || ALLOWED_SUBDIRS.contains(&dir_name)
+}
+
 // ── Background review write guards ────────────────────────────────────────
 
 /// Tracks which skills have been read via `skill_view` during a background
@@ -249,6 +283,13 @@ struct SkillMeta {
     name: String,
     description: String,
     category: Option<String>,
+    /// Child skill nodes (meta-skill routing surface). Populated when the
+    /// skill directory contains nested skill directories of its own.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    children: Vec<SkillMeta>,
+    /// Path relative to the parent skill root (meta-skill children only).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    path: Option<String>,
 }
 
 fn find_skills_in_dir(skills_dir: &Path) -> Vec<SkillMeta> {
@@ -271,56 +312,224 @@ fn collect_skills_recursive(base_dir: &Path, current_dir: &Path, skills: &mut Ve
             continue;
         }
         let dir_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-        if dir_name.starts_with('.')
-            || dir_name == "node_modules"
-            || dir_name == ".archive"
-            || dir_name == ".hub"
-        {
+        if dir_name.starts_with('.') || dir_name == "node_modules" {
             continue;
         }
         let skill_md = path.join("SKILL.md");
-        if skill_md.exists() {
-            if let Ok(content) = fs::read_to_string(&skill_md) {
-                let (frontmatter, body) = parse_frontmatter(&content);
-                let name = frontmatter
-                    .get("name")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or(dir_name)
-                    .chars()
-                    .take(MAX_NAME_LENGTH)
-                    .collect::<String>();
-                let description = frontmatter
-                    .get("description")
-                    .and_then(|v| v.as_str())
-                    .map(|s| {
-                        if s.len() > MAX_DESCRIPTION_LENGTH {
-                            format!("{}...", &s[..MAX_DESCRIPTION_LENGTH - 3])
-                        } else {
-                            s.to_string()
-                        }
-                    })
-                    .unwrap_or_else(|| {
-                        body.lines()
-                            .find(|l| !l.trim().starts_with('#'))
-                            .map(|l| l.trim().to_string())
-                            .unwrap_or_default()
-                    });
-                let category = path
-                    .parent()
-                    .filter(|p| *p != base_dir)
-                    .and_then(|p| p.file_name())
-                    .and_then(|n| n.to_str())
-                    .map(|s| s.to_string());
-                skills.push(SkillMeta {
-                    name,
-                    description,
-                    category,
+        if skill_md.exists()
+            && let Ok(content) = fs::read_to_string(&skill_md)
+        {
+            let (frontmatter, body) = parse_frontmatter(&content);
+            let name = frontmatter
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or(dir_name)
+                .chars()
+                .take(MAX_NAME_LENGTH)
+                .collect::<String>();
+            let description = frontmatter
+                .get("description")
+                .and_then(|v| v.as_str())
+                .map(|s| {
+                    if s.len() > MAX_DESCRIPTION_LENGTH {
+                        format!("{}...", &s[..MAX_DESCRIPTION_LENGTH - 3])
+                    } else {
+                        s.to_string()
+                    }
+                })
+                .unwrap_or_else(|| {
+                    body.lines()
+                        .find(|l| !l.trim().starts_with('#'))
+                        .map(|l| l.trim().to_string())
+                        .unwrap_or_default()
                 });
-            }
+            let category = path
+                .parent()
+                .filter(|p| *p != base_dir)
+                .and_then(|p| p.file_name())
+                .and_then(|n| n.to_str())
+                .map(|s| s.to_string()); // Meta-skill support: a skill whose directory contains nested
+            // skill directories is a router — surface its children so the
+            // model sees the routing surface without loading every leaf.
+            // Cheap gate: only walk when the dir has subdirectories, so
+            // the 84+ leaf skills in a typical pool don't pay for tree
+            // discovery on every skills_list call.
+            let children = if dir_has_subdirs(&path) {
+                collect_skill_children(&path)
+            } else {
+                Vec::new()
+            };
+            skills.push(SkillMeta {
+                name,
+                description,
+                category,
+                children,
+                path: None,
+            });
         } else {
             collect_skills_recursive(base_dir, &path, skills);
         }
     }
+}
+
+/// One node of a meta-skill tree, as collected for `_map.md` generation.
+struct MapNode {
+    rel_path: String,
+    description: String,
+    depth: usize,
+}
+
+/// Recursively walk a meta-skill subtree (descending THROUGH routers) and
+/// collect every node for `_map.md` + a validation report.
+///
+/// Mirrors the meta-skill-creator registry.py walk: routers are nodes that
+/// contain child nodes; resource dirs (references/scripts/templates/assets)
+/// are not skill nodes and are skipped.
+fn collect_map_nodes(
+    root: &Path,
+    dir: &Path,
+    depth: usize,
+    nodes: &mut Vec<MapNode>,
+    warnings: &mut Vec<String>,
+) {
+    // Parent router body, used for the reachability check. Containers without
+    // a SKILL.md have no routing table, so no check applies at that level.
+    let parent_body = fs::read_to_string(dir.join("SKILL.md")).unwrap_or_default();
+    let parent_name = dir
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
+
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let dir_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        if is_skill_dir_skipped(dir_name) {
+            continue;
+        }
+        let skill_md = path.join("SKILL.md");
+        if skill_md.exists()
+            && let Ok(content) = fs::read_to_string(&skill_md)
+        {
+            let (frontmatter, _body) = parse_frontmatter(&content);
+            let name = frontmatter
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or(dir_name)
+                .to_string();
+            let description = frontmatter
+                .get("description")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let rel = path
+                .strip_prefix(root)
+                .map(|p| p.to_string_lossy().replace('\\', "/"))
+                .unwrap_or_else(|_| dir_name.to_string());
+            // Reachability: a child that isn't referenced by its router's
+            // SKILL.md will never be reached — the whole reason for the map.
+            // Test the dir name, the frontmatter name (a router may reference
+            // a child by either), and the relative path.
+            if !parent_body.is_empty()
+                && !parent_body.contains(dir_name)
+                && !parent_body.contains(&name)
+                && !parent_body.contains(&rel)
+            {
+                warnings.push(format!(
+                    "child '{}' is not referenced in parent router '{}' SKILL.md — it will never be routed to. Add a routing line.",
+                    rel, parent_name
+                ));
+            }
+            nodes.push(MapNode {
+                rel_path: rel,
+                description,
+                depth,
+            });
+        }
+        // Descend through routers AND containers — leaves live below.
+        collect_map_nodes(root, &path, depth + 1, nodes, warnings);
+    }
+}
+
+/// Recursively collect the child skill nodes of a meta-skill router.
+///
+/// A child node is any directory (at any depth below `skill_dir`, excluding
+/// resource and hidden directories) that contains its own `SKILL.md`. Returns
+/// paths relative to `skill_dir` so the model can route with
+/// `skill_view(name='<parent>/<child>')`.
+fn collect_skill_children(skill_dir: &Path) -> Vec<SkillMeta> {
+    fn walk(dir: &Path, base: &Path, out: &mut Vec<SkillMeta>) {
+        let Ok(entries) = fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            let dir_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if is_skill_dir_skipped(dir_name) {
+                continue;
+            }
+            let skill_md = path.join("SKILL.md");
+            if skill_md.exists() {
+                if let Ok(content) = fs::read_to_string(&skill_md) {
+                    let (frontmatter, body) = parse_frontmatter(&content);
+                    let name = frontmatter
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or(dir_name)
+                        .chars()
+                        .take(MAX_NAME_LENGTH)
+                        .collect::<String>();
+                    let description = frontmatter
+                        .get("description")
+                        .and_then(|v| v.as_str())
+                        .map(|s| {
+                            if s.len() > MAX_DESCRIPTION_LENGTH {
+                                format!("{}...", &s[..MAX_DESCRIPTION_LENGTH - 3])
+                            } else {
+                                s.to_string()
+                            }
+                        })
+                        .unwrap_or_else(|| {
+                            body.lines()
+                                .find(|l| !l.trim().starts_with('#'))
+                                .map(|l| l.trim().to_string())
+                                .unwrap_or_default()
+                        });
+                    let rel = path
+                        .strip_prefix(base)
+                        .map(|p| p.to_string_lossy().replace('\\', "/"))
+                        .unwrap_or_else(|_| dir_name.to_string());
+                    let mut children = Vec::new();
+                    walk(&path, base, &mut children);
+                    children.sort_by(|a, b| a.name.cmp(&b.name));
+                    // category stays None for meta-skill nodes — the `path`
+                    // field (relative to the router root) encodes position.
+                    out.push(SkillMeta {
+                        name,
+                        description,
+                        category: None,
+                        children,
+                        path: Some(rel),
+                    });
+                }
+            } else {
+                // Sub-container (router without SKILL.md yet, or grouped dirs).
+                walk(&path, base, out);
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(skill_dir, skill_dir, &mut out);
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+    out
 }
 
 /// Find a skill by name across all skill directories.
@@ -543,6 +752,9 @@ pub struct SkillsTool {
 )]
 struct SkillsListArgs {
     category: Option<String>,
+    /// When true, return the full nested tree (routers with their children)
+    /// instead of the flat catalog. Meta-skill discovery surface.
+    tree: Option<bool>,
 }
 
 impl SkillsTool {
@@ -570,8 +782,9 @@ impl OperantTool for SkillsTool {
         )
     }
 
-    async fn execute(&self, _args: Value, _context: ToolContext) -> ToolResult {
+    async fn execute(&self, args: Value, _context: ToolContext) -> ToolResult {
         let skills_dir = &self.root_dir;
+        let tree_mode = args.get("tree").and_then(|v| v.as_bool()).unwrap_or(false);
         if !skills_dir.exists() {
             if let Err(e) = fs::create_dir_all(skills_dir) {
                 return ToolResult::error(
@@ -591,6 +804,18 @@ impl OperantTool for SkillsTool {
                 json!({ "skills": [], "categories": [], "message": "No skills found in skills/ directory." }),
             );
         }
+        if tree_mode {
+            // Meta-skill discovery surface: nested tree of routers/leaves.
+            let roots = collect_skill_children(skills_dir);
+            return ToolResult::success(
+                "skills_list",
+                json!({
+                    "tree": roots,
+                    "count": roots.len(),
+                    "hint": "Use skill_view(name='<parent>/<child>') to read any node. Use skill_manage(action='generate_map', name='<router>') to build _map.md."
+                }),
+            );
+        }
         let categories: Vec<String> = skills
             .iter()
             .filter_map(|s| s.category.clone())
@@ -603,7 +828,7 @@ impl OperantTool for SkillsTool {
                 "skills": skills,
                 "categories": categories,
                 "count": skills.len(),
-                "hint": "Use skill_view to see full content"
+                "hint": "Use skill_view to see full content. Use skills_list(tree=true) for the meta-skill tree."
             }),
         )
     }
@@ -768,6 +993,7 @@ impl OperantTool for SkillViewTool {
                         "related_skills": related_skills,
                         "supporting_files": supporting_files,
                         "linked_files": Value::Object(linked_files),
+                        "children": collect_skill_children(&skill_dir),
                         "path": skill_md.to_string_lossy()
                     }),
                 )
@@ -808,6 +1034,8 @@ struct SkillManageArgs {
     /// Replace all occurrences (patch).
     #[serde(alias = "replace_all")]
     replace_all: Option<bool>,
+    /// Delete a meta-skill router and all of its child skills (delete only).
+    recursive: Option<bool>,
 }
 
 pub struct SkillManageTool {
@@ -831,11 +1059,34 @@ impl SkillManageTool {
                 MAX_NAME_LENGTH
             ));
         }
-        if !VALID_NAME_RE.is_match(name) {
-            return Some(format!(
-                "Invalid skill name '{}'. Use lowercase letters, numbers, hyphens, dots, and underscores. Must start with a letter or digit.",
-                name
-            ));
+        // Meta-skill support: names may be slash-separated nested paths
+        // (e.g. `trading-systems/strategy-research/backtesting`). Each segment
+        // must be a valid skill name; the path must be relative and clean.
+        if name.starts_with('/') || name.ends_with('/') {
+            return Some("Skill path must not start or end with '/'".into());
+        }
+        if name.contains("//") {
+            return Some("Skill path must not contain '//'".into());
+        }
+        if name.split('/').any(|seg| seg == ".." || seg == ".") {
+            return Some("Skill path must not contain '.' or '..' segments".into());
+        }
+        for segment in name.split('/') {
+            if segment.is_empty() {
+                return Some("Skill path contains an empty segment".into());
+            }
+            if segment.len() > MAX_NAME_LENGTH {
+                return Some(format!(
+                    "Skill path segment '{}' exceeds {} characters.",
+                    segment, MAX_NAME_LENGTH
+                ));
+            }
+            if !VALID_NAME_RE.is_match(segment) {
+                return Some(format!(
+                    "Invalid skill path segment '{}'. Use lowercase letters, numbers, hyphens, dots, and underscores. Must start with a letter or digit.",
+                    segment
+                ));
+            }
         }
         None
     }
@@ -871,10 +1122,11 @@ impl OperantTool for SkillManageTool {
             "delete" => self.action_delete(&parsed).await,
             "write_file" => self.action_write_file(&parsed).await,
             "remove_file" => self.action_remove_file(&parsed).await,
+            "generate_map" => self.action_generate_map(&parsed).await,
             other => ToolResult::error(
                 "skill_manage",
                 format!(
-                    "Unknown action '{}'. Use: create, edit, patch, delete, write_file, remove_file",
+                    "Unknown action '{}'. Use: create, edit, patch, delete, write_file, remove_file, generate_map",
                     other
                 ),
             ),
@@ -893,6 +1145,14 @@ impl SkillManageTool {
         };
         if let Some(err) = Self::validate_name(&parsed.name) {
             return ToolResult::error("skill_manage", err);
+        }
+        // Nested paths (meta-skill children) and category are mutually
+        // exclusive: a nested path already encodes its position in the tree.
+        if parsed.name.contains('/') && parsed.category.is_some() {
+            return ToolResult::error(
+                "skill_manage",
+                "Use either a category or a nested path (meta-skill child), not both.",
+            );
         }
         if let Some(err) = validate_frontmatter(content) {
             return ToolResult::error("skill_manage", err);
@@ -1129,6 +1389,22 @@ impl SkillManageTool {
                 ),
             );
         }
+        // Meta-skill safety: never delete a router that has children unless
+        // recursive is set — mirrors hermes curator's never-auto-delete
+        // invariant and prevents accidental tree destruction.
+        let children = collect_skill_children(&skill_dir);
+        if !children.is_empty() && !parsed.recursive.unwrap_or(false) {
+            let names: Vec<&str> = children.iter().map(|c| c.name.as_str()).collect();
+            return ToolResult::error(
+                "skill_manage",
+                format!(
+                    "Skill '{}' is a meta-skill router with {} child skill(s): {:?}. Pass recursive=true to delete the whole tree.",
+                    parsed.name,
+                    children.len(),
+                    names
+                ),
+            );
+        }
         if let Err(e) = fs::remove_dir_all(&skill_dir) {
             return ToolResult::error("skill_manage", format!("Failed to delete: {}", e));
         }
@@ -1271,6 +1547,74 @@ impl SkillManageTool {
                 "message": format!("File '{}' removed from skill '{}'.", fp, parsed.name),
             }),
         )
+    }
+
+    // ── generate_map (meta-skill registry, registry.py parity) ─────
+    async fn action_generate_map(&self, parsed: &SkillManageArgs) -> ToolResult {
+        let Some(skill_dir) = find_skill(&self.root_dir, &parsed.name) else {
+            return ToolResult::error("skill_manage", format!("Skill '{}' not found", parsed.name));
+        };
+        // Walk the subtree and build the map + validation report. Unlike the
+        // flat scanner (which stops at the first SKILL.md), this walker
+        // descends THROUGH routers so nested leaves are indexed too.
+        let mut nodes: Vec<MapNode> = Vec::new();
+        let mut warnings: Vec<String> = Vec::new();
+        collect_map_nodes(&skill_dir, &skill_dir, 1, &mut nodes, &mut warnings);
+        nodes.sort_by(|a, b| a.rel_path.cmp(&b.rel_path));
+
+        if nodes.is_empty() {
+            // A leaf has no children — writing an empty map would just be
+            // noise. Report the count and let the caller decide. The schema
+            // stays stable across the leaf/router cases (warnings always
+            // present, map_path null when nothing was written).
+            return ToolResult::success(
+                "skill_manage",
+                json!({
+                    "action": "generate_map",
+                    "name": parsed.name,
+                    "map_path": Value::Null,
+                    "node_count": 0,
+                    "map": Value::Null,
+                    "warnings": [],
+                    "message": format!(
+                        "'{}' has no child skills — it is a leaf, not a router. No _map.md written.",
+                        parsed.name
+                    ),
+                }),
+            );
+        }
+        let mut map = String::new();
+        map.push_str(&format!("# {} — meta-skill tree map\n\n", parsed.name));
+        map.push_str("Indented index: each line is a node (path — description).\n");
+        map.push_str("Jump: read this map and go straight to the leaf you need.\n");
+        map.push_str("Walk: descend router by router when you don't know the leaf.\n\n");
+        for n in &nodes {
+            let indent = "  ".repeat(n.depth);
+            let first = n.description.split(['.', '\n']).next().unwrap_or("").trim();
+            map.push_str(&format!("{}- {} — {}\n", indent, n.rel_path, first));
+        }
+
+        let map_path = skill_dir.join("_map.md");
+        if let Err(e) = fs::write(&map_path, &map) {
+            return ToolResult::error("skill_manage", format!("Failed to write _map.md: {}", e));
+        }
+        let mut result = json!({
+            "action": "generate_map",
+            "name": parsed.name,
+            "map_path": map_path.to_string_lossy(),
+            "node_count": nodes.len(),
+            "map": map,
+            "warnings": warnings,
+        });
+        if let Some(obj) = result.as_object_mut() {
+            obj.insert("message".into(), json!(format!(
+                "Wrote _map.md with {} node(s). Read it with skill_view(name='{}', file_path='_map.md') to route the tree.",
+                nodes.len(),
+                parsed.name
+            )));
+        }
+        self.record_usage(&parsed.name, "generate_map");
+        ToolResult::success("skill_manage", result)
     }
 
     // ── Pinned check ────────────────────────────────────────────────
@@ -1573,6 +1917,113 @@ mod tests {
     fn test_validate_name_too_long() {
         let long = "a".repeat(MAX_NAME_LENGTH + 1);
         assert!(SkillManageTool::validate_name(&long).is_some());
+    }
+
+    #[test]
+    fn test_validate_name_accepts_nested_meta_skill_paths() {
+        // Meta-skill: slash-separated nested paths are valid node addresses.
+        assert!(SkillManageTool::validate_name("trading-systems").is_none());
+        assert!(SkillManageTool::validate_name("trading-systems/strategy-research").is_none());
+        assert!(
+            SkillManageTool::validate_name("trading-systems/strategy-research/backtesting")
+                .is_none()
+        );
+        // Traversal and malformed paths are rejected.
+        assert!(SkillManageTool::validate_name("../escape").is_some());
+        assert!(SkillManageTool::validate_name("trading-systems/../escape").is_some());
+        assert!(SkillManageTool::validate_name("/leading").is_some());
+        assert!(SkillManageTool::validate_name("trailing/").is_some());
+        assert!(SkillManageTool::validate_name("a//b").is_some());
+        assert!(SkillManageTool::validate_name("a/.").is_some());
+        // Each segment is validated individually.
+        assert!(SkillManageTool::validate_name("ok/Bad-Segment").is_some());
+    }
+
+    #[test]
+    fn test_collect_skill_children_finds_nested_tree() {
+        let dir = TempDir::new().unwrap();
+        let skills_dir = dir.path().join("skills");
+        let root = skills_dir.join("trading-systems");
+        fs::create_dir_all(root.join("strategy-research/backtesting")).unwrap();
+        fs::create_dir_all(root.join("execution")).unwrap();
+        fs::write(
+            root.join("SKILL.md"),
+            "---\nname: trading-systems\ndescription: Trading domain router\n---\n\nRoutes to strategy-research and execution.\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("strategy-research/SKILL.md"),
+            "---\nname: strategy-research\ndescription: Researches strategies\n---\n\nBody.\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("strategy-research/backtesting/SKILL.md"),
+            "---\nname: backtesting\ndescription: Backtests strategies\n---\n\nBody.\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("execution/SKILL.md"),
+            "---\nname: execution\ndescription: Executes trades\n---\n\nBody.\n",
+        )
+        .unwrap();
+
+        let children = collect_skill_children(&root);
+        assert_eq!(children.len(), 2, "router lists its children");
+        let sr = children
+            .iter()
+            .find(|c| c.name == "strategy-research")
+            .unwrap();
+        assert_eq!(sr.children.len(), 1, "router child surfaces its own leaf");
+        assert_eq!(sr.children[0].name, "backtesting");
+        // Paths are relative to the router root so the model can route.
+        assert_eq!(sr.path.as_deref(), Some("strategy-research"));
+        assert_eq!(
+            sr.children[0].path.as_deref(),
+            Some("strategy-research/backtesting")
+        );
+    }
+
+    #[test]
+    fn test_collect_map_nodes_walks_through_routers() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().join("trading-systems");
+        fs::create_dir_all(root.join("strategy-research/backtesting")).unwrap();
+        fs::write(
+            root.join("SKILL.md"),
+            "---\nname: trading-systems\ndescription: Router\n---\n\nBody.\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("strategy-research/SKILL.md"),
+            "---\nname: strategy-research\ndescription: Research router\n---\n\nBody.\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("strategy-research/backtesting/SKILL.md"),
+            "---\nname: backtesting\ndescription: Leaf\n---\n\nBody.\n",
+        )
+        .unwrap();
+        // A resource dir is NOT a skill node.
+        fs::create_dir_all(root.join("strategy-research/references")).unwrap();
+        fs::write(
+            root.join("strategy-research/references/guide.md"),
+            "# Guide",
+        )
+        .unwrap();
+
+        let mut nodes = Vec::new();
+        let mut warnings = Vec::new();
+        collect_map_nodes(&root, &root, 1, &mut nodes, &mut warnings);
+        let paths: Vec<&str> = nodes.iter().map(|n| n.rel_path.as_str()).collect();
+        assert!(paths.contains(&"strategy-research"), "got: {paths:?}");
+        assert!(
+            paths.contains(&"strategy-research/backtesting"),
+            "leaf below a router is indexed: {paths:?}"
+        );
+        assert!(
+            !paths.iter().any(|p| p.contains("references")),
+            "resource dirs are not skill nodes: {paths:?}"
+        );
     }
 
     #[test]
