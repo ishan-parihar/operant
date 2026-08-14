@@ -23,6 +23,13 @@ echo "=== Installing Browser Dependencies (igs + obscura) ==="
 bash "$(dirname "$0")/install-browser-deps.sh" || echo "WARN: browser deps provisioning failed (non-fatal)"
 
 echo ""
+echo "=== Seeding Bundled Skills ==="
+# Pack the 29-skill pool shipped with the repo into the user skills directory
+# (~/.operant/skills) so a fresh install is agent-ready from scratch. Idempotent
+# (keeps existing skills); FORCE=1 re-seeds. Best-effort — never abort install.
+bash "$(dirname "$0")/install-skills.sh" || echo "WARN: skill seeding failed (non-fatal)"
+
+echo ""
 echo "=== Installation Complete ==="
 echo ""
 echo "You can now run: operant --version"
@@ -33,3 +40,4 @@ echo "To start the dashboard: operant dashboard"
 echo "To start the gateway: operant gateway start"
 echo ""
 echo "Browser tooling: igs -> $(command -v igs || echo MISSING), obscura -> $(command -v obscura || echo MISSING)"
+echo "Skills: $(find "${HERMES_SKILLS_DIR:-${HERMES_HOME:-$HOME/.operant}/skills}" -maxdepth 2 -name SKILL.md 2>/dev/null | wc -l | tr -d ' ') installed"

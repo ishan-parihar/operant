@@ -101,6 +101,83 @@ operant
 
 ---
 
+## Skills
+
+Skills are **markdown instruction packs** — the same mechanism hermes-agent uses — that the agent loads and injects into its context on demand. They teach operant *how to do* things (debugging protocols, git workflows, security methodology) so it behaves like an experienced operator rather than a generic model. Invoke one in the TUI with `/skill <name>`; the agent can also call the `skill` tool itself mid-loop.
+
+### Directory layout
+
+Operant ships a **categorized** pool in the repo, and installs it **flat** into the user skills directory (matching `operant skills seed`):
+
+```
+repo:                                   installed (user):
+skills/                                 ~/.operant/skills/
+├── devops/                             ├── cli/                 # skills are
+│   ├── cli/SKILL.md                    │   ├── docker-management/  # FLAT — each
+│   └── docker-management/SKILL.md      │   ├── …                  # leaf skill is
+├── github/                             ├── systematic-debugging/  # a direct
+├── mcp/                                ├── test-driven-development/ # subdir
+├── productivity/                       ├── …
+├── research/                           └── <29 skills total>
+├── security/
+├── software-development/
+├── workspace-lint/
+└── remote-build-ssh/
+```
+
+Each skill is a directory containing a `SKILL.md` (required) plus any reference files, scripts, and templates:
+
+```
+~/.operant/skills/systematic-debugging/
+├── SKILL.md          # frontmatter + instructions (injected verbatim)
+└── …                 # optional references/ scripts/ examples/
+```
+
+### SKILL.md frontmatter
+
+```yaml
+---
+name: systematic-debugging        # slug used by /skill <name> and the skill tool
+description: "4-phase root cause debugging."  # one-line summary for the model
+author: Operant                  # provenance
+license: MIT
+platforms: [linux, macos, windows]
+version: 1.1.0
+metadata:
+  operant:
+    tags: [debugging, root-cause]       # used by the curator & search
+    related_skills: [plan, tdd]         # auto-suggested companions
+---
+```
+
+### Seeding (fresh installs are agent-ready from scratch)
+
+| Path | What it does |
+|---|---|
+| `./scripts/install.sh` | Builds the binary **and** seeds `~/.operant/skills` from the repo pool (offline, idempotent) |
+| First run | If the skills dir is empty, the binary auto-seeds from the bundled pool (`OPERANT_BUNDLED_SKILLS_DIR` override, then `<repo>/skills`, then `<exe>/../skills`) |
+| `operant skills seed [--source DIR] [--force]` | Manual re-seed; `--force` overwrites local edits |
+
+Location overrides (the binary honors these too):
+
+```bash
+export HERMES_HOME=~/.operant          # home root (skills default under it)
+export HERMES_SKILLS_DIR=/custom/skills # exact skills dir (config [skills] root_dir)
+export OPERANT_BUNDLED_SKILLS_DIR=/path/to/pool  # where seeding reads from
+```
+
+### Managing skills
+
+```bash
+operant skills list          # installed skills (+ /name for the TUI)
+operant skills install ./foo # import a skill dir or URL (recursive security scan)
+operant skills bundle        # combine skills into one
+operant skills audit         # scan for unsafe patterns (skills_guard)
+operant curator              # agent-curated skill lifecycle (archive/backup/restore)
+```
+
+---
+
 ## Configuration
 
 Config lives at `~/.operant/operant.toml` (secrets in `~/.operant/.env`). Start from the annotated reference:
