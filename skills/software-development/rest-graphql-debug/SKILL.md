@@ -5,7 +5,7 @@ version: 1.2.0
 author: eren-karakus0
 license: MIT
 metadata:
-  hermes:
+  operant:
     tags: [api, rest, graphql, http, debugging, testing, curl, integration]
     category: software-development
     related_skills: [systematic-debugging, test-driven-development]
@@ -13,7 +13,7 @@ metadata:
 
 # API Testing & Debugging
 
-Drive REST and GraphQL diagnosis through Hermes tools — `terminal` for `curl`, `execute_code` for Python `requests`, `web_extract` for vendor docs. Isolate the failing layer before guessing at the fix.
+Drive REST and GraphQL diagnosis through operant tools — `terminal` for `curl`, `code_execution` for Python `requests`, `web_fetch` for vendor docs. Isolate the failing layer before guessing at the fix.
 
 ## When to Use
 
@@ -73,7 +73,7 @@ terminal("""curl -X POST https://api.example.com/graphql \\
 **GraphQL gotcha:** servers often return HTTP 200 even when the query failed. Always inspect the `errors` field regardless of status code:
 
 ```python
-execute_code('''
+code_execution('''
 import os, requests
 resp = requests.post(
     "https://api.example.com/graphql",
@@ -89,10 +89,10 @@ print(data.get("data"))
 ''')
 ```
 
-### Python (requests) via execute_code
+### Python (requests) via code_execution
 
 ```python
-execute_code('''
+code_execution('''
 import requests
 resp = requests.get(
     "https://api.example.com/users/1",
@@ -127,7 +127,7 @@ terminal('''curl -w "dns:%{time_namelookup}s connect:%{time_connect}s tls:%{time
 In Python, always pass a tuple timeout — `requests` has no default and will hang forever:
 
 ```python
-execute_code('''
+code_execution('''
 import requests
 from requests.exceptions import ConnectTimeout, ReadTimeout
 try:
@@ -156,7 +156,7 @@ Failures: expired cert, self-signed, hostname mismatch, missing CA bundle. Use `
 terminal('curl -s -o /dev/null -w "%{http_code}\\n" -H "Authorization: Bearer $TOKEN" https://api.example.com/me')
 
 # Decode JWT exp claim — handles base64url padding correctly
-execute_code('''
+code_execution('''
 import json, base64, os
 tok = os.environ["TOKEN"]
 payload = tok.split(".")[1]
@@ -202,7 +202,7 @@ Common: form-encoded vs JSON, missing required fields, wrong HTTP method, unenco
 Always inspect content-type before calling `.json()`:
 
 ```python
-execute_code('''
+code_execution('''
 import requests
 resp = requests.post(url, json=payload, timeout=10)
 print(f"status={resp.status_code}")
@@ -267,7 +267,7 @@ The error body usually names the bad fields. Check:
 Check `Retry-After` and `X-RateLimit-*` headers. Exponential backoff:
 
 ```python
-execute_code('''
+code_execution('''
 import time, requests
 
 def with_backoff(method, url, **kwargs):
@@ -303,7 +303,7 @@ For all 5xx: backoff with jitter, alert on persistence.
 Catch schema drift before it hits production:
 
 ```python
-execute_code('''
+code_execution('''
 import requests
 
 def validate_user(data: dict) -> list[str]:
@@ -330,7 +330,7 @@ Run after API upgrades, when integrating new third parties, or in CI smoke tests
 Always capture the provider's request ID — fastest path to vendor support:
 
 ```python
-execute_code('''
+code_execution('''
 import requests
 resp = requests.post(url, json=payload, headers=headers, timeout=10)
 request_id = (
@@ -397,7 +397,7 @@ class TestAPISmoke:
 
 ### Token handling
 - Never log full tokens. Redact: `Bearer <REDACTED>`.
-- Never hardcode tokens in scripts. Read from env (`os.environ["API_TOKEN"]`) or `${HERMES_HOME:-~/.hermes}/.env`.
+- Never hardcode tokens in scripts. Read from env (`os.environ["API_TOKEN"]`) or `${OPERANT_HOME:-~/.operant}/.env`.
 - Rotate immediately if a token surfaces in logs, error messages, or git history.
 
 ### Safe logging
@@ -417,7 +417,7 @@ def redact_auth(headers: dict) -> dict:
 - [ ] **Tokens echoed back.** Some APIs include the auth token in error details. Verify they don't.
 - [ ] **Verbose `Server` / `X-Powered-By`.** Stack-info leaks. Note for security review.
 
-## Hermes Tool Patterns
+## operant Tool Patterns
 
 ### terminal — for curl, dig, openssl
 
@@ -426,12 +426,12 @@ terminal('curl -sI https://api.example.com')
 terminal('openssl s_client -connect api.example.com:443 -servername api.example.com </dev/null 2>/dev/null | openssl x509 -noout -dates')
 ```
 
-### execute_code — for multi-step Python flows
+### code_execution — for multi-step Python flows
 
-When debugging spans auth → fetch → paginate → validate, use `execute_code`. Variables persist for the script, results print to stdout, no risk of token spam in your context:
+When debugging spans auth → fetch → paginate → validate, use `code_execution`. Variables persist for the script, results print to stdout, no risk of token spam in your context:
 
 ```python
-execute_code('''
+code_execution('''
 import os, requests
 
 token = os.environ["API_TOKEN"]
@@ -456,12 +456,12 @@ print(f"users={len(all_users)}")
 ''')
 ```
 
-### web_extract — for vendor API docs
+### web_fetch — for vendor API docs
 
 Pull the spec for the endpoint you're debugging instead of guessing:
 
 ```python
-web_extract(urls=["https://docs.example.com/api/v1/users"])
+web_fetch(url="https://docs.example.com/api/v1/users")
 ```
 
 ### delegate_task — for full CRUD test sweeps

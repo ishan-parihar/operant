@@ -2,11 +2,11 @@
 name: requesting-code-review
 description: "Pre-commit review: security scan, quality gates, auto-fix."
 version: 2.0.0
-author: Hermes Agent (adapted from obra/superpowers + MorAlekss)
+author: Operant (adapted from hermes-agent) (adapted from obra/superpowers + MorAlekss)
 license: MIT
 platforms: [linux, macos, windows]
 metadata:
-  hermes:
+  operant:
     tags: [code-review, security, verification, quality, pre-commit, auto-fix]
     related_skills: [subagent-driven-development, plan, test-driven-development, github-code-review]
 ---
@@ -124,7 +124,7 @@ Quick scan before dispatching the reviewer:
 
 ## Step 5 — Independent reviewer subagent
 
-Call `delegate_task` directly — it is NOT available inside execute_code or scripts.
+Call `delegate_task` directly — it is NOT available inside code_execution or scripts.
 
 The reviewer gets ONLY the diff and static scan results. No shared context with
 the implementer. Fail-closed: unparseable response = fail.

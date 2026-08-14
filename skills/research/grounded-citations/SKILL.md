@@ -2,14 +2,14 @@
 name: grounded-citations
 description: "Ground answers and documents in cited, verifiable sources."
 version: 1.1.0
-author: Hermes Agent + Teknium
+author: Operant (adapted from hermes-agent) + Teknium
 license: MIT
 platforms: [linux, macos, windows]
 metadata:
-  hermes:
+  operant:
     tags: [Research, Citations, Grounding, Sources, Web, Reports]
     category: research
-    related_skills: [research-paper-writing, arxiv, ocr-and-documents]
+    related_skills: [plan, ocr-and-documents]
 ---
 
 # Grounded Citations
@@ -26,7 +26,7 @@ and `verify --evidence` fails any draft whose cited sources carry no evidence.
 
 This skill covers answers in chat, written documents (markdown, PDF, docx,
 slides), and research reports. It does not cover academic BibTeX pipelines —
-for conference papers use the `research-paper-writing` skill, which this skill
+for conference papers use the `plan` skill (drive the writing workflow), which this skill
 feeds (see `references/citation-formats.md`).
 
 ## When to Use
@@ -47,16 +47,16 @@ Mention a URL only if the user would plausibly want the link.
 ## Prerequisites
 
 None beyond the standard toolset. `scripts/sources.py` is stdlib-only Python 3.
-Retrieval comes from whatever is configured: `web_search`, `web_extract`,
-`browser_navigate`, or `terminal` (curl, CLIs).
+Retrieval comes from whatever is configured: `web_search`, `web_fetch`,
+`the browser tool (navigate action)`, or `terminal` (curl, CLIs).
 
-Ledger location: `$HERMES_HOME/cache/citations/ledger.json` (profile-aware).
+Ledger location: `$OPERANT_HOME/cache/citations/ledger.json` (profile-aware).
 Override per task with `--ledger <path>` or `HERMES_CITATION_LEDGER`.
 
 ## How to Run
 
 ```bash
-S=~/.hermes/skills/research/grounded-citations/scripts/sources.py
+S=~/.operant/skills/research/grounded-citations/scripts/sources.py
 
 python3 "$S" reset                                  # start a clean ledger
 python3 "$S" add https://example.com/a --title "A"  # prints: [1]
@@ -91,7 +91,7 @@ answer or document. Skip the reset when continuing work whose ids are already
 in a draft — reusing the ledger keeps the numbering stable.
 
 ② **Register every source at retrieval time.** After each `web_search` /
-`web_extract` / `browser_navigate` / fetch, pass the URLs to `sources.py add`
+`web_fetch` / `the browser tool (navigate action)` / fetch, pass the URLs to `sources.py add`
 (or pipe the raw JSON through `sources.py ingest`). Do this *before* writing
 prose. Registering later, from memory, is the failure mode this skill exists to
 prevent.
@@ -200,7 +200,7 @@ and read the `info: stats:` line to see the counts before picking a number.
   is an unverified claim.
 - **Citing a search snippet as if you read the page.** A `web_search`
   description supports only what it literally says. Cite the extracted page
-  when the claim needs the body — `web_extract` it first.
+  when the claim needs the body — `web_fetch` it first.
 - **Over-citing.** Three ids on a sentence is the ceiling; a citation on every
   clause makes text unreadable and hides which source carries the load.
 - **Citing the ledger in code/config artifacts.** Source comments belong in
@@ -209,7 +209,7 @@ and read the `info: stats:` line to see the counts before picking a number.
   them all at one ledger with `--ledger` (or `HERMES_CITATION_LEDGER`) if their
   outputs get merged, otherwise their ids will collide.
 - **Quoting from a snippet instead of the page.** Evidence quotes must come
-  from the extracted page text, not a search-result description — `web_extract`
+  from the extracted page text, not a search-result description — `web_fetch`
   first, save the text, then `quote --from` that file.
 - **Paraphrasing into `quote --text`.** The verbatim check will reject it; the
   fix is to find the actual sentence, not to reword until something matches.

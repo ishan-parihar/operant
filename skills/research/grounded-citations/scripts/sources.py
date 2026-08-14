@@ -26,7 +26,7 @@ an ``[unverified]`` marker rather than silently blended in.
 Ledger path resolution (first wins):
   --ledger PATH
   $HERMES_CITATION_LEDGER
-  $HERMES_HOME/cache/citations/ledger.json
+  $OPERANT_HOME/cache/citations/ledger.json
 """
 
 from __future__ import annotations
@@ -41,7 +41,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _hermes_home import get_hermes_home  # noqa: E402
+from _operant_home import get_operant_home  # noqa: E402
 
 SCHEMA_VERSION = 1
 
@@ -68,7 +68,7 @@ def resolve_ledger_path(explicit: str | None = None) -> Path:
     env = os.environ.get("HERMES_CITATION_LEDGER", "").strip()
     if env:
         return Path(env).expanduser()
-    return get_hermes_home() / "cache" / "citations" / "ledger.json"
+    return get_operant_home() / "cache" / "citations" / "ledger.json"
 
 
 def normalize_url(url: str) -> str:
@@ -199,7 +199,7 @@ def add_sources(
 def urls_from_json(payload: Any) -> list[tuple[str, str]]:
     """Walk arbitrary JSON tool output collecting (url, title) pairs.
 
-    Handles web_search (``data.web[]``), web_extract (``results[]``) and any
+    Handles web_search (``data.web[]``), web_fetch (``results[]``) and any
     other nesting, in document order, deduped.
     """
     found: list[tuple[str, str]] = []
@@ -235,7 +235,7 @@ def _normalize_ws(text: str) -> str:
 
 
 # Markdown artifacts that retrieval tools inject into otherwise-identical prose.
-# ``web_extract`` returns markdown, so the most citation-worthy sentences are
+# ``web_fetch`` returns markdown, so the most citation-worthy sentences are
 # exactly the ones carrying inline links and emphasis around terms:
 #   "including _[ERAP1](https://…/erap1/)_, _[IL1A](…)_, have also been…"
 # reads identically to the page a human sees.  Matching has to see through that

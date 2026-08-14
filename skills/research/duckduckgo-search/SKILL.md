@@ -6,9 +6,9 @@ author: gamedevCloudy
 license: MIT
 platforms: [linux, macos, windows]
 metadata:
-  hermes:
+  operant:
     tags: [search, duckduckgo, web-search, free, fallback]
-    related_skills: [arxiv]
+    related_skills: [searxng-search]
     fallback_for_toolsets: [web]
 ---
 
@@ -29,14 +29,14 @@ command -v ddgs >/dev/null && echo "DDGS_CLI=installed" || echo "DDGS_CLI=missin
 
 Decision tree:
 1. If `ddgs` CLI is installed, prefer `terminal` + `ddgs`
-2. If `ddgs` CLI is missing, do not assume `execute_code` can import `ddgs`
+2. If `ddgs` CLI is missing, do not assume `code_execution` can import `ddgs`
 3. If the user wants DuckDuckGo specifically, install `ddgs` first in the relevant environment
 4. Otherwise fall back to built-in web/browser tools
 
 Important runtime note:
-- Terminal and `execute_code` are separate runtimes
-- A successful shell install does not guarantee `execute_code` can import `ddgs`
-- Never assume third-party Python packages are preinstalled inside `execute_code`
+- Terminal and `code_execution` are separate runtimes
+- A successful shell install does not guarantee `code_execution` can import `ddgs`
+- Never assume third-party Python packages are preinstalled inside `code_execution`
 
 ## Installation
 
@@ -54,7 +54,7 @@ If a workflow depends on Python imports, verify that same runtime can import `dd
 
 ## Method 1: CLI Search (Preferred)
 
-Use the `ddgs` command via `terminal` when it exists. This is the preferred path because it avoids assuming the `execute_code` sandbox has the `ddgs` Python package installed.
+Use the `ddgs` command via `terminal` when it exists. This is the preferred path because it avoids assuming the `code_execution` sandbox has the `ddgs` Python package installed.
 
 ```bash
 # Text search
@@ -92,14 +92,14 @@ ddgs text -q "fastapi tutorial" -m 5 -o json
 
 ## Method 2: Python API (Only After Verification)
 
-Use the `DDGS` class in `execute_code` or another Python runtime only after verifying that `ddgs` is installed there. Do not assume `execute_code` includes third-party packages by default.
+Use the `DDGS` class in `code_execution` or another Python runtime only after verifying that `ddgs` is installed there. Do not assume `code_execution` includes third-party packages by default.
 
 Safe wording:
-- "Use `execute_code` with `ddgs` after installing or verifying the package if needed"
+- "Use `code_execution` with `ddgs` after installing or verifying the package if needed"
 
 Avoid saying:
-- "`execute_code` includes `ddgs`"
-- "DuckDuckGo search works by default in `execute_code`"
+- "`code_execution` includes `ddgs`"
+- "DuckDuckGo search works by default in `code_execution`"
 
 **Important:** `max_results` must always be passed as a **keyword argument** — positional usage raises an error on all methods.
 
@@ -185,7 +185,7 @@ Returns: `title`, `content`, `description`, `duration`, `provider`, `published`,
 
 ## Workflow: Search then Extract
 
-DuckDuckGo returns titles, URLs, and snippets — not full page content. To get full page content, search first and then extract the most relevant URL with `web_extract`, browser tools, or curl.
+DuckDuckGo returns titles, URLs, and snippets — not full page content. To get full page content, search first and then extract the most relevant URL with `web_fetch`, browser tools, or curl.
 
 CLI example:
 
@@ -204,16 +204,16 @@ with DDGS() as ddgs:
         print(r["title"], "->", r["href"])
 ```
 
-Then extract the best URL with `web_extract` or another content-retrieval tool.
+Then extract the best URL with `web_fetch` or another content-retrieval tool.
 
 ## Limitations
 
 - **Rate limiting**: DuckDuckGo may throttle after many rapid requests. Add a short delay between searches if needed.
-- **No content extraction**: `ddgs` returns snippets, not full page content. Use `web_extract`, browser tools, or curl for the full article/page.
+- **No content extraction**: `ddgs` returns snippets, not full page content. Use `web_fetch`, browser tools, or curl for the full article/page.
 - **Results quality**: Generally good but less configurable than Firecrawl's search.
 - **Availability**: DuckDuckGo may block requests from some cloud IPs. If searches return empty, try different keywords or wait a few seconds.
 - **Field variability**: Return fields may vary between results or `ddgs` versions. Use `.get()` for optional fields to avoid `KeyError`.
-- **Separate runtimes**: A successful `ddgs` install in terminal does not automatically mean `execute_code` can import it.
+- **Separate runtimes**: A successful `ddgs` install in terminal does not automatically mean `code_execution` can import it.
 
 ## Troubleshooting
 
@@ -222,13 +222,13 @@ Then extract the best URL with `web_extract` or another content-retrieval tool.
 | `ddgs: command not found` | CLI not installed in the shell environment | Install `ddgs`, or use built-in web/browser tools instead |
 | `ModuleNotFoundError: No module named 'ddgs'` | Python runtime does not have the package installed | Do not use Python DDGS there until that runtime is prepared |
 | Search returns nothing | Temporary rate limiting or poor query | Wait a few seconds, retry, or adjust the query |
-| CLI works but `execute_code` import fails | Terminal and `execute_code` are different runtimes | Keep using CLI, or separately prepare the Python runtime |
+| CLI works but `code_execution` import fails | Terminal and `code_execution` are different runtimes | Keep using CLI, or separately prepare the Python runtime |
 
 ## Pitfalls
 
 - **`max_results` is keyword-only**: `ddgs.text("query", 5)` raises an error. Use `ddgs.text("query", max_results=5)`.
 - **Do not assume the CLI exists**: Check `command -v ddgs` before using it.
-- **Do not assume `execute_code` can import `ddgs`**: `from ddgs import DDGS` may fail with `ModuleNotFoundError` unless that runtime was prepared separately.
+- **Do not assume `code_execution` can import `ddgs`**: `from ddgs import DDGS` may fail with `ModuleNotFoundError` unless that runtime was prepared separately.
 - **Package name**: The package is `ddgs` (previously `duckduckgo-search`). Install with `pip install ddgs`.
 - **Don't confuse `-q` and `-m`** (CLI): `-q` is for the query, `-m` is for max results count.
 - **Empty results**: If `ddgs` returns nothing, it may be rate-limited. Wait a few seconds and retry.

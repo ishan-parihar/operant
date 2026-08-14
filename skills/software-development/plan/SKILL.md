@@ -1,12 +1,12 @@
 ---
 name: plan
-description: Write a markdown plan to .hermes/plans/; no execution.
+description: Write a markdown plan to .operant/plans/; no execution.
 version: 2.0.0
-author: Hermes Agent (writing-craft adapted from obra/superpowers)
+author: Operant (writing-craft adapted from obra/superpowers)
 license: MIT
 platforms: [linux, macos, windows]
 metadata:
-  hermes:
+  operant:
     tags: [planning, plan-mode, implementation, workflow, design, documentation]
     related_skills: [subagent-driven-development, test-driven-development, requesting-code-review]
 ---
@@ -23,7 +23,7 @@ For this turn, you are planning only.
 - Do not edit project files except the plan markdown file.
 - Do not run mutating terminal commands, commit, push, or perform external actions.
 - You may inspect the repo or other context with read-only commands/tools when needed.
-- Your deliverable is a markdown plan saved inside the active workspace under `.hermes/plans/`.
+- Your deliverable is a markdown plan saved inside the active workspace under `.operant/plans/`.
 
 ## Output requirements
 
@@ -43,12 +43,12 @@ If the task is code-related, include exact file paths, likely test targets, and 
 ## Save location
 
 Save the plan with `file_write` under:
-- `.hermes/plans/YYYY-MM-DD_HHMMSS-<slug>.md`
+- `.operant/plans/YYYY-MM-DD_HHMMSS-<slug>.md`
 
-Treat that as relative to the active working directory / backend workspace. Hermes file tools are backend-aware, so using this relative path keeps the plan with the workspace on local, docker, ssh, modal, and daytona backends.
+Treat that as relative to the active working directory. operant file tools operate on the local filesystem; for remote or containerized workspaces, use the terminal tool with the appropriate ssh/docker context.
 
 If the runtime provides a specific target path, use that exact path.
-If not, create a sensible timestamped filename yourself under `.hermes/plans/`.
+If not, create a sensible timestamped filename yourself under `.operant/plans/`.
 
 ## Interaction style
 
@@ -121,7 +121,7 @@ Every plan MUST start with:
 ```markdown
 # [Feature Name] Implementation Plan
 
-> **For Hermes:** Use subagent-driven-development skill to implement this plan task-by-task.
+> **For operant:** Use subagent-driven-development skill to implement this plan task-by-task.
 
 **Goal:** [One sentence describing what this builds]
 
@@ -191,17 +191,17 @@ Read and understand:
 
 ### Step 2: Explore the Codebase
 
-Use Hermes tools to understand the project:
+Use operant tools to understand the project:
 
 ```python
 # Understand project structure
-search_files("*.py", target="files", path="src/")
+file_search("*.py", target="files", path="src/")
 
 # Look at similar features
-search_files("similar_pattern", path="src/", file_glob="*.py")
+file_search("similar_pattern", path="src/", file_glob="*.py")
 
 # Check existing tests
-search_files("*.py", target="files", path="tests/")
+file_search("*.py", target="files", path="tests/")
 
 # Read key files
 file_read("src/app.py")

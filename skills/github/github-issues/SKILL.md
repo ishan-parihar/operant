@@ -2,13 +2,13 @@
 name: github-issues
 description: "Create, triage, label, assign GitHub issues via gh or REST."
 version: 1.1.0
-author: Hermes Agent
+author: Operant (adapted from hermes-agent)
 license: MIT
 platforms: [linux, macos, windows]
 metadata:
-  hermes:
+  operant:
     tags: [GitHub, Issues, Project-Management, Bug-Tracking, Triage]
-    related_skills: [github-auth, github-pr-workflow]
+    related_skills: [github-repo-management, github-pr-workflow]
 ---
 
 # GitHub Issues Management
@@ -17,7 +17,7 @@ Create, search, triage, and manage GitHub issues. Each section shows `gh` first,
 
 ## Prerequisites
 
-- Authenticated with GitHub (see `github-auth` skill)
+- Authenticated with GitHub (see GitHub authentication (`gh auth login`, or GH_TOKEN in the environment))
 - Inside a git repo with a GitHub remote, or specify the repo explicitly
 
 ### Setup
@@ -28,10 +28,10 @@ if command -v gh &>/dev/null && gh auth status &>/dev/null; then
 else
   AUTH="git"
   if [ -z "$GITHUB_TOKEN" ]; then
-    if _hermes_env="${HERMES_HOME:-$HOME/.hermes}/.env"; [ -f "$_hermes_env" ] && grep -q "^GITHUB_TOKEN=" "$_hermes_env"; then
-      GITHUB_TOKEN=$(grep "^GITHUB_TOKEN=" "$_hermes_env" | head -1 | cut -d= -f2 | tr -d '\n\r')
+    if _op_env="${OPERANT_HOME:-$HOME/.operant}/.env"; [ -f "$_op_env" ] && grep -q "^GITHUB_TOKEN=" "$_op_env"; then
+      GITHUB_TOKEN=$(grep "^GITHUB_TOKEN=" "$_op_env" | head -1 | cut -d= -f2 | tr -d '\n\r')
     elif grep -q "github.com" ~/.git-credentials 2>/dev/null; then
-      GITHUB_TOKEN=$(uv run python3 "${HERMES_HOME:-$HOME/.hermes}/skills/github/github-auth/scripts/git-credential-token.py")
+      GITHUB_TOKEN=$(gh auth token 2>/dev/null || grep '^GITHUB_TOKEN=' "${OPERANT_HOME:-$HOME/.operant}/.env" | cut -d= -f2-)
     fi
   fi
 fi

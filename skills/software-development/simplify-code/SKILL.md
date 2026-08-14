@@ -2,11 +2,11 @@
 name: simplify-code
 description: "Parallel 4-agent cleanup of recent code changes."
 version: 1.1.0
-author: Hermes Agent (inspired by Claude Code /simplify)
+author: Operant (adapted from hermes-agent) (inspired by Claude Code /simplify)
 license: MIT
 platforms: [linux, macos, windows]
 metadata:
-  hermes:
+  operant:
     tags: [code-review, cleanup, refactor, delegation, subagent, parallel, simplify]
     related_skills: [requesting-code-review, test-driven-development, plan]
 ---
@@ -97,7 +97,7 @@ knows what actually ran.
 Give **every** reviewer the **complete diff** (not fragments — cross-file
 issues hide in the gaps) plus the absolute repo path so they can search the
 wider codebase. Each reviewer gets `terminal`, `file`, and `search`
-toolsets (so they can `git`, `file_read`, and `search_files`/grep).
+toolsets (so they can `git`, `file_read`, and `file_search`/grep).
 
 Tell each reviewer to:
 - Search the existing codebase for evidence (don't reason from the diff alone).
@@ -126,7 +126,7 @@ Pass these four goals (drop any the user's focus excludes):
 **Reviewer 1 — Code Reuse**
 > Review this diff for code that duplicates functionality already in the
 > codebase. Search utility modules, shared helpers, and adjacent files
-> (use search_files / grep) for existing functions, constants, or patterns
+> (use file_search / grep) for existing functions, constants, or patterns
 > the new code could call instead of reimplementing. Flag: new functions
 > that duplicate existing ones; hand-rolled logic that an existing utility
 > already does (manual string/path manipulation, custom env checks, ad-hoc

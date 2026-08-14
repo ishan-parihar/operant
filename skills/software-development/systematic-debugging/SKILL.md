@@ -2,11 +2,11 @@
 name: systematic-debugging
 description: "4-phase root cause debugging: understand bugs before fixing."
 version: 1.1.0
-author: Hermes Agent (adapted from obra/superpowers)
+author: Operant (adapted from obra/superpowers)
 license: MIT
 platforms: [linux, macos, windows]
 metadata:
-  hermes:
+  operant:
     tags: [debugging, troubleshooting, problem-solving, root-cause, investigation]
     related_skills: [test-driven-development, plan, subagent-driven-development]
 ---
@@ -74,7 +74,7 @@ You MUST complete each phase before proceeding to the next.
 - Read stack traces completely
 - Note line numbers, file paths, error codes
 
-**Action:** Use `file_read` on the relevant source files. Use `search_files` to find the error string in the codebase.
+**Action:** Use `file_read` on the relevant source files. Use `file_search` to find the error string in the codebase.
 
 ### 2. Build a Tight Feedback Loop
 
@@ -162,14 +162,14 @@ THEN investigate that specific component.
 - Keep tracing upstream until you find the source
 - Fix at the source, not at the symptom
 
-**Action:** Use `search_files` to trace references:
+**Action:** Use `file_search` to trace references:
 
 ```python
 # Find where the function is called
-search_files("function_name(", path="src/", file_glob="*.py")
+file_search("function_name(", path="src/", file_glob="*.py")
 
 # Find where the variable is set
-search_files("variable_name\\s*=", path="src/", file_glob="*.py")
+file_search("variable_name\\s*=", path="src/", file_glob="*.py")
 ```
 
 ### Phase 1 Completion Checklist
@@ -202,10 +202,10 @@ Done when removing any remaining element makes the loop go green. A minimal repr
 - Locate similar working code in the same codebase
 - What works that's similar to what's broken?
 
-**Action:** Use `search_files` to find comparable patterns:
+**Action:** Use `file_search` to find comparable patterns:
 
 ```python
-search_files("similar_pattern", path="src/", file_glob="*.py")
+file_search("similar_pattern", path="src/", file_glob="*.py")
 ```
 
 ### 2. Compare Against References
@@ -359,16 +359,16 @@ If you catch yourself thinking:
 | **3. Hypothesis** | Form theory, test minimally, one variable at a time | Confirmed or new hypothesis |
 | **4. Implementation** | Create regression test, fix root cause, verify | Bug resolved, all tests pass |
 
-## Hermes Agent Integration
+## operant Integration
 
 ### Investigation Tools
 
-Use these Hermes tools during Phase 1:
+Use these operant tools during Phase 1:
 
-- **`search_files`** — Find error strings, trace function calls, locate patterns
+- **`file_search`** — Find error strings, trace function calls, locate patterns
 - **`file_read`** — Read source code with line numbers for precise analysis
 - **`terminal`** — Run tests, check git history, reproduce bugs
-- **`web_search`/`web_extract`** — Research error messages, library docs
+- **`web_search`/`web_fetch`** — Research error messages, library docs
 
 ### With delegate_task
 

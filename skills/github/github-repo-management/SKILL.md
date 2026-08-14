@@ -2,13 +2,13 @@
 name: github-repo-management
 description: "Clone/create/fork repos; manage remotes, releases."
 version: 1.1.0
-author: Hermes Agent
+author: Operant (adapted from hermes-agent)
 license: MIT
 platforms: [linux, macos, windows]
 metadata:
-  hermes:
+  operant:
     tags: [GitHub, Repositories, Git, Releases, Secrets, Configuration]
-    related_skills: [github-auth, github-pr-workflow, github-issues]
+    related_skills: [github-repo-management, github-pr-workflow, github-issues]
 ---
 
 # GitHub Repository Management
@@ -17,7 +17,7 @@ Create, clone, fork, configure, and manage GitHub repositories. Each section sho
 
 ## Prerequisites
 
-- Authenticated with GitHub (see `github-auth` skill)
+- Authenticated with GitHub (see GitHub authentication (`gh auth login`, or GH_TOKEN in the environment))
 
 ### Setup
 
@@ -27,10 +27,10 @@ if command -v gh &>/dev/null && gh auth status &>/dev/null; then
 else
   AUTH="git"
   if [ -z "$GITHUB_TOKEN" ]; then
-    if _hermes_env="${HERMES_HOME:-$HOME/.hermes}/.env"; [ -f "$_hermes_env" ] && grep -q "^GITHUB_TOKEN=" "$_hermes_env"; then
-      GITHUB_TOKEN=$(grep "^GITHUB_TOKEN=" "$_hermes_env" | head -1 | cut -d= -f2 | tr -d '\n\r')
+    if _op_env="${OPERANT_HOME:-$HOME/.operant}/.env"; [ -f "$_op_env" ] && grep -q "^GITHUB_TOKEN=" "$_op_env"; then
+      GITHUB_TOKEN=$(grep "^GITHUB_TOKEN=" "$_op_env" | head -1 | cut -d= -f2 | tr -d '\n\r')
     elif grep -q "github.com" ~/.git-credentials 2>/dev/null; then
-      GITHUB_TOKEN=$(uv run python3 "${HERMES_HOME:-$HOME/.hermes}/skills/github/github-auth/scripts/git-credential-token.py")
+      GITHUB_TOKEN=$(gh auth token 2>/dev/null || grep '^GITHUB_TOKEN=' "${OPERANT_HOME:-$HOME/.operant}/.env" | cut -d= -f2-)
     fi
   fi
 fi

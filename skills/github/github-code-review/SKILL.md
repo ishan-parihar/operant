@@ -2,13 +2,13 @@
 name: github-code-review
 description: "Review PRs: diffs, inline comments via gh or REST."
 version: 1.1.0
-author: Hermes Agent
+author: Operant (adapted from hermes-agent)
 license: MIT
 platforms: [linux, macos, windows]
 metadata:
-  hermes:
+  operant:
     tags: [GitHub, Code-Review, Pull-Requests, Git, Quality]
-    related_skills: [github-auth, github-pr-workflow]
+    related_skills: [github-repo-management, github-pr-workflow]
 ---
 
 # GitHub Code Review
@@ -17,7 +17,7 @@ Perform code reviews on local changes before pushing, or review open PRs on GitH
 
 ## Prerequisites
 
-- Authenticated with GitHub (see `github-auth` skill)
+- Authenticated with GitHub (see GitHub authentication (`gh auth login`, or GH_TOKEN in the environment))
 - Inside a git repository
 
 ### Setup (for PR interactions)
@@ -28,10 +28,10 @@ if command -v gh &>/dev/null && gh auth status &>/dev/null; then
 else
   AUTH="git"
   if [ -z "$GITHUB_TOKEN" ]; then
-    if _hermes_env="${HERMES_HOME:-$HOME/.hermes}/.env"; [ -f "$_hermes_env" ] && grep -q "^GITHUB_TOKEN=" "$_hermes_env"; then
-      GITHUB_TOKEN=$(grep "^GITHUB_TOKEN=" "$_hermes_env" | head -1 | cut -d= -f2 | tr -d '\n\r')
+    if _op_env="${OPERANT_HOME:-$HOME/.operant}/.env"; [ -f "$_op_env" ] && grep -q "^GITHUB_TOKEN=" "$_op_env"; then
+      GITHUB_TOKEN=$(grep "^GITHUB_TOKEN=" "$_op_env" | head -1 | cut -d= -f2 | tr -d '\n\r')
     elif grep -q "github.com" ~/.git-credentials 2>/dev/null; then
-      GITHUB_TOKEN=$(uv run python3 "${HERMES_HOME:-$HOME/.hermes}/skills/github/github-auth/scripts/git-credential-token.py")
+      GITHUB_TOKEN=$(gh auth token 2>/dev/null || grep '^GITHUB_TOKEN=' "${OPERANT_HOME:-$HOME/.operant}/.env" | cut -d= -f2-)
     fi
   fi
 fi
@@ -172,7 +172,7 @@ This works with plain `git` — no `gh` needed:
 git fetch origin pull/123/head:pr-123
 git checkout pr-123
 
-# Now you can use file_read, search_files, run tests, etc.
+# Now you can use file_read, file_search, run tests, etc.
 
 # View diff against the base branch
 git diff main...pr-123
@@ -262,7 +262,7 @@ curl -s -X POST \
   -d "{
     \"commit_id\": \"$HEAD_SHA\",
     \"event\": \"COMMENT\",
-    \"body\": \"Code review from Hermes Agent\",
+    \"body\": \"Code review from operant\",
     \"comments\": [
       {\"path\": \"src/auth.py\", \"line\": 45, \"body\": \"Use parameterized queries to prevent SQL injection.\"},
       {\"path\": \"src/models/user.py\", \"line\": 23, \"body\": \"Hash passwords with bcrypt before storing.\"},
@@ -335,7 +335,7 @@ When the user asks you to "review PR #N", "look at this PR", or gives you a PR U
 ### Step 1: Set up environment
 
 ```bash
-source "${HERMES_HOME:-$HOME/.hermes}/skills/github/github-auth/scripts/gh-env.sh"
+gh auth status 2>/dev/null || gh auth login
 # Or run the inline setup block from the top of this skill
 ```
 
@@ -365,7 +365,7 @@ curl -s -H "Authorization: token $GITHUB_TOKEN" \
 
 ### Step 3: Check out the PR locally
 
-This gives you full access to `file_read`, `search_files`, and the ability to run tests.
+This gives you full access to `file_read`, `file_search`, and the ability to run tests.
 
 ```bash
 git fetch origin pull/$PR_NUMBER/head:pr-$PR_NUMBER
@@ -409,7 +409,7 @@ Collect your findings and submit them as a formal review with inline comments.
 **With gh:**
 ```bash
 # If no issues — approve
-gh pr review $PR_NUMBER --approve --body "Reviewed by Hermes Agent. Code looks clean — good test coverage, no security concerns."
+gh pr review $PR_NUMBER --approve --body "Reviewed by operant. Code looks clean — good test coverage, no security concerns."
 
 # If issues found — request changes with inline comments
 gh pr review $PR_NUMBER --request-changes --body "Found a few issues — see inline comments."
@@ -428,7 +428,7 @@ curl -s -X POST \
   -d "{
     \"commit_id\": \"$HEAD_SHA\",
     \"event\": \"REQUEST_CHANGES\",
-    \"body\": \"## Hermes Agent Review\n\nFound 2 issues, 1 suggestion. See inline comments.\",
+    \"body\": \"## operant Review\n\nFound 2 issues, 1 suggestion. See inline comments.\",
     \"comments\": [
       {\"path\": \"src/auth.py\", \"line\": 45, \"body\": \"🔴 **Critical:** User input passed directly to SQL query — use parameterized queries.\"},
       {\"path\": \"src/models.py\", \"line\": 23, \"body\": \"⚠️ **Warning:** Password stored without hashing.\"},
@@ -462,7 +462,7 @@ gh pr comment $PR_NUMBER --body "$(cat <<'EOF'
 - Good error handling in the middleware layer
 
 ---
-*Reviewed by Hermes Agent*
+*Reviewed by operant*
 EOF
 )"
 ```
