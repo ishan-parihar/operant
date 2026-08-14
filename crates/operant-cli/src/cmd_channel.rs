@@ -1,6 +1,7 @@
-use anyhow::Result;
+use anyhow::{Context, Result, bail};
 use clap::Subcommand;
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 
 use operant_core::config::AppConfig;
 
@@ -14,10 +15,15 @@ pub enum ChannelSubcommand {
     Doctor,
     /// Add a new channel configuration
     Add {
-        /// Channel type (telegram, discord, slack, whatsapp, matrix, imessage, email)
+        /// Channel type (telegram, discord, slack, whatsapp, email, webhooks)
         channel_type: String,
-        /// Optional configuration as JSON
-        config: String,
+        /// Optional configuration as JSON (e.g. {"api_key":"..."})
+        #[arg(value_name = "CONFIG")]
+        config_json: Option<String>,
+        /// Bot token for the channel (do NOT use the global --api-key — that
+        /// flag overrides the LLM API key and must never be persisted here)
+        #[arg(long, value_name = "TOKEN")]
+        token: Option<String>,
     },
     /// Remove a channel configuration
     Remove {
@@ -43,7 +49,8 @@ pub enum ChannelSubcommand {
 }
 
 pub async fn handle_channel_command(
-    config: &AppConfig,
+    config: &mut AppConfig,
+    config_path: Option<&Path>,
     cmd: ChannelSubcommand,
     json: bool,
 ) -> Result<()> {
@@ -143,36 +150,43 @@ pub async fn handle_channel_command(
         }
         ChannelSubcommand::Add {
             channel_type,
-            config: _,
+            config_json,
+            token,
         } => {
+            let channel_type = normalize_channel_type(&channel_type)?;
+            let token =
+                resolve_channel_token(&channel_type, token.as_deref(), config_json.as_deref())?;
+            set_channel_enabled(config, &channel_type, true, token.as_deref())?;
+            persist_config(config, config_path)?;
+            let saved_at = config_path
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_else(|| "<in-memory>".to_string());
             if json {
                 println!(
                     "{}",
-                    serde_json::json!({"status":"info","message": format!("Use `operant config set gateway.{}_enabled true` to enable {}", channel_type, channel_type)})
+                    serde_json::json!({"status":"added","channel": channel_type, "config": saved_at})
                 );
             } else {
-                println!(
-                    "To add a {} channel, update your operant.toml config:\n",
-                    channel_type
-                );
-                println!("  [gateway]");
-                println!("  {}_enabled = true", channel_type);
-                println!("  {}_token = \"YOUR_TOKEN\"", channel_type);
-                println!();
-                println!("Then run `operant channel doctor` to verify.");
+                println!("Added {channel_type} channel and persisted the config to {saved_at}.");
+                println!("Run `operant channel doctor` to verify connectivity.");
             }
             Ok(())
         }
         ChannelSubcommand::Remove { name } => {
+            let name = normalize_channel_type(&name)?;
+            set_channel_enabled(config, &name, false, None)?;
+            persist_config(config, config_path)?;
+            let saved_at = config_path
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_else(|| "<in-memory>".to_string());
             if json {
                 println!(
                     "{}",
-                    serde_json::json!({"status":"info","message": format!("Set gateway.{}_enabled = false in operant.toml", name)})
+                    serde_json::json!({"status":"removed","channel": name, "config": saved_at})
                 );
             } else {
                 println!(
-                    "To remove channel '{}', set `gateway.{}_enabled = false` in operant.toml",
-                    name, name
+                    "Removed {name} channel (disabled) and persisted the config to {saved_at}."
                 );
             }
             Ok(())
@@ -238,6 +252,123 @@ pub async fn handle_channel_command(
             Ok(())
         }
     }
+}
+
+/// Normalize and validate a channel type name against the set this CLI can manage.
+fn normalize_channel_type(raw: &str) -> Result<String> {
+    let t = raw.trim().to_ascii_lowercase();
+    const SUPPORTED: &[&str] = &[
+        "telegram", "discord", "slack", "whatsapp", "email", "webhooks",
+    ];
+    if SUPPORTED.contains(&t.as_str()) {
+        Ok(t)
+    } else {
+        bail!(
+            "Unsupported channel type '{t}'. Supported: {}",
+            SUPPORTED.join(", ")
+        )
+    }
+}
+
+/// Resolve the bot token from the --token flag or the CONFIG JSON (`api_key`,
+/// `token`, or `bot_token` keys). Token-backed platforms require one; email and
+/// webhooks do not.
+fn resolve_channel_token(
+    channel_type: &str,
+    token_flag: Option<&str>,
+    config_json: Option<&str>,
+) -> Result<Option<String>> {
+    if let Some(key) = token_flag.filter(|k| !k.trim().is_empty()) {
+        return Ok(Some(key.trim().to_string()));
+    }
+    if let Some(raw) = config_json {
+        let raw = raw.trim();
+        if !raw.is_empty() {
+            let value: serde_json::Value =
+                serde_json::from_str(raw).with_context(|| format!("Invalid CONFIG JSON: {raw}"))?;
+            for key in ["api_key", "token", "bot_token"] {
+                if let Some(s) = value
+                    .get(key)
+                    .and_then(|v| v.as_str())
+                    .filter(|s| !s.trim().is_empty())
+                {
+                    return Ok(Some(s.trim().to_string()));
+                }
+            }
+        }
+    }
+    if matches!(channel_type, "telegram" | "discord" | "slack" | "whatsapp") {
+        bail!(
+            "A token is required for {channel_type}: pass --token <TOKEN> or a CONFIG JSON with an api_key field"
+        )
+    }
+    Ok(None)
+}
+
+/// Enable/disable a channel on the runtime GatewayConfig and (for token-backed
+/// platforms) set or clear its token.
+fn set_channel_enabled(
+    config: &mut AppConfig,
+    channel_type: &str,
+    enabled: bool,
+    token: Option<&str>,
+) -> Result<()> {
+    let gw = &mut config.gateway;
+    let token = token.map(str::to_string);
+    match channel_type {
+        "telegram" => {
+            gw.telegram_enabled = enabled;
+            gw.telegram_token = token;
+        }
+        "discord" => {
+            gw.discord_enabled = enabled;
+            gw.discord_token = token;
+        }
+        "slack" => {
+            gw.slack_enabled = enabled;
+            gw.slack_token = token;
+        }
+        "whatsapp" => {
+            gw.whatsapp_enabled = enabled;
+            gw.whatsapp_token = token;
+        }
+        "email" => {
+            gw.email_enabled = enabled;
+        }
+        "webhooks" => {
+            gw.webhooks_enabled = enabled;
+        }
+        other => bail!("Unsupported channel type '{other}'"),
+    }
+    // Syntactic sanity check only — never calls the platform API.
+    if enabled && channel_type == "telegram" {
+        let Some(tok) = gw.telegram_token.as_deref() else {
+            return Ok(());
+        };
+        let looks_like_bot_token = tok
+            .split(':')
+            .next()
+            .is_some_and(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()))
+            && tok.contains(':')
+            && !tok.contains(' ');
+        if !looks_like_bot_token {
+            eprintln!(
+                "warning: token '{tok}' does not look like a Telegram bot token (expected digits:alphanumeric); storing anyway"
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Persist the mutated config back to the file that was loaded (requires -c).
+fn persist_config(config: &AppConfig, config_path: Option<&Path>) -> Result<()> {
+    let Some(path) = config_path else {
+        bail!("No config file to persist to. Pass -c/--config <PATH> so the change can be saved.")
+    };
+    let content = toml::to_string(config).context("Failed to serialize config")?;
+    std::fs::write(path, content)
+        .with_context(|| format!("Failed to write config to {}", path.display()))?;
+    Ok(())
 }
 
 /// Build a list of (channel_name, is_enabled) from config.

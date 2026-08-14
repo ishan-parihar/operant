@@ -1717,6 +1717,13 @@ async fn main() -> Result<()> {
 
     // Load core AppConfig (TOML-based) and layer on any values from CliConfig
     let mut loaded = load_app_config(cli.config.as_deref())?;
+    // Snapshot the file's own LLM settings BEFORE apply_cli_overrides stamps
+    // the global --api-key/--base-url/--model onto them (override semantics).
+    // Commands that persist the config (e.g. channel add/remove) restore these
+    // so a temporary CLI override can never be written back to disk.
+    let pre_override_client_api_key = loaded.config.client.api_key.clone();
+    let pre_override_client_base_url = loaded.config.client.base_url.clone();
+    let pre_override_agent_model = loaded.config.agent.model.clone();
 
     // Merge CliConfig-derived values into core AppConfig
     let cli_app_config = cli_config.to_app_config();
@@ -1944,7 +1951,21 @@ async fn main() -> Result<()> {
             cmd_curator::handle_curator_command(&loaded.config, cmd.clone(), *json).await?;
         }
         Some(Commands::Channel { cmd, json }) => {
-            cmd_channel::handle_channel_command(&loaded.config, cmd.clone(), *json).await?;
+            // apply_cli_overrides above stamped the global --api-key/--base-url/
+            // --model onto the loaded config (LLM-override semantics). Channel
+            // commands persist the config back to disk, so restore the file's
+            // original values first — otherwise a channel-token passed as
+            // --api-key would clobber the real LLM key on the next launch.
+            loaded.config.client.api_key = pre_override_client_api_key.clone();
+            loaded.config.client.base_url = pre_override_client_base_url.clone();
+            loaded.config.agent.model = pre_override_agent_model.clone();
+            cmd_channel::handle_channel_command(
+                &mut loaded.config,
+                loaded.source.as_deref(),
+                cmd.clone(),
+                *json,
+            )
+            .await?;
         }
         Some(Commands::Sop { cmd, json }) => {
             cmd_sop::handle_sop_command(&loaded.config, cmd.clone(), *json).await?;
