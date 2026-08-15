@@ -192,7 +192,71 @@ impl CronDb {
             ],
         ).map_err(|e| Error::Agent(format!("Failed to create cron job: {}", e)))?;
 
+        // Initial next_run_at — without it `get_due_jobs` (`next_run_at <= now`)
+        // would never match and a freshly-created job would never fire.
+        // (Latent bug surfaced by the hermes-parity audit: CLI/blueprint/
+        // suggestions-created jobs had NULL next_run_at forever.)
+        if let Some(next) = crate::cronjobs::schedule::next_run_from_schedule(&p.schedule) {
+            conn.execute(
+                "UPDATE cron_jobs SET next_run_at = ?1 WHERE id = ?2",
+                params![next, id],
+            )
+            .map_err(|e| Error::Agent(format!("Failed to set initial next_run_at: {}", e)))?;
+        }
+
         Ok(id)
+    }
+
+    /// Self-heal pass for jobs created before schedule normalization existed:
+    /// normalizes stored schedules (5-field / "every Nh" → 6-field) and
+    /// backfills any missing `next_run_at`. Returns the number of jobs healed.
+    /// Called on scheduler start and `operant cron tick`.
+    pub fn repair_schedules(&self) -> Result<usize, Error> {
+        let conn = self.lock_conn()?;
+        let mut stmt = conn
+            .prepare("SELECT id, schedule, next_run_at FROM cron_jobs WHERE enabled = 1")
+            .map_err(|e| Error::Agent(format!("Failed to prepare repair_schedules: {}", e)))?;
+        let rows: Vec<(String, String, Option<String>)> = stmt
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+            .and_then(|mapped| mapped.collect::<rusqlite::Result<Vec<_>>>())
+            .map_err(|e| Error::Agent(format!("Failed to read cron jobs: {}", e)))?;
+        drop(stmt);
+
+        let mut healed = 0;
+        for (id, schedule, next_run_at) in rows {
+            let normalized = crate::cronjobs::schedule::normalize_schedule(&schedule).ok();
+            let schedule_changed = normalized.as_deref() != Some(schedule.as_str());
+            let next = normalized
+                .as_deref()
+                .and_then(crate::cronjobs::schedule::next_run_from_schedule);
+            if !schedule_changed && !(next_run_at.is_none() && next.is_some()) {
+                continue;
+            }
+
+            let mut set_clauses: Vec<String> = Vec::new();
+            let mut args: Vec<&dyn rusqlite::ToSql> = Vec::new();
+            if let Some(n) = &normalized {
+                set_clauses.push(format!("schedule = ?{}", args.len() + 1));
+                args.push(n);
+            }
+            if let Some(n) = &next {
+                set_clauses.push(format!("next_run_at = ?{}", args.len() + 1));
+                args.push(n);
+            }
+            if set_clauses.is_empty() {
+                continue;
+            }
+            let sql = format!(
+                "UPDATE cron_jobs SET {} WHERE id = ?{}",
+                set_clauses.join(", "),
+                args.len() + 1
+            );
+            args.push(&id);
+            conn.execute(&sql, rusqlite::params_from_iter(args))
+                .map_err(|e| Error::Agent(format!("Failed to repair cron job {}: {}", id, e)))?;
+            healed += 1;
+        }
+        Ok(healed)
     }
 
     pub fn list_jobs(&self, include_disabled: bool) -> Result<Vec<CronJob>, Error> {

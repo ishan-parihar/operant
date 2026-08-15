@@ -458,6 +458,7 @@ fn gateway_config_from_app(app_config: &AppConfig) -> GatewayConfig {
         telegram_proxy: app_config.gateway.telegram_proxy.clone(),
         telegram_bot_username: app_config.gateway.telegram_bot_username.clone(),
         telegram_dm_topics_enabled: app_config.gateway.telegram_dm_topics_enabled,
+        max_concurrent_sessions: app_config.gateway.max_concurrent_sessions,
     }
 }
 
@@ -1676,6 +1677,7 @@ mod tests {
             telegram_proxy: None,
             telegram_bot_username: None,
             telegram_dm_topics_enabled: false,
+            max_concurrent_sessions: None,
         };
         let adapters = build_adapters(&config);
         assert_eq!(adapters.len(), 0);
@@ -1706,6 +1708,7 @@ mod tests {
             telegram_proxy: None,
             telegram_bot_username: None,
             telegram_dm_topics_enabled: false,
+            max_concurrent_sessions: None,
         };
         let adapters = build_adapters(&config);
         assert_eq!(adapters.len(), 1);
@@ -1737,6 +1740,7 @@ mod tests {
             telegram_proxy: None,
             telegram_bot_username: None,
             telegram_dm_topics_enabled: false,
+            max_concurrent_sessions: None,
         };
         let adapters = build_adapters(&config);
         assert_eq!(adapters.len(), 4);

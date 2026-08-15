@@ -37,6 +37,7 @@ mod cmd_setup;
 mod cmd_skills;
 mod cmd_sop;
 mod cmd_status;
+mod cmd_suggestions;
 mod cmd_tools;
 mod cmd_trajectory;
 mod cmd_tui_debug;
@@ -272,6 +273,21 @@ enum Commands {
     Cron {
         #[command(subcommand)]
         cmd: cmd_cron::CronSubcommand,
+        /// Output as JSON (for scripting/CI)
+        #[arg(long, global = true)]
+        json: bool,
+    },
+    /// Pause the agent (global emergency stop — new work only)
+    Pause {
+        /// Optional reason recorded in the sentinel
+        reason: Option<String>,
+    },
+    /// Resume from a global pause
+    Resume,
+    /// Manage suggested automations
+    Suggestions {
+        #[command(subcommand)]
+        cmd: cmd_suggestions::SuggestionsSubcommand,
         /// Output as JSON (for scripting/CI)
         #[arg(long, global = true)]
         json: bool,
@@ -1887,6 +1903,20 @@ async fn main() -> Result<()> {
         }
         Some(Commands::Cron { cmd, json }) => {
             cmd_cron::handle_cron_command(&loaded.config, cmd.clone(), *json).await?;
+        }
+        Some(Commands::Pause { reason }) => {
+            let detail = reason
+                .clone()
+                .unwrap_or_else(|| "engaged via `operant pause`".to_string());
+            operant_core::estop::engage(Some(&detail))?;
+            println!("⏸️ Operant paused (new work only). Resume with `operant resume`.");
+        }
+        Some(Commands::Resume) => {
+            operant_core::estop::disengage()?;
+            println!("Operant resumed.");
+        }
+        Some(Commands::Suggestions { cmd, json }) => {
+            cmd_suggestions::handle_suggestions_command(&loaded.config, cmd.clone(), *json).await?;
         }
         Some(Commands::Kanban { board, cmd, json }) => {
             cmd_kanban::handle_kanban_command(&loaded.config, board, cmd.clone(), *json).await?;

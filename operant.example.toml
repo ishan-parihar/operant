@@ -167,6 +167,16 @@ sms_twilio_enabled = false
 webhooks_enabled = false
 # webhooks_addr = "127.0.0.1:8080"
 admins = []
+# Cap on concurrent gateway sessions (hermes max_concurrent_sessions parity).
+# When reached, new sessions get a refusal reply while existing holders keep
+# their slots. Unset/None = unlimited.
+# max_concurrent_sessions = 4
+
+# Global emergency stop — `operant pause` / `operant resume` writes/removes a
+# sentinel (fail-safe: any file pauses new work). While paused, the cron
+# scheduler skips dispatch, kanban dispatch is blocked, and new gateway turns
+# get a paused reply. In-flight work is never killed.
+# Suggested automations: `operant suggestions list|accept|dismiss|catalog|clear`
 
 [tools]
 registry_timeout_secs = 30

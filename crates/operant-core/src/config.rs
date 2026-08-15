@@ -575,6 +575,10 @@ pub struct GatewaySettings {
     pub telegram_bot_username: Option<String>,
     /// Enable DM topic creation for private chats (Bot API 9.4+)
     pub telegram_dm_topics_enabled: bool,
+    /// Cap on concurrent gateway sessions (hermes `max_concurrent_sessions`
+    /// parity). When reached, new sessions get a refusal reply while existing
+    /// holders keep their slots. `None` = unlimited.
+    pub max_concurrent_sessions: Option<usize>,
 }
 
 impl Default for GatewaySettings {
@@ -605,6 +609,7 @@ impl Default for GatewaySettings {
             telegram_proxy: None,
             telegram_bot_username: None,
             telegram_dm_topics_enabled: false,
+            max_concurrent_sessions: None,
         }
     }
 }

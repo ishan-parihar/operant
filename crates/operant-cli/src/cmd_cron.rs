@@ -192,6 +192,12 @@ async fn cmd_create(
     repeat: Option<i32>,
 ) -> Result<()> {
     let db = CronDb::init(config.database_path.clone()).context("Failed to open cron database")?;
+    // Normalize + validate the schedule up front: the cron crate only parses
+    // 6-field expressions, so 5-field ("0 9 * * *") and interval ("every 6h")
+    // forms are converted here. Invalid schedules fail at creation instead of
+    // silently never firing.
+    let schedule = operant_core::cronjobs::normalize_schedule(schedule)
+        .with_context(|| format!("invalid schedule '{schedule}'"))?;
     // Repeat is now enforced by the scheduler (R16): when repeat_completed
     // reaches repeat_times the job is marked completed and disabled. Negative
     // values mean "infinite" — same semantics as a None repeat.
@@ -200,7 +206,7 @@ async fn cmd_create(
         .create_job(operant_core::cronjobs::db::CreateJobParams {
             name: name.to_string(),
             prompt: command.to_string(),
-            schedule: schedule.to_string(),
+            schedule: schedule.clone(),
             schedule_display: schedule.to_string(),
             repeat_times,
             deliver: "local".to_string(),
@@ -440,6 +446,13 @@ async fn cmd_status(config: &AppConfig) -> Result<()> {
 
 async fn cmd_tick(config: &AppConfig) -> Result<()> {
     let db = CronDb::init(config.database_path.clone()).context("Failed to open cron database")?;
+    // Self-heal legacy schedules/next_run before checking due jobs.
+    let healed = db
+        .repair_schedules()
+        .context("Failed to repair cron schedules")?;
+    if healed > 0 {
+        println!("Repaired {} legacy cron job schedule(s).", healed);
+    }
     let due_jobs = db.get_due_jobs().context("Failed to get due cron jobs")?;
 
     if due_jobs.is_empty() {
@@ -483,6 +496,10 @@ async fn cmd_blueprint(
     };
 
     let schedule = schedule_override.unwrap_or_else(|| default_schedule.to_string());
+    // Blueprint defaults are 5-field expressions — normalize to the 6-field
+    // form the scheduler's cron crate parses ("0 8 * * *" → "0 0 8 * * *").
+    let schedule = operant_core::cronjobs::normalize_schedule(&schedule)
+        .with_context(|| format!("invalid schedule '{schedule}'"))?;
 
     let db = CronDb::init(config.database_path.clone()).context("Failed to open cron database")?;
     let id = db

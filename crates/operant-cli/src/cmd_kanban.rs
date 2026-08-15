@@ -786,6 +786,14 @@ async fn cmd_log(config: &AppConfig, board_slug: &str, id: &str, message: &str) 
 }
 
 async fn cmd_dispatch(config: &AppConfig, board_slug: &str) -> Result<()> {
+    // Global emergency stop (hermes estop parity): while engaged, skip
+    // claiming NEW tasks. Already-running workers are never interrupted.
+    if operant_core::estop::is_engaged() {
+        println!("⏸️ Operant is paused — no new kanban tasks dispatched.");
+        println!("   Resume with `operant resume`.");
+        return Ok(());
+    }
+
     let db = open_db(config, board_slug)?;
     let dispatcher = operant_core::kanban::Dispatcher::new(db.conn().clone());
 

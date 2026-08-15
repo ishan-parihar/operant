@@ -71,6 +71,10 @@ pub struct GatewayConfig {
     pub telegram_bot_username: Option<String>,
     /// Enable DM topic creation for private chats (Bot API 9.4+)
     pub telegram_dm_topics_enabled: bool,
+    /// Cap on concurrent gateway sessions (hermes `max_concurrent_sessions`
+    /// parity). When reached, new sessions get a refusal reply while existing
+    /// holders keep their slots. `None` = unlimited.
+    pub max_concurrent_sessions: Option<usize>,
 }
 
 impl Default for GatewayConfig {
@@ -99,6 +103,7 @@ impl Default for GatewayConfig {
             telegram_proxy: settings.telegram_proxy,
             telegram_bot_username: settings.telegram_bot_username,
             telegram_dm_topics_enabled: settings.telegram_dm_topics_enabled,
+            max_concurrent_sessions: settings.max_concurrent_sessions,
         }
     }
 }
@@ -828,6 +833,52 @@ impl Gateway {
                 return Ok(None);
             }
         };
+
+        // Global emergency stop (hermes estop parity): while engaged, new
+        // turns get a brief paused reply instead of an agent run. In-flight
+        // work is never killed — this is pause-new-work.
+        if crate::estop::is_engaged() {
+            let state = crate::estop::state();
+            let reason = state
+                .reason
+                .as_deref()
+                .map(|r| format!(" ({r})"))
+                .unwrap_or_default();
+            info!("Gateway turn rejected: ESTOP engaged{reason}");
+            return Ok(Some(OutgoingMessage::new(
+                &message.channel_id,
+                format!("⏸️ Operant is paused{reason}. Resume with `operant resume`."),
+            )));
+        }
+
+        // Active-session cap (hermes `max_concurrent_sessions` parity): a
+        // new session is refused when the cap is reached; existing holders
+        // keep their slots (their locks refresh on every message).
+        if let Some(max) = self.config.max_concurrent_sessions {
+            let tracker = crate::active_sessions::ActiveSessionTracker::new(
+                crate::active_sessions::ActiveSessionTracker::default_dir(),
+                Some(max),
+            );
+            let session_key = format!(
+                "{}:{}:{}",
+                message.platform, message.user_id, message.channel_id
+            );
+            if !tracker.acquire(&session_key)? {
+                warn!(
+                    session = %session_key,
+                    max,
+                    "Gateway session refused: concurrency cap reached"
+                );
+                return Ok(Some(OutgoingMessage::new(
+                    &message.channel_id,
+                    format!("Too many concurrent sessions (limit {max}). Please try again later."),
+                )));
+            }
+            let result = handler.handle(message).await;
+            tracker.release(&session_key);
+            let response = result?;
+            return Ok(Some(response));
+        }
 
         let response = handler.handle(message).await?;
 
@@ -3719,6 +3770,7 @@ mod tests {
             email_smtp_user: None,
             email_smtp_pass: None,
             sms_twilio_enabled: false,
+            max_concurrent_sessions: None,
         };
         let gw = Gateway::new(config);
         let stats = gw.get_stats().await;
@@ -3984,6 +4036,7 @@ mod tests {
             email_smtp_user: None,
             email_smtp_pass: None,
             sms_twilio_enabled: false,
+            max_concurrent_sessions: None,
         };
         let msg = format_startup_message(&config);
         assert!(msg.contains("Operant Gateway"));

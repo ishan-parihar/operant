@@ -42,6 +42,7 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 pub mod accessibility;
 pub mod acp;
+pub mod active_sessions;
 pub mod aft_bridge;
 pub mod agent;
 pub mod agent_memory;
@@ -60,6 +61,7 @@ pub mod database;
 pub mod distillation;
 pub mod env_passthrough;
 pub mod error;
+pub mod estop;
 pub mod gateway;
 pub mod gateway_markdown;
 pub mod gateway_pipeline;

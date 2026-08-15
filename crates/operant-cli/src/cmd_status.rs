@@ -11,12 +11,17 @@ pub async fn handle_status_command(config: &AppConfig, deep: bool, json: bool) -
     // print this directly; otherwise we pretty-print it as human text.
     // (iter-135 — closes the ponytail-audit gap "no --json output flag
     // on any command".)
+    let estop = operant_core::estop::state();
     let mut status = json!({
         "version": env!("CARGO_PKG_VERSION"),
         "os": info.os,
         "arch": info.arch,
         "model": config.agent.model,
         "data_dir": operant_core::platform::operant_data_dir().display().to_string(),
+        "pause": {
+            "engaged": estop.engaged,
+            "reason": estop.reason,
+        },
     });
 
     match Database::init(config.database_path.clone()) {
@@ -71,6 +76,14 @@ pub async fn handle_status_command(config: &AppConfig, deep: bool, json: bool) -
                 .to_string()
         );
         status["mcp_servers"] = json!(config.mcp.servers.len());
+        let active = operant_core::active_sessions::ActiveSessionTracker::new(
+            operant_core::active_sessions::ActiveSessionTracker::default_dir(),
+            config.gateway.max_concurrent_sessions,
+        )
+        .count()
+        .unwrap_or(0);
+        status["active_sessions"] = json!(active);
+        status["max_concurrent_sessions"] = json!(config.gateway.max_concurrent_sessions);
     }
 
     if json {
@@ -95,6 +108,17 @@ pub async fn handle_status_command(config: &AppConfig, deep: bool, json: bool) -
             println!("Model: {} (default)", model);
         }
         println!("Data dir: {}", status["data_dir"]);
+        if status["pause"]["engaged"].as_bool() == Some(true) {
+            let reason = status["pause"]["reason"].as_str().unwrap_or("");
+            println!(
+                "Pause: ⏸️ ENGAGED{}",
+                if reason.is_empty() {
+                    String::new()
+                } else {
+                    format!(" ({})", reason)
+                }
+            );
+        }
 
         if deep {
             if let Some(key) = status.get("api_key") {
@@ -117,6 +141,14 @@ pub async fn handle_status_command(config: &AppConfig, deep: bool, json: bool) -
             }
             if let Some(mcp) = status.get("mcp_servers") {
                 println!("MCP servers: {} configured", mcp);
+            }
+            if let Some(active) = status.get("active_sessions") {
+                let cap = status["max_concurrent_sessions"].as_u64().unwrap_or(0);
+                if cap > 0 {
+                    println!("Active sessions: {}/{} (gateway cap)", active, cap);
+                } else {
+                    println!("Active sessions: {} (unlimited)", active);
+                }
             }
         }
     }

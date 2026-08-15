@@ -40,6 +40,10 @@ impl CronScheduler {
 
     pub async fn start(&self) {
         info!("Cron scheduler started. Ticking every 60 seconds.");
+        // Self-heal legacy schedules/next_run once at start.
+        if let Err(e) = self.db.repair_schedules() {
+            error!("Cron schedule repair failed: {}", e);
+        }
         loop {
             if let Err(e) = self.tick().await {
                 error!("Cron tick failed: {}", e);
@@ -49,6 +53,14 @@ impl CronScheduler {
     }
 
     pub async fn tick(&self) -> Result<(), Error> {
+        // Global emergency stop (hermes estop parity): while engaged, skip
+        // dispatching NEW due jobs. In-flight work is never interrupted —
+        // this is pause-new-work. The check is a single stat, safe per tick.
+        if crate::estop::is_engaged() {
+            debug!("ESTOP engaged — skipping cron dispatch");
+            return Ok(());
+        }
+
         let due_jobs = self.db.get_due_jobs()?;
         if due_jobs.is_empty() {
             return Ok(());
@@ -203,8 +215,21 @@ impl CronScheduler {
     }
 
     fn compute_next_run(&self, job: &CronJob) -> Option<String> {
-        let schedule = Schedule::from_str(&job.schedule).ok()?;
-        let next = schedule.upcoming(chrono::Utc).next()?;
+        // Normalize first so legacy jobs stored with 5-field expressions or
+        // "every Nh" intervals (which the cron crate rejects) self-heal: the
+        // normalized form is persisted once, then used for scheduling.
+        let schedule = crate::cronjobs::normalize_schedule(&job.schedule).ok()?;
+        if schedule != job.schedule {
+            let _ = self.db.update_job(
+                &job.id,
+                HashMap::from([(
+                    "schedule".to_string(),
+                    Some(serde_json::json!(schedule.clone())),
+                )]),
+            );
+        }
+        let parsed = Schedule::from_str(&schedule).ok()?;
+        let next = parsed.upcoming(chrono::Utc).next()?;
         Some(next.to_rfc3339())
     }
 }
