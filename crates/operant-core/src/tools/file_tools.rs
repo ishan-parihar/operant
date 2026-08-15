@@ -179,6 +179,16 @@ pub(crate) fn validate_path(raw_path: &str) -> Result<PathBuf, String> {
         }
     }
 
+    // Step 2b: Reject registered credential files (G9 — hermes
+    // credential_files.py parity). The registerable registry extends the
+    // built-in deny list with skill/config-declared credential stores;
+    // fail-closed on unresolved paths.
+    if let Some(reason) = crate::credential_files::protected_path_reason(&canonical) {
+        return Err(format!(
+            "Access to credential file denied ({reason}). If you genuinely need this file, ask the user to read it manually and paste the contents."
+        ));
+    }
+
     // Step 3: Reject `..` traversal in the canonical path.
     if canonical_str.contains("/../") || canonical_str.contains("\\..\\") {
         return Err(format!(

@@ -43,6 +43,8 @@ pub struct RuntimeMetrics {
     memory_sync_failures: AtomicU64,
     /// Memory jobs dropped because the executor channel was full.
     memory_jobs_dropped: AtomicU64,
+    /// Identical tool-call repeats skipped by the R4 guardrail.
+    guardrail_skips: AtomicU64,
     /// Unix-millis of the last stream-drop retry (0 = never).
     last_stream_retry_at: AtomicU64,
     /// Unix-millis of the last empty-content retry (0 = never).
@@ -60,6 +62,7 @@ pub struct MetricsSnapshot {
     pub empty_content_retries: u64,
     pub memory_sync_failures: u64,
     pub memory_jobs_dropped: u64,
+    pub guardrail_skips: u64,
     pub last_stream_retry_at: u64,
     pub last_empty_content_retry_at: u64,
     pub last_memory_failure_at: u64,
@@ -74,6 +77,7 @@ impl MetricsSnapshot {
             || self.empty_content_retries > 0
             || self.memory_sync_failures > 0
             || self.memory_jobs_dropped > 0
+            || self.guardrail_skips > 0
     }
 }
 
@@ -114,6 +118,11 @@ impl RuntimeMetrics {
         self.memory_jobs_dropped.fetch_add(1, Ordering::Relaxed);
     }
 
+    /// An identical tool-call repeat was skipped by the R4 guardrail.
+    pub fn record_guardrail_skip(&self) {
+        self.guardrail_skips.fetch_add(1, Ordering::Relaxed);
+    }
+
     /// Read every counter into a cheap `Copy` snapshot.
     pub fn snapshot(&self) -> MetricsSnapshot {
         MetricsSnapshot {
@@ -122,6 +131,7 @@ impl RuntimeMetrics {
             empty_content_retries: self.empty_content_retries.load(Ordering::Relaxed),
             memory_sync_failures: self.memory_sync_failures.load(Ordering::Relaxed),
             memory_jobs_dropped: self.memory_jobs_dropped.load(Ordering::Relaxed),
+            guardrail_skips: self.guardrail_skips.load(Ordering::Relaxed),
             last_stream_retry_at: self.last_stream_retry_at.load(Ordering::Relaxed),
             last_empty_content_retry_at: self.last_empty_content_retry_at.load(Ordering::Relaxed),
             last_memory_failure_at: self.last_memory_failure_at.load(Ordering::Relaxed),

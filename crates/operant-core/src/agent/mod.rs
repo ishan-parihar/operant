@@ -293,6 +293,16 @@ pub struct OperantAgent {
     /// When triggered, the agent loop exits at the next iteration boundary
     /// and tool execution is aborted via `flag.check()`.
     interrupt_flag: crate::interrupt::InterruptFlag,
+    /// R2: set when a stream error on a known reasoning model fired with no
+    /// content arrived yet (upstream idle-killed the thinking phase). The run
+    /// loop appends thinking-timeout guidance to the final error message once
+    /// retries are exhausted — mirrors hermes thinking_timeout_guidance.py.
+    thinking_timeout_hit: std::sync::atomic::AtomicBool,
+    /// R4: per-turn tracker of identical tool-call repeats (hermes
+    /// tool_guardrails.py parity). Guards against retry storms where the
+    /// model calls the same tool with identical args repeatedly. Reset at
+    /// the start of each user turn.
+    tool_guardrails: std::sync::Mutex<crate::tool_guardrails::ToolGuardrailTracker>,
     /// Whether to record trajectories (ReAct steps + messages) for each run.
     /// When true, a trajectory JSON is saved to ~/.operant/trajectories/
     /// on run() completion. Set via AgentConfig::record_trajectories.
@@ -428,6 +438,10 @@ impl OperantAgent {
             database,
             persistent_session_id: None,
             interrupt_flag: crate::interrupt::InterruptFlag::new(),
+            thinking_timeout_hit: std::sync::atomic::AtomicBool::new(false),
+            tool_guardrails: std::sync::Mutex::new(
+                crate::tool_guardrails::ToolGuardrailTracker::new(),
+            ),
             record_trajectories: false,
             session_cost_usd: Arc::new(std::sync::RwLock::new(0.0)),
             observer: None,
@@ -480,6 +494,10 @@ impl OperantAgent {
             database,
             persistent_session_id: None,
             interrupt_flag: crate::interrupt::InterruptFlag::new(),
+            thinking_timeout_hit: std::sync::atomic::AtomicBool::new(false),
+            tool_guardrails: std::sync::Mutex::new(
+                crate::tool_guardrails::ToolGuardrailTracker::new(),
+            ),
             record_trajectories: false,
             session_cost_usd: Arc::new(std::sync::RwLock::new(0.0)),
             observer: None,
@@ -861,6 +879,32 @@ impl OperantAgent {
         }
     }
 
+    /// R2: append thinking-timeout guidance to a final (post-retry) error when
+    /// the failure is a transport error on a known reasoning model with no
+    /// content arrived (upstream idle-killed the thinking phase). Only fires
+    /// after the retry budget is exhausted — the raw error flows through the
+    /// retry loop unannotated so classification is unaffected.
+    fn annotate_thinking_timeout(&self, err: crate::error::Error) -> crate::error::Error {
+        // Streaming path: the flag is set by process_stream when the failure
+        // happened with no content arrived. Non-streaming path: detect the
+        // transport error on a known reasoning model directly.
+        let hit = self
+            .thinking_timeout_hit
+            .load(std::sync::atomic::Ordering::Relaxed)
+            || crate::reasoning_timeouts::is_thinking_timeout(&self.model(), &err.to_string());
+        if hit {
+            let guidance =
+                crate::reasoning_timeouts::build_thinking_timeout_guidance(&self.model());
+            warn!(
+                error = %err,
+                "Thinking-timeout detected on reasoning model — appending guidance"
+            );
+            crate::error::Error::Agent(format!("{err}{guidance}"))
+        } else {
+            err
+        }
+    }
+
     /// Add a message to the conversation history
     pub async fn add_message(&self, message: Message) {
         let mut conv = self.conversation.write().await;
@@ -1220,6 +1264,16 @@ impl OperantAgent {
         // building. Matches hermes-agent's build_turn_context() pattern.
         let turn_ctx = turn_context::build_turn_context(self, &user_query).await?;
         let session_id = turn_ctx.session_id;
+
+        // ── Tool-call guardrail reset (R4) ────────────────────────────
+        // Identical-call repeat detection is per-USER-TURN, not per-iteration:
+        // the model may legitimately call the same tool across iterations of
+        // one task, but a retry storm repeats the exact same call within a
+        // few iterations. Reset at the start of each run().
+        self.tool_guardrails
+            .lock()
+            .expect("tool_guardrails lock poisoned")
+            .reset();
         let mut messages = turn_ctx.messages;
 
         // ── TurnStart lifecycle hook ─────────────────────────────────────
@@ -1536,7 +1590,7 @@ impl OperantAgent {
                                         .with_stream(self.config.stream);
                                 stream = self.client.chat_streaming(retry_request).await?;
                             } else {
-                                return Err(e);
+                                return Err(self.annotate_thinking_timeout(e));
                             }
                         }
                     }
@@ -1599,10 +1653,10 @@ impl OperantAgent {
                                 self.client.chat(retry_request).await?
                             } else {
                                 warn!("No more credentials to rotate — returning original error");
-                                return Err(e);
+                                return Err(self.annotate_thinking_timeout(e));
                             }
                         } else {
-                            return Err(e);
+                            return Err(self.annotate_thinking_timeout(e));
                         }
                     }
                 };
@@ -3297,6 +3351,24 @@ If nothing needs updating, say 'Nothing to save.' and stop.\n\n{}",
             // loop uses to re-issue the request (hermes-parity stream-drop
             // recovery). Trajectory saving is handled by the caller (run())
             // when this error propagates up.
+            //
+            // R2: a transport failure on a known reasoning model with NO
+            // content arrived yet is a thinking-timeout (upstream idle-killed
+            // the thinking phase). Record it so the run loop can annotate the
+            // final error with guidance once retries are exhausted.
+            if crate::reasoning_timeouts::is_thinking_timeout(&self.model(), &err.to_string())
+                && accumulated_text.is_empty()
+                && accumulated_reasoning.is_empty()
+                && tool_calls.is_empty()
+            {
+                self.thinking_timeout_hit
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
+                self.emit(AgentEvent::Content {
+                    text: "⚠ The model's thinking phase may have exceeded the upstream idle timeout — retrying."
+                        .to_string(),
+                })
+                .await;
+            }
             return Err(err);
         }
 
@@ -3469,6 +3541,63 @@ If nothing needs updating, say 'Nothing to save.' and stop.\n\n{}",
                     }
                 }
             };
+
+            // ── Tool-call guardrails (R4 — hermes tool_guardrails.py) ──
+            // Detect retry storms: the model calling the same tool with
+            // identical args repeatedly within one turn. Side-effecting tools
+            // are skipped on the 3rd identical call; no-effect tools (cheap,
+            // read-only) get a warning then skip on the 4th. The synthetic
+            // result tells the model to stop repeating, saving round-trips and
+            // preventing repeated mutations.
+            {
+                use crate::tool_guardrails::GuardrailDecision;
+                let decision = {
+                    let mut g = self
+                        .tool_guardrails
+                        .lock()
+                        .expect("tool_guardrails lock poisoned");
+                    g.observe(&name, &args_str)
+                };
+                match decision {
+                    GuardrailDecision::Allow => {}
+                    GuardrailDecision::Warn => {
+                        let count = self
+                            .tool_guardrails
+                            .lock()
+                            .expect("tool_guardrails lock poisoned")
+                            .count_of(&name, &args_str);
+                        warn!(
+                            tool = %name,
+                            count,
+                            "Repeated identical tool call — warning model"
+                        );
+                        self.emit(AgentEvent::Content {
+                            text: format!(
+                                "⚠ Tool '{name}' has been called with identical arguments {count} times this turn."
+                            ),
+                        })
+                        .await;
+                    }
+                    GuardrailDecision::Skip => {
+                        let count = self
+                            .tool_guardrails
+                            .lock()
+                            .expect("tool_guardrails lock poisoned")
+                            .count_of(&name, &args_str);
+                        warn!(
+                            tool = %name,
+                            count,
+                            "Repeated identical tool call — skipping duplicate"
+                        );
+                        self.metrics.record_guardrail_skip();
+                        early_results[idx] = Some(ToolResult::error(
+                            &tool_call.id,
+                            crate::tool_guardrails::build_skip_message(&name, count),
+                        ));
+                        continue;
+                    }
+                }
+            }
 
             // Validate tool exists
             if !self.registry.contains(&name).await {

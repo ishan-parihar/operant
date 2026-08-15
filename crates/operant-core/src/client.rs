@@ -146,6 +146,17 @@ impl OpenAIClient {
         }))
     }
 
+    /// Effective per-request timeout: the configured timeout, raised to the
+    /// reasoning stale-timeout floor when the model is a known reasoning
+    /// model (R2 — hermes reasoning_timeouts.py parity). A FLOOR — never
+    /// lowers an explicitly configured timeout.
+    fn effective_timeout(&self, model: &str) -> Duration {
+        match crate::reasoning_timeouts::get_reasoning_stale_timeout_floor(model) {
+            Some(floor) => self.config.timeout.max(Duration::from_secs(floor)),
+            None => self.config.timeout,
+        }
+    }
+
     /// Build authorization headers
     fn build_headers(&self) -> Result<HeaderMap> {
         let mut headers = HeaderMap::new();
@@ -279,6 +290,8 @@ impl OpenAIClient {
         let headers = self.build_headers()?;
 
         // Pre-flight rate-limit check (streaming does not retry mid-stream).
+        // (The bounded error-body read helper is defined below; both non-2xx
+        // paths in this file use it instead of unbounded `response.text()`.)
         if let Err(e) = self.rate_limiter.check_rate_limit(model).await {
             let retry_after = match e {
                 RateLimitError::TooManyRequests { retry_after_secs } => retry_after_secs,
@@ -311,6 +324,7 @@ impl OpenAIClient {
                 .post(url.clone())
                 .headers(headers.clone())
                 .json(&request)
+                .timeout(self.effective_timeout(model))
                 .send()
                 .await
             {
@@ -339,7 +353,7 @@ impl OpenAIClient {
                 return Ok(ChatStreamResponse::new(stream));
             }
 
-            let body = response.text().await?;
+            let body = read_bounded_error_body(response).await;
 
             if status == 429 {
                 self.rate_limiter.drain_bucket(model).await;
@@ -417,6 +431,7 @@ impl OpenAIClient {
                 .post(url.clone())
                 .headers(headers.clone())
                 .json(&body)
+                .timeout(self.effective_timeout(model))
                 .send()
                 .await
             {
@@ -440,7 +455,7 @@ impl OpenAIClient {
 
             let status = response.status();
             let retry_after_hdr = parse_retry_after_header(response.headers());
-            let body_text = response.text().await.map_err(Error::Network)?;
+            let body_text = read_bounded_error_body(response).await;
 
             // 3. Handle 429 rate limiting.
             if status == 429 {
@@ -1011,6 +1026,52 @@ pub struct StreamingToolCallDelta {
     pub function: Option<ToolCallFunction>,
 }
 
+/// Bounded read of an HTTP error response body (hermes `bounded_response.py`
+/// parity — R3).
+///
+/// A bare `response.text()` on a *streaming* request is unbounded in two
+/// dangerous ways: a server can declare (or stream) an arbitrarily large body,
+/// ballooning memory; and a server can open the body and stall forever, hanging
+/// the agent. The diagnostic body is only ever shown truncated to a few hundred
+/// characters, so reading megabytes — or blocking forever — buys nothing.
+///
+/// Caps the read at [`MAX_ERROR_BODY_BYTES`] and enforces a hard wall-clock
+/// deadline of [`ERROR_BODY_READ_TIMEOUT`], returning the decoded (lossy) text
+/// snippet. Callers pass the returned text into `classify_http_error` / error
+/// builders instead of touching `response.text()` directly.
+pub(crate) const MAX_ERROR_BODY_BYTES: usize = 64 * 1024;
+pub(crate) const ERROR_BODY_READ_TIMEOUT: Duration = Duration::from_secs(10);
+
+pub(crate) async fn read_bounded_error_body(response: reqwest::Response) -> String {
+    use futures_util::StreamExt;
+
+    let mut stream = response.bytes_stream();
+    let mut buf: Vec<u8> = Vec::with_capacity(4096);
+    let deadline = tokio::time::Instant::now() + ERROR_BODY_READ_TIMEOUT;
+
+    loop {
+        // Hard wall-clock deadline so a server that stalls mid-chunk can't hang
+        // the turn — control returns here even when the socket read blocks.
+        if tokio::time::Instant::now() >= deadline {
+            break;
+        }
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        let chunk = match tokio::time::timeout(remaining, stream.next()).await {
+            Ok(Some(Ok(chunk))) => chunk,
+            Ok(Some(Err(_))) | Ok(None) => break,
+            Err(_) => break, // timed out waiting for the next chunk
+        };
+        if buf.len() + chunk.len() > MAX_ERROR_BODY_BYTES {
+            let take = MAX_ERROR_BODY_BYTES.saturating_sub(buf.len());
+            buf.extend_from_slice(&chunk[..take]);
+            break;
+        }
+        buf.extend_from_slice(&chunk);
+    }
+
+    String::from_utf8_lossy(&buf).into_owned()
+}
+
 /// Classify an HTTP error from the provider API into a structured Error variant.
 ///
 /// Uses the HTTP status code and response body to produce the most specific
@@ -1400,6 +1461,80 @@ mod tests {
             got, "Hello",
             "SSE content should be consumed after the retry"
         );
+        server.abort();
+    }
+
+    // --- bounded error-body read tests (R3) ---
+
+    #[tokio::test]
+    async fn bounded_error_body_truncates_oversized_response() {
+        // A server streaming a huge error body must NOT balloon memory: the
+        // read caps at MAX_ERROR_BODY_BYTES.
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let huge = "e".repeat(MAX_ERROR_BODY_BYTES * 4);
+        let server = tokio::spawn(async move {
+            if let Ok((mut sock, _)) = listener.accept().await {
+                let mut buf = [0u8; 4096];
+                let _ = sock.read(&mut buf).await;
+                let response = format!(
+                    "HTTP/1.1 500 Internal Server Error\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    huge.len(),
+                    huge
+                );
+                let _ = sock.write_all(response.as_bytes()).await;
+                let _ = sock.shutdown().await;
+            }
+        });
+
+        let resp = reqwest::Client::new()
+            .get(format!("http://{addr}/error"))
+            .send()
+            .await
+            .expect("request should succeed");
+        let body = read_bounded_error_body(resp).await;
+        assert!(
+            body.len() <= MAX_ERROR_BODY_BYTES,
+            "body capped at {}",
+            MAX_ERROR_BODY_BYTES
+        );
+        assert!(body.starts_with("eee"), "truncated body keeps the prefix");
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn bounded_error_body_reads_small_response_fully() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let small = "rate limited: try again";
+        let server = tokio::spawn(async move {
+            if let Ok((mut sock, _)) = listener.accept().await {
+                let mut buf = [0u8; 4096];
+                let _ = sock.read(&mut buf).await;
+                let response = format!(
+                    "HTTP/1.1 429 Too Many Requests\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    small.len(),
+                    small
+                );
+                let _ = sock.write_all(response.as_bytes()).await;
+                let _ = sock.shutdown().await;
+            }
+        });
+
+        let resp = reqwest::Client::new()
+            .get(format!("http://{addr}/error"))
+            .send()
+            .await
+            .expect("request should succeed");
+        let body = read_bounded_error_body(resp).await;
+        assert_eq!(body, small);
         server.abort();
     }
 

@@ -26,6 +26,7 @@ pub use super::cron_tool::CronTool;
 pub use super::datetime_tool::{DateTimeTool, TimestampTool};
 pub use super::debug_helpers::{EchoTool, EnvVarTool, SystemInfoTool};
 pub use super::discord_tool::{DiscordAdminTool, DiscordTool};
+pub use super::env_probe_tool::EnvProbeTool;
 pub use super::feishu_tool::{FeishuDocTool, FeishuDriveTool};
 pub use super::file_state::FileStateTool;
 pub use super::file_tools::{FileListTool, FileReadTool, FileSearchTool, FileWriteTool};
@@ -105,6 +106,7 @@ pub async fn register_builtin_tools(
     registry.register(DateTimeTool).await?;
     registry.register(TimestampTool).await?;
     registry.register(EchoTool).await?;
+    registry.register(EnvProbeTool).await?;
     registry.register(EnvVarTool).await?;
     registry.register(SystemInfoTool).await?;
     registry.register(FileStateTool).await?;
@@ -253,6 +255,7 @@ pub fn builtin_tool_names() -> Vec<&'static str> {
         "echo",
         "debug_env",
         "debug_system",
+        "env_probe",
         "file_list",
         "file_read",
         "file_search",

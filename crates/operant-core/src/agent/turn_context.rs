@@ -17,6 +17,7 @@
 //! the original inline prologue in `run()`.
 
 use crate::client::Message;
+use crate::context_references;
 use crate::error::Result;
 
 use super::OperantAgent;
@@ -62,6 +63,40 @@ pub struct TurnContext {
 /// Behavior is identical to the original inline prologue; this is a
 /// pure move-and-name refactor with no semantic change.
 pub async fn build_turn_context(agent: &OperantAgent, user_query: &str) -> Result<TurnContext> {
+    // ── 0. @-reference expansion ─────────────────────────────────────
+    // Expand `@file:`, `@folder:`, `@git:…`, `@url:…` tokens the user typed
+    // BEFORE the message enters the conversation, so every surface (CLI, TUI,
+    // gateway, cron, autonomous, sub-agents) gets identical expansion. Mirrors
+    // hermes agent/context_references.py (R1). Warnings are surfaced to the
+    // user via the AgentEvent channel below.
+    let context_window = agent.config.context_window;
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let ctx =
+        context_references::preprocess_context_references(user_query, &cwd, context_window).await;
+    let effective_query = ctx.message.clone();
+
+    if !ctx.warnings.is_empty() && !ctx.blocked {
+        let joined = ctx.warnings.join(" | ");
+        warn!(warnings = %joined, "@ context references expanded with warnings");
+        agent
+            .emit(crate::agent::AgentEvent::Content {
+                text: format!("⚠ {joined}"),
+            })
+            .await;
+    }
+    if ctx.blocked {
+        warn!(
+            injected_tokens = ctx.injected_tokens,
+            "@ context injection refused (50% hard limit)"
+        );
+        agent
+            .emit(crate::agent::AgentEvent::Content {
+                text: "⚠ @ context injection refused: attached files exceed the 50% hard limit"
+                    .to_string(),
+            })
+            .await;
+    }
+
     // ── 1. Reset interrupt flag ──────────────────────────────────────
     // Without this, a Ctrl-C in run #1 permanently breaks run #2+
     // (the flag stays triggered and the loop exits immediately).
@@ -99,11 +134,13 @@ pub async fn build_turn_context(agent: &OperantAgent, user_query: &str) -> Resul
     let already_added = {
         let conv = agent.conversation.read().await;
         conv.last()
-            .is_some_and(|last| last.role == super::Role::User && last.content == user_query)
+            .is_some_and(|last| last.role == super::Role::User && last.content == effective_query)
     };
 
     if !already_added {
-        agent.add_message(Message::user(user_query)).await;
+        agent
+            .add_message(Message::user(effective_query.clone()))
+            .await;
     }
 
     // ── 5. DB session + user message persistence ─────────────────────
@@ -128,7 +165,7 @@ pub async fn build_turn_context(agent: &OperantAgent, user_query: &str) -> Resul
         .save_message(
             &session_id,
             "user",
-            user_query,
+            &effective_query,
             &chrono::Utc::now().to_rfc3339(),
         )
         .map_err(|e| {
@@ -145,7 +182,7 @@ pub async fn build_turn_context(agent: &OperantAgent, user_query: &str) -> Resul
     debug!(
         session_id = %session_id,
         messages = messages.len(),
-        user_query_len = user_query.len(),
+        user_query_len = effective_query.len(),
         already_added,
         "Turn context built"
     );

@@ -22,6 +22,7 @@ pub mod cron_tool;
 pub mod datetime_tool;
 pub mod debug_helpers;
 pub mod delegation_output_schema;
+pub mod env_probe_tool;
 pub mod file_state;
 pub mod file_tools;
 pub mod http_tool;
