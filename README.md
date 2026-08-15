@@ -116,7 +116,7 @@ skills/                                 ~/.operant/skills/
 ├── github/                             ├── systematic-debugging/  # a direct
 ├── mcp/                                ├── test-driven-development/ # subdir
 ├── productivity/                       ├── …
-├── research/                           └── <82 skills total>
+├── research/                           └── <105 skills total>
 ├── security/
 ├── software-development/
 ├── workspace-lint/
