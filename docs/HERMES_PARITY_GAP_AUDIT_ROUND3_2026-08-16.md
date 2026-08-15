@@ -98,3 +98,19 @@ false positives (equivalent implementation under a different name) are listed in
    for interruption cleanup (reuse `message_safety`).
 5. **G9/G10, R5/R6** — opportunistic (registry of protected files, env probe report, turn tally
    display, activity heartbeat).
+
+---
+
+## Status — 2026-08-16 (all Tier-1 + Tier-2 implemented, live-verified)
+
+| Gap | Status | Evidence |
+|-----|--------|----------|
+| **R1** @-reference expansion | ✅ Implemented (`context_references.rs`, wired into `turn_context::build_turn_context`) | 9 unit tests; live: `@file:/tmp/r3-live/sample.txt:2-4` → `beta gamma delta` verbatim (laguna-s-2.1-free) |
+| **R2** reasoning stale-timeout floor | ✅ Implemented (`reasoning_timeouts.rs` + per-request timeout raise in `client.rs` chat/chat_streaming + escape-point guidance annotation) | 4 unit tests |
+| **R3** bounded error-body reads | ✅ Implemented (`read_bounded_body` in `client.rs`, both error sites) | 2 unit tests |
+| **R4** tool-call guardrails | ✅ Implemented (`tool_guardrails.rs` + `observe()` in `execute_tools` pre-flight + `guardrail_skips` metric) | 7 unit tests; live: 2 identical env_probe calls allowed (spec: side-effect threshold=3) |
+| **G9** credential-file registry | ✅ Implemented (`credential_files.rs` + wired into `file_tools::validate_path`) | 4 unit tests; live: model refuses to read `~/.operant/.env` and routes to `env_probe` |
+| **G10** env-probe exposure audit | ✅ Implemented (`env_probe.rs` + registered as agent tool) | 7 unit tests; live: `env_probe` called in-loop, reports 2 exposures with names+lengths, values redacted |
+| **Fallback wiring (new)** | ✅ hermes `fallback_providers` parity: `[providers]` loaded into run path, `FallbackModelClient` + `ProviderRegistry` constructed (`create_model_client_with_fallback`) | 5 CLI tests + 1 config round-trip; live: real 401 on primary → `switching to fallback provider, to_provider: zen-alt` → request to fallback endpoint |
+
+Commits: `40ebfc5a` (R1–R4 + G9/G10), `54710da9` (fallback wiring), (R4 no-effect fix).

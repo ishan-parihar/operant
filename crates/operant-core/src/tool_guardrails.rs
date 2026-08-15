@@ -30,6 +30,7 @@ pub const NO_EFFECT_TOOL_NAMES: &[&str] = &[
     "web_fetch",
     "web_extract",
     "vision_analyze",
+    "env_probe",
     "browser_snapshot",
     "browser_get_images",
     "browser_console",
@@ -223,6 +224,7 @@ mod tests {
         assert!(tool_may_have_side_effect("patch"));
         assert!(tool_may_have_side_effect("unknown_tool")); // default effect-capable
         assert!(!tool_may_have_side_effect("file_read"));
+        assert!(!tool_may_have_side_effect("env_probe"));
         assert!(!tool_may_have_side_effect("web_search"));
         assert!(!tool_may_have_side_effect("datetime"));
         assert!(!tool_may_have_side_effect("skill_view"));
