@@ -120,6 +120,11 @@ autoload = true
 # schemas are always loaded eagerly and tools.tool_search.enabled is
 # forced to "off" (default true).
 deferred_loading = true
+# Stdio MCP watchdog sweep interval in seconds (hermes
+# mcp_stdio_watchdog.py parity): a background task periodically checks
+# every connected stdio MCP server's child process and auto-reconnects
+# one that has exited (crash), re-syncing its tools. 0 disables.
+watchdog_interval_secs = 30
 
 [[mcp.servers]]
 name = "filesystem-demo"

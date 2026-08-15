@@ -479,7 +479,18 @@ pub struct McpSettings {
     /// when MCP tools are present).
     #[serde(default = "default_true")]
     pub deferred_loading: bool,
+    /// Stdio MCP watchdog sweep interval in seconds (hermes
+    /// `mcp_stdio_watchdog.py` parity). A background task periodically
+    /// checks every connected stdio MCP server's child process and
+    /// auto-reconnects one that has exited (crash), re-syncing its tools
+    /// into the registry. `0` disables the watchdog. Default 30s.
+    #[serde(default = "default_mcp_watchdog_interval")]
+    pub watchdog_interval_secs: u64,
     pub servers: Vec<McpServerConfig>,
+}
+
+fn default_mcp_watchdog_interval() -> u64 {
+    30
 }
 
 impl Default for McpSettings {
@@ -487,6 +498,7 @@ impl Default for McpSettings {
         Self {
             autoload: true,
             deferred_loading: true,
+            watchdog_interval_secs: default_mcp_watchdog_interval(),
             servers: Vec::new(),
         }
     }

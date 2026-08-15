@@ -8,7 +8,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout};
 use tokio::sync::RwLock;
@@ -501,6 +502,16 @@ struct StdioIo {
     stdout: BufReader<ChildStdout>,
 }
 
+/// Internal classification of a stdio request failure so the auto-restart
+/// wrapper only retries genuine transport failures (broken pipe / EOF — the
+/// child died and the tool provably did not complete), never protocol-level
+/// errors (a timed-out or errored call is ambiguous — the server may have
+/// executed the tool, so it must not be re-issued).
+enum ReqError {
+    Transport(crate::error::Error),
+    Protocol(crate::error::Error),
+}
+
 /// MCP client that communicates over stdin/stdout of a child process
 #[derive(Debug, Clone)]
 pub struct McpStdioClient {
@@ -522,6 +533,23 @@ pub struct McpStdioClient {
     connected: Arc<RwLock<bool>>,
     /// Atomic request ID counter
     request_id: Arc<AtomicU64>,
+    /// Number of automatic reconnects performed (watchdog + call-time
+    /// recovery). Observable via [`McpStdioClient::restart_count`].
+    restarts: Arc<AtomicU64>,
+    /// Consecutive read timeouts (hung-server detection). Reset on any
+    /// successful exchange; when it reaches 2, the next request first
+    /// force-reconnects to clear the wedged child (hermes watchdog parity).
+    timeouts: Arc<AtomicU64>,
+    /// True once a session has ever been established (set at the end of a
+    /// successful connect). Lets call-time recovery distinguish a genuine
+    /// post-crash call (io is None because the child was killed) from the
+    /// never-connected initial handshake, which must never auto-reconnect.
+    had_session: Arc<AtomicBool>,
+    /// True while a reconnect is in flight. Suppresses call-time auto-retry
+    /// inside the reconnect's own initialize handshake so a persistently
+    /// dead server can never trigger a reconnect → connect → send_request →
+    /// reconnect loop.
+    reconnecting: Arc<AtomicBool>,
 }
 
 impl McpStdioClient {
@@ -541,7 +569,72 @@ impl McpStdioClient {
             capabilities: Arc::new(RwLock::new(McpCapabilities::default())),
             connected: Arc::new(RwLock::new(false)),
             request_id: Arc::new(AtomicU64::new(1)),
+            restarts: Arc::new(AtomicU64::new(0)),
+            timeouts: Arc::new(AtomicU64::new(0)),
+            had_session: Arc::new(AtomicBool::new(false)),
+            reconnecting: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    /// Number of automatic reconnects performed since this client was built.
+    pub async fn restart_count(&self) -> u64 {
+        self.restarts.load(Ordering::SeqCst)
+    }
+
+    /// Non-blocking liveness check on the underlying child process.
+    ///
+    /// Returns `false` when the child has exited (crash/EOF) or was never
+    /// spawned — the watchdog uses this to decide whether to reconnect.
+    pub async fn process_alive(&self) -> bool {
+        let mut guard = self.child.write().await;
+        match guard.as_mut() {
+            Some(child) => match child.try_wait() {
+                // Ok(Some(_)) → the child has exited.
+                Ok(Some(_)) => false,
+                // Ok(None) → still running.
+                Ok(None) => true,
+                // Err → OS-level failure; treat as alive and let the
+                // reconnect path surface the real error.
+                Err(_) => true,
+            },
+            None => false,
+        }
+    }
+
+    /// Drop the IO handles and kill + reap the current child (if any).
+    /// Idempotent — safe to call on an already-dead or absent child.
+    async fn kill_child(&self) {
+        // Drop stdin/stdout first so any pending request unblocks with an
+        // EOF/broken-pipe error instead of hanging on the 60s timeout.
+        *self.io.lock().await = None;
+        *self.connected.write().await = false;
+        if let Some(mut child) = self.child.write().await.take() {
+            let _ = child.kill().await;
+            // Reap the zombie so the PID doesn't linger.
+            let _ = child.wait().await;
+        }
+    }
+
+    /// Reconnect: kill the current child (if any), then spawn a fresh one
+    /// and run the full initialize handshake. Used by the stdio watchdog
+    /// (crashed child) and by call-time recovery (broken pipe on a call).
+    pub async fn reconnect(&self) -> Result<()> {
+        // Mark the reconnect in flight BEFORE any handshake work so the
+        // wrapper's call-time auto-retry is suppressed inside it (a dead
+        // server must fail the reconnect cleanly, never loop).
+        self.reconnecting.store(true, Ordering::SeqCst);
+        let result = async {
+            self.kill_child().await;
+            self.restarts.fetch_add(1, Ordering::SeqCst);
+            self.timeouts.store(0, Ordering::SeqCst);
+            // Box the connect future to break the (syntactic) async-recursion
+            // cycle reconnect → connect → send_request → reconnect. At runtime
+            // the loop never fires — see `reconnecting` above.
+            Box::pin(self.connect()).await
+        }
+        .await;
+        self.reconnecting.store(false, Ordering::SeqCst);
+        result
     }
 
     /// Connect to the MCP server by spawning the child process and initializing
@@ -648,6 +741,7 @@ impl McpStdioClient {
         self.list_tools().await?;
 
         *self.connected.write().await = true;
+        self.had_session.store(true, Ordering::SeqCst);
         info!(
             command = self.command.as_str(),
             "Connected to MCP stdio server"
@@ -740,12 +834,92 @@ impl McpStdioClient {
         self.capabilities.read().await.clone()
     }
 
+    /// Send a JSON-RPC request over stdin and read response from stdout,
+    /// with automatic recovery for crashed stdio children (hermes
+    /// `mcp_stdio_watchdog.py` parity):
+    ///
+    /// 1. A transport-level failure (broken pipe / EOF — the child died)
+    ///    triggers ONE reconnect + retry of the same call (safe: a dead
+    ///    child could not have executed the tool).
+    /// 2. Two consecutive read timeouts (hung server) force a reconnect
+    ///    BEFORE the next call so the wedged child is cleared without ever
+    ///    re-issuing an ambiguous call.
+    async fn send_request(&self, method: &str, params: Option<Value>) -> Result<Value> {
+        // Hung-server detection: if the previous call timed out (>=2
+        // consecutive), proactively kill + respawn the wedged child before
+        // sending. The timed-out call itself is never re-issued; the fresh
+        // child serves the NEXT call.
+        if self.timeouts.load(Ordering::SeqCst) >= 2
+            && self.had_session.load(Ordering::SeqCst)
+            && !self.reconnecting.load(Ordering::SeqCst)
+        {
+            warn!(
+                command = self.command.as_str(),
+                "MCP stdio server appears hung — force-reconnecting before next call"
+            );
+            if let Err(e) = self.reconnect().await {
+                let msg = e.to_string();
+                return Err(crate::error::Error::Agent(format!(
+                    "MCP stdio server hung; auto-reconnect failed: {msg}"
+                )));
+            }
+        }
+
+        match self.send_request_impl(method, params.clone()).await {
+            Ok(value) => {
+                // Any successful exchange clears the hang counter.
+                self.timeouts.store(0, Ordering::SeqCst);
+                Ok(value)
+            }
+            Err(ReqError::Transport(e)) => {
+                // Child died / pipe broke mid-call — the tool provably did
+                // not complete, so one auto-restart + retry is safe. Guarded
+                // to post-connect calls so the initial handshake (connected
+                // == false) can never loop.
+                if self.had_session.load(Ordering::SeqCst)
+                    && !self.reconnecting.load(Ordering::SeqCst)
+                {
+                    warn!(
+                        command = self.command.as_str(),
+                        error = %e,
+                        "MCP stdio transport failure — auto-reconnecting and retrying once"
+                    );
+                    if let Err(re) = self.reconnect().await {
+                        let rmsg = re.to_string();
+                        let emsg = e.to_string();
+                        return Err(crate::error::Error::Agent(format!(
+                            "MCP stdio call failed ({emsg}); auto-reconnect also failed: {rmsg}"
+                        )));
+                    }
+                    match self.send_request_impl(method, params).await {
+                        Ok(value) => Ok(value),
+                        Err(ReqError::Transport(e2)) => {
+                            let msg = e2.to_string();
+                            Err(crate::error::Error::Agent(format!(
+                                "MCP stdio call failed after reconnect: {msg}"
+                            )))
+                        }
+                        Err(ReqError::Protocol(e2)) => Err(e2),
+                    }
+                } else {
+                    Err(e)
+                }
+            }
+            Err(ReqError::Protocol(e)) => Err(e),
+        }
+    }
+
     #[expect(
         clippy::expect_used,
         reason = "invariant guaranteed by surrounding validation"
     )]
     /// Send a JSON-RPC request over stdin and read response from stdout
-    async fn send_request(&self, method: &str, params: Option<Value>) -> Result<Value> {
+    /// (single attempt — the wrapper above handles recovery).
+    async fn send_request_impl(
+        &self,
+        method: &str,
+        params: Option<Value>,
+    ) -> std::result::Result<Value, ReqError> {
         let request_id = self.request_id.fetch_add(1, Ordering::SeqCst);
 
         let request = JsonRpcRequest {
@@ -756,26 +930,41 @@ impl McpStdioClient {
         };
 
         let mut request_line = serde_json::to_string(&request).map_err(|e| {
-            crate::error::Error::Agent(format!("Failed to serialize request: {}", e))
+            ReqError::Protocol(crate::error::Error::Agent(format!(
+                "Failed to serialize request: {}",
+                e
+            )))
         })?;
         request_line.push('\n');
 
         let mut io_guard = self.io.lock().await;
         let io = io_guard.as_mut().ok_or_else(|| {
-            crate::error::Error::Agent("MCP stdio transport not connected".to_string())
+            // io None mid-session means the child was killed (crash or
+            // watchdog) — a Transport failure so the wrapper reconnects.
+            // The wrapper's had_session guard keeps a never-connected client
+            // from auto-reconnecting.
+            ReqError::Transport(crate::error::Error::Agent(
+                "MCP stdio transport not connected".to_string(),
+            ))
         })?;
 
-        // Write request to stdin
+        // Write request to stdin. A broken pipe here means the child died —
+        // classified as a Transport failure so the wrapper can restart.
         io.stdin
             .write_all(request_line.as_bytes())
             .await
             .map_err(|e| {
-                crate::error::Error::Agent(format!("Failed to write to MCP stdin: {}", e))
+                ReqError::Transport(crate::error::Error::Agent(format!(
+                    "Failed to write to MCP stdin: {}",
+                    e
+                )))
             })?;
-        io.stdin
-            .flush()
-            .await
-            .map_err(|e| crate::error::Error::Agent(format!("Failed to flush MCP stdin: {}", e)))?;
+        io.stdin.flush().await.map_err(|e| {
+            ReqError::Transport(crate::error::Error::Agent(format!(
+                "Failed to flush MCP stdin: {}",
+                e
+            )))
+        })?;
 
         // Read response from stdout — with a 60s timeout. Without this, a
         // hung MCP server would block the agent loop forever.
@@ -788,30 +977,38 @@ impl McpStdioClient {
         match read_result {
             Ok(Ok(_)) => {}
             Ok(Err(e)) => {
-                return Err(crate::error::Error::Agent(format!(
+                // EOF / read error — the child died mid-call.
+                return Err(ReqError::Transport(crate::error::Error::Agent(format!(
                     "Failed to read from MCP stdout: {}",
                     e
-                )));
+                ))));
             }
             Err(_) => {
-                return Err(crate::error::Error::Agent(
-                    "MCP stdio server did not respond within 60s (possible hang)".to_string(),
-                ));
+                // Read timeout — the server may be hung. Never re-issue this
+                // call (it may have executed the tool); count it so the next
+                // request force-reconnects once consecutive timeouts reach 2.
+                let n = self.timeouts.fetch_add(1, Ordering::SeqCst) + 1;
+                return Err(ReqError::Protocol(crate::error::Error::Agent(format!(
+                    "MCP stdio server did not respond within 60s (possible hang; consecutive timeouts: {n})"
+                ))));
             }
         }
 
         let trimmed = response_line.trim();
         if trimmed.is_empty() {
-            return Err(crate::error::Error::Agent(
+            return Err(ReqError::Protocol(crate::error::Error::Agent(
                 "MCP server returned empty or whitespace-only response".to_string(),
-            ));
+            )));
         }
 
         // Check if this is a server-initiated request (has "method" field)
         // rather than a response (has "result" or "error"). If so, handle
         // it and read the next line for our actual response.
         let parsed: Value = serde_json::from_str(trimmed).map_err(|e| {
-            crate::error::Error::ParseResponse(format!("Failed to parse MCP stdio response: {}", e))
+            ReqError::Protocol(crate::error::Error::ParseResponse(format!(
+                "Failed to parse MCP stdio response: {}",
+                e
+            )))
         })?;
 
         if parsed.get("method").is_some() {
@@ -880,50 +1077,55 @@ impl McpStdioClient {
             match read_result2 {
                 Ok(Ok(_)) => {}
                 Ok(Err(e)) => {
-                    return Err(crate::error::Error::Agent(format!(
+                    return Err(ReqError::Transport(crate::error::Error::Agent(format!(
                         "Failed to read MCP stdout after server request: {}",
                         e
-                    )));
+                    ))));
                 }
                 Err(_) => {
-                    return Err(crate::error::Error::Agent(
-                        "MCP stdio server did not respond within 60s after server request"
-                            .to_string(),
-                    ));
+                    let n = self.timeouts.fetch_add(1, Ordering::SeqCst) + 1;
+                    return Err(ReqError::Protocol(crate::error::Error::Agent(format!(
+                        "MCP stdio server did not respond within 60s after server request (consecutive timeouts: {n})"
+                    ))));
                 }
             }
         }
 
         let trimmed = response_line.trim();
         if trimmed.is_empty() {
-            return Err(crate::error::Error::Agent(
+            return Err(ReqError::Protocol(crate::error::Error::Agent(
                 "MCP server returned empty response after server request".to_string(),
-            ));
+            )));
         }
 
         let rpc_response: JsonRpcResponse = serde_json::from_str(trimmed).map_err(|e| {
-            crate::error::Error::ParseResponse(format!("Failed to parse MCP stdio response: {}", e))
+            ReqError::Protocol(crate::error::Error::ParseResponse(format!(
+                "Failed to parse MCP stdio response: {}",
+                e
+            )))
         })?;
 
         // Verify response ID matches request ID. Without this, out-of-order
         // or mismatched responses would silently return the wrong result.
         if rpc_response.id != request_id {
-            return Err(crate::error::Error::Agent(format!(
+            return Err(ReqError::Protocol(crate::error::Error::Agent(format!(
                 "MCP response ID mismatch: expected {}, got {} (possible out-of-order response)",
                 request_id, rpc_response.id
-            )));
+            ))));
         }
 
         if let Some(error) = rpc_response.error {
-            return Err(crate::error::Error::Agent(format!(
+            return Err(ReqError::Protocol(crate::error::Error::Agent(format!(
                 "MCP error {}: {}",
                 error.code, error.message
-            )));
+            ))));
         }
 
-        rpc_response
-            .result
-            .ok_or_else(|| crate::error::Error::Agent("No result in MCP response".to_string()))
+        rpc_response.result.ok_or_else(|| {
+            ReqError::Protocol(crate::error::Error::Agent(
+                "No result in MCP response".to_string(),
+            ))
+        })
     }
 
     /// Send a notification (no response expected)
@@ -1643,6 +1845,80 @@ impl McpManager {
         }
         registered
     }
+
+    /// Spawn a background stdio watchdog task (hermes
+    /// `mcp_stdio_watchdog.py` parity): every `interval`, sweep all
+    /// connected stdio servers and reconnect any whose child process has
+    /// exited (crash), then re-sync tools into `registry` when at least one
+    /// server was restarted.
+    ///
+    /// The task is detached — it dies with the process — and is safe to
+    /// spawn from short-lived CLI commands (an empty sweep is a cheap
+    /// no-op). Returns the task handle so callers can abort it if needed.
+    pub fn spawn_watchdog(
+        &self,
+        registry: ToolRegistry,
+        interval: Duration,
+    ) -> tokio::task::JoinHandle<()> {
+        let manager = self.clone();
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(interval);
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                ticker.tick().await;
+                let restarted = manager.sweep_stdio_servers().await;
+                if restarted > 0 {
+                    let synced = manager.sync_tools_to_registry(&registry).await;
+                    info!(
+                        restarted,
+                        synced, "MCP watchdog: stdio servers restarted, tools re-synced"
+                    );
+                }
+            }
+        })
+    }
+
+    /// One watchdog sweep: for every connected stdio server whose child has
+    /// exited, reconnect it. Returns the number of servers restarted.
+    /// Non-stdio transports are skipped (HTTP/SSE have no child to watch).
+    async fn sweep_stdio_servers(&self) -> usize {
+        let mut restarted = 0usize;
+        let names: Vec<String> = self.servers.read().await.keys().cloned().collect();
+        for name in names {
+            let transport = {
+                let servers = self.servers.read().await;
+                servers.get(&name).cloned()
+            };
+            let Some(McpTransport::Stdio(client)) = transport else {
+                continue;
+            };
+            if client.process_alive().await {
+                continue;
+            }
+            warn!(
+                server = name.as_str(),
+                "MCP watchdog: stdio server child exited — reconnecting"
+            );
+            match client.reconnect().await {
+                Ok(()) => {
+                    info!(
+                        server = name.as_str(),
+                        "MCP watchdog: stdio server reconnected"
+                    );
+                    restarted += 1;
+                }
+                Err(e) => {
+                    let msg = e.to_string();
+                    error!(
+                        server = name.as_str(),
+                        error = msg.as_str(),
+                        "MCP watchdog: reconnect failed (will retry next sweep)"
+                    );
+                }
+            }
+        }
+        restarted
+    }
 }
 
 #[cfg(test)]
@@ -1717,5 +1993,173 @@ mod tests {
         // Re-syncing is idempotent and reports the same count.
         let count2 = manager.sync_tools_to_registry(&registry).await;
         assert_eq!(count2, 2);
+    }
+
+    /// Minimal MCP stdio server (single-quoted python, no backslashes) used
+    /// by the watchdog tests. Responds to initialize / tools/list / any other
+    /// request with an empty result; stays silent on notifications (no id).
+    const FAKE_MCP_SERVER: &str = r#"import sys, json
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    try:
+        req = json.loads(line)
+    except Exception:
+        continue
+    rid = req.get('id')
+    if rid is None:
+        continue
+    mid = req.get('method')
+    if mid == 'initialize':
+        result = {'protocolVersion': '2025-06-18', 'capabilities': {'tools': {}}, 'serverInfo': {'name': 'fake', 'version': '1.0'}}
+    elif mid == 'tools/list':
+        result = {'tools': []}
+    else:
+        result = {}
+    sys.stdout.write(json.dumps({'jsonrpc': '2.0', 'id': rid, 'result': result}) + chr(10))
+    sys.stdout.flush()
+"#;
+
+    /// Build a stdio client pointed at a freshly-written copy of the fake
+    /// MCP server script. The temp dir is returned so tests can keep it
+    /// alive (or it is cleaned up by the OS on exit).
+    fn fake_stdio_client() -> (McpStdioClient, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!(
+            "operant_mcp_fake_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        let script = dir.join("fake_server.py");
+        std::fs::write(&script, FAKE_MCP_SERVER).expect("write fake server");
+        let client = McpStdioClient::new(
+            "python3",
+            vec![script.to_string_lossy().to_string()],
+            HashMap::new(),
+        );
+        (client, dir)
+    }
+
+    #[tokio::test]
+    async fn test_process_alive_detects_child_exit_and_reconnect_recovers() {
+        let (client, _dir) = fake_stdio_client();
+        client.connect().await.expect("fake server connect");
+        assert!(client.is_connected().await);
+        assert!(
+            client.process_alive().await,
+            "child should be alive after connect"
+        );
+
+        // Kill the child in place (keep the handle) so process_alive
+        // exercises the try_wait Ok(Some(_)) path, then poll until the OS
+        // reaps it (SIGKILL is fast but reaping is async).
+        {
+            let mut guard = client.child.write().await;
+            if let Some(child) = guard.as_mut() {
+                child.kill().await.expect("kill child");
+            }
+        }
+        let mut dead = false;
+        for _ in 0..20 {
+            if !client.process_alive().await {
+                dead = true;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+        assert!(dead, "child should be detected as dead within 2s");
+
+        // Reconnect spawns a fresh child and increments the restart counter.
+        client.reconnect().await.expect("reconnect after crash");
+        assert!(client.is_connected().await);
+        assert_eq!(client.restart_count().await, 1);
+        assert!(client.process_alive().await, "fresh child should be alive");
+
+        // The transport still routes calls through the shared client.
+        let value = client
+            .call_tool("echo", serde_json::json!({}))
+            .await
+            .expect("call after reconnect");
+        assert_eq!(value, serde_json::json!({}));
+    }
+
+    #[tokio::test]
+    async fn test_call_time_auto_restart_recovers_from_crashed_child() {
+        let (client, _dir) = fake_stdio_client();
+        client.connect().await.expect("fake server connect");
+
+        // Crash the child mid-session; the NEXT call must transparently
+        // reconnect + retry (hermes watchdog call-time parity).
+        client.kill_child().await;
+        assert!(!client.process_alive().await);
+
+        let value = client
+            .call_tool("echo", serde_json::json!({}))
+            .await
+            .expect("auto-recovered call");
+        assert_eq!(value, serde_json::json!({}));
+        assert_eq!(
+            client.restart_count().await,
+            1,
+            "call-time recovery must count one restart"
+        );
+        assert!(client.is_connected().await);
+    }
+
+    #[tokio::test]
+    async fn test_manager_sweep_restarts_dead_stdio_server() {
+        let (client, _dir) = fake_stdio_client();
+        client.connect().await.expect("fake server connect");
+
+        let manager = McpManager::new();
+        manager
+            .servers
+            .write()
+            .await
+            .insert("fake".to_string(), McpTransport::Stdio(client.clone()));
+
+        // Crash the child; the sweep must detect and reconnect it.
+        client.kill_child().await;
+        assert!(!client.process_alive().await);
+
+        let restarted = manager.sweep_stdio_servers().await;
+        assert_eq!(restarted, 1, "sweep must restart the dead server");
+        assert_eq!(client.restart_count().await, 1);
+        assert!(client.is_connected().await);
+        assert!(client.process_alive().await);
+    }
+
+    #[tokio::test]
+    async fn test_spawn_watchdog_restarts_dead_server() {
+        let (client, _dir) = fake_stdio_client();
+        client.connect().await.expect("fake server connect");
+
+        let manager = McpManager::new();
+        manager
+            .servers
+            .write()
+            .await
+            .insert("fake".to_string(), McpTransport::Stdio(client.clone()));
+        let registry = ToolRegistry::new(std::time::Duration::from_secs(10));
+
+        // Crash the child, then let the background watchdog recover it.
+        client.kill_child().await;
+        assert!(!client.process_alive().await);
+
+        let handle = manager.spawn_watchdog(registry, std::time::Duration::from_millis(50));
+        tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+
+        assert_eq!(
+            client.restart_count().await,
+            1,
+            "watchdog must reconnect the dead server"
+        );
+        assert!(client.process_alive().await);
+        assert!(client.is_connected().await);
+        handle.abort();
     }
 }

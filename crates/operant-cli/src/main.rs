@@ -962,6 +962,25 @@ pub(crate) async fn build_registry(
         }
 
         mcp_manager.sync_tools_to_registry(&registry).await;
+
+        // G4 (hermes mcp_stdio_watchdog.py parity): when at least one
+        // non-deferred stdio server is autoloaded, spawn a background
+        // watchdog that detects crashed children (process exit) and
+        // auto-reconnects them, re-syncing their tools into the registry.
+        // Interval from `[mcp] watchdog_interval_secs` (0 disables). The
+        // task dies with the process, so short-lived commands are unaffected.
+        if config.mcp.watchdog_interval_secs > 0
+            && config
+                .mcp
+                .servers
+                .iter()
+                .any(|s| s.enabled && !s.deferred && s.transport == McpTransportKind::Stdio)
+        {
+            mcp_manager.spawn_watchdog(
+                registry.clone(),
+                Duration::from_secs(config.mcp.watchdog_interval_secs),
+            );
+        }
     }
 
     Ok(registry)
