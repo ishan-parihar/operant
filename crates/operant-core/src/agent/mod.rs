@@ -236,6 +236,17 @@ pub enum AgentEvent {
         /// The review summary text.
         summary: String,
     },
+    /// A background delegation completed (hermes `async_delegation.py` parity).
+    /// Emitted from the spawned background child task so the CLI/TUI can
+    /// surface the outcome to the user.
+    AsyncDelegation {
+        /// The handle returned by `delegate_task(background=true)`.
+        delegation_id: String,
+        /// Terminal status: "completed" or "failed".
+        status: String,
+        /// Result summary or error text.
+        summary: String,
+    },
 }
 
 /// Operant Agent for tool orchestration

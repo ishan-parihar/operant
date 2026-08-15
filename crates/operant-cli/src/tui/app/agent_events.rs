@@ -350,6 +350,17 @@ impl App {
             AgentEvent::BackgroundReview { summary } => {
                 self.push_system_message(summary, SystemMessageStyle::Info);
             }
+
+            AgentEvent::AsyncDelegation {
+                delegation_id,
+                status,
+                summary,
+            } => {
+                self.push_system_message(
+                    format!("Async delegation {delegation_id} {status}: {summary}"),
+                    SystemMessageStyle::Info,
+                );
+            }
         }
     }
 }

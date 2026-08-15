@@ -1653,6 +1653,13 @@ async fn chat_non_tui(config: &AppConfig, system_prompt: Option<&str>) -> Result
                 AgentEvent::BackgroundReview { summary } => {
                     println!("  \u{1f4be} Self-improvement review: {summary}");
                 }
+                AgentEvent::AsyncDelegation {
+                    delegation_id,
+                    status,
+                    summary,
+                } => {
+                    println!("  \u{1f9f5} Async delegation {delegation_id} {status}: {summary}");
+                }
                 _ => {}
             }
         }

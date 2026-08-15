@@ -6,6 +6,7 @@
 //! - Built-in tools for common operations
 
 pub mod aft_tools;
+pub mod async_delegation;
 pub mod browser_camofox_state;
 pub mod browser_cdp_tool;
 pub mod browser_dialog_tool;
@@ -20,6 +21,7 @@ pub mod config_tool;
 pub mod cron_tool;
 pub mod datetime_tool;
 pub mod debug_helpers;
+pub mod delegation_output_schema;
 pub mod file_state;
 pub mod file_tools;
 pub mod http_tool;
@@ -69,6 +71,9 @@ pub mod home_assistant_tool;
 
 // Re-export commonly used types
 pub use aft_tools::register_aft_tools;
+pub use async_delegation::{
+    AsyncDelegationRecord, AsyncDelegationStatus, get_record, list_records, pending_count,
+};
 pub use browser_cdp_tool::BrowserCdpTool;
 pub use browser_dialog_tool::BrowserDialogTool;
 pub use builtin::{
@@ -83,6 +88,10 @@ pub use checkpoint_tool::{
 };
 pub use config_tool::{ConfigManageArgs, ConfigManageTool};
 pub use cron_tool::CronTool;
+pub use delegation_output_schema::{
+    MAX_SCHEMA_RETRIES, append_output_contract, build_retry_message, coerce_output_schema,
+    extract_json_candidate, validate_output,
+};
 pub use discord_tool::{DiscordAdminTool, DiscordTool};
 pub use feishu_tool::{FeishuDocTool, FeishuDriveTool};
 pub use home_assistant_tool::HomeAssistantTool;

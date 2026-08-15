@@ -21,12 +21,20 @@ use crate::agent::{AgentConfig, AgentEvent, ModelClient, OperantAgent};
 use crate::client::{ClientConfig, OpenAIClient};
 use crate::database::Database;
 use crate::schema::ToolSchema;
+use crate::tools::async_delegation;
+use crate::tools::delegation_output_schema::{
+    MAX_SCHEMA_RETRIES, append_output_contract, build_retry_message, coerce_output_schema,
+    validate_output,
+};
 use crate::tools::{OperantTool, ToolContext, ToolRegistry, ToolResult};
 
 const TOOL_NAME: &str = "delegate_task";
 
 /// Maximum concurrent children (default from Python implementation)
 const DEFAULT_MAX_CONCURRENT_CHILDREN: usize = 3;
+/// Maximum concurrent background delegations (hermes
+/// `_DEFAULT_MAX_ASYNC_CHILDREN = 3` parity).
+const MAX_ASYNC_CHILDREN: usize = 3;
 /// Default child timeout in seconds (10 minutes)
 const DEFAULT_CHILD_TIMEOUT_SECONDS: u64 = 600;
 /// Minimum spawn depth
@@ -64,6 +72,10 @@ struct DelegationTask {
     /// Optional toolsets to enable for this task
     #[serde(default)]
     toolsets: Option<Vec<String>>,
+    /// Optional JSON Schema object the child's final answer must validate
+    /// against (hermes delegation_output_schema.py parity).
+    #[serde(default)]
+    output_schema: Option<Value>,
 }
 
 /// Arguments for delegated sub-agent work.
@@ -94,6 +106,21 @@ struct SubAgentArgs {
     /// Timeout for child agent in seconds (default: 600)
     #[serde(default)]
     timeout_seconds: Option<u64>,
+    /// Optional JSON Schema object the child's final answer must validate
+    /// against. On failure the child gets exactly ONE bounded retry turn
+    /// carrying the validation errors verbatim (hermes
+    /// delegation_output_schema.py parity).
+    #[serde(default)]
+    output_schema: Option<Value>,
+    /// Run the delegated task in the background and return a handle
+    /// immediately (hermes async_delegation.py parity). Poll the result
+    /// with `query`.
+    #[serde(default)]
+    background: Option<bool>,
+    /// Poll the status/result of a previously dispatched background
+    /// delegation by its `delegation_id`.
+    #[serde(default)]
+    query: Option<String>,
 }
 
 /// Runtime state for delegation
@@ -173,6 +200,13 @@ impl SubAgentTool {
     }
 
     /// Run a focused delegated task in an isolated child agent.
+    ///
+    /// When `output_schema` is provided, the child's system prompt gets an
+    /// OUTPUT CONTRACT block and the final answer is validated against the
+    /// schema (hermes delegation_output_schema.py parity): on failure the
+    /// child receives exactly ONE bounded retry turn carrying the validation
+    /// errors verbatim, and a persistent failure still returns the answer
+    /// (flagged) so the parent keeps the data.
     pub async fn call(
         &self,
         goal: impl Into<String>,
@@ -180,6 +214,7 @@ impl SubAgentTool {
         role: SubAgentRole,
         max_iterations: Option<u32>,
         timeout_seconds: u64,
+        output_schema: Option<Value>,
     ) -> std::result::Result<String, BoxedToolError> {
         self.ensure_supported_model()?;
 
@@ -213,17 +248,76 @@ impl SubAgentTool {
             SubAgentRole::Leaf
         };
 
-        // Build child system prompt based on role
-        let system_prompt = build_child_system_prompt(
-            goal,
-            context.map(|c| c.into()).as_deref(),
-            effective_role,
-            child_depth,
-            max_depth,
-        );
+        let schema = match coerce_output_schema(output_schema) {
+            Ok(schema) => schema,
+            Err(error) => return Err(error.into()),
+        };
+        let context: Option<String> = context.map(|c| c.into());
 
+        let mut retry_errors: Vec<String> = Vec::new();
+        let mut attempts: usize = 0;
+        loop {
+            // Build child system prompt based on role
+            let mut system_prompt = build_child_system_prompt(
+                goal,
+                context.as_deref(),
+                effective_role,
+                child_depth,
+                max_depth,
+            );
+            if let Some(schema) = schema.as_ref() {
+                system_prompt.push_str(&format!("\n\n{}", append_output_contract(None, schema)));
+            }
+            if !retry_errors.is_empty() {
+                system_prompt.push_str(&format!("\n\n{}", build_retry_message(&retry_errors)));
+            }
+
+            let answer = self
+                .run_child(
+                    system_prompt,
+                    goal.to_string(),
+                    effective_role,
+                    max_iterations,
+                    timeout_seconds,
+                )
+                .await?;
+
+            let Some(schema_ref) = schema.as_ref() else {
+                return Ok(answer);
+            };
+            let (valid, errors) = validate_output(&answer, schema_ref);
+            if valid {
+                return Ok(answer);
+            }
+            if attempts >= MAX_SCHEMA_RETRIES {
+                // Persistent failure: keep the answer (the parent needs the
+                // data) but flag the contract breach explicitly (hermes
+                // returns the final text with the errors noted).
+                return Ok(format!(
+                    "{answer}\n\n[SCHEMA VALIDATION FAILED after {MAX_SCHEMA_RETRIES} \
+                     retr{} — errors: {}]",
+                    if MAX_SCHEMA_RETRIES == 1 { "y" } else { "ies" },
+                    errors.join("; ")
+                ));
+            }
+            retry_errors = errors;
+            attempts += 1;
+        }
+    }
+
+    /// Run a single child agent to completion with the given system prompt.
+    /// Shared by the sync, batch, and background delegation paths so depth
+    /// limits, tool inheritance, and result shaping stay in one place.
+    async fn run_child(
+        &self,
+        system_prompt: String,
+        goal: String,
+        role: SubAgentRole,
+        max_iterations: Option<u32>,
+        timeout_seconds: u64,
+    ) -> std::result::Result<String, BoxedToolError> {
         // Determine effective toolsets based on role and parent toolsets
-        let child_toolsets = self.compute_child_toolsets(effective_role);
+        let child_toolsets = self.compute_child_toolsets(role);
 
         let raw_client = OpenAIClient::from_shared_http_client(
             self.client_config.clone(),
@@ -259,7 +353,7 @@ impl SubAgentTool {
 
         // Run with timeout
         let timeout_duration = Duration::from_secs(timeout_seconds.max(30));
-        let result = timeout(timeout_duration, agent.run(goal.to_string())).await;
+        let result = timeout(timeout_duration, agent.run(goal)).await;
 
         match result {
             Ok(Ok(message)) => Ok(message.content),
@@ -272,7 +366,14 @@ impl SubAgentTool {
     #[allow(clippy::type_complexity)]
     pub async fn call_batch(
         &self,
-        tasks: Vec<(String, Option<String>, SubAgentRole, Option<u32>, u64)>,
+        tasks: Vec<(
+            String,
+            Option<String>,
+            SubAgentRole,
+            Option<u32>,
+            u64,
+            Option<Value>,
+        )>,
     ) -> std::result::Result<String, BoxedToolError> {
         let max_concurrent = MAX_CONCURRENT_CHILDREN.load(Ordering::Relaxed) as usize;
         let max_concurrent = max_concurrent.clamp(1, 10);
@@ -281,7 +382,7 @@ impl SubAgentTool {
         let semaphore = Arc::new(tokio::sync::Semaphore::new(max_concurrent));
         let mut handles = Vec::new();
 
-        for (goal, context, role, max_iterations, timeout_seconds) in tasks {
+        for (goal, context, role, max_iterations, timeout_seconds, output_schema) in tasks {
             let tool = self.clone_for_task();
             let permit = semaphore
                 .clone()
@@ -291,8 +392,15 @@ impl SubAgentTool {
 
             let handle = tokio::spawn(async move {
                 let _permit = permit;
-                tool.call(goal, context, role, max_iterations, timeout_seconds)
-                    .await
+                tool.call(
+                    goal,
+                    context,
+                    role,
+                    max_iterations,
+                    timeout_seconds,
+                    output_schema,
+                )
+                .await
             });
             handles.push(handle);
         }
@@ -315,6 +423,83 @@ impl SubAgentTool {
 
         // Format results as summary
         Ok(format_batch_results(&results, &errors))
+    }
+
+    /// Dispatch a delegation in the background and return a handle immediately
+    /// (hermes `async_delegation.py` parity). The child runs on a spawned
+    /// tokio task; on completion the record transitions to completed/failed
+    /// and an `AgentEvent::AsyncDelegation` is pushed onto the parent's event
+    /// channel (when one exists) so the CLI/TUI can surface the outcome. The
+    /// agent polls progress with `delegate_task(query="<id>")`.
+    async fn dispatch_background(
+        &self,
+        goal: String,
+        context: Option<String>,
+        role: SubAgentRole,
+        max_iterations: Option<u32>,
+        timeout_seconds: u64,
+        output_schema: Option<Value>,
+    ) -> std::result::Result<String, BoxedToolError> {
+        if async_delegation::pending_count() >= MAX_ASYNC_CHILDREN {
+            return Err(format!(
+                "Too many background delegations in flight (max {MAX_ASYNC_CHILDREN}); \
+                 wait for one to complete or use synchronous delegation."
+            )
+            .into());
+        }
+        let delegation_id = async_delegation::create_record(&goal, &self.model);
+
+        let tool = self.clone_for_task();
+        let event_tx = self.event_tx.clone();
+        let spawn_goal = goal.clone();
+        let spawn_id = delegation_id.clone();
+        tokio::spawn(async move {
+            let outcome = tool
+                .call(
+                    spawn_goal,
+                    context,
+                    role,
+                    max_iterations,
+                    timeout_seconds,
+                    output_schema,
+                )
+                .await;
+            match outcome {
+                Ok(content) => {
+                    async_delegation::mark_completed(&spawn_id, &content);
+                    if let Some(tx) = event_tx {
+                        let _ = tx
+                            .send(AgentEvent::AsyncDelegation {
+                                delegation_id: spawn_id.clone(),
+                                status: "completed".to_string(),
+                                summary: preview_of(&content, 200),
+                            })
+                            .await;
+                    }
+                }
+                Err(error) => {
+                    async_delegation::mark_failed(&spawn_id, &error.to_string());
+                    if let Some(tx) = event_tx {
+                        let _ = tx
+                            .send(AgentEvent::AsyncDelegation {
+                                delegation_id: spawn_id.clone(),
+                                status: "failed".to_string(),
+                                summary: error.to_string(),
+                            })
+                            .await;
+                    }
+                }
+            }
+        });
+
+        Ok(serde_json::json!({
+            "delegation_id": delegation_id,
+            "status": "dispatched",
+            "model": self.model,
+            "goal": preview_of(&goal, 80),
+            "poll": format!("delegate_task query=\"{delegation_id}\""),
+        })
+        .to_string())
     }
 
     fn clone_for_task(&self) -> Self {
@@ -612,7 +797,10 @@ impl OperantTool for SubAgentTool {
     fn description(&self) -> &str {
         "Delegate a focused task to an isolated sub-agent. Use this for deep analysis, \
         specialized coding investigation, architectural review, or other self-contained work. \
-        Supports single-task mode (goal + context) and batch mode (tasks array for parallel execution). \
+        Supports single-task mode (goal + context), batch mode (tasks array for parallel execution), \
+        and background mode (background=true returns a handle immediately — poll with query=\"<id>\"). \
+        Optional output_schema enforces a structured JSON contract on the child's final answer \
+        (exactly one bounded retry on validation failure). \
         The sub-agent has a fresh conversation and does not inherit parent memory. \
         Role 'leaf' (default) cannot delegate further; role 'orchestrator' can spawn its own sub-agents."
     }
@@ -630,6 +818,54 @@ impl OperantTool for SubAgentTool {
             Err(error) => return ToolResult::error(TOOL_NAME, error),
         };
 
+        // Query mode: poll a previously dispatched background delegation.
+        if let Some(query_id) = parsed.query {
+            return match async_delegation::get_record(&query_id) {
+                Some(record) => {
+                    let content = serde_json::to_value(&record).unwrap_or(Value::Null);
+                    ToolResult::success_with_name(TOOL_NAME, TOOL_NAME, content)
+                }
+                None => ToolResult::error(
+                    TOOL_NAME,
+                    format!("No background delegation found with id '{query_id}'"),
+                ),
+            };
+        }
+
+        // Background mode: dispatch and return a handle immediately.
+        if parsed.background.unwrap_or(false) {
+            let Some(goal) = parsed.goal else {
+                return ToolResult::error(
+                    TOOL_NAME,
+                    "Background delegation requires 'goal'".to_string(),
+                );
+            };
+            if parsed.tasks.is_some() {
+                return ToolResult::error(
+                    TOOL_NAME,
+                    "Background mode supports a single 'goal', not batch 'tasks'".to_string(),
+                );
+            }
+            let role = parsed.role.unwrap_or(SubAgentRole::Leaf);
+            let timeout = parsed
+                .timeout_seconds
+                .unwrap_or(DEFAULT_CHILD_TIMEOUT_SECONDS);
+            return match self
+                .dispatch_background(
+                    goal,
+                    parsed.context,
+                    role,
+                    parsed.max_iterations,
+                    timeout,
+                    parsed.output_schema,
+                )
+                .await
+            {
+                Ok(handle) => ToolResult::success_with_name(TOOL_NAME, TOOL_NAME, handle),
+                Err(error) => ToolResult::error(TOOL_NAME, error.to_string()),
+            };
+        }
+
         // Check if batch mode
         if let Some(tasks) = parsed.tasks {
             if !tasks.is_empty() {
@@ -641,7 +877,14 @@ impl OperantTool for SubAgentTool {
                         let timeout = parsed
                             .timeout_seconds
                             .unwrap_or(DEFAULT_CHILD_TIMEOUT_SECONDS);
-                        (t.goal, t.context, role, parsed.max_iterations, timeout)
+                        (
+                            t.goal,
+                            t.context,
+                            role,
+                            parsed.max_iterations,
+                            timeout,
+                            t.output_schema,
+                        )
                     })
                     .collect();
 
@@ -676,7 +919,14 @@ impl OperantTool for SubAgentTool {
                 .unwrap_or(DEFAULT_CHILD_TIMEOUT_SECONDS);
 
             match self
-                .call(goal, parsed.context, role, parsed.max_iterations, timeout)
+                .call(
+                    goal,
+                    parsed.context,
+                    role,
+                    parsed.max_iterations,
+                    timeout,
+                    parsed.output_schema,
+                )
                 .await
             {
                 Ok(content) => ToolResult {
@@ -717,6 +967,17 @@ fn parse_args(args: Value) -> Result<SubAgentArgs, String> {
 
 fn is_llama_model(model: &str) -> bool {
     model.to_ascii_lowercase().contains("llama")
+}
+
+/// One-line preview with a hard character cap (for background handles and
+/// completion summaries).
+fn preview_of(text: &str, max_chars: usize) -> String {
+    let flat: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut out: String = flat.chars().take(max_chars).collect();
+    if flat.chars().count() > max_chars {
+        out.push('…');
+    }
+    out
 }
 
 /// Set the maximum spawn depth (for testing/config)
@@ -781,6 +1042,46 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(args.role, Some(SubAgentRole::Orchestrator));
+    }
+
+    #[test]
+    fn parse_args_accepts_output_schema() {
+        let args = parse_args(serde_json::json!({
+            "goal": "summarize",
+            "output_schema": { "type": "object", "required": ["summary"] }
+        }))
+        .unwrap();
+        let schema = args.output_schema.unwrap();
+        assert_eq!(schema["type"], "object");
+        assert_eq!(schema["required"][0], "summary");
+    }
+
+    #[test]
+    fn parse_args_accepts_background_and_query() {
+        let bg = parse_args(serde_json::json!({
+            "goal": "deep dive",
+            "background": true
+        }))
+        .unwrap();
+        assert_eq!(bg.background, Some(true));
+
+        let q = parse_args(serde_json::json!({ "query": "dlg-1-0" })).unwrap();
+        assert_eq!(q.query.as_deref(), Some("dlg-1-0"));
+    }
+
+    #[test]
+    fn parse_args_batch_task_carries_output_schema() {
+        let args = parse_args(serde_json::json!({
+            "tasks": [
+                {
+                    "goal": "task 1",
+                    "output_schema": { "type": "object", "required": ["answer"] }
+                }
+            ]
+        }))
+        .unwrap();
+        let task = args.tasks.unwrap().pop().unwrap();
+        assert_eq!(task.output_schema.unwrap()["required"][0], "answer");
     }
 
     #[test]
