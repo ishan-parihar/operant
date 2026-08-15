@@ -37,6 +37,7 @@ pub mod openrouter_client;
 pub mod osv_check;
 pub mod patch_tool;
 pub mod process_tool;
+pub mod reaction_tool;
 pub mod send_message_tool;
 pub mod session_search_tool;
 pub mod skills_tool;
@@ -90,6 +91,7 @@ pub use lcm_tools::register_lcm_tools;
 pub use mcp_tool::McpManagementTool;
 pub use osv_check::OsvCheckTool;
 pub use process_tool::ProcessTool;
+pub use reaction_tool::ReactionTool;
 pub use send_message_tool::SendMessageTool;
 pub use session_search_tool::{SessionMeta, SessionResult, SessionSearchTool};
 pub use skills_tool::{

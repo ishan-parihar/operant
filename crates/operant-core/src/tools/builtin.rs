@@ -44,6 +44,7 @@ pub use super::openrouter_client::OpenRouterTool;
 pub use super::osv_check::OsvCheckTool;
 pub use super::patch_tool::PatchTool;
 pub use super::process_tool::ProcessTool;
+pub use super::reaction_tool::ReactionTool;
 pub use super::send_message_tool::SendMessageTool;
 pub use super::skills_tool::{SkillManageTool, SkillViewTool, SkillsTool};
 pub use super::spotify_tool::{
@@ -137,6 +138,7 @@ pub async fn register_builtin_tools(
 
     registry.register(SessionSearchTool::new(database)).await?;
     registry.register(SendMessageTool).await?;
+    registry.register(ReactionTool).await?;
     registry.register(DiscordTool).await?;
     registry.register(DiscordAdminTool).await?;
     registry.register(FeishuDocTool::new()).await?;
@@ -283,6 +285,7 @@ pub fn builtin_tool_names() -> Vec<&'static str> {
         "web_crawl",
         "xai_http_request",
         "send_message",
+        "react_to_message",
         "discord",
         "discord_admin",
         "feishu_doc_read",
