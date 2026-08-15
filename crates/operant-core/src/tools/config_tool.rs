@@ -112,10 +112,17 @@ impl OperantTool for ConfigManageTool {
                 };
                 let value_str = match value {
                     Value::String(s) => s.clone(),
+                    Value::Bool(b) => b.to_string(),
+                    Value::Number(n) => n.to_string(),
                     Value::Null => {
                         return ToolResult::error("config_manage", "set value cannot be null");
                     }
-                    other => other.to_string(),
+                    _ => {
+                        return ToolResult::error(
+                            "config_manage",
+                            "set value must be a scalar (string, number, or boolean)",
+                        );
+                    }
                 };
                 match set_config_value(key, &value_str) {
                     Ok(()) => ToolResult::success(
@@ -428,5 +435,26 @@ mod tests {
             result.error.unwrap_or_default().contains("unknown field"),
             "expected unknown-field error"
         );
+
+        // Non-scalar values are rejected, never silently JSON-stringified.
+        let result = tool
+            .execute(
+                serde_json::json!({
+                    "action": "set",
+                    "key": "agent.model",
+                    "value": { "nested": true },
+                }),
+                ToolContext::default(),
+            )
+            .await;
+        assert!(!result.success, "object value must error, got success");
+        assert!(
+            result.error.unwrap_or_default().contains("scalar"),
+            "expected scalar-only error"
+        );
+
+        // Restore the process-global runtime config so parallel tests in
+        // this crate always observe defaults, not this test's mutations.
+        crate::config::install_runtime_config(crate::config::AppConfig::default());
     }
 }

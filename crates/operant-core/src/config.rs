@@ -1171,25 +1171,31 @@ pub(crate) fn operant_config_dir_override() -> Option<PathBuf> {
     if custom.is_empty() {
         return None;
     }
-    if let Some(rest) = custom.strip_prefix("~/") {
-        return std::env::var("HOME")
-            .ok()
-            .map(|home| PathBuf::from(home).join(rest));
+    // Expand a leading `~` (bare, `~/`, or `~\`) to $HOME; leave
+    // `~otheruser/...` untouched. Mirrors the schema layer's tilde handling
+    // without pulling in shellexpand here.
+    if let Some(rest) = custom.strip_prefix('~')
+        && (rest.is_empty() || rest.starts_with('/') || rest.starts_with('\\'))
+        && let Ok(home) = std::env::var("HOME")
+    {
+        return Some(PathBuf::from(home).join(rest.trim_start_matches(['/', '\\'])));
     }
     Some(PathBuf::from(custom))
 }
 
 pub fn default_config_paths() -> Vec<PathBuf> {
-    let mut paths = vec![
-        PathBuf::from("operant.toml"),
-        PathBuf::from(".operant.toml"),
-    ];
+    let mut paths = Vec::new();
 
-    // Honor OPERANT_CONFIG_DIR (highest precedence after an explicit
-    // `--config`): `<dir>/operant.toml`.
+    // OPERANT_CONFIG_DIR is the highest-precedence override after an
+    // explicit `--config`: `<dir>/operant.toml`. Checked BEFORE the cwd
+    // candidates so a stray local `operant.toml` can never shadow an
+    // explicitly requested isolated config home (isolation guarantee).
     if let Some(dir) = operant_config_dir_override() {
         paths.push(dir.join("operant.toml"));
     }
+
+    paths.push(PathBuf::from("operant.toml"));
+    paths.push(PathBuf::from(".operant.toml"));
 
     if let Some(config_dir) = dirs::config_dir() {
         paths.push(config_dir.join("operant").join("config.toml"));
