@@ -90,6 +90,7 @@ pub mod runtime_adapter;
 pub mod runtime_metrics;
 pub mod schema;
 pub mod security;
+pub mod session_recap;
 pub mod skill_marketplace;
 pub mod skill_usage;
 pub mod skills;

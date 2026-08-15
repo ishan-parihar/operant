@@ -66,6 +66,20 @@ pub enum SessionsSubcommand {
         #[arg(long, default_value = "20")]
         limit: usize,
     },
+    /// Show a local recap of a session's recent activity (hermes
+    /// session_recap.py parity — pure local computation, no LLM call).
+    /// Defaults to the most recently updated session.
+    Recap {
+        /// Session ID to recap (default: most recent)
+        id: Option<String>,
+    },
+    /// Recap a session and re-orient before continuing it. Prints the recap,
+    /// the latest user prompt, and how to resume it in the TUI (/resume) or
+    /// the gateway.
+    Resume {
+        /// Session ID to resume
+        id: String,
+    },
 }
 
 /// Dispatch a sessions subcommand.
@@ -89,6 +103,8 @@ pub async fn handle_sessions_command(
         SessionsSubcommand::Rename { id, title } => cmd_rename(config, &id, &title).await,
         SessionsSubcommand::Browse => cmd_browse(config).await,
         SessionsSubcommand::Search { query, limit } => cmd_search(config, &query, limit).await,
+        SessionsSubcommand::Recap { id } => cmd_recap(config, id.as_deref()).await,
+        SessionsSubcommand::Resume { id } => cmd_resume(config, &id).await,
     }
 }
 
@@ -435,4 +451,83 @@ fn truncate_str(s: &str, max: usize) -> String {
         out.push('…');
         out
     }
+}
+
+/// Resolve the session to recap: the given id, or the most recent session.
+fn resolve_session(
+    db: &Database,
+    id: Option<&str>,
+) -> Result<operant_core::database::DatabaseSession> {
+    match id {
+        Some(id) => {
+            let sessions = db
+                .list_sessions(10_000)
+                .context("Failed to list sessions")?;
+            sessions
+                .into_iter()
+                .find(|s| s.id == id)
+                .context(format!("Session not found: {}", id))
+        }
+        None => {
+            let sessions = db.list_sessions(1).context("Failed to list sessions")?;
+            sessions.into_iter().next().context("No sessions found")
+        }
+    }
+}
+
+/// Show a local recap of a session's recent activity (hermes
+/// `hermes_cli/session_recap.py` parity — pure local computation, no LLM
+/// call; the user re-orients instantly and for free).
+async fn cmd_recap(config: &AppConfig, id: Option<&str>) -> Result<()> {
+    let db = Database::init(config.database_path.clone()).context("Failed to open database")?;
+    let session = resolve_session(&db, id)?;
+    let messages = db
+        .get_session_messages_full(&session.id)
+        .context("Failed to get session messages")?;
+
+    let recap = operant_core::session_recap::build_recap(
+        &messages,
+        session.title.as_deref(),
+        Some(&session.id),
+    );
+    println!("{}", recap);
+    println!();
+    println!("Session: {}", session.id);
+    Ok(())
+}
+
+/// Recap a session and print how to continue it (hermes `/resume` parity:
+/// re-orient first, then restore history and keep going).
+async fn cmd_resume(config: &AppConfig, id: &str) -> Result<()> {
+    let db = Database::init(config.database_path.clone()).context("Failed to open database")?;
+    let session = resolve_session(&db, Some(id))?;
+    let messages = db
+        .get_session_messages_full(&session.id)
+        .context("Failed to get session messages")?;
+
+    let recap = operant_core::session_recap::build_recap(
+        &messages,
+        session.title.as_deref(),
+        Some(&session.id),
+    );
+    println!("{}", recap);
+
+    if let Some(prompt) = messages
+        .iter()
+        .rev()
+        .find(|m| m.role == "user" && m.content.as_deref().is_some_and(|c| !c.trim().is_empty()))
+        .and_then(|m| m.content.clone())
+    {
+        println!();
+        println!("Last user prompt:");
+        for line in prompt.lines() {
+            println!("  {}", line);
+        }
+    }
+
+    println!();
+    println!("To continue this session:");
+    println!("  • TUI:      operant chat  →  /resume  →  pick this session");
+    println!("  • Gateway:  send a message on the same platform channel");
+    Ok(())
 }
