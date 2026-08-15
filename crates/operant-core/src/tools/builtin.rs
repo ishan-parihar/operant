@@ -57,6 +57,7 @@ pub use super::todo_tool::TodoTool;
 pub use super::tool_backend_helpers::ToolBackendTool;
 pub use super::transcription_tool::TranscriptionTool;
 pub use super::tts_tool::TtsTool;
+pub use super::verification_tool::VerifyTaskTool;
 pub use super::video_analysis_tool::VideoAnalysisTool;
 pub use super::vision_tool::VisionTool;
 pub use super::web_tools::{WebFetchTool, WebSearchTool};
@@ -136,7 +137,12 @@ pub async fn register_builtin_tools(
         .register(InsightsTool::new(database.clone()))
         .await?;
 
-    registry.register(SessionSearchTool::new(database)).await?;
+    registry
+        .register(SessionSearchTool::new(database.clone()))
+        .await?;
+    registry
+        .register(VerifyTaskTool::new(database.clone()))
+        .await?;
     registry.register(SendMessageTool).await?;
     registry.register(ReactionTool).await?;
     registry.register(DiscordTool).await?;
@@ -286,6 +292,7 @@ pub fn builtin_tool_names() -> Vec<&'static str> {
         "xai_http_request",
         "send_message",
         "react_to_message",
+        "verify_task",
         "discord",
         "discord_admin",
         "feishu_doc_read",

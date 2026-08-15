@@ -53,6 +53,7 @@ pub mod tts_command_provider;
 pub mod tts_provider;
 pub mod tts_registry;
 pub mod tts_tool;
+pub mod verification_tool;
 pub mod video_analysis_tool;
 pub mod vision_tool;
 pub mod web_providers;
@@ -106,6 +107,7 @@ pub use transcription_tool::TranscriptionTool;
 pub use tts_command_provider::CommandProvider;
 pub use tts_provider::{AudioFormat, TtsError, TtsProvider};
 pub use tts_registry::TtsPluginRegistry;
+pub use verification_tool::VerifyTaskTool;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;

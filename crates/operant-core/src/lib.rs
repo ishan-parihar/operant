@@ -96,6 +96,7 @@ pub mod skills_guard;
 pub mod tools;
 pub mod trajectory;
 pub mod user_question;
+pub mod verification;
 pub mod voice;
 pub mod write_origin;
 

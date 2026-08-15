@@ -202,6 +202,7 @@ impl Database {
         self.create_tools_state_table(&conn)?;
         self.create_session_tags_table(&conn)?;
         self.create_session_events_table(&conn)?;
+        self.create_verification_events_table(&conn)?;
 
         // Schema version bookkeeping
         Self::ensure_schema_version(&conn)?;
@@ -512,6 +513,85 @@ impl Database {
         )
         .map_err(|e| Error::Agent(format!("Failed to create session_events type index: {}", e)))?;
         Ok(())
+    }
+
+    fn create_verification_events_table(&self, conn: &Connection) -> Result<()> {
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS verification_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                recipe TEXT NOT NULL,
+                phase TEXT NOT NULL,
+                ok INTEGER NOT NULL,
+                exit_code INTEGER,
+                output_tail TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL
+            )",
+            [],
+        )
+        .map_err(|e| Error::Agent(format!("Failed to create verification_events table: {}", e)))?;
+
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_verification_events_created ON verification_events(created_at DESC)",
+            [],
+        )
+        .map_err(|e| Error::Agent(format!("Failed to create verification index: {}", e)))?;
+        Ok(())
+    }
+
+    // === Verification evidence ledger ===
+
+    /// Record a verification phase result (hermes `verification_evidence.py`
+    /// parity — every phase of every verify run is persisted with its output
+    /// tail so the agent can prove what it checked).
+    pub fn record_verification_event(
+        &self,
+        recipe: &str,
+        phase: &str,
+        ok: bool,
+        exit_code: Option<i32>,
+        output_tail: &str,
+    ) -> Result<()> {
+        let now = chrono::Utc::now().to_rfc3339();
+        let conn = self.lock_conn()?;
+        conn.execute(
+            "INSERT INTO verification_events (recipe, phase, ok, exit_code, output_tail, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![recipe, phase, ok as i64, exit_code, output_tail, now],
+        )
+        .map_err(|e| Error::Agent(format!("Failed to record verification event: {}", e)))?;
+        Ok(())
+    }
+
+    /// List recent verification events, newest first.
+    pub fn list_verification_events(&self, limit: u32) -> Result<Vec<VerificationEvent>> {
+        let conn = self.lock_conn()?;
+        let limit = limit.clamp(1, 200) as i64;
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, recipe, phase, ok, exit_code, output_tail, created_at
+                 FROM verification_events
+                 ORDER BY created_at DESC
+                 LIMIT ?1",
+            )
+            .map_err(|e| Error::Agent(format!("Failed to prepare verification events: {}", e)))?;
+        let rows = stmt
+            .query_map(params![limit], |row| {
+                Ok(VerificationEvent {
+                    id: row.get(0)?,
+                    recipe: row.get(1)?,
+                    phase: row.get(2)?,
+                    ok: row.get::<_, i64>(3)? != 0,
+                    exit_code: row.get(4)?,
+                    output_tail: row.get(5)?,
+                    created_at: row.get(6)?,
+                })
+            })
+            .map_err(|e| Error::Agent(format!("Verification events query error: {}", e)))?;
+        let mut events = Vec::new();
+        for row in rows {
+            events.push(row.map_err(|e| Error::Agent(format!("Verification row error: {}", e)))?);
+        }
+        Ok(events)
     }
 
     // === Session Management ===
@@ -1898,6 +1978,18 @@ pub struct StoredCheckpoint {
     pub hash: String,
     pub timestamp: String,
     pub reason: Option<String>,
+}
+
+/// A verification run event (hermes `verification_evidence.py` parity).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VerificationEvent {
+    pub id: i64,
+    pub recipe: String,
+    pub phase: String,
+    pub ok: bool,
+    pub exit_code: Option<i32>,
+    pub output_tail: String,
+    pub created_at: String,
 }
 
 /// An event recorded for a session.
