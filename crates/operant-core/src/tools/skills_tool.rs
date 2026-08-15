@@ -407,6 +407,69 @@ struct MapNode {
     resources: Vec<String>,
 }
 
+/// Validation report for a meta-skill tree (CLI `skills audit` gate + the
+/// `skill_manage generate_map` walker).
+pub struct SkillTreeValidation {
+    pub node_count: usize,
+    pub errors: Vec<String>,
+    pub warnings: Vec<String>,
+}
+
+/// Walk a meta-skill subtree (descending THROUGH routers) and run the full
+/// registry.py-parity validation: node health (name/dir mismatch, missing or
+/// vague description, oversized bodies), child reachability, orphan SKILL.md
+/// files under resource dirs, and unreferenced resource files. Shared by
+/// `skill_manage generate_map` and the CLI `skills audit` tree gate — one
+/// code path, one contract.
+fn collect_tree_validation(
+    skill_dir: &Path,
+    name: &str,
+) -> (Vec<MapNode>, Vec<String>, Vec<String>) {
+    let mut nodes: Vec<MapNode> = Vec::new();
+    let mut errors: Vec<String> = Vec::new();
+    let mut warnings: Vec<String> = Vec::new();
+    collect_map_nodes(
+        skill_dir,
+        skill_dir,
+        1,
+        &mut nodes,
+        &mut errors,
+        &mut warnings,
+    );
+    nodes.sort_by(|a, b| a.rel_path.cmp(&b.rel_path));
+
+    // Phase 2 — unreferenced resource files (registry.py): a resource no
+    // SKILL.md mentions will never be loaded. The reference corpus is the
+    // root router's own body plus every node body in the tree.
+    let root_content = fs::read_to_string(skill_dir.join("SKILL.md")).unwrap_or_default();
+    let (_, root_body) = parse_frontmatter(&root_content);
+    let joined_bodies = nodes
+        .iter()
+        .map(|n| n.body.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let all_bodies = format!("{root_body}\n{joined_bodies}");
+    let mut root_resources = collect_node_resources(skill_dir);
+    root_resources.sort();
+    warn_unreferenced_resources(name, &root_resources, &all_bodies, &mut warnings);
+    for n in &nodes {
+        warn_unreferenced_resources(&n.rel_path, &n.resources, &all_bodies, &mut warnings);
+    }
+    (nodes, errors, warnings)
+}
+
+/// Validate a meta-skill tree without writing `_map.md` — the non-destructive
+/// entry point for the CLI `skills audit` gate. Mirrors
+/// `skill_manage generate_map --check-only` semantics.
+pub fn validate_skill_tree(skill_dir: &Path, name: &str) -> SkillTreeValidation {
+    let (nodes, errors, warnings) = collect_tree_validation(skill_dir, name);
+    SkillTreeValidation {
+        node_count: nodes.len(),
+        errors,
+        warnings,
+    }
+}
+
 /// registry.py's missing/vague-description validation: a description must be
 /// specific enough to route on (what it does AND when to use it). Returns a
 /// reason the description fails, or None when it is specific enough.
@@ -1775,39 +1838,11 @@ impl SkillManageTool {
             return ToolResult::error("skill_manage", format!("Skill '{}' not found", parsed.name));
         };
         let check_only = parsed.check_only.unwrap_or(false);
-        // Walk the subtree and build the map + validation report. Unlike the
+        // Walk the subtree and build the map + validation report (registry.py
+        // parity, shared with the CLI `skills audit` tree gate). Unlike the
         // flat scanner (which stops at the first SKILL.md), this walker
         // descends THROUGH routers so nested leaves are indexed too.
-        let mut nodes: Vec<MapNode> = Vec::new();
-        let mut errors: Vec<String> = Vec::new();
-        let mut warnings: Vec<String> = Vec::new();
-        collect_map_nodes(
-            &skill_dir,
-            &skill_dir,
-            1,
-            &mut nodes,
-            &mut errors,
-            &mut warnings,
-        );
-        nodes.sort_by(|a, b| a.rel_path.cmp(&b.rel_path));
-
-        // Phase 2 — unreferenced resource files (registry.py): a resource no
-        // SKILL.md mentions will never be loaded. The reference corpus is the
-        // root router's own body plus every node body in the tree.
-        let root_content = fs::read_to_string(skill_dir.join("SKILL.md")).unwrap_or_default();
-        let (_, root_body) = parse_frontmatter(&root_content);
-        let joined_bodies = nodes
-            .iter()
-            .map(|n| n.body.as_str())
-            .collect::<Vec<_>>()
-            .join("\n");
-        let all_bodies = format!("{root_body}\n{joined_bodies}");
-        let mut root_resources = collect_node_resources(&skill_dir);
-        root_resources.sort();
-        warn_unreferenced_resources(&parsed.name, &root_resources, &all_bodies, &mut warnings);
-        for n in &nodes {
-            warn_unreferenced_resources(&n.rel_path, &n.resources, &all_bodies, &mut warnings);
-        }
+        let (nodes, errors, warnings) = collect_tree_validation(&skill_dir, &parsed.name);
 
         if nodes.is_empty() {
             // A leaf has no children — writing an empty map would just be
@@ -2497,6 +2532,64 @@ mod tests {
     #[test]
     fn test_validate_name_invalid_chars() {
         assert!(SkillManageTool::validate_name("My Skill!").is_some());
+    }
+
+    #[test]
+    fn test_validate_skill_tree_flags_unreachable_child_in_categorized_tree() {
+        // CLI `skills audit` tree-gate parity: validate_skill_tree is the
+        // non-destructive walker that flags a child never referenced by its
+        // router, even when the router sits under category dirs.
+        let dir = TempDir::new().unwrap();
+        let skills_dir = dir.path().join("skills");
+        let router = skills_dir.join("creative/website-design/components");
+        fs::create_dir_all(router.join("heroes")).unwrap();
+        fs::create_dir_all(router.join("orphan-leaf")).unwrap();
+        fs::write(
+            router.join("SKILL.md"),
+            "---\nname: components\ndescription: Website component router\n---\n\nRoutes to heroes.\n",
+        )
+        .unwrap();
+        fs::write(
+            router.join("heroes/SKILL.md"),
+            "---\nname: heroes\ndescription: Hero sections\n---\n\nBody.\n",
+        )
+        .unwrap();
+        fs::write(
+            router.join("orphan-leaf/SKILL.md"),
+            "---\nname: orphan-leaf\ndescription: Never referenced by the router\n---\n\nBody.\n",
+        )
+        .unwrap();
+
+        let report = validate_skill_tree(&router, "components");
+        assert_eq!(report.node_count, 2);
+        assert!(
+            report
+                .errors
+                .iter()
+                .any(|e| e.contains("orphan-leaf") && e.contains("not referenced")),
+            "expected unreachable-child error, got: {:?}",
+            report.errors
+        );
+        // The referenced child stays quiet.
+        assert!(!report.errors.iter().any(|e| e.contains("heroes")));
+    }
+
+    #[test]
+    fn test_validate_skill_tree_leaf_has_no_children() {
+        // A leaf (no child skill dirs) validates with zero nodes — the
+        // CLI gate skips it before calling, but the API must stay stable.
+        let dir = TempDir::new().unwrap();
+        let skills_dir = dir.path().join("skills");
+        let leaf = skills_dir.join("arxiv");
+        fs::create_dir_all(&leaf).unwrap();
+        fs::write(
+            leaf.join("SKILL.md"),
+            "---\nname: arxiv\ndescription: Search arXiv papers\n---\n\nBody.\n",
+        )
+        .unwrap();
+        let report = validate_skill_tree(&leaf, "arxiv");
+        assert_eq!(report.node_count, 0);
+        assert!(report.errors.is_empty());
     }
 
     #[test]

@@ -4,6 +4,7 @@ use console::style;
 use dialoguer::Confirm;
 use operant_core::config::AppConfig;
 use operant_core::skills::SkillManager;
+use operant_core::tools::validate_skill_tree;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tempfile as _;
@@ -1188,6 +1189,84 @@ fn audit_skills(config: &AppConfig) -> Result<()> {
 
     if skill_count == 0 {
         println!("No skill directories found.");
+    }
+
+    // Meta-skill tree gate (registry.py parity, shared walker with
+    // `skill_manage generate_map`): every router-capable tree (a directory
+    // carrying SKILL.md that also has child skill directories) is validated
+    // for reachable children, node health, orphan SKILL.md files under
+    // resource dirs, and unreferenced resources. Errors fail the audit;
+    // warnings are review prompts.
+    //
+    // The walk recurses through category dirs (collect_skill_dirs), so
+    // routers nested under categories (e.g. `creative/website-design/
+    // components`) are validated too — not just the flat seeded layout where
+    // the router sits at the root. validate_skill_tree itself descends
+    // THROUGH routers, so a nested sub-router's leaves are covered by its
+    // ancestor's report.
+    let mut tree_errors: usize = 0;
+    let mut tree_warnings: usize = 0;
+    if skills_dir.is_dir() {
+        let mut skill_dirs = Vec::new();
+        collect_skill_dirs(skills_dir, &mut skill_dirs);
+        for path in skill_dirs {
+            let dir_name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default();
+            if dir_name.starts_with('.') {
+                continue;
+            }
+            // Router-capable: has its own SKILL.md AND at least one child
+            // skill directory. Leaves and reference dirs are skipped — the
+            // per-skill loop above already covers them.
+            let has_skill_children = std::fs::read_dir(&path)
+                .map(|rd| {
+                    rd.flatten()
+                        .any(|e| e.path().is_dir() && e.path().join("SKILL.md").is_file())
+                })
+                .unwrap_or(false);
+            if !has_skill_children {
+                continue;
+            }
+            let report = validate_skill_tree(&path, &dir_name);
+            for err in &report.errors {
+                tree_errors += 1;
+                println!(
+                    "{} [{}] {}",
+                    style("TREE").red(),
+                    style(&dir_name).bold(),
+                    style(err).red()
+                );
+            }
+            for warn in &report.warnings {
+                tree_warnings += 1;
+                println!(
+                    "{} [{}] {}",
+                    style("TREE").yellow(),
+                    style(&dir_name).bold(),
+                    style(warn).yellow()
+                );
+            }
+        }
+    }
+    if tree_errors > 0 || tree_warnings > 0 {
+        println!();
+        println!(
+            "Meta-skill trees: {} error(s), {} warning(s) across router-capable trees.",
+            tree_errors, tree_warnings
+        );
+        // Warnings are review prompts, not failures — but they must still
+        // surface in the summary so "✓ No issues found" is never printed
+        // right after warnings were shown above.
+        total_issues += tree_errors;
+        if tree_warnings > 0 {
+            println!(
+                "{} {} tree warning(s) — review before calling the pool complete.",
+                style("⚠").yellow(),
+                tree_warnings
+            );
+        }
     }
 
     println!();
