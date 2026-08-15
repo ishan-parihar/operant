@@ -7,6 +7,8 @@
 - **LCM context engine** — `agent.context_engine = "lcm"`: lossless DAG, `lcm_recall`/`lcm_stats`/`lcm_assert` tools, background rollup maintenance for long-lived processes.
 - **Memory sync** — `sync_turn` posts observations after each turn; drained on shutdown so writes aren't lost.
 - **Autonomous** — `operant autonomous`: self-directed loop over TODO.md with test-command guardrails.
+- **SOPs** — `operant sop list/show/validate`: reusable standard operating procedures (markdown runbooks) that inject constraints and workflows into sessions.
+- **Webhooks** — `operant webhook subscribe/list/remove/test`: inbound event subscriptions that can trigger gateway behavior.
 
 ## Messaging gateway
 
@@ -21,8 +23,10 @@ telegram, discord, slack, and whatsapp. Manage it with `operant gateway`:
 | `operant gateway install` / `uninstall` | Install/remove the autostart systemd unit |
 | `operant gateway run` | Foreground run (Ctrl+C to stop) — good for live testing |
 | `operant channel list` | All configured channels |
+| `operant channel start` | Start all configured channels |
 | `operant channel doctor` | Health checks per platform |
-| `operant channel add <type> [--token <TOKEN>] [config-json]` | Configure a platform (`telegram|discord|slack|whatsapp|matrix|imessage|email`; pass the bot token with `--token` — never the global `--api-key`, which overrides the LLM key) |
+| `operant channel add <type> [--token <TOKEN>] [config-json]` | Configure a platform (accepted types: `telegram`, `discord`, `slack`, `whatsapp`, `email`, `webhooks`; pass the bot token with `--token` — never the global `--api-key`, which overrides the LLM key) |
+| `operant channel remove <type>` | Remove a channel configuration |
 | `operant channel send --channel-id <name> --recipient <id> "<msg>"` | Send a test message to verify delivery |
 | `operant channel bind-telegram` | Allowlist a telegram identity |
 
