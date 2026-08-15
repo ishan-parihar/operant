@@ -472,6 +472,13 @@ impl Default for McpServerConfig {
 #[serde(default, deny_unknown_fields)]
 pub struct McpSettings {
     pub autoload: bool,
+    /// Master switch for progressive tool disclosure of MCP tools (hermes
+    /// `mcp.deferred_loading` parity). When `false`, MCP tool schemas are
+    /// always loaded eagerly and `tools.tool_search.enabled` is forced to
+    /// `"off"`. Defaults to `true` (defer behind the tool_search bridge
+    /// when MCP tools are present).
+    #[serde(default = "default_true")]
+    pub deferred_loading: bool,
     pub servers: Vec<McpServerConfig>,
 }
 
@@ -479,6 +486,7 @@ impl Default for McpSettings {
     fn default() -> Self {
         Self {
             autoload: true,
+            deferred_loading: true,
             servers: Vec::new(),
         }
     }
@@ -741,6 +749,15 @@ pub struct ToolSettings {
     pub igs_timeout_secs: u64,
     #[serde(default)]
     pub lifeos_enabled: bool,
+    /// Progressive tool disclosure (hermes `tools.tool_search` parity).
+    ///
+    /// When active, MCP server tools (`mcp_*` names) are replaced in the
+    /// model-visible tools array by three bridge tools — `tool_search`,
+    /// `tool_describe`, `tool_call` — and surfaced on demand. Native
+    /// builtin tools never defer; Tier 0 (no MCP tools) is a pure
+    /// passthrough. See `tools/tool_search.rs` for the full design.
+    #[serde(default)]
+    pub tool_search: ToolSearchSettings,
 }
 
 fn default_true() -> bool {
@@ -749,6 +766,77 @@ fn default_true() -> bool {
 
 fn default_igs_timeout() -> u64 {
     60
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ToolSearchSettings {
+    /// `"auto"` | `"on"` | `"off"`. `"auto"` (default) activates the
+    /// bridge only when deferrable (MCP) tools are present — a pure
+    /// passthrough otherwise, so zero-behavior-change for native-only
+    /// configs. `"on"` forces the bridge; `"off"` disables it even when
+    /// MCP tools exist.
+    #[serde(default = "default_tool_search_enabled")]
+    pub enabled: String,
+    /// Listing budget as a percentage of the model's context window that
+    /// the embedded catalog listing may consume before disclosure degrades
+    /// (full listing -> names-only -> bare bridge). Default 5.0.
+    #[serde(default = "default_tool_search_threshold_pct")]
+    pub threshold_pct: f64,
+    /// `"auto"` | `"on"` | `"off"` — whether the `tool_search` bridge
+    /// description embeds a skills-style catalog listing of every deferred
+    /// tool (name + short description). `"auto"` = include when it fits
+    /// the listing budget, else names-only, else none (bare bridge).
+    #[serde(default = "default_tool_search_listing")]
+    pub listing: String,
+    /// Absolute cap on the embedded listing, regardless of context size.
+    /// Effective budget = min(listing_max_tokens, threshold_pct% of
+    /// context). Default 4000.
+    #[serde(default = "default_tool_search_listing_max_tokens")]
+    pub listing_max_tokens: usize,
+    /// Default `limit` for `tool_search` when the model omits it. Default 10.
+    #[serde(default = "default_tool_search_default_limit")]
+    pub search_default_limit: usize,
+    /// Hard cap on a single `tool_search` `limit`. Default 25.
+    #[serde(default = "default_tool_search_max_limit")]
+    pub max_search_limit: usize,
+}
+
+fn default_tool_search_enabled() -> String {
+    "auto".to_string()
+}
+
+fn default_tool_search_threshold_pct() -> f64 {
+    5.0
+}
+
+fn default_tool_search_listing() -> String {
+    "auto".to_string()
+}
+
+fn default_tool_search_listing_max_tokens() -> usize {
+    4000
+}
+
+fn default_tool_search_default_limit() -> usize {
+    10
+}
+
+fn default_tool_search_max_limit() -> usize {
+    25
+}
+
+impl Default for ToolSearchSettings {
+    fn default() -> Self {
+        Self {
+            enabled: default_tool_search_enabled(),
+            threshold_pct: default_tool_search_threshold_pct(),
+            listing: default_tool_search_listing(),
+            listing_max_tokens: default_tool_search_listing_max_tokens(),
+            search_default_limit: default_tool_search_default_limit(),
+            max_search_limit: default_tool_search_max_limit(),
+        }
+    }
 }
 
 impl Default for ToolSettings {
@@ -771,6 +859,7 @@ impl Default for ToolSettings {
             obscura_stealth: true,
             igs_timeout_secs: 60,
             lifeos_enabled: false,
+            tool_search: ToolSearchSettings::default(),
         }
     }
 }

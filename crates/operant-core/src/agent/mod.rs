@@ -132,6 +132,11 @@ pub struct AgentConfig {
     /// Maximum LLM retries per turn before giving up.
     /// Matches hermes-agent's `api_max_retries` (default 3).
     pub max_retries: usize,
+    /// Progressive tool disclosure settings (hermes `tools.tool_search`
+    /// parity). When active, MCP tool schemas are replaced in the
+    /// model-visible tools array by the `tool_search`/`tool_describe`/
+    /// `tool_call` bridge. See `tools/tool_search.rs`.
+    pub tool_search: crate::config::ToolSearchSettings,
 }
 
 impl Default for AgentConfig {
@@ -158,6 +163,7 @@ impl From<&BehaviorSettings> for AgentConfig {
             skill_nudge_interval: settings.creation_nudge_interval,
             memory_review_interval: settings.memory_nudge_interval,
             max_retries: 3,
+            tool_search: crate::config::ToolSearchSettings::default(),
         }
     }
 }
@@ -1360,7 +1366,10 @@ impl OperantAgent {
             );
 
             // Get tool schemas
-            let tools = self.registry.get_schemas().await;
+            let tools = self
+                .registry
+                .get_schemas_for_request(&self.config.tool_search, self.config.context_window)
+                .await;
 
             let request = ChatRequest::new(self.effective_model(), messages.clone())
                 .with_tools(tools)
@@ -1399,7 +1408,13 @@ impl OperantAgent {
                             self.iteration_budget.refund();
                             retry_state.consume_retry();
                             // Rebuild request with compressed messages
-                            let tools = self.registry.get_schemas().await;
+                            let tools = self
+                                .registry
+                                .get_schemas_for_request(
+                                    &self.config.tool_search,
+                                    self.config.context_window,
+                                )
+                                .await;
                             let retry_request =
                                 ChatRequest::new(self.effective_model(), messages.clone())
                                     .with_tools(tools)
@@ -1420,7 +1435,13 @@ impl OperantAgent {
                             if self.try_rotate_credential().is_some() {
                                 self.iteration_budget.refund();
                                 retry_state.consume_retry();
-                                let tools = self.registry.get_schemas().await;
+                                let tools = self
+                                    .registry
+                                    .get_schemas_for_request(
+                                        &self.config.tool_search,
+                                        self.config.context_window,
+                                    )
+                                    .await;
                                 let retry_request =
                                     ChatRequest::new(self.effective_model(), messages.clone())
                                         .with_tools(tools)
@@ -1466,7 +1487,13 @@ impl OperantAgent {
                                     max = retry_state.max_retries,
                                     "Stream dropped mid-read — re-issuing LLM request"
                                 );
-                                let tools = self.registry.get_schemas().await;
+                                let tools = self
+                                    .registry
+                                    .get_schemas_for_request(
+                                        &self.config.tool_search,
+                                        self.config.context_window,
+                                    )
+                                    .await;
                                 let retry_request =
                                     ChatRequest::new(self.effective_model(), messages.clone())
                                         .with_tools(tools)
@@ -1496,7 +1523,13 @@ impl OperantAgent {
                             // was wasted on a context overflow.
                             self.iteration_budget.refund();
                             retry_state.consume_retry();
-                            let tools = self.registry.get_schemas().await;
+                            let tools = self
+                                .registry
+                                .get_schemas_for_request(
+                                    &self.config.tool_search,
+                                    self.config.context_window,
+                                )
+                                .await;
                             let retry_request =
                                 ChatRequest::new(self.effective_model(), messages.clone())
                                     .with_tools(tools)
@@ -1516,7 +1549,13 @@ impl OperantAgent {
                             if self.try_rotate_credential().is_some() {
                                 self.iteration_budget.refund();
                                 retry_state.consume_retry();
-                                let tools = self.registry.get_schemas().await;
+                                let tools = self
+                                    .registry
+                                    .get_schemas_for_request(
+                                        &self.config.tool_search,
+                                        self.config.context_window,
+                                    )
+                                    .await;
                                 let retry_request =
                                     ChatRequest::new(self.effective_model(), messages.clone())
                                         .with_tools(tools)
@@ -4611,6 +4650,7 @@ mod tests {
             skill_nudge_interval: 0,
             memory_review_interval: 0,
             max_retries: 3,
+            tool_search: Default::default(),
         };
         let agent = OperantAgent::new(
             config,
@@ -4653,6 +4693,7 @@ mod tests {
             skill_nudge_interval: 0,
             memory_review_interval: 0,
             max_retries: 3,
+            tool_search: Default::default(),
         };
         let agent = OperantAgent::new(
             config,

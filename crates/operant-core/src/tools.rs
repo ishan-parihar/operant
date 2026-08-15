@@ -46,6 +46,7 @@ pub mod terminal_backend;
 pub mod terminal_tool;
 pub mod todo_tool;
 pub mod tool_backend_helpers;
+pub mod tool_search;
 pub mod transcription_tool;
 pub mod tts_command_provider;
 pub mod tts_provider;
@@ -412,6 +413,20 @@ impl ToolRegistry {
             .collect()
     }
 
+    /// Progressive tool disclosure: assemble the model-visible tools array
+    /// by applying the `tool_search` bridge (hermes parity). When the
+    /// bridge is active and MCP tools are present, `mcp_*` schemas are
+    /// hidden behind `tool_search`/`tool_describe`/`tool_call`; otherwise
+    /// this is a pure passthrough of [`ToolRegistry::get_schemas`].
+    pub async fn get_schemas_for_request(
+        &self,
+        settings: &crate::config::ToolSearchSettings,
+        context_window: usize,
+    ) -> Vec<ToolSchema> {
+        let all = self.get_schemas().await;
+        tool_search::assemble_tools(all, settings, context_window).visible
+    }
+
     pub async fn get_available_schemas_filtered(&self, filter: &[String]) -> Vec<ToolSchema> {
         let tools = self.tools.read().await;
         let disabled_names = self.disabled_names.read().await;
@@ -450,6 +465,25 @@ impl ToolRegistry {
     pub async fn contains(&self, name: &str) -> bool {
         let tools = self.tools.read().await;
         tools.contains_key(name)
+    }
+
+    /// Whether a tool is registered AND currently available (not disabled
+    /// by name or toolset, and `is_available()` reports true). The bridge
+    /// `tool_call` uses this so a deferred tool that the user disabled can
+    /// never be invoked around the ban (guardrail parity with direct
+    /// calls).
+    pub async fn is_available(&self, name: &str) -> bool {
+        let tools = self.tools.read().await;
+        let disabled_names = self.disabled_names.read().await;
+        let disabled_toolsets = self.disabled_toolsets.read().await;
+        match tools.get(name) {
+            Some(t) => {
+                t.is_available()
+                    && !disabled_names.contains(name)
+                    && !disabled_toolsets.contains(t.toolset())
+            }
+            None => false,
+        }
     }
 
     pub async fn len(&self) -> usize {

@@ -116,6 +116,10 @@ medium_width = 120
 
 [mcp]
 autoload = true
+# Master switch for progressive tool disclosure: when false, MCP tool
+# schemas are always loaded eagerly and tools.tool_search.enabled is
+# forced to "off" (default true).
+deferred_loading = true
 
 [[mcp.servers]]
 name = "filesystem-demo"
@@ -192,6 +196,21 @@ igs_enabled = true
 # binaries that predate --stealth support.
 # obscura_stealth = true
 lifeos_enabled = false
+# Progressive tool disclosure (hermes `tools.tool_search` parity).
+# When active, MCP server tools (`mcp_*`) are replaced in the model-visible
+# tools array by a `tool_search` / `tool_describe` / `tool_call` bridge and
+# surfaced on demand — keeping the context window lean when many MCP tools
+# are connected. Native tools never defer; Tier 0 (no MCP tools) is a pure
+# passthrough.
+[tools.tool_search]
+# "auto" (bridge on when MCP tools are present) | "on" | "off"
+enabled = "auto"
+# Listing budget as % of the model's context window (default 5.0).
+threshold_pct = 5.0
+# "auto" (skills-style listing when it fits) | "on" | "off"
+listing = "auto"
+# Absolute cap on the embedded catalog listing, in tokens (default 4000).
+# listing_max_tokens = 4000
 
 [tools.web]
 search_url = "https://lite.duckduckgo.com/lite/?q={query}"

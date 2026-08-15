@@ -166,6 +166,20 @@ pub async fn register_builtin_tools(
         registry.register(McpManagementTool::new(manager)).await?;
     }
 
+    // Progressive tool disclosure bridge (hermes `tools/tool_search.py`
+    // parity). Always registered so `tool_call` can dispatch to deferred
+    // MCP tools; their schemas are hidden from the model-visible array
+    // unless the bridge is active (see `tool_search::assemble_tools`).
+    registry
+        .register(super::tool_search::ToolSearchTool::new(registry.clone()))
+        .await?;
+    registry
+        .register(super::tool_search::ToolDescribeTool::new(registry.clone()))
+        .await?;
+    registry
+        .register(super::tool_search::ToolCallTool::new(registry.clone()))
+        .await?;
+
     Ok(())
 }
 
@@ -329,12 +343,13 @@ mod tests {
         let count = registry.len().await;
         // register_builtin_tools registers everything in builtin_tool_names
         // EXCEPT delegate_task (only in _with_sub_agent variant) AND
-        // mcp_management (conditionally registered only when mcp_manager is Some).
-        // So: registry.len() + 2 == builtin_tool_names().len().
+        // mcp_management (conditionally registered only when mcp_manager is Some),
+        // PLUS the three tool_search bridge tools (always registered).
+        // So: registry.len() + 2 == builtin_tool_names().len() + 3.
         assert_eq!(
             count + 2,
-            builtin_tool_names().len(),
-            "registry has {} tools, names list has {}; the difference should be 2 (delegate_task + mcp_management)",
+            builtin_tool_names().len() + 3,
+            "registry has {} tools, names list has {}; the difference should be 1 (bridge tools minus delegate_task + mcp_management)",
             count,
             builtin_tool_names().len()
         );
@@ -370,11 +385,12 @@ mod tests {
 
         let count = registry.len().await;
         // _with_sub_agent registers delegate_task but mcp_management is
-        // still conditional on mcp_manager being Some (passed as None here).
+        // still conditional on mcp_manager being Some (passed as None here),
+        // and the three tool_search bridge tools are always registered.
         assert_eq!(
             count + 1,
-            builtin_tool_names().len(),
-            "registry has {} tools, names list has {}; difference should be 1 (mcp_management)",
+            builtin_tool_names().len() + 3,
+            "registry has {} tools, names list has {}; difference should be 2 (bridge tools minus mcp_management)",
             count,
             builtin_tool_names().len()
         );

@@ -655,6 +655,16 @@ pub(crate) fn agent_config(
         agent.system_prompt = Some(prompt.to_string());
     }
     agent.request_timeout = Duration::from_secs(config.agent.request_timeout_secs);
+    // Progressive tool disclosure (hermes parity): thread the CLI's
+    // `tools.tool_search` block into the agent loop so MCP tool schemas
+    // can be deferred behind the tool_search bridge. `mcp.deferred_loading
+    // = false` is the master switch that forces eager loading regardless
+    // of the tool_search block (hermes `mcp.deferred_loading` parity).
+    let mut tool_search = config.tools.tool_search.clone();
+    if !config.mcp.deferred_loading {
+        tool_search.enabled = "off".to_string();
+    }
+    agent.tool_search = tool_search;
     agent
 }
 
