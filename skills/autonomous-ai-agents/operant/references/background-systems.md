@@ -22,12 +22,11 @@ telegram, discord, slack, and whatsapp. Manage it with `operant gateway`:
 | `operant gateway run` | Foreground run (Ctrl+C to stop) — good for live testing |
 | `operant channel list` | All configured channels |
 | `operant channel doctor` | Health checks per platform |
-| `operant channel add <type> [json]` | Configure a platform (`telegram|discord|slack|whatsapp|matrix|imessage|email`; token in `.env`, config in `[gateway]`) |
+| `operant channel add <type> [--token <TOKEN>] [config-json]` | Configure a platform (`telegram|discord|slack|whatsapp|matrix|imessage|email`; pass the bot token with `--token` — never the global `--api-key`, which overrides the LLM key) |
 | `operant channel send --channel-id <name> --recipient <id> "<msg>"` | Send a test message to verify delivery |
 | `operant channel bind-telegram` | Allowlist a telegram identity |
 
-Workflow for wiring a platform: put the bot token in `~/.operant/.env`
-(e.g. `TELEGRAM_BOT_TOKEN=…`), enable the channel in `[gateway]`, run
+Workflow for wiring a platform: pass the bot token with `operant channel add <type> --token <TOKEN>` (or put it in `~/.operant/.env` as `TELEGRAM_BOT_TOKEN=…`), enable the channel in `[gateway]`, run
 `operant channel doctor` to confirm the handshake, then `operant gateway run`
 (or `install` for autostart). Delivery goes through the normal agent loop, so
 an interactive gateway message can trigger any tool, skill, or cron job.

@@ -11,7 +11,7 @@ Skills are markdown instruction packs (`SKILL.md`) that inject guidance into the
 ## Management
 
 - `/skill <name>` in the TUI invokes a skill; `/bundle <name>` expands a bundle
-- `operant skills list` / `install ./dir-or-url` / `audit` / `bundle` / `seed [--source DIR] [--force]`
+- `operant skills list` / `search` / `inspect` / `install ./dir-or-url` / `uninstall` / `audit` / `seed [--source DIR] [--force]` / `market` / `tap` / `toggle` (note: `bundle` is a TUI slash command, not a CLI subcommand)
 - `operant skills market search/install <name>` — marketplace
 - `operant curator` — agent-curated lifecycle (archive/backup/restore)
 - First-run auto-seeds the bundled pool when the dir is empty; `install-skills.sh` pre-seeds at install time

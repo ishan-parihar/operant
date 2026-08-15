@@ -10,8 +10,8 @@ Run `operant --help` for the authoritative list. Key commands:
 | `operant setup` | Interactive setup wizard (provider, memory, TTS, gateway, agent) |
 | `operant model get/set` | Active model configuration |
 | `operant tools list` | Enabled tool registry |
-| `operant skills list/install/audit/bundle/seed/market` | Skill management |
-| `operant mcp list/connect` | MCP servers (deferred loading; reconnect materializes tools) |
+| `operant skills list/search/inspect/install/uninstall/audit/seed/market/tap/toggle` | Skill management (note: `bundle` is a TUI slash command, not a CLI subcommand) |
+| `operant mcp list/add/remove/test/serve/login/configure` | MCP servers (deferred loading; `/mcp r` in the TUI reconnects and materializes tools mid-session) |
 | `operant memory` | Memory management |
 | `operant sessions list` | Session history |
 | `operant cron` | Scheduled jobs |
