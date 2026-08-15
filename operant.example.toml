@@ -133,6 +133,22 @@ url = "http://127.0.0.1:8080/mcp"
 # auth_token = "optional"
 enabled = false
 
+# Mixture-of-Agents (MoA) turns — hermes /moa parity (G5).
+# When enabled, `operant run --moa` fans out `references` (advisory models)
+# over the conversation, an `aggregator` synthesizes their advice, and the
+# guidance is injected into the agent's context for that turn. Off by
+# default: MoA costs N+1 LLM calls per turn.
+[moa]
+enabled = false
+# references = [
+#   { provider = "openai", model = "gpt-4o-mini", base_url = "https://api.openai.com/v1", api_key = "..." },
+#   { provider = "deepseek", model = "deepseek-chat", base_url = "https://api.deepseek.com/v1", api_key = "..." },
+# ]
+# aggregator = { provider = "openai", model = "gpt-4o", base_url = "https://api.openai.com/v1", api_key = "..." }
+# max_tokens = 1024        # per-reference output cap (aggregator is never capped)
+# temperature = 0.7
+# timeout_secs = 60
+
 [[mcp.servers]]
 name = "stdio-demo"
 transport = "stdio"

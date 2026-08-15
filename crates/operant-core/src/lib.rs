@@ -73,6 +73,7 @@ pub mod mcp;
 pub mod mcp_oauth;
 pub mod memory;
 pub mod memory_provider;
+pub mod moa;
 pub mod models_dev;
 pub mod oauth_refresh;
 pub mod obscura_cdp;

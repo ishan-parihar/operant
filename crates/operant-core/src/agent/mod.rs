@@ -345,6 +345,11 @@ pub struct OperantAgent {
     /// ContextEngine.should_compress off real API usage, not a char/4 guess.
     /// Atomic so the streaming path can update it lock-free.
     last_prompt_tokens: std::sync::atomic::AtomicUsize,
+    /// Per-turn Mixture-of-Agents guidance (G5, hermes `moa_loop.py`
+    /// parity). Computed BEFORE `run()` via `crate::moa::aggregate_moa_context`
+    /// and drained into `build_messages` as a system message for this turn
+    /// only — the normal agent loop still owns tool calling and termination.
+    moa_guidance: Arc<std::sync::Mutex<Option<String>>>,
 }
 
 /// Strip `<memory-context>` / `<long_term_memory>` XML tags from streaming
@@ -432,6 +437,7 @@ impl OperantAgent {
             provider_registry: None,
             background_review_callback: None,
             last_prompt_tokens: std::sync::atomic::AtomicUsize::new(0),
+            moa_guidance: Arc::new(std::sync::Mutex::new(None)),
         }
     }
 
@@ -483,6 +489,7 @@ impl OperantAgent {
             provider_registry: None,
             background_review_callback: None,
             last_prompt_tokens: std::sync::atomic::AtomicUsize::new(0),
+            moa_guidance: Arc::new(std::sync::Mutex::new(None)),
         }
     }
 
@@ -639,6 +646,24 @@ impl OperantAgent {
 
     pub fn steer_queue_handle(&self) -> Arc<tokio::sync::Mutex<Vec<String>>> {
         Arc::clone(&self.steer_queue)
+    }
+
+    /// Inject per-turn MoA guidance (hermes `/moa` parity, G5). The
+    /// guidance is drained by the next `build_messages` call, so it applies
+    /// to exactly one `run()` turn. A `None`-returning
+    /// `aggregate_moa_context` (no references configured) is a no-op.
+    pub fn set_moa_guidance(&self, guidance: String) {
+        if let Ok(mut slot) = self.moa_guidance.lock() {
+            *slot = Some(guidance);
+        }
+    }
+
+    /// Drain the pending MoA guidance for this turn (None when unset).
+    fn drain_moa_guidance(&self) -> Option<String> {
+        self.moa_guidance
+            .lock()
+            .ok()
+            .and_then(|mut slot| slot.take())
     }
 
     /// List currently-active subagent tool calls. Returns a vec of
@@ -2217,6 +2242,16 @@ impl OperantAgent {
 
         if !volatile_suffix.trim().is_empty() {
             messages.push(Message::system(volatile_suffix.trim().to_string()));
+        }
+
+        // ── MoA guidance injection (G5, hermes moa_loop.py parity) ─────
+        // Per-turn Mixture-of-Agents guidance computed before run(); injected
+        // as a system message after the volatile suffix so the acting loop
+        // sees it for every iteration of this turn. Drained — it never leaks
+        // into the next turn (a plain turn with no MoA is byte-identical to
+        // before, preserving prompt-cache stability).
+        if let Some(guidance) = self.drain_moa_guidance() {
+            messages.push(Message::system(guidance));
         }
 
         // Add conversation history
@@ -4167,6 +4202,49 @@ mod tests {
         let prefix = agent.build_frozen_prefix();
         assert!(!prefix.contains("## Skill Management Principles"));
         assert!(!prefix.contains("Skill Safety Rule"));
+    }
+
+    #[tokio::test]
+    async fn build_messages_injects_moa_guidance_once_and_drains() {
+        use crate::agent::clients::openai::OpenAIModelClient;
+        use crate::client::OpenAIClient;
+
+        let db = Database::init(std::path::PathBuf::from("test_moa_guidance.sqlite")).unwrap();
+        let agent = OperantAgent::new(
+            AgentConfig::default(),
+            Box::new(OpenAIModelClient::new(OpenAIClient::new(
+                crate::client::ClientConfig::default(),
+            ))),
+            ToolRegistry::new(Duration::from_secs(1)),
+            Arc::new(db),
+        );
+        agent.user_message("hi").await;
+
+        // G5: no guidance set → byte-identical to a plain turn (no MoA msg).
+        let msgs = agent.build_messages("moa-test").await.unwrap();
+        assert!(
+            !msgs
+                .iter()
+                .any(|m| m.role == Role::System && m.content.contains("Mixture of Agents")),
+            "no MoA message when guidance unset"
+        );
+
+        agent.set_moa_guidance("[Mixture of Agents context — test guidance]".to_string());
+        let msgs = agent.build_messages("moa-test").await.unwrap();
+        let injected: Vec<_> = msgs
+            .iter()
+            .filter(|m| m.role == Role::System && m.content.contains("Mixture of Agents"))
+            .collect();
+        assert_eq!(injected.len(), 1, "guidance injected exactly once");
+
+        // Drained — the next turn is byte-identical again (no leak).
+        let msgs = agent.build_messages("moa-test").await.unwrap();
+        assert!(
+            !msgs
+                .iter()
+                .any(|m| m.role == Role::System && m.content.contains("Mixture of Agents")),
+            "guidance drained after one turn"
+        );
     }
 
     #[serial]

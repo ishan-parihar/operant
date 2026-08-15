@@ -200,6 +200,14 @@ enum Commands {
         /// ~/.operant/trajectories/. View with `operant trajectory list`.
         #[arg(long, action = ArgAction::SetTrue)]
         record_trajectory: bool,
+
+        /// Enable a Mixture-of-Agents turn (hermes /moa parity, G5): the
+        /// configured [moa] reference models advise on the query, an
+        /// aggregator synthesizes their guidance, and it is injected into
+        /// the agent's context for this run. Requires [moa] enabled and at
+        /// least one reference model configured.
+        #[arg(long, action = ArgAction::SetTrue)]
+        moa: bool,
     },
     Autonomous {
         #[arg(short, long)]
@@ -1513,6 +1521,7 @@ async fn run_non_tui(
     system_prompt: Option<&str>,
     query: &str,
     record_trajectory: bool,
+    moa: bool,
 ) -> Result<()> {
     let mcp_manager = McpManager::new();
     let agent =
@@ -1522,6 +1531,28 @@ async fn run_non_tui(
     if record_trajectory {
         println!("Trajectory recording enabled — run will be saved to ~/.operant/trajectories/");
     }
+
+    // G5 (hermes moa_loop.py parity): a MoA turn fans out the configured
+    // reference models over the fresh conversation, has the aggregator
+    // synthesize their advice, and injects the guidance for this run only.
+    // Failures are non-fatal — the agent still runs in single-model mode.
+    if moa {
+        match run_moa_for_query(config, query).await {
+            Ok(Some(guidance)) => {
+                println!("[moa] Injected Mixture-of-Agents guidance for this turn");
+                agent.set_moa_guidance(guidance);
+            }
+            Ok(None) => {
+                println!(
+                    "[moa] [moa] disabled or no reference models configured — running without MoA"
+                );
+            }
+            Err(e) => {
+                eprintln!("[moa] MoA aggregation failed (non-fatal): {e:#}");
+            }
+        }
+    }
+
     let response = agent.run(query.to_string()).await?;
     // Drain pending memory hooks (sync_turn → /observe, session/end) before
     // the process exits. The MemorySyncExecutor is a background tokio task —
@@ -1530,6 +1561,31 @@ async fn run_non_tui(
     agent.shutdown_memory_executor().await;
     println!("{}", response.content);
     Ok(())
+}
+
+/// G5 helper: run the MoA fan-out + synthesis for a fresh `operant run`
+/// query. Returns `Ok(None)` when MoA is disabled or no reference models
+/// are configured (the agent runs in single-model mode).
+async fn run_moa_for_query(config: &AppConfig, query: &str) -> Result<Option<String>> {
+    let moa = &config.moa;
+    if !moa.enabled || moa.references.is_empty() {
+        return Ok(None);
+    }
+    let messages = vec![operant_core::client::Message::user(query)];
+    let guidance = operant_core::moa::aggregate_moa_context(
+        query,
+        &messages,
+        &moa.references,
+        moa.aggregator.as_ref(),
+        &config.agent.model,
+        &client_config(config),
+        moa.max_tokens,
+        moa.temperature,
+        Duration::from_secs(moa.timeout_secs),
+    )
+    .await
+    .context("MoA aggregation failed")?;
+    Ok(guidance)
 }
 
 fn preview_tool_args(args: &str) -> Option<String> {
@@ -1843,6 +1899,7 @@ async fn main() -> Result<()> {
             query,
             autonomous,
             record_trajectory,
+            moa,
         }) => {
             if *autonomous {
                 if query.is_some() {
@@ -1869,7 +1926,14 @@ async fn main() -> Result<()> {
                 .await?;
             } else {
                 warn_tui_fallback(loaded.config.tui.rich_output);
-                run_non_tui(&loaded.config, system.as_deref(), query, *record_trajectory).await?;
+                run_non_tui(
+                    &loaded.config,
+                    system.as_deref(),
+                    query,
+                    *record_trajectory,
+                    *moa,
+                )
+                .await?;
             }
         }
         Some(Commands::Chat { system }) => {

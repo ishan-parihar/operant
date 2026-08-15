@@ -32,6 +32,7 @@ pub struct AppConfig {
     pub credential_pool: CredentialPoolSettings,
     pub terminal_backend: TerminalBackend,
     pub auxiliary_models: AuxiliaryModels,
+    pub moa: MoaSettings,
     pub checkpoints: CheckpointsSettings,
     pub database_path: PathBuf,
 }
@@ -62,6 +63,7 @@ impl Default for AppConfig {
             terminal_backend: TerminalBackend::Local,
             checkpoints: CheckpointsSettings::default(),
             auxiliary_models: AuxiliaryModels::default(),
+            moa: MoaSettings::default(),
             database_path,
         }
     }
@@ -1009,6 +1011,45 @@ pub struct AuxiliaryModelConfig {
     pub model: Option<String>,
     pub base_url: Option<String>,
     pub api_key: Option<String>,
+}
+
+/// Mixture-of-Agents (MoA) configuration (`[moa]` section, hermes
+/// `hermes_cli/moa_config.py` + `agent/moa_loop.py` parity).
+///
+/// When `enabled`, a MoA turn fans out `references` (advisory models) over
+/// the flattened conversation, then an `aggregator` model synthesizes their
+/// advice into guidance that is injected into the acting agent's context
+/// before it answers. Off by default — MoA costs N+1 LLM calls per turn.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+#[derive(Default)]
+pub struct MoaSettings {
+    /// Master switch. When false (default), MoA turns are a no-op.
+    pub enabled: bool,
+    /// Reference (advisor) models. Each is called with the flattened
+    /// conversation plus an advisory system prompt; their outputs feed the
+    /// aggregator. Empty (default) → MoA is inert even when enabled.
+    pub references: Vec<AuxiliaryModelConfig>,
+    /// Aggregator model that synthesizes the reference advice into concise
+    /// guidance for the acting agent. When unset, the main agent model is
+    /// used with the main provider client.
+    pub aggregator: Option<AuxiliaryModelConfig>,
+    /// Optional per-reference output cap (tokens). None → the model's own
+    /// maximum. The aggregator synthesis is NEVER capped (hermes parity).
+    #[serde(default)]
+    pub max_tokens: Option<u32>,
+    /// Optional temperature for reference and aggregator calls. None → the
+    /// provider default applies.
+    #[serde(default)]
+    pub temperature: Option<f32>,
+    /// Per-call timeout in seconds for reference/aggregator calls
+    /// (default 60).
+    #[serde(default = "default_moa_timeout_secs")]
+    pub timeout_secs: u64,
+}
+
+fn default_moa_timeout_secs() -> u64 {
+    60
 }
 
 /// Auxiliary model routing for specialized task slots.
