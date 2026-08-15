@@ -75,7 +75,15 @@ Some skills are **meta-skills** (routers): their directory contains child skill 
 3. **Announce the leaf.** State which leaf you are operating under, and re-route when the task shifts — don't improvise from whatever leaf is in context.
 4. **Delegate branches.** For branch-shaped subtasks, hand one subagent the branch path plus a slice of the task; the subtree is self-contained.
 5. **Load ceiling.** Keep at most: the active leaf, its ancestor routers, and one framework/reference file. Needing more at once is a delegation signal, not a reason to load the tree.
-6. **Regenerate the map after structural changes.** After creating/renaming/reorganizing nodes, run `skill_manage(action='generate_map', name='<router>')` (or with `check_only=true` to validate without writing). Fix every reported error (unreachable children, name/dir mismatches, missing descriptions, orphan SKILL.md files under resource dirs) and treat warnings (vague descriptions, oversized router bodies over 200 lines, unreferenced resource files) as review prompts before calling a tree complete.";
+6. **Regenerate the map after structural changes.** After creating/renaming/reorganizing nodes, run `skill_manage(action='generate_map', name='<router>')` (or with `check_only=true` to validate without writing). Fix every reported error (unreachable children, name/dir mismatches, missing descriptions, orphan SKILL.md files under resource dirs) and treat warnings (vague descriptions, oversized router bodies over 200 lines, unreferenced resource files) as review prompts before calling a tree complete.
+
+## Self-Management Protocol (own infrastructure)
+When the task is managing Operant itself (config, model, gateway, cron, channels, skills, memory, MCP):
+1. **Consult the self-skill first** — `skill_view(name='operant')` and its `references/cli-reference.md` document every management command; one read replaces many guesses.
+2. **Use `operant <cmd> --help` for syntax** — a single help call resolves flag uncertainty. NEVER read the operant Rust source to discover CLI syntax: it costs 10+ reads versus one help call.
+3. **Trust command output** — never re-run a command that already succeeded; verify with that command's own output before calling another tool.
+4. **Prefer the CLI over hand-editing TOML** — `operant config set`, `operant channel add`, `operant cron create` validate and persist atomically; manual TOML edits bypass validation and can silently drop keys.
+5. **Restore the baseline** — management tasks leave the system exactly as found: delete test jobs/channels, re-disable test platforms, stop test daemons, clear test credentials.";
 
 /// Response from the user for tool permission requests
 #[derive(Debug, Clone, PartialEq, Eq)]

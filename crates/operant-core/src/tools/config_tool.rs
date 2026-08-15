@@ -45,8 +45,11 @@ pub struct ConfigManageArgs {
     pub action: String,
     /// Dotted config key path, e.g. "agent.model" (get/set)
     pub key: Option<String>,
-    /// Value to assign (set only)
-    pub value: Option<String>,
+    /// Value to assign (set only). Accepts any JSON scalar — numbers and
+    /// booleans are stringified then type-coerced (bool → int → float →
+    /// string) exactly like `operant config set`, so passing `12` or
+    /// `"12"` both work without retries.
+    pub value: Option<Value>,
 }
 
 /// `config_manage` tool — inspect and modify operant's runtime configuration.
@@ -104,10 +107,17 @@ impl OperantTool for ConfigManageTool {
                 let Some(key) = parsed.key.as_deref().filter(|k| !k.is_empty()) else {
                     return ToolResult::error("config_manage", "set requires a 'key'");
                 };
-                let Some(value) = parsed.value.as_deref() else {
+                let Some(value) = parsed.value.as_ref() else {
                     return ToolResult::error("config_manage", "set requires a 'value'");
                 };
-                match set_config_value(key, value) {
+                let value_str = match value {
+                    Value::String(s) => s.clone(),
+                    Value::Null => {
+                        return ToolResult::error("config_manage", "set value cannot be null");
+                    }
+                    other => other.to_string(),
+                };
+                match set_config_value(key, &value_str) {
                     Ok(()) => ToolResult::success(
                         "config_manage",
                         json!({ "key": key, "value": value, "applied": true, "validated_against": "AppConfig" }),
@@ -364,5 +374,59 @@ mod tests {
             .await;
         assert!(result.success);
         assert!(result.content.contains("\"path\""));
+    }
+
+    #[tokio::test]
+    async fn set_accepts_numeric_and_string_values() {
+        let tool = ConfigManageTool;
+
+        // Models often emit a JSON number instead of a quoted string; both
+        // forms must set the same value without retry loops.
+        let result = tool
+            .execute(
+                serde_json::json!({
+                    "action": "set",
+                    "key": "agent.max_iterations",
+                    "value": 42,
+                }),
+                ToolContext::default(),
+            )
+            .await;
+        assert!(result.success, "numeric value rejected: {:?}", result.error);
+        assert_eq!(get_config_value("agent.max_iterations").unwrap(), 42);
+
+        let result = tool
+            .execute(
+                serde_json::json!({
+                    "action": "set",
+                    "key": "agent.model",
+                    "value": "gpt-5",
+                }),
+                ToolContext::default(),
+            )
+            .await;
+        assert!(result.success, "string value rejected: {:?}", result.error);
+        assert_eq!(
+            get_config_value("agent.model").unwrap(),
+            serde_json::json!("gpt-5")
+        );
+
+        // Unknown keys are rejected (deny_unknown_fields), never silently
+        // dropped — so the model sees a real error instead of a no-op.
+        let result = tool
+            .execute(
+                serde_json::json!({
+                    "action": "set",
+                    "key": "agent.totally_unknown_key_xyz",
+                    "value": "x",
+                }),
+                ToolContext::default(),
+            )
+            .await;
+        assert!(!result.success, "unknown key must error, got success");
+        assert!(
+            result.error.unwrap_or_default().contains("unknown field"),
+            "expected unknown-field error"
+        );
     }
 }

@@ -91,6 +91,10 @@ hermes*.db
 logs/.superpowers/
 
 # ---- tool-state / session artifacts (never commit) ----
+# skills runtime tracking (usage stats, curator scratch)
+skills/.usage.json
+skills/.usage.json.lock
+skills/.curator/
 .cortexkit/
 .contexty/
 .hive/

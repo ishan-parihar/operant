@@ -1088,7 +1088,16 @@ pub fn load_app_config(explicit: Option<&Path>) -> Result<LoadedConfig> {
         }
         match found {
             Some(path) => (parse_config_file(&path)?, Some(path)),
-            None => (AppConfig::default(), None),
+            None => {
+                // Nothing exists yet: fall back to defaults, but when
+                // OPERANT_CONFIG_DIR is set, still claim that isolated path
+                // as the config source so the `config_manage` tool and any
+                // persistence (e.g. `operant channel add`) target the
+                // isolated config home instead of the real `~/.operant`
+                // config. A later explicit persist creates the file there.
+                let source = operant_config_dir_override().map(|dir| dir.join("operant.toml"));
+                (AppConfig::default(), source)
+            }
         }
     };
 
@@ -1150,11 +1159,37 @@ pub fn ensure_default_mcp_servers(config: &mut AppConfig) {
     });
 }
 
+/// The `OPERANT_CONFIG_DIR` override (if set and non-empty), tilde-expanded.
+///
+/// Mirrors the schema layer's `default_config_dir()` so EVERY load path —
+/// CLI `run`/`gateway`/`cron`, the `config_manage` tool, and the gateway
+/// service — resolves to the same isolated config the user asked for
+/// instead of silently falling back to `~/.operant/operant.toml`.
+pub(crate) fn operant_config_dir_override() -> Option<PathBuf> {
+    let custom = std::env::var("OPERANT_CONFIG_DIR").ok()?;
+    let custom = custom.trim();
+    if custom.is_empty() {
+        return None;
+    }
+    if let Some(rest) = custom.strip_prefix("~/") {
+        return std::env::var("HOME")
+            .ok()
+            .map(|home| PathBuf::from(home).join(rest));
+    }
+    Some(PathBuf::from(custom))
+}
+
 pub fn default_config_paths() -> Vec<PathBuf> {
     let mut paths = vec![
         PathBuf::from("operant.toml"),
         PathBuf::from(".operant.toml"),
     ];
+
+    // Honor OPERANT_CONFIG_DIR (highest precedence after an explicit
+    // `--config`): `<dir>/operant.toml`.
+    if let Some(dir) = operant_config_dir_override() {
+        paths.push(dir.join("operant.toml"));
+    }
 
     if let Some(config_dir) = dirs::config_dir() {
         paths.push(config_dir.join("operant").join("config.toml"));

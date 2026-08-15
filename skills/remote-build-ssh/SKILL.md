@@ -207,3 +207,25 @@ ssh build-machine 'cd /path/to/project && cargo check --workspace'
 5. **For operant specifically**: `scripts/build-operant.sh` handles everything
 6. **Binary path**: `target/release/your-binary-name`
 7. **Copy binaries back** with `scp` (also needs ProxyCommand)
+
+## Stale Binary Detection (Critical)
+
+When a config file references fields that exist in the current **source code**
+but the **deployed binary** rejects them with `unknown field` errors, the deployed
+binary is stale. Always check the debug binary first:
+
+```bash
+# The debug binary at target/debug/ is often built from current source
+# and may accept config fields the deployed binary does not.
+./target/debug/operant channel list -c /path/to/config.toml
+
+# If the debug binary works, rebuild and deploy:
+source scripts/dev-env.sh
+cargo build --release -p operant-cli
+sudo cp target/release/operant /usr/local/bin/operant  # or ~/.cargo/bin/operant
+operant --version  # confirm version matches expectations
+```
+
+If `which operant` resolves to a stale binary (e.g. `~/.cargo/bin/operant` v0.1.4
+that lacks LCM fields added in source), either install the freshly-built binary
+to the correct location or use the full path to `target/debug/operant`.
