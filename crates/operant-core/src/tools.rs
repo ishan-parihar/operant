@@ -16,7 +16,6 @@ pub mod cdp_utils;
 pub mod checkpoint_tool;
 pub mod clarify_tool;
 pub mod code_execution;
-pub mod computer_use_tool;
 pub mod config_tool;
 pub mod cron_tool;
 pub mod datetime_tool;
@@ -79,7 +78,6 @@ pub use builtin::{
 pub use checkpoint_tool::{
     Checkpoint, CheckpointConfig, CheckpointManager, CheckpointTool, get_checkpoint_manager,
 };
-pub use computer_use_tool::ComputerUseTool;
 pub use config_tool::{ConfigManageArgs, ConfigManageTool};
 pub use cron_tool::CronTool;
 pub use discord_tool::{DiscordAdminTool, DiscordTool};

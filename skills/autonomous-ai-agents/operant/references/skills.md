@@ -29,5 +29,4 @@ Skills are markdown instruction packs (`SKILL.md`) that inject guidance into the
   - **Context/LCM**: `lcm_recall`, `lcm_recent`, `lcm_stats`, `lcm_assert`, `lcm_vector_recall`, `lcm_doctor`, `lcm_load_session`, `lcm_recall_round`
   - **Agentic**: `delegate_task`, `clarify`, `todo`, `kanban`, `cron`, `checkpoint`, `approval_request`, `notify`, `send_message`, `session_search`, `session_insights`, `vision_analyze`, `video_analyze`, `image_generate`, `text_to_speech`, `transcribe_audio`, `config_manage`, `datetime`, `timestamp`, `debug_env`, `debug_system`, `osv_check`, `learning_manage`, `tool_backend`, `echo`, `neutts_synthesize`
   - **Feishu**: `feishu_doc_read`, `feishu_drive`
-  - `computer_use` is macOS-only (cua-driver); it is registered only on macOS
 - Skills_guard scans on install for unsafe patterns (unpinned pip, rm -rf, etc.)

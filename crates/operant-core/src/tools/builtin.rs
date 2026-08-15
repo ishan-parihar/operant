@@ -21,8 +21,6 @@ pub use super::browser_tool::BrowserTool;
 pub use super::checkpoint_tool::CheckpointTool;
 pub use super::clarify_tool::ClarifyTool;
 pub use super::code_execution::CodeExecutionTool;
-#[cfg(target_os = "macos")]
-pub use super::computer_use_tool::ComputerUseTool;
 pub use super::config_tool::ConfigManageTool;
 pub use super::cron_tool::CronTool;
 pub use super::datetime_tool::{DateTimeTool, TimestampTool};
@@ -75,10 +73,6 @@ pub async fn register_builtin_tools(
 ) -> Result<()> {
     registry.register(CamofoxStateTool).await?;
     registry.register(BrowserTool).await?;
-    // Computer-use (macOS desktop control via cua-driver) is macOS-only;
-    // registered under cfg so it never appears as a dead tool on Linux/Windows.
-    #[cfg(target_os = "macos")]
-    registry.register(ComputerUseTool).await?;
     registry.register(CheckpointTool::new()).await?;
     registry.register(FileReadTool).await?;
     registry.register(FileWriteTool).await?;
