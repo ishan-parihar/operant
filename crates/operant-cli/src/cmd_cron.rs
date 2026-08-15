@@ -445,6 +445,15 @@ async fn cmd_status(config: &AppConfig) -> Result<()> {
 }
 
 async fn cmd_tick(config: &AppConfig) -> Result<()> {
+    // Global emergency stop (hermes estop parity): while engaged, the manual
+    // tick path refuses to dispatch — mirroring CronScheduler::tick(), which
+    // skips due jobs while paused. (iter-170)
+    if operant_core::estop::is_engaged() {
+        println!("⏸️ Operant is paused — cron dispatch is suspended.");
+        println!("   Resume with `operant resume`.");
+        return Ok(());
+    }
+
     let db = CronDb::init(config.database_path.clone()).context("Failed to open cron database")?;
     // Self-heal legacy schedules/next_run before checking due jobs.
     let healed = db
