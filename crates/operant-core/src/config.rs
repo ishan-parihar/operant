@@ -7,6 +7,11 @@ use serde::{Deserialize, Serialize};
 use crate::error::{Error, Result};
 use crate::platform;
 
+// Re-export the `[providers]` section types so consumers (CLI run path) can
+// name provider profiles without depending on operant-config directly.
+pub use operant_config::providers::ProvidersConfig;
+pub use operant_config::schema::{FallbackProviderConfig, ModelProviderConfig};
+
 static RUNTIME_CONFIG: OnceLock<RwLock<AppConfig>> = OnceLock::new();
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -35,6 +40,13 @@ pub struct AppConfig {
     pub moa: MoaSettings,
     pub checkpoints: CheckpointsSettings,
     pub database_path: PathBuf,
+    /// Provider profiles + ordered cross-provider fallback chain
+    /// (`[providers]`, hermes `fallback_providers` parity). Consumed by the
+    /// run path to build a [`crate::agent::provider_registry::ProviderRegistry`]
+    /// so auth/billing failures can switch providers; same-provider model
+    /// fallback is driven by `agent.fallback_models`.
+    #[serde(default)]
+    pub providers: operant_config::providers::ProvidersConfig,
 }
 
 impl Default for AppConfig {
@@ -65,6 +77,7 @@ impl Default for AppConfig {
             auxiliary_models: AuxiliaryModels::default(),
             moa: MoaSettings::default(),
             database_path,
+            providers: operant_config::providers::ProvidersConfig::default(),
         }
     }
 }
@@ -1806,5 +1819,52 @@ obscura_stealth = false
         restore_env("HERMES_STREAM", previous_stream);
         restore_env("HERMES_AUTONOMOUS_INTERVAL", previous_interval);
         restore_env("HERMES_AUTONOMOUS_STATUS", previous_status);
+    }
+
+    #[test]
+    fn providers_section_roundtrips_into_app_config() {
+        // Hermes `fallback_providers` parity: the run path must be able to
+        // read `[providers]` profiles + the ordered fallback chain from
+        // operant.toml (this was previously only loaded by the channels/ACP
+        // config path, never by AppConfig).
+        let raw = r#"
+[client]
+base_url = "https://zen.example/v1"
+api_key = "sk-test"
+
+[agent]
+model = "laguna-s-2.1-free"
+fallback_models = ["deepseek-v4-flash-free"]
+
+[providers.models.opencode-zen]
+base_url = "https://zen.example/v1"
+model = "deepseek-v4-flash-free"
+
+[[providers.fallback_chain]]
+provider = "opencode-zen"
+model = "deepseek-v4-flash-free"
+"#;
+        let parsed =
+            parse_config_str(raw, std::path::Path::new("providers.toml")).expect("valid TOML");
+
+        // Profiles load.
+        assert!(parsed.providers.models.contains_key("opencode-zen"));
+        assert_eq!(
+            parsed.providers.models["opencode-zen"].model.as_deref(),
+            Some("deepseek-v4-flash-free")
+        );
+        // Ordered chain loads in order.
+        assert_eq!(parsed.providers.fallback_chain.len(), 1);
+        assert_eq!(parsed.providers.fallback_chain[0].provider, "opencode-zen");
+        assert_eq!(
+            parsed.providers.fallback_chain[0].model,
+            "deepseek-v4-flash-free"
+        );
+        // Same-provider model fallback loads.
+        assert_eq!(parsed.agent.fallback_models, vec!["deepseek-v4-flash-free"]);
+        // Absent section defaults to empty — never blocks boot.
+        let minimal = parse_config_str("[agent]\nmodel = \"x\"\n", Path::new("min.toml")).unwrap();
+        assert!(minimal.providers.models.is_empty());
+        assert!(minimal.providers.fallback_chain.is_empty());
     }
 }

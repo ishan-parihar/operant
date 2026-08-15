@@ -35,6 +35,9 @@ schemars = { workspace = true }
 toml = { workspace = true }
 serde_yaml = "0.9"
 
+# Provider profiles + cross-provider fallback chain ([providers] section)
+operant-config = { path = "../operant-config" }
+
 # Error handling
 thiserror = { workspace = true }
 anyhow = { workspace = true }

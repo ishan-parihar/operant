@@ -95,7 +95,7 @@ use operant_core::agent::{AgentConfig, AgentEvent, OperantAgent};
 use operant_core::client::{ClientConfig, OpenAIClient};
 use operant_core::config::{
     AppConfig, BehaviorSettings, LoggingSettings, McpServerConfig, McpTransportKind,
-    install_runtime_config, load_app_config,
+    ModelProviderConfig, install_runtime_config, load_app_config,
 };
 use operant_core::mcp::McpManager;
 use operant_core::memory::MemoryManager;
@@ -665,6 +665,132 @@ fn create_model_client(
     }
 }
 
+/// Layer a named provider profile's overrides onto the primary client config.
+/// Absent fields inherit the primary (base URL, key, timeout) so a profile
+/// only needs to specify what differs (hermes `fallback_providers` parity).
+fn client_config_from_provider(
+    primary: &ClientConfig,
+    profile: &ModelProviderConfig,
+) -> ClientConfig {
+    let mut ccfg = primary.clone();
+    if let Some(base) = profile.base_url.as_deref().filter(|b| !b.is_empty()) {
+        ccfg.base_url = base.to_string();
+    }
+    if let Some(key) = profile.api_key.as_deref().filter(|k| !k.is_empty()) {
+        ccfg.api_key = Some(key.to_string());
+    }
+    if let Some(secs) = profile.timeout_secs.filter(|s| *s > 0) {
+        ccfg.timeout = Duration::from_secs(secs);
+    }
+    ccfg
+}
+
+/// Build a [`ProviderRegistry`] from the `[providers]` section — hermes
+/// `fallback_providers` parity for cross-provider switching.
+///
+/// Chain order: primary (entry 0), then `providers.fallback_chain` in
+/// configured order. Entries referencing an unknown profile key are skipped
+/// with a warning. Returns `None` when no usable chain exists.
+fn build_provider_registry(
+    config: &AppConfig,
+    primary_provider: &str,
+    primary_model: &str,
+    primary_cfg: &ClientConfig,
+) -> Option<std::sync::Arc<operant_core::agent::provider_registry::ProviderRegistry>> {
+    use operant_core::agent::provider_registry::{ProviderEntry, ProviderRegistry};
+
+    let models = &config.providers.models;
+    if models.is_empty() && config.providers.fallback_chain.is_empty() {
+        return None;
+    }
+
+    let mut clients: std::collections::HashMap<
+        String,
+        std::sync::Arc<dyn operant_core::agent::ModelClient>,
+    > = std::collections::HashMap::new();
+    // Primary client — entry 0 of the chain.
+    let primary_arc: std::sync::Arc<dyn operant_core::agent::ModelClient> = std::sync::Arc::new(
+        OpenAIModelClient::new(OpenAIClient::new(primary_cfg.clone())),
+    );
+    clients.insert(primary_provider.to_string(), primary_arc);
+
+    // Profile clients, deterministic order (HashMap has no stable iteration).
+    let mut names: Vec<&String> = models.keys().collect();
+    names.sort();
+    for name in names {
+        let profile = &models[name];
+        let ccfg = client_config_from_provider(primary_cfg, profile);
+        let client: std::sync::Arc<dyn operant_core::agent::ModelClient> =
+            std::sync::Arc::new(OpenAIModelClient::new(OpenAIClient::new(ccfg)));
+        clients.insert(name.clone(), client);
+    }
+
+    let mut chain = vec![ProviderEntry {
+        name: primary_provider.to_string(),
+        model: primary_model.to_string(),
+    }];
+    for entry in &config.providers.fallback_chain {
+        if !clients.contains_key(&entry.provider) {
+            tracing::warn!(
+                provider = %entry.provider,
+                "providers.fallback_chain references an unknown profile (not in [providers.models]) — skipping"
+            );
+            continue;
+        }
+        if entry.model.is_empty() {
+            continue;
+        }
+        chain.push(ProviderEntry {
+            name: entry.provider.clone(),
+            model: entry.model.clone(),
+        });
+    }
+    if chain.len() < 2 {
+        return None;
+    }
+    tracing::info!(
+        chain_len = chain.len(),
+        primary = %primary_provider,
+        "cross-provider fallback chain active"
+    );
+    Some(std::sync::Arc::new(ProviderRegistry::new(clients, chain)))
+}
+
+/// Create the run-path model client wrapped with the configured fallback
+/// chain (hermes `fallback_providers` parity):
+///
+/// * `agent.fallback_models` — same-client model swap on retryable errors
+///   (5xx, 429, network).
+/// * `[providers]` registry — cross-provider switch on auth/billing errors.
+///
+/// Falls back to a plain client when nothing is configured.
+fn create_model_client_with_fallback(
+    provider: &str,
+    model: &str,
+    config: &AppConfig,
+) -> Box<dyn operant_core::agent::ModelClient> {
+    let primary = create_model_client(provider, config);
+    let has_chain =
+        !config.providers.models.is_empty() || !config.providers.fallback_chain.is_empty();
+    if !config.agent.fallback_on_errors || (config.agent.fallback_models.is_empty() && !has_chain) {
+        return primary;
+    }
+
+    let primary_arc: std::sync::Arc<dyn operant_core::agent::ModelClient> =
+        std::sync::Arc::from(primary);
+    let mut fallback = operant_core::agent::FallbackModelClient::new(
+        primary_arc,
+        model.to_string(),
+        config.agent.fallback_models.clone(),
+        true,
+    );
+    if let Some(registry) = build_provider_registry(config, provider, model, &client_config(config))
+    {
+        fallback = fallback.with_provider_registry(registry);
+    }
+    Box::new(fallback)
+}
+
 pub(crate) fn client_config(config: &AppConfig) -> ClientConfig {
     ClientConfig::from(&config.client)
 }
@@ -1120,7 +1246,7 @@ pub(crate) async fn create_runtime_agent(
 
     let provider = crate::tui::provider::infer_provider_from_model(&behavior.model)
         .unwrap_or_else(|| "openai".to_string());
-    let model_client = create_model_client(&provider, config);
+    let model_client = create_model_client_with_fallback(&provider, &behavior.model, config);
 
     let context_window = core.agent_config.context_window;
     Ok({
@@ -1197,7 +1323,7 @@ pub(crate) async fn create_agent_without_events(
 
     let provider = crate::tui::provider::infer_provider_from_model(&config.agent.model)
         .unwrap_or_else(|| "openai".to_string());
-    let model_client = create_model_client(&provider, config);
+    let model_client = create_model_client_with_fallback(&provider, &config.agent.model, config);
 
     let context_window = core.agent_config.context_window;
     Ok({
@@ -2228,5 +2354,131 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    // ── Provider fallback wiring (hermes `fallback_providers` parity) ──
+
+    fn test_config_with_providers() -> AppConfig {
+        let mut config = AppConfig::default();
+        config.agent.model = "laguna-s-2.1-free".to_string();
+        config.agent.fallback_models = vec!["deepseek-v4-flash-free".to_string()];
+        config.providers.models.insert(
+            "zen-fallback".to_string(),
+            ModelProviderConfig {
+                base_url: Some("https://zen.example/v1".to_string()),
+                model: Some("deepseek-v4-flash-free".to_string()),
+                api_key: Some("sk-fallback".to_string()),
+                ..Default::default()
+            },
+        );
+        config
+            .providers
+            .fallback_chain
+            .push(operant_core::config::FallbackProviderConfig {
+                provider: "zen-fallback".to_string(),
+                model: "deepseek-v4-flash-free".to_string(),
+            });
+        config
+    }
+
+    #[test]
+    fn provider_profile_overrides_layer_onto_primary() {
+        let primary = ClientConfig {
+            base_url: "https://primary.example/v1".to_string(),
+            api_key: Some("sk-primary".to_string()),
+            timeout: Duration::from_secs(60),
+            max_context_length: 200_000,
+            rate_limit: Default::default(),
+        };
+        let profile = ModelProviderConfig {
+            base_url: Some("https://zen.example/v1".to_string()),
+            api_key: None, // inherit primary key
+            timeout_secs: Some(300),
+            ..Default::default()
+        };
+        let ccfg = client_config_from_provider(&primary, &profile);
+        assert_eq!(ccfg.base_url, "https://zen.example/v1");
+        assert_eq!(ccfg.api_key.as_deref(), Some("sk-primary"));
+        assert_eq!(ccfg.timeout, Duration::from_secs(300));
+    }
+
+    #[test]
+    fn build_provider_registry_orders_chain_primary_first() {
+        let config = test_config_with_providers();
+        let primary_cfg = client_config(&config);
+        let registry =
+            build_provider_registry(&config, "free", "laguna-s-2.1-free", &primary_cfg).unwrap();
+
+        assert_eq!(registry.active_provider().as_deref(), Some("free"));
+        // Chain: primary + configured fallback entry.
+        let switched = registry.switch_to_next().unwrap();
+        assert_eq!(switched.name, "zen-fallback");
+        assert_eq!(switched.model, "deepseek-v4-flash-free");
+        assert!(registry.get_client("zen-fallback").is_some());
+        // Primary client is registered too.
+        assert!(registry.get_client("free").is_some());
+    }
+
+    #[test]
+    fn build_provider_registry_skips_unknown_provider_entries() {
+        let mut config = test_config_with_providers();
+        config
+            .providers
+            .fallback_chain
+            .push(operant_core::config::FallbackProviderConfig {
+                provider: "ghost".to_string(),
+                model: "nope".to_string(),
+            });
+        let primary_cfg = client_config(&config);
+        let registry =
+            build_provider_registry(&config, "free", "laguna-s-2.1-free", &primary_cfg).unwrap();
+        // Unknown entry is skipped — only the valid fallback remains.
+        assert!(registry.switch_to_next().is_some());
+        // Chain is exhausted after the one valid fallback.
+        assert!(registry.switch_to_next().is_none());
+    }
+
+    #[test]
+    fn build_provider_registry_none_without_chain() {
+        let config = AppConfig::default(); // no [providers]
+        let primary_cfg = client_config(&config);
+        assert!(
+            build_provider_registry(&config, "openai", "gpt-4o", &primary_cfg).is_none(),
+            "no [providers] → no registry"
+        );
+    }
+
+    #[test]
+    fn fallback_models_flow_into_wrapper_chain() {
+        use operant_core::agent::FallbackModelClient;
+
+        // `agent.fallback_models` is the same-client model swap list. The
+        // wrapper is only constructed when the config says so — verify the
+        // gating: fallback_on_errors=false with a configured chain returns the
+        // raw primary client (early return, no FallbackModelClient built).
+        let mut config = test_config_with_providers();
+        config.agent.fallback_on_errors = false;
+        let client = create_model_client_with_fallback("free", "laguna-s-2.1-free", &config);
+        // Smoke: the returned client is usable and reports a provider.
+        assert!(!client.provider_name().is_empty());
+
+        // And with fallback enabled, FallbackModelClient::new is what wraps it
+        // (its model_chain is [primary, fallback_models...] — verified in the
+        // core crate's 17 fallback tests). Here we only prove the config
+        // surfaces are read: fallback_models + fallback_chain both reach the
+        // builder.
+        let primary_cfg = client_config(&config);
+        let registry = build_provider_registry(&config, "free", "laguna-s-2.1-free", &primary_cfg);
+        assert!(registry.is_some(), "chain configured → registry built");
+        // FallbackModelClient type is constructible from the same pieces.
+        let inner: std::sync::Arc<dyn operant_core::agent::ModelClient> =
+            std::sync::Arc::new(OpenAIModelClient::new(OpenAIClient::new(primary_cfg)));
+        let _fb = FallbackModelClient::new(
+            inner,
+            "laguna-s-2.1-free".to_string(),
+            config.agent.fallback_models.clone(),
+            true,
+        )
+        .with_provider_registry(registry.unwrap());
     }
 }

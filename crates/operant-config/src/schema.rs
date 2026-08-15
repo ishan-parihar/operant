@@ -6330,6 +6330,31 @@ pub struct ModelRouteConfig {
     pub api_key: Option<String>,
 }
 
+// ── Cross-provider fallback chain ──────────────────────────────
+
+/// One entry in the ordered cross-provider fallback chain (hermes
+/// `fallback_providers` parity).
+///
+/// `provider` names a profile key from `[providers.models]`; `model` is the
+/// model identifier to try with that provider when the primary fails with an
+/// auth/billing error (cross-provider switch) — or, when `provider` matches
+/// the primary provider, the model is folded into `agent.fallback_models`
+/// (same-client model swap on 5xx/429/network errors).
+///
+/// ```toml
+/// [[providers.fallback_chain]]
+/// provider = "opencode-zen"
+/// model = "deepseek-v4-flash-free"
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema-export", derive(schemars::JsonSchema))]
+pub struct FallbackProviderConfig {
+    /// Provider profile name — must match a key in `[providers.models]`.
+    pub provider: String,
+    /// Model identifier to send with that provider.
+    pub model: String,
+}
+
 // ── Embedding routing ───────────────────────────────────────────
 
 /// Route an embedding hint to a specific provider + model.
@@ -12742,6 +12767,7 @@ auto_save = true
             schema_version: crate::migration::CURRENT_SCHEMA_VERSION,
             providers: crate::providers::ProvidersConfig {
                 fallback: Some("openrouter".into()),
+                fallback_chain: Vec::new(),
                 models: {
                     let mut m = HashMap::new();
                     m.insert(

@@ -31,6 +31,13 @@ max_healing_attempts = 3
 show_reasoning = true
 tool_progress = "auto"
 context_compression = false
+# Same-provider model fallback (hermes `fallback_providers` parity, same
+# client): when the primary model fails with a retryable error (5xx, 429,
+# network), the agent retries each fallback model in order on the SAME client
+# (provider/base URL/key). Cross-provider fallback lives in `[providers]`
+# below. Both are wired through FallbackModelClient in the run path.
+# fallback_models = ["gpt-4o-mini", "gpt-3.5-turbo"]
+# fallback_on_errors = true
 # Context engine used to assemble the per-call message list (hermes-lcm parity):
 #   - "compact" (default): deterministic decay + lossy eviction when over budget
 #   - "lcm": lossless SQLite DAG + fresh-tail (D0) assembly; older messages are
@@ -320,3 +327,31 @@ provider = "igs"
 
 # [auxiliary_models]
 # Optional auxiliary model configurations for MoA / side-LLM tasks.
+
+# [providers]
+# Named provider profiles + ordered cross-provider fallback chain (hermes
+# `fallback_providers` parity). Used by the run path to build a
+# ProviderRegistry: when the primary provider fails with an auth/billing
+# error, the agent switches to the next profile in `fallback_chain` (anti-
+# thrash cooldowns apply). Entries referencing an unknown profile key are
+# skipped with a warning. Same-provider model swaps are configured with
+# `agent.fallback_models` above.
+#
+# [providers.models.opencode-zen]
+# base_url = "https://zen.example/v1"
+# api_key = "..."
+# model = "deepseek-v4-flash-free"
+# timeout_secs = 180
+#
+# [providers.models.gemini]
+# base_url = "https://generativelanguage.googleapis.com/v1beta/openai"
+# api_key = "..."
+# model = "gemini-2.5-flash"
+#
+# [[providers.fallback_chain]]
+# provider = "opencode-zen"
+# model = "deepseek-v4-flash-free"
+#
+# [[providers.fallback_chain]]
+# provider = "gemini"
+# model = "gemini-2.5-flash"

@@ -4815,6 +4815,7 @@ dependencies = [
  "image",
  "kokoro-tiny",
  "mockito",
+ "operant-config",
  "pin-project",
  "regex",
  "reqwest",

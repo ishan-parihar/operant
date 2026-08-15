@@ -4,7 +4,9 @@ use operant_macros::Configurable;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-use super::schema::{EmbeddingRouteConfig, ModelProviderConfig, ModelRouteConfig};
+use super::schema::{
+    EmbeddingRouteConfig, FallbackProviderConfig, ModelProviderConfig, ModelRouteConfig,
+};
 
 /// Top-level `[providers]` section. Wraps model provider profiles, routing rules,
 /// and an optional fallback reference.
@@ -25,6 +27,13 @@ pub struct ProvidersConfig {
     /// Model routing rules — route `hint:<name>` to specific provider+model combos.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub model_routes: Vec<ModelRouteConfig>,
+
+    /// Ordered cross-provider fallback chain (hermes `fallback_providers`
+    /// parity). Tried strictly in order after the primary provider fails.
+    /// Entries referencing an unknown profile key (not in `models`) are
+    /// skipped with a warning at runtime.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fallback_chain: Vec<FallbackProviderConfig>,
 
     /// Embedding routing rules — route `hint:<name>` to specific provider+model combos.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
