@@ -666,6 +666,8 @@ impl Database {
             params![session_id],
         )
         .map_err(|e| Error::Agent(format!("Failed to update session message_count: {}", e)))?;
+        // Auto-title the session from its first user message (G1 parity).
+        self.maybe_auto_title_session(&tx, session_id, role, content)?;
         tx.commit()
             .map_err(|e| Error::Agent(format!("Failed to commit message: {}", e)))?;
         Ok(())
@@ -730,6 +732,12 @@ impl Database {
                 params![message.session_id],
             )
             .map_err(|e| Error::Agent(format!("Failed to update message_count: {}", e)))?;
+        }
+        // Auto-title the session from its first user message (G1 parity).
+        if message.role == "user"
+            && let Some(content) = message.content.as_deref()
+        {
+            self.maybe_auto_title_session(&tx, &message.session_id, &message.role, content)?;
         }
         tx.commit()
             .map_err(|e| Error::Agent(format!("Failed to commit message: {}", e)))?;
@@ -1501,6 +1509,70 @@ impl Database {
             params![title, now, session_id],
         )
         .map_err(|e| Error::Agent(format!("Failed to update session title: {}", e)))?;
+        Ok(())
+    }
+
+    /// Generate a deterministic session title from the first user message
+    /// (hermes `title_generator.py` parity — no LLM round-trip). Strips
+    /// markdown/code-fence noise, collapses whitespace, truncates to a
+    /// display-friendly length.
+    pub fn generate_session_title(content: &str) -> String {
+        const MAX_TITLE_CHARS: usize = 60;
+
+        let first_line = content
+            .lines()
+            .map(str::trim)
+            .find(|line| {
+                !line.is_empty()
+                    && !line.starts_with("```")
+                    && !line.starts_with("~~~")
+                    && !line
+                        .trim_start_matches(|c| "#*->`•".contains(c))
+                        .trim()
+                        .is_empty()
+            })
+            .map(|line| {
+                line.trim_start_matches(|c| "#*->`•".contains(c))
+                    .split_whitespace()
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            })
+            .unwrap_or_default();
+
+        if first_line.is_empty() {
+            return "Untitled session".to_string();
+        }
+
+        let mut chars = first_line.chars();
+        let truncated: String = chars.by_ref().take(MAX_TITLE_CHARS).collect();
+        if chars.next().is_some() {
+            format!("{truncated}…")
+        } else {
+            truncated
+        }
+    }
+
+    /// Auto-generate a session title from the first user message when the
+    /// session still has no title (hermes auto-title parity). Guarded by the
+    /// `WHERE title IS NULL OR trim(title) = ''` clause so a concurrent
+    /// manual rename is never overwritten.
+    fn maybe_auto_title_session(
+        &self,
+        conn: &Connection,
+        session_id: &str,
+        role: &str,
+        content: &str,
+    ) -> Result<()> {
+        if role != "user" || content.trim().is_empty() {
+            return Ok(());
+        }
+        let generated = Self::generate_session_title(content);
+        conn.execute(
+            "UPDATE sessions SET title = ?1
+             WHERE id = ?2 AND (title IS NULL OR trim(title) = '')",
+            params![generated, session_id],
+        )
+        .map_err(|e| Error::Agent(format!("Failed to auto-title session: {}", e)))?;
         Ok(())
     }
 
@@ -3205,5 +3277,97 @@ mod tests {
         let sessions = db.list_sessions(10).unwrap();
         let s = sessions.iter().find(|s| s.id == "test-session").unwrap();
         assert_eq!(s.title.as_deref(), Some(""));
+    }
+
+    // === Auto session-title generation (G1) ===
+
+    #[test]
+    fn generate_session_title_extracts_first_line() {
+        let title = Database::generate_session_title(
+            "Fix the bug in error handling\n\nIt happens when the retry loop exhausts.",
+        );
+        assert_eq!(title, "Fix the bug in error handling");
+    }
+
+    #[test]
+    fn generate_session_title_strips_markdown_and_code_fences() {
+        let title = Database::generate_session_title(
+            "```rust\n## Review the PR\n\n- check the diff\n- run tests",
+        );
+        assert_eq!(title, "Review the PR");
+    }
+
+    #[test]
+    fn generate_session_title_truncates_long_messages() {
+        let long = "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor";
+        let title = Database::generate_session_title(long);
+        assert!(title.chars().count() <= 61);
+        assert!(title.ends_with('…'));
+    }
+
+    #[test]
+    fn generate_session_title_empty_content() {
+        assert_eq!(
+            Database::generate_session_title("   \n\n"),
+            "Untitled session"
+        );
+    }
+
+    #[test]
+    fn save_message_auto_titles_session_on_first_user_message() {
+        let db = test_db();
+        db.save_session("auto-title", None, "local", "t1", "t1")
+            .unwrap();
+        db.save_message("auto-title", "user", "Investigate the failing CI job", "t2")
+            .unwrap();
+        let sessions = db.list_sessions(10).unwrap();
+        let s = sessions.iter().find(|s| s.id == "auto-title").unwrap();
+        assert_eq!(s.title.as_deref(), Some("Investigate the failing CI job"));
+    }
+
+    #[test]
+    fn save_message_does_not_overwrite_existing_title() {
+        let db = test_db();
+        db.save_session("auto-title-2", Some("Manual Title"), "local", "t1", "t1")
+            .unwrap();
+        db.save_message("auto-title-2", "user", "A different first message", "t2")
+            .unwrap();
+        let sessions = db.list_sessions(10).unwrap();
+        let s = sessions.iter().find(|s| s.id == "auto-title-2").unwrap();
+        assert_eq!(s.title.as_deref(), Some("Manual Title"));
+    }
+
+    #[test]
+    fn save_message_assistant_does_not_auto_title() {
+        let db = test_db();
+        db.save_session("auto-title-3", None, "local", "t1", "t1")
+            .unwrap();
+        db.save_message("auto-title-3", "assistant", "Let me help.", "t2")
+            .unwrap();
+        let sessions = db.list_sessions(10).unwrap();
+        let s = sessions.iter().find(|s| s.id == "auto-title-3").unwrap();
+        assert!(s.title.is_none());
+    }
+
+    #[test]
+    fn save_message_full_auto_titles_user_message() {
+        let db = test_db();
+        db.save_session("auto-title-4", None, "local", "t1", "t1")
+            .unwrap();
+        let msg = MessageData {
+            id: 0,
+            session_id: "auto-title-4".to_string(),
+            role: "user".to_string(),
+            content: Some("Write a Python script to parse the CSV".to_string()),
+            timestamp: "t2".to_string(),
+            ..Default::default()
+        };
+        db.save_message_full(&msg).unwrap();
+        let sessions = db.list_sessions(10).unwrap();
+        let s = sessions.iter().find(|s| s.id == "auto-title-4").unwrap();
+        assert_eq!(
+            s.title.as_deref(),
+            Some("Write a Python script to parse the CSV")
+        );
     }
 }
