@@ -92,7 +92,8 @@ pub use process_tool::ProcessTool;
 pub use send_message_tool::SendMessageTool;
 pub use session_search_tool::{SessionMeta, SessionResult, SessionSearchTool};
 pub use skills_tool::{
-    SkillManageTool, SkillTreeValidation, SkillViewTool, SkillsTool, validate_skill_tree,
+    SkillManageTool, SkillMeta, SkillTreeValidation, SkillViewTool, SkillsTool,
+    collect_skill_children, validate_skill_tree,
 };
 pub use spotify_tool::{
     SpotifyAlbumsTool, SpotifyDevicesTool, SpotifyLibraryTool, SpotifyPlaybackTool,

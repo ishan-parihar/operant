@@ -302,17 +302,17 @@ fn validate_content_size(content: &str, label: &str) -> Option<String> {
 // ── Skill discovery helpers ──────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize)]
-struct SkillMeta {
-    name: String,
-    description: String,
-    category: Option<String>,
+pub struct SkillMeta {
+    pub name: String,
+    pub description: String,
+    pub category: Option<String>,
     /// Child skill nodes (meta-skill routing surface). Populated when the
     /// skill directory contains nested skill directories of its own.
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    children: Vec<SkillMeta>,
+    pub children: Vec<SkillMeta>,
     /// Path relative to the parent skill root (meta-skill children only).
     #[serde(skip_serializing_if = "Option::is_none")]
-    path: Option<String>,
+    pub path: Option<String>,
 }
 
 fn find_skills_in_dir(skills_dir: &Path) -> Vec<SkillMeta> {
@@ -741,7 +741,7 @@ fn collect_map_nodes(
 /// resource and hidden directories) that contains its own `SKILL.md`. Returns
 /// paths relative to `skill_dir` so the model can route with
 /// `skill_view(name='<parent>/<child>')`.
-fn collect_skill_children(skill_dir: &Path) -> Vec<SkillMeta> {
+pub fn collect_skill_children(skill_dir: &Path) -> Vec<SkillMeta> {
     fn walk(dir: &Path, base: &Path, out: &mut Vec<SkillMeta>) {
         let Ok(entries) = fs::read_dir(dir) else {
             return;

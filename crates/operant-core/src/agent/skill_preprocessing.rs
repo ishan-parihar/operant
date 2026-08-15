@@ -226,16 +226,78 @@ pub fn build_skill_invocation_message(name: &str, user_instruction: &str) -> Opt
 /// explicit skills root directory (e.g. the user's configured
 /// `skills.root_dir`), so the expansion honors config instead of always
 /// defaulting to the platform home.
+/// Resolve a skill directory from a name or relative path, mirroring the
+/// recursive resolution `skill_view`/`skills_list` use so `/skill` invocation
+/// behaves identically across layouts:
+///
+/// 1. Direct join — flat seeded layout (`components/heroes` ->
+///    `<root>/components/heroes`).
+/// 2. Path-segment walk — categorized layout where the router sits under
+///    category dirs (`creative/website-design/components/heroes`), so the
+///    caller can pass the relative path from the skills root.
+/// 3. Leaf-name recursive search — a bare name (`heroes`) resolves to the
+///    first skill with that name anywhere in the tree.
+fn resolve_skill_dir(skills_dir: &std::path::Path, name: &str) -> Option<std::path::PathBuf> {
+    // 1. Direct join (fast path — flat seeded layout).
+    let direct = skills_dir.join(name);
+    if direct.join("SKILL.md").is_file() {
+        return Some(direct);
+    }
+    // 2. Path-segment walk from the skills root (categorized layout).
+    if name.contains('/') {
+        let mut cur = skills_dir.to_path_buf();
+        let mut ok = true;
+        for seg in name.split('/') {
+            if seg.is_empty() || seg == "." || seg == ".." {
+                ok = false;
+                break;
+            }
+            cur = cur.join(seg);
+        }
+        if ok && cur.join("SKILL.md").is_file() {
+            return Some(cur);
+        }
+    }
+    // 3. Leaf-name recursive search (bare names anywhere in the tree).
+    find_skill_by_name(skills_dir, name)
+}
+
+/// Depth-first search for a directory named `name` that carries a SKILL.md.
+fn find_skill_by_name(dir: &std::path::Path, name: &str) -> Option<std::path::PathBuf> {
+    if !dir.is_dir() {
+        return None;
+    }
+    let entries = std::fs::read_dir(dir).ok()?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let dir_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        if dir_name.starts_with('.') || dir_name == "node_modules" || dir_name == ".archive" {
+            continue;
+        }
+        if dir_name == name && path.join("SKILL.md").is_file() {
+            return Some(path);
+        }
+        if let Some(found) = find_skill_by_name(&path, name) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+/// Like [`build_skill_invocation_message`] but resolves the skill from an
+/// explicit skills root directory (e.g. the user's configured
+/// `skills.root_dir`), so the expansion honors config instead of always
+/// defaulting to the platform home.
 pub fn build_skill_invocation_message_in(
     skills_dir: &std::path::Path,
     name: &str,
     user_instruction: &str,
 ) -> Option<String> {
-    let skill_dir = skills_dir.join(name);
+    let skill_dir = resolve_skill_dir(skills_dir, name)?;
     let skill_md = skill_dir.join("SKILL.md");
-    if !skill_md.exists() {
-        return None;
-    }
     let raw = std::fs::read_to_string(&skill_md).ok()?;
 
     // Strip YAML frontmatter (if any) before preprocessing/injection.

@@ -4,7 +4,7 @@ use console::style;
 use dialoguer::Confirm;
 use operant_core::config::AppConfig;
 use operant_core::skills::SkillManager;
-use operant_core::tools::validate_skill_tree;
+use operant_core::tools::{SkillMeta, collect_skill_children, validate_skill_tree};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tempfile as _;
@@ -12,8 +12,12 @@ use tempfile as _;
 /// Manage installed skills.
 #[derive(Debug, Clone, Subcommand)]
 pub enum SkillsSubcommand {
-    /// List all installed skills
-    List,
+    /// List all installed skills (--tree shows the meta-skill hierarchy)
+    List {
+        /// Render the full meta-skill hierarchy (routers with nested children)
+        #[arg(long)]
+        tree: bool,
+    },
     /// Search available skills by name or description
     Search {
         /// Search query (matched case-insensitively against name and description)
@@ -157,7 +161,7 @@ pub async fn handle_skills_command(
     json: bool,
 ) -> Result<()> {
     match cmd {
-        SkillsSubcommand::List => list_skills(config, json),
+        SkillsSubcommand::List { tree } => list_skills(config, json, tree),
         SkillsSubcommand::Search { query } => search_skills(config, &query),
         SkillsSubcommand::Inspect { id } => inspect_skill(config, &id),
         SkillsSubcommand::Install {
@@ -445,7 +449,7 @@ async fn handle_market_command(_config: &AppConfig, cmd: MarketCommand) -> Resul
 // Handlers
 // ---------------------------------------------------------------------------
 
-fn list_skills(config: &AppConfig, json: bool) -> Result<()> {
+fn list_skills(config: &AppConfig, json: bool, tree: bool) -> Result<()> {
     let skills_dir = &config.skills.root_dir;
 
     if !skills_dir.exists() {
@@ -454,6 +458,29 @@ fn list_skills(config: &AppConfig, json: bool) -> Result<()> {
         } else {
             println!("No skills installed.");
         }
+        return Ok(());
+    }
+
+    // Tree mode: render the full meta-skill hierarchy — routers with their
+    // nested children — so every node (router AND leaf) is visible and
+    // invocable, not just the flat top level.
+    if tree {
+        let roots = collect_skill_children(skills_dir);
+        if roots.is_empty() {
+            println!("No skills installed.");
+            return Ok(());
+        }
+        if json {
+            println!("{}", serde_json::to_string_pretty(&roots)?);
+            return Ok(());
+        }
+        let mut total: usize = 0;
+        println!("Skill tree:");
+        for root in &roots {
+            total += render_tree_node(root, 1);
+        }
+        println!();
+        println!("{} skill node(s) total.", total);
         return Ok(());
     }
 
@@ -485,6 +512,25 @@ fn list_skills(config: &AppConfig, json: bool) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Render one meta-skill tree node with indentation; returns node count
+/// including all descendants.
+fn render_tree_node(node: &SkillMeta, depth: usize) -> usize {
+    let indent = "  ".repeat(depth);
+    let has_children = !node.children.is_empty();
+    let marker = if has_children { "▸" } else { "·" };
+    let path = node
+        .path
+        .as_deref()
+        .map(|p| format!(" ({})", p))
+        .unwrap_or_default();
+    println!("{}{} {}{}", indent, marker, node.name, path);
+    let mut count = 1;
+    for child in &node.children {
+        count += render_tree_node(child, depth + 1);
+    }
+    count
 }
 
 fn search_skills(config: &AppConfig, query: &str) -> Result<()> {
