@@ -3,6 +3,8 @@
 //! Provides unified messaging interface across multiple platforms including
 //! Telegram, Discord, Slack, WhatsApp, and more.
 
+pub mod lifecycle;
+
 use async_trait::async_trait;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -19,6 +21,7 @@ use uuid::Uuid;
 
 use crate::config::runtime_config;
 use crate::error::{Error, Result};
+use crate::gateway::lifecycle::{DeliveryLedger, MirrorRule, SessionStallTracker, TurnLease};
 use crate::gateway_markdown::{markdown_to_slack_mrkdwn, markdown_to_telegram_html};
 use crate::gateway_session::{PersistentSessionStore, SessionSource};
 
@@ -677,6 +680,17 @@ pub struct Gateway {
     start_time: Instant,
     start_time_formatted: String,
     messages_processed: Arc<AtomicU64>,
+    /// Per-session turn lease (hermes `gateway/turn_lease.py` parity):
+    /// only one in-flight agent turn per session key.
+    turn_lease: TurnLease,
+    /// Last-activity tracker for stall detection (hermes
+    /// `gateway/session_stall.py` parity).
+    stall_tracker: SessionStallTracker,
+    /// Bounded record of outbound deliveries (hermes
+    /// `gateway/delivery_ledger.py` parity).
+    delivery_ledger: DeliveryLedger,
+    /// Response mirror rules (hermes `gateway/mirror.py` parity).
+    mirror_rules: Vec<MirrorRule>,
 }
 
 /// Handler for incoming messages from any platform
@@ -700,6 +714,10 @@ impl Gateway {
             start_time: Instant::now(),
             start_time_formatted: Utc::now().to_rfc3339(),
             messages_processed: Arc::new(AtomicU64::new(0)),
+            turn_lease: TurnLease::new(),
+            stall_tracker: SessionStallTracker::new(),
+            delivery_ledger: DeliveryLedger::default(),
+            mirror_rules: Vec::new(),
         }
     }
 
@@ -721,6 +739,101 @@ impl Gateway {
     pub fn with_persistent_sessions(mut self, store: Arc<PersistentSessionStore>) -> Self {
         self.persistent_sessions = Some(store);
         self
+    }
+
+    /// Add a response mirror rule (hermes `gateway/mirror.py` parity).
+    pub fn with_mirror_rule(mut self, rule: MirrorRule) -> Self {
+        self.mirror_rules.push(rule);
+        self
+    }
+
+    /// Register a mirror rule in place.
+    pub fn add_mirror_rule(&mut self, rule: MirrorRule) {
+        self.mirror_rules.push(rule);
+    }
+
+    /// Configure the delivery ledger capacity (default 500).
+    pub fn with_delivery_ledger_capacity(mut self, max: usize) -> Self {
+        self.delivery_ledger = DeliveryLedger::new(max);
+        self
+    }
+
+    /// Access the per-session turn lease.
+    pub fn turn_lease(&self) -> &TurnLease {
+        &self.turn_lease
+    }
+
+    /// Access the session stall tracker.
+    pub fn stall_tracker(&self) -> &SessionStallTracker {
+        &self.stall_tracker
+    }
+
+    /// Access the delivery ledger.
+    pub fn delivery_ledger(&self) -> &DeliveryLedger {
+        &self.delivery_ledger
+    }
+
+    /// Registered mirror rules.
+    pub fn mirror_rules(&self) -> &[MirrorRule] {
+        &self.mirror_rules
+    }
+
+    /// Target channels an outbound response on `platform`/`channel` should
+    /// be mirrored to (hermes `gateway/mirror.py` parity). The caller sends
+    /// the mirrored copies via `send_to_platform`.
+    pub fn mirror_targets(&self, platform: &str, channel: &str) -> Vec<String> {
+        self.mirror_rules
+            .iter()
+            .filter(|r| r.matches(platform, channel))
+            .map(|r| r.target_channel.clone())
+            .collect()
+    }
+
+    /// Run one handler turn under the gateway lifecycle: acquire the
+    /// per-session turn lease (busy sessions get a polite refusal instead
+    /// of a concurrent agent run), track the turn for stall detection, and
+    /// record the delivery outcome in the ledger.
+    async fn handle_with_lifecycle(
+        &self,
+        handler: &Arc<dyn MessageHandler>,
+        message: IncomingMessage,
+        session_key: &str,
+    ) -> Result<OutgoingMessage> {
+        // Turn lease — one in-flight turn per session key.
+        let Some(_guard) = self.turn_lease.try_acquire(session_key).await else {
+            debug!(
+                session = %session_key,
+                "Turn lease busy; polite refusal instead of concurrent agent run"
+            );
+            return Ok(OutgoingMessage::new(
+                &message.channel_id,
+                "⏳ Still working on your previous message — I'll reply as soon as it's done.",
+            ));
+        };
+
+        self.stall_tracker.touch(session_key).await;
+        let result = handler.handle(message.clone()).await;
+        self.stall_tracker.complete(session_key).await;
+
+        let response = match result {
+            Ok(r) => r,
+            Err(e) => {
+                self.delivery_ledger
+                    .record(&message.platform, &message.channel_id, "", "failed")
+                    .await;
+                return Err(e);
+            }
+        };
+
+        self.delivery_ledger
+            .record(
+                &message.platform,
+                &message.channel_id,
+                &response.content,
+                "delivered",
+            )
+            .await;
+        Ok(response)
     }
 
     /// Start the gateway and all enabled adapters
@@ -834,6 +947,12 @@ impl Gateway {
             }
         };
 
+        // Session key for the turn lease / stall tracker / delivery ledger.
+        let session_key = format!(
+            "{}:{}:{}",
+            message.platform, message.user_id, message.channel_id
+        );
+
         // Global emergency stop (hermes estop parity): while engaged, new
         // turns get a brief paused reply instead of an agent run. In-flight
         // work is never killed — this is pause-new-work.
@@ -859,10 +978,6 @@ impl Gateway {
                 crate::active_sessions::ActiveSessionTracker::default_dir(),
                 Some(max),
             );
-            let session_key = format!(
-                "{}:{}:{}",
-                message.platform, message.user_id, message.channel_id
-            );
             if !tracker.acquire(&session_key)? {
                 warn!(
                     session = %session_key,
@@ -874,13 +989,17 @@ impl Gateway {
                     format!("Too many concurrent sessions (limit {max}). Please try again later."),
                 )));
             }
-            let result = handler.handle(message).await;
+            let result = self
+                .handle_with_lifecycle(handler, message, &session_key)
+                .await;
             tracker.release(&session_key);
             let response = result?;
             return Ok(Some(response));
         }
 
-        let response = handler.handle(message).await?;
+        let response = self
+            .handle_with_lifecycle(handler, message, &session_key)
+            .await?;
 
         Ok(Some(response))
     }
@@ -3558,6 +3677,111 @@ mod tests {
         let config = GatewayConfig::default();
         assert!(!config.telegram_enabled);
         assert!(!config.discord_enabled);
+    }
+
+    /// Echo handler that optionally blocks inside `handle` until released
+    /// (simulates a long-running agent turn).
+    struct BlockingEchoHandler {
+        gate: Option<Arc<tokio::sync::Notify>>,
+    }
+
+    #[async_trait::async_trait]
+    impl MessageHandler for BlockingEchoHandler {
+        async fn handle(&self, message: IncomingMessage) -> Result<OutgoingMessage> {
+            if let Some(gate) = &self.gate {
+                gate.notified().await;
+            }
+            Ok(OutgoingMessage::new(
+                &message.channel_id,
+                format!("echo:{}", message.content),
+            ))
+        }
+    }
+
+    /// The per-session turn lease must refuse a second concurrent turn for
+    /// the same session while the first is in flight, and the stall tracker
+    /// must observe the in-flight turn.
+    #[tokio::test]
+    async fn route_message_serializes_concurrent_turns_via_lease() {
+        let gate = Arc::new(tokio::sync::Notify::new());
+        let handler = Arc::new(BlockingEchoHandler {
+            gate: Some(gate.clone()),
+        });
+        let gw = Arc::new(Gateway::new(GatewayConfig::default()).with_handler(handler));
+
+        let msg1 = IncomingMessage::new("telegram", "u1", "alice", "c1", "first");
+        let msg2 = IncomingMessage::new("telegram", "u1", "alice", "c1", "second");
+
+        let t1 = tokio::spawn({
+            let gw = gw.clone();
+            async move { gw.route_message(msg1).await.unwrap() }
+        });
+
+        // Wait for turn 1 to acquire the lease and enter handle().
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while std::time::Instant::now() < deadline {
+            if gw.turn_lease().is_busy("telegram:u1:c1").await {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert!(
+            gw.turn_lease().is_busy("telegram:u1:c1").await,
+            "turn 1 must hold the lease"
+        );
+        assert_eq!(gw.stall_tracker().active_count().await, 1);
+
+        // Second message for the same session: busy reply, no agent run.
+        let busy = gw.route_message(msg2).await.unwrap().expect("busy reply");
+        assert!(
+            busy.content
+                .contains("Still working on your previous message"),
+            "got: {}",
+            busy.content
+        );
+        assert_eq!(gw.stall_tracker().active_count().await, 1, "no second turn");
+
+        // Release turn 1 — it completes and the lease is freed.
+        gate.notify_one();
+        let first = t1.await.expect("task panicked").expect("response");
+        assert_eq!(first.content, "echo:first");
+        assert!(!gw.turn_lease().is_busy("telegram:u1:c1").await);
+        assert_eq!(gw.stall_tracker().active_count().await, 0);
+    }
+
+    /// Every successful route records a delivery in the ledger; mirror rules
+    /// resolve matching target channels.
+    #[tokio::test]
+    async fn route_message_records_delivery_and_mirror_targets() {
+        let handler = Arc::new(BlockingEchoHandler { gate: None });
+        let gw = Arc::new(
+            Gateway::new(GatewayConfig::default())
+                .with_handler(handler)
+                .with_mirror_rule(MirrorRule {
+                    platform: "telegram".to_string(),
+                    source_channel: "c1".to_string(),
+                    target_channel: "group:ops".to_string(),
+                }),
+        );
+
+        let msg = IncomingMessage::new("telegram", "u1", "alice", "c1", "hi");
+        let resp = gw.route_message(msg).await.unwrap().expect("response");
+        assert_eq!(resp.content, "echo:hi");
+
+        assert_eq!(gw.delivery_ledger().delivered_count().await, 1);
+        assert_eq!(gw.delivery_ledger().failed_count().await, 0);
+        let recent = gw.delivery_ledger().recent(5).await;
+        assert_eq!(recent[0].platform, "telegram");
+        assert_eq!(recent[0].channel_id, "c1");
+        assert!(recent[0].content_len > 0);
+
+        // Mirror rule matches the source channel and resolves the target.
+        assert_eq!(
+            gw.mirror_targets("telegram", "c1"),
+            vec!["group:ops".to_string()]
+        );
+        assert!(gw.mirror_targets("telegram", "c9").is_empty());
+        assert!(gw.mirror_targets("discord", "c1").is_empty());
     }
 
     #[tokio::test]
