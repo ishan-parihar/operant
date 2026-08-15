@@ -3,11 +3,12 @@ name: computer-use
 description: |
   Drive the user's desktop in the background — clicking, typing,
   scrolling, dragging — without stealing the cursor, keyboard focus,
-  or switching virtual desktops / Spaces. Cross-platform: macOS,
-  Windows, Linux. Works with any tool-capable model. Load this skill
+  or switching virtual desktops / Spaces. macOS only (via the `cua-driver`
+  binary): the tool is registered solely on macOS, so this skill never loads
+  on Linux/Windows. Works with any tool-capable model. Load this skill
   whenever the `computer_use` tool is available.
 version: 2.0.0
-platforms: [macos, windows, linux]
+platforms: [macos]
 metadata:
   operant:
     tags: [computer-use, desktop, automation, gui, cross-platform]
