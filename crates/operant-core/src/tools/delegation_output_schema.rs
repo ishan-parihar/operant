@@ -81,9 +81,9 @@ pub fn extract_json_candidate(text: &str) -> String {
             raw = trimmed[..trimmed.len() - 3].to_string();
         }
         raw = raw.trim().to_string();
-        let lower = raw.to_ascii_lowercase();
-        if let Some(stripped) = lower.strip_prefix("json\n") {
-            raw = raw[stripped.len()..].to_string();
+        // A `json` language tag on its own line (``` then json then content).
+        if raw.to_ascii_lowercase().starts_with("json\n") {
+            raw = raw["json\n".len()..].to_string();
         }
     }
     for (opener, closer) in [('{', '}'), ('[', ']')] {
@@ -118,7 +118,7 @@ pub fn validate_output(text: &str, schema: &Value) -> (bool, Vec<String>) {
         }
     };
     let mut errors = Vec::new();
-    validate_value(&parsed, schema, "$", &mut errors);
+    validate_value(&parsed, schema, "$", &mut errors, 0);
     if errors.is_empty() {
         (true, Vec::new())
     } else {
@@ -126,12 +126,22 @@ pub fn validate_output(text: &str, schema: &Value) -> (bool, Vec<String>) {
     }
 }
 
+/// Maximum schema nesting depth the validator will recurse into — hardens
+/// against adversarial deeply-nested schemas overflowing the stack.
+const MAX_VALIDATION_DEPTH: usize = 16;
+
 /// Lightweight JSON-Schema subset validation: root `type`, `required`,
 /// per-property `type`, nested `properties` recursion, and `items` for
 /// arrays. Errors rendered as `$.prop[0]`-style paths, bounded to
 /// [`MAX_RENDERED_ERRORS`] so a retry prompt never blows up.
-fn validate_value(value: &Value, schema: &Value, path: &str, errors: &mut Vec<String>) {
-    if errors.len() >= MAX_RENDERED_ERRORS {
+fn validate_value(
+    value: &Value,
+    schema: &Value,
+    path: &str,
+    errors: &mut Vec<String>,
+    depth: usize,
+) {
+    if errors.len() >= MAX_RENDERED_ERRORS || depth > MAX_VALIDATION_DEPTH {
         return;
     }
     if let Some(type_name) = schema.get("type").and_then(|t| t.as_str())
@@ -154,7 +164,13 @@ fn validate_value(value: &Value, schema: &Value, path: &str, errors: &mut Vec<St
             if let Some(properties) = schema.get("properties").and_then(|p| p.as_object()) {
                 for (key, prop_schema) in properties {
                     if let Some(child) = obj.get(key) {
-                        validate_value(child, prop_schema, &format!("{path}.{key}"), errors);
+                        validate_value(
+                            child,
+                            prop_schema,
+                            &format!("{path}.{key}"),
+                            errors,
+                            depth + 1,
+                        );
                     }
                 }
             }
@@ -165,7 +181,7 @@ fn validate_value(value: &Value, schema: &Value, path: &str, errors: &mut Vec<St
                     if errors.len() >= MAX_RENDERED_ERRORS {
                         return;
                     }
-                    validate_value(item, items, &format!("{path}[{i}]"), errors);
+                    validate_value(item, items, &format!("{path}[{i}]"), errors, depth + 1);
                 }
             }
         }
@@ -259,10 +275,16 @@ mod tests {
 
     #[test]
     fn extract_strips_fence_and_prose() {
-        let text = "Here is my answer:\n```json\n{\"a\": 1}\n```\nHope that helps.";
-        let candidate = extract_json_candidate(text);
-        assert_eq!(candidate.trim(), "{\"a\": 1}");
-        // Bare object with prose around it.
+        // Fenced ```json block (text starts with the fence — exercises the
+        // fence-stripping branch, which prose-only inputs never reach).
+        let text = "```json\n{\"a\": 1}\n```";
+        assert_eq!(extract_json_candidate(text).trim(), "{\"a\": 1}");
+        // Fence with a `json` language tag on its own line (the json\n branch).
+        let text2 = "```\njson\n{\"a\": 1}\n```";
+        assert_eq!(extract_json_candidate(text2).trim(), "{\"a\": 1}");
+        // Prose before the fence + bare object with prose around it.
+        let text3 = "Here is my answer:\n```json\n{\"a\": 1}\n```\nHope that helps.";
+        assert_eq!(extract_json_candidate(text3).trim(), "{\"a\": 1}");
         let candidate2 = extract_json_candidate("Sure: {\"b\": 2} that's all");
         assert_eq!(candidate2, "{\"b\": 2}");
     }

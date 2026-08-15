@@ -77,25 +77,52 @@ fn new_id() -> String {
     format!("dlg-{}-{n}", now_secs())
 }
 
+fn insert_pending(
+    map: &mut HashMap<String, AsyncDelegationRecord>,
+    goal: &str,
+    model: &str,
+) -> String {
+    let id = new_id();
+    map.insert(
+        id.clone(),
+        AsyncDelegationRecord {
+            delegation_id: id.clone(),
+            status: AsyncDelegationStatus::Pending,
+            goal: goal.to_string(),
+            model: model.to_string(),
+            dispatch_time: now_secs(),
+            completed_time: None,
+            result: None,
+            error: None,
+        },
+    );
+    id
+}
+
 /// Register a pending background delegation and return its handle id.
 pub fn create_record(goal: &str, model: &str) -> String {
-    let id = new_id();
     if let Ok(mut map) = registry().lock() {
-        map.insert(
-            id.clone(),
-            AsyncDelegationRecord {
-                delegation_id: id.clone(),
-                status: AsyncDelegationStatus::Pending,
-                goal: goal.to_string(),
-                model: model.to_string(),
-                dispatch_time: now_secs(),
-                completed_time: None,
-                result: None,
-                error: None,
-            },
-        );
+        insert_pending(&mut map, goal, model)
+    } else {
+        // Registry poisoned: fall back to an id that simply won't resolve.
+        new_id()
     }
-    id
+}
+
+/// Atomically check the in-flight cap and register a new pending record
+/// under ONE lock acquisition, so concurrent dispatches can't both pass a
+/// check-then-act race (the count can never exceed `max_pending`).
+/// Returns `Some(id)` when a slot was free, `None` when the cap is reached.
+pub fn try_create_record(goal: &str, model: &str, max_pending: usize) -> Option<String> {
+    let mut map = registry().lock().ok()?;
+    let pending = map
+        .values()
+        .filter(|r| r.status == AsyncDelegationStatus::Pending)
+        .count();
+    if pending >= max_pending {
+        return None;
+    }
+    Some(insert_pending(&mut map, goal, model))
 }
 
 /// Transition a record to completed and stash the child's final answer.

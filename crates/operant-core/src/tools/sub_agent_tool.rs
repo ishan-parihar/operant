@@ -32,9 +32,6 @@ const TOOL_NAME: &str = "delegate_task";
 
 /// Maximum concurrent children (default from Python implementation)
 const DEFAULT_MAX_CONCURRENT_CHILDREN: usize = 3;
-/// Maximum concurrent background delegations (hermes
-/// `_DEFAULT_MAX_ASYNC_CHILDREN = 3` parity).
-const MAX_ASYNC_CHILDREN: usize = 3;
 /// Default child timeout in seconds (10 minutes)
 const DEFAULT_CHILD_TIMEOUT_SECONDS: u64 = 600;
 /// Minimum spawn depth
@@ -265,7 +262,12 @@ impl SubAgentTool {
                 child_depth,
                 max_depth,
             );
-            if let Some(schema) = schema.as_ref() {
+            // Append the full OUTPUT CONTRACT only on the first attempt — the
+            // retry message explicitly tells the child NOT to re-read the
+            // schema (hermes: "no schema re-paste", errors verbatim only).
+            if let Some(schema) = schema.as_ref()
+                && attempts == 0
+            {
                 system_prompt.push_str(&format!("\n\n{}", append_output_contract(None, schema)));
             }
             if !retry_errors.is_empty() {
@@ -440,14 +442,18 @@ impl SubAgentTool {
         timeout_seconds: u64,
         output_schema: Option<Value>,
     ) -> std::result::Result<String, BoxedToolError> {
-        if async_delegation::pending_count() >= MAX_ASYNC_CHILDREN {
+        let Some(delegation_id) = async_delegation::try_create_record(
+            &goal,
+            &self.model,
+            async_delegation::DEFAULT_MAX_ASYNC_CHILDREN,
+        ) else {
             return Err(format!(
-                "Too many background delegations in flight (max {MAX_ASYNC_CHILDREN}); \
-                 wait for one to complete or use synchronous delegation."
+                "Too many background delegations in flight (max {}); \
+                 wait for one to complete or use synchronous delegation.",
+                async_delegation::DEFAULT_MAX_ASYNC_CHILDREN
             )
             .into());
-        }
-        let delegation_id = async_delegation::create_record(&goal, &self.model);
+        };
 
         let tool = self.clone_for_task();
         let event_tx = self.event_tx.clone();
@@ -466,27 +472,26 @@ impl SubAgentTool {
                 .await;
             match outcome {
                 Ok(content) => {
+                    // Persist the record FIRST — the event send below is
+                    // best-effort UI surfacing only (try_send so a full/slow
+                    // parent channel can never stall the background task).
                     async_delegation::mark_completed(&spawn_id, &content);
                     if let Some(tx) = event_tx {
-                        let _ = tx
-                            .send(AgentEvent::AsyncDelegation {
-                                delegation_id: spawn_id.clone(),
-                                status: "completed".to_string(),
-                                summary: preview_of(&content, 200),
-                            })
-                            .await;
+                        let _ = tx.try_send(AgentEvent::AsyncDelegation {
+                            delegation_id: spawn_id.clone(),
+                            status: "completed".to_string(),
+                            summary: preview_of(&content, 200),
+                        });
                     }
                 }
                 Err(error) => {
                     async_delegation::mark_failed(&spawn_id, &error.to_string());
                     if let Some(tx) = event_tx {
-                        let _ = tx
-                            .send(AgentEvent::AsyncDelegation {
-                                delegation_id: spawn_id.clone(),
-                                status: "failed".to_string(),
-                                summary: error.to_string(),
-                            })
-                            .await;
+                        let _ = tx.try_send(AgentEvent::AsyncDelegation {
+                            delegation_id: spawn_id.clone(),
+                            status: "failed".to_string(),
+                            summary: error.to_string(),
+                        });
                     }
                 }
             }
