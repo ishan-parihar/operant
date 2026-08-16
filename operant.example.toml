@@ -181,6 +181,8 @@ enabled = false
 # dm_topic_name = "General"
 # disable_link_previews = false   # disable Telegram link previews on sends
 # typing_cooldown_seconds = 30.0  # typing-indicator cooldown after transient failures
+# fallback_ips = []               # pin the Bot API host to these IPs when DNS is
+#                                 # broken (rotated round-robin; hermes parity)
 #
 # [channels.discord]
 # enabled = false

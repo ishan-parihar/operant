@@ -4856,6 +4856,92 @@ pub fn build_runtime_proxy_client_with_timeouts(
     client
 }
 
+/// Build an HTTP client for a channel, pinning the API host to a fallback IP
+/// (hermes `fallback_ips` parity: keeps the channel working when DNS for the
+/// API host is broken or poisoned). Uses an explicit per-channel proxy URL
+/// when configured, else the global runtime proxy.
+pub fn build_channel_proxy_client_resolved(
+    service_key: &str,
+    proxy_url: Option<&str>,
+    resolve_host: &str,
+    resolve_ip: &str,
+) -> reqwest::Client {
+    let ip: std::net::IpAddr = match resolve_ip.trim().parse() {
+        Ok(ip) => ip,
+        Err(_) => {
+            tracing::warn!(service_key, "Ignoring invalid fallback IP: {resolve_ip}");
+            return build_channel_proxy_client(service_key, proxy_url);
+        }
+    };
+    match normalize_proxy_url_option(proxy_url) {
+        Some(url) => build_explicit_proxy_client_resolved(service_key, &url, resolve_host, ip),
+        None => build_runtime_proxy_client_resolved(service_key, resolve_host, ip),
+    }
+}
+
+/// Runtime-proxy client variant that additionally pins `resolve_host` to `ip`.
+fn build_runtime_proxy_client_resolved(
+    service_key: &str,
+    resolve_host: &str,
+    ip: std::net::IpAddr,
+) -> reqwest::Client {
+    let cache_key = format!(
+        "runtime|{}|resolve={}:{}",
+        service_key.trim().to_ascii_lowercase(),
+        resolve_host,
+        ip
+    );
+    if let Some(client) = runtime_proxy_cached_client(&cache_key) {
+        return client;
+    }
+
+    let addr = std::net::SocketAddr::new(ip, 443);
+    let builder = apply_runtime_proxy_to_builder(reqwest::Client::builder(), service_key)
+        .resolve(resolve_host, addr);
+    let client = builder.build().unwrap_or_else(|error| {
+        tracing::warn!(
+            service_key,
+            "Failed to build resolved proxied client: {error}"
+        );
+        reqwest::Client::new()
+    });
+    set_runtime_proxy_cached_client(cache_key, client.clone());
+    client
+}
+
+/// Explicit-proxy client variant that additionally pins `resolve_host` to `ip`.
+fn build_explicit_proxy_client_resolved(
+    service_key: &str,
+    proxy_url: &str,
+    resolve_host: &str,
+    ip: std::net::IpAddr,
+) -> reqwest::Client {
+    let cache_key = format!(
+        "explicit|{}|{}|resolve={}:{}",
+        service_key.trim().to_ascii_lowercase(),
+        proxy_url,
+        resolve_host,
+        ip
+    );
+    if let Some(client) = runtime_proxy_cached_client(&cache_key) {
+        return client;
+    }
+
+    let addr = std::net::SocketAddr::new(ip, 443);
+    let mut builder = reqwest::Client::builder().resolve(resolve_host, addr);
+    builder = apply_explicit_proxy_to_builder(builder, service_key, proxy_url);
+    let client = builder.build().unwrap_or_else(|error| {
+        tracing::warn!(
+            service_key,
+            proxy_url,
+            "Failed to build resolved channel proxy client: {error}"
+        );
+        reqwest::Client::new()
+    });
+    set_runtime_proxy_cached_client(cache_key, client.clone());
+    client
+}
+
 /// Build an HTTP client for a channel, using an explicit per-channel proxy URL
 /// when configured.  Falls back to the global runtime proxy when `proxy_url` is
 /// `None` or empty.
@@ -7403,6 +7489,12 @@ pub struct TelegramConfig {
     /// `typing_cooldown_seconds` parity. Default: 30.
     #[serde(default = "default_telegram_typing_cooldown_secs")]
     pub typing_cooldown_seconds: f64,
+    /// Fallback IPs for the Bot API host (e.g. `api.telegram.org`), used to
+    /// pin the connection when DNS is broken or poisoned (hermes
+    /// `fallback_ips` parity). Each entry is an IP literal; entries are
+    /// rotated through on client rebuilds. Default: empty (use DNS).
+    #[serde(default)]
+    pub fallback_ips: Vec<String>,
 }
 
 fn default_telegram_dm_topic_name() -> String {
@@ -12884,6 +12976,7 @@ auto_save = true
                     approval_timeout_secs: default_telegram_approval_timeout_secs(),
                     disable_link_previews: false,
                     typing_cooldown_seconds: default_telegram_typing_cooldown_secs(),
+                    fallback_ips: vec![],
                 }),
                 discord: None,
                 discord_history: None,
@@ -13820,6 +13913,7 @@ default_temperature = 0.7
             dm_topic_name: default_telegram_dm_topic_name(),
             disable_link_previews: false,
             typing_cooldown_seconds: default_telegram_typing_cooldown_secs(),
+            fallback_ips: vec![],
         };
         let json = serde_json::to_string(&tc).unwrap();
         let parsed: TelegramConfig = serde_json::from_str(&json).unwrap();
@@ -17433,6 +17527,7 @@ require_otp_to_resume = true
             dm_topic_name: default_telegram_dm_topic_name(),
             disable_link_previews: false,
             typing_cooldown_seconds: default_telegram_typing_cooldown_secs(),
+            fallback_ips: vec![],
         });
 
         // Save (triggers encryption)

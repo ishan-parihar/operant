@@ -144,8 +144,9 @@ Tier-3 polish items are all implemented, committed, and pushed to `main`:
 | D2 | Discord slash commands | `9fcadf51` | `register_slash_commands` (guild/global REST PUT) + `INTERACTION_CREATE` handling with auth gate + ephemeral ACK; pure `interaction_to_command` parser; 4 tests |
 | D3 | Discord recovery ledger + backfill | `c00decc1` | SQLite `discord_recovery_cursors` + `backfill_missed_messages` (REST scan after cursor, mention re-dispatch, timestamp preservation); live-loop cursor advance; 3 tests |
 | T5/T7/D6 | Typing cooldown, link previews, liveness probe | `866a5c94` | `typing_cooldown_seconds` per-chat backoff; `disable_link_previews` → `link_preview_options`; heartbeat-ACK liveness counter (3-miss → reconnect); config + example TOML + tests |
+| T4 | Polling resilience suite | (this commit) | Heartbeat `getMe` probe (90s, 15s timeout) catching CLOSE-WAIT sockets; `getWebhookInfo` pending-update probe (2-strike escalation on a stuck queue); generation-based recovery trigger (debounced, keep-alive receiver so bumps are never lost); reconnect verification via `timeout=0` slot probe with hermes error classification (401/403 fatal, 409 conflict backoff, transient retry); 45s client-side long-poll ceiling; configurable `fallback_ips` (round-robin `.resolve()` pinning); watchdog tasks aborted on listen return + Drop; 9 tests; live-verified against `@ip_hermesvps_bot` (getMe / getWebhookInfo / getUpdates all ok) |
 
 **Remaining (not yet implemented):** D1 Discord voice (largest effort), T3 rich
-rendering pipeline, T4 polling resilience suite, T6 config depth (chat/topic
+rendering pipeline, T6 config depth (chat/topic
 ACLs, guest mode, identity refresh), T8 media albums, D4 forum posting, D7
 reaction lifecycle, D9 non-conversational tracker, D10 shutdown flush.

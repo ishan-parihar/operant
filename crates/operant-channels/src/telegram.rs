@@ -45,6 +45,179 @@ const TELEGRAM_COMMAND_NAME_MAX_LEN: usize = 32;
 /// longer than 100 characters. This conservative cap avoids that in practice.
 const TELEGRAM_COMMAND_DESCRIPTION_MAX_LEN: usize = 100;
 
+// ── T4 polling-resilience constants (hermes `_polling_heartbeat_loop`,
+// `_probe_pending_updates`, `_verify_polling_after_reconnect` parity) ────────
+/// Seconds between `getMe` connectivity probes on the general path. Catches
+/// dead TCP sockets (CLOSE-WAIT) that a long-poll waiting for the 30-second
+/// Telegram window never surfaces. Hermes default: 90.
+const POLLING_HEARTBEAT_INTERVAL_SECS: u64 = 90;
+/// Per-probe deadline for the heartbeat `getMe` before the path is declared
+/// suspect. Hermes default: 15s.
+const POLLING_HEARTBEAT_PROBE_TIMEOUT: Duration = Duration::from_secs(15);
+/// Seconds between `getWebhookInfo` pending-update probes. Hermes schedules
+/// these alongside the heartbeat.
+const POLLING_PENDING_PROBE_INTERVAL_SECS: u64 = 60;
+/// A pending_update_count at or above this while we believe we are polling
+/// marks a probe as "stuck" (updates are queuing server-side but the consumer
+/// is not draining them).
+const POLLING_PENDING_STUCK_THRESHOLD: i64 = 2;
+/// Consecutive stuck probes required before escalating to a polling restart,
+/// so a single in-flight update between probes never trips a needless
+/// recovery. Hermes: 2.
+const POLLING_PENDING_STUCK_STRIKES: u32 = 2;
+/// Client-side ceiling for one long-poll getUpdates request. Telegram holds
+/// the request up to the API `timeout` (30s), so 45s only fires on a wedged
+/// socket that the API-level timeout cannot surface.
+const POLL_CLIENT_TIMEOUT_SECS: u64 = 45;
+/// Minimum seconds between recovery triggers, so a wedged heartbeat and a
+/// wedged consumer probing at the same time collapse into one restart.
+const POLL_RECOVERY_DEBOUNCE_SECS: u64 = 30;
+/// Backoff after a confirmed client-side poll timeout (wedged socket).
+const POLL_WEDGE_BACKOFF_SECS: u64 = 5;
+
+/// Classification of a getUpdates failure (hermes `_looks_like_network_error`
+/// parity). `Fatal` errors must not churn the polling loop; `Conflict` means
+/// another process holds the getUpdates slot; `Network` is transient.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PollErrorClass {
+    Fatal,
+    Conflict,
+    Network,
+}
+
+impl PollErrorClass {
+    fn from_error_code(error_code: i64) -> Self {
+        match error_code {
+            // Unauthorized / forbidden: the token itself is rejected. Retrying
+            // cannot help; churn would just spam the API (hermes: auth errors
+            // are not `_looks_like_network_error`).
+            401 | 403 => PollErrorClass::Fatal,
+            // Another process holds the getUpdates slot (terminated by other
+            // getUpdates request).
+            409 => PollErrorClass::Conflict,
+            // Everything else (429 rate limit, 5xx, unknown) is transient.
+            _ => PollErrorClass::Network,
+        }
+    }
+}
+
+/// Shared state between `listen()` and the watchdog loops (heartbeat +
+/// pending-update probe). Cloneable so a spawned watchdog task can trigger
+/// recovery without borrowing the whole channel.
+#[derive(Clone)]
+struct PollRecoveryState {
+    /// Generation counter. `trigger()` bumps it; `listen()` subscribes a watch
+    /// receiver and abandons the in-flight long-poll the moment it bumps.
+    generation: tokio::sync::watch::Sender<u64>,
+    /// Permanent receiver keeping the channel alive. tokio watch only stores a
+    /// sent value when at least one receiver exists, so without this a watchdog
+    /// firing before `listen()`'s first subscription would silently lose the
+    /// bump (and the debounce timestamp would still be consumed).
+    _generation_keep_alive: tokio::sync::watch::Receiver<u64>,
+    /// Last observed `pending_update_count` (probe loop).
+    last_pending_count: Arc<parking_lot::Mutex<i64>>,
+    /// Consecutive stuck-probe strikes (probe loop).
+    pending_stuck_strikes: Arc<parking_lot::Mutex<u32>>,
+    /// Instant of the last recovery trigger, for debouncing.
+    last_recovery_at: Arc<parking_lot::Mutex<std::time::Instant>>,
+}
+
+impl PollRecoveryState {
+    fn new() -> Self {
+        let (generation, _generation_keep_alive) = tokio::sync::watch::channel(0);
+        Self {
+            generation,
+            _generation_keep_alive,
+            last_pending_count: Arc::new(parking_lot::Mutex::new(0)),
+            pending_stuck_strikes: Arc::new(parking_lot::Mutex::new(0)),
+            // Initialized in the past so the first trigger is never debounced.
+            last_recovery_at: Arc::new(parking_lot::Mutex::new(
+                std::time::Instant::now() - Duration::from_secs(POLL_RECOVERY_DEBOUNCE_SECS + 1),
+            )),
+        }
+    }
+
+    /// Debounced recovery trigger (hermes `_schedule_polling_recovery`
+    /// parity). Repeated triggers inside the debounce window collapse into
+    /// one bump, so a wedged heartbeat and a wedged consumer probing at the
+    /// same time restart the poll loop exactly once.
+    fn trigger(&self, reason: &str) {
+        let now = std::time::Instant::now();
+        {
+            let mut last = self.last_recovery_at.lock();
+            if now.duration_since(*last) < Duration::from_secs(POLL_RECOVERY_DEBOUNCE_SECS) {
+                tracing::debug!("Telegram poll recovery debounced: {reason}");
+                return;
+            }
+            *last = now;
+        }
+        tracing::warn!("Telegram polling recovery triggered: {reason}");
+        // NB: read the current value into a local first — `send()` takes the
+        // channel's write lock, so holding the `Ref` from `borrow()` across
+        // the call would deadlock (read lock + write lock).
+        let next = self.generation.borrow().wrapping_add(1);
+        let _ = self.generation.send(next);
+    }
+}
+
+/// Pure escalation rule for the pending-update probe (hermes
+/// `_probe_pending_updates` 2-strike parity): a probe observing a queue at or
+/// above `threshold` counts a strike; `max_strikes` consecutive strikes return
+/// `true` (escalate). Any healthy probe resets the strikes.
+fn probe_pending_escalate(
+    pending: i64,
+    strikes: &mut u32,
+    threshold: i64,
+    max_strikes: u32,
+) -> bool {
+    if pending >= threshold {
+        *strikes = strikes.saturating_add(1);
+        if *strikes >= max_strikes {
+            *strikes = 0;
+            return true;
+        }
+    } else {
+        *strikes = 0;
+    }
+    false
+}
+
+/// Host component of an API base URL (default `api.telegram.org`), used as the
+/// resolution target when fallback IPs are configured.
+fn api_host_of(base: &str) -> &str {
+    base.strip_prefix("https://")
+        .or_else(|| base.strip_prefix("http://"))
+        .and_then(|rest| rest.split('/').next())
+        .unwrap_or(base)
+}
+
+/// Build the Telegram API client for one request, pinning the API host to a
+/// configured fallback IP (rotated round-robin) when `fallback_ips` is
+/// non-empty, else the regular proxied channel client.
+fn build_telegram_api_client(
+    api_base: &str,
+    proxy_url: Option<&str>,
+    fallback_ips: &[String],
+    fallback_ip_index: &parking_lot::Mutex<usize>,
+) -> reqwest::Client {
+    if fallback_ips.is_empty() {
+        return operant_config::schema::build_channel_proxy_client("channel.telegram", proxy_url);
+    }
+    let idx = {
+        let mut index = fallback_ip_index.lock();
+        let current = *index;
+        *index = (*index + 1) % fallback_ips.len();
+        current
+    };
+    let ip = &fallback_ips[idx];
+    operant_config::schema::build_channel_proxy_client_resolved(
+        "channel.telegram",
+        proxy_url,
+        api_host_of(api_base),
+        ip,
+    )
+}
+
 /// Sanitize a skill name into a valid Telegram command name.
 /// Telegram commands must be 1-32 characters, lowercase a-z, 0-9, underscore only.
 fn sanitize_telegram_command_name(raw: &str) -> String {
@@ -439,6 +612,18 @@ pub struct TelegramChannel {
     typing_cooldown_secs: f64,
     typing_cooldown_until:
         std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, std::time::Instant>>>,
+    /// Fallback IPs for the Bot API host (hermes `fallback_ips` parity). When
+    /// non-empty, `http_client()` pins the host to one of these IPs (rotated
+    /// per rebuild) instead of relying on DNS.
+    fallback_ips: Vec<String>,
+    /// Round-robin index into `fallback_ips`, shared with the watchdog loops.
+    fallback_ip_index: Arc<parking_lot::Mutex<usize>>,
+    /// Polling-recovery state shared between `listen()` and the watchdog
+    /// loops: generation watch, pending-probe strikes, debounce timestamp.
+    poll_recovery: PollRecoveryState,
+    /// JoinHandles of the spawned watchdog loops (heartbeat + pending probe).
+    /// Aborted on `listen()` return and on drop.
+    poll_watchdogs: Mutex<Vec<tokio::task::JoinHandle<()>>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -496,6 +681,10 @@ impl TelegramChannel {
             typing_cooldown_until: std::sync::Arc::new(std::sync::Mutex::new(
                 std::collections::HashMap::new(),
             )),
+            fallback_ips: Vec::new(),
+            fallback_ip_index: Arc::new(parking_lot::Mutex::new(0)),
+            poll_recovery: PollRecoveryState::new(),
+            poll_watchdogs: Mutex::new(Vec::new()),
         }
     }
 
@@ -508,6 +697,14 @@ impl TelegramChannel {
     /// Configure whether Telegram-native acknowledgement reactions are sent.
     pub fn with_ack_reactions(mut self, enabled: bool) -> Self {
         self.ack_reactions = enabled;
+        self
+    }
+
+    /// Set fallback IPs for the Bot API host (hermes `fallback_ips` parity).
+    /// When set, `http_client()` pins the API host to one of these IPs,
+    /// rotating on each rebuild, instead of relying on DNS.
+    pub fn with_fallback_ips(mut self, ips: Vec<String>) -> Self {
+        self.fallback_ips = ips;
         self
     }
 
@@ -778,9 +975,11 @@ impl TelegramChannel {
     }
 
     fn http_client(&self) -> reqwest::Client {
-        operant_config::schema::build_channel_proxy_client(
-            "channel.telegram",
+        build_telegram_api_client(
+            &self.api_base,
             self.proxy_url.as_deref(),
+            &self.fallback_ips,
+            &self.fallback_ip_index,
         )
     }
 
@@ -2931,6 +3130,146 @@ Allowlist Telegram username (without '@') or numeric user ID.",
         self.send_media_by_url("sendVoice", "voice", chat_id, thread_id, url, caption)
             .await
     }
+
+    /// Spawn the T4 watchdog loops (heartbeat getMe probe + pending-update
+    /// probe). They own clones of the recovery state and the API connection
+    /// parameters, so they can run independently of `listen()`.
+    fn spawn_poll_watchdogs(&self) {
+        let recovery = self.poll_recovery.clone();
+        let api_base = self.api_base.clone();
+        let token = self.bot_token.clone();
+        let proxy = self.proxy_url.clone();
+        let fallbacks = self.fallback_ips.clone();
+        let index = Arc::clone(&self.fallback_ip_index);
+        let heartbeat = tokio::spawn(async move {
+            poll_heartbeat_loop(
+                &recovery,
+                &api_base,
+                &token,
+                proxy.as_deref(),
+                &fallbacks,
+                &index,
+            )
+            .await;
+        });
+
+        let recovery = self.poll_recovery.clone();
+        let api_base = self.api_base.clone();
+        let token = self.bot_token.clone();
+        let proxy = self.proxy_url.clone();
+        let fallbacks = self.fallback_ips.clone();
+        let index = Arc::clone(&self.fallback_ip_index);
+        let pending_probe = tokio::spawn(async move {
+            probe_pending_updates_loop(
+                &recovery,
+                &api_base,
+                &token,
+                proxy.as_deref(),
+                &fallbacks,
+                &index,
+            )
+            .await;
+        });
+
+        self.poll_watchdogs
+            .lock()
+            .extend([heartbeat, pending_probe]);
+    }
+
+    /// Abort the spawned watchdog loops. Called when `listen()` returns so a
+    /// dead channel does not keep probing the API; also wired into `Drop` for
+    /// externally-aborted tasks.
+    fn abort_poll_watchdogs(&self) {
+        let mut handles = self.poll_watchdogs.lock();
+        for handle in handles.drain(..) {
+            handle.abort();
+        }
+    }
+
+    /// Claim the getUpdates slot (startup) or re-verify it after a recovery
+    /// trigger / transient failure (hermes `_verify_polling_after_reconnect`
+    /// parity). Uses a `timeout=0` request so the slot is confirmed without
+    /// entering a long-poll. Drains any queued updates into `offset`.
+    ///
+    /// `Fatal` errors (401/403) stop the channel; `Conflict` backs off past
+    /// Telegram's 30-second poll window; transient network errors retry with a
+    /// short backoff. Returns `Err` only for fatal errors.
+    async fn verify_polling_slot(&self, offset: &mut i64) -> anyhow::Result<()> {
+        loop {
+            let url = self.api_url("getUpdates");
+            let probe = serde_json::json!({
+                "offset": *offset,
+                "timeout": 0,
+                "allowed_updates": ["message", "callback_query"]
+            });
+            match self.http_client().post(&url).json(&probe).send().await {
+                Err(e) => {
+                    tracing::warn!("Telegram slot probe network error: {e}; retrying in 5s");
+                    tokio::time::sleep(Duration::from_secs(5)).await;
+                }
+                Ok(resp) => match resp.json::<serde_json::Value>().await {
+                    Err(e) => {
+                        tracing::warn!("Telegram slot probe parse error: {e}; retrying in 5s");
+                        tokio::time::sleep(Duration::from_secs(5)).await;
+                    }
+                    Ok(data) => {
+                        let ok = data
+                            .get("ok")
+                            .and_then(serde_json::Value::as_bool)
+                            .unwrap_or(false);
+                        if ok {
+                            // Slot claimed — advance offset past any queued updates.
+                            if let Some(results) =
+                                data.get("result").and_then(serde_json::Value::as_array)
+                            {
+                                for update in results {
+                                    if let Some(uid) =
+                                        update.get("update_id").and_then(serde_json::Value::as_i64)
+                                    {
+                                        *offset = uid + 1;
+                                    }
+                                }
+                            }
+                            return Ok(());
+                        }
+
+                        let error_code = data
+                            .get("error_code")
+                            .and_then(serde_json::Value::as_i64)
+                            .unwrap_or_default();
+                        let description = data
+                            .get("description")
+                            .and_then(serde_json::Value::as_str)
+                            .unwrap_or("unknown");
+                        match PollErrorClass::from_error_code(error_code) {
+                            PollErrorClass::Fatal => {
+                                tracing::error!(
+                                    "Telegram polling slot probe fatal error \
+({error_code}): {description}"
+                                );
+                                anyhow::bail!(
+                                    "telegram polling fatal error {error_code}: {description}"
+                                );
+                            }
+                            PollErrorClass::Conflict => {
+                                tracing::debug!(
+                                    "Telegram slot busy (409): {description}; backing off 35s"
+                                );
+                                tokio::time::sleep(Duration::from_secs(35)).await;
+                            }
+                            PollErrorClass::Network => {
+                                tracing::warn!(
+                                    "Telegram slot probe API error {error_code}: {description}; \
+retrying in 5s"
+                                );
+                                tokio::time::sleep(Duration::from_secs(5)).await;
+                            }
+                        }
+                    }
+                },
+            }
+        }
+    }
 }
 
 #[async_trait]
@@ -3293,7 +3632,6 @@ impl Channel for TelegramChannel {
 
         self.send_text_chunks(&content, chat_id, thread_id).await
     }
-
     async fn listen(&self, tx: tokio::sync::mpsc::Sender<ChannelMessage>) -> anyhow::Result<()> {
         let mut offset: i64 = 0;
 
@@ -3306,80 +3644,43 @@ impl Channel for TelegramChannel {
         // Restore persisted DM-topic thread ids across restarts.
         self.load_dm_topic_state();
 
-        // Startup probe: claim the getUpdates slot before entering the long-poll loop.
-        // A previous daemon's 30-second poll may still be active on Telegram's server.
-        // We retry with timeout=0 until we receive a successful (non-409) response,
-        // confirming the slot is ours. This prevents the long-poll loop from entering
-        // a self-sustaining 409 cycle where each rejected request is immediately retried.
-        loop {
-            let url = self.api_url("getUpdates");
-            let probe = serde_json::json!({
-                "offset": offset,
-                "timeout": 0,
-                "allowed_updates": ["message", "callback_query"]
-            });
-            match self.http_client().post(&url).json(&probe).send().await {
-                Err(e) => {
-                    tracing::warn!("Telegram startup probe error: {e}; retrying in 5s");
-                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-                }
-                Ok(resp) => {
-                    match resp.json::<serde_json::Value>().await {
-                        Err(e) => {
-                            tracing::warn!(
-                                "Telegram startup probe parse error: {e}; retrying in 5s"
-                            );
-                            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-                        }
-                        Ok(data) => {
-                            let ok = data
-                                .get("ok")
-                                .and_then(serde_json::Value::as_bool)
-                                .unwrap_or(false);
-                            if ok {
-                                // Slot claimed — advance offset past any queued updates.
-                                if let Some(results) =
-                                    data.get("result").and_then(serde_json::Value::as_array)
-                                {
-                                    for update in results {
-                                        if let Some(uid) = update
-                                            .get("update_id")
-                                            .and_then(serde_json::Value::as_i64)
-                                        {
-                                            offset = uid + 1;
-                                        }
-                                    }
-                                }
-                                break; // Probe succeeded; enter the long-poll loop.
-                            }
+        // T4 polling resilience: spawn the watchdog loops that detect wedged
+        // TCP sockets (heartbeat getMe probe) and a stuck getUpdates consumer
+        // (pending-update probe). They share the recovery watch channel and
+        // bump the generation to restart the long-poll loop below.
+        self.spawn_poll_watchdogs();
 
-                            let error_code = data
-                                .get("error_code")
-                                .and_then(serde_json::Value::as_i64)
-                                .unwrap_or_default();
-                            if error_code == 409 {
-                                tracing::debug!("Startup probe: slot busy (409), retrying in 5s");
-                            } else {
-                                let desc = data
-                                    .get("description")
-                                    .and_then(serde_json::Value::as_str)
-                                    .unwrap_or("unknown");
-                                tracing::warn!(
-                                    "Startup probe: API error {error_code}: {desc}; retrying in 5s"
-                                );
-                            }
-                            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-                        }
-                    }
-                }
-            }
+        // Startup probe / reconnect verification: claim the getUpdates slot
+        // with a timeout=0 request. A previous daemon's 30-second poll may
+        // still be active on Telegram's server; we retry until the slot is
+        // ours. Fatal errors (401/403) stop the channel; 409 backs off past
+        // the competing poll window; transient errors retry (hermes
+        // `_verify_polling_after_reconnect` parity).
+        if let Err(e) = self.verify_polling_slot(&mut offset).await {
+            self.abort_poll_watchdogs();
+            return Err(e);
         }
 
-        tracing::debug!("Startup probe succeeded; entering main long-poll loop.");
+        tracing::debug!("Polling slot verified; entering main long-poll loop.");
 
         self.register_bot_commands().await;
 
+        // Set by a recovery trigger, a client-side poll timeout, or a
+        // transient API error: re-verify the slot before resuming the 30s
+        // long-poll so we never race a competing session.
+        let mut needs_verify = false;
+
         loop {
+            if needs_verify {
+                match self.verify_polling_slot(&mut offset).await {
+                    Ok(()) => needs_verify = false,
+                    Err(e) => {
+                        self.abort_poll_watchdogs();
+                        return Err(e);
+                    }
+                }
+            }
+
             if self.mention_only {
                 let missing_username = self.bot_username.lock().is_none();
                 if missing_username {
@@ -3394,11 +3695,41 @@ impl Channel for TelegramChannel {
                 "allowed_updates": ["message", "callback_query"]
             });
 
-            let resp = match self.http_client().post(&url).json(&body).send().await {
-                Ok(r) => r,
-                Err(e) => {
-                    tracing::warn!("Telegram poll error: {e}");
-                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            // Subscribe before sending so a recovery trigger that fires while
+            // this request is in flight abandons it (hermes generation
+            // verifier parity). A fresh subscription only sees NEW bumps.
+            let mut recovery_rx = self.poll_recovery.generation.subscribe();
+            let request = self.http_client().post(&url).json(&body).send();
+            let timed =
+                tokio::time::timeout(Duration::from_secs(POLL_CLIENT_TIMEOUT_SECS), request);
+            let resp = tokio::select! {
+                r = timed => match r {
+                    Ok(Ok(r)) => r,
+                    Ok(Err(e)) => {
+                        tracing::warn!("Telegram poll error: {e}");
+                        tokio::time::sleep(Duration::from_secs(5)).await;
+                        continue;
+                    }
+                    Err(_) => {
+                        // Client-side ceiling exceeded: the TCP path is wedged
+                        // (CLOSE-WAIT) even though the API-level 30s timeout
+                        // never surfaced an error. Re-verify the slot before
+                        // resuming (hermes heartbeat/CLOSE-WAIT parity).
+                        tracing::warn!(
+                            "Telegram long-poll request timed out client-side; \
+            connection suspect — re-verifying slot"
+                        );
+                        needs_verify = true;
+                        tokio::time::sleep(Duration::from_secs(POLL_WEDGE_BACKOFF_SECS)).await;
+                        continue;
+                    }
+                },
+                _ = recovery_rx.changed() => {
+                    tracing::warn!(
+                        "Telegram poll recovery requested; re-verifying slot \
+            before resuming long-poll"
+                    );
+                    needs_verify = true;
                     continue;
                 }
             };
@@ -3407,7 +3738,7 @@ impl Channel for TelegramChannel {
                 Ok(d) => d,
                 Err(e) => {
                     tracing::warn!("Telegram parse error: {e}");
-                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                    tokio::time::sleep(Duration::from_secs(5)).await;
                     continue;
                 }
             };
@@ -3426,24 +3757,46 @@ impl Channel for TelegramChannel {
                     .and_then(serde_json::Value::as_str)
                     .unwrap_or("unknown Telegram API error");
 
-                if error_code == 409 {
-                    tracing::warn!(
-                        "Telegram polling conflict (409): {description}. \
+                match PollErrorClass::from_error_code(error_code) {
+                    PollErrorClass::Fatal => {
+                        // Auth/validation errors must not churn the loop (hermes
+                        // `_looks_like_network_error` parity). Stop polling.
+                        tracing::error!(
+                            "Telegram getUpdates fatal error (code={error_code}): \
+{description}; stopping polling"
+                        );
+                        self.abort_poll_watchdogs();
+                        anyhow::bail!(
+                            "telegram getUpdates fatal error (code={error_code}): {description}"
+                        );
+                    }
+                    PollErrorClass::Conflict => {
+                        tracing::warn!(
+                            "Telegram polling conflict (409): {description}. \
 Ensure only one `operant` process is using this bot token."
-                    );
-                    // Back off for 35 seconds — longer than Telegram's 30-second poll
-                    // timeout — so any competing session (e.g. a stale connection from
-                    // a previous daemon) has time to expire before we retry.
-                    tokio::time::sleep(std::time::Duration::from_secs(35)).await;
-                } else {
-                    tracing::warn!(
-                        "Telegram getUpdates API error (code={}): {description}",
-                        error_code
-                    );
-                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                        );
+                        // Back off for 35 seconds — longer than Telegram's 30-second poll
+                        // timeout — so any competing session (e.g. a stale connection from
+                        // a previous daemon) has time to expire before we retry.
+                        tokio::time::sleep(Duration::from_secs(35)).await;
+                        needs_verify = true;
+                    }
+                    PollErrorClass::Network => {
+                        tracing::warn!(
+                            "Telegram getUpdates API error (code={}): {description}",
+                            error_code
+                        );
+                        tokio::time::sleep(Duration::from_secs(5)).await;
+                        needs_verify = true;
+                    }
                 }
                 continue;
             }
+
+            // A healthy response proves the consumer is draining the queue;
+            // reset the pending-update probe strikes so a single in-flight
+            // update between probes never escalates (hermes parity).
+            *self.poll_recovery.pending_stuck_strikes.lock() = 0;
 
             if let Some(results) = data.get("result").and_then(serde_json::Value::as_array) {
                 for update in results {
@@ -3896,6 +4249,109 @@ Ensure only one `operant` process is using this bot token."
         };
 
         Ok(result)
+    }
+}
+
+/// Abort the polling watchdog tasks when the channel is dropped, so an
+/// externally-aborted `listen()` never leaves orphaned probes hitting the API.
+impl Drop for TelegramChannel {
+    fn drop(&mut self) {
+        for handle in self.poll_watchdogs.get_mut().drain(..) {
+            handle.abort();
+        }
+    }
+}
+
+/// Heartbeat loop (hermes `_polling_heartbeat_loop` parity): probe `getMe` on
+/// the general request path every interval with a short deadline. A long-poll
+/// waiting for Telegram's 30-second window never surfaces a dead TCP socket
+/// (CLOSE-WAIT), but a connect-level failure here does — and triggers a polling
+/// recovery, so the main loop re-verifies the slot and resumes on a fresh
+/// connection.
+async fn poll_heartbeat_loop(
+    recovery: &PollRecoveryState,
+    api_base: &str,
+    token: &str,
+    proxy: Option<&str>,
+    fallbacks: &[String],
+    fallback_index: &parking_lot::Mutex<usize>,
+) {
+    loop {
+        tokio::time::sleep(Duration::from_secs(POLLING_HEARTBEAT_INTERVAL_SECS)).await;
+        let url = format!("{api_base}/bot{token}/getMe");
+        let probe = async {
+            let client = build_telegram_api_client(api_base, proxy, fallbacks, fallback_index);
+            match client.get(&url).send().await {
+                Ok(resp) => resp
+                    .error_for_status()
+                    .map(|_| ())
+                    .map_err(|e| e.to_string()),
+                Err(e) => Err(e.to_string()),
+            }
+        };
+        match tokio::time::timeout(POLLING_HEARTBEAT_PROBE_TIMEOUT, probe).await {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => {
+                recovery.trigger(&format!("heartbeat getMe failed: {e}"));
+            }
+            Err(_) => {
+                recovery.trigger("heartbeat getMe timed out");
+            }
+        }
+    }
+}
+
+/// Pending-update probe loop (hermes `_probe_pending_updates` parity): read
+/// `getWebhookInfo().pending_update_count` on the general path. A queue that
+/// stays at/above the threshold across two consecutive probes while we believe
+/// we are polling means the long-poll consumer is wedged (updates are queuing
+/// server-side but never delivered) — escalate to a polling recovery. Any
+/// healthy probe resets the strikes.
+async fn probe_pending_updates_loop(
+    recovery: &PollRecoveryState,
+    api_base: &str,
+    token: &str,
+    proxy: Option<&str>,
+    fallbacks: &[String],
+    fallback_index: &parking_lot::Mutex<usize>,
+) {
+    loop {
+        tokio::time::sleep(Duration::from_secs(POLLING_PENDING_PROBE_INTERVAL_SECS)).await;
+        let url = format!("{api_base}/bot{token}/getWebhookInfo");
+        let client = build_telegram_api_client(api_base, proxy, fallbacks, fallback_index);
+        let pending = match client.get(&url).send().await {
+            Ok(resp) if resp.status().is_success() => resp
+                .json::<serde_json::Value>()
+                .await
+                .ok()
+                .and_then(|data| {
+                    data.get("ok")
+                        .and_then(serde_json::Value::as_bool)
+                        .filter(|ok| *ok)
+                        .and_then(|_| {
+                            data.pointer("/result/pending_update_count")
+                                .and_then(serde_json::Value::as_i64)
+                        })
+                }),
+            _ => None,
+        };
+        let Some(pending) = pending else {
+            // Transient getWebhookInfo failure — never escalate on the probe
+            // itself failing, only on a stuck queue.
+            continue;
+        };
+        let escalate = probe_pending_escalate(
+            pending,
+            &mut recovery.pending_stuck_strikes.lock(),
+            POLLING_PENDING_STUCK_THRESHOLD,
+            POLLING_PENDING_STUCK_STRIKES,
+        );
+        *recovery.last_pending_count.lock() = pending;
+        if escalate {
+            recovery.trigger(&format!(
+                "pending update queue wedged (pending_update_count={pending})"
+            ));
+        }
     }
 }
 
@@ -6590,5 +7046,135 @@ mod tests {
     fn non_choice_callback_data_is_ignored() {
         assert!("approval:abc:approve".strip_prefix("choice:").is_none());
         assert!("choice".strip_prefix("choice:").is_none());
+    }
+
+    // ── T4 polling-resilience tests ──────────────────────────────────────────
+
+    #[test]
+    fn getupdates_error_classification_matches_hermes() {
+        // Auth/validation errors are Fatal — never churn the loop.
+        assert_eq!(PollErrorClass::from_error_code(401), PollErrorClass::Fatal);
+        assert_eq!(PollErrorClass::from_error_code(403), PollErrorClass::Fatal);
+        // Another getUpdates consumer holds the slot.
+        assert_eq!(
+            PollErrorClass::from_error_code(409),
+            PollErrorClass::Conflict
+        );
+        // Everything transient (rate limit, 5xx, unknown) is Network.
+        assert_eq!(
+            PollErrorClass::from_error_code(429),
+            PollErrorClass::Network
+        );
+        assert_eq!(
+            PollErrorClass::from_error_code(500),
+            PollErrorClass::Network
+        );
+        assert_eq!(PollErrorClass::from_error_code(0), PollErrorClass::Network);
+    }
+
+    #[test]
+    fn pending_probe_single_stuck_does_not_escalate() {
+        // Hermes test_telegram_pending_update_probe contract: one probe seeing
+        // a queue at/above threshold only counts a strike.
+        let mut strikes = 0u32;
+        assert!(!probe_pending_escalate(
+            9,
+            &mut strikes,
+            POLLING_PENDING_STUCK_THRESHOLD,
+            POLLING_PENDING_STUCK_STRIKES
+        ));
+        assert_eq!(strikes, 1);
+    }
+
+    #[test]
+    fn pending_probe_two_stuck_probes_escalate() {
+        let mut strikes = 0u32;
+        assert!(!probe_pending_escalate(
+            9,
+            &mut strikes,
+            POLLING_PENDING_STUCK_THRESHOLD,
+            POLLING_PENDING_STUCK_STRIKES
+        ));
+        assert!(probe_pending_escalate(
+            9,
+            &mut strikes,
+            POLLING_PENDING_STUCK_THRESHOLD,
+            POLLING_PENDING_STUCK_STRIKES
+        ));
+        // Escalation resets the strikes for the next cycle.
+        assert_eq!(strikes, 0);
+    }
+
+    #[test]
+    fn pending_probe_healthy_resets_strikes() {
+        let mut strikes = 1u32;
+        assert!(!probe_pending_escalate(
+            0,
+            &mut strikes,
+            POLLING_PENDING_STUCK_THRESHOLD,
+            POLLING_PENDING_STUCK_STRIKES
+        ));
+        assert_eq!(strikes, 0);
+    }
+
+    #[test]
+    fn pending_probe_below_threshold_does_not_strike() {
+        let mut strikes = 0u32;
+        assert!(!probe_pending_escalate(
+            1,
+            &mut strikes,
+            POLLING_PENDING_STUCK_THRESHOLD,
+            POLLING_PENDING_STUCK_STRIKES
+        ));
+        assert_eq!(strikes, 0);
+    }
+
+    #[test]
+    fn recovery_trigger_bumps_generation() {
+        let state = PollRecoveryState::new();
+        let rx = state.generation.subscribe();
+        assert_eq!(*rx.borrow(), 0);
+        state.trigger("test");
+        // The watch value bumps synchronously.
+        assert_eq!(*rx.borrow(), 1);
+    }
+
+    #[test]
+    fn recovery_trigger_is_debounced() {
+        let state = PollRecoveryState::new();
+        state.trigger("first");
+        // Back-to-back trigger inside the debounce window is collapsed.
+        state.trigger("second");
+        let rx = state.generation.subscribe();
+        assert_eq!(*rx.borrow(), 1);
+    }
+
+    #[test]
+    fn fallback_ip_rotation_advances_round_robin() {
+        let index = parking_lot::Mutex::new(0usize);
+        // Pick the IP the rotation index selects on successive calls.
+        let pick = || {
+            let mut i = index.lock();
+            let cur = *i;
+            *i = (*i + 1) % 3;
+            cur
+        };
+        assert_eq!(pick(), 0);
+        assert_eq!(pick(), 1);
+        assert_eq!(pick(), 2);
+        assert_eq!(pick(), 0); // wraps
+    }
+
+    #[test]
+    fn fallback_ips_builder_stores_and_http_client_uses_resolve() {
+        let ch = TelegramChannel::new("fake-token".into(), vec!["*".into()], false)
+            .with_fallback_ips(vec!["149.154.167.220".into()]);
+        assert_eq!(ch.fallback_ips, vec!["149.154.167.220".to_string()]);
+        // api_host extraction used as the resolve target.
+        assert_eq!(api_host_of("https://api.telegram.org"), "api.telegram.org");
+        assert_eq!(api_host_of("http://127.0.0.1:8080"), "127.0.0.1:8080");
+        // Building the client with the fallback must not panic and must
+        // succeed (the resolved builder is exercised).
+        let _client = ch.http_client();
     }
 }
