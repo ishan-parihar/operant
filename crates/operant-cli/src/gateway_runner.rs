@@ -981,13 +981,23 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                         .send(operant_core::agent::ToolPermissionResponse::AllowSession);
                     continue;
                 }
-                // Send the permission prompt
-                let prompt = format!(
-                    "🔧 Permission required: {} — {}\nReply /approve to allow, /deny to cancel (60s timeout)",
-                    req.tool_name, req.description
-                );
-                let msg = OutgoingMessage::new(channel_id, &prompt).no_markdown();
-                let _ = gw_for_perm.send_to_platform(platform, msg).await;
+                // Send the permission prompt. Platforms that support
+                // interactive components (Telegram) render tappable
+                // approve/deny buttons via their send_approval_prompt
+                // override; the rest fall back to the plain-text /approve
+                // /deny prompt. (hermes send_exec_approval parity.)
+                if let Some(adapter) = gw_for_perm.adapter_for(platform) {
+                    let _ = adapter
+                        .send_approval_prompt(channel_id, &req.tool_name, &req.description)
+                        .await;
+                } else {
+                    let prompt = format!(
+                        "🔧 Permission required: {} — {}\nReply /approve to allow, /deny to cancel (60s timeout)",
+                        req.tool_name, req.description
+                    );
+                    let msg = OutgoingMessage::new(channel_id, &prompt).no_markdown();
+                    let _ = gw_for_perm.send_to_platform(platform, msg).await;
+                }
 
                 // Store the pending request keyed by channel_id
                 pending_permissions_for_perm

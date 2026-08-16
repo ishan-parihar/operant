@@ -666,6 +666,26 @@ pub trait PlatformAdapter: Send + Sync {
     async fn send_voice(&self, _channel_id: &str, _audio_data: &[u8], _format: &str) -> Result<()> {
         Ok(()) // default no-op for platforms that don't support voice
     }
+
+    /// Ask the operator to approve/deny a tool permission prompt.
+    ///
+    /// Default implementation sends a plain-text prompt instructing the
+    /// operator to reply `/approve` or `/deny`. Platforms that support
+    /// interactive components (e.g. Telegram inline keyboards) override this
+    /// to render tappable buttons; the resulting tap must resolve the same
+    /// way a text reply would (hermes `send_exec_approval` parity).
+    async fn send_approval_prompt(
+        &self,
+        channel_id: &str,
+        tool_name: &str,
+        description: &str,
+    ) -> Result<()> {
+        let prompt = format!(
+            "🔧 Permission required: {tool_name} — {description}\nReply /approve to allow, /deny to cancel (60s timeout)"
+        );
+        self.send_message(OutgoingMessage::new(channel_id, &prompt).no_markdown())
+            .await
+    }
 }
 
 /// Gateway for routing messages between platforms and the agent
@@ -892,6 +912,12 @@ impl Gateway {
     /// Get the number of registered adapters.
     pub fn adapter_count(&self) -> usize {
         self.adapters.len()
+    }
+
+    /// Get a registered adapter by platform name (adapters are keyed by
+    /// `PlatformAdapter::name()`).
+    pub fn adapter_for(&self, platform: &str) -> Option<Arc<dyn PlatformAdapter>> {
+        self.adapters.get(platform).cloned()
     }
 
     // (iter-151: Gateway::status() deleted — duplicate of get_platform_status,
@@ -1562,8 +1588,87 @@ impl PlatformAdapter for TelegramAdapter {
     }
 
     async fn handle_update(&self, update: serde_json::Value) -> Result<Option<IncomingMessage>> {
+        // Route callback_query approval taps before delegating to parse_update:
+        // a tap resolves the pending permission the same way a `/approve` or
+        // `/deny` text reply would, but the tap must also be answered so the
+        // inline keyboard stops showing its spinner. (hermes
+        // `send_exec_approval` parity — the tap and the text reply share the
+        // resolution path.)
+        if let Some(cb) = update.get("callback_query")
+            && let Some(action) = cb
+                .get("data")
+                .and_then(serde_json::Value::as_str)
+                .and_then(|d| d.strip_prefix("approval:"))
+        {
+            let channel_id = cb
+                .get("message")
+                .and_then(|m| m.get("chat"))
+                .and_then(|c| c.get("id"))
+                .and_then(serde_json::Value::as_i64)
+                .map(|i| i.to_string());
+            let cb_id = cb
+                .get("id")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default();
+
+            // Answer the callback to dismiss the spinner (best-effort).
+            if channel_id.is_some() {
+                let answer = serde_json::json!({
+                    "callback_query_id": cb_id,
+                    "text": match action {
+                        "approve" => "✅ Approved",
+                        "deny" => "❌ Denied",
+                        _ => "⚠️ Unknown action",
+                    },
+                });
+                if let Err(e) = self
+                    .client
+                    .post(format!("{}/answerCallbackQuery", self.api_url()))
+                    .json(&answer)
+                    .send()
+                    .await
+                {
+                    tracing::warn!("answerCallbackQuery failed: {e}");
+                }
+
+                // Synthesize the equivalent text command so the shared
+                // gateway_commands resolver handles the tap.
+                return Ok(Self::approval_message_from_callback(cb));
+            }
+        }
+
         // Parse Telegram update — delegates to the static parse_update
         TelegramAdapter::parse_update(update)
+    }
+
+    async fn send_approval_prompt(
+        &self,
+        channel_id: &str,
+        tool_name: &str,
+        description: &str,
+    ) -> Result<()> {
+        let prompt = format!(
+            "🔧 Permission required: {tool_name} — {description}\nTap a button to allow or cancel (60s timeout), or reply /approve / /deny."
+        );
+        // Inline keyboard with tappable approve/deny buttons (hermes
+        // `send_exec_approval` parity). Callback data uses the `approval:`
+        // prefix handled in `handle_update` above.
+        let body = serde_json::json!({
+            "chat_id": channel_id,
+            "text": prompt,
+            "reply_markup": {
+                "inline_keyboard": [[
+                    { "text": "✅ Approve", "callback_data": "approval:approve" },
+                    { "text": "❌ Deny", "callback_data": "approval:deny" }
+                ]]
+            }
+        });
+        self.client
+            .post(format!("{}/sendMessage", self.api_url()))
+            .json(&body)
+            .send()
+            .await?;
+        Ok(())
     }
 
     fn config_json(&self) -> serde_json::Value {
@@ -1791,6 +1896,44 @@ impl PlatformAdapter for TelegramAdapter {
             )));
         }
         Ok(())
+    }
+}
+
+impl TelegramAdapter {
+    /// Synthesize the `/approve` / `/deny` text command that an inline-keyboard
+    /// tap resolves to, so taps and text replies share the gateway_commands
+    /// resolution path (hermes `send_exec_approval` parity). Pure — no I/O —
+    /// so it is unit-testable without a live client.
+    fn approval_message_from_callback(cb: &serde_json::Value) -> Option<IncomingMessage> {
+        let action = cb
+            .get("data")
+            .and_then(serde_json::Value::as_str)
+            .and_then(|d| d.strip_prefix("approval:"))?;
+        let channel_id = cb
+            .get("message")
+            .and_then(|m| m.get("chat"))
+            .and_then(|c| c.get("id"))
+            .and_then(serde_json::Value::as_i64)
+            .map(|i| i.to_string())?;
+        Some(IncomingMessage::new(
+            "telegram",
+            cb.get("from")
+                .and_then(|f| f.get("id"))
+                .and_then(serde_json::Value::as_i64)
+                .map(|i| i.to_string())
+                .unwrap_or_default(),
+            cb.get("from")
+                .and_then(|f| f.get("username"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("unknown")
+                .to_string(),
+            channel_id,
+            match action {
+                "approve" => "/approve".to_string(),
+                "deny" => "/deny".to_string(),
+                other => format!("/approve-unknown-{other}"),
+            },
+        ))
     }
 }
 
@@ -3686,6 +3829,62 @@ mod tests {
         let config = GatewayConfig::default();
         assert!(!config.telegram_enabled);
         assert!(!config.discord_enabled);
+    }
+
+    /// An inline-keyboard approve tap must synthesize a `/approve` text
+    /// message on the same channel, so the shared gateway_commands resolver
+    /// handles it identically to a typed reply.
+    #[test]
+    fn approval_callback_approve_synthesizes_slash_approve() {
+        let cb = serde_json::json!({
+            "id": "cb_1",
+            "data": "approval:approve",
+            "from": {"id": 111, "username": "ishan"},
+            "message": {
+                "chat": {"id": -100123},
+                "message_id": 42,
+                "text": "🔧 Permission required: terminal"
+            }
+        });
+        let msg = TelegramAdapter::approval_message_from_callback(&cb).expect("callback parsed");
+        assert_eq!(msg.platform, "telegram");
+        assert_eq!(msg.user_id, "111");
+        assert_eq!(msg.channel_id, "-100123");
+        assert_eq!(msg.content, "/approve");
+    }
+
+    #[test]
+    fn approval_callback_deny_synthesizes_slash_deny() {
+        let cb = serde_json::json!({
+            "id": "cb_2",
+            "data": "approval:deny",
+            "from": {"id": 222, "username": "other"},
+            "message": {"chat": {"id": 999}}
+        });
+        let msg = TelegramAdapter::approval_message_from_callback(&cb).expect("callback parsed");
+        assert_eq!(msg.content, "/deny");
+        assert_eq!(msg.channel_id, "999");
+    }
+
+    #[test]
+    fn non_approval_callback_is_ignored() {
+        let cb = serde_json::json!({
+            "id": "cb_3",
+            "data": "some-other-action",
+            "from": {"id": 333},
+            "message": {"chat": {"id": 1}}
+        });
+        assert!(TelegramAdapter::approval_message_from_callback(&cb).is_none());
+    }
+
+    #[test]
+    fn callback_without_chat_is_ignored() {
+        let cb = serde_json::json!({
+            "id": "cb_4",
+            "data": "approval:approve",
+            "from": {"id": 444}
+        });
+        assert!(TelegramAdapter::approval_message_from_callback(&cb).is_none());
     }
 
     /// Echo handler that optionally blocks inside `handle` until released
