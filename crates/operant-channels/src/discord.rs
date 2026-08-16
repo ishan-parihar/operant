@@ -1659,6 +1659,14 @@ impl Channel for DiscordChannel {
         // the watchdog is disabled (recv will just pend forever).
         let _stall_tx_guard = stall_tx;
 
+        // Liveness probe (hermes `_start_liveness_probe` parity): Discord
+        // answers every heartbeat with op 11 (HEARTBEAT_ACK). Count
+        // consecutive heartbeats without an ACK; after `LIVENESS_ACK_LIMIT`
+        // in a row the gateway is presumed unresponsive and we tear down for
+        // the outer reconnect loop instead of waiting for the stall watchdog.
+        const LIVENESS_ACK_LIMIT: u32 = 3;
+        let mut heartbeats_since_ack: u32 = 0;
+
         loop {
             tokio::select! {
                 _ = stall_rx.recv() => {
@@ -1666,6 +1674,13 @@ impl Channel for DiscordChannel {
                     break;
                 }
                 _ = hb_rx.recv() => {
+                    heartbeats_since_ack += 1;
+                    if heartbeats_since_ack > LIVENESS_ACK_LIMIT {
+                        tracing::warn!(
+                            "Discord: no heartbeat ACK for {heartbeats_since_ack} heartbeats — gateway unresponsive, reconnecting"
+                        );
+                        break;
+                    }
                     let d = if sequence >= 0 { json!(sequence) } else { json!(null) };
                     let hb = json!({"op": 1, "d": d});
                     if write.send(Message::Text(hb.to_string().into())).await.is_err() {
@@ -1728,8 +1743,16 @@ impl Channel for DiscordChannel {
                             tracing::warn!("Discord: received Invalid Session (op 9), closing for restart");
                             break;
                         }
+                        // Op 11: HEARTBEAT_ACK — handled by the generic
+                        // liveness refresh below.
+                        11 => {}
                         _ => {}
                     }
+
+                    // Any successfully-parsed frame — heartbeat ACK or
+                    // dispatch — proves the gateway is alive, so refresh the
+                    // liveness counter regardless of opcode.
+                    heartbeats_since_ack = 0;
 
                     // Only handle MESSAGE_CREATE (opcode 0, type "MESSAGE_CREATE")
                     let event_type = event.get("t").and_then(|t| t.as_str()).unwrap_or("");
@@ -2425,6 +2448,31 @@ mod tests {
     fn discord_channel_name() {
         let ch = DiscordChannel::new("fake".into(), None, vec![], false, false);
         assert_eq!(ch.name(), "discord");
+    }
+    /// The liveness probe trips only after `LIVENESS_ACK_LIMIT` consecutive
+    /// heartbeats without any gateway frame (op 11 ACK or dispatch), and
+    /// any frame in between resets the counter.
+    #[test]
+    fn liveness_probe_trips_only_after_consecutive_missing_acks() {
+        const LIVENESS_ACK_LIMIT: u32 = 3;
+        // Mirrors the listen loop: heartbeat ticks increment, any parsed
+        // frame resets, a tick beyond the limit triggers reconnect.
+        let mut trips: Vec<bool> = Vec::new();
+        let mut heartbeats_since_ack: u32 = 0;
+
+        for frame in ["tick", "ack", "tick", "tick", "tick", "tick"] {
+            match frame {
+                "ack" => heartbeats_since_ack = 0,
+                _ => {
+                    heartbeats_since_ack += 1;
+                    trips.push(heartbeats_since_ack > LIVENESS_ACK_LIMIT);
+                }
+            }
+        }
+
+        // One tick before the ack (index 0), then 4 consecutive after the
+        // ack → trips at the 4th consecutive (index 4).
+        assert_eq!(trips, vec![false, false, false, false, true]);
     }
 
     #[test]

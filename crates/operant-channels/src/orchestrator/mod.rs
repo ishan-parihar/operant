@@ -4425,7 +4425,9 @@ fn build_channel_by_id(config: &Config, channel_id: &str) -> Result<Arc<dyn Chan
                 .with_tts(config.tts.clone())
                 .with_workspace_dir(config.workspace_dir.clone())
                 .with_approval_timeout_secs(tg.approval_timeout_secs)
-                .with_dm_topics(tg.dm_topics_enabled, tg.dm_topic_name.clone()),
+                .with_dm_topics(tg.dm_topics_enabled, tg.dm_topic_name.clone())
+                .with_link_previews(!tg.disable_link_previews)
+                .with_typing_cooldown_secs(tg.typing_cooldown_seconds),
             ))
         }
         "discord" => {
@@ -13580,6 +13582,8 @@ This is an example JSON object for profile settings."#;
             approval_timeout_secs: 120,
             dm_topics_enabled: false,
             dm_topic_name: "General".to_string(),
+            disable_link_previews: false,
+            typing_cooldown_seconds: 30.0,
         });
         match build_channel_by_id(&config, "telegram") {
             Ok(channel) => assert_eq!(channel.name(), "telegram"),

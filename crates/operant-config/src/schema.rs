@@ -7393,10 +7393,24 @@ pub struct TelegramConfig {
     /// Name for the per-chat DM topic. Default: "General".
     #[serde(default = "default_telegram_dm_topic_name")]
     pub dm_topic_name: String,
+    /// When true, Telegram link previews are disabled on outbound messages
+    /// (`link_preview_options.is_disabled`). Hermes `disable_link_previews`
+    /// parity. Default: false (previews on).
+    #[serde(default)]
+    pub disable_link_previews: bool,
+    /// Seconds to suppress Telegram typing-indicator refreshes for a chat
+    /// after a transient send failure (rate limit, timeout). Hermes
+    /// `typing_cooldown_seconds` parity. Default: 30.
+    #[serde(default = "default_telegram_typing_cooldown_secs")]
+    pub typing_cooldown_seconds: f64,
 }
 
 fn default_telegram_dm_topic_name() -> String {
     "General".to_string()
+}
+
+fn default_telegram_typing_cooldown_secs() -> f64 {
+    30.0
 }
 
 impl ChannelConfig for TelegramConfig {
@@ -12868,6 +12882,8 @@ auto_save = true
                     ack_reactions: None,
                     proxy_url: None,
                     approval_timeout_secs: default_telegram_approval_timeout_secs(),
+                    disable_link_previews: false,
+                    typing_cooldown_seconds: default_telegram_typing_cooldown_secs(),
                 }),
                 discord: None,
                 discord_history: None,
@@ -13802,6 +13818,8 @@ default_temperature = 0.7
             approval_timeout_secs: 120,
             dm_topics_enabled: false,
             dm_topic_name: default_telegram_dm_topic_name(),
+            disable_link_previews: false,
+            typing_cooldown_seconds: default_telegram_typing_cooldown_secs(),
         };
         let json = serde_json::to_string(&tc).unwrap();
         let parsed: TelegramConfig = serde_json::from_str(&json).unwrap();
@@ -17413,6 +17431,8 @@ require_otp_to_resume = true
             approval_timeout_secs: default_telegram_approval_timeout_secs(),
             dm_topics_enabled: false,
             dm_topic_name: default_telegram_dm_topic_name(),
+            disable_link_previews: false,
+            typing_cooldown_seconds: default_telegram_typing_cooldown_secs(),
         });
 
         // Save (triggers encryption)

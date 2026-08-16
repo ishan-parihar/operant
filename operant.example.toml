@@ -179,6 +179,8 @@ enabled = false
 # allowed_users = []
 # dm_topics_enabled = false   # per-DM forum topics (hermes parity)
 # dm_topic_name = "General"
+# disable_link_previews = false   # disable Telegram link previews on sends
+# typing_cooldown_seconds = 30.0  # typing-indicator cooldown after transient failures
 #
 # [channels.discord]
 # enabled = false

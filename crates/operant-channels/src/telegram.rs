@@ -429,6 +429,16 @@ pub struct TelegramChannel {
     /// inline-keyboard question to the active conversation. Falls back to the
     /// generic send+listen flow when no message has arrived yet.
     last_chat_id: std::sync::Mutex<Option<String>>,
+    /// When true, outbound messages include `link_preview_options` disabling
+    /// Telegram link previews (hermes `disable_link_previews` parity).
+    /// Default: true (previews on).
+    link_previews_enabled: bool,
+    /// Per-chat typing-indicator cooldown: chat_id -> instant until which
+    /// `sendChatAction` refreshes are suppressed after a transient failure
+    /// (rate limit, timeout). Hermes `_record_typing_cooldown` parity.
+    typing_cooldown_secs: f64,
+    typing_cooldown_until:
+        std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, std::time::Instant>>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -481,6 +491,11 @@ impl TelegramChannel {
             dm_topic_name: "General".to_string(),
             dm_topic_threads: std::sync::Mutex::new(std::collections::HashMap::new()),
             last_chat_id: std::sync::Mutex::new(None),
+            link_previews_enabled: true,
+            typing_cooldown_secs: 30.0,
+            typing_cooldown_until: std::sync::Arc::new(std::sync::Mutex::new(
+                std::collections::HashMap::new(),
+            )),
         }
     }
 
@@ -571,6 +586,20 @@ impl TelegramChannel {
         if !name.is_empty() {
             self.dm_topic_name = name.to_string();
         }
+        self
+    }
+
+    /// Toggle Telegram link previews on outbound messages (hermes
+    /// `disable_link_previews` parity). Pass `true` to keep previews on.
+    pub fn with_link_previews(mut self, enabled: bool) -> Self {
+        self.link_previews_enabled = enabled;
+        self
+    }
+
+    /// Configure the per-chat typing-indicator cooldown after transient
+    /// send failures (hermes `typing_cooldown_seconds` parity). Default 30s.
+    pub fn with_typing_cooldown_secs(mut self, secs: f64) -> Self {
+        self.typing_cooldown_secs = if secs > 0.0 { secs } else { 1.0 };
         self
     }
 
@@ -842,6 +871,17 @@ impl TelegramChannel {
 
     fn api_url(&self, method: &str) -> String {
         format!("{}/bot{}/{method}", self.api_base, self.bot_token)
+    }
+
+    /// `link_preview_options` value for outbound sendMessage bodies when
+    /// link previews are disabled (hermes `_link_preview_kwargs` parity).
+    /// `None` when previews stay on, so the field is omitted entirely.
+    fn link_preview_json(&self) -> Option<serde_json::Value> {
+        if self.link_previews_enabled {
+            None
+        } else {
+            Some(serde_json::json!({ "is_disabled": true }))
+        }
     }
 
     /// Register the bot's slash commands with Telegram via `setMyCommands`.
@@ -2295,6 +2335,9 @@ Allowlist Telegram username (without '@') or numeric user ID.",
             if let Some(tid) = thread_id {
                 markdown_body["message_thread_id"] = serde_json::Value::String(tid.to_string());
             }
+            if let Some(lp) = self.link_preview_json() {
+                markdown_body["link_preview_options"] = lp;
+            }
 
             let markdown_resp = self
                 .http_client()
@@ -2325,6 +2368,9 @@ Allowlist Telegram username (without '@') or numeric user ID.",
             // Add message_thread_id for forum topic support
             if let Some(tid) = thread_id {
                 plain_body["message_thread_id"] = serde_json::Value::String(tid.to_string());
+            }
+            if let Some(lp) = self.link_preview_json() {
+                plain_body["link_preview_options"] = lp;
             }
             let plain_resp = self
                 .http_client()
@@ -2915,6 +2961,9 @@ impl Channel for TelegramChannel {
         });
         if let Some(tid) = thread_id {
             body["message_thread_id"] = serde_json::Value::String(tid.to_string());
+        }
+        if let Some(lp) = self.link_preview_json() {
+            body["link_preview_options"] = lp;
         }
 
         let resp = self
@@ -3590,14 +3639,67 @@ Ensure only one `operant` process is using this bot token."
         let client = self.http_client();
         let url = self.api_url("sendChatAction");
         let chat_id = recipient.to_string();
+        let cooldown_secs = self.typing_cooldown_secs;
+        let cooldown_until = Arc::clone(&self.typing_cooldown_until);
 
         let handle = tokio::spawn(async move {
             loop {
-                let body = serde_json::json!({
-                    "chat_id": &chat_id,
-                    "action": "typing"
-                });
-                let _ = client.post(&url).json(&body).send().await;
+                // Suppress refreshes while this chat is in cooldown after a
+                // transient failure (hermes `_typing_in_cooldown` parity):
+                // hammering sendChatAction into a rate limit makes it worse
+                // and spams the API/logs.
+                let in_cooldown = {
+                    let mut map = cooldown_until.lock().unwrap_or_else(|e| e.into_inner());
+                    match map.get(&chat_id) {
+                        Some(until) if *until > std::time::Instant::now() => true,
+                        _ => {
+                            map.remove(&chat_id);
+                            false
+                        }
+                    }
+                };
+                if !in_cooldown {
+                    let body = serde_json::json!({
+                        "chat_id": &chat_id,
+                        "action": "typing"
+                    });
+                    match client.post(&url).json(&body).send().await {
+                        Ok(r) if r.status().is_success() => {
+                            // Success clears any stale cooldown.
+                            cooldown_until
+                                .lock()
+                                .unwrap_or_else(|e| e.into_inner())
+                                .remove(&chat_id);
+                        }
+                        Ok(r) => {
+                            let status = r.status();
+                            tracing::debug!(
+                                "Telegram typing indicator failed ({status}); suppressing refreshes for {cooldown_secs}s"
+                            );
+                            cooldown_until
+                                .lock()
+                                .unwrap_or_else(|e| e.into_inner())
+                                .insert(
+                                    chat_id.clone(),
+                                    std::time::Instant::now()
+                                        + Duration::from_secs_f64(cooldown_secs),
+                                );
+                        }
+                        Err(e) => {
+                            tracing::debug!(
+                                "Telegram typing indicator error: {e}; suppressing refreshes for {cooldown_secs}s"
+                            );
+                            cooldown_until
+                                .lock()
+                                .unwrap_or_else(|e| e.into_inner())
+                                .insert(
+                                    chat_id.clone(),
+                                    std::time::Instant::now()
+                                        + Duration::from_secs_f64(cooldown_secs),
+                                );
+                        }
+                    }
+                }
                 // Telegram typing indicator expires after 5s; refresh at 4s
                 tokio::time::sleep(Duration::from_secs(4)).await;
             }
@@ -3805,6 +3907,57 @@ mod tests {
     fn telegram_channel_name() {
         let ch = TelegramChannel::new("fake-token".into(), vec!["*".into()], false);
         assert_eq!(ch.name(), "telegram");
+    }
+
+    #[test]
+    fn link_previews_default_on_and_disablable() {
+        let ch = TelegramChannel::new("fake-token".into(), vec!["*".into()], false);
+        assert!(ch.link_preview_json().is_none(), "previews on by default");
+
+        let disabled = ch.with_link_previews(false);
+        assert_eq!(
+            disabled.link_preview_json(),
+            Some(serde_json::json!({ "is_disabled": true }))
+        );
+    }
+
+    #[test]
+    fn typing_cooldown_clamps_minimum() {
+        let base = TelegramChannel::new("fake-token".into(), vec!["*".into()], false);
+        assert_eq!(base.typing_cooldown_secs, 30.0);
+        let clamped = base.with_typing_cooldown_secs(0.0);
+        assert_eq!(clamped.typing_cooldown_secs, 1.0);
+        let normal = TelegramChannel::new("fake-token".into(), vec!["*".into()], false)
+            .with_typing_cooldown_secs(15.0);
+        assert_eq!(normal.typing_cooldown_secs, 15.0);
+    }
+
+    #[test]
+    fn typing_cooldown_state_blocks_until_expiry() {
+        let ch = TelegramChannel::new("fake-token".into(), vec!["*".into()], false);
+        // Insert a cooldown ending in the future and verify the loop's gate
+        // logic (in_cooldown check) suppresses refreshes.
+        ch.typing_cooldown_until
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(
+                "123".to_string(),
+                std::time::Instant::now() + Duration::from_secs(60),
+            );
+        let in_cooldown = {
+            let mut map = ch
+                .typing_cooldown_until
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            match map.get("123") {
+                Some(until) if *until > std::time::Instant::now() => true,
+                _ => {
+                    map.remove("123");
+                    false
+                }
+            }
+        };
+        assert!(in_cooldown);
     }
 
     #[test]
