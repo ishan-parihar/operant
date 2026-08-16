@@ -357,12 +357,12 @@ provider = "igs"
 # `load_pool(fb_provider)` parity): when the chain switches to it, that
 # provider rotates its own keys under free-tier pressure instead of failing
 # on the first 429.
-#
-# [providers.models.opencode-zen]
-# base_url = "https://zen.example/v1"
-# api_key = "..."
-# model = "deepseek-v4-flash-free"
-# timeout_secs = 180
+#  # [providers.models.opencode-zen]
+  # base_url = "https://zen.example/v1"
+  # api_key = "..."
+  # api_keys = ["sk-...", "sk-..."]   # extra keys for THIS provider's pool
+  # model = "deepseek-v4-flash-free"
+  # timeout_secs = 180
 #
 # [providers.models.gemini]
 # base_url = "https://generativelanguage.googleapis.com/v1beta/openai"

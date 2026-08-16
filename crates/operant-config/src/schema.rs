@@ -554,6 +554,13 @@ pub struct ModelProviderConfig {
     #[secret]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api_key: Option<String>,
+    /// Additional API keys for this provider's credential pool (hermes
+    /// multi-key-per-provider parity). The primary `api_key` is tried first;
+    /// these rotate in on 401/429/billing exhaustion, each with its own
+    /// error-class bench (hermes `load_pool(provider)` seeds every key a
+    /// provider owns). Empty by default.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub api_keys: Vec<String>,
     /// Override the provider type label. Rarely needed — only useful when you run two profiles against the same provider type (e.g. two different OpenAI-compatible gateways) and want to tell them apart in logs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,

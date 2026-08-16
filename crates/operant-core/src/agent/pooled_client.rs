@@ -16,6 +16,7 @@
 //! client's runtime key.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -92,6 +93,38 @@ impl PooledModelClient {
         );
     }
 
+    /// Build the error surfaced when the pool has no available credential.
+    ///
+    /// If a classified error was recorded during this rotation loop it is
+    /// returned as-is (it carries the underlying error class — normally
+    /// `RateLimited`). Otherwise the pool was *already* exhausted — e.g. all
+    /// keys benched by a previous call in the same turn — so surface the
+    /// earliest remaining bench as a `RateLimited` instead of an opaque
+    /// `Agent("no available keys")` error (hermes pool-exhaustion parity):
+    /// the outer fallback chain can then act on the rate-limit class and
+    /// switch providers instead of failing on an unclassifiable error.
+    fn pool_exhausted_error(&self, last_err: Option<Error>) -> Error {
+        if let Some(err) = last_err {
+            return err;
+        }
+        let now = chrono::Utc::now();
+        let earliest = self
+            .pool
+            .list()
+            .iter()
+            .filter_map(|c| c.error_reset_at.map(|r| (r - now).num_seconds().max(0)))
+            .min();
+        if let Some(secs) = earliest {
+            return Error::RateLimited {
+                retry_after: Duration::from_secs(secs.max(1) as u64),
+            };
+        }
+        Error::Agent(format!(
+            "Credential pool for provider '{}' has no available keys",
+            self.pool.provider()
+        ))
+    }
+
     /// The non-streaming rotation loop.
     ///
     /// Bounded by the pool size: each iteration consumes one available key
@@ -125,12 +158,7 @@ impl PooledModelClient {
             }
         }
 
-        Err(last_err.unwrap_or_else(|| {
-            Error::Agent(format!(
-                "Credential pool for provider '{}' has no available keys",
-                self.pool.provider()
-            ))
-        }))
+        Err(self.pool_exhausted_error(last_err))
     }
 }
 
@@ -216,12 +244,7 @@ impl ModelClient for PooledModelClient {
             }
         }
 
-        Err(last_err.unwrap_or_else(|| {
-            Error::Agent(format!(
-                "Credential pool for provider '{}' has no available keys",
-                self.pool.provider()
-            ))
-        }))
+        Err(self.pool_exhausted_error(last_err))
     }
 
     fn set_api_key(&self, api_key: &str) {
@@ -449,6 +472,45 @@ mod tests {
         let pooled = PooledModelClient::new(client, pool);
         let err = pooled.chat(request()).await.unwrap_err();
         assert!(err.to_string().contains("no available keys"));
+    }
+
+    #[tokio::test]
+    async fn exhausted_pool_surfaces_rate_limited_with_remaining_bench() {
+        // Regression: after a previous call benched every key, the NEXT call
+        // found the pool empty and surfaced an opaque `Agent("no available
+        // keys")` error — unclassifiable, so the outer fallback chain never
+        // switched providers. Now it must surface `RateLimited` with the
+        // earliest remaining bench (hermes pool-exhaustion parity), letting
+        // the chain act on the rate-limit class.
+        let seen = recording();
+        let client = ScriptedClient::new(vec![Outcome::Ok(chat_response("mock"))], seen);
+        let pooled = PooledModelClient::new(client, pool_with(&["k1", "k2"]));
+
+        // Simulate a previous call that benched both keys for ~10s.
+        let reset_at = chrono::Utc::now() + chrono::Duration::seconds(10);
+        for cred in pooled.pool.list() {
+            pooled.pool.invalidate_with_reset(
+                &cred.id,
+                Some(429),
+                Some("rate_limit"),
+                Some("rate limit"),
+                Some(reset_at),
+                false,
+            );
+        }
+        assert!(!pooled.pool.has_available());
+
+        let err = pooled.chat(request()).await.unwrap_err();
+        match err {
+            Error::RateLimited { retry_after } => {
+                let secs = retry_after.as_secs();
+                assert!(
+                    (1..=10).contains(&secs),
+                    "expected remaining bench ~10s, got {secs}s"
+                );
+            }
+            other => panic!("expected RateLimited, got {other:?}"),
+        }
     }
 
     /// Streaming mock: each `chat_streaming` call pops the next scripted

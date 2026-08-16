@@ -727,7 +727,9 @@ fn build_pool_registry(
         "env",
     );
 
-    // Profile providers: each gets its own pool keyed by its profile name.
+    // Profile providers: each gets its own pool keyed by its profile name,
+    // seeded with the effective `api_key` plus the profile's own
+    // `api_keys` vector (hermes multi-key-per-provider parity).
     for name in config.providers.models.keys() {
         let profile = &config.providers.models[name];
         let effective = client_config_from_provider(primary_cfg, profile);
@@ -741,6 +743,14 @@ fn build_pool_registry(
                 &format!("{name}-primary"),
                 key,
                 "config ([providers] models)",
+            );
+        }
+        for (i, key) in profile.api_keys.iter().enumerate() {
+            registry.add_seed(
+                name,
+                &format!("{name}-extra-{i}"),
+                key,
+                "config ([providers] models api_keys)",
             );
         }
     }

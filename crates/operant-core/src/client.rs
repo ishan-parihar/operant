@@ -144,6 +144,34 @@ impl OpenAIClient {
         }
     }
 
+    /// Effective API key: the runtime override (credential-pool rotation)
+    /// if set, else the configured key, else a stable fallback.
+    fn effective_api_key(&self) -> String {
+        if let Ok(slot) = self.api_key_override.read()
+            && let Some(key) = slot.as_deref().filter(|k| !k.is_empty())
+        {
+            return key.to_string();
+        }
+        self.config
+            .api_key
+            .clone()
+            .filter(|k| !k.is_empty())
+            .unwrap_or_else(|| "default".to_string())
+    }
+
+    /// Rate-limiter bucket key: model + current credential.
+    ///
+    /// Keying by credential (hermes parity) means a 429 on one key drains
+    /// only that key's bucket — rotation attempts with the pool's other keys
+    /// (and the fallback provider's own client) are not locally rejected for
+    /// the model's entire 60s drain window, so the rotation path can actually
+    /// reach the provider instead of benching healthy keys on local
+    /// rejections. Without a pool the single configured key behaves exactly
+    /// as before.
+    fn limiter_key(&self, model: &str) -> String {
+        format!("{}:{}", model, self.effective_api_key())
+    }
+
     pub(crate) fn config_clone(&self) -> ClientConfig {
         self.config.clone()
     }
@@ -323,7 +351,11 @@ impl OpenAIClient {
         // Pre-flight rate-limit check (streaming does not retry mid-stream).
         // (The bounded error-body read helper is defined below; both non-2xx
         // paths in this file use it instead of unbounded `response.text()`.)
-        if let Err(e) = self.rate_limiter.check_rate_limit(model).await {
+        if let Err(e) = self
+            .rate_limiter
+            .check_rate_limit(&self.limiter_key(model))
+            .await
+        {
             let retry_after = match e {
                 RateLimitError::TooManyRequests { retry_after_secs } => retry_after_secs,
                 _ => 60,
@@ -387,7 +419,9 @@ impl OpenAIClient {
             let body = read_bounded_error_body(response).await;
 
             if status == 429 {
-                self.rate_limiter.drain_bucket(model).await;
+                self.rate_limiter
+                    .drain_bucket(&self.limiter_key(model))
+                    .await;
             }
 
             // Retry on 5xx if attempts remain.
@@ -437,7 +471,11 @@ impl OpenAIClient {
 
         for attempt in 1..=max_retries {
             // 1. Proactive rate-limit check (consume a token).
-            if let Err(e) = self.rate_limiter.check_rate_limit(model).await {
+            if let Err(e) = self
+                .rate_limiter
+                .check_rate_limit(&self.limiter_key(model))
+                .await
+            {
                 let wait = match e {
                     RateLimitError::TooManyRequests { retry_after_secs } => {
                         Duration::from_secs(retry_after_secs)
@@ -490,7 +528,9 @@ impl OpenAIClient {
 
             // 3. Handle 429 rate limiting.
             if status == 429 {
-                self.rate_limiter.drain_bucket(model).await;
+                self.rate_limiter
+                    .drain_bucket(&self.limiter_key(model))
+                    .await;
 
                 let retry_after = retry_after_hdr.unwrap_or_else(|| {
                     Duration::from_secs(exponential_backoff_secs(attempt, base_delay, max_delay))

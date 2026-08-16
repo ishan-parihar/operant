@@ -103,6 +103,23 @@ impl FallbackModelClient {
         Some(result)
     }
 
+    /// Whether an error warrants switching to the next provider in the
+    /// fallback chain (hermes parity).
+    ///
+    /// The switch fires on auth/billing errors AND on credential-pool
+    /// exhaustion, which surfaces as `RateLimited` once every key is benched
+    /// (the pooled client reports the underlying class instead of an opaque
+    /// "no keys" error). A fully rate-limited provider is exactly when a
+    /// fallback provider's separate quota should be tried; the registry's
+    /// anti-thrash cooldown bounds repeat switching.
+    fn should_switch_provider(classified: &ClassifiedError) -> bool {
+        classified.is_auth()
+            || matches!(
+                classified.reason,
+                FailoverReason::Billing | FailoverReason::RateLimit
+            )
+    }
+
     /// Try the next provider from the registry for streaming.
     /// Called by chat_streaming() after try_models returns an auth/billing error.
     async fn try_next_provider_streaming(
@@ -276,7 +293,7 @@ impl ModelClient for FallbackModelClient {
             // Check for auth/billing errors → try provider fallback
             if let Err(ref e) = result {
                 let classified = Self::classify_error(e);
-                if (classified.is_auth() || matches!(classified.reason, FailoverReason::Billing))
+                if Self::should_switch_provider(&classified)
                     && let Some(provider_result) = self.try_next_provider_chat(&request).await
                 {
                     return provider_result;
@@ -286,10 +303,10 @@ impl ModelClient for FallbackModelClient {
         }
 
         let result = self.try_models(&request, |req| self.inner.chat(req)).await;
-        // Check for auth/billing errors → try provider fallback
+        // Check for auth/billing/rate-limit-exhaustion errors → try provider fallback
         if let Err(ref e) = result {
             let classified = Self::classify_error(e);
-            if (classified.is_auth() || matches!(classified.reason, FailoverReason::Billing))
+            if Self::should_switch_provider(&classified)
                 && let Some(provider_result) = self.try_next_provider_chat(&request).await
             {
                 return provider_result;
@@ -306,7 +323,7 @@ impl ModelClient for FallbackModelClient {
             let result = self.inner.chat_streaming(request.clone()).await;
             if let Err(ref e) = result {
                 let classified = Self::classify_error(e);
-                if (classified.is_auth() || matches!(classified.reason, FailoverReason::Billing))
+                if Self::should_switch_provider(&classified)
                     && let Some(provider_result) = self.try_next_provider_streaming(&request).await
                 {
                     return provider_result;
@@ -320,7 +337,7 @@ impl ModelClient for FallbackModelClient {
             .await;
         if let Err(ref e) = result {
             let classified = Self::classify_error(e);
-            if (classified.is_auth() || matches!(classified.reason, FailoverReason::Billing))
+            if Self::should_switch_provider(&classified)
                 && let Some(provider_result) = self.try_next_provider_streaming(&request).await
             {
                 return provider_result;
@@ -690,11 +707,47 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn rate_limit_exhaustion_triggers_provider_switch() {
+        use crate::agent::provider_registry::{ProviderEntry, ProviderRegistry};
+
+        // Primary returns RateLimited — the class a credential pool surfaces
+        // once every key is benched (pool exhaustion) — and the fallback
+        // provider succeeds. Hermes parity: a fully rate-limited provider
+        // should switch to the fallback provider's separate quota.
+        let primary_client = MockModelClient::new("openai", vec![MockResult::RateLimited]);
+        let fallback_client =
+            MockModelClient::new("anthropic", vec![MockResult::Ok(chat_response("claude-3"))]);
+
+        let mut clients = std::collections::HashMap::new();
+        clients.insert("openai".to_string(), primary_client);
+        clients.insert("anthropic".to_string(), fallback_client);
+
+        let chain = vec![
+            ProviderEntry {
+                name: "openai".to_string(),
+                model: "gpt-4".to_string(),
+            },
+            ProviderEntry {
+                name: "anthropic".to_string(),
+                model: "claude-3".to_string(),
+            },
+        ];
+        let registry = Arc::new(ProviderRegistry::new(clients, chain));
+
+        let inner = MockModelClient::new("openai", vec![MockResult::RateLimited]);
+        let client = FallbackModelClient::new(inner, "gpt-4".into(), vec![], true)
+            .with_provider_registry(registry);
+
+        let result = client.chat(make_request()).await.unwrap();
+        assert_eq!(result.model, "claude-3");
+    }
+
+    #[tokio::test]
     async fn non_auth_error_does_not_trigger_provider_switch() {
         use crate::agent::provider_registry::{ProviderEntry, ProviderRegistry};
 
         // Primary provider returns 503 (server error) → should NOT trigger provider switch
-        // (provider switch is only for auth/billing errors)
+        // (provider switch is only for auth/billing/rate-limit-exhaustion errors)
         let primary_client = MockModelClient::new("openai", vec![MockResult::ServerError]);
         let fallback_client =
             MockModelClient::new("anthropic", vec![MockResult::Ok(chat_response("claude-3"))]);
