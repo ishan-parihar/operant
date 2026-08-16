@@ -422,34 +422,48 @@ async fn cmd_stop() -> Result<()> {
         .args(["--user", "stop", "operant-gateway"])
         .output()
         .await;
-
-    if let Ok(output) = &sysd
-        && output.status.success()
-    {
+    let sysd_stopped = matches!(&sysd, Ok(output) if output.status.success());
+    if sysd_stopped {
         println!("Gateway service stopped via systemd.");
+    }
+
+    // A systemd stop does not cover `operant gateway run` foreground
+    // processes — kill whatever the PID file tracks before declaring stop.
+    if kill_gateway_by_pid_file() {
         return Ok(());
     }
 
-    let pid_path = operant_core::platform::operant_home().join("gateway.pid");
-    if let Ok(pid_str) = std::fs::read_to_string(&pid_path)
-        && let Ok(pid) = pid_str.trim().parse::<u32>()
-    {
-        let kill = tokio::process::Command::new("kill")
-            .arg(pid.to_string())
-            .output()
-            .await;
-        if let Ok(k) = kill
-            && k.status.success()
-        {
-            println!("Gateway process ({}) killed.", pid);
-            let _ = std::fs::remove_file(&pid_path);
-            return Ok(());
-        }
+    if !sysd_stopped {
+        let msg = crate::gateway_runner::stop_gateway().await?;
+        println!("{}", msg);
     }
-
-    let msg = crate::gateway_runner::stop_gateway().await?;
-    println!("{}", msg);
     Ok(())
+}
+
+/// Kill the gateway process tracked by `gateway.pid`, if any.
+///
+/// Returns `true` when a process was killed (the PID file is removed in
+/// that case). Used by `gateway stop` and `gateway uninstall` so a
+/// foreground `operant gateway run` is never left orphaned after the
+/// systemd service is stopped.
+fn kill_gateway_by_pid_file() -> bool {
+    let pid_path = operant_core::platform::operant_home().join("gateway.pid");
+    let Ok(pid_str) = std::fs::read_to_string(&pid_path) else {
+        return false;
+    };
+    let Ok(pid) = pid_str.trim().parse::<u32>() else {
+        return false;
+    };
+    let killed = std::process::Command::new("kill")
+        .arg(pid.to_string())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if killed {
+        println!("Gateway process ({}) killed.", pid);
+        let _ = std::fs::remove_file(&pid_path);
+    }
+    killed
 }
 
 /// Restart the gateway service.
@@ -512,10 +526,9 @@ async fn cmd_uninstall() -> Result<()> {
         .output()
         .await;
 
-    let pid_path = operant_core::platform::operant_home().join("gateway.pid");
-    if pid_path.exists() {
-        let _ = std::fs::remove_file(&pid_path);
-    }
+    // Never leave a foreground `gateway run` orphaned — kill it before
+    // removing the PID file.
+    kill_gateway_by_pid_file();
 
     println!("Gateway service uninstalled.");
     Ok(())
