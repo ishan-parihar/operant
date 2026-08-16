@@ -329,6 +329,17 @@ provider = "igs"
 # from the model (e.g. opencode-zen, openai, anthropic). Unknown values fall
 # back to fill_first, mirroring hermes `get_pool_strategy()`.
 # strategies = { opencode-zen = "round_robin", openai = "least_used" }
+#
+# Pools are created PER PROVIDER on demand (hermes `load_pool(provider)`
+# parity): the primary provider is seeded from `[client] api_key` +
+# `additional_api_keys` + the provider's env var, and every
+# `[providers.models.<name>]` profile below gets its OWN pool seeded from its
+# `api_key`. Each provider rotates its own keys on 429/401/billing
+# (benched by error class: 401 → 5m, 429 → 1h, sole-credential transient →
+# 60s) before the cross-provider fallback chain is consulted — so free-tier
+# usage with several API keys stays alive under rate-limit pressure.
+# `client.additional_api_keys = ["sk-...", "sk-..."]` adds more keys to the
+# primary provider's pool.
 
 # [auxiliary_models]
 # Optional auxiliary model configurations for MoA / side-LLM tasks.
@@ -341,6 +352,11 @@ provider = "igs"
 # thrash cooldowns apply). Entries referencing an unknown profile key are
 # skipped with a warning. Same-provider model swaps are configured with
 # `agent.fallback_models` above.
+#
+# Each profile also becomes its own credential pool (hermes
+# `load_pool(fb_provider)` parity): when the chain switches to it, that
+# provider rotates its own keys under free-tier pressure instead of failing
+# on the first 429.
 #
 # [providers.models.opencode-zen]
 # base_url = "https://zen.example/v1"

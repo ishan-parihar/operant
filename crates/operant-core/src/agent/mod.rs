@@ -4219,6 +4219,9 @@ pub use model_client::{ChatRequest, ModelClient, StreamChunk};
 mod fallback;
 pub use fallback::{ClassifiedError, FallbackModelClient};
 
+mod pooled_client;
+pub use pooled_client::PooledModelClient;
+
 pub mod clients;
 
 #[cfg(test)]

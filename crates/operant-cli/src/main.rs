@@ -685,6 +685,87 @@ fn client_config_from_provider(
     ccfg
 }
 
+/// Build the per-provider credential-pool registry (hermes `load_pool`
+/// parity). Every provider that can carry a key gets its own pool, seeded
+/// from config, so same-provider multi-key rotation works under free-tier
+/// pressure *and* each fallback provider in the chain rotates its own keys
+/// instead of failing on the first 429.
+///
+/// Seeds:
+/// * primary provider — `client.api_key` + `client.additional_api_keys` +
+///   the provider's canonical env var;
+/// * every `[providers] models.<name>` profile — its `api_key` (the effective
+///   key after inheritance, i.e. profile key or primary key).
+fn build_pool_registry(
+    config: &AppConfig,
+    primary_provider: &str,
+    primary_cfg: &ClientConfig,
+) -> std::sync::Arc<operant_core::credential_pool::CredentialPoolRegistry> {
+    use operant_core::credential_pool::CredentialPoolRegistry;
+    let registry = CredentialPoolRegistry::new(config.credential_pool.clone());
+
+    // Primary provider: configured key + additional keys + env var.
+    if let Some(key) = primary_cfg
+        .api_key
+        .as_deref()
+        .filter(|k| !k.trim().is_empty())
+    {
+        registry.add_seed(primary_provider, "primary", key, "config (client.api_key)");
+    }
+    for (i, key) in config.client.additional_api_keys.iter().enumerate() {
+        registry.add_seed(
+            primary_provider,
+            &format!("additional-{i}"),
+            key,
+            "config (client.additional_api_keys)",
+        );
+    }
+    registry.add_seed(
+        primary_provider,
+        &crate::cmd_auth::provider_env_var(primary_provider),
+        &std::env::var(crate::cmd_auth::provider_env_var(primary_provider)).unwrap_or_default(),
+        "env",
+    );
+
+    // Profile providers: each gets its own pool keyed by its profile name.
+    for name in config.providers.models.keys() {
+        let profile = &config.providers.models[name];
+        let effective = client_config_from_provider(primary_cfg, profile);
+        if let Some(key) = effective
+            .api_key
+            .as_deref()
+            .filter(|k| !k.trim().is_empty())
+        {
+            registry.add_seed(
+                name,
+                &format!("{name}-primary"),
+                key,
+                "config ([providers] models)",
+            );
+        }
+    }
+
+    tracing::info!(
+        providers = ?registry.providers(),
+        "Per-provider credential pool registry ready"
+    );
+    std::sync::Arc::new(registry)
+}
+
+/// Wrap a provider client in a pooled client carrying that provider's
+/// on-demand pool (hermes pool-per-provider parity). An empty pool degrades
+/// to a passthrough, so wrapping is unconditional.
+fn wrap_pooled(
+    client: std::sync::Arc<dyn operant_core::agent::ModelClient>,
+    provider: &str,
+    registry: &std::sync::Arc<operant_core::credential_pool::CredentialPoolRegistry>,
+) -> std::sync::Arc<dyn operant_core::agent::ModelClient> {
+    std::sync::Arc::new(operant_core::agent::PooledModelClient::new(
+        client,
+        registry.get_or_create(provider),
+    ))
+}
+
 /// Build a [`ProviderRegistry`] from the `[providers]` section — hermes
 /// `fallback_providers` parity for cross-provider switching.
 ///
@@ -696,6 +777,7 @@ fn build_provider_registry(
     primary_provider: &str,
     primary_model: &str,
     primary_cfg: &ClientConfig,
+    pool_registry: &std::sync::Arc<operant_core::credential_pool::CredentialPoolRegistry>,
 ) -> Option<std::sync::Arc<operant_core::agent::provider_registry::ProviderRegistry>> {
     use operant_core::agent::provider_registry::{ProviderEntry, ProviderRegistry};
 
@@ -708,20 +790,31 @@ fn build_provider_registry(
         String,
         std::sync::Arc<dyn operant_core::agent::ModelClient>,
     > = std::collections::HashMap::new();
-    // Primary client — entry 0 of the chain.
-    let primary_arc: std::sync::Arc<dyn operant_core::agent::ModelClient> = std::sync::Arc::new(
-        OpenAIModelClient::new(OpenAIClient::new(primary_cfg.clone())),
+    // Primary client — entry 0 of the chain. Pooled so the primary provider
+    // rotates its own keys too.
+    let primary_arc = wrap_pooled(
+        std::sync::Arc::new(OpenAIModelClient::new(OpenAIClient::new(
+            primary_cfg.clone(),
+        ))),
+        primary_provider,
+        pool_registry,
     );
     clients.insert(primary_provider.to_string(), primary_arc);
 
     // Profile clients, deterministic order (HashMap has no stable iteration).
+    // Each is pooled with its own per-provider pool (hermes
+    // `load_pool(fb_provider)` parity — the fallback provider rotates keys
+    // under free-tier pressure instead of failing on the first 429).
     let mut names: Vec<&String> = models.keys().collect();
     names.sort();
     for name in names {
         let profile = &models[name];
         let ccfg = client_config_from_provider(primary_cfg, profile);
-        let client: std::sync::Arc<dyn operant_core::agent::ModelClient> =
-            std::sync::Arc::new(OpenAIModelClient::new(OpenAIClient::new(ccfg)));
+        let client = wrap_pooled(
+            std::sync::Arc::new(OpenAIModelClient::new(OpenAIClient::new(ccfg))),
+            name,
+            pool_registry,
+        );
         clients.insert(name.clone(), client);
     }
 
@@ -768,27 +861,38 @@ fn create_model_client_with_fallback(
     provider: &str,
     model: &str,
     config: &AppConfig,
-) -> Box<dyn operant_core::agent::ModelClient> {
-    let primary = create_model_client(provider, config);
+) -> (
+    Box<dyn operant_core::agent::ModelClient>,
+    Option<std::sync::Arc<operant_core::credential_pool::CredentialPoolRegistry>>,
+) {
+    let primary_cfg = client_config(config);
+    let pool_registry = build_pool_registry(config, provider, &primary_cfg);
+    // Primary client is pooled too: same-provider multi-key rotation happens
+    // inside the client on 429/401/billing (hermes pool-per-provider parity).
+    let primary_pooled: Box<dyn operant_core::agent::ModelClient> =
+        Box::new(operant_core::agent::PooledModelClient::new(
+            std::sync::Arc::from(create_model_client(provider, config)),
+            pool_registry.get_or_create(provider),
+        ));
+
     let has_chain =
         !config.providers.models.is_empty() || !config.providers.fallback_chain.is_empty();
     if !config.agent.fallback_on_errors || (config.agent.fallback_models.is_empty() && !has_chain) {
-        return primary;
+        return (primary_pooled, Some(pool_registry));
     }
 
-    let primary_arc: std::sync::Arc<dyn operant_core::agent::ModelClient> =
-        std::sync::Arc::from(primary);
     let mut fallback = operant_core::agent::FallbackModelClient::new(
-        primary_arc,
+        std::sync::Arc::from(primary_pooled),
         model.to_string(),
         config.agent.fallback_models.clone(),
         true,
     );
-    if let Some(registry) = build_provider_registry(config, provider, model, &client_config(config))
+    if let Some(registry) =
+        build_provider_registry(config, provider, model, &primary_cfg, &pool_registry)
     {
         fallback = fallback.with_provider_registry(registry);
     }
-    Box::new(fallback)
+    (Box::new(fallback), Some(pool_registry))
 }
 
 pub(crate) fn client_config(config: &AppConfig) -> ClientConfig {
@@ -1246,7 +1350,8 @@ pub(crate) async fn create_runtime_agent(
 
     let provider = crate::tui::provider::infer_provider_from_model(&behavior.model)
         .unwrap_or_else(|| "openai".to_string());
-    let model_client = create_model_client_with_fallback(&provider, &behavior.model, config);
+    let (model_client, pool_registry) =
+        create_model_client_with_fallback(&provider, &behavior.model, config);
 
     let context_window = core.agent_config.context_window;
     Ok({
@@ -1299,7 +1404,7 @@ pub(crate) async fn create_runtime_agent(
             agent = agent.with_memory_provider(provider);
         }
         configure_checkpoints(config);
-        agent = attach_credential_pool(agent, &provider, config);
+        agent = attach_credential_pool(agent, &provider, config, pool_registry.as_ref());
         agent
     })
 }
@@ -1323,7 +1428,8 @@ pub(crate) async fn create_agent_without_events(
 
     let provider = crate::tui::provider::infer_provider_from_model(&config.agent.model)
         .unwrap_or_else(|| "openai".to_string());
-    let model_client = create_model_client_with_fallback(&provider, &config.agent.model, config);
+    let (model_client, pool_registry) =
+        create_model_client_with_fallback(&provider, &config.agent.model, config);
 
     let context_window = core.agent_config.context_window;
     Ok({
@@ -1364,7 +1470,7 @@ pub(crate) async fn create_agent_without_events(
             agent = agent.with_memory_provider(provider);
         }
         configure_checkpoints(config);
-        agent = attach_credential_pool(agent, &provider, config);
+        agent = attach_credential_pool(agent, &provider, config, pool_registry.as_ref());
         agent
     })
 }
@@ -1545,33 +1651,62 @@ fn configure_checkpoints(config: &AppConfig) {
     );
 }
 
-fn attach_credential_pool(agent: OperantAgent, provider: &str, config: &AppConfig) -> OperantAgent {
+/// Attach the primary provider's credential pool to the agent (hermes
+/// `_credential_pool` pattern) for the agent-loop last-resort rotation.
+///
+/// When a pool registry is supplied (built by
+/// [`create_model_client_with_fallback`]), the agent shares the *same* pool
+/// instance the pooled client uses, so exhaustion/cooldown state stays
+/// consistent between the client-layer rotation and the agent-loop rotation.
+/// Without a registry (e.g. tests), a local pool is seeded from the env var
+/// + `client.additional_api_keys` as before.
+fn attach_credential_pool(
+    agent: OperantAgent,
+    provider: &str,
+    config: &AppConfig,
+    pool_registry: Option<&std::sync::Arc<operant_core::credential_pool::CredentialPoolRegistry>>,
+) -> OperantAgent {
     if !config.credential_pool.enabled {
         return agent;
     }
-    let mut pool = operant_core::credential_pool::CredentialPool::new(provider);
-    pool.seed_from_env(&crate::cmd_auth::provider_env_var(provider));
-    for key in &config.client.additional_api_keys {
-        if !key.trim().is_empty() {
-            pool.add(operant_core::credential_pool::PooledCredential::new(
-                &format!("additional-{}", key.len()),
-                operant_core::credential_pool::AuthType::ApiKey,
-                key,
-                "config (client.additional_api_keys)",
-            ));
+    let pool = match pool_registry {
+        Some(registry) => {
+            let pool = registry.get_or_create(provider);
+            if !pool.has_credentials() {
+                return agent;
+            }
+            pool
         }
-    }
-    // Per-provider strategy (hermes `credential_pool_strategies` parity):
-    // the provider's entry in `strategies` wins, else the global `strategy`,
-    // else fill_first — same fail-closed default as hermes `get_pool_strategy()`.
-    let strategy = config.credential_pool.strategy_for(provider);
-    pool.set_strategy(strategy);
-    if pool.has_credentials() {
-        tracing::info!(provider = %provider, creds = pool.len(), "Attached credential pool");
-        agent.with_credential_pool(std::sync::Arc::new(pool))
-    } else {
-        agent
-    }
+        None => {
+            let mut pool = operant_core::credential_pool::CredentialPool::new(provider);
+            pool.seed_from_env(&crate::cmd_auth::provider_env_var(provider));
+            for key in &config.client.additional_api_keys {
+                if !key.trim().is_empty() {
+                    pool.add(operant_core::credential_pool::PooledCredential::new(
+                        &format!("additional-{}", key.len()),
+                        operant_core::credential_pool::AuthType::ApiKey,
+                        key,
+                        "config (client.additional_api_keys)",
+                    ));
+                }
+            }
+            // Per-provider strategy (hermes `credential_pool_strategies`
+            // parity): the provider's entry wins, else global, else
+            // fill_first — hermes `get_pool_strategy()` fail-closed default.
+            pool.set_strategy(config.credential_pool.strategy_for(provider));
+            if !pool.has_credentials() {
+                return agent;
+            }
+            std::sync::Arc::new(pool)
+        }
+    };
+    tracing::info!(
+        provider = %provider,
+        creds = pool.len(),
+        strategy = %pool.strategy().as_str(),
+        "Attached credential pool"
+    );
+    agent.with_credential_pool(pool)
 }
 
 async fn load_repo_memory_manager() -> Result<(MemoryManager, Option<Arc<dyn MemoryProvider>>)> {
@@ -2357,6 +2492,7 @@ mod tests {
         let mut config = AppConfig::default();
         config.agent.model = "laguna-s-2.1-free".to_string();
         config.agent.fallback_models = vec!["deepseek-v4-flash-free".to_string()];
+        config.client.api_key = Some("sk-primary".to_string());
         config.providers.models.insert(
             "zen-fallback".to_string(),
             ModelProviderConfig {
@@ -2397,12 +2533,21 @@ mod tests {
         assert_eq!(ccfg.timeout, Duration::from_secs(300));
     }
 
+    fn test_pool_registry(
+        config: &AppConfig,
+        provider: &str,
+    ) -> std::sync::Arc<operant_core::credential_pool::CredentialPoolRegistry> {
+        build_pool_registry(config, provider, &client_config(config))
+    }
+
     #[test]
     fn build_provider_registry_orders_chain_primary_first() {
         let config = test_config_with_providers();
         let primary_cfg = client_config(&config);
+        let pools = test_pool_registry(&config, "free");
         let registry =
-            build_provider_registry(&config, "free", "laguna-s-2.1-free", &primary_cfg).unwrap();
+            build_provider_registry(&config, "free", "laguna-s-2.1-free", &primary_cfg, &pools)
+                .unwrap();
 
         assert_eq!(registry.active_provider().as_deref(), Some("free"));
         // Chain: primary + configured fallback entry.
@@ -2425,8 +2570,10 @@ mod tests {
                 model: "nope".to_string(),
             });
         let primary_cfg = client_config(&config);
+        let pools = test_pool_registry(&config, "free");
         let registry =
-            build_provider_registry(&config, "free", "laguna-s-2.1-free", &primary_cfg).unwrap();
+            build_provider_registry(&config, "free", "laguna-s-2.1-free", &primary_cfg, &pools)
+                .unwrap();
         // Unknown entry is skipped — only the valid fallback remains.
         assert!(registry.switch_to_next().is_some());
         // Chain is exhausted after the one valid fallback.
@@ -2437,8 +2584,9 @@ mod tests {
     fn build_provider_registry_none_without_chain() {
         let config = AppConfig::default(); // no [providers]
         let primary_cfg = client_config(&config);
+        let pools = test_pool_registry(&config, "openai");
         assert!(
-            build_provider_registry(&config, "openai", "gpt-4o", &primary_cfg).is_none(),
+            build_provider_registry(&config, "openai", "gpt-4o", &primary_cfg, &pools).is_none(),
             "no [providers] → no registry"
         );
     }
@@ -2453,7 +2601,8 @@ mod tests {
         // raw primary client (early return, no FallbackModelClient built).
         let mut config = test_config_with_providers();
         config.agent.fallback_on_errors = false;
-        let client = create_model_client_with_fallback("free", "laguna-s-2.1-free", &config);
+        let (client, _pool_registry) =
+            create_model_client_with_fallback("free", "laguna-s-2.1-free", &config);
         // Smoke: the returned client is usable and reports a provider.
         assert!(!client.provider_name().is_empty());
 
@@ -2463,7 +2612,9 @@ mod tests {
         // surfaces are read: fallback_models + fallback_chain both reach the
         // builder.
         let primary_cfg = client_config(&config);
-        let registry = build_provider_registry(&config, "free", "laguna-s-2.1-free", &primary_cfg);
+        let pools = test_pool_registry(&config, "free");
+        let registry =
+            build_provider_registry(&config, "free", "laguna-s-2.1-free", &primary_cfg, &pools);
         assert!(registry.is_some(), "chain configured → registry built");
         // FallbackModelClient type is constructible from the same pieces.
         let inner: std::sync::Arc<dyn operant_core::agent::ModelClient> =
@@ -2475,5 +2626,89 @@ mod tests {
             true,
         )
         .with_provider_registry(registry.unwrap());
+    }
+
+    // ── Per-provider on-demand pools (hermes `load_pool` parity) ──
+
+    #[test]
+    fn pool_registry_seeds_primary_and_profiles() {
+        let config = test_config_with_providers();
+        let pools = test_pool_registry(&config, "free");
+
+        // Primary provider seeded from config client key.
+        assert!(pools.has_credentials("free"));
+        let primary_pool = pools.get_or_create("free");
+        assert_eq!(primary_pool.len(), 1);
+        assert_eq!(
+            primary_pool.peek().map(|c| c.value),
+            Some("sk-primary".to_string())
+        );
+
+        // Fallback profile provider seeded from its own api_key.
+        assert!(pools.has_credentials("zen-fallback"));
+        let fb_pool = pools.get_or_create("zen-fallback");
+        assert_eq!(fb_pool.len(), 1);
+        assert_eq!(
+            fb_pool.peek().map(|c| c.value),
+            Some("sk-fallback".to_string())
+        );
+
+        // Providers list contains both.
+        let providers = pools.providers();
+        assert!(providers.contains(&"free".to_string()));
+        assert!(providers.contains(&"zen-fallback".to_string()));
+    }
+
+    #[test]
+    fn pool_registry_dedupes_identical_keys() {
+        let config = test_config_with_providers();
+        let pools = test_pool_registry(&config, "free");
+        // Pool already has sk-primary (config) — adding the same value twice
+        // must produce one entry, not two (hermes sibling-marking is avoided
+        // by preventing the duplicate at seed time).
+        pools.add_seed("free", "dup-1", "sk-fallback", "test");
+        pools.add_seed("free", "dup-2", "sk-fallback", "test");
+        let pool = pools.get_or_create("free");
+        assert_eq!(pool.len(), 2, "sk-primary + one deduped sk-fallback");
+        let values: Vec<String> = pool.list().into_iter().map(|c| c.value).collect();
+        assert_eq!(values.iter().filter(|v| *v == "sk-fallback").count(), 1);
+    }
+
+    #[test]
+    fn pool_registry_lazy_creation_shared_pool() {
+        let config = AppConfig::default();
+        let pools = test_pool_registry(&config, "openai");
+        // No pool exists before first use.
+        assert!(pools.pool("openai").is_none());
+        let first = pools.get_or_create("openai");
+        let second = pools.get_or_create("openai");
+        assert!(
+            std::sync::Arc::ptr_eq(&first, &second),
+            "pool is cached and shared"
+        );
+    }
+
+    #[test]
+    fn pooled_registry_clients_are_pooled() {
+        let config = test_config_with_providers();
+        let primary_cfg = client_config(&config);
+        let pools = test_pool_registry(&config, "free");
+        let registry =
+            build_provider_registry(&config, "free", "laguna-s-2.1-free", &primary_cfg, &pools)
+                .unwrap();
+        // Building the registry consults the per-provider pool registry
+        // (hermes `load_pool(fb_provider)` parity) — the fallback provider's
+        // pool must be materialized and seeded during build.
+        assert!(registry.get_client("zen-fallback").is_some());
+        let fb_pool = pools
+            .pool("zen-fallback")
+            .expect("fallback pool materialized");
+        assert_eq!(fb_pool.len(), 1);
+        assert_eq!(
+            fb_pool.peek().map(|c| c.value),
+            Some("sk-fallback".to_string())
+        );
+        // Primary provider's pool is shared with the agent-path wrapper.
+        assert!(pools.pool("free").is_some());
     }
 }

@@ -35,6 +35,12 @@ impl ModelClient for OpenAIModelClient {
         "openai"
     }
 
+    fn set_api_key(&self, api_key: &str) {
+        // Credential-pool rotation parity: swap the runtime key so the next
+        // request uses the new credential without rebuilding the client.
+        self.inner.set_api_key(api_key);
+    }
+
     async fn chat(&self, request: ChatRequest) -> Result<crate::client::ChatResponse> {
         let tools = if request.tools.is_empty() {
             None

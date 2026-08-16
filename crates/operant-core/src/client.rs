@@ -5,6 +5,7 @@
 //! Supports reasoning_content for extended-thinking models.
 
 use std::pin::Pin;
+use std::sync::{Arc, RwLock};
 use std::task::{Context, Poll};
 use std::time::Duration;
 
@@ -65,6 +66,11 @@ pub struct OpenAIClient {
     http_client: Client,
     /// Token-bucket rate limiter keyed by model name.
     rate_limiter: RateLimiter,
+    /// Runtime API-key override for credential-pool rotation (hermes
+    /// `_credential_pool` + `set_api_key` parity). When set, this key is
+    /// used instead of `config.api_key` — the pool rotates keys without
+    /// rebuilding the client.
+    api_key_override: Arc<RwLock<Option<String>>>,
 }
 
 /// Response envelope for the OpenAI-compatible `/embeddings` endpoint.
@@ -103,6 +109,7 @@ impl OpenAIClient {
             config,
             http_client,
             rate_limiter,
+            api_key_override: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -117,6 +124,23 @@ impl OpenAIClient {
             config,
             http_client,
             rate_limiter,
+            api_key_override: Arc::new(RwLock::new(None)),
+        }
+    }
+
+    /// Swap the runtime API key (credential-pool rotation).
+    ///
+    /// The override takes precedence over `config.api_key` in
+    /// [`build_headers`](Self::build_headers) until cleared. Setting an empty
+    /// string clears the override and falls back to the configured key.
+    pub fn set_api_key(&self, api_key: &str) {
+        let value = if api_key.trim().is_empty() {
+            None
+        } else {
+            Some(api_key.to_string())
+        };
+        if let Ok(mut slot) = self.api_key_override.write() {
+            *slot = value;
         }
     }
 
@@ -164,8 +188,15 @@ impl OpenAIClient {
         // Content type
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
 
-        // Authorization
-        if let Some(ref api_key) = self.config.api_key {
+        // Authorization — runtime override (pool rotation) wins over the
+        // configured key (hermes runtime `api_key` swap parity).
+        let effective_key = self
+            .api_key_override
+            .read()
+            .ok()
+            .and_then(|guard| guard.clone())
+            .or_else(|| self.config.api_key.clone());
+        if let Some(api_key) = effective_key {
             let auth_value = format!("Bearer {}", api_key);
             headers.insert(
                 AUTHORIZATION,

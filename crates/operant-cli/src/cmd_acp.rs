@@ -139,21 +139,22 @@ async fn execute_acp_command_inner(
         .await
         .map_err(|e| format!("Memory init error: {}", e))?;
 
-    let mut agent = operant_core::agent::OperantAgent::new(
-        agent_config,
-        Box::new(operant_core::agent::clients::openai::OpenAIModelClient::new(raw_client)),
-        registry,
-        database,
-    )
-    .with_memory_manager(memory_manager);
+    // Same credential-pool treatment as the run/TUI/gateway paths so ACP
+    // sessions get per-provider multi-key rotation too (hermes parity): the
+    // model client is pooled per provider, and the agent shares the primary
+    // provider's pool instance.
+    let provider_name = crate::tui::provider::infer_provider_from_model(&config.agent.model)
+        .unwrap_or_else(|| "openai".to_string());
+    let (model_client, pool_registry) =
+        crate::create_model_client_with_fallback(&provider_name, &config.agent.model, &config);
+
+    let mut agent =
+        operant_core::agent::OperantAgent::new(agent_config, model_client, registry, database)
+            .with_memory_manager(memory_manager);
     if let Some(provider) = memory_provider {
         agent = agent.with_memory_provider(provider);
     }
-    // Same credential-pool treatment as the run/TUI/gateway paths so ACP
-    // sessions get per-provider multi-key rotation too (hermes parity).
-    let provider_name = crate::tui::provider::infer_provider_from_model(&config.agent.model)
-        .unwrap_or_else(|| "openai".to_string());
-    agent = crate::attach_credential_pool(agent, &provider_name, &config);
+    agent = crate::attach_credential_pool(agent, &provider_name, &config, pool_registry.as_ref());
 
     let response = agent
         .run(command.to_string())

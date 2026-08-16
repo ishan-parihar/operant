@@ -8,7 +8,7 @@
 //! Ported from `operant-agent/agent/credential_pool.py`.
 
 use std::collections::HashMap;
-use std::sync::RwLock;
+use std::sync::{Arc, Mutex, RwLock};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -23,6 +23,13 @@ use crate::error::{Error, Result};
 
 /// Cooldown before retrying an exhausted credential (seconds).
 pub const EXHAUSTED_TTL_SECONDS: u64 = 300; // 5 minutes
+
+/// Sole-credential transient-throttle cap (seconds) — hermes
+/// `EXHAUSTED_TTL_SOLE_CREDENTIAL_SECONDS` parity. When a pool has no other
+/// key to rotate to, a transient throttle (429/403/5xx) benches the only key
+/// for a minute instead of an hour so a single-key setup can recover.
+/// Billing exhaustion (402 / explicit billing reason) keeps the full bench.
+pub const EXHAUSTED_TTL_SOLE_CREDENTIAL_SECONDS: u64 = 60; // 1 minute
 
 /// Status value: credential is healthy and usable.
 pub const STATUS_OK: &str = "ok";
@@ -488,21 +495,64 @@ impl CredentialPool {
         message: Option<&str>,
         rotate: bool,
     ) -> Option<PooledCredential> {
+        self.invalidate_with_reset(id, error_code, reason, message, None, rotate)
+    }
+
+    /// Like [`invalidate`](Self::invalidate) but honors a provider-supplied
+    /// recovery timestamp (`retry-after` / `reset_at`) that overrides the
+    /// error-class TTL.
+    pub fn invalidate_with_reset(
+        &self,
+        id: &str,
+        error_code: Option<i32>,
+        reason: Option<&str>,
+        message: Option<&str>,
+        reset_at: Option<DateTime<Utc>>,
+        rotate: bool,
+    ) -> Option<PooledCredential> {
         let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+
+        // hermes `_exhausted_ttl` parity: size the cooldown by error class
+        // (401 → 5m, 429 → 1h, billing → 1h, default → 1h) and cap a *sole*
+        // credential's transient throttle to 60s so a single key recovers
+        // instead of being benched for an hour. Billing keeps the full
+        // bench — a spent account won't recover in a minute. A provider-
+        // supplied reset timestamp always wins.
+        //
+        // "Sole" counts every entry (hermes counts non-DEAD entries; operant
+        // has no DEAD status) — an exhausted sibling still means there are
+        // two real keys, so the failing one gets the full class TTL.
+        let sole = inner.credentials.len() <= 1;
+        let is_billing = error_code == Some(402)
+            || reason.is_some_and(|r| {
+                let lr = r.to_lowercase();
+                lr.contains("billing") || lr.contains("quota")
+            });
+        let ttl = exhausted_ttl(error_code);
+        let effective_reset = reset_at.unwrap_or_else(|| {
+            if sole && !is_billing {
+                Utc::now()
+                    + chrono::Duration::seconds(
+                        ttl.min(EXHAUSTED_TTL_SOLE_CREDENTIAL_SECONDS) as i64
+                    )
+            } else {
+                Utc::now() + chrono::Duration::seconds(ttl as i64)
+            }
+        });
 
         if let Some(cred) = inner.credentials.get_mut(id) {
             cred.status = Some(STATUS_EXHAUSTED.to_string());
             cred.last_error_code = error_code;
             cred.last_error_reason = reason.map(|s| s.to_string());
             cred.last_error_message = message.map(|s| s.to_string());
-            cred.error_reset_at =
-                Some(Utc::now() + chrono::Duration::seconds(EXHAUSTED_TTL_SECONDS as i64));
+            cred.error_reset_at = Some(effective_reset);
 
             info!(
                 provider = %self.provider,
                 credential = %id,
                 code = ?error_code,
                 reason = ?reason,
+                reset_at = %effective_reset,
                 "Credential marked exhausted"
             );
         }
@@ -793,6 +843,131 @@ pub fn create_pool_from_entries(
         pool.add(cred);
     }
     pool
+}
+
+// ---------------------------------------------------------------------------
+// CredentialPoolRegistry — per-provider on-demand pools
+// ---------------------------------------------------------------------------
+
+/// One seed entry for a provider pool.
+#[derive(Debug, Clone)]
+struct PoolSeed {
+    name: String,
+    value: String,
+    source: String,
+}
+
+/// Per-provider credential pool registry (hermes `load_pool` parity).
+///
+/// Hermes creates a `CredentialPool` **per provider on demand** at every
+/// consumption site: the runtime provider resolver, the agent at init,
+/// `switch_model`, and each fallback provider as the chain switches to it
+/// (`load_pool(fb_provider)` rebind). This registry mirrors that: seeds are
+/// registered once from config, and a provider's pool is lazily materialized
+/// on first use with the provider's own strategy
+/// (`credential_pool.strategies.<provider>` → global → `fill_first`). A
+/// fallback provider that is never reached never pays for pool construction.
+///
+/// All pools created through the registry are cached and shared (Arc), so
+/// the agent-loop rotation and the client-layer pooled clients observe the
+/// same exhaustion/cooldown state for a provider.
+#[derive(Clone)]
+pub struct CredentialPoolRegistry {
+    settings: crate::config::CredentialPoolSettings,
+    seeds: Arc<Mutex<HashMap<String, Vec<PoolSeed>>>>,
+    pools: Arc<Mutex<HashMap<String, Arc<CredentialPool>>>>,
+}
+
+impl CredentialPoolRegistry {
+    /// Create an empty registry with the given pool settings (strategies).
+    pub fn new(settings: crate::config::CredentialPoolSettings) -> Self {
+        Self {
+            settings,
+            seeds: Arc::new(Mutex::new(HashMap::new())),
+            pools: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    /// Register a credential seed for a provider. Identical values are
+    /// deduplicated (hermes marks sibling entries sharing a failed key — we
+    /// prevent the duplicate at seed time instead).
+    pub fn add_seed(&self, provider: &str, name: &str, value: &str, source: &str) {
+        if value.trim().is_empty() {
+            return;
+        }
+        let mut seeds = self.seeds.lock().unwrap_or_else(|e| e.into_inner());
+        let entries = seeds.entry(provider.to_string()).or_default();
+        if entries.iter().any(|s| s.value == value) {
+            debug!(provider = %provider, source = %source, "Skipping duplicate credential seed");
+            return;
+        }
+        entries.push(PoolSeed {
+            name: name.to_string(),
+            value: value.to_string(),
+            source: source.to_string(),
+        });
+    }
+
+    /// Return the cached pool for a provider, if one has been materialized.
+    pub fn pool(&self, provider: &str) -> Option<Arc<CredentialPool>> {
+        let pools = self.pools.lock().unwrap_or_else(|e| e.into_inner());
+        pools.get(provider).cloned()
+    }
+
+    /// Return (creating on first use) the pool for a provider.
+    ///
+    /// Pools are built lazily from the registered seeds with the provider's
+    /// resolved strategy — the hermes `load_pool(provider)` on-demand
+    /// semantics. An empty pool (no seeds) is still returned so callers can
+    /// treat "no credentials" uniformly; `has_credentials` distinguishes.
+    pub fn get_or_create(&self, provider: &str) -> Arc<CredentialPool> {
+        if let Some(pool) = self.pool(provider) {
+            return pool;
+        }
+        let mut pools = self.pools.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(pool) = pools.get(provider) {
+            return pool.clone();
+        }
+        let strategy = self.settings.strategy_for(provider);
+        let pool = Arc::new(CredentialPool::with_strategy(provider, strategy));
+        let seeds = self.seeds.lock().unwrap_or_else(|e| e.into_inner());
+        for seed in seeds.get(provider).cloned().unwrap_or_default() {
+            pool.add(PooledCredential::new(
+                &seed.name,
+                AuthType::ApiKey,
+                &seed.value,
+                &seed.source,
+            ));
+        }
+        info!(
+            provider = %provider,
+            creds = pool.len(),
+            strategy = %strategy.as_str(),
+            "Materialized credential pool on demand"
+        );
+        pools.insert(provider.to_string(), pool.clone());
+        pool
+    }
+
+    /// True when the provider has at least one seeded credential.
+    pub fn has_credentials(&self, provider: &str) -> bool {
+        let seeds = self.seeds.lock().unwrap_or_else(|e| e.into_inner());
+        seeds
+            .get(provider)
+            .is_some_and(|entries| !entries.is_empty())
+    }
+
+    /// Providers with at least one registered seed.
+    pub fn providers(&self) -> Vec<String> {
+        let seeds = self.seeds.lock().unwrap_or_else(|e| e.into_inner());
+        let mut names: Vec<String> = seeds
+            .iter()
+            .filter(|(_, entries)| !entries.is_empty())
+            .map(|(name, _)| name.clone())
+            .collect();
+        names.sort();
+        names
+    }
 }
 
 #[cfg(test)]
@@ -1122,5 +1297,157 @@ mod tests {
         ];
         let pool = create_pool_from_entries("test", PoolStrategy::Random, entries);
         assert_eq!(pool.len(), 2);
+    }
+
+    // ── Error-class TTL + sole-credential cap (hermes `_exhausted_ttl`) ──
+
+    fn bench_secs(cred: &PooledCredential) -> i64 {
+        (cred.error_reset_at.unwrap() - Utc::now()).num_seconds()
+    }
+
+    #[test]
+    fn test_invalidate_error_class_ttl() {
+        // 429 rate-limit benches 1h (multi-key pool); 401 benches 5m.
+        let pool = test_pool();
+        let all = pool.list();
+        pool.invalidate(&all[0].id, Some(429), Some("rate_limit"), None, false);
+        let cred = pool.get(&all[0].id).unwrap();
+        assert!(
+            (3500..=3700).contains(&bench_secs(&cred)),
+            "429 → ~1h bench, got {}",
+            bench_secs(&cred)
+        );
+
+        let pool = test_pool();
+        let all = pool.list();
+        pool.invalidate(&all[0].id, Some(401), Some("auth"), None, false);
+        let cred = pool.get(&all[0].id).unwrap();
+        assert!(
+            (250..=320).contains(&bench_secs(&cred)),
+            "401 → ~5m bench, got {}",
+            bench_secs(&cred)
+        );
+    }
+
+    #[test]
+    fn test_sole_credential_transient_capped_to_60s() {
+        // A single key that 429s recovers in ~60s (not 1h) — hermes
+        // EXHAUSTED_TTL_SOLE_CREDENTIAL_SECONDS parity.
+        let pool = CredentialPool::new("sole");
+        pool.add(PooledCredential::new("only", AuthType::ApiKey, "v", "env"));
+        let all = pool.list();
+        pool.invalidate(&all[0].id, Some(429), Some("rate_limit"), None, false);
+        let cred = pool.get(&all[0].id).unwrap();
+        assert!(
+            (50..=70).contains(&bench_secs(&cred)),
+            "sole transient → ~60s, got {}",
+            bench_secs(&cred)
+        );
+    }
+
+    #[test]
+    fn test_sole_credential_billing_keeps_full_bench() {
+        // Billing is a real depletion — even a sole key keeps the 1h bench.
+        let pool = CredentialPool::new("sole");
+        pool.add(PooledCredential::new("only", AuthType::ApiKey, "v", "env"));
+        let all = pool.list();
+        pool.invalidate(&all[0].id, Some(402), Some("billing"), None, false);
+        let cred = pool.get(&all[0].id).unwrap();
+        assert!(
+            (3500..=3700).contains(&bench_secs(&cred)),
+            "sole billing → ~1h, got {}",
+            bench_secs(&cred)
+        );
+    }
+
+    #[test]
+    fn test_invalidate_with_reset_override() {
+        // Provider-supplied retry-after (5s) overrides the error-class TTL.
+        let pool = test_pool();
+        let all = pool.list();
+        pool.invalidate_with_reset(
+            &all[0].id,
+            Some(429),
+            Some("rate_limit"),
+            None,
+            Some(Utc::now() + chrono::Duration::seconds(5)),
+            false,
+        );
+        let cred = pool.get(&all[0].id).unwrap();
+        assert!(
+            (0..=10).contains(&bench_secs(&cred)),
+            "retry-after 5s wins over 1h TTL, got {}",
+            bench_secs(&cred)
+        );
+    }
+
+    // ── CredentialPoolRegistry (hermes `load_pool` on-demand parity) ──
+
+    fn test_registry() -> CredentialPoolRegistry {
+        CredentialPoolRegistry::new(crate::config::CredentialPoolSettings::default())
+    }
+
+    #[test]
+    fn test_registry_on_demand_creation_and_cache() {
+        let registry = test_registry();
+        registry.add_seed("opencode-zen", "k1", "sk-1", "config");
+        registry.add_seed("opencode-zen", "k2", "sk-2", "config");
+        registry.add_seed("gemini", "g1", "g-key", "config");
+
+        // No pool exists before first use.
+        assert!(registry.pool("opencode-zen").is_none());
+        let pool = registry.get_or_create("opencode-zen");
+        assert_eq!(pool.len(), 2);
+        assert_eq!(pool.provider(), "opencode-zen");
+        // Cached and shared — second call returns the same Arc.
+        assert!(std::sync::Arc::ptr_eq(
+            &pool,
+            &registry.get_or_create("opencode-zen")
+        ));
+        // Unseeded provider gets an empty pool (uniform "no credentials").
+        assert!(!registry.has_credentials("anthropic"));
+        assert!(registry.get_or_create("anthropic").is_empty());
+    }
+
+    #[test]
+    fn test_registry_dedupes_seed_values() {
+        let registry = test_registry();
+        registry.add_seed("openai", "a", "sk-same", "config");
+        registry.add_seed("openai", "b", "sk-same", "config");
+        registry.add_seed("openai", "c", "sk-diff", "config");
+        let pool = registry.get_or_create("openai");
+        assert_eq!(pool.len(), 2, "duplicate value deduped");
+    }
+
+    #[test]
+    fn test_registry_providers_and_strategy() {
+        let mut settings = crate::config::CredentialPoolSettings::default();
+        settings
+            .strategies
+            .insert("opencode-zen".to_string(), "round_robin".to_string());
+        let registry = CredentialPoolRegistry::new(settings);
+        registry.add_seed("opencode-zen", "k1", "sk-1", "config");
+        registry.add_seed("gemini", "g1", "g-key", "config");
+
+        let providers = registry.providers();
+        assert_eq!(
+            providers,
+            vec!["gemini".to_string(), "opencode-zen".to_string()]
+        );
+        let pool = registry.get_or_create("opencode-zen");
+        assert_eq!(pool.strategy(), PoolStrategy::RoundRobin);
+        // Unconfigured provider → global → fill_first (fail-closed).
+        assert_eq!(
+            registry.get_or_create("gemini").strategy(),
+            PoolStrategy::FillFirst
+        );
+    }
+
+    #[test]
+    fn test_registry_ignores_empty_seed() {
+        let registry = test_registry();
+        registry.add_seed("openai", "empty", "  ", "env");
+        assert!(!registry.has_credentials("openai"));
+        assert!(registry.get_or_create("openai").is_empty());
     }
 }
