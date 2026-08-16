@@ -345,17 +345,16 @@ async fn process_attachments(
         };
 
         if ct.starts_with("text/") {
-            match client.get(url).send().await {
-                Ok(resp) if resp.status().is_success() => {
+            // SSRF-guarded fetch: every redirect hop is re-validated against
+            // private/loopback/link-local ranges (hermes redirect-guard parity).
+            match crate::util::fetch_url_with_ssrf_guard(client, url, 3).await {
+                Ok(resp) => {
                     if let Ok(text) = resp.text().await {
                         text_parts.push(format!("[{name}]\n{text}"));
                     }
                 }
-                Ok(resp) => {
-                    tracing::warn!(name, status = %resp.status(), "discord attachment fetch failed");
-                }
                 Err(e) => {
-                    tracing::warn!(name, error = %e, "discord attachment fetch error");
+                    tracing::warn!(name, error = %e, "discord attachment fetch failed");
                 }
             }
             continue;
@@ -430,20 +429,18 @@ async fn download_attachment_bytes(
     url: &str,
     name: &str,
 ) -> Option<Vec<u8>> {
-    match client.get(url).send().await {
-        Ok(resp) if resp.status().is_success() => match resp.bytes().await {
+    // SSRF-guarded fetch: every redirect hop is re-validated against
+    // private/loopback/link-local ranges (hermes redirect-guard parity).
+    match crate::util::fetch_url_with_ssrf_guard(client, url, 3).await {
+        Ok(resp) => match resp.bytes().await {
             Ok(b) => Some(b.to_vec()),
             Err(e) => {
                 tracing::warn!(name, error = %e, "discord: failed to read attachment bytes");
                 None
             }
         },
-        Ok(resp) => {
-            tracing::warn!(name, status = %resp.status(), "discord: attachment download failed");
-            None
-        }
         Err(e) => {
-            tracing::warn!(name, error = %e, "discord: attachment fetch error");
+            tracing::warn!(name, error = %e, "discord: attachment download failed");
             None
         }
     }

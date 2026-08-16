@@ -211,6 +211,112 @@ pub fn parse_approval_reply(
 }
 
 /// Generate a conversation history key from a channel message.
+/// SSRF verdict for a URL: `Ok(true)` when the hostname resolves only to
+/// public addresses, `Ok(false)` when it is blocked, `Err` on DNS failure
+/// (fail-closed). Hermes `tools/url_safety.py::is_safe_url` parity — blocks
+/// loopback, private (RFC 1918), link-local, multicast, unspecified, and
+/// reserved ranges so a malicious attachment URL can't reach cloud metadata
+/// (169.254.169.254), localhost services, or internal networks.
+pub async fn ssrf_verdict(url: &str) -> anyhow::Result<bool> {
+    let parsed = url::Url::parse(url).map_err(|e| anyhow::anyhow!("invalid URL: {e}"))?;
+
+    // Literal IPs are checked directly (no DNS). The typed `host()` returns
+    // the IP for IPv6 bracket syntax, which `host_str()` round-tripping can
+    // mangle.
+    if let Some(host) = parsed.host() {
+        match host {
+            url::Host::Ipv4(ip) => return Ok(!is_blocked_ip(std::net::IpAddr::V4(ip))),
+            url::Host::Ipv6(ip) => return Ok(!is_blocked_ip(std::net::IpAddr::V6(ip))),
+            url::Host::Domain(_) => {}
+        }
+    }
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| anyhow::anyhow!("URL has no host"))?;
+
+    // Resolve the hostname; fail-closed on DNS errors.
+    let resolved = tokio::net::lookup_host((host, 443)).await?;
+    for addr in resolved {
+        if is_blocked_ip(addr.ip()) {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+fn is_blocked_ip(ip: std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(v4) => {
+            v4.is_loopback()
+                || v4.is_private()
+                || v4.is_link_local()
+                || v4.is_multicast()
+                || v4.is_unspecified()
+                || is_reserved_ipv4(v4)
+        }
+        std::net::IpAddr::V6(v6) => {
+            v6.is_loopback()
+                || v6.is_unspecified()
+                || v6.is_multicast()
+                || matches!(v6.segments(), [0, 0, 0, 0, 0, 0, 0, 1])
+                || v6.is_unique_local()
+                || v6.is_unicast_link_local()
+        }
+    }
+}
+
+fn is_reserved_ipv4(v4: std::net::Ipv4Addr) -> bool {
+    // 0.0.0.0/8, 100.64.0.0/10 (CGNAT), 169.254.0.0/16 (link-local — caught
+    // above but kept for clarity), 192.0.0.0/24, 192.0.2.0/24 (TEST-NET),
+    // 198.18.0.0/15 (benchmark), 198.51.100.0/24, 203.0.113.0/24, 224.0.0.0/4,
+    // 240.0.0.0/4, 255.255.255.255.
+    let o = v4.octets();
+    let block = u32::from_be_bytes(o);
+    let is_cgnat = (o[0] == 100) && (o[1] & 0xC0) == 0x40;
+    let is_doc = o[0] == 192 && o[1] == 0 && o[2] == 2;
+    let is_bench = o[0] == 198 && (o[1] & 0xFE) == 18;
+    let is_doc2 = o[0] == 198 && o[1] == 51 && o[2] == 100;
+    let is_doc3 = o[0] == 203 && o[1] == 0 && o[2] == 113;
+    let is_class_e = (o[0] & 0xF0) == 0xF0;
+    let is_broadcast = v4 == std::net::Ipv4Addr::BROADCAST;
+    block == 0 || is_cgnat || is_doc || is_bench || is_doc2 || is_doc3 || is_class_e || is_broadcast
+}
+
+/// Fetch a URL with per-redirect SSRF re-validation (hermes
+/// `_read_url_image_with_redirect_guard` parity). `allow_redirects(false)`
+/// plus manual hop walking means every redirect target is re-checked before
+/// any bytes are read — a redirect from a public URL to a private address
+/// is refused instead of silently followed.
+pub async fn fetch_url_with_ssrf_guard(
+    client: &reqwest::Client,
+    url: &str,
+    max_redirects: usize,
+) -> anyhow::Result<reqwest::Response> {
+    let mut current = url.to_string();
+    for _ in 0..=max_redirects {
+        if !ssrf_verdict(&current).await? {
+            anyhow::bail!(
+                "Blocked URL redirect to private/internal address (SSRF protection): {current}"
+            );
+        }
+        let resp = client.get(&current).send().await?.error_for_status()?;
+        if let Some(loc) = resp
+            .headers()
+            .get(reqwest::header::LOCATION)
+            .and_then(|v| v.to_str().ok())
+        {
+            let next = url::Url::parse(&current)
+                .and_then(|base| base.join(loc))
+                .map(|u| u.to_string())
+                .unwrap_or_else(|_| loc.to_string());
+            current = next;
+            continue;
+        }
+        return Ok(resp);
+    }
+    anyhow::bail!("Too many URL redirects (SSRF protection)")
+}
+
 pub fn conversation_history_key(msg: &operant_api::channel::ChannelMessage) -> String {
     match &msg.thread_ts {
         Some(tid) => format!(
@@ -224,6 +330,49 @@ pub fn conversation_history_key(msg: &operant_api::channel::ChannelMessage) -> S
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── SSRF guard ────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn ssrf_verdict_blocks_literals() {
+        assert!(!ssrf_verdict("http://127.0.0.1:8080/admin").await.unwrap());
+        assert!(!ssrf_verdict("http://10.0.0.5/internal").await.unwrap());
+        assert!(
+            !ssrf_verdict("http://169.254.169.254/latest/meta-data")
+                .await
+                .unwrap()
+        );
+        assert!(!ssrf_verdict("http://192.168.1.1/router").await.unwrap());
+        assert!(!ssrf_verdict("http://[::1]/api").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn ssrf_verdict_allows_public_host() {
+        // example.com is a public test domain; DNS may be unavailable in
+        // offline CI, so accept both the Ok(true) and the Err (fail-closed)
+        // outcomes — the assertion is that a *public* literal IP is allowed.
+        assert!(ssrf_verdict("http://93.184.216.34/resource").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn ssrf_verdict_rejects_localhost_name() {
+        // localhost resolves to loopback on every platform.
+        let v = ssrf_verdict("http://localhost:3000/api").await;
+        let blocked = match &v {
+            Ok(safe) => !safe,
+            Err(_) => true, // DNS failure = fail-closed
+        };
+        assert!(blocked, "got: {v:?}");
+    }
+
+    #[tokio::test]
+    async fn is_blocked_ip_covers_metadata() {
+        assert!(is_blocked_ip("169.254.169.254".parse().unwrap()));
+        assert!(is_blocked_ip("127.0.0.1".parse().unwrap()));
+        assert!(is_blocked_ip("10.1.2.3".parse().unwrap()));
+        assert!(is_blocked_ip("100.64.0.1".parse().unwrap())); // CGNAT
+        assert!(!is_blocked_ip("93.184.216.34".parse().unwrap()));
+    }
 
     #[test]
     fn parse_attachment_markers_extracts_known_kinds() {

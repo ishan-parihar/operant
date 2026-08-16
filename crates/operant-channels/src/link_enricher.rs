@@ -165,12 +165,16 @@ async fn fetch_link_summary(url: &str, timeout_secs: u64) -> Option<LinkSummary>
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(timeout_secs))
         .connect_timeout(Duration::from_secs(5))
-        .redirect(reqwest::redirect::Policy::limited(5))
+        .redirect(reqwest::redirect::Policy::none()) // manual hops re-validated below
         .user_agent("Operant/0.1 (link-enricher)")
         .build()
         .ok()?;
 
-    let response = client.get(url).send().await.ok()?;
+    // Hostname-level gate (existing `is_ssrf_target`) + per-redirect DNS-level
+    // re-validation so a public URL can't redirect onto private/local ranges.
+    let response = crate::util::fetch_url_with_ssrf_guard(&client, url, 5)
+        .await
+        .ok()?;
     if !response.status().is_success() {
         return None;
     }
