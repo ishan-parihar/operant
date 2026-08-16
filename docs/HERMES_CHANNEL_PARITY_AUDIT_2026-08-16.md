@@ -125,3 +125,27 @@ rich `DiscordChannel` (`operant-channels/src/discord.rs`, 3,227 lines) +
 
 ### Tier 3 (polish)
 9. T3 rich rendering pipeline, T4 polling resilience, T5 typing cooldown, T6 config depth, T7 link previews, T8 media albums, D4 forums, D6 liveness probe, D7 reaction lifecycle, D9 non-conversational tracker, D10 shutdown flush.
+
+---
+
+## 4. Implementation status (updated Aug 16, 2026)
+
+Tier-1 security + dead-code items, the Tier-2 feature-parity items, and the
+Tier-3 polish items are all implemented, committed, and pushed to `main`:
+
+| # | Item | Commit(s) | Notes |
+|---|------|-----------|-------|
+| D5 | `allowed_mentions` (deny everyone/roles by default) | `803402ff` | `DiscordAllowedMentions` policy on all send/edit helpers; patched in `discord.rs`, `discord_history.rs`, and thin `DiscordAdapter`; `with_allowed_mentions` builder |
+| T9 | Adapter error redaction | `803402ff` | `Error::Network` variant now wraps redacting `RedactedReqwestError` (token-bearing URLs masked crate-wide); telegram regex fixed to match `/bot<TOKEN>` URLs; `gateway_runner` log lines routed through `redact_err` |
+| D8 | SSRF guard on remote fetches | `212d8d1d` | `ssrf_guard` in channels `util.rs` (blocked loopback/private/link-local + scheme allowlist); applied to Discord attachment fetches and `link_enricher` redirect chain |
+| T1 | Telegram DM topics | `79924226` | `createForumTopic` + persisted `chat_id → thread_id` state file, DM routing into topic; wired via `with_dm_topics` from `[channels.telegram]` config; 3 tests |
+| Two-stack | Inline-button approvals on thin gateway path | `e149e597` | `send_approval_prompt` trait method + Telegram inline-keyboard override; `callback_query` taps synthesize `/approve` `/deny` through the shared resolver; `Gateway::adapter_for`; 4 tests |
+| T2 | Telegram choice picker | `f0296880` | `request_choice` override with inline keyboard, index-based callback data, `pending_choices` map, last-chat addressing; 4 tests |
+| D2 | Discord slash commands | `9fcadf51` | `register_slash_commands` (guild/global REST PUT) + `INTERACTION_CREATE` handling with auth gate + ephemeral ACK; pure `interaction_to_command` parser; 4 tests |
+| D3 | Discord recovery ledger + backfill | `c00decc1` | SQLite `discord_recovery_cursors` + `backfill_missed_messages` (REST scan after cursor, mention re-dispatch, timestamp preservation); live-loop cursor advance; 3 tests |
+| T5/T7/D6 | Typing cooldown, link previews, liveness probe | `866a5c94` | `typing_cooldown_seconds` per-chat backoff; `disable_link_previews` → `link_preview_options`; heartbeat-ACK liveness counter (3-miss → reconnect); config + example TOML + tests |
+
+**Remaining (not yet implemented):** D1 Discord voice (largest effort), T3 rich
+rendering pipeline, T4 polling resilience suite, T6 config depth (chat/topic
+ACLs, guest mode, identity refresh), T8 media albums, D4 forum posting, D7
+reaction lifecycle, D9 non-conversational tracker, D10 shutdown flush.
