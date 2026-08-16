@@ -1561,16 +1561,11 @@ fn attach_credential_pool(agent: OperantAgent, provider: &str, config: &AppConfi
             ));
         }
     }
-    let strategy = config
-        .credential_pool
-        .strategies
-        .get(provider)
-        .or(config.credential_pool.strategy.as_ref());
-    if let Some(strategy) = strategy {
-        pool.set_strategy(operant_core::credential_pool::PoolStrategy::parse_strategy(
-            strategy,
-        ));
-    }
+    // Per-provider strategy (hermes `credential_pool_strategies` parity):
+    // the provider's entry in `strategies` wins, else the global `strategy`,
+    // else fill_first — same fail-closed default as hermes `get_pool_strategy()`.
+    let strategy = config.credential_pool.strategy_for(provider);
+    pool.set_strategy(strategy);
     if pool.has_credentials() {
         tracing::info!(provider = %provider, creds = pool.len(), "Attached credential pool");
         agent.with_credential_pool(std::sync::Arc::new(pool))

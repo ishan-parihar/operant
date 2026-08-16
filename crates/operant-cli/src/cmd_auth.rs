@@ -346,7 +346,7 @@ fn handle_auth_reset() -> Result<()> {
 /// Show which providers have credentials configured.
 fn handle_auth_status(config: &AppConfig) -> Result<()> {
     println!("── Auth Status ────────────────────────────────────────");
-    println!(" {:<14} Status", "Provider");
+    println!(" {:<14} {:<30} Pool", "Provider", "Status");
     println!(" ─────────────────────────────────────────────────────");
 
     for (provider, env_var, _, _) in PROVIDER_ENV_VARS {
@@ -358,7 +358,10 @@ fn handle_auth_status(config: &AppConfig) -> Result<()> {
             }
             _ => "not set".to_string(),
         };
-        println!(" {:<14} {}", provider, status);
+        // Per-provider pool strategy (hermes `credential_pool_strategies`
+        // parity): configured entry, else the global default, else fill_first.
+        let strategy = config.credential_pool.strategy_for(provider).as_str();
+        println!(" {:<14} {:<30} {}", provider, status, strategy);
     }
 
     // Config-level key
@@ -369,7 +372,11 @@ fn handle_auth_status(config: &AppConfig) -> Result<()> {
         }
         _ => "not set".to_string(),
     };
-    println!(" {:<14} {} (client.api_key)", "default", config_status);
+    let default_strategy = config.credential_pool.strategy_for("default").as_str();
+    println!(
+        " {:<14} {:<30} {} (client.api_key)",
+        "default", config_status, default_strategy
+    );
 
     println!("─────────────────────────────────────────────────────");
     Ok(())

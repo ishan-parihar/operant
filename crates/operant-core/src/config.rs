@@ -1012,9 +1012,31 @@ pub struct VisionSettings {
 #[serde(default, deny_unknown_fields)]
 #[derive(Default)]
 pub struct CredentialPoolSettings {
+    /// Global default selection strategy (fill_first|round_robin|random|least_used).
     pub strategy: Option<String>,
+    /// Master switch — when false no credential pool is attached to agents.
     pub enabled: bool,
+    /// Per-provider selection strategies (hermes `credential_pool_strategies`
+    /// parity). Keys are provider names as inferred from the model (e.g.
+    /// `opencode-zen`, `openai`, `anthropic`); each entry overrides the global
+    /// `strategy` for that provider. Unknown or unparseable values fall back
+    /// to `fill_first` (hermes `get_pool_strategy()` semantics).
     pub strategies: HashMap<String, String>,
+}
+
+impl CredentialPoolSettings {
+    /// Resolve the pool selection strategy for a provider.
+    ///
+    /// Mirrors hermes-agent's `get_pool_strategy()`: per-provider
+    /// `strategies` entry first, then the global `strategy`, defaulting to
+    /// `fill_first` when nothing (or an unknown value) is configured.
+    pub fn strategy_for(&self, provider: &str) -> crate::credential_pool::PoolStrategy {
+        self.strategies
+            .get(provider)
+            .or(self.strategy.as_ref())
+            .map(|s| crate::credential_pool::PoolStrategy::parse_strategy(s))
+            .unwrap_or_default()
+    }
 }
 
 /// Configuration for an auxiliary model assigned to a specific task slot.
@@ -1866,5 +1888,68 @@ model = "deepseek-v4-flash-free"
         let minimal = parse_config_str("[agent]\nmodel = \"x\"\n", Path::new("min.toml")).unwrap();
         assert!(minimal.providers.models.is_empty());
         assert!(minimal.providers.fallback_chain.is_empty());
+    }
+
+    #[test]
+    fn credential_pool_strategies_parse_and_resolve_per_provider() {
+        // hermes `credential_pool_strategies` parity: the per-provider map
+        // must round-trip through TOML and win over the global strategy.
+        let raw = r#"
+[credential_pool]
+enabled = true
+strategy = "fill_first"
+strategies = { opencode-zen = "round_robin", openai = "least_used" }
+"#;
+        let parsed = parse_config_str(raw, std::path::Path::new("pool.toml")).expect("valid TOML");
+        use crate::credential_pool::PoolStrategy;
+        assert!(parsed.credential_pool.enabled);
+        // Per-provider entries win.
+        assert_eq!(
+            parsed.credential_pool.strategy_for("opencode-zen"),
+            PoolStrategy::RoundRobin
+        );
+        assert_eq!(
+            parsed.credential_pool.strategy_for("openai"),
+            PoolStrategy::LeastUsed
+        );
+        // Unconfigured provider falls back to the global strategy.
+        assert_eq!(
+            parsed.credential_pool.strategy_for("anthropic"),
+            PoolStrategy::FillFirst
+        );
+    }
+
+    #[test]
+    fn credential_pool_strategy_fallback_semantics() {
+        use crate::credential_pool::PoolStrategy;
+
+        // No strategy configured anywhere → fill_first.
+        let unset = CredentialPoolSettings::default();
+        assert_eq!(unset.strategy_for("anything"), PoolStrategy::FillFirst);
+
+        // Global-only: every provider inherits it.
+        let global = CredentialPoolSettings {
+            strategy: Some("round_robin".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(global.strategy_for("openai"), PoolStrategy::RoundRobin);
+        assert_eq!(
+            global.strategy_for("opencode-zen"),
+            PoolStrategy::RoundRobin
+        );
+
+        // Unknown/invalid value → fill_first (hermes `get_pool_strategy()`
+        // fail-closed default; never panics on a typo'd config).
+        let invalid = CredentialPoolSettings {
+            strategy: Some("banana".to_string()),
+            strategies: {
+                let mut m = std::collections::HashMap::new();
+                m.insert("openai".to_string(), "round robin with spaces".to_string());
+                m
+            },
+            ..Default::default()
+        };
+        assert_eq!(invalid.strategy_for("openai"), PoolStrategy::FillFirst);
+        assert_eq!(invalid.strategy_for("other"), PoolStrategy::FillFirst);
     }
 }

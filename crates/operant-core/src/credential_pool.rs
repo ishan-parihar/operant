@@ -95,6 +95,17 @@ impl PoolStrategy {
             _ => PoolStrategy::FillFirst,
         }
     }
+
+    /// Return the canonical config string for this strategy (the value used
+    /// in `credential_pool.strategies` / `credential_pool.strategy`).
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            PoolStrategy::FillFirst => "fill_first",
+            PoolStrategy::RoundRobin => "round_robin",
+            PoolStrategy::Random => "random",
+            PoolStrategy::LeastUsed => "least_used",
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -978,6 +989,14 @@ mod tests {
             PoolStrategy::parse_strategy("unknown"),
             PoolStrategy::FillFirst
         );
+    }
+
+    #[test]
+    fn test_strategy_as_str_roundtrip() {
+        // Canonical config strings must round-trip through parse_strategy.
+        for s in ["fill_first", "round_robin", "random", "least_used"] {
+            assert_eq!(PoolStrategy::parse_strategy(s).as_str(), s);
+        }
     }
 
     #[test]

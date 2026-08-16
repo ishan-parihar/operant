@@ -149,6 +149,11 @@ async fn execute_acp_command_inner(
     if let Some(provider) = memory_provider {
         agent = agent.with_memory_provider(provider);
     }
+    // Same credential-pool treatment as the run/TUI/gateway paths so ACP
+    // sessions get per-provider multi-key rotation too (hermes parity).
+    let provider_name = crate::tui::provider::infer_provider_from_model(&config.agent.model)
+        .unwrap_or_else(|| "openai".to_string());
+    agent = crate::attach_credential_pool(agent, &provider_name, &config);
 
     let response = agent
         .run(command.to_string())

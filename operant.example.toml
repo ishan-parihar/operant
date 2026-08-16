@@ -322,8 +322,13 @@ provider = "igs"
 # api_key = "..."
 
 # [credential_pool]
-# strategy = "fill_first"  # fill_first|round_robin|random|least_used
 # enabled = false
+# strategy = "fill_first"  # global default: fill_first|round_robin|random|least_used
+# Per-provider strategies override the global default (hermes
+# `credential_pool_strategies` parity). Keys are provider names as inferred
+# from the model (e.g. opencode-zen, openai, anthropic). Unknown values fall
+# back to fill_first, mirroring hermes `get_pool_strategy()`.
+# strategies = { opencode-zen = "round_robin", openai = "least_used" }
 
 # [auxiliary_models]
 # Optional auxiliary model configurations for MoA / side-LLM tasks.
