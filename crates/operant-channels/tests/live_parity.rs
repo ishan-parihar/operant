@@ -35,8 +35,8 @@ async fn live_telegram_dm_topic_delivery_roundtrip() {
     let token = env("LIVE_TELEGRAM_TOKEN").expect("LIVE_TELEGRAM_TOKEN required");
     let chat = env("LIVE_TELEGRAM_CHAT").expect("LIVE_TELEGRAM_CHAT required");
 
-    use operant_channels::telegram::TelegramChannel;
     use operant_api::channel::Channel as _;
+    use operant_channels::telegram::TelegramChannel;
 
     let ch = TelegramChannel::new(token.clone(), vec!["*".into()], false)
         .with_dm_topics(true, "General".to_string());
@@ -69,8 +69,8 @@ async fn live_telegram_dm_topics() {
     let token = env("LIVE_TELEGRAM_TOKEN").expect("LIVE_TELEGRAM_TOKEN required");
     let chat = env("LIVE_TELEGRAM_CHAT").expect("LIVE_TELEGRAM_CHAT required");
 
-    use operant_channels::telegram::TelegramChannel;
     use operant_api::channel::Channel as _;
+    use operant_channels::telegram::TelegramChannel;
 
     let ch = TelegramChannel::new(token.clone(), vec!["*".into()], false)
         .with_dm_topics(true, "General".to_string());
@@ -80,7 +80,9 @@ async fn live_telegram_dm_topics() {
     // 1. createForumTopic works against this chat (the API ensure_dm_topic
     //    calls), and 2. send() routes into `chat:thread` targets.
     let create = reqwest::Client::new()
-        .post(format!("https://api.telegram.org/bot{token}/createForumTopic"))
+        .post(format!(
+            "https://api.telegram.org/bot{token}/createForumTopic"
+        ))
         .json(&serde_json::json!({
             "chat_id": chat.parse::<i64>().unwrap(),
             "name": format!("__operant_live_test_{}", std::process::id()),
@@ -90,9 +92,15 @@ async fn live_telegram_dm_topics() {
         .expect("createForumTopic request");
 
     let create_json: serde_json::Value = create.json().await.expect("createForumTopic JSON");
-    let ok = create_json.get("ok").and_then(|v| v.as_bool()).unwrap_or(false);
+    let ok = create_json
+        .get("ok")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     println!("createForumTopic ok={ok} payload={create_json}");
-    assert!(ok, "createForumTopic must succeed against a DM chat: {create_json}");
+    assert!(
+        ok,
+        "createForumTopic must succeed against a DM chat: {create_json}"
+    );
 
     let thread_id = create_json
         .pointer("/result/message_thread_id")
@@ -137,11 +145,18 @@ async fn live_discord_slash_commands() {
         .send()
         .await
         .expect("applications/@me request");
-    assert!(me.status().is_success(), "bot auth must resolve: {}", me.status());
+    assert!(
+        me.status().is_success(),
+        "bot auth must resolve: {}",
+        me.status()
+    );
 
     let app_id = {
         let json: serde_json::Value = me.json().await.expect("applications/@me JSON");
-        json.get("id").and_then(|v| v.as_str()).expect("application id").to_string()
+        json.get("id")
+            .and_then(|v| v.as_str())
+            .expect("application id")
+            .to_string()
     };
 
     // Simulate exactly what register_slash_commands PUTs and verify Discord
@@ -177,9 +192,14 @@ async fn live_discord_slash_commands() {
         .expect("PUT commands request");
     let status = put.status();
     let body: serde_json::Value = put.json().await.unwrap_or_default();
-    println!("slash-command registration status={status} registered={}",
-        body.as_array().map(|a| a.len()).unwrap_or(0));
-    assert!(status.is_success(), "command registration must succeed: {status} {body}");
+    println!(
+        "slash-command registration status={status} registered={}",
+        body.as_array().map(|a| a.len()).unwrap_or(0)
+    );
+    assert!(
+        status.is_success(),
+        "command registration must succeed: {status} {body}"
+    );
 }
 
 #[tokio::test]
@@ -215,6 +235,9 @@ async fn live_discord_slash_command_registration_same_payload() {
     let status = put.status();
     let body: serde_json::Value = put.json().await.unwrap_or_default();
     println!("global registration status={status} body={body}");
-    assert!(status.is_success(), "global command registration must succeed: {status} {body}");
+    assert!(
+        status.is_success(),
+        "global command registration must succeed: {status} {body}"
+    );
     let _ = Duration::from_secs(0); // keep the import used
 }
