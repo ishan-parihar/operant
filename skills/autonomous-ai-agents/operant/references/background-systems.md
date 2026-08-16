@@ -41,10 +41,11 @@ an interactive gateway message can trigger any tool, skill, or cron job.
 
 | Command | What it does |
 |---|---|
-| `operant cron create <name> <schedule> <command>` | Schedule an agent run (cron syntax, e.g. `"0 9 * * *"` or `"every 6h"`; `--repeat N` to cap runs) |
-| `operant cron list` / `get <name>` | Inspect jobs |
-| `operant cron update <id> [name] [schedule] [command]` / `pause` / `resume` / `delete` | Manage lifecycle |
-| `operant cron run <name>` | Trigger a run immediately (test before trusting the schedule) |
+| `operant cron create <name> <schedule> <command>` | Schedule an agent run (cron syntax, e.g. `"0 9 * * *"` or `"every 6h"`; `--repeat N` to cap runs; prints the new job's ID) |
+| `operant cron list` | List jobs — **note the `ID` column**: `get` / `pause` / `resume` / `delete` / `run` all take the **job ID** (e.g. `cron_f3b2cf6b`), not the name |
+| `operant cron get <id>` / `update <id> [name] [schedule] [command]` | Inspect / manage a job by ID |
+| `operant cron pause <id>` / `resume <id>` / `delete <id>` | Lifecycle by ID (status flips reflected in `cron status` totals) |
+| `operant cron run <id>` | Trigger a run immediately (test before trusting the schedule) |
 | `operant cron status` / `tick` | Scheduler health / force a due-check |
 | `operant cron blueprint` | Create from a pre-built blueprint (morning brief, weekly digest — includes delivery presets) |
 

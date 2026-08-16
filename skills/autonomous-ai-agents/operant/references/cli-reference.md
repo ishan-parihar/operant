@@ -9,6 +9,8 @@ Run `operant --help` for the authoritative list. Key commands:
 | `operant autonomous` | Self-directed development loop |
 | `operant setup` | Interactive setup wizard (provider, memory, TTS, gateway, agent) |
 | `operant model show/set` | Active model configuration |
+| `operant config show/set/check/path/edit/env-path/migrate` | Configuration management: `show` (effective config as YAML), `set <key> <value>` (dotted key, typed coercion, runtime-only — persists on next launch), `check` (validate), `path` / `env-path` (file locations) |
+| `operant pause` / `resume` / `status` | Global emergency stop / resume (new work only) / system overview |
 | `operant tools list` | Enabled tool registry |
 | `operant skills list/search/inspect/install/uninstall/audit/seed/market/tap/toggle` | Skill management (note: `bundle` is a TUI slash command, not a CLI subcommand) |
 | `operant mcp list/add/remove/test/serve/login/configure` | MCP servers (deferred loading; `/mcp r` in the TUI reconnects and materializes tools mid-session) |
