@@ -18,13 +18,14 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use futures::StreamExt;
 use futures::stream::BoxStream;
 use tracing::warn;
 
 use super::fallback::FallbackModelClient;
 use super::model_client::{ChatRequest, ModelClient, StreamChunk};
 use crate::client::ChatResponse;
-use crate::credential_pool::CredentialPool;
+use crate::credential_pool::{CredentialPool, PooledCredential};
 use crate::error::{Error, Result};
 
 /// A [`ModelClient`] wrapper that rotates credentials within a per-provider
@@ -68,17 +69,36 @@ impl PooledModelClient {
         retry_after.map(|d| chrono::Utc::now() + chrono::Duration::from_std(d).unwrap_or_default())
     }
 
-    /// The rotation loop shared by `chat` and `chat_streaming`.
+    /// Bench the given credential for a classified credential error (hermes
+    /// `mark_exhausted_and_rotate`): sizes the cooldown by error class and
+    /// honors a provider-supplied retry-after.
+    fn bench_credential(&self, cred: &PooledCredential, err: &Error) {
+        let classified = FallbackModelClient::classify_error(err);
+        let reset_at = Self::reset_at_from_error(err);
+        self.pool.invalidate_with_reset(
+            &cred.id,
+            classified.status_code.map(|s| s as i32),
+            Some(classified.reason.as_str()),
+            Some(&classified.message),
+            reset_at,
+            false,
+        );
+        warn!(
+            provider = %self.pool.provider(),
+            credential = %cred.name,
+            status = ?classified.status_code,
+            reason = %classified.reason,
+            "Credential exhausted — benched"
+        );
+    }
+
+    /// The non-streaming rotation loop.
     ///
     /// Bounded by the pool size: each iteration consumes one available key
     /// (benched on failure), so the loop terminates when the pool is empty.
     /// Non-rotate errors (4xx other than 429/401-billing, format, policy)
     /// propagate immediately.
-    async fn rotate_loop<T>(
-        &self,
-        request: &ChatRequest,
-        call: impl Fn(&dyn ModelClient, ChatRequest) -> futures::future::BoxFuture<'_, Result<T>>,
-    ) -> Result<T> {
+    async fn rotate_loop_chat(&self, request: &ChatRequest) -> Result<ChatResponse> {
         let max_attempts = self.pool.len().max(1);
         let mut last_err: Option<Error> = None;
 
@@ -87,32 +107,19 @@ impl PooledModelClient {
                 break; // no available key left
             };
             self.inner.set_api_key(&cred.value);
-            let result = call(self.inner.as_ref(), request.clone()).await;
-            match result {
+            match self.inner.chat(request.clone()).await {
                 Ok(value) => return Ok(value),
                 Err(e) => {
                     let classified = FallbackModelClient::classify_error(&e);
                     if !classified.should_rotate_credential {
                         return Err(e);
                     }
-                    let reset_at = Self::reset_at_from_error(&e);
-                    self.pool.invalidate_with_reset(
-                        &cred.id,
-                        classified.status_code.map(|s| s as i32),
-                        Some(classified.reason.as_str()),
-                        Some(&classified.message),
-                        reset_at,
-                        false,
-                    );
                     warn!(
-                        provider = %self.pool.provider(),
-                        credential = %cred.name,
-                        status = ?classified.status_code,
-                        reason = %classified.reason,
                         attempt = attempt + 1,
                         max = max_attempts,
                         "Credential exhausted — rotating to next key"
                     );
+                    self.bench_credential(&cred, &e);
                     last_err = Some(e);
                 }
             }
@@ -135,10 +142,7 @@ impl ModelClient for PooledModelClient {
 
     async fn chat(&self, request: ChatRequest) -> Result<ChatResponse> {
         let _guard = self.gate.lock().await;
-        self.rotate_loop(&request, |client, req| {
-            Box::pin(async move { client.chat(req).await })
-        })
-        .await
+        self.rotate_loop_chat(&request).await
     }
 
     async fn chat_streaming(
@@ -148,10 +152,76 @@ impl ModelClient for PooledModelClient {
         // The gate covers key selection + stream establishment; the returned
         // stream is self-contained and doesn't hold the lock.
         let _guard = self.gate.lock().await;
-        self.rotate_loop(&request, |client, req| {
-            Box::pin(async move { client.chat_streaming(req).await })
-        })
-        .await
+        let max_attempts = self.pool.len().max(1);
+        let mut last_err: Option<Error> = None;
+
+        for attempt in 0..max_attempts {
+            let Some(cred) = self.pool.select() else {
+                break; // no available key left
+            };
+            self.inner.set_api_key(&cred.value);
+            match self.inner.chat_streaming(request.clone()).await {
+                Ok(stream) => {
+                    // Wrap the stream so a rotate-classified MID-STREAM error
+                    // (e.g. a 429 chunk after the connection was established)
+                    // benches the selected credential. The agent's mid-stream
+                    // recovery re-issues the request, and the re-issue picks
+                    // the next available key — rotation fires on the retry
+                    // (hermes `mark_exhausted_and_rotate` parity for the
+                    // stream lifecycle, not just establishment). Transport
+                    // drops (Network) and format errors are not benched.
+                    let pool = self.pool.clone();
+                    let cred_id = cred.id.clone();
+                    let cred_name = cred.name.clone();
+                    let provider = self.pool.provider().to_string();
+                    let wrapped = stream.map(move |item| {
+                        if let Err(e) = &item {
+                            let classified = FallbackModelClient::classify_error(e);
+                            if classified.should_rotate_credential {
+                                let reset_at = Self::reset_at_from_error(e);
+                                pool.invalidate_with_reset(
+                                    &cred_id,
+                                    classified.status_code.map(|s| s as i32),
+                                    Some(classified.reason.as_str()),
+                                    Some(&classified.message),
+                                    reset_at,
+                                    false,
+                                );
+                                warn!(
+                                    provider = %provider,
+                                    credential = %cred_name,
+                                    status = ?classified.status_code,
+                                    reason = %classified.reason,
+                                    "Credential exhausted mid-stream — benched for the retry"
+                                );
+                            }
+                        }
+                        item
+                    });
+                    return Ok(Box::pin(wrapped));
+                }
+                Err(e) => {
+                    let classified = FallbackModelClient::classify_error(&e);
+                    if !classified.should_rotate_credential {
+                        return Err(e);
+                    }
+                    warn!(
+                        attempt = attempt + 1,
+                        max = max_attempts,
+                        "Credential exhausted — rotating to next key"
+                    );
+                    self.bench_credential(&cred, &e);
+                    last_err = Some(e);
+                }
+            }
+        }
+
+        Err(last_err.unwrap_or_else(|| {
+            Error::Agent(format!(
+                "Credential pool for provider '{}' has no available keys",
+                self.pool.provider()
+            ))
+        }))
     }
 
     fn set_api_key(&self, api_key: &str) {
@@ -379,6 +449,148 @@ mod tests {
         let pooled = PooledModelClient::new(client, pool);
         let err = pooled.chat(request()).await.unwrap_err();
         assert!(err.to_string().contains("no available keys"));
+    }
+
+    /// Streaming mock: each `chat_streaming` call pops the next scripted
+    /// sequence of stream items.
+    struct StreamingScriptedClient {
+        scripts: std::sync::Mutex<std::collections::VecDeque<Vec<Result<StreamChunk>>>>,
+        seen_keys: Arc<std::sync::Mutex<Vec<String>>>,
+    }
+
+    impl StreamingScriptedClient {
+        #[allow(clippy::new_ret_no_self)]
+        fn new(
+            scripts: Vec<Vec<Result<StreamChunk>>>,
+            seen_keys: Arc<std::sync::Mutex<Vec<String>>>,
+        ) -> Arc<dyn ModelClient> {
+            Arc::new(Self {
+                scripts: std::sync::Mutex::new(scripts.into()), // VecDeque::from
+                seen_keys,
+            })
+        }
+    }
+
+    #[async_trait]
+    impl ModelClient for StreamingScriptedClient {
+        fn provider_name(&self) -> &str {
+            "mock-stream"
+        }
+
+        fn set_api_key(&self, api_key: &str) {
+            if let Ok(mut keys) = self.seen_keys.lock() {
+                keys.push(api_key.to_string());
+            }
+        }
+
+        async fn chat(&self, _request: ChatRequest) -> Result<ChatResponse> {
+            Err(Error::Agent("non-streaming not used".into()))
+        }
+
+        async fn chat_streaming(
+            &self,
+            _request: ChatRequest,
+        ) -> Result<BoxStream<'static, Result<StreamChunk>>> {
+            let script = self
+                .scripts
+                .lock()
+                .map(|mut s| s.pop_front().unwrap_or_default())
+                .unwrap_or_default();
+            Ok(Box::pin(futures::stream::iter(script)))
+        }
+    }
+
+    #[tokio::test]
+    async fn mid_stream_rotate_error_benches_key_and_next_request_rotates() {
+        let seen = recording();
+        let client = StreamingScriptedClient::new(
+            vec![
+                // Request 1: stream established with k1, then a mid-stream
+                // 429 chunk (connection succeeded, body failed).
+                vec![
+                    Err(Error::RateLimited {
+                        retry_after: Duration::from_secs(5),
+                    }),
+                    Ok(StreamChunk::new(Some("partial".to_string()), None, None)),
+                ],
+                // Request 2 (the retry): clean stream on the rotated key.
+                vec![
+                    Ok(StreamChunk::new(Some("rotated".to_string()), None, None)),
+                    Ok(StreamChunk::new(Some(" answer".to_string()), None, None)),
+                ],
+            ],
+            seen.clone(),
+        );
+        let pooled = PooledModelClient::new(client, pool_with(&["k1", "k2"]));
+
+        // Request 1: the mid-stream 429 surfaces AND benches k1.
+        let mut s1 = pooled.chat_streaming(request()).await.unwrap();
+        let first = s1.next().await.unwrap();
+        assert!(
+            matches!(first, Err(Error::RateLimited { .. })),
+            "mid-stream 429 must surface from the stream"
+        );
+        let _ = s1.next().await.unwrap().unwrap(); // remaining chunk still flows
+        assert_eq!(
+            pooled
+                .pool
+                .list()
+                .iter()
+                .filter(|c| c.is_available())
+                .count(),
+            1,
+            "k1 benched by the mid-stream 429; only k2 available"
+        );
+
+        // Request 2: rotation fires — the retry selects k2.
+        let mut s2 = pooled.chat_streaming(request()).await.unwrap();
+        let mut text = String::new();
+        while let Some(item) = s2.next().await {
+            if let Ok(chunk) = item {
+                text.push_str(chunk.content.as_deref().unwrap_or(""));
+            }
+        }
+        assert_eq!(text, "rotated answer");
+        let keys = seen.lock().unwrap().clone();
+        assert_eq!(keys, vec!["k1", "k2"], "rotation fired on the retry");
+    }
+
+    #[tokio::test]
+    async fn mid_stream_network_drop_does_not_bench_key() {
+        let seen = recording();
+        // reqwest transport error (provider closing the SSE connection
+        // mid-body) — the realistic mid-stream drop.
+        let net_err = reqwest::Client::new()
+            .get("http://127.0.0.1:9/")
+            .send()
+            .await
+            .unwrap_err();
+        let client = StreamingScriptedClient::new(
+            vec![
+                // Transport drop (network) — not the key's fault.
+                vec![Err(Error::Network(net_err))],
+                // Retry succeeds with the SAME key (no rotation).
+                vec![Ok(StreamChunk::new(
+                    Some("recovered".to_string()),
+                    None,
+                    None,
+                ))],
+            ],
+            seen.clone(),
+        );
+        let pooled = PooledModelClient::new(client, pool_with(&["k1"]));
+
+        let mut s1 = pooled.chat_streaming(request()).await.unwrap();
+        assert!(matches!(s1.next().await.unwrap(), Err(Error::Network(_))));
+        // Sole key NOT benched — a transport blip isn't a key failure.
+        assert!(pooled.pool.has_available());
+
+        // Next request reuses k1 and succeeds.
+        let mut s2 = pooled.chat_streaming(request()).await.unwrap();
+        let text = s2.next().await.unwrap().unwrap();
+        assert_eq!(text.content.as_deref(), Some("recovered"));
+        let keys = seen.lock().unwrap().clone();
+        assert_eq!(keys, vec!["k1", "k1"], "transport drop does not rotate");
     }
 
     #[tokio::test]

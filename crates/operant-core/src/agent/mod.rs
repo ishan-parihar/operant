@@ -1552,9 +1552,15 @@ impl OperantAgent {
                 // decoding response body") from the stream. hermes-agent
                 // explicitly retries these drops (_log_stream_retry /
                 // _emit_stream_drop) instead of aborting the turn; we mirror
-                // that here with the turn's existing retry budget. Only
-                // retryable, non-compress, non-rotate failures re-issue the
-                // request.
+                // that here with the turn's existing retry budget.
+                //
+                // Rotate-classified mid-stream errors (429/401 chunks) are
+                // retried too: the pooled client has already benched the
+                // failed key via its stream wrapper, so the re-issued
+                // request rotates to the next available key — rotation
+                // fires on the retry (hermes wraps the whole stream
+                // lifecycle with mark_exhausted_and_rotate, not just
+                // connection establishment).
                 let processed = loop {
                     match self.process_stream(stream).await {
                         Ok(processed) => break processed,
@@ -1562,7 +1568,8 @@ impl OperantAgent {
                             let classified = FallbackModelClient::classify_error(&e);
                             let retryable = classified.retryable
                                 && !classified.should_compress
-                                && !classified.should_rotate_credential;
+                                && (classified.should_rotate_credential
+                                    || !retry_state.rotate_attempted);
                             if retryable && retry_state.consume_retry() {
                                 self.iteration_budget.refund();
                                 // Aggregation hook: bump the shared retry
@@ -4941,6 +4948,121 @@ mod tests {
         // Memory and empty-content counters stay untouched on this path.
         assert_eq!(snap.memory_sync_failures, 0);
         assert_eq!(snap.empty_content_retries, 0);
+    }
+
+    /// Mock client whose first streaming attempt dies mid-read with a
+    /// rotate-classified error (a 429 chunk after the connection was
+    /// established) and whose subsequent attempts succeed. Used to verify
+    /// that the run() loop's mid-stream recovery re-issues the request and
+    /// that the pooled client rotates to the next key on the retry.
+    struct DropRotateThenOkClient {
+        calls: std::sync::atomic::AtomicUsize,
+    }
+
+    #[async_trait]
+    impl ModelClient for DropRotateThenOkClient {
+        fn provider_name(&self) -> &str {
+            "mock-drop-rotate-then-ok"
+        }
+
+        async fn chat(&self, _request: ChatRequest) -> Result<ChatResponse> {
+            Err(Error::Agent("non-streaming not used in drop test".into()))
+        }
+
+        async fn chat_streaming(
+            &self,
+            _request: ChatRequest,
+        ) -> Result<BoxStream<'static, Result<StreamChunk>>> {
+            let call = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if call == 0 {
+                // First call: a stream that yields a mid-stream 429 chunk.
+                let stream = futures::stream::iter(vec![Err(Error::RateLimited {
+                    retry_after: Duration::from_secs(5),
+                })]);
+                Ok(Box::pin(stream))
+            } else {
+                // Subsequent calls: a valid stream with final content.
+                let stream = futures::stream::iter(vec![Ok(StreamChunk::new(
+                    Some("rotated answer".to_string()),
+                    None,
+                    None,
+                ))]);
+                Ok(Box::pin(stream))
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn run_retries_mid_stream_rotate_and_rotates_credential() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db = Database::init(temp_dir.path().join("rotate_drop_test.sqlite")).unwrap();
+
+        // Two-key pool shared by the pooled client AND the agent: the
+        // mid-stream 429 benches k1 (via the pooled stream wrapper), so the
+        // re-issued request must rotate to k2.
+        let pool = std::sync::Arc::new(crate::credential_pool::CredentialPool::new("demo"));
+        pool.add(crate::credential_pool::PooledCredential::new(
+            "k1",
+            crate::credential_pool::AuthType::ApiKey,
+            "key-1",
+            "test",
+        ));
+        pool.add(crate::credential_pool::PooledCredential::new(
+            "k2",
+            crate::credential_pool::AuthType::ApiKey,
+            "key-2",
+            "test",
+        ));
+
+        let config = AgentConfig {
+            model: "demo".to_string(),
+            max_iterations: 3,
+            tool_timeout: Duration::from_secs(5),
+            request_timeout: Duration::from_secs(10),
+            system_prompt: Some("You are a test agent.".to_string()),
+            stream: true,
+            context_window: 8000,
+            max_healing_attempts: 1,
+            fallback_models: Vec::new(),
+            fallback_on_errors: false,
+            approval_mode: "off".to_string(),
+            record_trajectories: false,
+            skill_nudge_interval: 0,
+            memory_review_interval: 0,
+            max_retries: 3,
+            tool_search: Default::default(),
+        };
+        let client: Box<dyn ModelClient> = Box::new(PooledModelClient::new(
+            std::sync::Arc::new(DropRotateThenOkClient {
+                calls: std::sync::atomic::AtomicUsize::new(0),
+            }),
+            pool.clone(),
+        ));
+        let agent = OperantAgent::new(
+            config,
+            client,
+            ToolRegistry::new(Duration::from_secs(1)),
+            Arc::new(db),
+        )
+        .with_credential_pool(pool.clone());
+
+        let result = agent
+            .run("hello".to_string())
+            .await
+            .expect("run() should retry the mid-stream 429 and succeed on the rotated key");
+        assert_eq!(result.content, "rotated answer");
+        // k1 is benched (mid-stream 429), k2 carried the retry.
+        let available: Vec<String> = pool
+            .list()
+            .into_iter()
+            .filter(|c| c.is_available())
+            .map(|c| c.name)
+            .collect();
+        assert_eq!(
+            available,
+            vec!["k2".to_string()],
+            "rotation fired on the mid-stream retry"
+        );
     }
 
     #[test]
