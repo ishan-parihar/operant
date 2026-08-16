@@ -10,6 +10,80 @@ use uuid::Uuid;
 
 use operant_memory::{Memory, MemoryCategory};
 
+/// Durable per-channel backfill cursors for missed-message recovery
+/// (hermes `plugins/platforms/discord/recovery.py::DiscordRecoveryStore`
+/// parity — the `discord_recovery_cursors` table).
+///
+/// Stored in `<config_dir>/discord_recovery.db` using the same
+/// `OPERANT_CONFIG_DIR` > `$HOME/.operant` precedence as the rest of the
+/// config. Failures are warn-only: a broken ledger never blocks the
+/// listener, it only disables missed-message backfill for that run.
+struct RecoveryLedger {
+    conn: std::sync::Mutex<rusqlite::Connection>,
+}
+
+impl RecoveryLedger {
+    fn recovery_db_path() -> std::path::PathBuf {
+        let dir = std::env::var("OPERANT_CONFIG_DIR")
+            .ok()
+            .filter(|v| !v.trim().is_empty())
+            .map(std::path::PathBuf::from)
+            .or_else(|| {
+                std::env::var("HOME")
+                    .ok()
+                    .filter(|v| !v.is_empty())
+                    .map(|h| std::path::PathBuf::from(h).join(".operant"))
+            })
+            .unwrap_or_else(|| {
+                directories::UserDirs::new()
+                    .map(|u| u.home_dir().join(".operant"))
+                    .unwrap_or_default()
+            });
+        dir.join("discord_recovery.db")
+    }
+
+    fn open() -> anyhow::Result<Self> {
+        let path = Self::recovery_db_path();
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let conn = rusqlite::Connection::open(&path)?;
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS discord_recovery_cursors (\
+                 channel_id TEXT PRIMARY KEY,\
+                 last_message_id TEXT NOT NULL,\
+                 updated_at TEXT NOT NULL\
+             );",
+        )?;
+        Ok(Self {
+            conn: std::sync::Mutex::new(conn),
+        })
+    }
+
+    fn cursor(&self, channel_id: &str) -> Option<String> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        conn.query_row(
+            "SELECT last_message_id FROM discord_recovery_cursors WHERE channel_id = ?1",
+            [channel_id],
+            |row| row.get(0),
+        )
+        .ok()
+    }
+
+    fn set_cursor(&self, channel_id: &str, message_id: &str) {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let now = chrono::Utc::now().to_rfc3339();
+        let _ = conn.execute(
+            "INSERT INTO discord_recovery_cursors (channel_id, last_message_id, updated_at) \
+             VALUES (?1, ?2, ?3) \
+             ON CONFLICT(channel_id) DO UPDATE SET \
+             last_message_id = excluded.last_message_id, \
+             updated_at = excluded.updated_at",
+            rusqlite::params![channel_id, message_id, now],
+        );
+    }
+}
+
 /// Discord History channel — connects via Gateway WebSocket, stores ALL non-bot messages
 /// to a dedicated discord.db, and forwards @mention messages to the agent.
 pub struct DiscordHistoryChannel {
@@ -77,6 +151,175 @@ impl DiscordHistoryChannel {
     fn bot_user_id_from_token(token: &str) -> Option<String> {
         let part = token.split('.').next()?;
         base64_decode(part)
+    }
+
+    /// Backfill @mention messages missed while the bot was offline (hermes
+    /// `_run_missed_message_backfill` parity).
+    ///
+    /// Discord does not replay events sent while the bot is down; a normal
+    /// gateway reconnect only resumes sessions already marked resume_pending.
+    /// This pass scans each watched channel's recent history after the
+    /// durable cursor, and re-dispatches any @mention messages the operator
+    /// may have missed. The cursor advances past every message it sees, so
+    /// backfill is naturally deduplicated across restarts — messages that
+    /// arrived while live were already recorded and the `after=` cursor
+    /// skips them.
+    ///
+    /// Best-effort: any failure (ledger unavailable, API error, channel
+    /// gone) is warn-only and leaves the cursor untouched for a later run.
+    async fn backfill_missed_messages(
+        &self,
+        tx: &tokio::sync::mpsc::Sender<ChannelMessage>,
+        ledger: &RecoveryLedger,
+    ) {
+        let bot_user_id = Self::bot_user_id_from_token(&self.bot_token).unwrap_or_default();
+        if bot_user_id.is_empty() {
+            return;
+        }
+        if self.channel_ids.is_empty() {
+            // No explicit channels configured = watch-all mode; backfill
+            // would need guild channel enumeration, which this channel does
+            // not implement. Skip silently (hermes requires explicit
+            // `missed_message_backfill` channels too).
+            return;
+        }
+
+        for channel_id in &self.channel_ids {
+            let mut url =
+                format!("https://discord.com/api/v10/channels/{channel_id}/messages?limit=50");
+            if let Some(cursor) = ledger.cursor(channel_id) {
+                url.push_str(&format!("&after={cursor}"));
+            }
+
+            let resp = match self
+                .http_client()
+                .get(&url)
+                .header("Authorization", format!("Bot {}", self.bot_token))
+                .send()
+                .await
+            {
+                Ok(r) if r.status().is_success() => r,
+                Ok(r) => {
+                    tracing::warn!(
+                        "discord_history: backfill scan failed for {channel_id} ({})",
+                        r.status()
+                    );
+                    continue;
+                }
+                Err(e) => {
+                    tracing::warn!("discord_history: backfill scan error for {channel_id}: {e}");
+                    continue;
+                }
+            };
+            let messages: Vec<serde_json::Value> = match resp.json().await {
+                Ok(m) => m,
+                Err(e) => {
+                    tracing::warn!("discord_history: backfill parse error: {e}");
+                    continue;
+                }
+            };
+
+            // The REST endpoint returns newest-first; process oldest-first
+            // so re-dispatched mentions preserve chronological order.
+            for m in messages.iter().rev() {
+                let author_id = m
+                    .get("author")
+                    .and_then(|a| a.get("id"))
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("");
+                let username = m
+                    .get("author")
+                    .and_then(|a| a.get("username"))
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or(author_id);
+                if author_id == bot_user_id {
+                    continue;
+                }
+                if m.get("author")
+                    .and_then(|a| a.get("bot"))
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false)
+                {
+                    continue;
+                }
+
+                let message_id = m
+                    .get("id")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("");
+                let content = m
+                    .get("content")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("");
+                let is_dm = m
+                    .get("guild_id")
+                    .and_then(serde_json::Value::as_str)
+                    .is_none();
+
+                // Advance the cursor past every message in the window
+                // (including ones we don't dispatch) so a crash mid-scan
+                // never re-scans the same window.
+                if !message_id.is_empty() {
+                    ledger.set_cursor(channel_id, message_id);
+                }
+
+                // Same gates as the live path: DM storage/respond policy and
+                // the mention gate.
+                if is_dm && !self.store_dms && !self.respond_to_dms {
+                    continue;
+                }
+                if !self.is_user_allowed(author_id) {
+                    continue;
+                }
+                if !contains_bot_mention(content, &bot_user_id) {
+                    continue;
+                }
+                if is_dm && !self.respond_to_dms {
+                    continue;
+                }
+
+                let clean_content = strip_bot_mention(content, &bot_user_id);
+                if clean_content.is_empty() {
+                    continue;
+                }
+
+                let channel_msg = ChannelMessage {
+                    id: if message_id.is_empty() {
+                        Uuid::new_v4().to_string()
+                    } else {
+                        format!("discord_{message_id}")
+                    },
+                    sender: author_id.to_string(),
+                    reply_target: if channel_id.is_empty() {
+                        author_id.to_string()
+                    } else {
+                        channel_id.clone()
+                    },
+                    content: clean_content,
+                    channel: "discord_history".to_string(),
+                    timestamp: m
+                        .get("timestamp")
+                        .and_then(serde_json::Value::as_str)
+                        .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
+                        .map(|t| t.timestamp().max(0) as u64)
+                        .unwrap_or_else(|| {
+                            std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_secs()
+                        }),
+                    thread_ts: None,
+                    interruption_scope_id: None,
+                    attachments: Vec::new(),
+                };
+                tracing::info!(
+                    "discord_history: backfilling missed @mention from @{username} in #{channel_id}"
+                );
+                if tx.send(channel_msg).await.is_err() {
+                    return;
+                }
+            }
+        }
     }
 
     async fn resolve_channel_name(&self, channel_id: &str) -> String {
@@ -283,6 +526,18 @@ impl Channel for DiscordHistoryChannel {
 
         tracing::info!("DiscordHistory: connected and identified");
 
+        // Missed-message recovery: open the durable cursor ledger and
+        // backfill @mentions that arrived while the bot was offline. The
+        // live loop below advances the same cursors, so the two paths share
+        // one dedup boundary. A broken ledger only disables backfill — it
+        // never blocks the listener.
+        let ledger = RecoveryLedger::open().inspect_err(|e| {
+            tracing::warn!("discord_history: recovery ledger unavailable: {e}");
+        });
+        if let Ok(ref ledger) = ledger {
+            self.backfill_missed_messages(&tx, ledger).await;
+        }
+
         let mut sequence: i64 = -1;
 
         let (hb_tx, mut hb_rx) = tokio::sync::mpsc::channel::<()>(1);
@@ -477,6 +732,15 @@ impl Channel for DiscordHistoryChannel {
                                 "discord_history: stored message from @{username} in #{channel_display}"
                             );
                         }
+
+                        // Advance the recovery cursor so the next backfill
+                        // scan starts after this message (hermes
+                        // `discord_recovery_cursors` parity).
+                        if let Ok(ref ledger) = ledger
+                            && !message_id.is_empty()
+                        {
+                            ledger.set_cursor(&channel_id, message_id);
+                        }
                     }
 
                     // Forward @mention to agent (skip DMs if respond_to_dms=false)
@@ -557,5 +821,58 @@ impl Channel for DiscordHistoryChannel {
             handle.abort();
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Serializes tests that mutate `OPERANT_CONFIG_DIR` (Rust runs tests in
+    /// the same binary concurrently).
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn recovery_ledger_persists_and_updates_cursor() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        unsafe { std::env::set_var("OPERANT_CONFIG_DIR", "/tmp/operant-d3-ledger-test") };
+        let _ = std::fs::remove_file("/tmp/operant-d3-ledger-test/discord_recovery.db");
+
+        let ledger = RecoveryLedger::open().expect("ledger opens");
+        assert!(ledger.cursor("100").is_none(), "fresh ledger has no cursor");
+
+        ledger.set_cursor("100", "msg-1");
+        ledger.set_cursor("100", "msg-2");
+        ledger.set_cursor("200", "msg-9");
+        assert_eq!(ledger.cursor("100").as_deref(), Some("msg-2"));
+        assert_eq!(ledger.cursor("200").as_deref(), Some("msg-9"));
+
+        // Reopening the ledger reads the same durable state.
+        let reopened = RecoveryLedger::open().expect("ledger reopens");
+        assert_eq!(reopened.cursor("100").as_deref(), Some("msg-2"));
+
+        unsafe { std::env::remove_var("OPERANT_CONFIG_DIR") };
+    }
+
+    #[test]
+    fn recovery_ledger_path_respects_config_dir_env() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        unsafe { std::env::set_var("OPERANT_CONFIG_DIR", "/tmp/operant-d3-path-test") };
+        let path = RecoveryLedger::recovery_db_path();
+        assert_eq!(
+            path,
+            std::path::PathBuf::from("/tmp/operant-d3-path-test/discord_recovery.db")
+        );
+        unsafe { std::env::remove_var("OPERANT_CONFIG_DIR") };
+    }
+
+    #[test]
+    fn recovery_ledger_missing_cursor_is_none() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        unsafe { std::env::set_var("OPERANT_CONFIG_DIR", "/tmp/operant-d3-none-test") };
+        let _ = std::fs::remove_file("/tmp/operant-d3-none-test/discord_recovery.db");
+        let ledger = RecoveryLedger::open().expect("ledger opens");
+        assert!(ledger.cursor("does-not-exist").is_none());
+        unsafe { std::env::remove_var("OPERANT_CONFIG_DIR") };
     }
 }
