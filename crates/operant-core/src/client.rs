@@ -1188,7 +1188,7 @@ impl Stream for ChatStreamResponse {
 
         loop {
             if let Some(event) = try_parse_next_sse_event(&mut this.buffer, false) {
-                return Poll::Ready(Some(Ok(event)));
+                return Poll::Ready(Some(event));
             }
 
             match Pin::new(&mut this.inner).poll_next(cx) {
@@ -1199,7 +1199,7 @@ impl Stream for ChatStreamResponse {
                 }
                 Poll::Ready(Some(Err(e))) => return Poll::Ready(Some(Err(Error::Network(e)))),
                 Poll::Ready(None) => {
-                    return Poll::Ready(try_parse_next_sse_event(&mut this.buffer, true).map(Ok));
+                    return Poll::Ready(try_parse_next_sse_event(&mut this.buffer, true));
                 }
                 Poll::Pending => return Poll::Pending,
             }
@@ -1207,8 +1207,103 @@ impl Stream for ChatStreamResponse {
     }
 }
 
+/// Minimal SSE error envelope (OpenAI-compatible streaming errors).
+#[derive(Debug, Deserialize)]
+struct SseErrorEnvelope {
+    #[serde(default)]
+    error: Option<SseErrorDetail>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SseErrorDetail {
+    #[serde(default)]
+    message: Option<String>,
+    #[serde(default, rename = "type")]
+    error_type: Option<String>,
+    #[serde(default)]
+    code: Option<String>,
+    #[serde(default)]
+    status: Option<u16>,
+    #[serde(default)]
+    retry_after: Option<f64>,
+    #[serde(default)]
+    retry_after_ms: Option<u64>,
+}
+
+/// Map an SSE `data:` payload containing an OpenAI-compatible error object
+/// to a classified [`Error`] (hermes surfaces streaming error events for
+/// classification — rotate on 429, compress on context overflow — instead
+/// of silently dropping them). Returns `None` when the payload isn't an
+/// error envelope.
+fn classify_sse_error(payload: &str) -> Option<Error> {
+    let envelope: SseErrorEnvelope = serde_json::from_str(payload).ok()?;
+    let detail = envelope.error?;
+    let message = detail.message.unwrap_or_default();
+    let status = detail.status;
+    let type_key = detail
+        .error_type
+        .or(detail.code)
+        .unwrap_or_default()
+        .to_lowercase();
+    let lc_msg = message.to_lowercase();
+
+    let retry_after = detail
+        .retry_after
+        .map(Duration::from_secs_f64)
+        .or_else(|| detail.retry_after_ms.map(Duration::from_millis));
+
+    if status == Some(429) || type_key.contains("rate_limit") || lc_msg.contains("rate limit") {
+        return Some(Error::RateLimited {
+            retry_after: retry_after.unwrap_or_else(|| Duration::from_secs(60)),
+        });
+    }
+    if status == Some(401)
+        || type_key.contains("invalid_api_key")
+        || type_key.contains("authentication")
+        || lc_msg.contains("api key")
+    {
+        return Some(Error::Authentication(message));
+    }
+    if status == Some(402)
+        || type_key.contains("quota")
+        || type_key.contains("billing")
+        || lc_msg.contains("quota")
+        || lc_msg.contains("insufficient")
+    {
+        return Some(Error::Provider {
+            status: status.unwrap_or(402),
+            body: message,
+            retry_after: None,
+        });
+    }
+    if status == Some(413)
+        || type_key.contains("context_length")
+        || (lc_msg.contains("context") && lc_msg.contains("exceed"))
+    {
+        return Some(Error::ContextLengthExceeded);
+    }
+    if status.is_some_and(|s| s >= 500)
+        || type_key.contains("server_error")
+        || type_key.contains("internal")
+    {
+        return Some(Error::Provider {
+            status: status.unwrap_or(500),
+            body: message,
+            retry_after,
+        });
+    }
+    Some(Error::Provider {
+        status: status.unwrap_or(400),
+        body: message,
+        retry_after,
+    })
+}
+
 #[allow(clippy::collapsible_str_replace)]
-fn try_parse_next_sse_event(buffer: &mut String, allow_partial: bool) -> Option<ChatStreamEvent> {
+fn try_parse_next_sse_event(
+    buffer: &mut String,
+    allow_partial: bool,
+) -> Option<crate::error::Result<ChatStreamEvent>> {
     normalize_sse_buffer(buffer);
 
     let event_end = if let Some(index) = buffer.find("\n\n") {
@@ -1242,12 +1337,18 @@ fn try_parse_next_sse_event(buffer: &mut String, allow_partial: bool) -> Option<
     }
 
     match serde_json::from_str::<ChatStreamEvent>(payload.trim()) {
-        Ok(event) => Some(event),
+        Ok(event) => Some(Ok(event)),
         Err(e) => {
+            // SSE error envelope — surface it as a classified error so the
+            // runtime can rotate credentials / compress context instead of
+            // silently dropping the provider's failure signal.
+            if let Some(err) = classify_sse_error(&payload) {
+                return Some(Err(err));
+            }
             if let Some(json_start) = payload.find('{') {
                 let potential_json = &payload[json_start..];
                 if let Ok(event) = serde_json::from_str::<ChatStreamEvent>(potential_json.trim()) {
-                    return Some(event);
+                    return Some(Ok(event));
                 }
             }
             debug!(error = %e, payload = %payload, "Failed to parse SSE event");
@@ -1395,7 +1496,9 @@ mod tests {
     #[test]
     fn streaming_parser_handles_crlf_events() {
         let mut buffer = "data: {\"id\":\"1\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"demo\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hello\"},\"finish_reason\":null}]}\r\n\r\n".to_string();
-        let event = try_parse_next_sse_event(&mut buffer, false).expect("event should parse");
+        let event = try_parse_next_sse_event(&mut buffer, false)
+            .expect("event should parse")
+            .expect("event should not be an error");
 
         assert_eq!(event.choices.len(), 1);
         assert_eq!(event.choices[0].delta.content.as_deref(), Some("Hello"));
@@ -1405,8 +1508,9 @@ mod tests {
     #[test]
     fn streaming_parser_handles_partial_final_event() {
         let mut buffer = "data: {\"id\":\"1\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"demo\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Done\"},\"finish_reason\":\"stop\"}]}".to_string();
-        let event =
-            try_parse_next_sse_event(&mut buffer, true).expect("trailing event should parse");
+        let event = try_parse_next_sse_event(&mut buffer, true)
+            .expect("trailing event should parse")
+            .expect("event should not be an error");
 
         assert_eq!(event.choices[0].delta.content.as_deref(), Some("Done"));
         assert!(buffer.is_empty());
@@ -1746,13 +1850,77 @@ mod tests {
 "#,
         );
         let event = try_parse_next_sse_event(&mut buffer, false)
-            .expect("null-name delta must parse into an SSE event");
+            .expect("null-name delta must parse into an SSE event")
+            .expect("event should not be an error");
         let deltas = &event.choices[0].delta.tool_calls;
         let calls = deltas.as_ref().expect("tool_calls present");
         assert_eq!(calls.len(), 1);
         assert_eq!(
             calls[0].function.as_ref().unwrap().arguments,
             r#""query": "rus"#
+        );
+    }
+
+    // ── mid-stream SSE error-event surfacing (hermes parity) ──────────
+    //
+    // Providers can emit an OpenAI-compatible error object as an SSE `data:`
+    // event *after* the stream is established (mid-response 429/402/413).
+    // Previously `try_parse_next_sse_event` silently dropped these, so the
+    // agent never saw the failure and the mid-stream retry loop never fired.
+    // Now they surface as classified errors: rotate on 429, compress on 413,
+    // switch provider on auth/billing.
+
+    #[test]
+    fn sse_error_event_surfaces_as_rate_limited() {
+        let mut buffer = String::from(
+            "data: {\"error\":{\"message\":\"rate limit reached\",\"type\":\"rate_limit_error\",\"status\":429}}\n\n",
+        );
+        let parsed = try_parse_next_sse_event(&mut buffer, false)
+            .expect("error event must surface, not be dropped");
+        let err = parsed.expect_err("must be a classified error");
+        assert!(
+            matches!(err, crate::error::Error::RateLimited { .. }),
+            "429 SSE error must classify as RateLimited, got: {err}"
+        );
+        assert!(buffer.is_empty());
+    }
+
+    #[test]
+    fn sse_error_event_surfaces_as_authentication() {
+        let mut buffer = String::from(
+            "data: {\"error\":{\"message\":\"invalid api key\",\"type\":\"invalid_api_key\",\"status\":401}}\n\n",
+        );
+        let parsed = try_parse_next_sse_event(&mut buffer, false)
+            .expect("error event must surface, not be dropped");
+        let err = parsed.expect_err("must be a classified error");
+        assert!(
+            matches!(err, crate::error::Error::Authentication(_)),
+            "401 SSE error must classify as Authentication, got: {err}"
+        );
+    }
+
+    #[test]
+    fn sse_error_event_surfaces_as_context_length() {
+        let mut buffer = String::from(
+            "data: {\"error\":{\"message\":\"This model's maximum context length is 128000 tokens\",\"type\":\"context_length_exceeded\",\"code\":\"context_length_exceeded\",\"status\":413}}\n\n",
+        );
+        let parsed = try_parse_next_sse_event(&mut buffer, false)
+            .expect("error event must surface, not be dropped");
+        let err = parsed.expect_err("must be a classified error");
+        assert!(
+            matches!(err, crate::error::Error::ContextLengthExceeded),
+            "413 SSE error must classify as ContextLengthExceeded, got: {err}"
+        );
+    }
+
+    #[test]
+    fn sse_non_error_payload_still_dropped_without_classification() {
+        // A data payload that is neither a valid chunk nor an error envelope
+        // must still be skipped (not surfaced as a bogus Provider error).
+        let mut buffer = String::from("data: {\"unexpected\":true}\n\n");
+        assert!(
+            try_parse_next_sse_event(&mut buffer, false).is_none(),
+            "non-envelope JSON must be dropped silently"
         );
     }
 
