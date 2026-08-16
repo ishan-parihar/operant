@@ -362,6 +362,11 @@ fn parse_attachment_markers(message: &str) -> (String, Vec<TelegramAttachment>) 
 /// Telegram Bot API maximum file download size (20 MB).
 const TELEGRAM_MAX_FILE_DOWNLOAD_BYTES: u64 = 20 * 1024 * 1024;
 
+/// A pending multiple-choice question: the oneshot sender to resolve with
+/// the chosen option text, plus the original option list so an index-based
+/// `choice:` callback can be mapped back to text.
+type PendingChoice = (tokio::sync::oneshot::Sender<String>, Vec<String>);
+
 /// Telegram channel — long-polls the Bot API for updates
 pub struct TelegramChannel {
     bot_token: String,
@@ -400,6 +405,13 @@ pub struct TelegramChannel {
             >,
         >,
     >,
+    /// Pending multiple-choice questions: callback_data key → oneshot sender
+    /// of the chosen option text plus the original option list (so the tap's
+    /// index-based callback_data can be mapped back to text). `request_choice`
+    /// registers an entry and `listen()` resolves it when the matching
+    /// `choice:` callback_query arrives (hermes model-picker drill-down
+    /// parity).
+    pending_choices: Arc<tokio::sync::Mutex<std::collections::HashMap<String, PendingChoice>>>,
     /// Seconds to wait for the operator to tap an inline-keyboard button on a
     /// tool approval prompt before auto-denying. Configurable via
     /// `channels.telegram.approval_timeout_secs`. Default: 120.
@@ -412,6 +424,11 @@ pub struct TelegramChannel {
     /// Cache: chat_id -> forum topic thread_id. Populated lazily via
     /// `ensure_dm_topic`; persisted to the config dir state file.
     dm_topic_threads: std::sync::Mutex<std::collections::HashMap<String, i64>>,
+    /// Most recent chat a message arrived from, recorded by `listen()`. Used
+    /// by `request_choice` (which has no recipient parameter) to address the
+    /// inline-keyboard question to the active conversation. Falls back to the
+    /// generic send+listen flow when no message has arrived yet.
+    last_chat_id: std::sync::Mutex<Option<String>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -458,10 +475,12 @@ impl TelegramChannel {
             proxy_url: None,
             tool_command_specs: Vec::new(),
             pending_approvals: Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
+            pending_choices: Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
             approval_timeout_secs: 120,
             dm_topics_enabled: false,
             dm_topic_name: "General".to_string(),
             dm_topic_threads: std::sync::Mutex::new(std::collections::HashMap::new()),
+            last_chat_id: std::sync::Mutex::new(None),
         }
     }
 
@@ -3441,6 +3460,41 @@ Ensure only one `operant` process is using this bot token."
                             }
                         }
 
+                        // ── Multiple-choice taps (`choice:` prefix) ──
+                        // Resolve the pending `request_choice` oneshot with the
+                        // selected option text. Index-based callback_data keeps
+                        // payloads under Telegram's 64-byte limit.
+                        if let Some(rest) = cb_data.strip_prefix("choice:")
+                            && let Some((choice_id, idx_str)) = rest.rsplit_once(':')
+                            && let Ok(idx) = idx_str.parse::<usize>()
+                        {
+                            let answered = if let Some((sender, choices)) =
+                                self.pending_choices.lock().await.remove(choice_id)
+                            {
+                                let choice_text = choices
+                                    .get(idx)
+                                    .cloned()
+                                    .unwrap_or_else(|| format!("option {}", idx + 1));
+                                let _ = sender.send(choice_text);
+                                true
+                            } else {
+                                false
+                            };
+                            let answer_body = serde_json::json!({
+                                "callback_query_id": cb_id,
+                                "text": if answered { "✅ Selected" } else { "⚠️ Expired" },
+                            });
+                            if let Err(e) = self
+                                .http_client()
+                                .post(self.api_url("answerCallbackQuery"))
+                                .json(&answer_body)
+                                .send()
+                                .await
+                            {
+                                tracing::warn!("answerCallbackQuery (choice) failed: {e}");
+                            }
+                        }
+
                         continue; // callback_query is not a regular message
                     }
 
@@ -3463,6 +3517,13 @@ Ensure only one `operant` process is using this bot token."
                             reaction_chat_id,
                             reaction_message_id,
                         );
+                    }
+
+                    // Record the chat for `request_choice` (no recipient
+                    // parameter) before DM-topic rewriting mutates the target.
+                    if let Some((chat_id, _)) = Self::extract_update_message_target(update) {
+                        *self.last_chat_id.lock().unwrap_or_else(|e| e.into_inner()) =
+                            Some(chat_id);
                     }
 
                     // DM topics: when enabled and this is a private-chat
@@ -3641,6 +3702,99 @@ Ensure only one `operant` process is using this bot token."
 
         Ok(result)
     }
+
+    async fn request_choice(
+        &self,
+        question: &str,
+        choices: &[String],
+        timeout: std::time::Duration,
+    ) -> anyhow::Result<Option<String>> {
+        if choices.is_empty() {
+            anyhow::bail!("TelegramChannel.request_choice requires at least one choice");
+        }
+
+        // `request_choice` carries no recipient, so address the question to
+        // the most recent chat a message arrived from. If none has been seen
+        // yet (channel never listened), signal the caller to fall back to the
+        // generic send + listen flow.
+        let chat_id = match self
+            .last_chat_id
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+        {
+            Some(c) => c,
+            None => return Ok(None),
+        };
+
+        // Unique key embedded in callback_data so listen() can route the tap.
+        let choice_id = uuid::Uuid::new_v4().to_string();
+        let question_html = Self::escape_html(question);
+        let text = format!("\u{2753} <b>{question_html}</b>\n\nTap an option below:");
+
+        // One button per choice; callback_data carries the choice index so
+        // the selected option text is recovered without echoing user content
+        // into callback_data (which Telegram limits to 64 bytes).
+        let buttons: Vec<serde_json::Value> = choices
+            .iter()
+            .enumerate()
+            .map(|(idx, choice)| {
+                serde_json::json!({ "text": choice, "callback_data": format!("choice:{choice_id}:{idx}") })
+            })
+            .collect();
+        // Wrap in a single row for small choice sets; split at 4 for larger.
+        let rows: Vec<Vec<serde_json::Value>> = buttons.chunks(4).map(|c| c.to_vec()).collect();
+        let reply_markup = serde_json::json!({ "inline_keyboard": rows });
+
+        let body = serde_json::json!({
+            "chat_id": chat_id,
+            "text": text,
+            "parse_mode": "HTML",
+            "reply_markup": reply_markup,
+        });
+
+        // Register the oneshot BEFORE sending to avoid a race where the user
+        // taps before the sender is in the map. The choice list rides along so
+        // `listen()` can map the index-based callback back to text.
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        self.pending_choices
+            .lock()
+            .await
+            .insert(choice_id.clone(), (tx, choices.to_vec()));
+
+        let resp = self
+            .http_client()
+            .post(self.api_url("sendMessage"))
+            .json(&body)
+            .send()
+            .await;
+
+        match resp {
+            Ok(r) if r.status().is_success() => {}
+            Ok(r) => {
+                self.pending_choices.lock().await.remove(&choice_id);
+                let status = r.status();
+                let err = r.text().await.unwrap_or_default();
+                anyhow::bail!("Telegram sendMessage (choice) failed ({status}): {err}");
+            }
+            Err(e) => {
+                self.pending_choices.lock().await.remove(&choice_id);
+                return Err(e.into());
+            }
+        }
+
+        // Wait for the user to tap a button, honoring the caller's timeout.
+        let result = match tokio::time::timeout(timeout, rx).await {
+            Ok(Ok(choice)) => Some(choice),
+            _ => {
+                // Timeout or sender dropped — clean up.
+                self.pending_choices.lock().await.remove(&choice_id);
+                None
+            }
+        };
+
+        Ok(result)
+    }
 }
 
 #[cfg(test)]
@@ -3795,7 +3949,8 @@ mod tests {
         let ch = TelegramChannel::new("t".into(), vec!["*".into()], false);
         let out = rt.block_on(async { ch.ensure_dm_topic("123456").await });
         assert!(out.is_none());
-    }    /// Serializes tests that mutate `OPERANT_CONFIG_DIR` (Rust runs tests in
+    }
+    /// Serializes tests that mutate `OPERANT_CONFIG_DIR` (Rust runs tests in
     /// parallel within a binary, and env mutation would race).
     static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
@@ -3831,7 +3986,10 @@ mod tests {
         ch.persist_dm_topic_state();
         let ch2 = TelegramChannel::new("t".into(), vec!["*".into()], false);
         ch2.load_dm_topic_state();
-        assert_eq!(*ch2.dm_topic_threads.lock().unwrap().get("999001").unwrap(), 42);
+        assert_eq!(
+            *ch2.dm_topic_threads.lock().unwrap().get("999001").unwrap(),
+            42
+        );
         unsafe { std::env::remove_var("OPERANT_CONFIG_DIR") };
         let _ = std::fs::remove_file(TelegramChannel::dm_topic_state_path());
     }
@@ -6244,5 +6402,40 @@ mod tests {
     fn non_approval_callback_data_is_ignored() {
         let cb_data = "some_other_action:data";
         assert!(cb_data.strip_prefix("approval:").is_none());
+    }
+
+    #[tokio::test]
+    async fn pending_choice_resolves_with_selected_text() {
+        let ch = TelegramChannel::new("token".into(), vec!["*".into()], false);
+        let choice_id = "test-choice-123".to_string();
+        let choices = vec!["Alpha".to_string(), "Beta".to_string(), "Gamma".to_string()];
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        ch.pending_choices
+            .lock()
+            .await
+            .insert(choice_id.clone(), (tx, choices.clone()));
+
+        // Simulate what listen() does when a `choice:` callback_query arrives.
+        let (sender, stored_choices) = ch.pending_choices.lock().await.remove(&choice_id).unwrap();
+        let text = stored_choices.get(1).cloned().unwrap();
+        sender.send(text).unwrap();
+
+        assert_eq!(rx.await.unwrap(), "Beta");
+    }
+
+    #[test]
+    fn choice_callback_data_parses_uuid_and_index() {
+        let uuid = "550e8400-e29b-41d4-a716-446655440000";
+        let cb_data = format!("choice:{uuid}:2");
+        let rest = cb_data.strip_prefix("choice:").unwrap();
+        let (id, idx_str) = rest.rsplit_once(':').unwrap();
+        assert_eq!(id, uuid);
+        assert_eq!(idx_str.parse::<usize>().unwrap(), 2);
+    }
+
+    #[test]
+    fn non_choice_callback_data_is_ignored() {
+        assert!("approval:abc:approve".strip_prefix("choice:").is_none());
+        assert!("choice".strip_prefix("choice:").is_none());
     }
 }
