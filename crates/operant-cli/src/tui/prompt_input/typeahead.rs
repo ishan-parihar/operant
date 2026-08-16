@@ -128,6 +128,13 @@ pub(super) fn compute_slash_suggestions(
 static SKILL_NAME_SNAPSHOT: std::sync::OnceLock<std::sync::RwLock<Vec<String>>> =
     std::sync::OnceLock::new();
 
+/// Serializes snapshot writers. Parallel tests construct `App` (which
+/// re-registers the real installed skills) while the typeahead test asserts
+/// on its own registration — without this mutex the process-wide snapshot is
+/// replaced mid-assertion and the test flakes. Production impact is nil:
+/// registration happens only at app init / skills rescans.
+pub(super) static SKILL_SNAPSHOT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// Compute `/skill <name>` / `/bundle <name>` name completions from the
 /// installed-skills snapshot registered by the app.
 fn compute_name_completions(
@@ -158,6 +165,13 @@ fn compute_name_completions(
 /// Register the installed skill + bundle names for `/skill <Tab>` typeahead.
 /// Called by the app whenever the skills directory is (re)scanned.
 pub fn register_typeahead_names(skill_names: Vec<String>, bundle_names: Vec<String>) {
+    let _guard = SKILL_SNAPSHOT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    set_typeahead_names(skill_names, bundle_names);
+}
+
+/// Lock-free inner writer used by `register_typeahead_names` and by the
+/// typeahead test (which holds `SKILL_SNAPSHOT_LOCK` across its assertions).
+pub(super) fn set_typeahead_names(skill_names: Vec<String>, bundle_names: Vec<String>) {
     let names = SKILL_NAME_SNAPSHOT.get_or_init(|| std::sync::RwLock::new(Vec::new()));
     let mut names = names.write().unwrap_or_else(|e| e.into_inner());
     names.clear();

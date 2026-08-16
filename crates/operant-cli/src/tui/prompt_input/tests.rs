@@ -309,7 +309,14 @@ fn typeahead_case_insensitive() {
 
 #[test]
 fn typeahead_skill_names_complete() {
-    crate::tui::prompt_input::register_typeahead_names(
+    // Hold the snapshot-writer lock for the whole test: parallel tests that
+    // construct `App` re-register the real installed skills into the
+    // process-wide snapshot, which would otherwise be replaced between our
+    // registration and assertions (flaky under `cargo test --workspace`).
+    let _guard = super::typeahead::SKILL_SNAPSHOT_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    super::typeahead::set_typeahead_names(
         vec!["gitcrawl".to_string(), "web-research".to_string()],
         vec!["research-pack".to_string()],
     );
