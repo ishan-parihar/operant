@@ -46,6 +46,18 @@ impl DiscordAllowedMentions {
     }
 }
 
+/// A parsed Discord slash-command interaction: the synthesized `/name args`
+/// text plus the routing metadata needed to forward and answer it.
+struct InteractionCommand {
+    content: String,
+    author_id: String,
+    #[allow(dead_code)]
+    author_name: String,
+    channel_id: String,
+    interaction_id: String,
+    interaction_token: String,
+}
+
 pub struct DiscordChannel {
     bot_token: String,
     guild_id: Option<String>,
@@ -207,6 +219,234 @@ impl DiscordChannel {
         // Discord bot tokens are base64(bot_user_id).timestamp.hmac
         let part = token.split('.').next()?;
         base64_decode(part)
+    }
+
+    /// Register the bot's Discord application (slash) commands via the REST
+    /// API (hermes `_register_slash_commands` + `_safe_sync_slash_commands`
+    /// parity). Guild-scoped when a `guild_id` is configured (instant
+    /// propagation, no global cache delay); global otherwise. Failures are
+    /// warn-only — a registration hiccup must never block the listener.
+    async fn register_slash_commands(&self) {
+        let Ok(me) = self
+            .http_client()
+            .get("https://discord.com/api/v10/applications/@me")
+            .header("Authorization", format!("Bot {}", self.bot_token))
+            .send()
+            .await
+        else {
+            tracing::warn!("Discord: could not fetch application id for slash commands");
+            return;
+        };
+        let Ok(me_json) = me.json::<serde_json::Value>().await else {
+            tracing::warn!("Discord: could not parse application payload for slash commands");
+            return;
+        };
+        let Some(app_id) = me_json.get("id").and_then(serde_json::Value::as_str) else {
+            tracing::warn!("Discord: application payload missing id for slash commands");
+            return;
+        };
+
+        // The command set mirrors the orchestrator's runtime commands plus
+        // the core gateway slash surface (hermes `_register_slash_commands`
+        // parity): every entry is synthesized back into a `/name args` text
+        // message in `handle_interaction`, so the shared resolver handles it
+        // identically to a typed command.
+        let commands = json!([
+            { "name": "new", "description": "Start a new conversation", "type": 1 },
+            { "name": "reset", "description": "Reset the session", "type": 1 },
+            {
+                "name": "model",
+                "description": "Show or change the model",
+                "type": 1,
+                "options": [{
+                    "name": "name",
+                    "description": "Model name. Leave empty to show current.",
+                    "type": 3,
+                    "required": false
+                }]
+            },
+            { "name": "status", "description": "Show session status", "type": 1 },
+            { "name": "help", "description": "Show available commands", "type": 1 },
+            { "name": "stop", "description": "Stop the running agent", "type": 1 },
+            { "name": "approve", "description": "Approve a pending tool permission", "type": 1 },
+            { "name": "deny", "description": "Deny a pending tool permission", "type": 1 }
+        ]);
+
+        let endpoint = match &self.guild_id {
+            Some(gid) => {
+                format!("https://discord.com/api/v10/applications/{app_id}/guilds/{gid}/commands")
+            }
+            None => format!("https://discord.com/api/v10/applications/{app_id}/commands"),
+        };
+
+        let resp = self
+            .http_client()
+            .put(&endpoint)
+            .header("Authorization", format!("Bot {}", self.bot_token))
+            .json(&commands)
+            .send()
+            .await;
+        match resp {
+            Ok(r) if r.status().is_success() => {
+                tracing::info!("Discord: registered {} slash commands", 8);
+            }
+            Ok(r) => {
+                let status = r.status();
+                let body = r.text().await.unwrap_or_default();
+                tracing::warn!("Discord: slash command registration failed ({status}): {body}");
+            }
+            Err(e) => {
+                tracing::warn!("Discord: slash command registration error: {e}");
+            }
+        }
+    }
+
+    /// Extract the `/name args` text command, author, and channel from an
+    /// `INTERACTION_CREATE` payload. Pure — no I/O — so the routing logic is
+    /// unit-testable. Returns `None` for non-application-command interactions
+    /// (components, message commands, autocomplete).
+    fn interaction_to_command(d: &serde_json::Value) -> Option<InteractionCommand> {
+        // Only application commands (type 2) are handled; component
+        // interactions (type 3), message commands (type 3/4), and
+        // autocomplete (type 4) are not registered and can be ignored.
+        if d.get("type").and_then(serde_json::Value::as_u64) != Some(2) {
+            return None;
+        }
+        let data = d.get("data")?;
+        let name = data.get("name").and_then(serde_json::Value::as_str)?;
+
+        // Rebuild `/name arg1 arg2` from options.
+        let mut args = Vec::new();
+        if let Some(opts) = data.get("options").and_then(serde_json::Value::as_array) {
+            for opt in opts {
+                if let Some(v) = opt.get("value").and_then(serde_json::Value::as_str) {
+                    args.push(v.to_string());
+                }
+            }
+        }
+        let mut content = format!("/{name}");
+        if !args.is_empty() {
+            content.push(' ');
+            content.push_str(&args.join(" "));
+        }
+
+        // Guild interactions carry the user under `member.user`, DMs under `user`.
+        let author_id = d
+            .get("member")
+            .and_then(|m| m.get("user"))
+            .or_else(|| d.get("user"))
+            .and_then(|u| u.get("id"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        let author_name = d
+            .get("member")
+            .and_then(|m| m.get("user"))
+            .or_else(|| d.get("user"))
+            .and_then(|u| u.get("username"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("unknown")
+            .to_string();
+        let channel_id = d
+            .get("channel_id")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        let interaction_id = d
+            .get("id")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        let interaction_token = d
+            .get("token")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+
+        Some(InteractionCommand {
+            content,
+            author_id: author_id.to_string(),
+            author_name,
+            channel_id,
+            interaction_id,
+            interaction_token,
+        })
+    }
+
+    /// Handle an `INTERACTION_CREATE` gateway event — a slash-command
+    /// invocation (hermes `_run_simple_slash` parity).
+    ///
+    /// Synthesizes the equivalent `/name args` text message so the shared
+    /// orchestrator/gateway command resolver handles the interaction
+    /// identically to a typed command. Authorization mirrors the
+    /// `MESSAGE_CREATE` path: unauthorized users are rejected and the
+    /// interaction is answered with an ephemeral rejection so Discord
+    /// doesn't show a "interaction failed" state.
+    async fn handle_interaction(
+        &self,
+        d: &serde_json::Value,
+        tx: &tokio::sync::mpsc::Sender<ChannelMessage>,
+    ) -> anyhow::Result<()> {
+        let Some(cmd) = Self::interaction_to_command(d) else {
+            return Ok(());
+        };
+
+        // Sender validation — same trust boundary as regular messages.
+        if !self.is_user_allowed(&cmd.author_id) {
+            tracing::warn!(
+                "Discord: ignoring slash command from unauthorized user: {}",
+                cmd.author_id
+            );
+            if !cmd.interaction_id.is_empty() && !cmd.interaction_token.is_empty() {
+                let url = format!(
+                    "https://discord.com/api/v10/interactions/{}/{}/callback",
+                    cmd.interaction_id, cmd.interaction_token
+                );
+                let body = json!({
+                    "type": 4, // CHANNEL_MESSAGE_WITH_SOURCE
+                    "data": { "content": "⛔ You are not authorized to use this bot.", "flags": 64 },
+                });
+                let _ = self.http_client().post(&url).json(&body).send().await;
+            }
+            return Ok(());
+        }
+
+        // Answer the interaction first so Discord doesn't show a timeout
+        // spinner; the real reply comes via the normal send path.
+        if !cmd.interaction_id.is_empty() && !cmd.interaction_token.is_empty() {
+            let url = format!(
+                "https://discord.com/api/v10/interactions/{}/{}/callback",
+                cmd.interaction_id, cmd.interaction_token
+            );
+            let body = json!({
+                "type": 4, // CHANNEL_MESSAGE_WITH_SOURCE
+                "data": { "content": "✅ Command received.", "flags": 64 },
+            });
+            let _ = self.http_client().post(&url).json(&body).send().await;
+        }
+
+        let channel_msg = ChannelMessage {
+            id: Uuid::new_v4().to_string(),
+            sender: cmd.author_id.clone(),
+            reply_target: if cmd.channel_id.is_empty() {
+                cmd.author_id.clone()
+            } else {
+                cmd.channel_id.clone()
+            },
+            content: cmd.content,
+            channel: "discord".to_string(),
+            timestamp: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+            interruption_scope_id: None,
+            thread_ts: None,
+            attachments: Vec::new(),
+        };
+
+        if tx.send(channel_msg).await.is_err() {
+            anyhow::bail!("Discord: interaction channel closed");
+        }
+        Ok(())
     }
 
     /// Resolve whether `channel_id` is a Discord thread (ANNOUNCEMENT,
@@ -1372,6 +1612,11 @@ impl Channel for DiscordChannel {
 
         tracing::info!("Discord: connected and identified");
 
+        // Register application commands (slash commands). Best-effort — a
+        // registration failure is warn-only and never blocks the listener.
+        // Runs after identify so the application id lookup is well-formed.
+        self.register_slash_commands().await;
+
         // Track the last sequence number for heartbeats and resume.
         // Only accessed in the select! loop below, so a plain i64 suffices.
         let mut sequence: i64 = -1;
@@ -1488,6 +1733,21 @@ impl Channel for DiscordChannel {
 
                     // Only handle MESSAGE_CREATE (opcode 0, type "MESSAGE_CREATE")
                     let event_type = event.get("t").and_then(|t| t.as_str()).unwrap_or("");
+                    if event_type == "INTERACTION_CREATE" {
+                        // Slash-command invocation — synthesize the equivalent
+                        // `/name args` text message and forward it through the
+                        // same pipeline (hermes `_run_simple_slash` parity).
+                        if let Some(d) = event.get("d") {
+                            match self.handle_interaction(d, &tx).await {
+                                Ok(()) => continue,
+                                Err(e) => {
+                                    tracing::warn!("Discord: interaction handling failed: {e}");
+                                    continue;
+                                }
+                            }
+                        }
+                        continue;
+                    }
                     if event_type != "MESSAGE_CREATE" {
                         continue;
                     }
@@ -2172,6 +2432,68 @@ mod tests {
         // "MTIzNDU2" decodes to "123456"
         let decoded = base64_decode("MTIzNDU2");
         assert_eq!(decoded, Some("123456".to_string()));
+    }
+
+    #[test]
+    fn interaction_to_command_synthesizes_slash_text() {
+        let interaction = serde_json::json!({
+            "id": "111",
+            "type": 2,
+            "token": "tok-abc",
+            "channel_id": "999",
+            "member": { "user": { "id": "42", "username": "ishan" } },
+            "data": {
+                "name": "model",
+                "options": [
+                    { "name": "name", "value": "claude-sonnet-4" }
+                ]
+            }
+        });
+        let cmd = DiscordChannel::interaction_to_command(&interaction).expect("parsed");
+        assert_eq!(cmd.content, "/model claude-sonnet-4");
+        assert_eq!(cmd.author_id, "42");
+        assert_eq!(cmd.channel_id, "999");
+        assert_eq!(cmd.interaction_id, "111");
+        assert_eq!(cmd.interaction_token, "tok-abc");
+    }
+
+    #[test]
+    fn interaction_to_command_handles_no_args_and_dm_user() {
+        let interaction = serde_json::json!({
+            "id": "222",
+            "type": 2,
+            "token": "tok-xyz",
+            "user": { "id": "77", "username": "dm-user" },
+            "data": { "name": "new" }
+        });
+        let cmd = DiscordChannel::interaction_to_command(&interaction).expect("parsed");
+        assert_eq!(cmd.content, "/new");
+        assert_eq!(cmd.author_id, "77");
+        assert_eq!(cmd.author_name, "dm-user");
+        assert_eq!(cmd.channel_id, "");
+    }
+
+    #[test]
+    fn non_application_command_interaction_is_ignored() {
+        // Component interaction (type 3) and autocomplete (type 4) are not
+        // registered commands and must not be routed.
+        let component = serde_json::json!({ "id": "1", "type": 3, "data": { "custom_id": "x" } });
+        assert!(DiscordChannel::interaction_to_command(&component).is_none());
+        let autocomplete = serde_json::json!({ "id": "2", "type": 4 });
+        assert!(DiscordChannel::interaction_to_command(&autocomplete).is_none());
+    }
+
+    #[test]
+    fn interaction_command_escapes_missing_user() {
+        let interaction = serde_json::json!({
+            "id": "333",
+            "type": 2,
+            "token": "tok-q",
+            "data": { "name": "help" }
+        });
+        let cmd = DiscordChannel::interaction_to_command(&interaction).expect("parsed");
+        assert_eq!(cmd.content, "/help");
+        assert_eq!(cmd.author_id, "");
     }
 
     #[test]
