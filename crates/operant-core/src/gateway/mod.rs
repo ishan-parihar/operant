@@ -1984,9 +1984,18 @@ impl PlatformAdapter for DiscordAdapter {
         // (Bug #14 from iter-98 audit.)
         let chunks = chunk_text(&message.content, 2000);
 
+        // Deny @everyone/@here and role pings by default (hermes
+        // `_build_allowed_mentions` parity) — echoed user content or LLM
+        // output containing `@everyone` must never ping the whole server.
+        let allowed_mentions = serde_json::json!({
+            "parse": ["users"],
+            "replied_user": true,
+        });
+
         for chunk in chunks {
             let body = serde_json::json!({
                 "content": chunk,
+                "allowed_mentions": allowed_mentions,
             });
 
             let url = format!(
@@ -3056,7 +3065,7 @@ impl PlatformAdapter for WhatsAppAdapter {
             .json(&body)
             .send()
             .await
-            .map_err(Error::Network)?;
+            .map_err(|e| Error::Network(e.into()))?;
 
         if !resp.status().is_success() {
             return Err(Error::Agent(format!(
@@ -3465,7 +3474,7 @@ impl PlatformAdapter for SmsAdapter {
             ])
             .send()
             .await
-            .map_err(Error::Network)?;
+            .map_err(|e| Error::Network(e.into()))?;
 
         if !resp.status().is_success() {
             return Err(Error::Agent(format!("Twilio API error: {}", resp.status())));

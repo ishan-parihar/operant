@@ -15,6 +15,7 @@ use operant_core::gateway::{
     WhatsAppAdapter,
 };
 use operant_core::gateway_pipeline::{MessagePipeline, PipelineAction};
+use operant_core::redaction::redact_sensitive_text_if_enabled;
 
 use crate::gateway_commands::{
     CommandContext, handle_command, resolve_command, telegram_bot_commands,
@@ -55,6 +56,15 @@ pub static PENDING_USER_QUESTIONS: OnceLock<PendingUserQuestions> = OnceLock::ne
 /// that nothing read — mirroring the TUI's
 /// PermissionMode::BypassPermissions.)
 pub static YOLO_CHANNELS: OnceLock<std::sync::Mutex<HashSet<String>>> = OnceLock::new();
+
+/// Redact secrets (API keys, bot tokens, passwords) from an error/display
+/// string before it reaches logs. Hermes `_redact_telegram_error_text` /
+/// `_redact_discord_error_text` parity: gateway error paths echo upstream
+/// API bodies and reqwest URLs (which embed bot tokens in the path), so
+/// every error-formatted log line must be scrubbed. (T9 channel audit)
+fn redact_err(e: &(impl std::fmt::Display + ?Sized)) -> String {
+    redact_sensitive_text_if_enabled(&e.to_string())
+}
 
 fn yolo_key(platform: &str, channel_id: &str) -> String {
     format!("{platform}:{channel_id}")
@@ -666,7 +676,7 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                 }
             }
             Err(e) => {
-                tracing::warn!("Failed to register Telegram commands: {}", e);
+                tracing::warn!("Failed to register Telegram commands: {}", redact_err(&e));
             }
         }
     }
@@ -813,7 +823,10 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                                 progress_msgs.insert(key, (msg_id, vec![line]));
                             }
                             Err(e) => {
-                                tracing::warn!(error = %e, "Failed to send first progress message");
+                                tracing::warn!(
+                                    error = %redact_err(&e),
+                                    "Failed to send first progress message"
+                                );
                             }
                         }
                     }
@@ -832,7 +845,10 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                                 .send_voice(&platform, &channel_id, &audio_bytes, format)
                                 .await
                         {
-                            tracing::warn!(error = %e, "Failed to send TTS voice message");
+                            tracing::warn!(
+                                error = %redact_err(&e),
+                                "Failed to send TTS voice message"
+                            );
                         }
                     }
                 }
@@ -856,7 +872,10 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                                     stream_msg_id = Some(msg_id);
                                 }
                                 Err(e) => {
-                                    tracing::warn!(error = %e, "Failed to send first stream chunk");
+                                    tracing::warn!(
+                                        error = %redact_err(&e),
+                                        "Failed to send first stream chunk"
+                                    );
                                 }
                             }
                         }
@@ -1191,7 +1210,9 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                             s.session_id,
                             msg.channel_id
                         ),
-                        Err(e) => tracing::warn!("Failed to get shared session: {}", e),
+                        Err(e) => {
+                            tracing::warn!("Failed to get shared session: {}", redact_err(&e))
+                        }
                     }
                     msg.content = format!("[{}]: {}", msg.username, msg.content);
                 } else {
@@ -1220,7 +1241,9 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                                 msg.user_id,
                                 msg.platform
                             ),
-                            Err(e) => tracing::warn!("Failed to create session: {}", e),
+                            Err(e) => {
+                                tracing::warn!("Failed to create session: {}", redact_err(&e))
+                            }
                         }
                     }
                 }
@@ -1305,7 +1328,7 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                                 "Failed to send response on {} to {}: {}",
                                 platform,
                                 channel_id,
-                                e
+                                redact_err(&e)
                             );
                         }
                         save_turn_state(&channel_id, "complete");
@@ -1314,7 +1337,11 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                         save_turn_state(&channel_id, "complete");
                     }
                     Err(e) => {
-                        tracing::error!("Failed to route message on {}: {}", platform, e);
+                        tracing::error!(
+                            "Failed to route message on {}: {}",
+                            platform,
+                            redact_err(&e)
+                        );
                         save_turn_state(&channel_id, "failed");
                     }
                 }
@@ -1329,13 +1356,12 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                 Ok(())
             }
             .await;
-
             if let Err(e) = result {
                 tracing::error!(
                     "Error processing message from {} on {}: {}",
                     channel_id,
                     platform,
-                    e
+                    redact_err(&e)
                 );
             }
         }
@@ -1361,7 +1387,10 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
             while let Some(delivery) = cron_rx.recv().await {
                 let msg = OutgoingMessage::new(&delivery.chat_id, &delivery.content);
                 if let Err(e) = gw_for_cron.send_to_platform(&delivery.platform, msg).await {
-                    tracing::warn!(error = %e, "Failed to deliver cron result");
+                    tracing::warn!(
+                        error = %redact_err(&e),
+                        "Failed to deliver cron result"
+                    );
                 }
             }
         });
@@ -1490,7 +1519,7 @@ async fn enrich_photo(raw: &serde_json::Value, token: &str) -> Option<String> {
             Some(format!("[Image: {}×{} pixels]", width, height))
         }
         Err(e) => {
-            tracing::warn!("Failed to download Telegram photo: {}", e);
+            tracing::warn!("Failed to download Telegram photo: {}", redact_err(&e));
             // Still report the dimensions even when download fails
             Some(format!("[Image: {}×{} pixels]", width, height))
         }
@@ -1511,7 +1540,7 @@ async fn enrich_voice(raw: &serde_json::Value, token: &str) -> Option<String> {
     let path = match download_telegram_file(token, file_id).await {
         Ok(p) => p,
         Err(e) => {
-            tracing::warn!("Failed to download voice message: {}", e);
+            tracing::warn!("Failed to download voice message: {}", redact_err(&e));
             return Some(format!("[Voice message: {}:{:02}]", minutes, seconds));
         }
     };

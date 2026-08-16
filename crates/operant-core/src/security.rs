@@ -213,7 +213,7 @@ async fn do_check_osv(package_name: &str, version: &str) -> Result<Vec<OsvAdviso
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(10))
         .build()
-        .map_err(Error::Network)?;
+        .map_err(|e| Error::Network(e.into()))?;
 
     let resp = client
         .post("https://api.osv.dev/v1/query")
@@ -221,9 +221,9 @@ async fn do_check_osv(package_name: &str, version: &str) -> Result<Vec<OsvAdviso
         .header("User-Agent", "operant-core-osv-check/1.0")
         .send()
         .await
-        .map_err(Error::Network)?;
+        .map_err(|e| Error::Network(e.into()))?;
 
-    let data: serde_json::Value = resp.json().await.map_err(Error::Network)?;
+    let data: serde_json::Value = resp.json().await.map_err(|e| Error::Network(e.into()))?;
 
     let vulns = data
         .get("vulns")

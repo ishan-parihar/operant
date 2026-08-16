@@ -18,12 +18,43 @@ use tokio_tungstenite::tungstenite::Message;
 use uuid::Uuid;
 
 /// Discord channel — connects via Gateway WebSocket for real-time messages
+/// Discord `allowed_mentions` policy (hermes `_build_allowed_mentions` parity).
+///
+/// By default `@everyone`/`@here` and role pings are **denied** — Discord
+/// would otherwise let any echoed user content or LLM output containing
+/// `@everyone` ping the whole server. Only user and replied-user pings
+/// are allowed. Opt into everyone/roles explicitly per channel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct DiscordAllowedMentions {
+    /// Allow `@everyone`/`@here` pings. Default false.
+    pub everyone: bool,
+    /// Allow `@role` pings. Default false.
+    pub roles: bool,
+}
+
+impl DiscordAllowedMentions {
+    /// The `parse` array + `replied_user` flag sent to Discord.
+    fn to_json(self) -> serde_json::Value {
+        let mut parse = vec!["users"];
+        if self.everyone {
+            parse.push("everyone");
+        }
+        if self.roles {
+            parse.push("roles");
+        }
+        json!({ "parse": parse, "replied_user": true })
+    }
+}
+
 pub struct DiscordChannel {
     bot_token: String,
     guild_id: Option<String>,
     allowed_users: Vec<String>,
     listen_to_bots: bool,
     mention_only: bool,
+    /// Allowed-mentions policy applied to every send/edit. Default denies
+    /// everyone/roles (see [`DiscordAllowedMentions`]).
+    allowed_mentions: DiscordAllowedMentions,
     typing_handles: Mutex<HashMap<String, tokio::task::JoinHandle<()>>>,
     /// Per-channel proxy URL override.
     proxy_url: Option<String>,
@@ -72,6 +103,7 @@ impl DiscordChannel {
             allowed_users,
             listen_to_bots,
             mention_only,
+            allowed_mentions: DiscordAllowedMentions::default(),
             typing_handles: Mutex::new(HashMap::new()),
             proxy_url: None,
             transcription: None,
@@ -98,6 +130,15 @@ impl DiscordChannel {
 
     pub fn with_approval_timeout_secs(mut self, secs: u64) -> Self {
         self.approval_timeout_secs = secs;
+        self
+    }
+
+    /// Configure the allowed-mentions policy for all sends/edits.
+    ///
+    /// Default denies `@everyone`/`@here` and role pings. Pass a policy with
+    /// `everyone`/`roles` set to opt in (hermes `DISCORD_ALLOW_MENTION_*` parity).
+    pub fn with_allowed_mentions(mut self, allowed: DiscordAllowedMentions) -> Self {
+        self.allowed_mentions = allowed;
         self
     }
 
@@ -767,9 +808,10 @@ async fn send_discord_message_json(
     bot_token: &str,
     recipient: &str,
     content: &str,
+    allowed_mentions: &serde_json::Value,
 ) -> anyhow::Result<String> {
     let url = format!("https://discord.com/api/v10/channels/{recipient}/messages");
-    let body = json!({ "content": content });
+    let body = json!({ "content": content, "allowed_mentions": allowed_mentions });
 
     let resp = client
         .post(&url)
@@ -798,10 +840,12 @@ async fn send_discord_message_with_files(
     recipient: &str,
     content: &str,
     files: &[PathBuf],
+    allowed_mentions: &serde_json::Value,
 ) -> anyhow::Result<String> {
     let url = format!("https://discord.com/api/v10/channels/{recipient}/messages");
 
-    let mut form = Form::new().text("payload_json", json!({ "content": content }).to_string());
+    let payload = json!({ "content": content, "allowed_mentions": allowed_mentions });
+    let mut form = Form::new().text("payload_json", payload.to_string());
 
     for (idx, path) in files.iter().enumerate() {
         let bytes = tokio::fs::read(path).await.map_err(|error| {
@@ -858,9 +902,10 @@ async fn edit_discord_message(
     channel_id: &str,
     message_id: &str,
     content: &str,
+    allowed_mentions: &serde_json::Value,
 ) -> anyhow::Result<()> {
     let url = format!("https://discord.com/api/v10/channels/{channel_id}/messages/{message_id}");
-    let body = json!({ "content": content });
+    let body = json!({ "content": content, "allowed_mentions": allowed_mentions });
 
     let resp = client
         .patch(&url)
@@ -1232,11 +1277,18 @@ impl Channel for DiscordChannel {
                     &message.recipient,
                     chunk,
                     &local_files,
+                    &self.allowed_mentions.to_json(),
                 )
                 .await?
             } else {
-                send_discord_message_json(&client, &self.bot_token, &message.recipient, chunk)
-                    .await?
+                send_discord_message_json(
+                    &client,
+                    &self.bot_token,
+                    &message.recipient,
+                    chunk,
+                    &self.allowed_mentions.to_json(),
+                )
+                .await?
             };
             if first_message_id.is_none() {
                 first_message_id = Some(message_id);
@@ -1685,6 +1737,7 @@ impl Channel for DiscordChannel {
                     &self.bot_token,
                     &message.recipient,
                     &initial_text,
+                    &self.allowed_mentions.to_json(),
                 )
                 .await?;
 
@@ -1750,6 +1803,7 @@ impl Channel for DiscordChannel {
                     recipient,
                     message_id,
                     display_text,
+                    &self.allowed_mentions.to_json(),
                 )
                 .await
                 {
@@ -1907,10 +1961,18 @@ impl Channel for DiscordChannel {
                         recipient,
                         chunk,
                         &local_files,
+                        &self.allowed_mentions.to_json(),
                     )
                     .await?
                 } else {
-                    send_discord_message_json(&client, &self.bot_token, recipient, chunk).await?
+                    send_discord_message_json(
+                        &client,
+                        &self.bot_token,
+                        recipient,
+                        chunk,
+                        &self.allowed_mentions.to_json(),
+                    )
+                    .await?
                 };
                 if first_message_id.is_none() {
                     first_message_id = Some(new_id);
@@ -1931,8 +1993,14 @@ impl Channel for DiscordChannel {
             let chunks = split_message_for_discord(&content);
             let mut first_message_id: Option<String> = None;
             for (i, chunk) in chunks.iter().enumerate() {
-                let new_id =
-                    send_discord_message_json(&client, &self.bot_token, recipient, chunk).await?;
+                let new_id = send_discord_message_json(
+                    &client,
+                    &self.bot_token,
+                    recipient,
+                    chunk,
+                    &self.allowed_mentions.to_json(),
+                )
+                .await?;
                 if first_message_id.is_none() {
                     first_message_id = Some(new_id);
                 }
@@ -1948,20 +2016,33 @@ impl Channel for DiscordChannel {
         // Path 3: simple case — edit in-place; fall back to delete + POST on failure.
         // The reaction target is the draft message_id when the edit lands;
         // when the fallback fires it's the freshly posted message instead.
-        let reaction_target =
-            match edit_discord_message(&client, &self.bot_token, recipient, message_id, &content)
-                .await
-            {
-                Ok(()) => message_id.to_string(),
-                Err(e) => {
-                    tracing::warn!(
-                        "Discord finalize_draft edit failed: {e}; falling back to delete+send"
-                    );
-                    let _ = delete_discord_message(&client, &self.bot_token, recipient, message_id)
-                        .await;
-                    send_discord_message_json(&client, &self.bot_token, recipient, &content).await?
-                }
-            };
+        let reaction_target = match edit_discord_message(
+            &client,
+            &self.bot_token,
+            recipient,
+            message_id,
+            &content,
+            &self.allowed_mentions.to_json(),
+        )
+        .await
+        {
+            Ok(()) => message_id.to_string(),
+            Err(e) => {
+                tracing::warn!(
+                    "Discord finalize_draft edit failed: {e}; falling back to delete+send"
+                );
+                let _ =
+                    delete_discord_message(&client, &self.bot_token, recipient, message_id).await;
+                send_discord_message_json(
+                    &client,
+                    &self.bot_token,
+                    recipient,
+                    &content,
+                    &self.allowed_mentions.to_json(),
+                )
+                .await?
+            }
+        };
         self.apply_failure_reactions(recipient, Some(&reaction_target), &reactions)
             .await;
 

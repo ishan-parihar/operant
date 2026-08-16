@@ -405,7 +405,7 @@ impl OpenAIClient {
                         tokio::time::sleep(Duration::from_secs(delay_s)).await;
                         continue;
                     }
-                    return Err(Error::Network(e));
+                    return Err(Error::Network(e.into()));
                 }
             };
 
@@ -518,7 +518,7 @@ impl OpenAIClient {
                         tokio::time::sleep(Duration::from_secs(delay_s)).await;
                         continue;
                     }
-                    return Err(Error::Network(e));
+                    return Err(Error::Network(e.into()));
                 }
             };
 
@@ -1237,7 +1237,9 @@ impl Stream for ChatStreamResponse {
                         this.buffer.push_str(&text);
                     }
                 }
-                Poll::Ready(Some(Err(e))) => return Poll::Ready(Some(Err(Error::Network(e)))),
+                Poll::Ready(Some(Err(e))) => {
+                    return Poll::Ready(Some(Err(Error::Network(e.into()))));
+                }
                 Poll::Ready(None) => {
                     return Poll::Ready(try_parse_next_sse_event(&mut this.buffer, true));
                 }

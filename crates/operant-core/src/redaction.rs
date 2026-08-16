@@ -199,9 +199,14 @@ fn patterns() -> &'static RedactPatterns {
             Regex::new(r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b")
                 .expect("valid jwt regex");
 
-        // Telegram bot tokens.
-        let telegram =
-            Regex::new(r"\b\d{8,10}:[A-Za-z0-9_-]{35}\b").expect("valid telegram regex");
+        // Telegram bot tokens. Leading `\b` would fail on real URLs like
+        // `https://api.telegram.org/bot<TOKEN>/sendMessage` — the `bot`
+        // prefix is a word char so there is no boundary before the digits.
+        // Requiring a non-digit predecessor (captured so the replacement
+        // preserves it) matches after letters (e.g. `bot`) while refusing
+        // to match the tail of a longer digit run.
+        let telegram = Regex::new(r"([^0-9])(\d{8,10}:[A-Za-z0-9_-]{35})\b")
+            .expect("valid telegram regex");
 
         // URL userinfo.
         let url_userinfo = Regex::new(r"(?i)(https?://)[^:@/\s]+:[^@/\s]+@")
@@ -389,11 +394,12 @@ pub fn redact_sensitive_text(input: &str) -> String {
         .replace_all(&out, "${1}=[REDACTED]")
         .into_owned();
 
-    // JWTs / Telegram tokens — full span.
+    // JWTs / Telegram tokens — full span. The telegram match captures the
+    // non-digit predecessor (`$1`) so `bot<TOKEN>` keeps the `t` from `bot`.
     out = p.jwt.replace_all(&out, "[REDACTED JWT]").into_owned();
     out = p
         .telegram
-        .replace_all(&out, "[REDACTED TELEGRAM TOKEN]")
+        .replace_all(&out, "${1}[REDACTED TELEGRAM TOKEN]")
         .into_owned();
 
     // Provider token prefixes — full span.
@@ -535,6 +541,36 @@ mod tests {
         let out = redact_sensitive_text(&text);
         assert!(!out.contains(&body));
         assert!(out.contains("[REDACTED TELEGRAM TOKEN]"), "got: {out}");
+    }
+
+    /// Regression: real URLs embed the token right after `bot` with no
+    /// whitespace — `https://api.telegram.org/bot<TOKEN>/sendMessage`.
+    /// A leading `\b` in the regex fails there (no boundary between the
+    /// `t` of `bot` and the digits), leaking the token into logs.
+    #[test]
+    fn redacts_telegram_token_in_bot_url() {
+        let body = "B".repeat(35);
+        let text = format!("https://api.telegram.org/bot1234567890:{body}/sendMessage");
+        let out = redact_sensitive_text(&text);
+        assert!(!out.contains(&body), "token leaked in bot URL: {out}");
+        assert!(
+            out.contains("[REDACTED TELEGRAM TOKEN]"),
+            "token not redacted in bot URL: {out}"
+        );
+    }
+
+    /// The non-digit-predecessor guard must still refuse to match the tail
+    /// of a longer digit run (e.g. a large numeric ID followed by `:...`).
+    #[test]
+    fn telegram_regex_ignores_digit_run_tail() {
+        let body = "C".repeat(35);
+        // Preceded by extra digits — this is not a token, must not match.
+        let text = format!("id=12345678901234567890:{body}");
+        let out = redact_sensitive_text(&text);
+        assert!(
+            out.contains(&body),
+            "digit-run tail was falsely redacted: {out}"
+        );
     }
 
     #[test]

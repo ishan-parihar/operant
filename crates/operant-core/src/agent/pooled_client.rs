@@ -630,7 +630,7 @@ mod tests {
         let client = StreamingScriptedClient::new(
             vec![
                 // Transport drop (network) — not the key's fault.
-                vec![Err(Error::Network(net_err))],
+                vec![Err(Error::Network(net_err.into()))],
                 // Retry succeeds with the SAME key (no rotation).
                 vec![Ok(StreamChunk::new(
                     Some("recovered".to_string()),

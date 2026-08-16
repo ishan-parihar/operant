@@ -359,7 +359,7 @@ impl ModelClient for AnthropicModelClient {
                                 }
                             }
                         }
-                        Err(e) => chunks.push(Err(Error::Network(e))),
+                        Err(e) => chunks.push(Err(Error::Network(e.into()))),
                     }
                     futures::future::ready(Some(futures::stream::iter(chunks)))
                 },

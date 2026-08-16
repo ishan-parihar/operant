@@ -58,12 +58,59 @@ fn extract_provider_message(body: &str) -> String {
     }
 }
 
+/// Wrapper around `reqwest::Error` whose `Display`/`Debug` scrub secrets.
+///
+/// `reqwest` error strings embed the full request URL — and provider URLs
+/// routinely contain API keys / bot tokens (e.g. Telegram's
+/// `https://api.telegram.org/bot<TOKEN>/sendMessage`, query-param keys).
+/// Without this wrapper, any `?` on a failed `.send()` would leak the
+/// credential into every log line, `channel send` error, and gateway status.
+/// Hermes `_redact_telegram_error_text` / `_redact_discord_error_text`
+/// parity — scrub at the error boundary instead of at every call site.
+pub struct RedactedReqwestError(pub reqwest::Error);
+
+impl std::fmt::Display for RedactedReqwestError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}",
+            crate::redaction::redact_sensitive_text_if_enabled(&self.0.to_string())
+        )
+    }
+}
+
+impl std::fmt::Debug for RedactedReqwestError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(self, f)
+    }
+}
+
+impl std::error::Error for RedactedReqwestError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.0)
+    }
+}
+
+impl From<reqwest::Error> for RedactedReqwestError {
+    fn from(e: reqwest::Error) -> Self {
+        Self(e)
+    }
+}
+
+/// `?` on a `reqwest::Result` converts through the redacting wrapper, so
+/// the URL-embedded token never survives into the `Network` error text.
+impl From<reqwest::Error> for Error {
+    fn from(e: reqwest::Error) -> Self {
+        Error::Network(RedactedReqwestError(e))
+    }
+}
+
 /// Domain-specific errors for Operant-RS
 #[derive(Error, Debug)]
 pub enum Error {
     // ========== Client Errors ==========
     #[error("Network error: {0}")]
-    Network(#[from] reqwest::Error),
+    Network(#[from] RedactedReqwestError),
 
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
@@ -329,5 +376,55 @@ mod tests {
             "user_message should include HTTP status: {}",
             user_msg
         );
+    }
+
+    /// Telegram bot tokens embedded in reqwest URLs must never survive into
+    /// `Network` error Display (hermes `_redact_telegram_error_text` parity).
+    ///
+    /// reqwest's error constructor is crate-private, so we drive a real
+    /// failing request against a dead port to get a genuine `reqwest::Error`
+    /// whose text embeds the request URL (including any token in it).
+    #[tokio::test]
+    async fn network_error_redacts_token_url() {
+        let token = "1234567890:AbCdEfGhIjKlMnOpQrStUvWxYzAbCdEfGhX"; // 35-char suffix per TG format
+        let client = reqwest::Client::new();
+        let url = format!(
+            "http://127.0.0.1:1/bot{token}/sendMessage?api_key=sk-abcdef1234567890abcdef1234567890"
+        );
+        let reqwest_err = client
+            .get(&url)
+            .send()
+            .await
+            .expect_err("dead port must fail");
+        let wrapped: RedactedReqwestError = reqwest_err.into();
+        let display = wrapped.to_string();
+        assert!(
+            !display.contains(token),
+            "bot token leaked into network error: {display}"
+        );
+        assert!(
+            !display.contains("sk-abcdef1234567890abcdef1234567890"),
+            "query-param key leaked into network error: {display}"
+        );
+    }
+
+    /// The `?` conversion path (reqwest::Error -> Error::Network) must also
+    /// scrub the token-bearing URL.
+    #[tokio::test]
+    async fn network_error_conversion_redacts() {
+        let client = reqwest::Client::new();
+        let url = "http://127.0.0.1:1/v1?api_key=sk-abcdef1234567890abcdef1234567890&x=1";
+        let reqwest_err = client
+            .get(url)
+            .send()
+            .await
+            .expect_err("dead port must fail");
+        let err: Error = reqwest_err.into();
+        let display = err.to_string();
+        assert!(
+            !display.contains("sk-abcdef1234567890abcdef1234567890"),
+            "query-param key leaked into converted network error: {display}"
+        );
+        assert!(display.contains("Network error"), "got: {display}");
     }
 }

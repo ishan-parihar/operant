@@ -234,7 +234,7 @@ impl OAuthRefresher {
                 }
                 Err(e) => {
                     debug!("Anthropic token refresh error at {endpoint}: {e}");
-                    last_error = Some(Error::Network(e));
+                    last_error = Some(Error::Network(e.into()));
                 }
             }
         }
@@ -266,7 +266,7 @@ impl OAuthRefresher {
             ))
             .send()
             .await
-            .map_err(Error::Network)?;
+            .map_err(|e| Error::Network(e.into()))?;
 
         if !resp.status().is_success() {
             let status = resp.status();
@@ -381,7 +381,7 @@ impl OAuthRefresher {
             ))
             .send()
             .await
-            .map_err(Error::Network)?;
+            .map_err(|e| Error::Network(e.into()))?;
 
         if !resp.status().is_success() {
             let status = resp.status();
@@ -445,7 +445,7 @@ impl OAuthRefresher {
             .form(&[("grant_type", "refresh_token"), ("client_id", client_id)])
             .send()
             .await
-            .map_err(Error::Network)?;
+            .map_err(|e| Error::Network(e.into()))?;
 
         if !resp.status().is_success() {
             let status = resp.status();
@@ -538,7 +538,7 @@ impl OAuthRefresher {
             .header("Accept", "application/json")
             .send()
             .await
-            .map_err(Error::Network)?;
+            .map_err(|e| Error::Network(e.into()))?;
 
         if resp.status().is_success() {
             debug!("Nous agent key minted successfully");

@@ -4843,7 +4843,7 @@ mod tests {
                     .send()
                     .await
                     .unwrap_err();
-                let stream = futures::stream::once(async move { Err(Error::Network(err)) });
+                let stream = futures::stream::once(async move { Err(Error::Network(err.into())) });
                 Ok(Box::pin(stream))
             } else {
                 // Second call: a valid stream with final content.

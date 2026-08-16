@@ -209,10 +209,17 @@ impl Channel for DiscordHistoryChannel {
             "https://discord.com/api/v10/channels/{}/messages",
             message.recipient
         );
+        // Deny @everyone/@here and role pings by default (hermes
+        // `_build_allowed_mentions` parity) — echoed user content or LLM
+        // output containing `@everyone` must never ping the whole server.
+        let body = json!({
+            "content": content,
+            "allowed_mentions": { "parse": ["users"], "replied_user": true }
+        });
         self.http_client()
             .post(&url)
             .header("Authorization", format!("Bot {}", self.bot_token))
-            .json(&json!({"content": content}))
+            .json(&body)
             .send()
             .await?;
         Ok(())
