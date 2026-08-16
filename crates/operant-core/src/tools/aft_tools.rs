@@ -107,6 +107,23 @@ fn project_root_from_context(context: &ToolContext) -> std::path::PathBuf {
         })
 }
 
+/// Enforce the same path-safety gate the native file tools apply (G9 /
+/// hermes file_safety parity): hard-deny patterns, the credential-file
+/// registry, and `..` traversal. AFT tools previously bypassed this — a
+/// model could `aft_read`/`aft_write` `~/.operant/.env` directly.
+/// Returns `Err(ToolResult)` ready to return from `execute`.
+fn guard_aft_path(tool_name: &str, raw_path: &str) -> std::result::Result<(), ToolResult> {
+    match crate::tools::file_tools::validate_path(raw_path) {
+        Ok(_) => Ok(()),
+        Err(e) => Err(ToolResult::error(
+            tool_name,
+            format!(
+                "{e} If you genuinely need this file, ask the user to read it manually and paste the contents."
+            ),
+        )),
+    }
+}
+
 /// Strip protocol noise (id/success/code) from an aft response so the
 /// model sees only meaningful payload (content/output/text/message/…).
 fn response_payload(response: &Value) -> Value {
@@ -172,6 +189,9 @@ impl OperantTool for AftReadTool {
             Ok(a) => a,
             Err(e) => return ToolResult::error("aft_read", format!("Invalid arguments: {}", e)),
         };
+        if let Err(err) = guard_aft_path("aft_read", &args.file_path) {
+            return err;
+        }
         let mut params = serde_json::json!({ "file": args.file_path });
         if let Some(start) = args.start_line {
             params["start_line"] = json!(start);
@@ -244,6 +264,9 @@ impl OperantTool for AftOutlineTool {
             Ok(a) => a,
             Err(e) => return ToolResult::error("aft_outline", format!("Invalid arguments: {}", e)),
         };
+        if let Err(err) = guard_aft_path("aft_outline", &args.file_path) {
+            return err;
+        }
         execute_aft_command(
             &self.pool,
             &context,
@@ -281,6 +304,9 @@ impl OperantTool for AftZoomTool {
             Ok(a) => a,
             Err(e) => return ToolResult::error("aft_zoom", format!("Invalid arguments: {}", e)),
         };
+        if let Err(err) = guard_aft_path("aft_zoom", &args.file_path) {
+            return err;
+        }
         execute_aft_command(
             &self.pool,
             &context,
@@ -320,6 +346,9 @@ impl OperantTool for AftInspectTool {
         };
         let mut params = json!({});
         if let Some(p) = args.path {
+            if let Err(err) = guard_aft_path("aft_inspect", &p) {
+                return err;
+            }
             params["path"] = json!(p);
         }
         execute_aft_command(&self.pool, &context, "aft_inspect", "inspect", params).await
@@ -352,6 +381,9 @@ impl OperantTool for AftCallersTool {
             Ok(a) => a,
             Err(e) => return ToolResult::error("aft_callers", format!("Invalid arguments: {}", e)),
         };
+        if let Err(err) = guard_aft_path("aft_callers", &args.file_path) {
+            return err;
+        }
         execute_aft_command(
             &self.pool,
             &context,
@@ -502,6 +534,9 @@ impl OperantTool for AftWriteTool {
             Ok(a) => a,
             Err(e) => return ToolResult::error("aft_write", format!("Invalid arguments: {}", e)),
         };
+        if let Err(err) = guard_aft_path("aft_write", &args.file_path) {
+            return err;
+        }
         execute_aft_command(
             &self.pool,
             &context,
@@ -540,6 +575,9 @@ impl OperantTool for AftEditTool {
             Ok(a) => a,
             Err(e) => return ToolResult::error("aft_edit", format!("Invalid arguments: {}", e)),
         };
+        if let Err(err) = guard_aft_path("aft_edit", &args.file_path) {
+            return err;
+        }
         execute_aft_command(
             &self.pool,
             &context,
@@ -582,6 +620,21 @@ impl OperantTool for AftApplyPatchTool {
                 return ToolResult::error("aft_apply_patch", format!("Invalid arguments: {}", e));
             }
         };
+        // The patch body embeds per-file headers (`*** Update/Add/Delete
+        // File: <path>`) — validate every touched path through the same
+        // safety gate so a patch can't reach credential files either.
+        for line in args.patch.lines() {
+            let trimmed = line.trim();
+            let path = trimmed
+                .strip_prefix("*** Update File: ")
+                .or_else(|| trimmed.strip_prefix("*** Add File: "))
+                .or_else(|| trimmed.strip_prefix("*** Delete File: "));
+            if let Some(path) = path
+                && let Err(err) = guard_aft_path("aft_apply_patch", path.trim())
+            {
+                return err;
+            }
+        }
         execute_aft_command(
             &self.pool,
             &context,
@@ -973,5 +1026,73 @@ mod tests {
                 tool.name()
             );
         }
+    }
+
+    // ---- G9 path-safety gate (hermes file_safety parity) ----
+
+    #[test]
+    fn guard_blocks_operant_env() {
+        // ~/.operant/.env is a registered credential store — AFT read/write
+        // tools must refuse it just like native file_read/file_write.
+        let home = std::env::var("HOME").unwrap_or_default();
+        let env_path = format!("{home}/.operant/.env");
+        let err = guard_aft_path("aft_read", &env_path).unwrap_err();
+        assert!(!err.success);
+        let msg = err.error.unwrap_or_default().to_lowercase();
+        assert!(
+            msg.contains("credential") || msg.contains("denied"),
+            "got: {msg}"
+        );
+    }
+
+    #[test]
+    fn guard_blocks_ssh_private_key() {
+        let home = std::env::var("HOME").unwrap_or_default();
+        let key = format!("{home}/.ssh/id_rsa");
+        assert!(guard_aft_path("aft_write", &key).is_err());
+    }
+
+    #[test]
+    fn guard_blocks_traversal_escape() {
+        // `..` traversal (with a non-existent parent) is rejected.
+        let home = std::env::var("HOME").unwrap_or_default();
+        let escape = format!("{home}/nonexistent-dir/../../.ssh/id_ed25519");
+        assert!(guard_aft_path("aft_edit", &escape).is_err());
+    }
+
+    #[test]
+    fn guard_allows_ordinary_project_files() {
+        // A normal project file inside cwd must pass (no false positives).
+        let cwd = std::env::current_dir().unwrap_or_default();
+        let project_file = cwd.join("Cargo.toml");
+        if project_file.exists() {
+            assert!(guard_aft_path("aft_read", &project_file.to_string_lossy()).is_ok());
+        }
+    }
+
+    #[test]
+    fn apply_patch_guard_extracts_file_headers() {
+        // The patch-body guard must catch a protected path embedded in
+        // `*** Update File:` headers.
+        let home = std::env::var("HOME").unwrap_or_default();
+        let patch = format!(
+            "*** Begin Patch\n*** Update File: {home}/.operant/.env\n@@\n line\n*** End Patch"
+        );
+        let tool = AftApplyPatchTool { pool: make_pool() };
+        // Simulate what execute does: extract + validate headers.
+        let mut blocked = false;
+        for line in patch.lines() {
+            let trimmed = line.trim();
+            let path = trimmed
+                .strip_prefix("*** Update File: ")
+                .or_else(|| trimmed.strip_prefix("*** Add File: "))
+                .or_else(|| trimmed.strip_prefix("*** Delete File: "));
+            if let Some(path) = path
+                && guard_aft_path(tool.name(), path.trim()).is_err()
+            {
+                blocked = true;
+            }
+        }
+        assert!(blocked, "patch touching ~/.operant/.env must be blocked");
     }
 }
