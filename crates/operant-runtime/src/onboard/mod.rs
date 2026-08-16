@@ -1882,6 +1882,9 @@ mod tests {
             // are None. An empty-string answer lets prompt_field's
             // is-set-guard skip the persist, leaving the field None.
             .with("proxy-url", "")
+            // dm-topic-name is a plain String with a serde default — answer
+            // explicitly so the wizard's string() prompt doesn't bail.
+            .with("dm-topic-name", "General")
             .with_sequence("Channel", ["telegram", "Done"]);
         run(&mut cfg, &mut ui, Section::Channels, &flags)
             .await

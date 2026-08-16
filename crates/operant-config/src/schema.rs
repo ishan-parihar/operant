@@ -7384,6 +7384,19 @@ pub struct TelegramConfig {
     /// button on a tool approval prompt before auto-denying. Default: 120.
     #[serde(default = "default_telegram_approval_timeout_secs")]
     pub approval_timeout_secs: u64,
+    /// When true, each DM chat gets its own forum topic (created via
+    /// `createForumTopic`, thread id persisted to a state file across
+    /// restarts) and replies are routed into that topic. Hermes
+    /// `_setup_dm_topics` / `ensure_dm_topic` parity. Default: false.
+    #[serde(default)]
+    pub dm_topics_enabled: bool,
+    /// Name for the per-chat DM topic. Default: "General".
+    #[serde(default = "default_telegram_dm_topic_name")]
+    pub dm_topic_name: String,
+}
+
+fn default_telegram_dm_topic_name() -> String {
+    "General".to_string()
 }
 
 impl ChannelConfig for TelegramConfig {
@@ -12844,6 +12857,8 @@ auto_save = true
                 cli: true,
                 telegram: Some(TelegramConfig {
                     enabled: true,
+                    dm_topics_enabled: false,
+                    dm_topic_name: default_telegram_dm_topic_name(),
                     bot_token: "123:ABC".into(),
                     allowed_users: vec!["user1".into()],
                     stream_mode: StreamMode::default(),
@@ -13785,6 +13800,8 @@ default_temperature = 0.7
             ack_reactions: None,
             proxy_url: None,
             approval_timeout_secs: 120,
+            dm_topics_enabled: false,
+            dm_topic_name: default_telegram_dm_topic_name(),
         };
         let json = serde_json::to_string(&tc).unwrap();
         let parsed: TelegramConfig = serde_json::from_str(&json).unwrap();
@@ -17394,6 +17411,8 @@ require_otp_to_resume = true
             ack_reactions: None,
             proxy_url: None,
             approval_timeout_secs: default_telegram_approval_timeout_secs(),
+            dm_topics_enabled: false,
+            dm_topic_name: default_telegram_dm_topic_name(),
         });
 
         // Save (triggers encryption)

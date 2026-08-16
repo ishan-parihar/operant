@@ -404,6 +404,14 @@ pub struct TelegramChannel {
     /// tool approval prompt before auto-denying. Configurable via
     /// `channels.telegram.approval_timeout_secs`. Default: 120.
     approval_timeout_secs: u64,
+    /// When true, each DM chat gets its own forum topic and replies are
+    /// routed into it (hermes `_setup_dm_topics` parity).
+    dm_topics_enabled: bool,
+    /// Name for the per-chat DM topic. Default: "General".
+    dm_topic_name: String,
+    /// Cache: chat_id -> forum topic thread_id. Populated lazily via
+    /// `ensure_dm_topic`; persisted to the config dir state file.
+    dm_topic_threads: std::sync::Mutex<std::collections::HashMap<String, i64>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -451,6 +459,9 @@ impl TelegramChannel {
             tool_command_specs: Vec::new(),
             pending_approvals: Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
             approval_timeout_secs: 120,
+            dm_topics_enabled: false,
+            dm_topic_name: "General".to_string(),
+            dm_topic_threads: std::sync::Mutex::new(std::collections::HashMap::new()),
         }
     }
 
@@ -530,6 +541,143 @@ impl TelegramChannel {
             self.tts_config = Some(config);
         }
         self
+    }
+
+    /// Enable per-DM forum topics: each DM chat gets its own topic created
+    /// on first contact and replies are routed into it. Thread ids are
+    /// persisted across restarts (hermes `ensure_dm_topic` parity).
+    pub fn with_dm_topics(mut self, enabled: bool, topic_name: String) -> Self {
+        self.dm_topics_enabled = enabled;
+        let name = topic_name.trim();
+        if !name.is_empty() {
+            self.dm_topic_name = name.to_string();
+        }
+        self
+    }
+
+    // ── DM topics (hermes `_setup_dm_topics` / `ensure_dm_topic` parity) ──
+
+    /// Path to the DM-topic state file: `<config_dir>/telegram_dm_topics.json`
+    /// with the same `OPERANT_CONFIG_DIR` > `$HOME/.operant` precedence the
+    /// rest of the config uses.
+    fn dm_topic_state_path() -> std::path::PathBuf {
+        let dir = std::env::var("OPERANT_CONFIG_DIR")
+            .ok()
+            .filter(|v| !v.trim().is_empty())
+            .map(std::path::PathBuf::from)
+            .or_else(|| {
+                std::env::var("HOME")
+                    .ok()
+                    .filter(|v| !v.is_empty())
+                    .map(|h| std::path::PathBuf::from(h).join(".operant"))
+            })
+            .unwrap_or_else(|| {
+                directories::UserDirs::new()
+                    .map(|u| u.home_dir().join(".operant"))
+                    .unwrap_or_default()
+            });
+        dir.join("telegram_dm_topics.json")
+    }
+
+    /// Load the persisted `chat_id -> thread_id` map from the state file.
+    fn load_dm_topic_state(&self) {
+        let path = Self::dm_topic_state_path();
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            return;
+        };
+        let Ok(map): Result<std::collections::HashMap<String, i64>, _> =
+            serde_json::from_str(&text)
+        else {
+            return;
+        };
+        let mut cache = self.dm_topic_threads.lock().unwrap();
+        for (chat, tid) in map {
+            cache.insert(chat, tid);
+        }
+    }
+
+    /// Persist the `chat_id -> thread_id` map to the state file.
+    fn persist_dm_topic_state(&self) {
+        let path = Self::dm_topic_state_path();
+        let map = self.dm_topic_threads.lock().unwrap().clone();
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        if let Ok(json) = serde_json::to_string_pretty(&map) {
+            let _ = std::fs::write(&path, json);
+        }
+    }
+
+    /// Return the DM-topic thread id for a chat, creating the forum topic
+    /// on first contact and persisting the id (hermes `ensure_dm_topic`
+    /// parity). Returns `None` when topics are disabled, the chat is not a
+    /// numeric DM id, or the API call fails (log-only — the reply still
+    /// goes to the chat root).
+    async fn ensure_dm_topic(&self, chat_id: &str) -> Option<i64> {
+        if !self.dm_topics_enabled {
+            return None;
+        }
+        let chat_id_int: i64 = chat_id.trim().parse().ok()?;
+
+        if let Some(&tid) = self.dm_topic_threads.lock().unwrap().get(chat_id) {
+            return Some(tid);
+        }
+
+        // Create the topic via createForumTopic. Icon color is derived from
+        // the chat id so each user's topic is visually distinct.
+        let icon_color = (chat_id_int as u32).wrapping_mul(2654435761) % 0x0F_FF_FF;
+        let body = serde_json::json!({
+            "chat_id": chat_id_int,
+            "name": self.dm_topic_name,
+            "icon_color": icon_color,
+        });
+        let resp = match self
+            .http_client()
+            .post(self.api_url("createForumTopic"))
+            .json(&body)
+            .send()
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::warn!(chat_id, error = %e, "dm-topic create request failed");
+                return None;
+            }
+        };
+
+        if !resp.status().is_success() {
+            tracing::warn!(
+                chat_id,
+                status = %resp.status(),
+                "dm-topic create failed (chat may not support forum topics)"
+            );
+            return None;
+        }
+
+        let data: serde_json::Value = match resp.json().await {
+            Ok(d) => d,
+            Err(e) => {
+                tracing::warn!(chat_id, error = %e, "dm-topic create parse failed");
+                return None;
+            }
+        };
+        let thread_id = data
+            .get("result")
+            .and_then(|r| r.get("message_thread_id"))
+            .and_then(serde_json::Value::as_i64)?;
+
+        self.dm_topic_threads
+            .lock()
+            .unwrap()
+            .insert(chat_id.to_string(), thread_id);
+        self.persist_dm_topic_state();
+        tracing::info!(
+            chat_id,
+            thread_id,
+            topic = %self.dm_topic_name,
+            "Created DM topic"
+        );
+        Some(thread_id)
     }
 
     /// Parse reply_target into (chat_id, optional thread_id).
@@ -3087,6 +3235,9 @@ impl Channel for TelegramChannel {
 
         tracing::info!("Telegram channel listening for messages...");
 
+        // Restore persisted DM-topic thread ids across restarts.
+        self.load_dm_topic_state();
+
         // Startup probe: claim the getUpdates slot before entering the long-poll loop.
         // A previous daemon's 30-second poll may still be active on Telegram's server.
         // We retry with timeout=0 until we receive a successful (non-409) response,
@@ -3293,7 +3444,7 @@ Ensure only one `operant` process is using this bot token."
                         continue; // callback_query is not a regular message
                     }
 
-                    let msg = if let Some(m) = self.parse_update_message(update) {
+                    let mut msg = if let Some(m) = self.parse_update_message(update) {
                         m
                     } else if let Some(m) = self.try_parse_voice_message(update).await {
                         m
@@ -3314,9 +3465,26 @@ Ensure only one `operant` process is using this bot token."
                         );
                     }
 
+                    // DM topics: when enabled and this is a private-chat
+                    // message, ensure the chat's forum topic exists and route
+                    // the reply into it (hermes `ensure_dm_topic` parity).
+                    // The typing indicator still goes to the bare chat id.
+                    let typing_chat_id = if self.dm_topics_enabled {
+                        if let Some(tid) = self.ensure_dm_topic(&msg.reply_target).await {
+                            msg.reply_target = format!("{}:{}", msg.reply_target, tid);
+                            msg.thread_ts = Some(tid.to_string());
+                        }
+                        msg.reply_target
+                            .split_once(':')
+                            .map(|(chat, _)| chat.to_string())
+                            .unwrap_or_else(|| msg.reply_target.clone())
+                    } else {
+                        msg.reply_target.clone()
+                    };
+
                     // Send "typing" indicator immediately when we receive a message
                     let typing_body = serde_json::json!({
-                        "chat_id": &msg.reply_target,
+                        "chat_id": typing_chat_id,
                         "action": "typing"
                     });
                     let _ = self
@@ -3618,6 +3786,54 @@ mod tests {
         // fall back to chunked send instead of returning early.
         let result = ch.finalize_draft("123", "not-a-number", &long_text).await;
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn dm_topics_disabled_returns_none() {
+        // Ensure-dm-topic is a no-op when the feature is off (no network).
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let ch = TelegramChannel::new("t".into(), vec!["*".into()], false);
+        let out = rt.block_on(async { ch.ensure_dm_topic("123456").await });
+        assert!(out.is_none());
+    }    /// Serializes tests that mutate `OPERANT_CONFIG_DIR` (Rust runs tests in
+    /// parallel within a binary, and env mutation would race).
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn dm_topics_state_path_respects_config_dir_env() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let ch = TelegramChannel::new("t".into(), vec!["*".into()], false);
+        // Unset override first so the default branch (HOME) applies.
+        unsafe { std::env::remove_var("OPERANT_CONFIG_DIR") };
+        let default_path = TelegramChannel::dm_topic_state_path();
+        assert!(default_path.ends_with("telegram_dm_topics.json"));
+
+        unsafe { std::env::set_var("OPERANT_CONFIG_DIR", "/tmp/operant-dm-topic-test") };
+        let custom = TelegramChannel::dm_topic_state_path();
+        assert_eq!(
+            custom,
+            std::path::PathBuf::from("/tmp/operant-dm-topic-test/telegram_dm_topics.json")
+        );
+        unsafe { std::env::remove_var("OPERANT_CONFIG_DIR") };
+        let _ = ch; // keep the channel binding used
+    }
+
+    #[test]
+    fn dm_topic_state_roundtrip() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let ch = TelegramChannel::new("t".into(), vec!["*".into()], false);
+        ch.dm_topic_threads
+            .lock()
+            .unwrap()
+            .insert("999001".to_string(), 42);
+        // Persist to a temp config dir, then load into a fresh channel.
+        unsafe { std::env::set_var("OPERANT_CONFIG_DIR", "/tmp/operant-dm-topic-test") };
+        ch.persist_dm_topic_state();
+        let ch2 = TelegramChannel::new("t".into(), vec!["*".into()], false);
+        ch2.load_dm_topic_state();
+        assert_eq!(*ch2.dm_topic_threads.lock().unwrap().get("999001").unwrap(), 42);
+        unsafe { std::env::remove_var("OPERANT_CONFIG_DIR") };
+        let _ = std::fs::remove_file(TelegramChannel::dm_topic_state_path());
     }
 
     #[test]

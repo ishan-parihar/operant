@@ -168,6 +168,23 @@ enabled = false
 [mcp.servers.env]
 # EXAMPLE_ROOT = "C:/workspace"
 
+# ── Channels crate (rich `Channel` trait stack; used by `operant channel send`,
+#    the daemon's supervised channels, and the ACP gateway) ──────────────
+# The thin `[gateway]` platform adapters above are what `operant gateway run`
+# uses; the channels crate adds approvals, draft streaming, ack reactions, and
+# per-DM forum topics.
+# [channels.telegram]
+# enabled = false
+# bot_token = ""
+# allowed_users = []
+# dm_topics_enabled = false   # per-DM forum topics (hermes parity)
+# dm_topic_name = "General"
+#
+# [channels.discord]
+# enabled = false
+# bot_token = ""
+# allowed_users = []
+
 [skills]
 root_dir = "$HOME/.operant/skills"
 memory_dir = "$HOME/.operant/memory"
@@ -179,6 +196,10 @@ template_description = "Describe what this skill does."
 telegram_enabled = false
 # telegram_token = ""
 telegram_api_base = "https://api.telegram.org"
+# Per-DM forum topics: when true, each private chat gets its own topic
+# (created via createForumTopic, thread id persisted across restarts) and
+# replies are routed into it. Hermes `_setup_dm_topics` parity.
+telegram_dm_topics_enabled = false
 discord_enabled = false
 # discord_token = ""
 discord_api_base = "https://discord.com/api/v10"

@@ -4424,7 +4424,8 @@ fn build_channel_by_id(config: &Config, channel_id: &str) -> Result<Arc<dyn Chan
                 .with_transcription(config.transcription.clone())
                 .with_tts(config.tts.clone())
                 .with_workspace_dir(config.workspace_dir.clone())
-                .with_approval_timeout_secs(tg.approval_timeout_secs),
+                .with_approval_timeout_secs(tg.approval_timeout_secs)
+                .with_dm_topics(tg.dm_topics_enabled, tg.dm_topic_name.clone()),
             ))
         }
         "discord" => {
@@ -4961,7 +4962,8 @@ fn collect_configured_channels(
                     .with_workspace_dir(config.workspace_dir.clone())
                     .with_proxy_url(tg.proxy_url.clone())
                     .with_tool_command_specs(tool_specs.to_vec())
-                    .with_approval_timeout_secs(tg.approval_timeout_secs),
+                    .with_approval_timeout_secs(tg.approval_timeout_secs)
+                    .with_dm_topics(tg.dm_topics_enabled, tg.dm_topic_name.clone()),
                 ),
             });
         } else {
@@ -13576,6 +13578,8 @@ This is an example JSON object for profile settings."#;
             ack_reactions: None,
             proxy_url: None,
             approval_timeout_secs: 120,
+            dm_topics_enabled: false,
+            dm_topic_name: "General".to_string(),
         });
         match build_channel_by_id(&config, "telegram") {
             Ok(channel) => assert_eq!(channel.name(), "telegram"),

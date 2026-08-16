@@ -233,6 +233,8 @@ mod tests {
             ack_reactions: None,
             proxy_url: None,
             approval_timeout_secs: 120,
+            dm_topics_enabled: false,
+            dm_topic_name: "General".to_string(),
         });
         let entries = all_integrations(&config);
         let nested = config

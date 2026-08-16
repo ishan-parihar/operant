@@ -1144,6 +1144,8 @@ mod tests {
             ack_reactions: None,
             proxy_url: None,
             approval_timeout_secs: 120,
+            dm_topics_enabled: false,
+            dm_topic_name: "General".to_string(),
         });
         assert!(has_supervised_channels(&config));
     }
@@ -1292,6 +1294,8 @@ mod tests {
             ack_reactions: None,
             proxy_url: None,
             approval_timeout_secs: 120,
+            dm_topics_enabled: false,
+            dm_topic_name: "General".to_string(),
         });
 
         let target = resolve_heartbeat_delivery(&config).unwrap();
@@ -1312,6 +1316,8 @@ mod tests {
             ack_reactions: None,
             proxy_url: None,
             approval_timeout_secs: 120,
+            dm_topics_enabled: false,
+            dm_topic_name: "General".to_string(),
         });
 
         let target = resolve_heartbeat_delivery(&config).unwrap();
