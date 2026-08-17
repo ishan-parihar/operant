@@ -623,8 +623,10 @@ pub trait PlatformAdapter: Send + Sync {
         Ok(true)
     }
 
-    /// Send a typing indicator to a channel.
-    fn send_typing(&self, _channel_id: &str) -> Result<()> {
+    /// Send a typing indicator to a channel. `thread_id` is the platform
+    /// forum topic (Telegram message_thread_id) so the indicator shows in
+    /// the same topic the user sent from, not the general chat.
+    fn send_typing(&self, _channel_id: &str, _thread_id: Option<i64>) -> Result<()> {
         Ok(())
     }
 
@@ -1110,9 +1112,9 @@ impl Gateway {
     }
 
     /// Send a typing indicator to a platform channel
-    pub fn send_typing(&self, platform: &str, channel_id: &str) -> Result<()> {
+    pub fn send_typing(&self, platform: &str, channel_id: &str, thread_id: Option<i64>) -> Result<()> {
         if let Some(adapter) = self.adapters.get(platform) {
-            adapter.send_typing(channel_id)?;
+            adapter.send_typing(channel_id, thread_id)?;
         }
         Ok(())
     }
@@ -1536,12 +1538,17 @@ impl PlatformAdapter for TelegramAdapter {
         Ok(())
     }
 
-    fn send_typing(&self, channel_id: &str) -> Result<()> {
+    fn send_typing(&self, channel_id: &str, thread_id: Option<i64>) -> Result<()> {
         let url = format!("{}/sendChatAction", self.api_url());
-        let body = serde_json::json!({
+        let mut body = serde_json::json!({
             "chat_id": channel_id,
             "action": "typing",
         });
+        // Route the typing indicator into the same forum topic the user
+        // sent from — otherwise it shows in the general chat.
+        if let Some(tid) = thread_id {
+            body["message_thread_id"] = serde_json::json!(tid);
+        }
         let client = self.client.clone();
         tokio::spawn(async move {
             let _ = client.post(&url).json(&body).send().await;
@@ -2120,7 +2127,7 @@ impl PlatformAdapter for DiscordAdapter {
     /// Send a typing indicator. Discord's typing endpoint is
     /// POST /channels/{id}/typing (5s TTL). (Bug #13 from iter-98 audit —
     /// previously Discord used the default no-op, so users saw no indicator.)
-    fn send_typing(&self, channel_id: &str) -> Result<()> {
+    fn send_typing(&self, channel_id: &str, _thread_id: Option<i64>) -> Result<()> {
         let token = self
             .token
             .as_ref()

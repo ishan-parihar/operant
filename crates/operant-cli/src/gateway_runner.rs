@@ -826,7 +826,26 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                     let line = tool_preview_line(&name, &arguments);
                     let key = (platform.clone(), channel_id.clone());
 
-                    if let Some((msg_id, lines)) = progress_msgs.get_mut(&key) {
+                    // When a stream message is already active (the model
+                    // emitted a preamble before calling tools), append the
+                    // tool line to the SAME message so the user sees one
+                    // chronological working message instead of a dangling
+                    // partial sentence plus separate tool spam. The final
+                    // answer then completes that same message via the Done
+                    // edit. (Fixes "stream cut off before the sentence
+                    // formed" when the model pivots to tools mid-sentence.)
+                    if stream_msg_id.is_some() {
+                        stream_text.push_str(&format!("\n{}", line));
+                        let body = stream_text.clone();
+                        let msg = OutgoingMessage::new(&channel_id, &body)
+                            .no_markdown()
+                            .with_thread_id(thread_id);
+                        if let Some(ref msg_id) = stream_msg_id {
+                            let _ = gw_for_events
+                                .edit_message(&platform, &channel_id, msg_id, msg)
+                                .await;
+                        }
+                    } else if let Some((msg_id, lines)) = progress_msgs.get_mut(&key) {
                         // Append line to existing chronological message
                         lines.push(line);
                         let body = lines.join("\n");
@@ -923,11 +942,22 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                     // Final message — do a final edit with the complete text.
                     if !stream_text.is_empty() {
                         if let Some(ref msg_id) = stream_msg_id {
-                            let msg =
-                                OutgoingMessage::new(&channel_id, &stream_text).with_thread_id(thread_id);
-                            let _ = gw_for_events
+                            let msg = OutgoingMessage::new(&channel_id, &stream_text)
+                                .with_thread_id(thread_id);
+                            // If the final edit fails (e.g. the accumulated
+                            // stream exceeded Telegram's 4096-char edit limit
+                            // after tool lines were merged in), drop the
+                            // stream-delivery marker so the dispatch loop
+                            // falls back to sending the full response as a
+                            // fresh message instead of losing the answer.
+                            let edit_ok = gw_for_events
                                 .edit_message(&platform, &channel_id, msg_id, msg)
-                                .await;
+                                .await
+                                .is_ok();
+                            if !edit_ok {
+                                let mut map = stream_delivery_for_events.lock().await;
+                                map.remove(&(platform.clone(), channel_id.clone()));
+                            }
                         }
                         // Reset streaming state for the next turn.
                         stream_text.clear();
@@ -1304,6 +1334,7 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                 // typing' indicator, making long silences look like the bot
                 // was dead.)
                 let typing_platform = platform.clone();
+                let typing_thread_id = msg.thread_id;
                 let typing_handle = {
                     let gw = gw.clone();
                     let ch = channel_id.clone();
@@ -1313,7 +1344,7 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                         interval.tick().await;
                         loop {
                             interval.tick().await;
-                            if gw.send_typing(&typing_platform, &ch).is_err() {
+                            if gw.send_typing(&typing_platform, &ch, typing_thread_id).is_err() {
                                 break;
                             }
                         }
