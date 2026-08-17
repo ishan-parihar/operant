@@ -2151,15 +2151,31 @@ for line in sys.stdin:
         assert!(!client.process_alive().await);
 
         let handle = manager.spawn_watchdog(registry, std::time::Duration::from_millis(50));
-        tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+
+        // Poll instead of sleeping a fixed window: under parallel test load
+        // the reconnect handshake (spawn python3 + initialize) can outlive a
+        // 600ms sleep even though the watchdog fired. Wait until the child is
+        // both restarted and reconnected, with a generous deadline.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        loop {
+            if client.process_alive().await && client.is_connected().await {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "watchdog must reconnect the dead server (restarts={}, alive={}, connected={})",
+                client.restart_count().await,
+                client.process_alive().await,
+                client.is_connected().await
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
 
         assert_eq!(
             client.restart_count().await,
             1,
-            "watchdog must reconnect the dead server"
+            "watchdog must reconnect the dead server exactly once"
         );
-        assert!(client.process_alive().await);
-        assert!(client.is_connected().await);
         handle.abort();
     }
 }

@@ -920,6 +920,40 @@ impl OperantAgent {
         }
     }
 
+    /// Loop-level per-request ceiling — the `request_timeout` config wired as
+    /// the run loop's own budget (hermes `request_timeout_secs` parity, the
+    /// audit's dead-field fix). Raised to the R2 reasoning stale-timeout floor
+    /// for known reasoning models so a long-thinking model is never killed by
+    /// the loop ceiling — the floor is a FLOOR, applied as `max(configured,
+    /// floor)` exactly like the client's `effective_timeout`.
+    fn loop_request_timeout(&self) -> std::time::Duration {
+        let configured = self.config.request_timeout;
+        match crate::reasoning_timeouts::get_reasoning_stale_timeout_floor(&self.model()) {
+            Some(floor) => configured.max(std::time::Duration::from_secs(floor)),
+            None => configured,
+        }
+    }
+
+    /// Run a model call under the loop-level request budget. On expiry, the
+    /// future is dropped and a retryable `Agent` error is produced (its
+    /// "timed out" text also feeds the R2 thinking-timeout detection for
+    /// reasoning models).
+    async fn call_with_loop_timeout<F, T>(&self, fut: F) -> crate::error::Result<T>
+    where
+        F: std::future::Future<Output = crate::error::Result<T>>,
+    {
+        let budget = self.loop_request_timeout();
+        match tokio::time::timeout(budget, fut).await {
+            Ok(result) => result,
+            Err(_elapsed) => {
+                warn!(budget = ?budget, "LLM request exceeded loop request_timeout ceiling");
+                Err(crate::error::Error::Agent(format!(
+                    "request timed out after {budget:?} (loop request_timeout ceiling)"
+                )))
+            }
+        }
+    }
+
     /// R2: append thinking-timeout guidance to a final (post-retry) error when
     /// the failure is a transport error on a known reasoning model with no
     /// content arrived (upstream idle-killed the thinking phase). Only fires
@@ -1522,7 +1556,13 @@ impl OperantAgent {
             let llm_start = std::time::Instant::now();
             let mut stream_extra_content = None;
             let response = if request.stream {
-                let mut stream = match self.client.chat_streaming(request).await {
+                // The run loop's own per-request budget (request_timeout,
+                // raised to the R2 reasoning floor) — the client's transport
+                // timeout is the wire-level guard, this is the loop ceiling.
+                let mut stream = match self
+                    .call_with_loop_timeout(self.client.chat_streaming(request))
+                    .await
+                {
                     Ok(s) => s,
                     Err(e) => {
                         // ── Context overflow auto-compression (iter-63) ───────
@@ -1640,7 +1680,11 @@ impl OperantAgent {
                                     ChatRequest::new(self.effective_model(), messages.clone())
                                         .with_tools(tools)
                                         .with_stream(self.config.stream);
-                                stream = self.client.chat_streaming(retry_request).await?;
+                                stream = self
+                                    .call_with_loop_timeout(
+                                        self.client.chat_streaming(retry_request),
+                                    )
+                                    .await?;
                             } else {
                                 return Err(self.annotate_thinking_timeout(e));
                             }
@@ -1651,7 +1695,7 @@ impl OperantAgent {
                 stream_extra_content = extra;
                 Ok((text, reasoning, tcs))
             } else {
-                let response = match self.client.chat(request).await {
+                let response = match self.call_with_loop_timeout(self.client.chat(request)).await {
                     Ok(r) => r,
                     Err(e) => {
                         let classified = FallbackModelClient::classify_error(&e);
@@ -1676,7 +1720,8 @@ impl OperantAgent {
                                 ChatRequest::new(self.effective_model(), messages.clone())
                                     .with_tools(tools)
                                     .with_stream(self.config.stream);
-                            self.client.chat(retry_request).await?
+                            self.call_with_loop_timeout(self.client.chat(retry_request))
+                                .await?
                         } else if classified.should_rotate_credential
                             && !retry_state.rotate_attempted
                         {
@@ -1702,7 +1747,8 @@ impl OperantAgent {
                                     ChatRequest::new(self.effective_model(), messages.clone())
                                         .with_tools(tools)
                                         .with_stream(self.config.stream);
-                                self.client.chat(retry_request).await?
+                                self.call_with_loop_timeout(self.client.chat(retry_request))
+                                    .await?
                             } else {
                                 warn!("No more credentials to rotate — returning original error");
                                 return Err(self.annotate_thinking_timeout(e));
@@ -5162,5 +5208,101 @@ mod tests {
             }
             _ => panic!("Expected ToolPermissionRequest variant"),
         }
+    }
+
+    // ── R2 loop-budget helpers (request_timeout ceiling + reasoning floor) ──
+
+    fn test_agent_with_request_timeout(secs: u64) -> OperantAgent {
+        use crate::agent::clients::openai::OpenAIModelClient;
+        use crate::client::OpenAIClient;
+        static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let config = AgentConfig {
+            request_timeout: Duration::from_secs(secs),
+            ..AgentConfig::default()
+        };
+        // Unique per call — parallel tests must never share the SQLite file.
+        let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let db = Database::init(std::path::PathBuf::from(format!(
+            "test_loop_timeout_{}_{n}.sqlite",
+            std::process::id()
+        )))
+        .unwrap();
+        OperantAgent::new(
+            config,
+            Box::new(OpenAIModelClient::new(OpenAIClient::new(
+                crate::client::ClientConfig::default(),
+            ))),
+            ToolRegistry::new(Duration::from_secs(1)),
+            Arc::new(db),
+        )
+    }
+
+    #[test]
+    fn loop_request_timeout_uses_configured_budget() {
+        let mut agent = test_agent_with_request_timeout(30);
+        // Demo model has no reasoning floor → the loop budget is exactly the
+        // configured request_timeout.
+        agent.config.model = "demo".to_string();
+        assert_eq!(agent.loop_request_timeout(), Duration::from_secs(30));
+    }
+
+    #[test]
+    fn loop_request_timeout_raised_to_reasoning_floor() {
+        let mut agent = test_agent_with_request_timeout(30);
+        // A known reasoning model with a 300s floor must raise the loop
+        // budget above the configured 30s — the floor is a FLOOR, applied as
+        // max(configured, floor) so long-thinking models are never killed by
+        // the loop ceiling.
+        agent.config.model = "openai/o3-mini".to_string();
+        assert_eq!(agent.loop_request_timeout(), Duration::from_secs(300));
+    }
+
+    #[test]
+    fn loop_request_timeout_never_lowers_configured_budget() {
+        let mut agent = test_agent_with_request_timeout(600);
+        // Configured 600s stays 600s even for a reasoning model with a 300s
+        // floor (max wins, never min).
+        agent.config.model = "openai/o3-mini".to_string();
+        assert_eq!(agent.loop_request_timeout(), Duration::from_secs(600));
+    }
+
+    #[tokio::test]
+    async fn call_with_loop_timeout_returns_result_on_time() {
+        let agent = test_agent_with_request_timeout(5);
+        let out = agent
+            .call_with_loop_timeout(async { Ok::<_, crate::error::Error>("fast".to_string()) })
+            .await
+            .unwrap();
+        assert_eq!(out, "fast");
+    }
+
+    #[tokio::test]
+    async fn call_with_loop_timeout_expires_and_errors() {
+        let agent = test_agent_with_request_timeout(1);
+        let err = agent
+            .call_with_loop_timeout(async {
+                tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+                Ok::<_, crate::error::Error>("too slow".to_string())
+            })
+            .await
+            .unwrap_err();
+        // The expired call surfaces as a retryable Agent error with the
+        // budget in the message (its "timed out" text also feeds the R2
+        // thinking-timeout detection for reasoning models).
+        let msg = err.to_string();
+        assert!(msg.contains("timed out"), "got: {msg}");
+        assert!(msg.contains("loop request_timeout ceiling"), "got: {msg}");
+    }
+
+    #[tokio::test]
+    async fn call_with_loop_timeout_propagates_underlying_error() {
+        let agent = test_agent_with_request_timeout(5);
+        let err = agent
+            .call_with_loop_timeout(async {
+                Err::<(), crate::error::Error>(crate::error::Error::Agent("boom".to_string()))
+            })
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("boom"));
     }
 }

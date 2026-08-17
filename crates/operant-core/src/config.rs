@@ -1558,6 +1558,7 @@ fn apply_path_override(name: &str, target: &mut PathBuf) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
     use std::ffi::OsString;
     use std::sync::{Mutex, OnceLock};
 
@@ -1695,6 +1696,13 @@ obscura_stealth = false
         );
     }
 
+    // Both tests mutate the process-wide current directory via
+    // `with_current_dir`, which races any concurrently-running test that
+    // reads `std::env::current_dir()` (e.g. the #[serial] LCM rollup test's
+    // `load_workspace_context` walk). `#[serial]` shares the global serial
+    // lock, making them mutually exclusive with other serial tests; the
+    // env_lock serializes them against the other env-mutating config tests.
+    #[serial]
     #[test]
     fn default_path_discovery_prefers_local_operant_toml() {
         let _guard = env_lock().lock().unwrap();
@@ -1711,6 +1719,7 @@ obscura_stealth = false
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    #[serial]
     #[test]
     fn explicit_path_overrides_defaults() {
         let _guard = env_lock().lock().unwrap();
