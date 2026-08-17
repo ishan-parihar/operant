@@ -235,7 +235,27 @@ impl MessageHandler for GatewayMessageHandler {
 
         // Long-term memory recall is injected by the agent itself inside
         // run() (build_messages → provider.prefetch under <memory_context>).
-        let query = message.content.clone();
+        //
+        // Attachments: the gateway cached platform attachments to local paths
+        // (message.media_urls). Inject them into the query so the agent can
+        // inspect them with native tools — vision_analyze for images,
+        // file_read / STT for documents and audio. Hermes passes
+        // `event.media_urls` to the agent the same way.
+        let query = if message.media_urls.is_empty() {
+            message.content.clone()
+        } else {
+            let paths: Vec<String> = message
+                .media_urls
+                .iter()
+                .map(|p| format!("- {p}"))
+                .collect();
+            format!(
+                "{}\n\n[The user attached {} file(s), cached locally by the gateway:]\n{}\n\nInspect them with the appropriate tool: vision_analyze for images (pass the file path as image_url), file_read for text/documents, and the STT/audio tools for voice messages. Report what you find.",
+                message.content,
+                message.media_urls.len(),
+                paths.join("\n")
+            )
+        };
 
         let user_content = message.content.clone();
 

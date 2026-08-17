@@ -132,6 +132,12 @@ pub struct IncomingMessage {
     pub is_group_chat: bool,
     /// Forum thread/topic ID (Telegram-specific)
     pub thread_id: Option<i64>,
+    /// Locally-cached paths for attachments on this message (photos,
+    /// documents, voice/audio, video). The gateway downloads platform
+    /// attachments to disk so the agent can inspect them with native tools
+    /// (vision_analyze for images, file_read/STT for others) — hermes
+    /// `event.media_urls` parity. Empty when the message is plain text.
+    pub media_urls: Vec<String>,
 }
 
 impl IncomingMessage {
@@ -156,6 +162,7 @@ impl IncomingMessage {
                 .unwrap_or(0),
             is_group_chat: false,
             thread_id: None,
+            media_urls: Vec::new(),
         }
     }
 
@@ -174,6 +181,13 @@ impl IncomingMessage {
     /// Set the thread/topic ID (Telegram forum topics)
     pub fn with_thread_id(mut self, thread_id: Option<i64>) -> Self {
         self.thread_id = thread_id;
+        self
+    }
+
+    /// Attach locally-cached media file paths (hermes `event.media_urls`
+    /// parity). The agent can then inspect these with vision/file tools.
+    pub fn with_media_urls(mut self, media_urls: Vec<String>) -> Self {
+        self.media_urls = media_urls;
         self
     }
 }
@@ -1732,6 +1746,8 @@ impl PlatformAdapter for TelegramAdapter {
         running.store(true, Ordering::SeqCst);
 
         let client = self.client.clone();
+        let media_base = base.clone();
+        let media_token = token.clone();
 
         tracing::info!("Telegram polling task spawned");
         tokio::spawn(async move {
@@ -1833,13 +1849,30 @@ impl PlatformAdapter for TelegramAdapter {
                                     if let Some(update_id) = update["update_id"].as_i64() {
                                         offset = update_id + 1;
                                     }
-                                    if let Ok(Some(msg)) =
+                                    if let Ok(Some(mut msg)) =
                                         TelegramAdapter::parse_update(update.clone())
                                     {
+                                        // Download attachments (photos, documents,
+                                        // voice/audio/video) into the local media
+                                        // cache so the agent can inspect them with
+                                        // native tools (hermes parity). Best-effort:
+                                        // a failed download keeps the placeholder
+                                        // text and still delivers the message.
+                                        let media = download_telegram_attachments(
+                                            &client,
+                                            &media_token,
+                                            &media_base,
+                                            update,
+                                        )
+                                        .await;
+                                        if !media.is_empty() {
+                                            msg = msg.with_media_urls(media);
+                                        }
                                         tracing::info!(
-                                            "Sent message to gateway handler (chat: {}, content: {:.50})",
+                                            "Sent message to gateway handler (chat: {}, content: {:.50}, media: {})",
                                             msg.channel_id,
-                                            msg.content
+                                            msg.content,
+                                            msg.media_urls.len()
                                         );
                                         if let Err(e) = message_tx.send(msg) {
                                             tracing::error!(
@@ -1975,6 +2008,174 @@ impl TelegramAdapter {
                 other => format!("/approve-unknown-{other}"),
             },
         ))
+    }
+}
+
+/// Telegram bot API file path for a message attachment, if any.
+///
+/// Returns the `file_id` for the largest photo size, or the document/voice/
+/// video/audio/sticker file — mirroring hermes' `_media_message_type`
+/// extraction. `None` for plain text messages.
+fn telegram_attachment_file_id(message: &serde_json::Value) -> Option<String> {
+    if let Some(photos) = message.get("photo").and_then(|p| p.as_array()) {
+        // PhotoSize list is sorted by size ascending — take the largest.
+        return photos
+            .last()
+            .and_then(|p| p.get("file_id"))
+            .and_then(|f| f.as_str())
+            .map(|s| s.to_string());
+    }
+    for key in [
+        "document",
+        "voice",
+        "video",
+        "audio",
+        "video_note",
+        "sticker",
+    ] {
+        if let Some(fid) = message
+            .get(key)
+            .and_then(|v| v.get("file_id"))
+            .and_then(|f| f.as_str())
+        {
+            return Some(fid.to_string());
+        }
+    }
+    None
+}
+
+/// Guess a file extension for a Telegram file path / mime-ish hint.
+fn telegram_media_extension(file_path: &str, fallback: &str) -> String {
+    let lower = file_path.to_lowercase();
+    let known = [
+        ".jpg", ".jpeg", ".png", ".webp", ".gif", ".mp4", ".ogg", ".oga", ".mp3", ".m4a", ".wav",
+        ".opus", ".pdf", ".txt", ".md", ".docx", ".xlsx", ".csv", ".json", ".zip", ".tar", ".gz",
+        ".py", ".rs", ".toml", ".yaml", ".yml", ".html",
+    ];
+    for ext in known {
+        if lower.ends_with(ext) {
+            return ext.to_string();
+        }
+    }
+    fallback.to_string()
+}
+
+/// Download a Telegram attachment (photo/document/voice/video) to the local
+/// media cache (`~/.operant/media/`) so the agent can inspect it with native
+/// tools. Hermes `cache_image_from_bytes`/`cache_audio_from_bytes` parity —
+/// Telegram file URLs are ephemeral (~1h), so the gateway must persist them.
+///
+/// Returns the local file path on success. Failures log a warning and return
+/// None — an attachment that can't be cached degrades to the placeholder text
+/// rather than dropping the message.
+async fn download_telegram_attachment(
+    client: &reqwest::Client,
+    token: &str,
+    base: &str,
+    file_id: &str,
+    file_name_hint: Option<&str>,
+) -> Option<String> {
+    // 1. Resolve file path via getFile
+    let api_base = base.trim_end_matches('/');
+    let get_file_url = format!("{api_base}/bot{token}/getFile");
+    let resp = client
+        .post(&get_file_url)
+        .json(&serde_json::json!({ "file_id": file_id }))
+        .send()
+        .await
+        .ok()?;
+    let data: serde_json::Value = resp.json().await.ok()?;
+    let file_path = data["result"]["file_path"].as_str()?;
+
+    // 2. Download the bytes
+    let download_url = format!("{api_base}/file/bot{token}/{file_path}");
+    let bytes = client
+        .get(&download_url)
+        .send()
+        .await
+        .ok()?
+        .bytes()
+        .await
+        .ok()?;
+    if bytes.is_empty() {
+        return None;
+    }
+
+    // 3. Persist to ~/.operant/media/ with a stable, descriptive name
+    let media_dir = crate::platform::operant_home().join("media");
+    if std::fs::create_dir_all(&media_dir).is_err() {
+        return None;
+    }
+    let ext = telegram_media_extension(
+        file_path,
+        file_name_hint
+            .and_then(|f| std::path::Path::new(f).extension().and_then(|e| e.to_str()))
+            .map(|e| format!(".{}", e.to_lowercase()))
+            .unwrap_or_else(|| ".bin".to_string())
+            .as_str(),
+    );
+    let file_name = file_name_hint
+        .and_then(|f| {
+            let stem = std::path::Path::new(f)
+                .file_stem()
+                .and_then(|s| s.to_str())?
+                .to_string();
+            Some(stem)
+        })
+        .unwrap_or_else(|| "attachment".to_string());
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    // Sanitize the stem so it can't escape the media dir.
+    let safe_stem: String = file_name
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' || c == '.' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let dest = media_dir.join(format!("{safe_stem}_{ts}{ext}"));
+    if std::fs::write(&dest, &bytes).is_err() {
+        return None;
+    }
+    tracing::info!(path = %dest.display(), file_id = %file_id, "Cached Telegram attachment");
+    Some(dest.to_string_lossy().to_string())
+}
+
+/// Download all attachments on a Telegram update message into the local media
+/// cache. Returns the list of cached local paths (empty for text-only
+/// messages).
+async fn download_telegram_attachments(
+    client: &reqwest::Client,
+    token: &str,
+    base: &str,
+    update: &serde_json::Value,
+) -> Vec<String> {
+    let message = match update.get("message") {
+        Some(m) => m,
+        None => return Vec::new(),
+    };
+    let file_id = match telegram_attachment_file_id(message) {
+        Some(fid) => fid,
+        None => return Vec::new(),
+    };
+    let file_name_hint = message
+        .get("document")
+        .and_then(|d| d.get("file_name"))
+        .and_then(|f| f.as_str());
+    match download_telegram_attachment(client, token, base, &file_id, file_name_hint).await {
+        Some(path) => vec![path],
+        None => {
+            tracing::warn!(
+                file_id = %file_id,
+                "Failed to cache Telegram attachment — degraded to placeholder text"
+            );
+            Vec::new()
+        }
     }
 }
 
@@ -2558,6 +2759,7 @@ fn parse_discord_message(json: &serde_json::Value, _api_url: &str) -> Option<Inc
         timestamp,
         is_group_chat: guild_id,
         thread_id: None,
+        media_urls: Vec::new(),
     })
 }
 
@@ -3054,6 +3256,7 @@ impl PlatformAdapter for WebhookAdapter {
                                                         .and_then(|t| t.as_str())
                                                         .and_then(|s| s.split('.').next().and_then(|n| n.parse::<i64>().ok())),
                                                     raw: v.clone(),
+                                                    media_urls: Vec::new(),
                                                 };
                                                 let _ = tx.send(slack_msg);
                                             }
@@ -3080,6 +3283,7 @@ impl PlatformAdapter for WebhookAdapter {
                                                     is_group_chat: false,
                                                     timestamp: msg.get("timestamp").and_then(|t| t.as_str()).and_then(|s| s.parse::<i64>().ok()).unwrap_or_else(|| chrono::Utc::now().timestamp()),
                                                     thread_id: None,
+                                                    media_urls: Vec::new(),
                                                     raw: msg.clone(),
                                                 };
                                                 let _ = tx.send(wa_msg);
@@ -3114,6 +3318,7 @@ impl PlatformAdapter for WebhookAdapter {
                             is_group_chat: false,
                             timestamp: chrono::Utc::now().timestamp(),
                             thread_id: None,
+                            media_urls: Vec::new(),
                             raw: serde_json::from_slice(&body).unwrap_or(serde_json::json!({"route": route})),
                         };
 
@@ -3284,6 +3489,7 @@ impl PlatformAdapter for WhatsAppAdapter {
                 is_group_chat: false,
                 timestamp: chrono::Utc::now().timestamp(),
                 thread_id: None,
+                media_urls: Vec::new(),
 
                 raw: update,
             }));
@@ -3552,6 +3758,7 @@ impl PlatformAdapter for EmailAdapter {
             is_group_chat: false,
             timestamp: chrono::Utc::now().timestamp(),
             thread_id: None,
+            media_urls: Vec::new(),
 
             raw: update,
         }))
@@ -3691,6 +3898,7 @@ impl PlatformAdapter for SmsAdapter {
             is_group_chat: false,
             timestamp: chrono::Utc::now().timestamp(),
             thread_id: None,
+            media_urls: Vec::new(),
 
             raw: update,
         }))
@@ -3905,6 +4113,79 @@ mod tests {
         assert_eq!(msg.channel_id, "-100123");
         assert_eq!(msg.thread_id, Some(91609));
         assert!(msg.is_group_chat);
+    }
+
+    /// A photo update must extract the largest PhotoSize file_id (hermes
+    /// takes `photo[-1]` — sizes are sorted ascending).
+    #[test]
+    fn telegram_attachment_file_id_takes_largest_photo() {
+        let message = serde_json::json!({
+            "photo": [
+                {"file_id": "small", "width": 100, "height": 100},
+                {"file_id": "large", "width": 1000, "height": 1000},
+            ]
+        });
+        assert_eq!(
+            telegram_attachment_file_id(&message).as_deref(),
+            Some("large")
+        );
+    }
+
+    /// A document update must extract the document file_id.
+    #[test]
+    fn telegram_attachment_file_id_document() {
+        let message = serde_json::json!({
+            "document": {"file_id": "doc_1", "file_name": "report.pdf"}
+        });
+        assert_eq!(
+            telegram_attachment_file_id(&message).as_deref(),
+            Some("doc_1")
+        );
+    }
+
+    /// A voice update must extract the voice file_id; plain text yields None.
+    #[test]
+    fn telegram_attachment_file_id_voice_and_text() {
+        let voice = serde_json::json!({"voice": {"file_id": "voice_1"}});
+        assert_eq!(
+            telegram_attachment_file_id(&voice).as_deref(),
+            Some("voice_1")
+        );
+        assert_eq!(telegram_attachment_file_id(&serde_json::json!({})), None);
+    }
+
+    /// Extension guessing must map common Telegram file paths and fall back
+    /// to the hint for unknown ones.
+    #[test]
+    fn telegram_media_extension_guessing() {
+        assert_eq!(
+            telegram_media_extension("docs/photo_123.jpg", ".bin"),
+            ".jpg"
+        );
+        assert_eq!(telegram_media_extension("voice/msg.oga", ".bin"), ".oga");
+        assert_eq!(
+            telegram_media_extension("documents/notes.md", ".bin"),
+            ".md"
+        );
+        assert_eq!(
+            telegram_media_extension("files/unknown-123", ".pdf"),
+            ".pdf"
+        );
+    }
+
+    /// with_media_urls must round-trip the cached attachment paths onto the
+    /// IncomingMessage so the runner can inject them into the agent prompt.
+    #[test]
+    fn incoming_message_media_urls_roundtrip() {
+        let msg = IncomingMessage::new("telegram", "1", "u", "c", "[sent a photo]")
+            .with_media_urls(vec!["/home/u/.operant/media/photo_1.jpg".to_string()]);
+        assert_eq!(msg.media_urls.len(), 1);
+        assert!(msg.media_urls[0].ends_with("photo_1.jpg"));
+        assert!(
+            IncomingMessage::new("telegram", "1", "u", "c", "hi")
+                .media_urls
+                .is_empty()
+        );
     }
 
     #[tokio::test]
