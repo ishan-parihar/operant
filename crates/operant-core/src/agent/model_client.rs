@@ -74,6 +74,12 @@ pub struct StreamChunk {
     /// message_delta events). Callers merge across chunks — see
     /// `process_stream` in `agent/mod.rs`.
     pub usage: Option<Usage>,
+    /// Provider-reported finish reason, present on the terminal chunk(s) of
+    /// the stream (`"stop"`, `"length"`, `"tool_calls"`, ...). Surfaced to
+    /// the loop so it can detect truncated responses (`"length"`) and
+    /// request a continuation instead of treating a cut-off answer as final
+    /// (round-4 T1, hermes `_should_treat_stop_as_truncated` parity).
+    pub finish_reason: Option<String>,
 }
 
 impl StreamChunk {
@@ -88,6 +94,7 @@ impl StreamChunk {
             tool_calls,
             extra_content: None,
             usage: None,
+            finish_reason: None,
         }
     }
 }

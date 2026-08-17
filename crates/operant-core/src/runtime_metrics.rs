@@ -45,6 +45,8 @@ pub struct RuntimeMetrics {
     memory_jobs_dropped: AtomicU64,
     /// Identical tool-call repeats skipped by the R4 guardrail.
     guardrail_skips: AtomicU64,
+    /// Truncated responses that triggered a continuation retry (T1).
+    truncation_continuations: AtomicU64,
     /// Unix-millis of the last stream-drop retry (0 = never).
     last_stream_retry_at: AtomicU64,
     /// Unix-millis of the last empty-content retry (0 = never).
@@ -63,6 +65,7 @@ pub struct MetricsSnapshot {
     pub memory_sync_failures: u64,
     pub memory_jobs_dropped: u64,
     pub guardrail_skips: u64,
+    pub truncation_continuations: u64,
     pub last_stream_retry_at: u64,
     pub last_empty_content_retry_at: u64,
     pub last_memory_failure_at: u64,
@@ -78,6 +81,7 @@ impl MetricsSnapshot {
             || self.memory_sync_failures > 0
             || self.memory_jobs_dropped > 0
             || self.guardrail_skips > 0
+            || self.truncation_continuations > 0
     }
 }
 
@@ -97,6 +101,12 @@ impl RuntimeMetrics {
         self.stream_retries.fetch_add(1, Ordering::Relaxed);
         self.last_stream_retry_at
             .store(now_millis(), Ordering::Relaxed);
+    }
+
+    /// A truncated response triggered a continuation retry (T1).
+    pub fn record_truncation_continuation(&self) {
+        self.truncation_continuations
+            .fetch_add(1, Ordering::Relaxed);
     }
 
     /// The model returned an empty turn and the loop retried it.
@@ -132,6 +142,7 @@ impl RuntimeMetrics {
             memory_sync_failures: self.memory_sync_failures.load(Ordering::Relaxed),
             memory_jobs_dropped: self.memory_jobs_dropped.load(Ordering::Relaxed),
             guardrail_skips: self.guardrail_skips.load(Ordering::Relaxed),
+            truncation_continuations: self.truncation_continuations.load(Ordering::Relaxed),
             last_stream_retry_at: self.last_stream_retry_at.load(Ordering::Relaxed),
             last_empty_content_retry_at: self.last_empty_content_retry_at.load(Ordering::Relaxed),
             last_memory_failure_at: self.last_memory_failure_at.load(Ordering::Relaxed),

@@ -305,6 +305,18 @@ impl App {
                 self.check_token_warnings();
             }
 
+            AgentEvent::RateLimitNotice { retry_after_secs } => {
+                // T3: surface the rate-limit state as a non-blocking
+                // notification (hermes `_capture_rate_limits` parity).
+                let msg = match retry_after_secs {
+                    Some(secs) if secs > 0 => {
+                        format!("Rate limit reached — retry in ~{secs}s")
+                    }
+                    _ => "Rate limit reached — retrying with backoff".to_string(),
+                };
+                self.push_notification(NotificationKind::Warning, msg, None);
+            }
+
             AgentEvent::Cost {
                 cost_usd,
                 input_tokens,

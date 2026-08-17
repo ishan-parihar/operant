@@ -20,6 +20,8 @@ pub(crate) mod turn_context;
 pub(crate) mod turn_finalizer;
 pub mod turn_retry_state;
 
+use crate::turn_end_heuristics;
+
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -139,6 +141,10 @@ pub struct AgentConfig {
     pub tool_search: crate::config::ToolSearchSettings,
 }
 
+/// Cap on truncation-continuation retries per turn (hermes
+/// `conversation_loop.py` uses the same limit of 4).
+pub const MAX_LENGTH_CONTINUE_RETRIES: usize = 4;
+
 impl Default for AgentConfig {
     fn default() -> Self {
         Self::from(&runtime_config().agent)
@@ -220,6 +226,10 @@ pub enum AgentEvent {
         output_tokens: u32,
         model: String,
     },
+    /// A rate-limit (429) response was classified during the turn. Emitted so
+    /// the CLI/TUI can surface "limit reached, retry in Ns" instead of only
+    /// seeing the error text (T3 — hermes `_capture_rate_limits` parity).
+    RateLimitNotice { retry_after_secs: Option<u64> },
     /// Tool requires permission before execution
     ToolPermissionRequest {
         tool_name: String,
@@ -943,13 +953,35 @@ impl OperantAgent {
         F: std::future::Future<Output = crate::error::Result<T>>,
     {
         let budget = self.loop_request_timeout();
-        match tokio::time::timeout(budget, fut).await {
-            Ok(result) => result,
-            Err(_elapsed) => {
+        // T2: race the request against BOTH the budget ceiling and the
+        // interrupt flag so a Ctrl-C on the one-shot path aborts the
+        // in-flight request instead of waiting for it (or the timeout) to
+        // complete. The interrupt branch returns an `Interrupted`-style
+        // error; the loop's error handlers bail out on the flag before
+        // classifying, so it never enters the retry/rotate path.
+        let interrupt_flag = self.interrupt_flag.clone();
+        let interrupt_fut = async move {
+            loop {
+                if interrupt_flag.is_triggered() {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+            crate::error::Error::Agent(
+                "Interrupted by user — in-flight LLM request aborted".to_string(),
+            )
+        };
+        tokio::select! {
+            result = fut => result,
+            _ = tokio::time::sleep(budget) => {
                 warn!(budget = ?budget, "LLM request exceeded loop request_timeout ceiling");
                 Err(crate::error::Error::Agent(format!(
                     "request timed out after {budget:?} (loop request_timeout ceiling)"
                 )))
+            }
+            interrupted = interrupt_fut => {
+                warn!("Interrupt flag triggered — aborting in-flight LLM request");
+                Err(interrupted)
             }
         }
     }
@@ -978,6 +1010,34 @@ impl OperantAgent {
         } else {
             err
         }
+    }
+
+    /// T3: emit a `RateLimitNotice` AgentEvent when the classified failure is
+    /// a rate limit (429), surfacing the Retry-After (when known) so the
+    /// CLI/TUI can show "limit reached, retry in Ns" (hermes
+    /// `_capture_rate_limits` parity). No-op for other failure classes.
+    async fn emit_rate_limit_notice(
+        &self,
+        classified: &ClassifiedError,
+        err: &crate::error::Error,
+    ) {
+        use crate::agent::error_classifier::FailoverReason;
+        if !matches!(
+            classified.reason,
+            FailoverReason::RateLimit | FailoverReason::UpstreamRateLimit
+        ) {
+            return;
+        }
+        let retry_after_secs = match err {
+            crate::error::Error::RateLimited { retry_after } => Some(retry_after.as_secs()),
+            crate::error::Error::Provider {
+                retry_after: Some(d),
+                ..
+            } => Some(d.as_secs()),
+            _ => None,
+        };
+        self.emit(AgentEvent::RateLimitNotice { retry_after_secs })
+            .await;
     }
 
     /// Add a message to the conversation history
@@ -1214,13 +1274,14 @@ impl OperantAgent {
 
         let grace_result = if self.config.stream {
             let stream = self.client.chat_streaming(grace_request).await?;
-            let (text, reasoning, _tcs, _extra) = self.process_stream(stream).await?;
+            let (text, reasoning, _tcs, _extra, _finish_reason) =
+                self.process_stream(stream).await?;
             Ok((text, reasoning))
         } else {
             let response = self.client.chat(grace_request).await?;
             self.process_response(response)
                 .await
-                .map(|(t, r, _)| (t, r))
+                .map(|(t, r, _, _)| (t, r))
         };
 
         match grace_result {
@@ -1435,6 +1496,8 @@ impl OperantAgent {
         // calls, nudge it to continue instead of silently accepting an empty
         // reply as the final answer.
         let mut empty_content_retries: usize = 0;
+        // Truncation-continuation retries (T1 — hermes caps at 4).
+        let mut length_continue_retries: usize = 0;
 
         // Reset provider registry to primary at turn start.
         // Matches hermes-agent's restore_primary_runtime() pattern —
@@ -1565,12 +1628,17 @@ impl OperantAgent {
                 {
                     Ok(s) => s,
                     Err(e) => {
+                        // T2: bail out on interrupt instead of classifying.
+                        if self.interrupt_flag.is_triggered() {
+                            return Err(e);
+                        }
                         // ── Context overflow auto-compression (iter-63) ───────
                         // When the provider returns a context_overflow error,
                         // compress the conversation using context_management
                         // and retry once. This prevents hard failures on long
                         // sessions that exceed the context window.
                         let classified = FallbackModelClient::classify_error(&e);
+                        self.emit_rate_limit_notice(&classified, &e).await;
                         if classified.should_compress && !retry_state.compress_attempted {
                             retry_state.compress_attempted = true;
                             warn!(reason = %classified.reason, "Context overflow detected — compressing and retrying");
@@ -1647,9 +1715,22 @@ impl OperantAgent {
                 // lifecycle with mark_exhausted_and_rotate, not just
                 // connection establishment).
                 let processed = loop {
-                    match self.process_stream(stream).await {
+                    // T2: the whole stream consumption runs under the loop
+                    // budget ceiling (with the R2 reasoning floor) and the
+                    // interrupt flag, so a Ctrl-C mid-stream aborts the
+                    // request immediately instead of waiting for the turn
+                    // to finish.
+                    match self
+                        .call_with_loop_timeout(self.process_stream(stream))
+                        .await
+                    {
                         Ok(processed) => break processed,
                         Err(e) => {
+                            // T2: never classify/retry an interrupt-aborted
+                            // request — propagate the interrupted error up.
+                            if self.interrupt_flag.is_triggered() {
+                                return Err(e);
+                            }
                             let classified = FallbackModelClient::classify_error(&e);
                             let retryable = classified.retryable
                                 && !classified.should_compress
@@ -1691,14 +1772,19 @@ impl OperantAgent {
                         }
                     }
                 };
-                let (text, reasoning, tcs, extra) = processed;
+                let (text, reasoning, tcs, extra, finish_reason) = processed;
                 stream_extra_content = extra;
-                Ok((text, reasoning, tcs))
+                Ok((text, reasoning, tcs, finish_reason))
             } else {
                 let response = match self.call_with_loop_timeout(self.client.chat(request)).await {
                     Ok(r) => r,
                     Err(e) => {
+                        // T2: bail out on interrupt instead of classifying.
+                        if self.interrupt_flag.is_triggered() {
+                            return Err(e);
+                        }
                         let classified = FallbackModelClient::classify_error(&e);
+                        self.emit_rate_limit_notice(&classified, &e).await;
                         if classified.should_compress && !retry_state.compress_attempted {
                             retry_state.compress_attempted = true;
                             warn!(reason = %classified.reason, "Context overflow detected — compressing and retrying");
@@ -1782,9 +1868,68 @@ impl OperantAgent {
             let mut tool_names: Vec<String> = Vec::new();
 
             match response {
-                Ok((response_text, reasoning_text, tool_calls)) => {
+                Ok((response_text, reasoning_text, tool_calls, finish_reason)) => {
                     // Reset retry state on successful LLM response.
                     retry_state.reset_on_success();
+
+                    // ── Truncation continuation (T1 — hermes parity) ──────
+                    // When the provider reports a cut-off response
+                    // (finish_reason="length", or a suspicious stop on
+                    // Ollama-GLM), don't surface the partial answer as
+                    // final: append a continuation prompt and re-loop,
+                    // bounded by MAX_LENGTH_CONTINUE_RETRIES (hermes uses
+                    // the same cap) and the iteration budget.
+                    if tool_calls.is_empty()
+                        && length_continue_retries < MAX_LENGTH_CONTINUE_RETRIES
+                    {
+                        let truncated = finish_reason.as_deref() == Some("length")
+                            || turn_end_heuristics::should_treat_stop_as_truncated(
+                                &self.config.model,
+                                finish_reason.as_deref(),
+                                &response_text,
+                                messages.iter().any(|m| m.role == Role::Tool),
+                                false,
+                            );
+                        if truncated {
+                            // Thinking-exhausted: the model burned the whole
+                            // output budget on reasoning with nothing visible
+                            // left — continuation retries are pointless, give
+                            // a targeted error (hermes conversation_loop.py
+                            // thinking-exhausted detection).
+                            if turn_end_heuristics::thinking_exhausted(&response_text) {
+                                return Err(Error::Agent(
+                                    "Model used all output tokens on reasoning with none left \
+                                     for the response. Try lowering reasoning effort or \
+                                     increasing max_tokens."
+                                        .to_string(),
+                                ));
+                            }
+                            length_continue_retries += 1;
+                            self.metrics.record_truncation_continuation();
+                            warn!(
+                                finish_reason = ?finish_reason,
+                                "Response truncated — requesting continuation ({}/{})",
+                                length_continue_retries,
+                                MAX_LENGTH_CONTINUE_RETRIES
+                            );
+                            self.emit(AgentEvent::Content {
+                                text: format!(
+                                    "↻ Response truncated — requesting continuation ({}/{})",
+                                    length_continue_retries, MAX_LENGTH_CONTINUE_RETRIES
+                                ),
+                            })
+                            .await;
+                            let continue_msg =
+                                Message::user(turn_end_heuristics::continuation_prompt());
+                            messages.push(continue_msg.clone());
+                            self.add_message(continue_msg).await;
+                            // Refund the consumed iteration — the LLM call
+                            // was wasted on a truncated turn; the continuation
+                            // is the same logical turn.
+                            self.iteration_budget.refund();
+                            continue;
+                        }
+                    }
 
                     // ── Empty-content recovery (hermes parity) ─────────────
                     // If the model produced no visible text, no reasoning, and
@@ -1871,7 +2016,9 @@ impl OperantAgent {
                             tool_name: None,
                             timestamp,
                             token_count: None,
-                            finish_reason: Some("tool_calls".to_string()),
+                            // T1: persist the provider's real finish reason
+                            // (previously hardcoded to "tool_calls").
+                            finish_reason: finish_reason.clone(),
                             reasoning: assistant_msg.reasoning.clone(),
                             reasoning_content: None,
                             reasoning_details: None,
@@ -3243,7 +3390,13 @@ If nothing needs updating, say 'Nothing to save.' and stop.\n\n{}",
     async fn process_stream(
         &self,
         mut stream: BoxStream<'static, Result<StreamChunk>>,
-    ) -> Result<(String, String, Vec<ToolCall>, Option<serde_json::Value>)> {
+    ) -> Result<(
+        String,
+        String,
+        Vec<ToolCall>,
+        Option<serde_json::Value>,
+        Option<String>,
+    )> {
         let mut accumulated_extra: Option<serde_json::Value> = None;
         let mut parser = ToolCallStreamParser::new().on_tool_call(|tc| {
             let tc_id = tc.id.clone();
@@ -3266,6 +3419,9 @@ If nothing needs updating, say 'Nothing to save.' and stop.\n\n{}",
         // the generic "Stream processing failed" string) and decide whether
         // to flush partials after the loop.
         let mut stream_error: Option<Error> = None;
+        // Provider-reported finish reason from the terminal chunk(s) (T1 —
+        // truncation detection). Last non-None wins.
+        let mut finish_reason: Option<String> = None;
 
         while let Some(chunk_result) = stream.next().await {
             match chunk_result {
@@ -3349,6 +3505,11 @@ If nothing needs updating, say 'Nothing to save.' and stop.\n\n{}",
                         for tc in chunk_tool_calls {
                             merge_stream_tool_call(&mut tool_calls, tc);
                         }
+                    }
+
+                    // Capture the provider finish reason (T1).
+                    if let Some(fr) = &chunk.finish_reason {
+                        finish_reason = Some(fr.clone());
                     }
                 }
                 Err(e) => {
@@ -3512,18 +3673,21 @@ If nothing needs updating, say 'Nothing to save.' and stop.\n\n{}",
             accumulated_reasoning,
             tool_calls,
             accumulated_extra,
+            finish_reason,
         ))
     }
 
     async fn process_response(
         &self,
         response: ChatResponse,
-    ) -> Result<(String, String, Vec<ToolCall>)> {
-        let choice = response
+    ) -> Result<(String, String, Vec<ToolCall>, Option<String>)> {
+        let mut choice = response
             .choices
             .into_iter()
             .next()
             .ok_or_else(|| Error::ParseResponse("response had no choices".to_string()))?;
+        // Provider-reported finish reason (T1 — truncation detection).
+        let finish_reason = choice.finish_reason.take();
 
         let message = choice.message;
         let raw_content = message.content.unwrap_or_default();
@@ -3555,7 +3719,7 @@ If nothing needs updating, say 'Nothing to save.' and stop.\n\n{}",
 
         self.emit_usage_and_cost(&response.usage).await;
 
-        Ok((content, reasoning, tool_calls))
+        Ok((content, reasoning, tool_calls, finish_reason))
     }
 
     #[expect(
@@ -3587,6 +3751,13 @@ If nothing needs updating, say 'Nothing to save.' and stop.\n\n{}",
         // ── Phase 1: Pre-flight (sequential) ────────────────────────────
         let mut pending: Vec<(usize, ToolCall, serde_json::Value)> = Vec::new();
         let mut early_results: Vec<Option<ToolResult>> = vec![None; tool_calls.len()];
+        // T6: within-batch dedupe (hermes `_deduplicate_tool_calls`) — only
+        // the first occurrence of each (tool, arguments) pair in a single
+        // assistant message executes; exact duplicates are skipped with a
+        // synthetic result so result ordering is preserved and degenerate
+        // batches don't double-mutate.
+        let mut seen_tool_calls: std::collections::HashSet<(String, String)> =
+            std::collections::HashSet::new();
 
         for (idx, tool_call) in tool_calls.into_iter().enumerate() {
             // Check interrupt flag
@@ -3594,6 +3765,27 @@ If nothing needs updating, say 'Nothing to save.' and stop.\n\n{}",
                 early_results[idx] = Some(ToolResult::error(
                     &tool_call.id,
                     "Skipped: interrupted by user (Ctrl-C)".to_string(),
+                ));
+                continue;
+            }
+
+            // T6: skip exact duplicates within this batch.
+            let dup_key = (
+                tool_call.function.name.clone(),
+                tool_call.function.arguments.trim().to_string(),
+            );
+            if !seen_tool_calls.insert(dup_key) {
+                warn!(
+                    tool = %tool_call.function.name,
+                    "Duplicate tool call with identical arguments — skipped (T6 within-batch dedupe)"
+                );
+                early_results[idx] = Some(ToolResult::error(
+                    &tool_call.id,
+                    format!(
+                        "Duplicate tool call '{}' with identical arguments skipped — already \
+                         invoked once in this batch.",
+                        tool_call.function.name
+                    ),
                 ));
                 continue;
             }
@@ -4914,7 +5106,8 @@ mod tests {
             },
         };
 
-        let (content, reasoning, tool_calls) = agent.process_response(response).await.unwrap();
+        let (content, reasoning, tool_calls, _finish_reason) =
+            agent.process_response(response).await.unwrap();
 
         assert_eq!(content, "");
         assert_eq!(reasoning, "need tool");
@@ -5304,5 +5497,177 @@ mod tests {
             .await
             .unwrap_err();
         assert!(err.to_string().contains("boom"));
+    }
+
+    // ── T2: interrupt aborts the in-flight request ─────────────────────────
+
+    #[tokio::test]
+    async fn call_with_loop_timeout_aborts_on_interrupt() {
+        let agent = test_agent_with_request_timeout(30);
+        agent.interrupt_flag.trigger();
+        let err = agent
+            .call_with_loop_timeout(async {
+                // Long future — must be aborted by the interrupt branch, not
+                // by the 30s budget.
+                tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                Ok::<_, crate::error::Error>("too slow".to_string())
+            })
+            .await
+            .unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("Interrupted"), "got: {msg}");
+        assert!(msg.contains("aborted"), "got: {msg}");
+    }
+
+    #[tokio::test]
+    async fn call_with_loop_timeout_untouched_when_flag_clear() {
+        let agent = test_agent_with_request_timeout(5);
+        let out = agent
+            .call_with_loop_timeout(async { Ok::<_, crate::error::Error>("ok".to_string()) })
+            .await
+            .unwrap();
+        assert_eq!(out, "ok");
+    }
+
+    // ── T1: finish_reason plumbing through process_stream ──────────────────
+
+    #[tokio::test]
+    async fn process_stream_captures_finish_reason() {
+        let agent = test_agent_with_request_timeout(5);
+        use crate::agent::model_client::StreamChunk;
+
+        let chunks: Vec<std::result::Result<StreamChunk, crate::error::Error>> = vec![
+            Ok(StreamChunk::new(
+                Some("partial answer ".to_string()),
+                None,
+                None,
+            )),
+            Ok(StreamChunk {
+                content: Some("cut off".to_string()),
+                reasoning: None,
+                tool_calls: None,
+                extra_content: None,
+                usage: None,
+                finish_reason: Some("length".to_string()),
+            }),
+        ];
+        let stream: BoxStream<'static, Result<StreamChunk>> =
+            Box::pin(futures::stream::iter(chunks));
+
+        let (text, _reasoning, tcs, _extra, finish_reason) =
+            agent.process_stream(stream).await.unwrap();
+        assert_eq!(text, "partial answer cut off");
+        assert!(tcs.is_empty());
+        assert_eq!(finish_reason.as_deref(), Some("length"));
+    }
+
+    #[tokio::test]
+    async fn process_stream_finish_reason_none_when_absent() {
+        let agent = test_agent_with_request_timeout(5);
+        use crate::agent::model_client::StreamChunk;
+
+        let chunks: Vec<std::result::Result<StreamChunk, crate::error::Error>> =
+            vec![Ok(StreamChunk::new(Some("hello".to_string()), None, None))];
+        let stream: BoxStream<'static, Result<StreamChunk>> =
+            Box::pin(futures::stream::iter(chunks));
+        let (_t, _r, _tcs, _e, finish_reason) = agent.process_stream(stream).await.unwrap();
+        assert!(finish_reason.is_none());
+    }
+
+    // ── T6: within-batch tool-call dedupe ──────────────────────────────────
+
+    #[tokio::test]
+    async fn execute_tools_dedupes_identical_batch_calls() {
+        use crate::tools::debug_helpers::EchoTool;
+
+        let config = AgentConfig::default();
+        let registry = ToolRegistry::new(Duration::from_secs(1));
+        registry.register(EchoTool).await.unwrap();
+        let db = Database::init(std::path::PathBuf::from(format!(
+            "test_db_dedupe_{}.sqlite",
+            std::process::id()
+        )))
+        .unwrap();
+        let agent = OperantAgent::new(
+            config,
+            Box::new(crate::agent::clients::openai::OpenAIModelClient::new(
+                crate::client::OpenAIClient::new(crate::client::ClientConfig::default()),
+            )),
+            registry,
+            Arc::new(db),
+        );
+
+        let mk = |id: &str, args: &str| ToolCall {
+            id: id.to_string(),
+            function: crate::client::ToolCallFunction {
+                name: "echo".to_string(),
+                arguments: args.to_string(),
+            },
+        };
+        // Three calls: two identical + one different. The duplicate must be
+        // skipped with a synthetic result; ordering preserved.
+        let results = agent
+            .execute_tools(vec![
+                mk("c1", r#"{"message":"hi"}"#),
+                mk("c2", r#"{"message":"hi"}"#),
+                mk("c3", r#"{"message":"bye"}"#),
+            ])
+            .await
+            .unwrap();
+        assert_eq!(results.len(), 3);
+        assert!(
+            results[0].success,
+            "first occurrence executes: {:?}",
+            results[0]
+        );
+        let dup_err = results[1].error.as_deref().unwrap_or_default();
+        assert!(
+            dup_err.contains("Duplicate tool call"),
+            "duplicate must be skipped: {:?}",
+            results[1]
+        );
+        assert!(
+            results[2].success,
+            "different args still execute: {:?}",
+            results[2]
+        );
+    }
+
+    #[tokio::test]
+    async fn execute_tools_does_not_dedupe_different_args() {
+        use crate::tools::debug_helpers::EchoTool;
+
+        let config = AgentConfig::default();
+        let registry = ToolRegistry::new(Duration::from_secs(1));
+        registry.register(EchoTool).await.unwrap();
+        let db = Database::init(std::path::PathBuf::from(format!(
+            "test_db_nodedupe_{}.sqlite",
+            std::process::id()
+        )))
+        .unwrap();
+        let agent = OperantAgent::new(
+            config,
+            Box::new(crate::agent::clients::openai::OpenAIModelClient::new(
+                crate::client::OpenAIClient::new(crate::client::ClientConfig::default()),
+            )),
+            registry,
+            Arc::new(db),
+        );
+        let mk = |id: &str, args: &str| ToolCall {
+            id: id.to_string(),
+            function: crate::client::ToolCallFunction {
+                name: "echo".to_string(),
+                arguments: args.to_string(),
+            },
+        };
+        let results = agent
+            .execute_tools(vec![
+                mk("c1", r#"{"message":"a"}"#),
+                mk("c2", r#"{"message":"b"}"#),
+            ])
+            .await
+            .unwrap();
+        assert_eq!(results.len(), 2);
+        assert!(results[0].success && results[1].success);
     }
 }

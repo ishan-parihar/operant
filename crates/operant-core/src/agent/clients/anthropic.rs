@@ -479,11 +479,25 @@ fn parse_sse_event(
                     completion_tokens: 0,
                     total_tokens: input_tokens,
                 }),
+                finish_reason: None,
             })
         }
         "message_delta" => {
             let output_tokens = json["usage"]["output_tokens"].as_u64().unwrap_or(0) as u32;
-            (output_tokens > 0).then_some(StreamChunk {
+            // Anthropic reports the final stop_reason on message_delta
+            // (`delta.stop_reason`: end_turn / max_tokens / stop_sequence / ...).
+            // Map max_tokens → "length" so the loop's truncation heuristics
+            // treat it like an OpenAI-compatible length stop (T1 parity).
+            let stop_reason = json["delta"]["stop_reason"].as_str().map(|s| {
+                if s == "max_tokens" {
+                    "length".to_string()
+                } else if s == "end_turn" {
+                    "stop".to_string()
+                } else {
+                    s.to_string()
+                }
+            });
+            (output_tokens > 0 || stop_reason.is_some()).then_some(StreamChunk {
                 content: None,
                 reasoning: None,
                 tool_calls: None,
@@ -493,6 +507,7 @@ fn parse_sse_event(
                     completion_tokens: output_tokens,
                     total_tokens: output_tokens,
                 }),
+                finish_reason: stop_reason,
             })
         }
         _ => None,

@@ -99,6 +99,7 @@ impl ModelClient for OpenAIModelClient {
                     let reasoning = choice.and_then(|c| c.delta.reasoning_content.clone());
                     let tool_calls = extract_tool_calls_from_stream_event(&event, state);
                     let extra_content = choice.and_then(|c| c.delta.extra_content.clone());
+                    let finish_reason = choice.and_then(|c| c.finish_reason.clone());
 
                     Ok(StreamChunk {
                         content,
@@ -106,6 +107,7 @@ impl ModelClient for OpenAIModelClient {
                         tool_calls,
                         extra_content,
                         usage: event.usage,
+                        finish_reason,
                     })
                 }
                 Err(e) => Err(e),
