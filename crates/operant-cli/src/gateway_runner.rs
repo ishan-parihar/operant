@@ -309,11 +309,10 @@ impl MessageHandler for GatewayMessageHandler {
                     .agent
                     .db()
                     .save_message(&session_id, "user", &user_content, &now);
-                Ok(OutgoingMessage::new(
-                    &message.channel_id,
-                    format!("Error: {}", e),
+                Ok(
+                    OutgoingMessage::new(&message.channel_id, format!("Error: {}", e))
+                        .with_thread_id(message.thread_id),
                 )
-                .with_thread_id(message.thread_id))
             }
         }
     }
@@ -788,6 +787,18 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
         }
     }
 
+    /// True when a `Content` event is an agent-emitted meta-notice rather
+    /// than model-generated prose. These are surfaced to the user (never
+    /// filtered out) but as their OWN small message — they must not glue
+    /// into the active writing block and turn the first message into a
+    /// dumping ground.
+    fn is_agent_meta_notice(text: &str) -> bool {
+        text.starts_with("Empty assistant response — retrying")
+            || text.starts_with("↻ Response truncated — requesting continuation")
+            || text.starts_with("⚠ The model's thinking phase may have exceeded")
+            || (text.starts_with("⚠ Tool '") && text.contains("identical arguments"))
+    }
+
     // Spawn tool progress event receiver — appends tool calls to a single
     // chronological message by editing in-place. This gives users a clean
     // single-message timeline of all tool calls (like the operant-agent does).
@@ -826,26 +837,31 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                     let line = tool_preview_line(&name, &arguments);
                     let key = (platform.clone(), channel_id.clone());
 
-                    // When a stream message is already active (the model
-                    // emitted a preamble before calling tools), append the
-                    // tool line to the SAME message so the user sees one
-                    // chronological working message instead of a dangling
-                    // partial sentence plus separate tool spam. The final
-                    // answer then completes that same message via the Done
-                    // edit. (Fixes "stream cut off before the sentence
-                    // formed" when the model pivots to tools mid-sentence.)
-                    if stream_msg_id.is_some() {
-                        stream_text.push_str(&format!("\n{}", line));
-                        let body = stream_text.clone();
-                        let msg = OutgoingMessage::new(&channel_id, &body)
-                            .no_markdown()
-                            .with_thread_id(thread_id);
-                        if let Some(ref msg_id) = stream_msg_id {
+                    // Segment break (hermes `on_segment_break` parity): when
+                    // the model pivots to tools, FINALIZE the active stream
+                    // message with its complete preamble text and reset the
+                    // stream state. Tool progress then lives in its own
+                    // message(s), and any post-tool output starts a FRESH
+                    // message — nothing piles into the first writing block.
+                    if let Some(ref msg_id) = stream_msg_id {
+                        if !stream_text.is_empty() {
+                            let msg = OutgoingMessage::new(&channel_id, &stream_text)
+                                .with_thread_id(thread_id);
                             let _ = gw_for_events
                                 .edit_message(&platform, &channel_id, msg_id, msg)
                                 .await;
                         }
-                    } else if let Some((msg_id, lines)) = progress_msgs.get_mut(&key) {
+                        stream_text.clear();
+                        stream_msg_id = None;
+                        // The finalized preamble is NOT the final answer —
+                        // drop the dedup marker so the dispatch loop still
+                        // delivers the real final response (a later Content
+                        // block re-inserts the marker when it streams).
+                        let mut map = stream_delivery_for_events.lock().await;
+                        map.remove(&(platform.clone(), channel_id.clone()));
+                    }
+
+                    if let Some((msg_id, lines)) = progress_msgs.get_mut(&key) {
                         // Append line to existing chronological message
                         lines.push(line);
                         let body = lines.join("\n");
@@ -897,34 +913,64 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                     }
                 }
                 AgentEvent::Content { text } => {
-                    // Streaming progressive edit (iter-100 — closes Bug #12).
-                    // Accumulate text and edit the message in-place every
-                    // 500ms so the user sees tokens as they arrive.
-                    stream_text.push_str(&text);
-                    // Debounce: only edit if 500ms have passed since the last edit.
-                    if last_edit_time.elapsed() > std::time::Duration::from_millis(500) {
-                        last_edit_time = std::time::Instant::now();
-                        let msg =
-                            OutgoingMessage::new(&channel_id, &stream_text).with_thread_id(thread_id);
+                    // Agent-emitted meta-notices (empty-response retries,
+                    // truncation continuations, thinking timeouts, identical
+                    // tool-call warnings) arrive as Content events. They must
+                    // stay VISIBLE (never filtered out) but must never glue
+                    // into the active writing block: finalize the current
+                    // block, send the notice as its own small message, and
+                    // reset the stream so the next real content starts fresh.
+                    if is_agent_meta_notice(&text) {
                         if let Some(ref msg_id) = stream_msg_id {
-                            let _ = gw_for_events
-                                .edit_message(&platform, &channel_id, msg_id, msg)
-                                .await;
-                        } else {
-                            // First chunk — send a new message and store the id.
-                            match gw_for_events.send_message_return_id(&platform, msg).await {
-                                Ok(msg_id) => {
-                                    stream_msg_id = Some(msg_id.clone());
-                                    // Record delivery so the dispatch loop
-                                    // skips the duplicate final send.
-                                    let mut map = stream_delivery_for_events.lock().await;
-                                    map.insert((platform.clone(), channel_id.clone()), msg_id);
-                                }
-                                Err(e) => {
-                                    tracing::warn!(
-                                        error = %redact_err(&e),
-                                        "Failed to send first stream chunk"
-                                    );
+                            if !stream_text.is_empty() {
+                                let msg = OutgoingMessage::new(&channel_id, &stream_text)
+                                    .with_thread_id(thread_id);
+                                let _ = gw_for_events
+                                    .edit_message(&platform, &channel_id, msg_id, msg)
+                                    .await;
+                            }
+                            stream_text.clear();
+                            stream_msg_id = None;
+                        }
+                        let notice =
+                            OutgoingMessage::new(&channel_id, &text).with_thread_id(thread_id);
+                        let _ = gw_for_events.send_to_platform(&platform, notice).await;
+                    } else {
+                        // Streaming progressive edit (iter-100 — closes Bug #12).
+                        // Accumulate text and edit the message in-place every
+                        // 500ms so the user sees tokens as they arrive. Each
+                        // writing block (iteration) owns its own message: the
+                        // block is finalized on IterationComplete and the next
+                        // block starts a fresh message, so post-tool output and
+                        // thinking between tool calls arrive as separate
+                        // chronological messages instead of piling into the
+                        // first one.
+                        stream_text.push_str(&text);
+                        // Debounce: only edit if 500ms have passed since the last edit.
+                        if last_edit_time.elapsed() > std::time::Duration::from_millis(500) {
+                            last_edit_time = std::time::Instant::now();
+                            let msg = OutgoingMessage::new(&channel_id, &stream_text)
+                                .with_thread_id(thread_id);
+                            if let Some(ref msg_id) = stream_msg_id {
+                                let _ = gw_for_events
+                                    .edit_message(&platform, &channel_id, msg_id, msg)
+                                    .await;
+                            } else {
+                                // First chunk — send a new message and store the id.
+                                match gw_for_events.send_message_return_id(&platform, msg).await {
+                                    Ok(msg_id) => {
+                                        stream_msg_id = Some(msg_id.clone());
+                                        // Record delivery so the dispatch loop
+                                        // skips the duplicate final send.
+                                        let mut map = stream_delivery_for_events.lock().await;
+                                        map.insert((platform.clone(), channel_id.clone()), msg_id);
+                                    }
+                                    Err(e) => {
+                                        tracing::warn!(
+                                            error = %redact_err(&e),
+                                            "Failed to send first stream chunk"
+                                        );
+                                    }
                                 }
                             }
                         }
@@ -939,11 +985,14 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                     );
                 }
                 AgentEvent::Done { .. } => {
-                    // Final message — do a final edit with the complete text.
+                    // Final message — do a final edit with the complete text
+                    // of the last writing block. If the last block never got
+                    // a message (debounce race: content arrived, then Done
+                    // fired within 500ms), send it as a fresh message now.
                     if !stream_text.is_empty() {
+                        let msg = OutgoingMessage::new(&channel_id, &stream_text)
+                            .with_thread_id(thread_id);
                         if let Some(ref msg_id) = stream_msg_id {
-                            let msg = OutgoingMessage::new(&channel_id, &stream_text)
-                                .with_thread_id(thread_id);
                             // If the final edit fails (e.g. the accumulated
                             // stream exceeded Telegram's 4096-char edit limit
                             // after tool lines were merged in), drop the
@@ -958,16 +1007,51 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                                 let mut map = stream_delivery_for_events.lock().await;
                                 map.remove(&(platform.clone(), channel_id.clone()));
                             }
+                        } else {
+                            // No message yet — deliver the final block as a
+                            // fresh message.
+                            match gw_for_events.send_message_return_id(&platform, msg).await {
+                                Ok(msg_id) => {
+                                    let mut map = stream_delivery_for_events.lock().await;
+                                    map.insert((platform.clone(), channel_id.clone()), msg_id);
+                                }
+                                Err(e) => {
+                                    tracing::warn!(
+                                        error = %redact_err(&e),
+                                        "Failed to send final stream block"
+                                    );
+                                }
+                            }
                         }
                         // Reset streaming state for the next turn.
                         stream_text.clear();
                         stream_msg_id = None;
                     }
                 }
-                AgentEvent::Usage { .. } | AgentEvent::IterationComplete { .. } => {
-                    // Usage + iteration events are not surfaced to the user
-                    // in gateway mode. The TUI uses them for /stats and the
-                    // iter-N pill; the gateway doesn't have those overlays.
+                AgentEvent::IterationComplete { .. } => {
+                    // A writing block ended. Finalize the block's message
+                    // with its complete text, then reset the stream state so
+                    // the NEXT block (post-tool output, thinking between
+                    // tool calls) creates a NEW message. The stream content
+                    // itself is preserved — this is purely a Telegram
+                    // message-boundary decision, keeping the chronological
+                    // order the agent produced.
+                    if !stream_text.is_empty() {
+                        if let Some(ref msg_id) = stream_msg_id {
+                            let msg = OutgoingMessage::new(&channel_id, &stream_text)
+                                .with_thread_id(thread_id);
+                            let _ = gw_for_events
+                                .edit_message(&platform, &channel_id, msg_id, msg)
+                                .await;
+                        }
+                        stream_text.clear();
+                        stream_msg_id = None;
+                    }
+                }
+                AgentEvent::Usage { .. } => {
+                    // Usage events are not surfaced to the user in gateway
+                    // mode. The TUI uses them for /stats; the gateway
+                    // doesn't have those overlays.
                 }
                 AgentEvent::Error { error } => {
                     // Surface errors to the user.
@@ -976,9 +1060,12 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                         .no_markdown()
                         .with_thread_id(thread_id);
                     let _ = gw_for_events.send_to_platform(&platform, msg).await;
-                    // Reset streaming state.
+                    // Reset streaming state + drop the dedup marker so the
+                    // dispatch loop isn't left suppressing a future send.
                     stream_text.clear();
                     stream_msg_id = None;
+                    let mut map = stream_delivery_for_events.lock().await;
+                    map.remove(&(platform.clone(), channel_id.clone()));
                 }
                 AgentEvent::ToolPermissionRequest { .. } => {
                     // Permission requests are drained by the dedicated
@@ -1126,7 +1213,9 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
         while let Some(req) = uq_rx.recv().await {
             tracing::info!(question = %req.question, "User question received from clarify tool");
             // Surface the question to the user.
-            if let Some((platform, channel_id, thread_id)) = current_channel_for_uq.lock().await.as_ref() {
+            if let Some((platform, channel_id, thread_id)) =
+                current_channel_for_uq.lock().await.as_ref()
+            {
                 let body = if let Some(ref choices) = req.choices {
                     format!(
                         "❓ {}\n\n{}",
@@ -1344,7 +1433,10 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                         interval.tick().await;
                         loop {
                             interval.tick().await;
-                            if gw.send_typing(&typing_platform, &ch, typing_thread_id).is_err() {
+                            if gw
+                                .send_typing(&typing_platform, &ch, typing_thread_id)
+                                .is_err()
+                            {
                                 break;
                             }
                         }
@@ -1412,7 +1504,8 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                         // (Kills the double-reply bug on gateway turns.)
                         let streamed = {
                             let mut map = stream_delivery_for_dispatch.lock().await;
-                            map.remove(&(platform.clone(), channel_id.clone())).is_some()
+                            map.remove(&(platform.clone(), channel_id.clone()))
+                                .is_some()
                         };
                         if streamed {
                             tracing::info!(

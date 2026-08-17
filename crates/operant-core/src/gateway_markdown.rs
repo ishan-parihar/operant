@@ -12,6 +12,145 @@ use regex::Regex;
 use std::sync::LazyLock;
 
 // ---------------------------------------------------------------------------
+// GFM table → bullets conversion (hermes parity)
+// ---------------------------------------------------------------------------
+
+/// Matches a GFM table delimiter row: optional outer pipes, cells of dashes
+/// (with optional alignment colons) separated by '|'.
+/// Requires at least one internal '|' so lone '---' rules are NOT matched.
+static TABLE_SEPARATOR_RE: LazyLock<Regex> =
+    LazyLock::new(|| rx(r"^\s*\|?\s*:?-+:?\s*(?:\|\s*:?-+:?\s*){1,}\|?\s*$"));
+
+/// Return true if *line* could plausibly be a table data row.
+fn is_table_row(line: &str) -> bool {
+    let stripped = line.trim();
+    !stripped.is_empty() && stripped.contains('|')
+}
+
+/// Split a GFM table row into trimmed cell values (`| a | b | c |` →
+/// `["a", "b", "c"]`).
+fn split_table_row(line: &str) -> Vec<String> {
+    let mut s = line.trim();
+    if let Some(rest) = s.strip_prefix('|') {
+        s = rest;
+    }
+    if let Some(rest) = s.strip_suffix('|') {
+        s = rest;
+    }
+    s.split('|').map(|cell| cell.trim().to_string()).collect()
+}
+
+/// Render a detected GFM table as bold-heading + bullet groups.
+///
+/// Uses the same alignment logic as hermes' Telegram renderer: for
+/// non-row-label tables, `data_cells = cells` (the full row) and the bullet
+/// whose value duplicates the heading is skipped — this keeps
+/// header→value alignment correct for both `| A | B |` and `| label | A | B |`
+/// shaped tables.
+fn render_table_block(table_block: &[String]) -> String {
+    if table_block.len() < 3 {
+        return table_block.join("\n");
+    }
+    let headers = split_table_row(&table_block[0]);
+    if headers.len() < 2 {
+        return table_block.join("\n");
+    }
+    let first_data_row = if table_block.len() > 2 {
+        split_table_row(&table_block[2])
+    } else {
+        Vec::new()
+    };
+    let has_row_label_col = first_data_row.len() == headers.len() + 1;
+
+    let mut rendered_groups: Vec<String> = Vec::new();
+    for (index, row) in table_block.iter().skip(2).enumerate() {
+        let mut cells = split_table_row(row);
+        let heading: String;
+        let data_cells: Vec<String>;
+        if has_row_label_col {
+            heading = if !cells.is_empty() && !cells[0].is_empty() {
+                cells[0].clone()
+            } else {
+                format!("Row {}", index + 1)
+            };
+            data_cells = cells.split_off(1);
+        } else {
+            heading = cells
+                .iter()
+                .find(|cell| !cell.is_empty())
+                .cloned()
+                .unwrap_or_else(|| format!("Row {}", index + 1));
+            data_cells = cells;
+        }
+
+        let mut data_cells = data_cells;
+        if data_cells.len() < headers.len() {
+            data_cells.resize(headers.len(), String::new());
+        } else if data_cells.len() > headers.len() {
+            data_cells.truncate(headers.len());
+        }
+
+        let mut bullets: Vec<String> = Vec::new();
+        for (header, value) in headers.iter().zip(data_cells.iter()) {
+            if !has_row_label_col && *value == heading {
+                continue;
+            }
+            bullets.push(format!("• {}: {}", header, value));
+        }
+
+        let mut group_lines = vec![format!("**{}**", heading)];
+        group_lines.extend(bullets);
+        rendered_groups.push(group_lines.join("\n"));
+    }
+    rendered_groups.join("\n\n")
+}
+
+/// Rewrite GFM pipe tables into bold-heading + bullet groups.
+///
+/// Tables inside fenced code blocks are left alone. Runs BEFORE the
+/// placeholder extraction / HTML escaping so the `**heading**` markers it
+/// emits flow through the regular bold conversion and pipes never reach
+/// Telegram raw.
+fn convert_table_to_bullets(text: &str) -> String {
+    if !text.contains('|') || !text.contains('-') {
+        return text.to_string();
+    }
+    let lines: Vec<&str> = text.split('\n').collect();
+    let mut out: Vec<String> = Vec::new();
+    let mut in_fence = false;
+    let mut i = 0;
+    while i < lines.len() {
+        let line = lines[i];
+        let stripped = line.trim_start();
+        if stripped.starts_with("```") {
+            in_fence = !in_fence;
+            out.push(line.to_string());
+            i += 1;
+            continue;
+        }
+        if in_fence {
+            out.push(line.to_string());
+            i += 1;
+            continue;
+        }
+        if line.contains('|') && i + 1 < lines.len() && TABLE_SEPARATOR_RE.is_match(lines[i + 1]) {
+            let mut table_block = vec![line.to_string(), lines[i + 1].to_string()];
+            let mut j = i + 2;
+            while j < lines.len() && is_table_row(lines[j]) {
+                table_block.push(lines[j].to_string());
+                j += 1;
+            }
+            out.push(render_table_block(&table_block));
+            i = j;
+            continue;
+        }
+        out.push(line.to_string());
+        i += 1;
+    }
+    out.join("\n")
+}
+
+// ---------------------------------------------------------------------------
 // Placeholder system
 // ---------------------------------------------------------------------------
 
@@ -237,10 +376,16 @@ pub fn markdown_to_telegram_html(text: &str) -> String {
         return String::new();
     }
 
+    // 0. Convert GFM pipe tables to bold-heading + bullet groups FIRST
+    //    (fence-aware, hermes parity) so the emitted `**heading**` markers
+    //    flow through the bold pass below and raw `|` pipes never reach
+    //    Telegram.
+    let table_text = convert_table_to_bullets(text);
+
     // 1. Extract and protect code blocks and inline code BEFORE HTML escaping
     //    so that characters like `"` inside fences are preserved verbatim.
     let mut conv = MarkdownConverter::new();
-    let no_blocks = conv.extract_code_blocks(text);
+    let no_blocks = conv.extract_code_blocks(&table_text);
     let no_code = conv.extract_inline_code(&no_blocks);
 
     // 2. Escape HTML special characters in the remaining (non-code) body.
@@ -371,6 +516,51 @@ mod tests {
         let input = "**bold** and *italic* and `code`";
         let expected = "<b>bold</b> and <i>italic</i> and <code>code</code>";
         assert_eq!(markdown_to_telegram_html(input), expected);
+    }
+
+    #[test]
+    fn test_table_to_bullets() {
+        // The exact shape from the live ✅ report — header row + separator +
+        // two data rows. Renders as bold heading + bullet groups.
+        let input = "| Component | Status | Details |\n|-----------|--------|---------|\n| Core Binary | ✅ | operant 0.2.0 |\n| Gateway | ✅ | Running |";
+        let expected = "<b>Core Binary</b>\n• Status: ✅\n• Details: operant 0.2.0\n\n<b>Gateway</b>\n• Status: ✅\n• Details: Running";
+        assert_eq!(markdown_to_telegram_html(input), expected);
+    }
+
+    #[test]
+    fn test_table_with_row_labels() {
+        // Row-label shape: first cell is the heading, the rest are values.
+        let input =
+            "| Metric | Value |\n|--------|-------|\n| Latency | 12ms |\n| Uptime | 99.9% |";
+        let expected = "<b>Latency</b>\n• Value: 12ms\n\n<b>Uptime</b>\n• Value: 99.9%";
+        assert_eq!(markdown_to_telegram_html(input), expected);
+    }
+
+    #[test]
+    fn test_table_inside_code_block_untouched() {
+        // Tables inside fenced code blocks must be left alone.
+        let input = "```\n| A | B |\n|---|---|\n| 1 | 2 |\n```";
+        let result = markdown_to_telegram_html(input);
+        assert!(
+            result.contains("<pre>| A | B |"),
+            "table inside fence must survive: {result}"
+        );
+    }
+
+    #[test]
+    fn test_table_with_bold_heading_markdown() {
+        // The `**heading**` markers emitted by the table renderer flow
+        // through the bold pass.
+        let input = "| Component | Status |\n|-----------|--------|\n| Core | ✅ |";
+        let result = markdown_to_telegram_html(input);
+        assert!(
+            result.contains("<b>Core</b>"),
+            "heading must be bold: {result}"
+        );
+        assert!(
+            result.contains("• Status: ✅"),
+            "bullet must be present: {result}"
+        );
     }
 }
 

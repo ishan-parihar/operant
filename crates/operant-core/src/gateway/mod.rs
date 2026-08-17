@@ -1112,7 +1112,12 @@ impl Gateway {
     }
 
     /// Send a typing indicator to a platform channel
-    pub fn send_typing(&self, platform: &str, channel_id: &str, thread_id: Option<i64>) -> Result<()> {
+    pub fn send_typing(
+        &self,
+        platform: &str,
+        channel_id: &str,
+        thread_id: Option<i64>,
+    ) -> Result<()> {
         if let Some(adapter) = self.adapters.get(platform) {
             adapter.send_typing(channel_id, thread_id)?;
         }
