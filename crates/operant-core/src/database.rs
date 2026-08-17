@@ -1581,6 +1581,93 @@ impl Database {
     // === Session Management ===
 
     /// Update the title of a session.
+    /// Durable session activity heartbeat (R6 — hermes `session_activity.py`
+    /// parity). Records an observation-only activity stamp into
+    /// `session_events` (event_type='activity') with a bounded description
+    /// and provenance. The caller (agent loop / gateway) is responsible for
+    /// the ≥60s cadence throttle — this method writes unconditionally, and
+    /// `force` bypasses nothing since the throttle lives on the caller.
+    ///
+    /// Returns the RFC3339 timestamp written, for diagnostics.
+    pub fn record_session_activity(
+        &self,
+        session_id: &str,
+        description: &str,
+        provenance: &str,
+    ) -> Result<String> {
+        let now = chrono::Utc::now().to_rfc3339();
+        let bounded = Self::bound_activity_description(description);
+        let data = serde_json::json!({
+            "description": bounded,
+            "provenance": provenance,
+        });
+        let conn = self.lock_conn()?;
+        conn.execute(
+            "INSERT INTO session_events (session_id, event_type, event_data, created_at)
+             VALUES (?1, 'activity', ?2, ?3)",
+            params![session_id, data.to_string(), now],
+        )
+        .map_err(|e| Error::Agent(format!("Failed to record session activity: {}", e)))?;
+        Ok(now)
+    }
+
+    /// Clamp free-form activity text to the shared description budget
+    /// (hermes `bound_activity_description` parity: 120 chars).
+    pub fn bound_activity_description(description: &str) -> String {
+        const MAX: usize = 120;
+        let text = description.trim();
+        if text.chars().count() <= MAX {
+            text.to_string()
+        } else {
+            let mut chars = text.chars();
+            let truncated: String = chars.by_ref().take(MAX - 1).collect();
+            format!("{truncated}…")
+        }
+    }
+
+    /// Read the most recent activity stamp for a session (activity liveness
+    /// visibility — gateway/session health). Returns (timestamp, description,
+    /// provenance) or None when the session never stamped activity.
+    pub fn latest_session_activity(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<(String, String, String)>> {
+        let conn = self.lock_conn()?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT created_at, event_data FROM session_events
+                 WHERE session_id = ?1 AND event_type = 'activity'
+                 ORDER BY created_at DESC LIMIT 1",
+            )
+            .map_err(|e| Error::Agent(format!("Failed to prepare activity query: {}", e)))?;
+        let mut rows = stmt
+            .query_map(params![session_id], |row| {
+                let created: String = row.get(0)?;
+                let data: String = row.get(1)?;
+                Ok((created, data))
+            })
+            .map_err(|e| Error::Agent(format!("Failed to query activity: {}", e)))?;
+        if let Some(row) = rows.next() {
+            let (created, data) =
+                row.map_err(|e| Error::Agent(format!("Failed to read activity row: {}", e)))?;
+            let parsed: serde_json::Value =
+                serde_json::from_str(&data).unwrap_or_else(|_| serde_json::json!({}));
+            let desc = parsed
+                .get("description")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let prov = parsed
+                .get("provenance")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown")
+                .to_string();
+            Ok(Some((created, desc, prov)))
+        } else {
+            Ok(None)
+        }
+    }
+
     pub fn update_session_title(&self, session_id: &str, title: &str) -> Result<()> {
         let now = chrono::Utc::now().to_rfc3339();
         let conn = self.lock_conn()?;
@@ -3461,5 +3548,53 @@ mod tests {
             s.title.as_deref(),
             Some("Write a Python script to parse the CSV")
         );
+    }
+
+    // ---- R6: durable session activity heartbeat ----
+
+    #[test]
+    fn session_activity_stamps_and_reads_back() {
+        let db = test_db();
+        db.record_session_activity("test-session", "turn complete", "agent.loop")
+            .unwrap();
+        let latest = db.latest_session_activity("test-session").unwrap();
+        let (ts, desc, prov) = latest.expect("activity stamp must exist");
+        assert!(!ts.is_empty());
+        assert_eq!(desc, "turn complete");
+        assert_eq!(prov, "agent.loop");
+    }
+
+    #[test]
+    fn session_activity_returns_latest_stamp() {
+        let db = test_db();
+        db.record_session_activity("test-session", "first", "agent.loop")
+            .unwrap();
+        db.record_session_activity("test-session", "second", "agent.loop")
+            .unwrap();
+        let (_, desc, _) = db
+            .latest_session_activity("test-session")
+            .unwrap()
+            .expect("activity stamp must exist");
+        assert_eq!(desc, "second");
+    }
+
+    #[test]
+    fn session_activity_missing_session_returns_none() {
+        let db = test_db();
+        assert!(
+            db.latest_session_activity("ghost-session")
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn activity_description_is_bounded() {
+        let long = "x".repeat(500);
+        let bounded = Database::bound_activity_description(&long);
+        assert!(bounded.chars().count() <= 120);
+        assert!(bounded.ends_with('…'));
+        // Short text passes through untouched.
+        assert_eq!(Database::bound_activity_description("  hi  "), "hi");
     }
 }

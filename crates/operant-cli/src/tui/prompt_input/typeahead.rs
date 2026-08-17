@@ -165,7 +165,9 @@ fn compute_name_completions(
 /// Register the installed skill + bundle names for `/skill <Tab>` typeahead.
 /// Called by the app whenever the skills directory is (re)scanned.
 pub fn register_typeahead_names(skill_names: Vec<String>, bundle_names: Vec<String>) {
-    let _guard = SKILL_SNAPSHOT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = SKILL_SNAPSHOT_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     set_typeahead_names(skill_names, bundle_names);
 }
 

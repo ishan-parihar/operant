@@ -303,6 +303,11 @@ pub struct OperantAgent {
     /// model calls the same tool with identical args repeatedly. Reset at
     /// the start of each user turn.
     tool_guardrails: std::sync::Mutex<crate::tool_guardrails::ToolGuardrailTracker>,
+    /// R6: monotonic-clock timestamp (seconds) of the last durable session
+    /// activity heartbeat write, per session id. Throttles the heartbeat to
+    /// a ≥60s cadence so the SessionDB write path is never hammered
+    /// (hermes session_activity.py parity).
+    session_activity_last_stamp: std::sync::Mutex<std::collections::HashMap<String, f64>>,
     /// Whether to record trajectories (ReAct steps + messages) for each run.
     /// When true, a trajectory JSON is saved to ~/.operant/trajectories/
     /// on run() completion. Set via AgentConfig::record_trajectories.
@@ -442,6 +447,7 @@ impl OperantAgent {
             tool_guardrails: std::sync::Mutex::new(
                 crate::tool_guardrails::ToolGuardrailTracker::new(),
             ),
+            session_activity_last_stamp: std::sync::Mutex::new(std::collections::HashMap::new()),
             record_trajectories: false,
             session_cost_usd: Arc::new(std::sync::RwLock::new(0.0)),
             observer: None,
@@ -498,6 +504,7 @@ impl OperantAgent {
             tool_guardrails: std::sync::Mutex::new(
                 crate::tool_guardrails::ToolGuardrailTracker::new(),
             ),
+            session_activity_last_stamp: std::sync::Mutex::new(std::collections::HashMap::new()),
             record_trajectories: false,
             session_cost_usd: Arc::new(std::sync::RwLock::new(0.0)),
             observer: None,
@@ -527,6 +534,40 @@ impl OperantAgent {
     pub fn with_observer(mut self, observer: Arc<dyn Observer>) -> Self {
         self.observer = Some(observer);
         self
+    }
+
+    /// Durable session activity heartbeat (R6 — hermes `session_activity.py`
+    /// parity). Writes an observation-only activity stamp into
+    /// `session_events` throttled to a ≥60s cadence per session, so the
+    /// SessionDB write path is never hammered by a long agentic run.
+    /// `force = true` bypasses the throttle (terminal stamps / shutdown).
+    pub async fn touch_session_activity(&self, session_id: &str, description: &str) {
+        const HEARTBEAT_MIN_INTERVAL_SECONDS: f64 = 60.0;
+        let now_mono = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs_f64();
+
+        let due = {
+            let mut guard = self
+                .session_activity_last_stamp
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            let last = guard.get(session_id).copied().unwrap_or(0.0);
+            let due = now_mono - last >= HEARTBEAT_MIN_INTERVAL_SECONDS;
+            if due {
+                guard.insert(session_id.to_string(), now_mono);
+            }
+            due
+        };
+
+        if due
+            && let Ok(ts) =
+                self.database
+                    .record_session_activity(session_id, description, "agent.loop")
+        {
+            tracing::debug!(session_id, ts, "session activity heartbeat");
+        }
     }
 
     /// Share an external runtime-metrics registry with the agent loop (and
@@ -1289,6 +1330,10 @@ impl OperantAgent {
         }
         let mut iteration = 0;
         let mut total_tool_calls: usize = 0;
+        // Turn-level wall clock for the R5 accounting line (the observer's
+        // AgentEnd duration; the per-iteration `llm_start` only covers the
+        // model call).
+        let turn_start = std::time::Instant::now();
 
         // ── Memory provider: on_turn_start ──────────────────────────────
         // Notify the memory provider of the new turn so it can do per-turn
@@ -1869,6 +1914,13 @@ impl OperantAgent {
                         })
                         .await;
 
+                        // R6 — durable session activity heartbeat (hermes
+                        // session_activity.py parity): stamp the session as
+                        // active so gateway/session liveness views see work
+                        // even when the session never sends a message.
+                        self.touch_session_activity(&session_id, "turn complete")
+                            .await;
+
                         // Memory provider: sync_turn + queue_prefetch hooks.
                         // sync_turn persists the completed turn to graph memory
                         // (entity extraction + auto-wiring). queue_prefetch
@@ -1915,6 +1967,20 @@ impl OperantAgent {
                                         .with_session(&session_id),
                                 )
                                 .await;
+                        }
+
+                        // Emit AgentEnd observer event (R5 turn-summary feed —
+                        // the observer prints the per-turn accounting line;
+                        // the grace/budget-exhausted path already emits this).
+                        if let Some(ref obs) = self.observer {
+                            let cost = self.session_cost_usd.read().map(|c| *c).unwrap_or(0.0);
+                            obs.record_event(&ObserverEvent::AgentEnd {
+                                provider: self.config.model.clone(),
+                                model: self.model(),
+                                duration: turn_start.elapsed(),
+                                tokens_used: None,
+                                cost_usd: if cost > 0.0 { Some(cost) } else { None },
+                            });
                         }
 
                         // ── Eager LCM ingest (hermes context_engine parity) ──

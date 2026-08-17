@@ -5,17 +5,21 @@
 //! was deleted in iter-126 (ponytail audit Tier-1 cut). Only `reload_dotenv`
 //! survives because `gateway_runner.rs` calls it before each agent turn.
 //!
-//! Reads the file at `HERMES_ENV_FILE` (or `.env` in the working directory)
-//! and sets each `KEY=VALUE` pair into the process environment, enabling
-//! credential rotation without restarting the long-lived gateway daemon.
+//! Reads the file at `OPERANT_ENV_FILE` (legacy `HERMES_ENV_FILE` also
+//! honored for migration; or `.env` in the working directory) and sets each
+//! `KEY=VALUE` pair into the process environment, enabling credential
+//! rotation without restarting the long-lived gateway daemon.
 
 /// Reload environment variables from a `.env` file before each agent turn.
 ///
-/// Reads the file at `HERMES_ENV_FILE` (or `.env` in the working directory)
-/// and sets each `KEY=VALUE` pair into the process environment, enabling
-/// credential rotation without restarting the long-lived gateway daemon.
+/// Reads the file at `OPERANT_ENV_FILE` (legacy `HERMES_ENV_FILE` also
+/// honored for migration; or `.env` in the working directory) and sets each
+/// `KEY=VALUE` pair into the process environment, enabling credential
+/// rotation without restarting the long-lived gateway daemon.
 pub fn reload_dotenv() {
-    let path = std::env::var("HERMES_ENV_FILE").unwrap_or_else(|_| ".env".to_string());
+    let path = std::env::var("OPERANT_ENV_FILE")
+        .or_else(|_| std::env::var("HERMES_ENV_FILE"))
+        .unwrap_or_else(|_| ".env".to_string());
     let content = match std::fs::read_to_string(&path) {
         Ok(c) => c,
         Err(_) => return,

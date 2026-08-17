@@ -100,8 +100,10 @@ use operant_core::config::{
 use operant_core::mcp::McpManager;
 use operant_core::memory::MemoryManager;
 use operant_core::memory_provider::MemoryProvider;
+use operant_core::observer::{Observer, ObserverEvent, ObserverMetric};
 use operant_core::skills::SkillManager;
 use operant_core::tools::{ToolContext, ToolRegistry};
+use operant_core::turn_summary::{TurnSummaryCollector, format_turn_summary};
 use serde_json::Value;
 use tokio::sync::mpsc;
 use tracing::{Level, warn};
@@ -1782,6 +1784,56 @@ pub(crate) async fn load_memory_manager(
     }
 }
 
+/// Per-turn accounting line (R5 — hermes `agent/turn_summary.py` parity).
+/// Rides the observer feed (which already sees every tool call) and prints
+/// one dim summary line after the turn, e.g.
+/// `⋯ 12.4s · edited 2 files +18 -3 · read 4 files · ran 3 commands`.
+struct TurnSummaryObserver {
+    collector: std::sync::Mutex<TurnSummaryCollector>,
+}
+
+impl TurnSummaryObserver {
+    fn new() -> Self {
+        Self {
+            collector: std::sync::Mutex::new(TurnSummaryCollector::new()),
+        }
+    }
+}
+
+impl Observer for TurnSummaryObserver {
+    fn record_event(&self, event: &ObserverEvent) {
+        match event {
+            ObserverEvent::AgentStart { .. } => {
+                if let Ok(mut c) = self.collector.lock() {
+                    c.begin();
+                }
+            }
+            ObserverEvent::ToolCall { tool, .. } => {
+                if let Ok(mut c) = self.collector.lock() {
+                    c.record_tool(tool, "");
+                }
+            }
+            ObserverEvent::AgentEnd { duration, .. } => {
+                let line = self
+                    .collector
+                    .lock()
+                    .map(|c| format_turn_summary(c.tally(), duration.as_secs_f64()))
+                    .unwrap_or_default();
+                if !line.is_empty() {
+                    println!("{line}");
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn record_metric(&self, _metric: &ObserverMetric) {}
+
+    fn name(&self) -> &str {
+        "turn-summary"
+    }
+}
+
 async fn run_non_tui(
     config: &AppConfig,
     system_prompt: Option<&str>,
@@ -1818,6 +1870,12 @@ async fn run_non_tui(
             }
         }
     }
+
+    // R5 — per-turn accounting line: ride the observer feed so the summary
+    // prints after the one-shot run (hermes turn_summary.py parity).
+    let summary_observer: std::sync::Arc<dyn Observer> =
+        std::sync::Arc::new(TurnSummaryObserver::new());
+    let agent = agent.with_observer(summary_observer.clone());
 
     let response = agent.run(query.to_string()).await?;
     // Drain pending memory hooks (sync_turn → /observe, session/end) before
@@ -1881,6 +1939,10 @@ fn preview_tool_args(args: &str) -> Option<String> {
 async fn chat_non_tui(config: &AppConfig, system_prompt: Option<&str>) -> Result<()> {
     let mcp_manager = McpManager::new();
     let (event_tx, mut event_rx) = mpsc::channel::<AgentEvent>(256);
+    // R5 — per-turn accounting line in interactive mode: the summary
+    // observer rides the shared feed and prints after each turn.
+    let summary_observer: std::sync::Arc<dyn Observer> =
+        std::sync::Arc::new(TurnSummaryObserver::new());
     let agent = create_runtime_agent(
         config,
         &config.agent,
@@ -1890,7 +1952,8 @@ async fn chat_non_tui(config: &AppConfig, system_prompt: Option<&str>) -> Result
         &config.skills.root_dir,
         None,
     )
-    .await?;
+    .await?
+    .with_observer(summary_observer);
 
     // Spawn task to display tool events in real-time
     tokio::spawn(async move {

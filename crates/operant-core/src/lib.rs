@@ -102,6 +102,7 @@ pub mod skills_guard;
 pub mod tool_guardrails;
 pub mod tools;
 pub mod trajectory;
+pub mod turn_summary;
 pub mod user_question;
 pub mod verification;
 pub mod voice;

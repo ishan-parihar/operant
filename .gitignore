@@ -53,6 +53,8 @@ graphify-out/
 
 # Autonomous-mode runtime state
 autonomous-status.toml
+# Local runtime data (state store, stream store) created by live runs
+data/
 telegram_offset.txt
 build.log
 build*.log

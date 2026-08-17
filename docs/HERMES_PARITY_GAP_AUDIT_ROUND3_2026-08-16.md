@@ -34,8 +34,8 @@ false positives (equivalent implementation under a different name) are listed in
 
 | # | Feature | hermes source | operant status | Impact |
 |---|---------|---------------|----------------|--------|
-| R5 | **Per-turn accounting line** (post-turn "edited 2 files +18 -3 · read 4 files · ran 3 commands") | `agent/turn_summary.py` (`TurnSummaryCollector`, `format_turn_summary`) | Absent — no post-turn tally surfaced in TUI/CLI. | 🟢 Low-Med — UX |
-| R6 | **Durable session activity heartbeat** (SessionDB activity stamp, ≥30s cadence, `force_persist` on terminal stamps) | `agent/session_activity.py` | `active_sessions.rs` tracks locks with stale pruning, but no per-session persisted activity heartbeat. | 🟢 Low-Med — gateway/session liveness visibility |
+| R5 | **Per-turn accounting line** (post-turn "edited 2 files +18 -3 · read 4 files · ran 3 commands") | `agent/turn_summary.py` (`TurnSummaryCollector`, `format_turn_summary`) | ✅ Implemented (`turn_summary.rs` + `TurnSummaryObserver` in CLI, both run paths) — was absent. | 🟢 Low-Med — UX |
+| R6 | **Durable session activity heartbeat** (SessionDB activity stamp, ≥30s cadence, `force_persist` on terminal stamps) | `agent/session_activity.py` | ✅ Implemented (`touch_session_activity` in `database.rs` + agent stamp at turn end, 60s throttle) — was absent. | 🟢 Low-Med — gateway/session liveness visibility |
 | R7 | **Streaming think-block scrubber state machine** (hold partial tags at delta boundaries; flush held-back prose at EOS) | `agent/think_scrubber.py` | Operant has `OPEN_REASONING_TAGS`/`CLOSE_REASONING_TAGS` + `find_first_tag` + a `pending` buffer in `agent/mod.rs:3805` (StreamingContextScrubber port) — **stateful scrubber present**, but verify it holds partial tags across deltas (see §2). | 🟢 Low (probably covered) |
 
 ---
@@ -72,7 +72,7 @@ false positives (equivalent implementation under a different name) are listed in
    `client.chat()`/streaming in `tokio::time::timeout(request_timeout)` — the field exists but
    the loop has no per-request budget of its own. Ties directly into R2: when we add a stale
    detector, wire this field as the ceiling.
-2. **`HERMES_ENV_FILE` naming leak** (from Round 2, still present in `env_passthrough.rs`).
+2. **`HERMES_ENV_FILE` naming leak** (from Round 2) — ✅ fixed: `env_passthrough.rs` now reads `OPERANT_ENV_FILE` (with `HERMES_ENV_FILE` honored as a legacy fallback) so the agent loop carries the operant-native env-file override name.
 3. **Round-2 §3 items** (workspace doc drift in `AGENTS.md`, stale-process guard) remain open —
    infra, not loop.
 
@@ -112,5 +112,8 @@ false positives (equivalent implementation under a different name) are listed in
 | **G9** credential-file registry | ✅ Implemented (`credential_files.rs` + wired into `file_tools::validate_path`) | 4 unit tests; live: model refuses to read `~/.operant/.env` and routes to `env_probe` |
 | **G10** env-probe exposure audit | ✅ Implemented (`env_probe.rs` + registered as agent tool) | 7 unit tests; live: `env_probe` called in-loop, reports 2 exposures with names+lengths, values redacted |
 | **Fallback wiring (new)** | ✅ hermes `fallback_providers` parity: `[providers]` loaded into run path, `FallbackModelClient` + `ProviderRegistry` constructed (`create_model_client_with_fallback`) | 5 CLI tests + 1 config round-trip; live: real 401 on primary → `switching to fallback provider, to_provider: zen-alt` → request to fallback endpoint |
+| **R5** turn accounting line | ✅ Implemented (`turn_summary.rs` — verb mapping incl. `edited N files +A -B` diff extraction for `patch`, `read N files`, `ran N commands`; `TurnSummaryObserver` wired into one-shot `run` + interactive `chat_non_tui`, printed on `AgentEnd`) | 7 unit tests; live (laguna-s-2.1-free, native tools): 3-tool run → `⋯ 0.0s · edited 1 file · read 1 file · ran 1 command` then `DONE` |
+| **R6** session activity heartbeat | ✅ Implemented (`touch_session_activity` in `database.rs` — `activity` event in `session_events`; agent stamps at turn end, 60s throttle to avoid write churn) | 2 DB unit tests; live: run `sess_192cf544…` stamped `activity` at exactly turn-end epoch |
+| **G9 AFT bypass (new)** | ✅ AFT file tools (`aft_read`/`aft_write`/`aft_edit`/`aft_apply_patch`/`aft_callers`/`aft_inspect`) now route file-path args through `validate_path`, closing the G9 protected-file bypass AFT tools had (read **and** write vectors) | 5 unit tests; live: `aft_read ~/.operant/.env` → refused with the same denial message as native `file_read` |
 
-Commits: `40ebfc5a` (R1–R4 + G9/G10), `54710da9` (fallback wiring), (R4 no-effect fix).
+Commits: `40ebfc5a` (R1–R4 + G9/G10), `54710da9` (fallback wiring), `5ddac3b1` (G9 AFT bypass), `bda836fa` (typeahead flake), next (R5/R6 + env-file).
