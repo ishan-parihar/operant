@@ -189,6 +189,10 @@ pub struct OutgoingMessage {
     pub parse_markdown: bool,
     /// Reply to message ID (if any)
     pub reply_to: Option<String>,
+    /// Forum thread/topic ID (Telegram-specific; forwarded from the
+    /// incoming message so replies land in the same topic the user sent
+    /// from instead of the general chat).
+    pub thread_id: Option<i64>,
 }
 
 impl OutgoingMessage {
@@ -199,6 +203,7 @@ impl OutgoingMessage {
             content: content.into(),
             parse_markdown: true,
             reply_to: None,
+            thread_id: None,
         }
     }
 
@@ -211,6 +216,12 @@ impl OutgoingMessage {
     /// Set reply-to message ID
     pub fn with_reply_to(mut self, message_id: impl Into<String>) -> Self {
         self.reply_to = Some(message_id.into());
+        self
+    }
+
+    /// Set the forum thread/topic ID (Telegram message_thread_id).
+    pub fn with_thread_id(mut self, thread_id: Option<i64>) -> Self {
+        self.thread_id = thread_id;
         self
     }
 }
@@ -1211,6 +1222,7 @@ impl TelegramAdapter {
         channel_id: &str,
         text: &str,
         reply_to: Option<&str>,
+        thread_id: Option<i64>,
     ) -> Result<String> {
         let html = markdown_to_telegram_html(text);
         let mut body = serde_json::json!({
@@ -1221,6 +1233,9 @@ impl TelegramAdapter {
 
         if let Some(reply) = reply_to {
             body["reply_to_message_id"] = serde_json::json!(reply);
+        }
+        if let Some(tid) = thread_id {
+            body["message_thread_id"] = serde_json::json!(tid);
         }
 
         tracing::debug!(
@@ -1250,6 +1265,9 @@ impl TelegramAdapter {
             });
             if let Some(reply) = reply_to {
                 plain_body["reply_to_message_id"] = serde_json::json!(reply);
+            }
+            if let Some(tid) = thread_id {
+                plain_body["message_thread_id"] = serde_json::json!(tid);
             }
             let resp = self
                 .client
@@ -1512,7 +1530,7 @@ impl PlatformAdapter for TelegramAdapter {
             } else {
                 None
             };
-            self.send_telegram_inner(&message.channel_id, chunk, reply_to)
+            self.send_telegram_inner(&message.channel_id, chunk, reply_to, message.thread_id)
                 .await?;
         }
         Ok(())
@@ -1535,10 +1553,15 @@ impl PlatformAdapter for TelegramAdapter {
     async fn send_message_return_id(&self, message: OutgoingMessage) -> Result<String> {
         let chunks = chunk_text(&message.content, 4000);
         let id = self
-            .send_telegram_inner(&message.channel_id, &chunks[0], message.reply_to.as_deref())
+            .send_telegram_inner(
+                &message.channel_id,
+                &chunks[0],
+                message.reply_to.as_deref(),
+                message.thread_id,
+            )
             .await?;
         for chunk in &chunks[1..] {
-            self.send_telegram_inner(&message.channel_id, chunk, None)
+            self.send_telegram_inner(&message.channel_id, chunk, None, message.thread_id)
                 .await?;
         }
         Ok(id)
@@ -1861,10 +1884,16 @@ impl PlatformAdapter for TelegramAdapter {
     ) -> Result<String> {
         let chunks = chunk_text(&message.content, 4000);
         let first_id = self
-            .send_telegram_inner(channel_id, &chunks[0], message.reply_to.as_deref())
+            .send_telegram_inner(
+                channel_id,
+                &chunks[0],
+                message.reply_to.as_deref(),
+                message.thread_id,
+            )
             .await?;
         for chunk in &chunks[1..] {
-            self.send_telegram_inner(channel_id, chunk, None).await?;
+            self.send_telegram_inner(channel_id, chunk, None, message.thread_id)
+                .await?;
         }
         Ok(first_id)
     }
@@ -3822,6 +3851,48 @@ mod tests {
         assert_eq!(msg.content, "Response to you");
         assert!(!msg.parse_markdown);
         assert_eq!(msg.reply_to, Some("111".to_string()));
+        assert_eq!(msg.thread_id, None);
+    }
+
+    /// A reply to a forum-topic message must carry the incoming
+    /// message_thread_id so it lands in the same topic (hermes parity).
+    #[test]
+    fn test_outgoing_message_thread_id_roundtrip() {
+        // Incoming forum message with a topic thread id.
+        let incoming = IncomingMessage::new("telegram", "111", "ishan", "-100123", "hello")
+            .with_thread_id(Some(65901));
+        assert_eq!(incoming.thread_id, Some(65901));
+
+        // Reply built from it forwards the thread id.
+        let reply = OutgoingMessage::new(&incoming.channel_id, "hi back")
+            .with_thread_id(incoming.thread_id);
+        assert_eq!(reply.thread_id, Some(65901));
+
+        // Messages without a thread context stay None (general chat).
+        let plain = OutgoingMessage::new("-100123", "plain");
+        assert_eq!(plain.thread_id, None);
+    }
+
+    /// A forum message update must surface message_thread_id on the parsed
+    /// IncomingMessage so replies are routed back to the topic.
+    #[test]
+    fn parse_update_captures_message_thread_id() {
+        let update = serde_json::json!({
+            "update_id": 1,
+            "message": {
+                "message_id": 10,
+                "message_thread_id": 91609,
+                "from": {"id": 111, "is_bot": false, "username": "ishan"},
+                "chat": {"id": -100123, "type": "supergroup"},
+                "text": "Testing the operant functioning."
+            }
+        });
+        let msg = TelegramAdapter::parse_update(update)
+            .expect("parse ok")
+            .expect("message present");
+        assert_eq!(msg.channel_id, "-100123");
+        assert_eq!(msg.thread_id, Some(91609));
+        assert!(msg.is_group_chat);
     }
 
     #[tokio::test]

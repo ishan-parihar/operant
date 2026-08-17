@@ -25,6 +25,10 @@ use operant_core::tools::{OperantTool, ToolContext, TranscriptionTool};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::OnceLock;
+
+/// The active gateway turn's target: (platform, channel_id, telegram
+/// thread_id). Thread id is None for non-forum platforms/chat.
+type CurrentChannel = (String, String, Option<i64>);
 use tokio::sync::Mutex;
 use tokio::sync::mpsc;
 
@@ -296,7 +300,8 @@ impl MessageHandler for GatewayMessageHandler {
                     .db()
                     .save_message(&session_id, "assistant", &content, &now);
 
-                Ok(OutgoingMessage::new(message.channel_id, content))
+                Ok(OutgoingMessage::new(message.channel_id, content)
+                    .with_thread_id(message.thread_id))
             }
             Err(e) => {
                 // Still save the user message on error
@@ -307,7 +312,8 @@ impl MessageHandler for GatewayMessageHandler {
                 Ok(OutgoingMessage::new(
                     &message.channel_id,
                     format!("Error: {}", e),
-                ))
+                )
+                .with_thread_id(message.thread_id))
             }
         }
     }
@@ -578,7 +584,19 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
 
     // Create event channel for tool progress previews
     let (event_tx, mut event_rx) = mpsc::channel::<AgentEvent>(256);
-    let current_channel: Arc<Mutex<Option<(String, String)>>> = Arc::new(Mutex::new(None));
+    // (platform, channel_id, telegram thread_id) — thread_id is forwarded so
+    // all outbound progress/stream/error messages land in the same forum
+    // topic the user sent from (hermes topic-reply parity).
+    let current_channel: Arc<Mutex<Option<CurrentChannel>>> = Arc::new(Mutex::new(None));
+
+    // (platform, channel_id) -> streamed message id. Set by the event
+    // receiver when the first streaming chunk is delivered; the dispatch
+    // loop consumes it after route_message so the final response is NOT
+    // sent a second time (the streamed message was already edited to the
+    // full text by AgentEvent::Done). This kills the duplicate-reply bug
+    // where every gateway turn produced two identical messages.
+    let stream_delivery: Arc<Mutex<HashMap<(String, String), String>>> =
+        Arc::new(Mutex::new(HashMap::new()));
 
     // Create permission channel for tool-approval flow (Bug #1 from iter-98
     // audit — gateway never called with_permissions, so bash/file_write ran
@@ -777,6 +795,7 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
     // (iter-100 — closes Bug #12 from iter-98 audit).
     let gw_for_events = gw.clone();
     let current_channel_for_events = current_channel.clone();
+    let stream_delivery_for_events = stream_delivery.clone();
     tokio::spawn(async move {
         // (platform, channel_id) -> (message_id, tool_lines)
         let mut progress_msgs: Hm<(String, String), (String, Vec<String>)> = Hm::new();
@@ -786,16 +805,17 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
         let mut last_edit_time = std::time::Instant::now();
         tracing::info!("Tool progress + streaming event receiver started");
         while let Some(event) = event_rx.recv().await {
-            let (platform, channel_id) = match current_channel_for_events.lock().await.as_ref() {
-                Some((p, c)) => (p.clone(), c.clone()),
-                None => {
-                    tracing::debug!(
-                        "Dropping tool event (no active channel): {:?}",
-                        std::mem::discriminant(&event)
-                    );
-                    continue;
-                }
-            };
+            let (platform, channel_id, thread_id) =
+                match current_channel_for_events.lock().await.as_ref() {
+                    Some((p, c, t)) => (p.clone(), c.clone(), *t),
+                    None => {
+                        tracing::debug!(
+                            "Dropping tool event (no active channel): {:?}",
+                            std::mem::discriminant(&event)
+                        );
+                        continue;
+                    }
+                };
 
             match event {
                 AgentEvent::ToolStart {
@@ -810,14 +830,18 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                         // Append line to existing chronological message
                         lines.push(line);
                         let body = lines.join("\n");
-                        let msg = OutgoingMessage::new(&channel_id, &body).no_markdown();
+                        let msg = OutgoingMessage::new(&channel_id, &body)
+                            .no_markdown()
+                            .with_thread_id(thread_id);
                         let _ = gw_for_events
                             .edit_message(&platform, &channel_id, msg_id, msg)
                             .await;
                     } else {
                         // First tool — send new message
                         let body = line.clone();
-                        let msg = OutgoingMessage::new(&channel_id, &body).no_markdown();
+                        let msg = OutgoingMessage::new(&channel_id, &body)
+                            .no_markdown()
+                            .with_thread_id(thread_id);
                         match gw_for_events.send_message_return_id(&platform, msg).await {
                             Ok(msg_id) => {
                                 progress_msgs.insert(key, (msg_id, vec![line]));
@@ -845,6 +869,7 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                                 .send_voice(&platform, &channel_id, &audio_bytes, format)
                                 .await
                         {
+                            let _ = thread_id;
                             tracing::warn!(
                                 error = %redact_err(&e),
                                 "Failed to send TTS voice message"
@@ -860,7 +885,8 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                     // Debounce: only edit if 500ms have passed since the last edit.
                     if last_edit_time.elapsed() > std::time::Duration::from_millis(500) {
                         last_edit_time = std::time::Instant::now();
-                        let msg = OutgoingMessage::new(&channel_id, &stream_text);
+                        let msg =
+                            OutgoingMessage::new(&channel_id, &stream_text).with_thread_id(thread_id);
                         if let Some(ref msg_id) = stream_msg_id {
                             let _ = gw_for_events
                                 .edit_message(&platform, &channel_id, msg_id, msg)
@@ -869,7 +895,11 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                             // First chunk — send a new message and store the id.
                             match gw_for_events.send_message_return_id(&platform, msg).await {
                                 Ok(msg_id) => {
-                                    stream_msg_id = Some(msg_id);
+                                    stream_msg_id = Some(msg_id.clone());
+                                    // Record delivery so the dispatch loop
+                                    // skips the duplicate final send.
+                                    let mut map = stream_delivery_for_events.lock().await;
+                                    map.insert((platform.clone(), channel_id.clone()), msg_id);
                                 }
                                 Err(e) => {
                                     tracing::warn!(
@@ -893,7 +923,8 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                     // Final message — do a final edit with the complete text.
                     if !stream_text.is_empty() {
                         if let Some(ref msg_id) = stream_msg_id {
-                            let msg = OutgoingMessage::new(&channel_id, &stream_text);
+                            let msg =
+                                OutgoingMessage::new(&channel_id, &stream_text).with_thread_id(thread_id);
                             let _ = gw_for_events
                                 .edit_message(&platform, &channel_id, msg_id, msg)
                                 .await;
@@ -911,7 +942,9 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                 AgentEvent::Error { error } => {
                     // Surface errors to the user.
                     let body = format!("❌ Error: {}", error);
-                    let msg = OutgoingMessage::new(&channel_id, &body).no_markdown();
+                    let msg = OutgoingMessage::new(&channel_id, &body)
+                        .no_markdown()
+                        .with_thread_id(thread_id);
                     let _ = gw_for_events.send_to_platform(&platform, msg).await;
                     // Reset streaming state.
                     stream_text.clear();
@@ -966,7 +999,7 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
             // Get the current channel to send the prompt to
             let channel_info = current_channel_for_perm.lock().await.clone();
 
-            if let Some((platform, channel_id)) = &channel_info {
+            if let Some((platform, channel_id, thread_id)) = &channel_info {
                 // YOLO mode: the channel opted into skipping approval prompts
                 // via /yolo. (R17: /yolo previously wrote a metadata key that
                 // nothing read — the receiver now honors the live set, mirroring
@@ -995,7 +1028,9 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                         "🔧 Permission required: {} — {}\nReply /approve to allow, /deny to cancel (60s timeout)",
                         req.tool_name, req.description
                     );
-                    let msg = OutgoingMessage::new(channel_id, &prompt).no_markdown();
+                    let msg = OutgoingMessage::new(channel_id, &prompt)
+                        .no_markdown()
+                        .with_thread_id(*thread_id);
                     let _ = gw_for_perm.send_to_platform(platform, msg).await;
                 }
 
@@ -1061,7 +1096,7 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
         while let Some(req) = uq_rx.recv().await {
             tracing::info!(question = %req.question, "User question received from clarify tool");
             // Surface the question to the user.
-            if let Some((platform, channel_id)) = current_channel_for_uq.lock().await.as_ref() {
+            if let Some((platform, channel_id, thread_id)) = current_channel_for_uq.lock().await.as_ref() {
                 let body = if let Some(ref choices) = req.choices {
                     format!(
                         "❓ {}\n\n{}",
@@ -1076,7 +1111,9 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                 } else {
                     format!("❓ {}", req.question)
                 };
-                let msg = OutgoingMessage::new(channel_id, &body).no_markdown();
+                let msg = OutgoingMessage::new(channel_id, &body)
+                    .no_markdown()
+                    .with_thread_id(*thread_id);
                 let _ = gw_for_uq.send_to_platform(platform, msg).await;
 
                 // Store the reply_tx so the next message from this channel
@@ -1113,6 +1150,7 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
     });
 
     let app_config_clone = app_config.clone();
+    let stream_delivery_for_dispatch = stream_delivery.clone();
     tokio::spawn(async move {
         while let Some(mut msg) = message_rx.recv().await {
             tracing::info!(
@@ -1287,6 +1325,7 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                 let keepalive_handle = if platform == "telegram" {
                     let gw = gw.clone();
                     let ch = channel_id.clone();
+                    let thread_id = msg.thread_id;
                     Some(tokio::spawn(async move {
                         let start = std::time::Instant::now();
                         // Wait 3 minutes before first notification (matches Python behavior)
@@ -1296,7 +1335,9 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                             let minutes = elapsed / 60;
                             let body =
                                 format!("\u{23F3} Still working... ({}m elapsed...)", minutes);
-                            let msg = OutgoingMessage::new(&ch, &body).no_markdown();
+                            let msg = OutgoingMessage::new(&ch, &body)
+                                .no_markdown()
+                                .with_thread_id(thread_id);
                             if gw.send_to_platform("telegram", msg).await.is_err() {
                                 break;
                             }
@@ -1314,7 +1355,8 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                     platform,
                     channel_id
                 );
-                *current_channel.lock().await = Some((platform.clone(), channel_id.clone()));
+                *current_channel.lock().await =
+                    Some((platform.clone(), channel_id.clone(), msg.thread_id));
 
                 // ── 5.6 Per-turn .env reload for credential rotation ─────────
                 operant_core::env_passthrough::reload_dotenv();
@@ -1333,7 +1375,20 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                             "Message routed successfully, response length: {}",
                             response.content.len()
                         );
-                        if let Err(e) = gw.send_to_platform(&platform, response).await {
+                        // If streaming already delivered the response as a
+                        // progressive-edited message (AgentEvent::Content →
+                        // AgentEvent::Done), skip the duplicate full send.
+                        // (Kills the double-reply bug on gateway turns.)
+                        let streamed = {
+                            let mut map = stream_delivery_for_dispatch.lock().await;
+                            map.remove(&(platform.clone(), channel_id.clone())).is_some()
+                        };
+                        if streamed {
+                            tracing::info!(
+                                "Stream already delivered response to {}; skipping duplicate send",
+                                channel_id
+                            );
+                        } else if let Err(e) = gw.send_to_platform(&platform, response).await {
                             tracing::error!(
                                 "Failed to send response on {} to {}: {}",
                                 platform,
@@ -1344,6 +1399,11 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                         save_turn_state(&channel_id, "complete");
                     }
                     Ok(None) => {
+                        // Even when the handler returns no response, clear any
+                        // leftover stream marker so the next turn isn't
+                        // wrongly suppressed.
+                        let mut map = stream_delivery_for_dispatch.lock().await;
+                        map.remove(&(platform.clone(), channel_id.clone()));
                         save_turn_state(&channel_id, "complete");
                     }
                     Err(e) => {
@@ -1352,6 +1412,8 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                             platform,
                             redact_err(&e)
                         );
+                        let mut map = stream_delivery_for_dispatch.lock().await;
+                        map.remove(&(platform.clone(), channel_id.clone()));
                         save_turn_state(&channel_id, "failed");
                     }
                 }
