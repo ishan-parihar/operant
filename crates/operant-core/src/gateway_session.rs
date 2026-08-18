@@ -1361,12 +1361,40 @@ impl PersistentSessionStore {
     }
 
     /// Find or create a shared session (legacy API).
+    ///
+    /// `thread_id` is the forum topic (Telegram message_thread_id, Discord
+    /// thread, …): when present, the shared session is keyed per-thread so
+    /// each topic gets its own record instead of sharing the parent
+    /// channel's — hermes build_session_key parity. The non-threaded path
+    /// keeps its legacy key format for continuity.
     pub fn find_or_create_shared_session(
         &self,
         platform: &str,
         channel_id: &str,
+        thread_id: Option<i64>,
     ) -> Result<PlatformSession, Error> {
-        self.create_session(platform, "__shared__", channel_id)
+        let Some(tid) = thread_id else {
+            return self.create_session(platform, "__shared__", channel_id);
+        };
+        let source = SessionSource {
+            platform: platform.to_string(),
+            chat_id: channel_id.to_string(),
+            user_id: Some("__shared__".to_string()),
+            chat_type: "thread".to_string(),
+            thread_id: Some(tid.to_string()),
+            ..Default::default()
+        };
+        let entry = self.get_or_create_session(&source, false)?;
+        Ok(PlatformSession {
+            session_id: entry.session_id,
+            platform: entry.platform.unwrap_or_default(),
+            platform_user_id: "__shared__".to_string(),
+            platform_channel_id: channel_id.to_string(),
+            operant_session_id: String::new(),
+            created_at: entry.created_at,
+            last_active: entry.updated_at,
+            metadata: HashMap::new(),
+        })
     }
 
     #[expect(

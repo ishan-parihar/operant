@@ -440,12 +440,23 @@ impl SessionStore {
         }
     }
 
-    /// Find or create a shared session keyed by channel_id only (for group chats).
+    /// Find or create a shared session for a group chat. When `thread_id`
+    /// (forum topic) is present, the session is scoped to that thread so
+    /// each topic gets its own record — hermes build_session_key parity.
     pub fn find_or_create_shared_session(
         &self,
         platform: &str,
         channel_id: &str,
+        thread_id: Option<i64>,
     ) -> Result<PlatformSession> {
+        if let Some(tid) = thread_id {
+            let scoped = format!("{}__thread_{}", channel_id, tid);
+            if let Some(s) = self.find_session(platform, "__shared__", &scoped) {
+                let _ = self.update_activity(&s.session_id);
+                return Ok(s);
+            }
+            return self.create_session(platform, "__shared__", &scoped);
+        }
         if let Some(s) = self.find_session(platform, "__shared__", channel_id) {
             let _ = self.update_activity(&s.session_id);
             return Ok(s);
@@ -1000,16 +1011,25 @@ impl Gateway {
             "Routing message"
         );
 
-        // Track session in persistent store if available
+        // Track session in persistent store if available. Thread id is
+        // propagated so forum topics / threads get their own persistent
+        // session records (hermes build_session_key parity).
         if let Some(ref store) = self.persistent_sessions {
             let source = SessionSource {
                 platform: message.platform.clone(),
                 chat_id: message.channel_id.clone(),
                 chat_name: None,
-                chat_type: if message.is_group_chat { "group" } else { "dm" }.to_string(),
+                chat_type: if message.thread_id.is_some() {
+                    "thread"
+                } else if message.is_group_chat {
+                    "group"
+                } else {
+                    "dm"
+                }
+                .to_string(),
                 user_id: Some(message.user_id.clone()),
                 user_name: Some(message.username.clone()),
-                thread_id: None,
+                thread_id: message.thread_id.map(|t| t.to_string()),
                 chat_topic: None,
                 user_id_alt: None,
                 chat_id_alt: None,
@@ -1043,10 +1063,18 @@ impl Gateway {
         };
 
         // Session key for the turn lease / stall tracker / delivery ledger.
-        let session_key = format!(
-            "{}:{}:{}",
-            message.platform, message.user_id, message.channel_id
-        );
+        // Thread-aware so a long-running agent in one forum topic never
+        // blocks another topic's turns (hermes session isolation parity).
+        let session_key = match message.thread_id {
+            Some(tid) => format!(
+                "{}:{}:{}:thread:{}",
+                message.platform, message.user_id, message.channel_id, tid
+            ),
+            None => format!(
+                "{}:{}:{}",
+                message.platform, message.user_id, message.channel_id
+            ),
+        };
 
         // Global emergency stop (hermes estop parity): while engaged, new
         // turns get a brief paused reply instead of an agent run. In-flight
@@ -4952,6 +4980,36 @@ mod tests {
 
         let not_found = store.find_session("telegram", "user1", "chan1");
         assert!(not_found.is_none());
+    }
+
+    /// Each Telegram forum topic must get its own shared session — a message
+    /// in a new topic must NOT continue the parent channel's (or another
+    /// topic's) conversation. (hermes build_session_key parity — the bug
+    /// where every topic in a supergroup shared one gateway session.)
+    #[test]
+    fn test_shared_session_scoped_per_thread() {
+        let store = SessionStore::new();
+        let base = store
+            .find_or_create_shared_session("telegram", "-100123", None)
+            .unwrap();
+        let t1 = store
+            .find_or_create_shared_session("telegram", "-100123", Some(91609))
+            .unwrap();
+        let t2 = store
+            .find_or_create_shared_session("telegram", "-100123", Some(91610))
+            .unwrap();
+
+        // The general chat, topic 91609, and topic 91610 are three distinct
+        // sessions.
+        assert_ne!(base.session_id, t1.session_id);
+        assert_ne!(base.session_id, t2.session_id);
+        assert_ne!(t1.session_id, t2.session_id);
+
+        // Re-fetching the same thread returns the same (stable) session.
+        let t1_again = store
+            .find_or_create_shared_session("telegram", "-100123", Some(91609))
+            .unwrap();
+        assert_eq!(t1.session_id, t1_again.session_id);
     }
 
     #[test]

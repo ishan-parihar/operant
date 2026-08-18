@@ -29,6 +29,22 @@ use std::sync::OnceLock;
 /// The active gateway turn's target: (platform, channel_id, telegram
 /// thread_id). Thread id is None for non-forum platforms/chat.
 type CurrentChannel = (String, String, Option<i64>);
+
+/// Map key for per-thread state: (platform, channel_id, telegram thread_id).
+/// Thread id is None for non-forum platforms/chat. Keying stream/progress
+/// state by thread keeps concurrent forum topics isolated (hermes session
+/// isolation parity).
+type ThreadKey = (String, String, Option<i64>);
+
+/// (platform, channel_id, thread_id) -> streamed Telegram message id. Set by
+/// the event receiver when the first streaming chunk is delivered; the
+/// dispatch loop consumes it after route_message so the final response is
+/// not sent a second time.
+type StreamDeliveryMap = Arc<Mutex<HashMap<ThreadKey, String>>>;
+
+/// (platform, channel_id, thread_id) -> (message_id, tool_lines) for the
+/// single-message chronological tool-progress timeline.
+type ProgressMap = HashMap<ThreadKey, (String, Vec<String>)>;
 use tokio::sync::Mutex;
 use tokio::sync::mpsc;
 
@@ -181,14 +197,24 @@ impl MessageHandler for GatewayMessageHandler {
             }
         }
 
-        // Build session key: per-user for DMs, per-channel for groups
-        let session_key = if message.is_group_chat {
-            format!("{}:{}", message.platform, message.channel_id)
-        } else {
-            format!(
+        // Build session key: per-user for DMs, per-channel for groups, and
+        // thread-aware so each Telegram forum topic / Discord thread gets its
+        // own conversation — a new topic starts a FRESH session instead of
+        // continuing the parent channel's history. (hermes build_session_key
+        // parity: threads are separate sessions within a parent chat.)
+        let session_key = match (message.is_group_chat, message.thread_id) {
+            (true, Some(tid)) => {
+                format!("{}:{}:thread:{}", message.platform, message.channel_id, tid)
+            }
+            (true, None) => format!("{}:{}", message.platform, message.channel_id),
+            (false, Some(tid)) => format!(
+                "{}:{}:{}:thread:{}",
+                message.platform, message.channel_id, message.user_id, tid
+            ),
+            (false, None) => format!(
                 "{}:{}:{}",
                 message.platform, message.channel_id, message.user_id
-            )
+            ),
         };
 
         // Derive stable session_id from key hash
@@ -548,13 +574,21 @@ pub async fn send_channel_message(
         .map_err(anyhow::Error::from)
 }
 
-fn build_session_context(platform: &str, channel_id: &str, app_config: &AppConfig) -> String {
+fn build_session_context(
+    platform: &str,
+    channel_id: &str,
+    thread_id: Option<i64>,
+    app_config: &AppConfig,
+) -> String {
     let mut ctx = String::new();
     ctx.push_str(&format!("Connected platform: {}\n", platform));
     ctx.push_str(&format!(
         "Channel: {}\n",
         operant_core::pii::redact_chat_id(channel_id)
     ));
+    if let Some(tid) = thread_id {
+        ctx.push_str(&format!("Topic/thread: {tid}\n"));
+    }
     if app_config.gateway.telegram_enabled {
         ctx.push_str("Available: Telegram\n");
     }
@@ -618,8 +652,10 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
     // sent a second time (the streamed message was already edited to the
     // full text by AgentEvent::Done). This kills the duplicate-reply bug
     // where every gateway turn produced two identical messages.
-    let stream_delivery: Arc<Mutex<HashMap<(String, String), String>>> =
-        Arc::new(Mutex::new(HashMap::new()));
+    // Keyed by (platform, channel_id, thread_id) so concurrent forum topics
+    // never collide on each other's stream/dedup markers (hermes session
+    // isolation parity).
+    let stream_delivery: StreamDeliveryMap = Arc::new(Mutex::new(HashMap::new()));
 
     // Create permission channel for tool-approval flow (Bug #1 from iter-98
     // audit — gateway never called with_permissions, so bash/file_write ran
@@ -723,7 +759,6 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
     }
 
     // Tool preview helpers
-    use std::collections::HashMap as Hm;
 
     fn tool_emoji(name: &str) -> &'static str {
         match name {
@@ -832,8 +867,8 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
     let current_channel_for_events = current_channel.clone();
     let stream_delivery_for_events = stream_delivery.clone();
     tokio::spawn(async move {
-        // (platform, channel_id) -> (message_id, tool_lines)
-        let mut progress_msgs: Hm<(String, String), (String, Vec<String>)> = Hm::new();
+        // (platform, channel_id, thread_id) -> (message_id, tool_lines)
+        let mut progress_msgs: ProgressMap = HashMap::new();
         // Streaming state: accumulated text + message_id for progressive edit.
         let mut stream_text = String::new();
         let mut stream_msg_id: Option<String> = None;
@@ -859,7 +894,7 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                     arguments,
                 } => {
                     let line = tool_preview_line(&name, &arguments);
-                    let key = (platform.clone(), channel_id.clone());
+                    let key = (platform.clone(), channel_id.clone(), thread_id);
 
                     // Segment break (hermes `on_segment_break` parity): when
                     // the model pivots to tools, FINALIZE the active stream
@@ -882,7 +917,7 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                         // delivers the real final response (a later Content
                         // block re-inserts the marker when it streams).
                         let mut map = stream_delivery_for_events.lock().await;
-                        map.remove(&(platform.clone(), channel_id.clone()));
+                        map.remove(&(platform.clone(), channel_id.clone(), thread_id));
                     }
 
                     if let Some((msg_id, lines)) = progress_msgs.get_mut(&key) {
@@ -987,7 +1022,10 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                                         // Record delivery so the dispatch loop
                                         // skips the duplicate final send.
                                         let mut map = stream_delivery_for_events.lock().await;
-                                        map.insert((platform.clone(), channel_id.clone()), msg_id);
+                                        map.insert(
+                                            (platform.clone(), channel_id.clone(), thread_id),
+                                            msg_id,
+                                        );
                                     }
                                     Err(e) => {
                                         tracing::warn!(
@@ -1029,7 +1067,7 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                                 .is_ok();
                             if !edit_ok {
                                 let mut map = stream_delivery_for_events.lock().await;
-                                map.remove(&(platform.clone(), channel_id.clone()));
+                                map.remove(&(platform.clone(), channel_id.clone(), thread_id));
                             }
                         } else {
                             // No message yet — deliver the final block as a
@@ -1037,7 +1075,10 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                             match gw_for_events.send_message_return_id(&platform, msg).await {
                                 Ok(msg_id) => {
                                     let mut map = stream_delivery_for_events.lock().await;
-                                    map.insert((platform.clone(), channel_id.clone()), msg_id);
+                                    map.insert(
+                                        (platform.clone(), channel_id.clone(), thread_id),
+                                        msg_id,
+                                    );
                                 }
                                 Err(e) => {
                                     tracing::warn!(
@@ -1089,7 +1130,7 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                     stream_text.clear();
                     stream_msg_id = None;
                     let mut map = stream_delivery_for_events.lock().await;
-                    map.remove(&(platform.clone(), channel_id.clone()));
+                    map.remove(&(platform.clone(), channel_id.clone(), thread_id));
                 }
                 AgentEvent::ToolPermissionRequest { .. } => {
                     // Permission requests are drained by the dedicated
@@ -1325,6 +1366,9 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
             );
             let platform = msg.platform.clone();
             let channel_id = msg.channel_id.clone();
+            // Thread id captured before `msg` is moved into route_message —
+            // stream/dedup markers and session keys are per-topic.
+            let msg_thread = msg.thread_id;
 
             // Wrap entire processing body for error resilience — a single
             // message processing error will not crash the whole gateway.
@@ -1495,10 +1539,11 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
 
                 // ── 4. Session management ─────────────────────────────────────
                 if msg.is_group_chat {
-                    match gw
-                        .get_session_store()
-                        .find_or_create_shared_session(&msg.platform, &msg.channel_id)
-                    {
+                    match gw.get_session_store().find_or_create_shared_session(
+                        &msg.platform,
+                        &msg.channel_id,
+                        msg_thread,
+                    ) {
                         Ok(s) => tracing::info!(
                             "Shared session {} for channel {}",
                             s.session_id,
@@ -1615,7 +1660,8 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                 save_turn_state(&channel_id, "pending");
 
                 // ── 5.8 Session context injection ────────────────────────────
-                let ctx = build_session_context(&platform, &channel_id, &app_config_clone);
+                let ctx =
+                    build_session_context(&platform, &channel_id, msg_thread, &app_config_clone);
                 msg.content = format!("[context: {}]\n{}", ctx.trim(), msg.content);
 
                 // ── 6. Route message ──────────────────────────────────────────
@@ -1631,7 +1677,7 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                         // (Kills the double-reply bug on gateway turns.)
                         let streamed = {
                             let mut map = stream_delivery_for_dispatch.lock().await;
-                            map.remove(&(platform.clone(), channel_id.clone()))
+                            map.remove(&(platform.clone(), channel_id.clone(), msg_thread))
                                 .is_some()
                         };
                         if streamed {
@@ -1654,7 +1700,7 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                         // leftover stream marker so the next turn isn't
                         // wrongly suppressed.
                         let mut map = stream_delivery_for_dispatch.lock().await;
-                        map.remove(&(platform.clone(), channel_id.clone()));
+                        map.remove(&(platform.clone(), channel_id.clone(), msg_thread));
                         save_turn_state(&channel_id, "complete");
                     }
                     Err(e) => {
@@ -1664,7 +1710,7 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                             redact_err(&e)
                         );
                         let mut map = stream_delivery_for_dispatch.lock().await;
-                        map.remove(&(platform.clone(), channel_id.clone()));
+                        map.remove(&(platform.clone(), channel_id.clone(), msg_thread));
                         save_turn_state(&channel_id, "failed");
                     }
                 }
