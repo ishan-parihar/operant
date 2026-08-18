@@ -1792,6 +1792,15 @@ impl PlatformAdapter for TelegramAdapter {
                 let mut retry_delay: u64 = 1;
                 let mut last_heartbeat = Instant::now();
 
+                // Defensive dedup window: remember recently processed
+                // update_ids so a duplicate delivery (offset-file race,
+                // restart edge case) can never double-process the same
+                // update and double-reply. Telegram guarantees no dupes
+                // when offset handling is correct — this is belt-and-braces.
+                const RECENT_UPDATE_WINDOW: usize = 256;
+                let mut recent_updates: std::collections::VecDeque<i64> =
+                    std::collections::VecDeque::new();
+
                 tracing::info!("Entering main polling loop");
                 while running.load(Ordering::SeqCst) {
                     // Early exit if the gateway receiver has been dropped (clean shutdown).
@@ -1846,9 +1855,19 @@ impl PlatformAdapter for TelegramAdapter {
                                     last_heartbeat = Instant::now();
                                 }
                                 for update in updates {
-                                    if let Some(update_id) = update["update_id"].as_i64() {
-                                        offset = update_id + 1;
+                                    let Some(update_id) = update["update_id"].as_i64() else {
+                                        continue;
+                                    };
+                                    // Skip anything already processed (defense
+                                    // against duplicate delivery).
+                                    if recent_updates.contains(&update_id) {
+                                        tracing::warn!(
+                                            update_id,
+                                            "Skipping duplicate Telegram update (already processed)"
+                                        );
+                                        continue;
                                     }
+                                    offset = update_id + 1;
                                     if let Ok(Some(mut msg)) =
                                         TelegramAdapter::parse_update(update.clone())
                                     {
@@ -1883,6 +1902,10 @@ impl PlatformAdapter for TelegramAdapter {
                                             running.store(false, Ordering::SeqCst);
                                             break;
                                         }
+                                    }
+                                    recent_updates.push_back(update_id);
+                                    if recent_updates.len() > RECENT_UPDATE_WINDOW {
+                                        recent_updates.pop_front();
                                     }
                                 }
                             }
@@ -2179,6 +2202,61 @@ async fn download_telegram_attachments(
     }
 }
 
+/// Telegram update message keys that indicate a *service* message — no user
+/// content: topic lifecycle, membership changes, pins, migrations, payments,
+/// etc. These must be filtered in `parse_update` before the attachment
+/// fallbacks, otherwise they surface to the agent as "[sent an attachment]"
+/// and spawn a bogus agent turn. That was the double-reply bug when a user
+/// creates a forum topic and types a message: the `forum_topic_created`
+/// service message got its own turn (→ "I received another attachment")
+/// *in addition to* the real text turn.
+const TELEGRAM_SERVICE_MESSAGE_KEYS: &[&str] = &[
+    "forum_topic_created",
+    "forum_topic_closed",
+    "forum_topic_reopened",
+    "forum_topic_edited",
+    "general_forum_topic_hidden",
+    "general_forum_topic_unhidden",
+    "new_chat_members",
+    "left_chat_member",
+    "new_chat_title",
+    "new_chat_photo",
+    "delete_chat_photo",
+    "group_chat_created",
+    "supergroup_chat_created",
+    "channel_chat_created",
+    "message_auto_delete_timer_changed",
+    "migrate_to_chat_id",
+    "migrate_from_chat_id",
+    "pinned_message",
+    "chat_background_set",
+    "video_chat_started",
+    "video_chat_ended",
+    "video_chat_scheduled",
+    "video_chat_participants_invited",
+    "proximity_alert_triggered",
+    "boost_added",
+    "user_shared",
+    "chat_shared",
+    "write_access_allowed",
+    "connected_website",
+    "passport_data",
+    "successful_payment",
+    "refunded_payment",
+    "invoice",
+    "giveaway_created",
+    "giveaway_completed",
+    "giveaway_winners",
+];
+
+/// True when a Telegram update message is a service message (topic created,
+/// member joined/left, pinned, migrated, …) carrying no user content.
+fn telegram_message_is_service(message: &serde_json::Value) -> bool {
+    TELEGRAM_SERVICE_MESSAGE_KEYS
+        .iter()
+        .any(|k| message.get(*k).is_some())
+}
+
 impl TelegramAdapter {
     /// Parse a Telegram update into an IncomingMessage.
     /// This is the same logic used by handle_update but callable without a trait object.
@@ -2195,6 +2273,14 @@ impl TelegramAdapter {
                 .and_then(|b| b.as_bool())
                 .unwrap_or(false)
         {
+            return Ok(None);
+        }
+
+        // Service messages (forum topic created, member joined/left, pinned,
+        // migrated, …) carry no user content — skip them entirely instead of
+        // fabricating an "[sent an attachment]" placeholder that spawns a
+        // bogus agent turn.
+        if telegram_message_is_service(message) {
             return Ok(None);
         }
 
@@ -2229,10 +2315,33 @@ impl TelegramAdapter {
                 .and_then(|c| c.as_str())
                 .unwrap_or("[sent a voice message]")
                 .to_string()
+        } else if message.get("video").is_some() {
+            message
+                .get("caption")
+                .and_then(|c| c.as_str())
+                .unwrap_or("[sent a video]")
+                .to_string()
+        } else if message.get("video_note").is_some() {
+            "[sent a video note]".to_string()
+        } else if message.get("animation").is_some() {
+            message
+                .get("caption")
+                .and_then(|c| c.as_str())
+                .unwrap_or("[sent an animation]")
+                .to_string()
+        } else if message.get("audio").is_some() {
+            message
+                .get("caption")
+                .and_then(|c| c.as_str())
+                .unwrap_or("[sent an audio message]")
+                .to_string()
         } else if message.get("sticker").is_some() {
             "[sent a sticker]".to_string()
         } else {
-            "[sent an attachment]".to_string()
+            // No text, no caption, and no recognized media — not a user
+            // message (unknown service updates fall here). Skip rather than
+            // fabricate an attachment the agent can't act on.
+            return Ok(None);
         };
 
         let thread_id = message.get("message_thread_id").and_then(|t| t.as_i64());
@@ -4113,6 +4222,144 @@ mod tests {
         assert_eq!(msg.channel_id, "-100123");
         assert_eq!(msg.thread_id, Some(91609));
         assert!(msg.is_group_chat);
+    }
+
+    /// Service messages (forum topic created, member joined, …) carry no
+    /// user content and must be dropped by parse_update — they previously
+    /// fell through to "[sent an attachment]" and spawned a bogus agent turn
+    /// (the double-reply bug: topic-creation service message + real text).
+    #[test]
+    fn parse_update_filters_service_messages() {
+        // forum_topic_created — the exact shape Telegram sends when a user
+        // creates a new topic (no text, no from, no media).
+        let topic_created = serde_json::json!({
+            "update_id": 1,
+            "message": {
+                "message_id": 10,
+                "message_thread_id": 91663,
+                "chat": {"id": -100123, "type": "supergroup"},
+                "date": 1752872700,
+                "forum_topic_created": {"name": "New Chat", "icon_color": 0}
+            }
+        });
+        assert!(
+            TelegramAdapter::parse_update(topic_created)
+                .expect("parse ok")
+                .is_none()
+        );
+
+        // new_chat_members
+        let joined = serde_json::json!({
+            "update_id": 2,
+            "message": {
+                "message_id": 11,
+                "chat": {"id": -100123, "type": "supergroup"},
+                "new_chat_members": [{"id": 999, "first_name": "Bot"}]
+            }
+        });
+        assert!(
+            TelegramAdapter::parse_update(joined)
+                .expect("parse ok")
+                .is_none()
+        );
+
+        // pinned_message
+        let pinned = serde_json::json!({
+            "update_id": 3,
+            "message": {
+                "message_id": 12,
+                "chat": {"id": -100123, "type": "supergroup"},
+                "pinned_message": {"message_id": 9, "text": "rules"}
+            }
+        });
+        assert!(
+            TelegramAdapter::parse_update(pinned)
+                .expect("parse ok")
+                .is_none()
+        );
+
+        // A media-less message with no recognized content must NOT fabricate
+        // "[sent an attachment]" — it is not a user message.
+        let unknown = serde_json::json!({
+            "update_id": 4,
+            "message": {
+                "message_id": 13,
+                "from": {"id": 111, "is_bot": false, "username": "ishan"},
+                "chat": {"id": -100123, "type": "supergroup"},
+                "date": 1752872700
+            }
+        });
+        assert!(
+            TelegramAdapter::parse_update(unknown)
+                .expect("parse ok")
+                .is_none()
+        );
+
+        // Sanity: a real text message in the same topic still parses.
+        let text = serde_json::json!({
+            "update_id": 5,
+            "message": {
+                "message_id": 14,
+                "message_thread_id": 91663,
+                "from": {"id": 111, "is_bot": false, "username": "ishan"},
+                "chat": {"id": -100123, "type": "supergroup"},
+                "text": "Testing operant executive functions."
+            }
+        });
+        let msg = TelegramAdapter::parse_update(text)
+            .expect("parse ok")
+            .expect("message present");
+        assert_eq!(msg.content, "Testing operant executive functions.");
+        assert_eq!(msg.thread_id, Some(91663));
+    }
+
+    /// Media types beyond photo/document/voice must get accurate placeholders
+    /// instead of the generic "[sent an attachment]" fallback.
+    #[test]
+    fn parse_update_media_placeholders() {
+        let video = serde_json::json!({
+            "update_id": 1,
+            "message": {
+                "message_id": 1,
+                "from": {"id": 1, "is_bot": false, "username": "u"},
+                "chat": {"id": 2, "type": "private"},
+                "video": {"file_id": "v1"}
+            }
+        });
+        let msg = TelegramAdapter::parse_update(video)
+            .expect("parse ok")
+            .expect("present");
+        assert_eq!(msg.content, "[sent a video]");
+
+        let audio = serde_json::json!({
+            "update_id": 2,
+            "message": {
+                "message_id": 2,
+                "from": {"id": 1, "is_bot": false, "username": "u"},
+                "chat": {"id": 2, "type": "private"},
+                "audio": {"file_id": "a1"}
+            }
+        });
+        let msg = TelegramAdapter::parse_update(audio)
+            .expect("parse ok")
+            .expect("present");
+        assert_eq!(msg.content, "[sent an audio message]");
+
+        // caption-bearing video uses the caption.
+        let video_cap = serde_json::json!({
+            "update_id": 3,
+            "message": {
+                "message_id": 3,
+                "from": {"id": 1, "is_bot": false, "username": "u"},
+                "chat": {"id": 2, "type": "private"},
+                "video": {"file_id": "v2"},
+                "caption": "watch this"
+            }
+        });
+        let msg = TelegramAdapter::parse_update(video_cap)
+            .expect("parse ok")
+            .expect("present");
+        assert_eq!(msg.content, "watch this");
     }
 
     /// A photo update must extract the largest PhotoSize file_id (hermes

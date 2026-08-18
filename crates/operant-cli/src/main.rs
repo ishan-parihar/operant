@@ -2218,11 +2218,24 @@ async fn main() -> Result<()> {
         operant_core::tools::sub_agent_tool::set_max_concurrent_children(count as usize);
     }
 
+    // The gateway daemon is headless — TUI rich-output mode would route its
+    // logs to io::sink() (silently discarded), which makes the gateway
+    // undebuggable. A daemon must never silently lose logs: `gateway run`
+    // forces stderr (or the configured log_file) regardless of rich_output.
+    let is_gateway_daemon = matches!(
+        cli.command,
+        Some(Commands::Gateway {
+            cmd: cmd_gateway::GatewaySubcommand::Run,
+            ..
+        })
+    );
+    let effective_rich_output = loaded.config.tui.rich_output && !is_gateway_daemon;
+
     init_logging(
         cli.verbose,
         cli.log_level.as_deref(),
         &loaded.config.logging,
-        loaded.config.tui.rich_output,
+        effective_rich_output,
     );
 
     if cli.debug_tui {
