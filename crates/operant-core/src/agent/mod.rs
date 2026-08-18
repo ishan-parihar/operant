@@ -410,6 +410,13 @@ pub struct OperantAgent {
     /// and drained into `build_messages` as a system message for this turn
     /// only — the normal agent loop still owns tool calling and termination.
     moa_guidance: Arc<std::sync::Mutex<Option<String>>>,
+    /// Set of tool-call IDs for which `AgentEvent::ToolStart` was already
+    /// emitted during `process_stream` (streaming XML extraction). `execute_tools`
+    /// checks this set and skips emitting duplicate `ToolStart` events — so the
+    /// gateway runner sees exactly ONE `ToolStart` per tool call, arriving during
+    /// streaming (not after the turn finishes), enabling chronological message
+    /// splitting. Cleared at the start of each `run()`.
+    stream_emitted_tool_starts: std::sync::Mutex<std::collections::HashSet<String>>,
 }
 
 /// Strip `<memory-context>` / `<long_term_memory>` XML tags from streaming
@@ -637,6 +644,7 @@ impl OperantAgent {
             background_review_callback: None,
             last_prompt_tokens: std::sync::atomic::AtomicUsize::new(0),
             moa_guidance: Arc::new(std::sync::Mutex::new(None)),
+            stream_emitted_tool_starts: std::sync::Mutex::new(std::collections::HashSet::new()),
         }
     }
 
@@ -697,6 +705,7 @@ impl OperantAgent {
             background_review_callback: None,
             last_prompt_tokens: std::sync::atomic::AtomicUsize::new(0),
             moa_guidance: Arc::new(std::sync::Mutex::new(None)),
+            stream_emitted_tool_starts: std::sync::Mutex::new(std::collections::HashSet::new()),
         }
     }
 
@@ -1583,6 +1592,11 @@ impl OperantAgent {
         // permanently exhausted after the first turn exhausts it, causing
         // every subsequent turn to short-circuit to a grace call.
         self.iteration_budget.reset();
+
+        // Clear streaming ToolStart dedup set — each turn starts fresh.
+        if let Ok(mut set) = self.stream_emitted_tool_starts.lock() {
+            set.clear();
+        }
 
         let mut messages = turn_ctx.messages;
 
@@ -3650,10 +3664,35 @@ If nothing needs updating, say 'Nothing to save.' and stop.\n\n{}",
 
                         if !content_delta.is_empty() {
                             let chunk_tool_calls = parser.process_chunk(&content_delta);
+                            // Collect new tool calls that need ToolStart emitted.
+                            // Lock is dropped before each .await to satisfy Send bounds.
+                            let mut pending_tool_starts: Vec<(String, String, String)> = Vec::new();
                             for tc in chunk_tool_calls {
                                 if !tool_calls.iter().any(|existing| existing.id == tc.id) {
+                                    let already = self
+                                        .stream_emitted_tool_starts
+                                        .lock()
+                                        .map(|mut s| !s.insert(tc.id.clone()))
+                                        .unwrap_or(true);
+                                    if !already {
+                                        pending_tool_starts.push((
+                                            tc.id.clone(),
+                                            tc.function.name.clone(),
+                                            tc.function.arguments.clone(),
+                                        ));
+                                    }
                                     tool_calls.push(tc);
                                 }
+                            }
+                            // Emit ToolStart outside the lock — chronological
+                            // message splitting parity.
+                            for (id, name, args) in pending_tool_starts {
+                                self.emit(AgentEvent::ToolStart {
+                                    tool_call_id: id,
+                                    name,
+                                    arguments: args,
+                                })
+                                .await;
                             }
 
                             let visible_text = tool_call_router.feed(&content_delta);
@@ -3680,8 +3719,38 @@ If nothing needs updating, say 'Nothing to save.' and stop.\n\n{}",
 
                     // Merge native provider tool-call deltas
                     if let Some(chunk_tool_calls) = chunk.tool_calls {
+                        let mut native_pending: Vec<(String, String, String)> = Vec::new();
                         for tc in chunk_tool_calls {
+                            let is_new = !tool_calls.iter().any(|e| e.id == tc.id);
+                            let has_name = !tc.function.name.is_empty();
                             merge_stream_tool_call(&mut tool_calls, tc);
+                            if is_new
+                                && has_name
+                                && let Some(full) =
+                                    tool_calls.iter().find(|e| !e.function.name.is_empty())
+                            {
+                                let id = full.id.clone();
+                                let already = self
+                                    .stream_emitted_tool_starts
+                                    .lock()
+                                    .map(|mut s| !s.insert(id.clone()))
+                                    .unwrap_or(true);
+                                if !already {
+                                    native_pending.push((
+                                        id,
+                                        full.function.name.clone(),
+                                        full.function.arguments.clone(),
+                                    ));
+                                }
+                            }
+                        }
+                        for (id, name, args) in native_pending {
+                            self.emit(AgentEvent::ToolStart {
+                                tool_call_id: id,
+                                name,
+                                arguments: args,
+                            })
+                            .await;
                         }
                     }
 
@@ -3711,8 +3780,31 @@ If nothing needs updating, say 'Nothing to save.' and stop.\n\n{}",
         let (remaining_content, remaining_reasoning) = content_router.finish();
         if !remaining_content.is_empty() {
             let remaining_calls = parser.process_chunk(&remaining_content);
+            let mut flush_pending: Vec<(String, String, String)> = Vec::new();
             for tc in remaining_calls {
+                if !tool_calls.iter().any(|existing| existing.id == tc.id) {
+                    let already = self
+                        .stream_emitted_tool_starts
+                        .lock()
+                        .map(|mut s| !s.insert(tc.id.clone()))
+                        .unwrap_or(true);
+                    if !already {
+                        flush_pending.push((
+                            tc.id.clone(),
+                            tc.function.name.clone(),
+                            tc.function.arguments.clone(),
+                        ));
+                    }
+                }
                 merge_stream_tool_call(&mut tool_calls, tc);
+            }
+            for (id, name, args) in flush_pending {
+                self.emit(AgentEvent::ToolStart {
+                    tool_call_id: id,
+                    name,
+                    arguments: args,
+                })
+                .await;
             }
             let visible = tool_call_router.feed(&remaining_content);
             if !visible.is_empty() {
@@ -3989,12 +4081,22 @@ If nothing needs updating, say 'Nothing to save.' and stop.\n\n{}",
                 });
             }
 
-            self.emit(AgentEvent::ToolStart {
-                tool_call_id: tool_call.id.clone(),
-                name: name.clone(),
-                arguments: args_str.clone(),
-            })
-            .await;
+            // Skip emitting ToolStart if it was already emitted during
+            // streaming (process_stream extracts XML tool calls and emits
+            // ToolStart early so the gateway can split messages chronologically).
+            let already_streamed = self
+                .stream_emitted_tool_starts
+                .lock()
+                .map(|s| s.contains(&tool_call.id))
+                .unwrap_or(false);
+            if !already_streamed {
+                self.emit(AgentEvent::ToolStart {
+                    tool_call_id: tool_call.id.clone(),
+                    name: name.clone(),
+                    arguments: args_str.clone(),
+                })
+                .await;
+            }
 
             // Parse arguments — with auto-repair for common truncation issues.
             // (iter-123 — fixes "Invalid JSON: EOF while parsing" errors
