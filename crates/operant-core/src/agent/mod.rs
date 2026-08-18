@@ -466,7 +466,22 @@ fn is_interactive_tool(name: &str) -> bool {
 /// the child's own timeout must govern, so these get a generous backstop
 /// instead.
 fn is_long_running_tool(name: &str) -> bool {
-    matches!(name, "delegate_task")
+    matches!(
+        name,
+        "delegate_task"
+            | "aft_bash"
+            | "aft_read"
+            | "aft_write"
+            | "aft_edit"
+            | "aft_glob"
+            | "aft_grep"
+            | "aft_search"
+            | "aft_ast_search"
+            | "aft_outline"
+            | "aft_zoom"
+            | "aft_callers"
+            | "aft_apply_patch"
+    )
 }
 
 /// Defensive wrapper for tools exempt from the generic tool timeout.

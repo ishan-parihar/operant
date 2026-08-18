@@ -58,8 +58,14 @@ impl OperantTool for CamofoxStateTool {
 
     fn is_available(&self) -> bool {
         // Only available when Camofox is configured (CAMOFOX_URL env var)
-        // or the state directory already has saved states.
-        std::env::var("CAMOFOX_URL").is_ok() || state_dir().exists()
+        // or the state directory has saved states (not just an empty dir).
+        if std::env::var("CAMOFOX_URL").is_ok() {
+            return true;
+        }
+        std::fs::read_dir(state_dir())
+            .ok()
+            .and_then(|mut d| d.next())
+            .is_some()
     }
 
     fn description(&self) -> &str {
