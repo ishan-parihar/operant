@@ -449,6 +449,16 @@ fn prefer_reported(reported: usize, heuristic: usize) -> usize {
     if reported > 0 { reported } else { heuristic }
 }
 
+/// Tools that block waiting for a human to respond to an interactive dialog
+/// (`clarify` question, `approval_request` prompt). These must NOT be wrapped
+/// in the generic tool timeout — a 30s cap kills the dialog before the user
+/// can see it and tap a button (the gateway showed the prompt and then
+/// immediately reported "Tool timed out after 30s", so the dialog never
+/// resolved). They self-timeout via the user-question receiver (120s) instead.
+fn is_interactive_tool(name: &str) -> bool {
+    matches!(name, "clarify" | "approval_request")
+}
+
 /// Load the persistent tool-approval allowlist: config seeds + patterns
 /// persisted on disk (hermes `load_permanent_allowlist` parity). Best-effort
 /// — a missing or malformed file yields just the config seeds.
@@ -4206,12 +4216,20 @@ If nothing needs updating, say 'Nothing to save.' and stop.\n\n{}",
                 .next()
                 .expect("pending non-empty in single-tool branch");
             let name = tool_call.function.name.clone();
-            let result = timeout(
-                self.config.tool_timeout,
+            let tool_future =
                 self.registry
-                    .execute(&name, &tool_call.id, args, ToolContext::default()),
-            )
-            .await;
+                    .execute(&name, &tool_call.id, args, ToolContext::default());
+            // Interactive tools (clarify / approval_request) block waiting
+            // for a human — the generic tool timeout (30s) would kill the
+            // dialog before the user can respond. They get a generous
+            // defensive wrapper instead: the user-question receiver resolves
+            // them on its own (120s timeout reply), so the wrapper is only a
+            // backstop against a wedged receiver.
+            let result = if is_interactive_tool(&name) {
+                timeout(Duration::from_secs(600), tool_future).await
+            } else {
+                timeout(self.config.tool_timeout, tool_future).await
+            };
             early_results[idx] = Some(match result {
                 Ok(Ok(r)) => r,
                 Ok(Err(e)) => ToolResult::error(&tool_call.id, e.to_string()),
@@ -4261,11 +4279,17 @@ If nothing needs updating, say 'Nothing to save.' and stop.\n\n{}",
                         }
 
                         let name = tool_call.function.name.clone();
-                        let result = timeout(
-                            tool_timeout,
-                            registry.execute(&name, &tool_call.id, args, ToolContext::default()),
-                        )
-                        .await;
+                        let exec =
+                            registry.execute(&name, &tool_call.id, args, ToolContext::default());
+                        // Interactive tools exempt from the generic tool
+                        // timeout (see is_interactive_tool); the 600s wrapper
+                        // is only a backstop — the user-question receiver
+                        // resolves the dialog on its own 120s timeout.
+                        let result = if is_interactive_tool(&name) {
+                            timeout(Duration::from_secs(600), exec).await
+                        } else {
+                            timeout(tool_timeout, exec).await
+                        };
 
                         (
                             idx,
@@ -5545,6 +5569,19 @@ mod tests {
         assert_eq!(deny, ToolPermissionResponse::Deny);
         assert_ne!(allow_once, deny);
         assert_ne!(always, allow_session);
+    }
+
+    #[test]
+    fn interactive_tools_exempt_from_generic_timeout() {
+        // clarify / approval_request block waiting for a human — they must
+        // never be wrapped in the generic tool timeout (the gateway showed
+        // "Tool timed out after 30s" and killed the dialog before the user
+        // could tap). Everything else keeps the hard timeout.
+        assert!(is_interactive_tool("clarify"));
+        assert!(is_interactive_tool("approval_request"));
+        assert!(!is_interactive_tool("bash"));
+        assert!(!is_interactive_tool("code_execution"));
+        assert!(!is_interactive_tool("web_search"));
     }
 
     #[test]

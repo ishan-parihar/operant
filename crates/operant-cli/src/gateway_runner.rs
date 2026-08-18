@@ -22,7 +22,7 @@ use crate::gateway_commands::{
 };
 use operant_core::mcp::McpManager;
 use operant_core::tools::{OperantTool, ToolContext, TranscriptionTool};
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use std::sync::OnceLock;
 
@@ -721,6 +721,10 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
     gateway.start().await.context("Failed to start gateway")?;
 
     let (message_tx, mut message_rx) = mpsc::unbounded_channel::<IncomingMessage>();
+    // Clone kept by the dispatch loop so a queued message can be re-injected
+    // into the channel once its session's in-flight turn completes (the
+    // message arm re-runs interception and spawns the turn).
+    let message_tx_for_reinject = message_tx.clone();
     gateway
         .start_with_channel(message_tx)
         .await
@@ -1358,381 +1362,551 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
     let app_config_clone = app_config.clone();
     let stream_delivery_for_dispatch = stream_delivery.clone();
     tokio::spawn(async move {
-        while let Some(mut msg) = message_rx.recv().await {
-            tracing::info!(
-                "Gateway received message from {} on {}",
-                msg.user_id,
-                msg.platform
-            );
-            let platform = msg.platform.clone();
-            let channel_id = msg.channel_id.clone();
-            // Thread id captured before `msg` is moved into route_message —
-            // stream/dedup markers and session keys are per-topic.
-            let msg_thread = msg.thread_id;
+        // ── Turn dispatch: per-session serialization with live dialogs ────────
+        // Only one agent turn runs per session at a time; further messages for
+        // a busy session are FIFO-queued and run when the current turn finishes
+        // (hermes per-session queue). Dialog messages — approval / choice
+        // button taps, /approve /deny, clarify replies — are resolved INLINE
+        // below and never queued, so a long-running turn can never deadlock an
+        // interactive prompt. Previously the loop awaited the whole turn
+        // inline: a tap or reply queued behind the very turn that spawned the
+        // dialog, and the tool's timeout killed it before the user could
+        // respond (clarify / approval_request always timed out).
+        let gw_for_turns = gw.clone();
+        let app_config_for_turns = app_config_clone.clone();
+        let stream_delivery_for_turns = stream_delivery_for_dispatch.clone();
+        let current_channel_for_turns = current_channel.clone();
+        let telegram_token_for_turns = telegram_token.clone();
+        let mut turn_inflight: HashMap<String, ()> = HashMap::new();
+        let mut turn_queue: VecDeque<(String, IncomingMessage)> = VecDeque::new();
+        let (turn_done_tx, mut turn_done_rx) = mpsc::unbounded_channel::<String>();
 
-            // Wrap entire processing body for error resilience — a single
-            // message processing error will not crash the whole gateway.
-            let result: anyhow::Result<()> = async {
-                // ── 1. Admin allowlist ────────────────────────────────────────
-                if !admins.is_empty() && !admins.contains(&msg.user_id) {
-                    tracing::warn!(
-                        "Message from unauthorized user {} on {} rejected",
-                        msg.user_id,
-                        msg.platform
-                    );
-                    let response = OutgoingMessage::new(
-                        &msg.channel_id,
-                        "You are not authorized to use this bot.",
-                    )
-                    .with_thread_id(msg.thread_id);
-                    gw.send_to_platform(&platform, response).await?;
-                    return Ok(());
-                }
-                tracing::info!("Message from {} passed admin allowlist check", msg.user_id);
-
-                // ── 1.5 Command interception ──────────────────────────────────
-                // (Approval button taps are synthesized as `/approve` /
-                // `/deny` commands — see handle_callback_update in core. The
-                // tap also carries an `approval_callback` raw marker so we can
-                // edit the prompt message once the outcome is known, exactly
-                // like hermes' `query.edit_message_text` after a tap.)
-                let approval_tap = msg.raw.get("approval_callback").cloned();
-                let approval_was_pending = approval_tap.is_some() && {
-                    let mut found = false;
-                    if let Some(cell) = crate::gateway_runner::PENDING_PERMISSIONS.get()
-                        && let Ok(guard) = cell.lock()
-                        && let Some(pending) = guard.as_ref()
-                        && let Ok(map) = pending.try_lock()
-                    {
-                        found = map.contains_key(&msg.channel_id);
-                    }
-                    found
-                };
-                let is_admin = admins.is_empty() || admins.contains(&msg.user_id);
-                if let Some((cmd_def, cmd_args)) = resolve_command(&msg.content) {
-                    tracing::info!("User {} ran command /{}", msg.user_id, cmd_def.name);
-                    if cmd_def.admin_only && !is_admin {
-                        let response =
-                            OutgoingMessage::new(&msg.channel_id, "This command is admin-only.")
-                                .with_thread_id(msg.thread_id);
-                        gw.send_to_platform(&platform, response).await?;
-                    } else {
-                        let ctx = CommandContext::new(
-                            Some(&gw),
-                            &app_config_clone,
-                            is_admin,
-                            &msg.user_id,
-                            &platform,
-                            &msg.channel_id,
-                        );
-                        if let Some(response_text) = handle_command(cmd_def.name, cmd_args, &ctx) {
-                            let response = OutgoingMessage::new(&msg.channel_id, response_text)
-                                .with_thread_id(msg.thread_id);
-                            gw.send_to_platform(&platform, response).await?;
-                        }
-                    }
-                    // Reflect the tap outcome on the prompt message itself
-                    // (hermes parity: "✅ Approved by X" / "⌛ expired").
-                    if let Some(cb) = approval_tap {
-                        edit_approval_prompt_message(&gw, &platform, &cb, approval_was_pending)
-                            .await;
-                    }
-                    return Ok(());
-                }
-
-                // ── 1.6 Clarify choice taps ──────────────────────────────────
-                // A `choice:` inline-button tap resolves the pending
-                // clarify() question with the selected option. The adapter
-                // synthesized this message with a raw `choice_callback`
-                // marker — resolve it here so it never reaches the agent as
-                // a stray message, and edit the prompt to show the selection
-                // (hermes `send_clarify` tap parity).
-                if let Some(cc) = msg.raw.get("choice_callback").cloned() {
-                    let pending_map_clone = {
-                        let global_uq = crate::gateway_runner::PENDING_USER_QUESTIONS.get();
-                        global_uq
-                            .and_then(|g| g.lock().ok())
-                            .and_then(|mut guard| guard.take())
-                    };
-                    let mut selected: Option<String> = None;
-                    if let Some(pending_map) = pending_map_clone {
-                        let key = format!("{platform}:{channel_id}");
-                        let idx = cc.get("idx").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
-                        if let Some((reply_tx, choices)) = pending_map.lock().await.remove(&key) {
-                            let text = choices
-                                .and_then(|c| c.get(idx).cloned())
-                                .unwrap_or_else(|| format!("option {}", idx + 1));
-                            let _ = reply_tx.send(text.clone());
-                            selected = Some(text);
-                        }
-                        if let Some(g) = crate::gateway_runner::PENDING_USER_QUESTIONS.get()
-                            && let Ok(mut guard) = g.lock()
-                        {
-                            *guard = Some(pending_map);
-                        }
-                    }
-                    // Edit the question message to show the selection and
-                    // remove the buttons.
-                    if let (Some(adapter), Some(chat), Some(mid)) = (
-                        gw.adapter_for(&platform),
-                        cc.get("chat_id").and_then(|v| v.as_str()),
-                        cc.get("message_id").and_then(|v| v.as_i64()),
-                    ) {
-                        let text = match selected {
-                            Some(t) => format!("✅ Selected: {t}"),
-                            None => "⌛ This question has already been answered or timed out."
-                                .to_string(),
-                        };
-                        let _ = adapter
-                            .edit_message(
-                                chat,
-                                &mid.to_string(),
-                                &OutgoingMessage::new(chat, &text).no_markdown(),
-                            )
-                            .await;
-                    }
-                    return Ok(());
-                }
-
-                // ── 2. Message enrichment ─────────────────────────────────────
-                if platform == "telegram"
-                    && let Some(token) = &telegram_token
-                {
-                    // Photo enrichment: download largest photo and note it
-                    if let Some(desc) = enrich_photo(&msg.raw, token).await {
-                        msg.content = format!("{}\n{}", desc, msg.content);
-                    }
-                    // Voice enrichment: download, transcribe, prepend
-                    if let Some(transcript) = enrich_voice(&msg.raw, token).await {
-                        msg.content = format!("{}\n{}", transcript, msg.content);
-                    }
-                    // Document enrichment: extract filename + caption
-                    if let Some(info) = enrich_document(&msg.raw) {
-                        msg.content = if msg.content.is_empty() {
-                            info
-                        } else {
-                            format!("{}\n{}", msg.content, info)
-                        };
-                    }
-                }
-                tracing::info!(
-                    "Message enrichment done, final content length: {}",
-                    msg.content.len()
-                );
-
-                // ── 3. Message pipeline ───────────────────────────────────────
-                let pipeline = MessagePipeline::new();
-                let action = pipeline.process(&msg);
-                tracing::info!("Message pipeline action: {:?}", action);
-                match action {
-                    PipelineAction::Block(reason) => {
-                        let response = OutgoingMessage::new(&msg.channel_id, reason)
-                            .with_thread_id(msg.thread_id);
-                        gw.send_to_platform(&platform, response).await?;
-                        return Ok(());
-                    }
-                    PipelineAction::Queue => {
-                        // Queue not yet wired — allow through for now.
-                    }
-                    PipelineAction::Allow => {}
-                }
-
-                // ── 4. Session management ─────────────────────────────────────
-                if msg.is_group_chat {
-                    match gw.get_session_store().find_or_create_shared_session(
-                        &msg.platform,
-                        &msg.channel_id,
-                        msg_thread,
-                    ) {
-                        Ok(s) => tracing::info!(
-                            "Shared session {} for channel {}",
-                            s.session_id,
-                            msg.channel_id
-                        ),
-                        Err(e) => {
-                            tracing::warn!("Failed to get shared session: {}", redact_err(&e))
-                        }
-                    }
-                    msg.content = format!("[{}]: {}", msg.username, msg.content);
-                } else {
-                    let existing = gw.get_session_store().find_session(
-                        &msg.platform,
-                        &msg.user_id,
-                        &msg.channel_id,
-                    );
-                    if let Some(s) = existing {
+        loop {
+            tokio::select! {
+                    maybe_msg = message_rx.recv() => {
+                        let Some(mut msg) = maybe_msg else { break };
                         tracing::info!(
-                            "Found existing session {} for {}@{}",
-                            s.session_id,
+                            "Gateway received message from {} on {}",
                             msg.user_id,
                             msg.platform
                         );
-                        let _ = gw.get_session_store().update_activity(&s.session_id);
+                        let platform = msg.platform.clone();
+                        let channel_id = msg.channel_id.clone();
+                        // Thread id captured before `msg` is moved into the turn —
+                        // stream/dedup markers and session keys are per-topic.
+                        let msg_thread = msg.thread_id;
+
+                        // ── 1. Dialog interception (never queued) ────────────────
+                        // `true` = handled here (no agent turn); `false` = turn.
+                        let handled: anyhow::Result<bool> = async {
+                            // ── 1. Admin allowlist ────────────────────────────────
+                            if !admins.is_empty() && !admins.contains(&msg.user_id) {
+                                tracing::warn!(
+                                    "Message from unauthorized user {} on {} rejected",
+                                    msg.user_id,
+                                    msg.platform
+                                );
+                                let response = OutgoingMessage::new(
+                                    &msg.channel_id,
+                                    "You are not authorized to use this bot.",
+                                )
+                                .with_thread_id(msg.thread_id);
+                                gw.send_to_platform(&platform, response).await?;
+                                return Ok(true);
+                            }
+                            tracing::info!(
+                                "Message from {} passed admin allowlist check",
+                                msg.user_id
+                            );
+
+                            // ── 1.5 Command interception ──────────────────────────
+                            // (Approval button taps are synthesized as `/approve` /
+                            // `/deny` commands — see handle_callback_update in
+                            // core. The tap also carries an `approval_callback`
+                            // raw marker so we can edit the prompt message once
+                            // the outcome is known, exactly like hermes'
+                            // `query.edit_message_text` after a tap.)
+                            let approval_tap = msg.raw.get("approval_callback").cloned();
+                            let approval_was_pending = approval_tap.is_some() && {
+                                let mut found = false;
+                                if let Some(cell) = crate::gateway_runner::PENDING_PERMISSIONS.get()
+                                    && let Ok(guard) = cell.lock()
+                                    && let Some(pending) = guard.as_ref()
+                                    && let Ok(map) = pending.try_lock()
+                                {
+                                    found = map.contains_key(&msg.channel_id);
+                                }
+                                found
+                            };
+                            let is_admin = admins.is_empty() || admins.contains(&msg.user_id);
+                            if let Some((cmd_def, cmd_args)) = resolve_command(&msg.content) {
+                                tracing::info!(
+                                    "User {} ran command /{}",
+                                    msg.user_id,
+                                    cmd_def.name
+                                );
+                                if cmd_def.admin_only && !is_admin {
+                                    let response = OutgoingMessage::new(
+                                        &msg.channel_id,
+                                        "This command is admin-only.",
+                                    )
+                                    .with_thread_id(msg.thread_id);
+                                    gw.send_to_platform(&platform, response).await?;
+                                } else {
+                                    let ctx = CommandContext::new(
+                                        Some(&gw),
+                                        &app_config_clone,
+                                        is_admin,
+                                        &msg.user_id,
+                                        &platform,
+                                        &msg.channel_id,
+                                    );
+                                    if let Some(response_text) =
+                                        handle_command(cmd_def.name, cmd_args, &ctx)
+                                    {
+                                        let response = OutgoingMessage::new(
+                                            &msg.channel_id,
+                                            response_text,
+                                        )
+                                        .with_thread_id(msg.thread_id);
+                                        gw.send_to_platform(&platform, response).await?;
+                                    }
+                                }
+                                // Reflect the tap outcome on the prompt message
+                                // itself (hermes parity: "✅ Approved by X" /
+                                // "⌛ expired").
+                                if let Some(cb) = approval_tap {
+                                    edit_approval_prompt_message(
+                                        &gw,
+                                        &platform,
+                                        &cb,
+                                        approval_was_pending,
+                                    )
+                                    .await;
+                                }
+                                return Ok(true);
+                            }
+
+                            // ── 1.6 Clarify choice taps ──────────────────────────
+                            // A `choice:` inline-button tap resolves the pending
+                            // clarify() question with the selected option. The
+                            // adapter synthesized this message with a raw
+                            // `choice_callback` marker — resolve it here so it
+                            // never reaches the agent as a stray message, and
+                            // edit the prompt to show the selection (hermes
+                            // `send_clarify` tap parity).
+                            if let Some(cc) = msg.raw.get("choice_callback").cloned() {
+                                let pending_map_clone = {
+                                    let global_uq =
+                                        crate::gateway_runner::PENDING_USER_QUESTIONS.get();
+                                    global_uq
+                                        .and_then(|g| g.lock().ok())
+                                        .and_then(|mut guard| guard.take())
+                                };
+                                let mut selected: Option<String> = None;
+                                if let Some(pending_map) = pending_map_clone {
+                                    let key = format!("{platform}:{channel_id}");
+                                    let idx = cc
+                                        .get("idx")
+                                        .and_then(|v| v.as_u64())
+                                        .unwrap_or(0) as usize;
+                                    if let Some((reply_tx, choices)) =
+                                        pending_map.lock().await.remove(&key)
+                                    {
+                                        let text = choices
+                                            .and_then(|c| c.get(idx).cloned())
+                                            .unwrap_or_else(|| format!("option {}", idx + 1));
+                                        let _ = reply_tx.send(text.clone());
+                                        selected = Some(text);
+                                    }
+                                    if let Some(g) =
+                                        crate::gateway_runner::PENDING_USER_QUESTIONS.get()
+                                        && let Ok(mut guard) = g.lock()
+                                    {
+                                        *guard = Some(pending_map);
+                                    }
+                                }
+                                // Edit the question message to show the selection
+                                // and remove the buttons.
+                                if let (Some(adapter), Some(chat), Some(mid)) = (
+                                    gw.adapter_for(&platform),
+                                    cc.get("chat_id").and_then(|v| v.as_str()),
+                                    cc.get("message_id").and_then(|v| v.as_i64()),
+                                ) {
+                                    let text = match selected {
+                                        Some(t) => format!("✅ Selected: {t}"),
+                                        None => "⌛ This question has already been answered or timed out."
+                                            .to_string(),
+                                    };
+                                    let _ = adapter
+                                        .edit_message(
+                                            chat,
+                                            &mid.to_string(),
+                                            &OutgoingMessage::new(chat, &text).no_markdown(),
+                                        )
+                                        .await;
+                                }
+                            return Ok(true);
+                        }
+
+                        // ── 1.7 Pending clarify() text replies ────────────────
+                        // A plain-text reply while a clarify() /
+                        // approval_request() dialog is pending resolves the
+                        // question with the user's text. Checked here (in
+                        // addition to the handler) so the reply is never
+                        // queued behind the very turn that spawned the
+                        // dialog — the dialog would otherwise deadlock until
+                        // its 120s timeout.
+                        if !msg.content.trim_start().starts_with('/') {
+                            let channel_key = format!("{platform}:{channel_id}");
+                            let pending_map_clone = {
+                                let global_uq =
+                                    crate::gateway_runner::PENDING_USER_QUESTIONS.get();
+                                global_uq
+                                    .and_then(|g| g.lock().ok())
+                                    .and_then(|mut guard| guard.take())
+                            };
+                            if let Some(pending_map) = pending_map_clone {
+                                let reply_tx = {
+                                    let mut pending = pending_map.lock().await;
+                                    pending.remove(&channel_key)
+                                };
+                                if let Some((reply_tx, _choices)) = reply_tx {
+                                    tracing::info!(
+                                        channel = %channel_key,
+                                        "Routing message as user-question reply (dispatch)"
+                                    );
+                                    let _ = reply_tx.send(msg.content.clone());
+                                    if let Some(g) =
+                                        crate::gateway_runner::PENDING_USER_QUESTIONS.get()
+                                        && let Ok(mut guard) = g.lock()
+                                    {
+                                        *guard = Some(pending_map);
+                                    }
+                                    // Acknowledge so the user knows the
+                                    // reply landed (hermes parity).
+                                    let ack = OutgoingMessage::new(
+                                        &msg.channel_id,
+                                        "✅ Reply received — resuming...",
+                                    )
+                                    .no_markdown()
+                                    .with_thread_id(msg.thread_id);
+                                    let _ = gw.send_to_platform(&platform, ack).await;
+                                    return Ok(true);
+                                }
+                                if let Some(g) =
+                                    crate::gateway_runner::PENDING_USER_QUESTIONS.get()
+                                    && let Ok(mut guard) = g.lock()
+                                {
+                                    *guard = Some(pending_map);
+                                }
+                            }
+                        }
+                        Ok(false)
+                    }
+                    .await;
+                        match handled {
+                            Ok(true) => continue,
+                            Err(e) => {
+                                tracing::error!(
+                                    "Error intercepting message on {}: {}",
+                                    channel_id,
+                                    redact_err(&e)
+                                );
+                                continue;
+                            }
+                            Ok(false) => {}
+                        }
+
+                        // ── 2. Turn routing (per-session FIFO queue) ─────────────
+                        let session_key = match (msg.is_group_chat, msg.thread_id) {
+                            (true, Some(tid)) => {
+                                format!("{}:{}:thread:{}", msg.platform, msg.channel_id, tid)
+                            }
+                            (true, None) => format!("{}:{}", msg.platform, msg.channel_id),
+                            (false, Some(tid)) => format!(
+                                "{}:{}:{}:thread:{}",
+                                msg.platform, msg.channel_id, msg.user_id, tid
+                            ),
+                            (false, None) => {
+                                format!("{}:{}:{}", msg.platform, msg.channel_id, msg.user_id)
+                            }
+                        };
+                        if turn_inflight.contains_key(&session_key) {
+                            tracing::debug!(
+                                session = %session_key,
+                                "Queuing message behind in-flight turn"
+                            );
+                            turn_queue.push_back((session_key, msg));
+                            continue;
+                        }
+                        turn_inflight.insert(session_key.clone(), ());
+                        let gw = gw_for_turns.clone();
+                        let app_config_clone = app_config_for_turns.clone();
+                        let stream_delivery_for_dispatch = stream_delivery_for_turns.clone();
+                        let current_channel = current_channel_for_turns.clone();
+                        let telegram_token = telegram_token_for_turns.clone();
+                        let done_tx = turn_done_tx.clone();
+                        tokio::spawn(async move {
+                    // Wrap the turn body for error resilience — a single message
+                    // processing error will not crash the whole gateway.
+                    let result: anyhow::Result<()> = async {
+                    // ── 2. Message enrichment ─────────────────────────────────────
+                    if platform == "telegram"
+                        && let Some(token) = &telegram_token
+                    {
+                        // Photo enrichment: download largest photo and note it
+                        if let Some(desc) = enrich_photo(&msg.raw, token).await {
+                            msg.content = format!("{}\n{}", desc, msg.content);
+                        }
+                        // Voice enrichment: download, transcribe, prepend
+                        if let Some(transcript) = enrich_voice(&msg.raw, token).await {
+                            msg.content = format!("{}\n{}", transcript, msg.content);
+                        }
+                        // Document enrichment: extract filename + caption
+                        if let Some(info) = enrich_document(&msg.raw) {
+                            msg.content = if msg.content.is_empty() {
+                                info
+                            } else {
+                                format!("{}\n{}", msg.content, info)
+                            };
+                        }
+                    }
+                    tracing::info!(
+                        "Message enrichment done, final content length: {}",
+                        msg.content.len()
+                    );
+
+                    // ── 3. Message pipeline ───────────────────────────────────────
+                    let pipeline = MessagePipeline::new();
+                    let action = pipeline.process(&msg);
+                    tracing::info!("Message pipeline action: {:?}", action);
+                    match action {
+                        PipelineAction::Block(reason) => {
+                            let response = OutgoingMessage::new(&msg.channel_id, reason)
+                                .with_thread_id(msg.thread_id);
+                            gw.send_to_platform(&platform, response).await?;
+                            return Ok(());
+                        }
+                        PipelineAction::Queue => {
+                            // Queue not yet wired — allow through for now.
+                        }
+                        PipelineAction::Allow => {}
+                    }
+
+                    // ── 4. Session management ─────────────────────────────────────
+                    if msg.is_group_chat {
+                        match gw.get_session_store().find_or_create_shared_session(
+                            &msg.platform,
+                            &msg.channel_id,
+                            msg_thread,
+                        ) {
+                            Ok(s) => tracing::info!(
+                                "Shared session {} for channel {}",
+                                s.session_id,
+                                msg.channel_id
+                            ),
+                            Err(e) => {
+                                tracing::warn!("Failed to get shared session: {}", redact_err(&e))
+                            }
+                        }
+                        msg.content = format!("[{}]: {}", msg.username, msg.content);
                     } else {
-                        match gw.get_session_store().create_session(
+                        let existing = gw.get_session_store().find_session(
                             &msg.platform,
                             &msg.user_id,
                             &msg.channel_id,
-                        ) {
-                            Ok(s) => tracing::info!(
-                                "Created new session {} for {}@{}",
+                        );
+                        if let Some(s) = existing {
+                            tracing::info!(
+                                "Found existing session {} for {}@{}",
                                 s.session_id,
                                 msg.user_id,
                                 msg.platform
-                            ),
-                            Err(e) => {
-                                tracing::warn!("Failed to create session: {}", redact_err(&e))
+                            );
+                            let _ = gw.get_session_store().update_activity(&s.session_id);
+                        } else {
+                            match gw.get_session_store().create_session(
+                                &msg.platform,
+                                &msg.user_id,
+                                &msg.channel_id,
+                            ) {
+                                Ok(s) => tracing::info!(
+                                    "Created new session {} for {}@{}",
+                                    s.session_id,
+                                    msg.user_id,
+                                    msg.platform
+                                ),
+                                Err(e) => {
+                                    tracing::warn!("Failed to create session: {}", redact_err(&e))
+                                }
                             }
                         }
                     }
-                }
 
-                // ── 5. Typing indicator ───────────────────────────────────────
-                // Send typing indicator on ALL platforms, not just Telegram.
-                // The PlatformAdapter::send_typing default is a no-op, so
-                // non-supporting platforms skip silently. (Bug #13 from
-                // iter-98 audit — Discord and Slack users saw no 'bot is
-                // typing' indicator, making long silences look like the bot
-                // was dead.)
-                let typing_platform = platform.clone();
-                let typing_thread_id = msg.thread_id;
-                let typing_handle = {
-                    let gw = gw.clone();
-                    let ch = channel_id.clone();
-                    Some(tokio::spawn(async move {
-                        let mut interval = tokio::time::interval(std::time::Duration::from_secs(4));
-                        // Skip first immediate tick, send first after 4s
-                        interval.tick().await;
-                        loop {
+                    // ── 5. Typing indicator ───────────────────────────────────────
+                    // Send typing indicator on ALL platforms, not just Telegram.
+                    // The PlatformAdapter::send_typing default is a no-op, so
+                    // non-supporting platforms skip silently. (Bug #13 from
+                    // iter-98 audit — Discord and Slack users saw no 'bot is
+                    // typing' indicator, making long silences look like the bot
+                    // was dead.)
+                    let typing_platform = platform.clone();
+                    let typing_thread_id = msg.thread_id;
+                    let typing_handle = {
+                        let gw = gw.clone();
+                        let ch = channel_id.clone();
+                        Some(tokio::spawn(async move {
+                            let mut interval = tokio::time::interval(std::time::Duration::from_secs(4));
+                            // Skip first immediate tick, send first after 4s
                             interval.tick().await;
-                            if gw
-                                .send_typing(&typing_platform, &ch, typing_thread_id)
-                                .is_err()
-                            {
-                                break;
+                            loop {
+                                interval.tick().await;
+                                if gw
+                                    .send_typing(&typing_platform, &ch, typing_thread_id)
+                                    .is_err()
+                                {
+                                    break;
+                                }
                             }
-                        }
-                    }))
-                };
+                        }))
+                    };
 
-                // ── 5.5 Keepalive notification ─────────────────────────────────
-                // Send "Still working..." periodically for long-running operations
-                let keepalive_handle = if platform == "telegram" {
-                    let gw = gw.clone();
-                    let ch = channel_id.clone();
-                    let thread_id = msg.thread_id;
-                    Some(tokio::spawn(async move {
-                        let start = std::time::Instant::now();
-                        // Wait 3 minutes before first notification (matches Python behavior)
-                        tokio::time::sleep(std::time::Duration::from_secs(180)).await;
-                        loop {
-                            let elapsed = start.elapsed().as_secs();
-                            let minutes = elapsed / 60;
-                            let body =
-                                format!("\u{23F3} Still working... ({}m elapsed...)", minutes);
-                            let msg = OutgoingMessage::new(&ch, &body)
-                                .no_markdown()
-                                .with_thread_id(thread_id);
-                            if gw.send_to_platform("telegram", msg).await.is_err() {
-                                break;
-                            }
-                            // Wait 3 minutes between notifications
+                    // ── 5.5 Keepalive notification ─────────────────────────────────
+                    // Send "Still working..." periodically for long-running operations
+                    let keepalive_handle = if platform == "telegram" {
+                        let gw = gw.clone();
+                        let ch = channel_id.clone();
+                        let thread_id = msg.thread_id;
+                        Some(tokio::spawn(async move {
+                            let start = std::time::Instant::now();
+                            // Wait 3 minutes before first notification (matches Python behavior)
                             tokio::time::sleep(std::time::Duration::from_secs(180)).await;
-                        }
-                    }))
-                } else {
-                    None
-                };
+                            loop {
+                                let elapsed = start.elapsed().as_secs();
+                                let minutes = elapsed / 60;
+                                let body =
+                                    format!("\u{23F3} Still working... ({}m elapsed...)", minutes);
+                                let msg = OutgoingMessage::new(&ch, &body)
+                                    .no_markdown()
+                                    .with_thread_id(thread_id);
+                                if gw.send_to_platform("telegram", msg).await.is_err() {
+                                    break;
+                                }
+                                // Wait 3 minutes between notifications
+                                tokio::time::sleep(std::time::Duration::from_secs(180)).await;
+                            }
+                        }))
+                    } else {
+                        None
+                    };
 
-                // ── 5.5 Set current channel for tool progress ────────────────
-                tracing::debug!(
-                    "Setting current_channel to {}@{} for tool progress",
-                    platform,
-                    channel_id
-                );
-                *current_channel.lock().await =
-                    Some((platform.clone(), channel_id.clone(), msg.thread_id));
+                    // ── 5.5 Set current channel for tool progress ────────────────
+                    tracing::debug!(
+                        "Setting current_channel to {}@{} for tool progress",
+                        platform,
+                        channel_id
+                    );
+                    *current_channel.lock().await =
+                        Some((platform.clone(), channel_id.clone(), msg.thread_id));
 
-                // ── 5.6 Per-turn .env reload for credential rotation ─────────
-                operant_core::env_passthrough::reload_dotenv();
+                    // ── 5.6 Per-turn .env reload for credential rotation ─────────
+                    operant_core::env_passthrough::reload_dotenv();
 
-                // ── 5.7 Turn state: mark pending ─────────────────────────────
-                save_turn_state(&channel_id, "pending");
+                    // ── 5.7 Turn state: mark pending ─────────────────────────────
+                    save_turn_state(&channel_id, "pending");
 
-                // ── 5.8 Session context injection ────────────────────────────
-                let ctx =
-                    build_session_context(&platform, &channel_id, msg_thread, &app_config_clone);
-                msg.content = format!("[context: {}]\n{}", ctx.trim(), msg.content);
+                    // ── 5.8 Session context injection ────────────────────────────
+                    let ctx =
+                        build_session_context(&platform, &channel_id, msg_thread, &app_config_clone);
+                    msg.content = format!("[context: {}]\n{}", ctx.trim(), msg.content);
 
-                // ── 6. Route message ──────────────────────────────────────────
-                match gw.route_message(msg).await {
-                    Ok(Some(response)) => {
-                        tracing::info!(
-                            "Message routed successfully, response length: {}",
-                            response.content.len()
-                        );
-                        // If streaming already delivered the response as a
-                        // progressive-edited message (AgentEvent::Content →
-                        // AgentEvent::Done), skip the duplicate full send.
-                        // (Kills the double-reply bug on gateway turns.)
-                        let streamed = {
-                            let mut map = stream_delivery_for_dispatch.lock().await;
-                            map.remove(&(platform.clone(), channel_id.clone(), msg_thread))
-                                .is_some()
-                        };
-                        if streamed {
+                    // ── 6. Route message ──────────────────────────────────────────
+                    match gw.route_message(msg).await {
+                        Ok(Some(response)) => {
                             tracing::info!(
-                                "Stream already delivered response to {}; skipping duplicate send",
-                                channel_id
+                                "Message routed successfully, response length: {}",
+                                response.content.len()
                             );
-                        } else if let Err(e) = gw.send_to_platform(&platform, response).await {
+                            // If streaming already delivered the response as a
+                            // progressive-edited message (AgentEvent::Content →
+                            // AgentEvent::Done), skip the duplicate full send.
+                            // (Kills the double-reply bug on gateway turns.)
+                            let streamed = {
+                                let mut map = stream_delivery_for_dispatch.lock().await;
+                                map.remove(&(platform.clone(), channel_id.clone(), msg_thread))
+                                    .is_some()
+                            };
+                            if streamed {
+                                tracing::info!(
+                                    "Stream already delivered response to {}; skipping duplicate send",
+                                    channel_id
+                                );
+                            } else if let Err(e) = gw.send_to_platform(&platform, response).await {
+                                tracing::error!(
+                                    "Failed to send response on {} to {}: {}",
+                                    platform,
+                                    channel_id,
+                                    redact_err(&e)
+                                );
+                            }
+                            save_turn_state(&channel_id, "complete");
+                        }
+                        Ok(None) => {
+                            // Even when the handler returns no response, clear any
+                            // leftover stream marker so the next turn isn't
+                            // wrongly suppressed.
+                            let mut map = stream_delivery_for_dispatch.lock().await;
+                            map.remove(&(platform.clone(), channel_id.clone(), msg_thread));
+                            save_turn_state(&channel_id, "complete");
+                        }
+                        Err(e) => {
                             tracing::error!(
-                                "Failed to send response on {} to {}: {}",
+                                "Failed to route message on {}: {}",
                                 platform,
-                                channel_id,
                                 redact_err(&e)
                             );
+                            let mut map = stream_delivery_for_dispatch.lock().await;
+                            map.remove(&(platform.clone(), channel_id.clone(), msg_thread));
+                            save_turn_state(&channel_id, "failed");
                         }
-                        save_turn_state(&channel_id, "complete");
                     }
-                    Ok(None) => {
-                        // Even when the handler returns no response, clear any
-                        // leftover stream marker so the next turn isn't
-                        // wrongly suppressed.
-                        let mut map = stream_delivery_for_dispatch.lock().await;
-                        map.remove(&(platform.clone(), channel_id.clone(), msg_thread));
-                        save_turn_state(&channel_id, "complete");
-                    }
-                    Err(e) => {
-                        tracing::error!(
-                            "Failed to route message on {}: {}",
-                            platform,
-                            redact_err(&e)
-                        );
-                        let mut map = stream_delivery_for_dispatch.lock().await;
-                        map.remove(&(platform.clone(), channel_id.clone(), msg_thread));
-                        save_turn_state(&channel_id, "failed");
-                    }
-                }
 
-                if let Some(handle) = typing_handle {
-                    handle.abort();
-                }
-                if let Some(handle) = keepalive_handle {
-                    handle.abort();
-                }
+                    if let Some(handle) = typing_handle {
+                        handle.abort();
+                    }
+                    if let Some(handle) = keepalive_handle {
+                        handle.abort();
+                    }
 
-                Ok(())
-            }
-            .await;
-            if let Err(e) = result {
-                tracing::error!(
-                    "Error processing message from {} on {}: {}",
-                    channel_id,
-                    platform,
-                    redact_err(&e)
-                );
-            }
+                    Ok(())
+                }
+                .await;
+                if let Err(e) = result {
+                    tracing::error!(
+                        "Error processing message from {} on {}: {}",
+                        channel_id,
+                        platform,
+                        redact_err(&e)
+                    );
+                }
+                // Free the session slot so the next queued message runs.
+                let _ = done_tx.send(session_key);
+            });
+            continue;
+                    }
+                    Some(done_key) = turn_done_rx.recv() => {
+                        turn_inflight.remove(&done_key);
+                        // Run the next queued message for this session by
+                        // re-injecting it — the message arm re-runs interception
+                        // and spawns the turn.
+                        if let Some(pos) = turn_queue.iter().position(|(k, _)| *k == done_key)
+                            && let Some((_, msg)) = turn_queue.remove(pos)
+                        {
+                            let _ = message_tx_for_reinject.send(msg);
+                        }
+                    }
+                }
         }
     });
 

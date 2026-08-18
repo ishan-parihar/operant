@@ -21,7 +21,9 @@ const MAX_CHOICES: usize = 4;
 struct ClarifyArgs {
     /// The clarifying question to ask the user
     question: String,
-    /// Optional list of choices (max 4) for the user to pick from
+    /// Optional list of choices for the user to pick from. More than 4 are
+    /// truncated to the first 4 (hermes parity — a 5th "Other" option is
+    /// always appended by the UI).
     choices: Option<Vec<String>>,
 }
 
@@ -53,17 +55,14 @@ impl OperantTool for ClarifyTool {
             return ToolResult::error("clarify", "Question must not be empty");
         }
 
+        // hermes parity: choices beyond MAX_CHOICES are TRUNCATED, not
+        // rejected — an LLM that offers 8 options must not fail the whole
+        // clarify dialog (the gateway showed "Too many choices: 8 provided"
+        // and the interactive prompt never appeared). An empty list becomes
+        // an open-ended question, exactly like hermes' clarify_tool.py.
         let choices = match args.choices {
-            Some(ref c) if c.len() > MAX_CHOICES => {
-                return ToolResult::error(
-                    "clarify",
-                    format!(
-                        "Too many choices: {} provided, maximum is {}",
-                        c.len(),
-                        MAX_CHOICES
-                    ),
-                );
-            }
+            Some(ref c) if c.len() > MAX_CHOICES => Some(c[..MAX_CHOICES].to_vec()),
+            Some(c) if c.is_empty() => None,
             Some(c) => Some(c),
             None => None,
         };
@@ -157,20 +156,47 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_clarify_too_many_choices() {
+    async fn test_clarify_too_many_choices_truncated() {
+        // hermes parity: more than MAX_CHOICES are TRUNCATED, not rejected —
+        // an LLM offering 8 options must still get a working interactive
+        // dialog (the gateway previously showed "Too many choices: 8
+        // provided" and the clarify prompt never appeared).
         let tool = ClarifyTool;
         let result = tool
             .execute(
                 serde_json::json!({
                     "question": "Pick one:",
-                    "choices": ["A", "B", "C", "D", "E"]
+                    "choices": ["A", "B", "C", "D", "E", "F", "G", "H"]
                 }),
                 default_context(),
             )
             .await;
 
-        assert!(!result.success);
-        assert!(result.error.unwrap().contains("Too many choices"));
+        assert!(result.success, "8 choices must not fail the dialog");
+        let parsed: Value = serde_json::from_str(&result.content).unwrap();
+        assert_eq!(parsed["choiceCount"], 4);
+        assert_eq!(parsed["choices"][0], "A");
+        assert_eq!(parsed["choices"][3], "D");
+    }
+
+    #[tokio::test]
+    async fn test_clarify_empty_choices_becomes_open_ended() {
+        // hermes parity: an empty choices list becomes an open-ended
+        // question (choices = None) instead of a 0-choice dialog.
+        let tool = ClarifyTool;
+        let result = tool
+            .execute(
+                serde_json::json!({
+                    "question": "Tell me more:",
+                    "choices": []
+                }),
+                default_context(),
+            )
+            .await;
+
+        assert!(result.success);
+        let parsed: Value = serde_json::from_str(&result.content).unwrap();
+        assert!(parsed.get("choices").is_none());
     }
 
     #[tokio::test]
