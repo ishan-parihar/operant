@@ -94,6 +94,9 @@ pub enum ToolPermissionResponse {
     AllowOnce,
     /// Allow this tool call and all subsequent calls to this tool in the session
     AllowSession,
+    /// Allow this tool and every future call in this and later sessions
+    /// (hermes `always` — persisted to the permanent allowlist).
+    AllowAlways,
     /// Deny this tool call
     Deny,
 }
@@ -124,6 +127,17 @@ pub struct AgentConfig {
     /// Approval mode for tool execution: "smart" (default, pattern-based),
     /// "manual" (prompt for every tool), or "off" (no checks).
     pub approval_mode: String,
+    /// Persistent tool-approval allowlist (hermes `command_allowlist`
+    /// parity). Patterns match tool names exactly or via `*`/`?` globs
+    /// (e.g. "file_*"). A matching tool skips the permission prompt
+    /// entirely — both in this session and across restarts when
+    /// `approval_allowlist_path` is set. Seeded from config
+    /// (`security.command_allowlist`) by the CLI.
+    pub approval_allowlist: Vec<String>,
+    /// Where `AllowAlways` choices persist (a JSON array of patterns).
+    /// `None` disables disk persistence (approvals are session-memory
+    /// only, matching hermes' in-memory `_session_approved`).
+    pub approval_allowlist_path: Option<std::path::PathBuf>,
     /// Whether to record trajectories (ReAct steps + messages) for each run.
     /// Saved to ~/.operant/trajectories/<session_id>.json.
     pub record_trajectories: bool,
@@ -165,6 +179,8 @@ impl From<&BehaviorSettings> for AgentConfig {
             fallback_models: settings.fallback_models.clone(),
             fallback_on_errors: settings.fallback_on_errors,
             approval_mode: "smart".to_string(),
+            approval_allowlist: Vec::new(),
+            approval_allowlist_path: None,
             record_trajectories: false,
             skill_nudge_interval: settings.creation_nudge_interval,
             memory_review_interval: settings.memory_nudge_interval,
@@ -272,6 +288,14 @@ pub struct OperantAgent {
     conversation: Arc<RwLock<Vec<Message>>>,
     event_tx: Option<mpsc::Sender<AgentEvent>>,
     permission_tx: Option<mpsc::Sender<ToolPermissionRequest>>,
+    /// Session-scoped approvals (hermes `approve_session`): tool names the
+    /// user allowed for the rest of this agent instance's lifetime. Never
+    /// persisted.
+    session_allowlist: Arc<std::sync::RwLock<std::collections::HashSet<String>>>,
+    /// Persistent approvals (hermes `approve_permanent`): tool names the
+    /// user allowed forever. Loaded from `approval_allowlist_path` on
+    /// construction and written back on `AllowAlways`.
+    persistent_allowlist: Arc<std::sync::RwLock<std::collections::HashSet<String>>>,
     memory_manager: Option<MemoryManager>,
     skill_manager: Option<SkillManager>,
     database: Arc<Database>,
@@ -425,7 +449,87 @@ fn prefer_reported(reported: usize, heuristic: usize) -> usize {
     if reported > 0 { reported } else { heuristic }
 }
 
+/// Load the persistent tool-approval allowlist: config seeds + patterns
+/// persisted on disk (hermes `load_permanent_allowlist` parity). Best-effort
+/// — a missing or malformed file yields just the config seeds.
+fn approval_allowlist_from_config(config: &AgentConfig) -> std::collections::HashSet<String> {
+    let mut set: std::collections::HashSet<String> =
+        config.approval_allowlist.iter().cloned().collect();
+    if let Some(path) = &config.approval_allowlist_path
+        && let Ok(contents) = std::fs::read_to_string(path)
+        && let Ok(patterns) = serde_json::from_str::<Vec<String>>(&contents)
+    {
+        set.extend(patterns);
+    }
+    set
+}
+
+/// Persist the allowlist to disk (best-effort; a failure must never block the
+/// agent — hermes `save_permanent_allowlist` is equally best-effort). Written
+/// atomically (temp file + rename) so a crash can't corrupt it.
+fn persist_approval_allowlist(
+    path: Option<&std::path::Path>,
+    patterns: &std::collections::HashSet<String>,
+) {
+    let Some(path) = path else { return };
+    let mut sorted: Vec<&String> = patterns.iter().collect();
+    sorted.sort();
+    let Ok(json) = serde_json::to_string_pretty(&sorted) else {
+        return;
+    };
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let tmp = path.with_extension("tmp");
+    if std::fs::write(&tmp, json).is_ok() {
+        let _ = std::fs::rename(&tmp, path);
+    }
+}
+
+/// Match a tool name against an allowlist pattern: exact match or a `*`/`?`
+/// glob (hermes `_command_matches_permanent_allowlist` uses `fnmatch`, the
+/// Python equivalent).
+fn allowlist_pattern_matches(pattern: &str, name: &str) -> bool {
+    if pattern == name {
+        return true;
+    }
+    if !pattern.contains('*') && !pattern.contains('?') {
+        return false;
+    }
+    fn rec(p: &[char], n: &[char]) -> bool {
+        match (p.first(), n.first()) {
+            (None, None) => true,
+            (Some('*'), _) => rec(&p[1..], n) || (!n.is_empty() && rec(p, &n[1..])),
+            (Some('?'), Some(_)) => rec(&p[1..], &n[1..]),
+            (Some(a), Some(b)) if a == b => rec(&p[1..], &n[1..]),
+            _ => false,
+        }
+    }
+    let p: Vec<char> = pattern.chars().collect();
+    let n: Vec<char> = name.chars().collect();
+    rec(&p, &n)
+}
+
 impl OperantAgent {
+    /// True when `tool_name` is covered by the session or persistent allowlist
+    /// (hermes `is_approved(session_key, pattern_key)` parity). Both sets are
+    /// consulted so a session approval and a permanent approval behave
+    /// identically at check time.
+    fn tool_allowed_by_allowlist(&self, tool_name: &str) -> bool {
+        let session = self
+            .session_allowlist
+            .read()
+            .unwrap_or_else(|e| e.into_inner());
+        let persistent = self
+            .persistent_allowlist
+            .read()
+            .unwrap_or_else(|e| e.into_inner());
+        session
+            .iter()
+            .chain(persistent.iter())
+            .any(|pat| allowlist_pattern_matches(pat, tool_name))
+    }
+
     /// Create a new Operant agent
     pub fn new(
         config: AgentConfig,
@@ -436,6 +540,7 @@ impl OperantAgent {
         let max_iter = config.max_iterations;
         let nudge = config.skill_nudge_interval;
         let mem_interval = config.memory_review_interval;
+        let persistent_allowlist = approval_allowlist_from_config(&config);
         Self {
             config,
             model_override: Arc::new(std::sync::RwLock::new(None::<String>)),
@@ -444,6 +549,8 @@ impl OperantAgent {
             conversation: Arc::new(RwLock::new(Vec::new())),
             event_tx: None,
             permission_tx: None,
+            session_allowlist: Arc::new(std::sync::RwLock::new(std::collections::HashSet::new())),
+            persistent_allowlist: Arc::new(std::sync::RwLock::new(persistent_allowlist)),
             memory_manager: None,
             memory_provider: None,
             memory_sync_executor: Arc::new(std::sync::Mutex::new(None)),
@@ -493,6 +600,7 @@ impl OperantAgent {
         let max_iter = config.max_iterations;
         let nudge = config.skill_nudge_interval;
         let mem_interval = config.memory_review_interval;
+        let persistent_allowlist = approval_allowlist_from_config(&config);
         Self {
             config,
             model_override: Arc::new(std::sync::RwLock::new(None::<String>)),
@@ -501,6 +609,8 @@ impl OperantAgent {
             conversation: Arc::new(RwLock::new(Vec::new())),
             event_tx: Some(event_tx),
             permission_tx: None,
+            session_allowlist: Arc::new(std::sync::RwLock::new(std::collections::HashSet::new())),
+            persistent_allowlist: Arc::new(std::sync::RwLock::new(persistent_allowlist)),
             memory_manager: None,
             memory_provider: None,
             memory_sync_executor: Arc::new(std::sync::Mutex::new(None)),
@@ -3975,60 +4085,100 @@ If nothing needs updating, say 'Nothing to save.' and stop.\n\n{}",
 
             // Permission guard for dangerous tools (interactive — sequential)
             if let Some(ref permission_tx) = self.permission_tx {
-                let needs_permission = matches!(
-                    name.as_str(),
-                    "bash"
-                        | "terminal"
-                        | "execute_command"
-                        | "code_execution"
-                        | "file_read"
-                        | "file_write"
-                        | "file_edit"
-                        | "patch"
-                        | "process"
-                        | "browser"
-                );
-                if needs_permission {
-                    let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
-                    let description = format!("Execute {} tool", name);
-                    let danger = match name.as_str() {
-                        "bash" | "terminal" | "execute_command" => {
-                            "This runs a shell command on your system".to_string()
-                        }
-                        "code_execution" => {
-                            "This runs code on your system with the operant process's permissions (not sandboxed)".to_string()
-                        }
-                        "file_read" => "This reads a file from your system".to_string(),
-                        "file_write" => "This writes content to a file".to_string(),
-                        "file_edit" | "patch" => "This modifies an existing file".to_string(),
-                        "process" => "This manages background processes".to_string(),
-                        "browser" => "This opens and interacts with a browser".to_string(),
-                        _ => "This tool may modify your system".to_string(),
-                    };
-                    let input_preview = Some(args_str.clone());
-                    let _ = permission_tx
-                        .send(ToolPermissionRequest {
-                            tool_name: name.clone(),
-                            tool_id: tool_call.id.clone(),
-                            description,
-                            danger_explanation: danger,
-                            input_preview,
-                            response_tx: resp_tx,
-                        })
-                        .await;
-                    let response = tokio::select! {
-                        r = resp_rx => r.unwrap_or(ToolPermissionResponse::Deny),
-                        _ = tokio::time::sleep(Duration::from_secs(120)) => ToolPermissionResponse::Deny,
-                    };
-                    match response {
-                        ToolPermissionResponse::AllowOnce
-                        | ToolPermissionResponse::AllowSession => {}
-                        ToolPermissionResponse::Deny => {
-                            early_results[idx] = Some(ToolResult::error(
-                                &tool_call.id,
-                                "Permission denied by user".to_string(),
-                            ));
-                            continue;
+                // hermes parity: a tool covered by the session or permanent
+                // allowlist (`command_allowlist` / `always`) never prompts —
+                // it runs immediately. Checked before the hardcoded
+                // dangerous-tool list so allowlisted tools bypass the gate
+                // (hermes `_command_matches_permanent_allowlist` fires before
+                // detection, with only the hardline floor above it).
+                if self.tool_allowed_by_allowlist(&name) {
+                    // allowed by allowlist — no prompt
+                } else {
+                    let needs_permission = matches!(
+                        name.as_str(),
+                        "bash"
+                            | "terminal"
+                            | "execute_command"
+                            | "code_execution"
+                            | "file_read"
+                            | "file_write"
+                            | "file_edit"
+                            | "patch"
+                            | "process"
+                            | "browser"
+                    );
+                    if needs_permission {
+                        let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
+                        let description = format!("Execute {} tool", name);
+                        let danger = match name.as_str() {
+                            "bash" | "terminal" | "execute_command" => {
+                                "This runs a shell command on your system".to_string()
+                            }
+                            "code_execution" => {
+                                "This runs code on your system with the operant process's permissions (not sandboxed)".to_string()
+                            }
+                            "file_read" => "This reads a file from your system".to_string(),
+                            "file_write" => "This writes content to a file".to_string(),
+                            "file_edit" | "patch" => "This modifies an existing file".to_string(),
+                            "process" => "This manages background processes".to_string(),
+                            "browser" => "This opens and interacts with a browser".to_string(),
+                            _ => "This tool may modify your system".to_string(),
+                        };
+                        let input_preview = Some(args_str.clone());
+                        let _ = permission_tx
+                            .send(ToolPermissionRequest {
+                                tool_name: name.clone(),
+                                tool_id: tool_call.id.clone(),
+                                description,
+                                danger_explanation: danger,
+                                input_preview,
+                                response_tx: resp_tx,
+                            })
+                            .await;
+                        let response = tokio::select! {
+                            r = resp_rx => r.unwrap_or(ToolPermissionResponse::Deny),
+                            _ = tokio::time::sleep(Duration::from_secs(120)) => ToolPermissionResponse::Deny,
+                        };
+                        match response {
+                            ToolPermissionResponse::AllowOnce => {}
+                            ToolPermissionResponse::AllowSession => {
+                                // hermes `approve_session`: remember the tool
+                                // for the rest of this agent instance so it
+                                // never prompts again this session.
+                                self.session_allowlist
+                                    .write()
+                                    .unwrap_or_else(|e| e.into_inner())
+                                    .insert(name.clone());
+                            }
+                            ToolPermissionResponse::AllowAlways => {
+                                // hermes `approve_permanent` +
+                                // `save_permanent_allowlist`: remember forever
+                                // and persist to disk so later sessions honor
+                                // the choice too.
+                                self.session_allowlist
+                                    .write()
+                                    .unwrap_or_else(|e| e.into_inner())
+                                    .insert(name.clone());
+                                let patterns = {
+                                    let mut guard = self
+                                        .persistent_allowlist
+                                        .write()
+                                        .unwrap_or_else(|e| e.into_inner());
+                                    guard.insert(name.clone());
+                                    guard.clone()
+                                };
+                                persist_approval_allowlist(
+                                    self.config.approval_allowlist_path.as_deref(),
+                                    &patterns,
+                                );
+                            }
+                            ToolPermissionResponse::Deny => {
+                                early_results[idx] = Some(ToolResult::error(
+                                    &tool_call.id,
+                                    "Permission denied by user".to_string(),
+                                ));
+                                continue;
+                            }
                         }
                     }
                 }
@@ -5185,6 +5335,8 @@ mod tests {
             fallback_models: Vec::new(),
             fallback_on_errors: false,
             approval_mode: "off".to_string(),
+            approval_allowlist: Vec::new(),
+            approval_allowlist_path: None,
             record_trajectories: false,
             skill_nudge_interval: 0,
             memory_review_interval: 0,
@@ -5228,6 +5380,8 @@ mod tests {
             fallback_models: Vec::new(),
             fallback_on_errors: false,
             approval_mode: "off".to_string(),
+            approval_allowlist: Vec::new(),
+            approval_allowlist_path: None,
             record_trajectories: false,
             skill_nudge_interval: 0,
             memory_review_interval: 0,
@@ -5337,6 +5491,8 @@ mod tests {
             fallback_models: Vec::new(),
             fallback_on_errors: false,
             approval_mode: "off".to_string(),
+            approval_allowlist: Vec::new(),
+            approval_allowlist_path: None,
             record_trajectories: false,
             skill_nudge_interval: 0,
             memory_review_interval: 0,
@@ -5380,12 +5536,75 @@ mod tests {
     fn tool_permission_response_variants() {
         let allow_once = ToolPermissionResponse::AllowOnce;
         let allow_session = ToolPermissionResponse::AllowSession;
+        let always = ToolPermissionResponse::AllowAlways;
         let deny = ToolPermissionResponse::Deny;
 
         assert_eq!(allow_once, ToolPermissionResponse::AllowOnce);
         assert_eq!(allow_session, ToolPermissionResponse::AllowSession);
+        assert_eq!(always, ToolPermissionResponse::AllowAlways);
         assert_eq!(deny, ToolPermissionResponse::Deny);
         assert_ne!(allow_once, deny);
+        assert_ne!(always, allow_session);
+    }
+
+    #[test]
+    fn allowlist_pattern_matching() {
+        // Exact match.
+        assert!(allowlist_pattern_matches(
+            "code_execution",
+            "code_execution"
+        ));
+        // `*` glob — prefix and suffix wildcards.
+        assert!(allowlist_pattern_matches("file_*", "file_write"));
+        assert!(allowlist_pattern_matches("file_*", "file_read"));
+        assert!(!allowlist_pattern_matches("file_*", "browser"));
+        assert!(allowlist_pattern_matches("*_search", "memory_search"));
+        assert!(!allowlist_pattern_matches("*_search", "memory_store"));
+        // `?` single-character wildcard.
+        assert!(allowlist_pattern_matches("bash?", "bashx"));
+        assert!(!allowlist_pattern_matches("bash?", "bash"));
+        // A plain pattern (no glob chars) must not substring-match.
+        assert!(!allowlist_pattern_matches("file", "file_write"));
+        // Mid-pattern star.
+        assert!(allowlist_pattern_matches(
+            "mcp_*_tool",
+            "mcp_management_tool"
+        ));
+    }
+
+    #[test]
+    fn persistent_allowlist_round_trips_to_disk() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("approval_allowlist.json");
+
+        let config = AgentConfig {
+            approval_allowlist_path: Some(path.clone()),
+            approval_allowlist: vec!["code_execution".to_string(), "file_*".to_string()],
+            ..AgentConfig::default()
+        };
+
+        // Config seeds + persisted patterns both load on construction.
+        let loaded = approval_allowlist_from_config(&config);
+        assert!(loaded.contains("code_execution"));
+        assert!(loaded.contains("file_*"));
+
+        // The AllowAlways path: extend the set with a new tool and persist.
+        let mut patterns = loaded;
+        patterns.insert("browser".to_string());
+        persist_approval_allowlist(Some(&path), &patterns);
+
+        // A fresh config (same path, no seeds) must reload the persisted
+        // pattern — proving the "always allow" choice survives restarts.
+        let fresh = AgentConfig {
+            approval_allowlist_path: Some(path.clone()),
+            ..AgentConfig::default()
+        };
+        let reloaded = approval_allowlist_from_config(&fresh);
+        assert!(
+            reloaded.contains("browser"),
+            "persisted pattern must reload"
+        );
+        assert!(reloaded.contains("code_execution"));
     }
 
     #[test]

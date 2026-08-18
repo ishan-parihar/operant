@@ -921,6 +921,13 @@ pub(crate) fn agent_config(
         agent.system_prompt = Some(prompt.to_string());
     }
     agent.request_timeout = Duration::from_secs(config.agent.request_timeout_secs);
+    // Permanent tool-approval allowlist (hermes `command_allowlist` parity):
+    // seed from the top-level `command_allowlist` config key and persist
+    // "always allow" choices to a sidecar JSON in the operant data dir so
+    // later sessions honor them too.
+    agent.approval_allowlist = config.command_allowlist.clone();
+    agent.approval_allowlist_path =
+        dirs::home_dir().map(|h| h.join(".operant").join("approval_allowlist.json"));
     // Progressive tool disclosure (hermes parity): thread the CLI's
     // `tools.tool_search` block into the agent loop so MCP tool schemas
     // can be deferred behind the tool_search bridge. `mcp.deferred_loading

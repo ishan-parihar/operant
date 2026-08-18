@@ -542,6 +542,7 @@ fn build_help_text() -> String {
 /// [`COMMAND_REGISTRY`], this function falls through to the plugin command
 /// registry via [`operant_core::plugins::handle_plugin_command`].
 pub fn handle_command(cmd_name: &str, _args: &str, ctx: &CommandContext<'_>) -> Option<String> {
+    let args = _args;
     let def = COMMAND_REGISTRY.iter().find(|d| {
         d.name.eq_ignore_ascii_case(cmd_name)
             || d.aliases.iter().any(|a| a.eq_ignore_ascii_case(cmd_name))
@@ -1754,7 +1755,15 @@ pub fn handle_command(cmd_name: &str, _args: &str, ctx: &CommandContext<'_>) -> 
         // ── Admin ────────────────────────────────────────────────────
         "approve" => {
             // (iter-160: resolve pending permission request)
-            let mut msg = String::from("✅ **Action approved.**");
+            // hermes parity: `/approve always` grants the tool permanently
+            // (persisted allowlist, `approve_permanent`), `/approve` grants
+            // it for the rest of the session (`approve_session`).
+            let always = args.trim().eq_ignore_ascii_case("always");
+            let mut msg = if always {
+                String::from("✅✅ **Action approved — always allow.**")
+            } else {
+                String::from("✅ **Action approved.**")
+            };
             let resolved = crate::gateway_runner::PENDING_PERMISSIONS
                 .get()
                 .and_then(|s| s.lock().ok())
@@ -1763,14 +1772,21 @@ pub fn handle_command(cmd_name: &str, _args: &str, ctx: &CommandContext<'_>) -> 
                     // Try to resolve the pending permission for this channel
                     pending.try_lock().ok().and_then(|mut pending_map| {
                         pending_map.remove(ctx.channel_id).and_then(|req| {
-                            req.response_tx.send(
-                                operant_core::agent::ToolPermissionResponse::AllowSession,
-                            ).ok()
+                            let response = if always {
+                                operant_core::agent::ToolPermissionResponse::AllowAlways
+                            } else {
+                                operant_core::agent::ToolPermissionResponse::AllowSession
+                            };
+                            req.response_tx.send(response).ok()
                         })
                     })
                 });
             if resolved.is_some() {
-                msg.push_str("\nTool execution resumed.");
+                msg.push_str(if always {
+                    "\nTool execution resumed; the tool is now in the permanent allowlist."
+                } else {
+                    "\nTool execution resumed."
+                });
             } else {
                 msg.push_str("\n(No pending permission request found.)");
             }

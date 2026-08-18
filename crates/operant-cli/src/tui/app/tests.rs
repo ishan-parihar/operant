@@ -516,6 +516,34 @@ fn test_permission_dialog_uppercase_y_sends_allow_session() {
 }
 
 #[test]
+fn test_permission_dialog_p_sends_allow_always() {
+    use crate::tui::dialogs::PermissionRequest;
+
+    let mut app = make_app();
+    let pr = PermissionRequest::standard(
+        "tu-p".to_string(),
+        "Bash".to_string(),
+        "This will execute a shell command.".to_string(),
+    );
+    app.permission_request = Some(pr);
+
+    let (tx, mut rx) = tokio::sync::oneshot::channel();
+    app.pending_permission_response_tx = Some(tx);
+
+    // 'p' — "Yes, always allow (persistent)": now backed by the real
+    // persistent allowlist (hermes `always` → command_allowlist).
+    let key = press_key(KeyCode::Char('p'), KeyModifiers::NONE);
+    app.handle_permission_key(key);
+
+    assert!(app.permission_request.is_none());
+    let response = rx.try_recv().expect("response should be sent");
+    assert_eq!(
+        response,
+        operant_core::agent::ToolPermissionResponse::AllowAlways
+    );
+}
+
+#[test]
 fn test_permission_dialog_n_sends_deny() {
     use crate::tui::dialogs::PermissionRequest;
 

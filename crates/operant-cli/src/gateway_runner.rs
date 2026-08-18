@@ -1836,6 +1836,7 @@ async fn edit_approval_prompt_message(
     let text = if was_pending {
         match action {
             "approve" => format!("✅ Approved by {user} (button tap)"),
+            "always" => format!("✅✅ Always allowed by {user} (button tap)"),
             "deny" => format!("❌ Denied by {user} (button tap)"),
             _ => "⚠️ Unknown action".to_string(),
         }

@@ -2,6 +2,13 @@
 
 terminal_backend = "local"
 
+# Tool-approval allowlist (hermes `command_allowlist` parity). Patterns match
+# tool names exactly or via `*`/`?` globs (e.g. "file_*"). A matching tool
+# skips the permission prompt in every session. "Always allow" choices made
+# interactively (TUI `p` key, gateway /approve always / button) are persisted
+# to ~/.operant/approval_allowlist.json and honored across restarts.
+# command_allowlist = ["file_read", "file_*"]
+
 [client]
 base_url = "https://api.openai.com/v1"
 # api_key = "set me or use OPENAI_API_KEY"

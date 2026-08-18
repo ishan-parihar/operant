@@ -1746,17 +1746,19 @@ impl PlatformAdapter for TelegramAdapter {
         description: &str,
     ) -> Result<()> {
         let prompt = format!(
-            "🔧 Permission required: {tool_name} — {description}\nTap a button to allow or cancel (60s timeout), or reply /approve / /deny."
+            "🔧 Permission required: {tool_name} — {description}\nTap a button to allow (once / always) or cancel (60s timeout), or reply /approve, /approve always, /deny."
         );
-        // Inline keyboard with tappable approve/deny buttons (hermes
-        // `send_exec_approval` parity). Callback data uses the `approval:`
-        // prefix handled in `handle_callback_update` below.
+        // Inline keyboard with tappable approve / always / deny buttons
+        // (hermes `send_exec_approval` parity — `always` is the permanent
+        // allowlist choice). Callback data uses the `approval:` prefix
+        // handled in `handle_callback_update` below.
         let mut body = serde_json::json!({
             "chat_id": channel_id,
             "text": prompt,
             "reply_markup": {
                 "inline_keyboard": [[
                     { "text": "✅ Approve", "callback_data": "approval:approve" },
+                    { "text": "✅✅ Always", "callback_data": "approval:always" },
                     { "text": "❌ Deny", "callback_data": "approval:deny" }
                 ]]
             }
@@ -2138,10 +2140,11 @@ impl TelegramAdapter {
             .unwrap_or_default();
         let api = format!("{}/bot{}", base.trim_end_matches('/'), token);
 
-        // ── Tool-permission approve/deny taps ────────────────────────────
+        // ── Tool-permission approve / always / deny taps ─────────────────
         if let Some(action) = data.strip_prefix("approval:") {
             let label = match action {
                 "approve" => "✅ Approved",
+                "always" => "✅✅ Always allowed",
                 "deny" => "❌ Denied",
                 _ => "⚠️ Unknown action",
             };
@@ -2219,6 +2222,7 @@ impl TelegramAdapter {
                 channel_id.clone(),
                 match action {
                     "approve" => "/approve".to_string(),
+                    "always" => "/approve always".to_string(),
                     "deny" => "/deny".to_string(),
                     other => format!("/approve-unknown-{other}"),
                 },
@@ -4825,6 +4829,36 @@ mod tests {
             "message": {"chat": {"id": 1}}
         });
         assert!(TelegramAdapter::choice_message_from_callback(&cb).is_none());
+    }
+
+    /// An `approval:always` button tap must synthesize `/approve always` so
+    /// the shared gateway_commands resolver grants the permanent allowlist
+    /// (hermes `always` → command_allowlist parity), carrying the thread and
+    /// the edit marker for the outcome label.
+    #[test]
+    fn approval_always_callback_synthesizes_approve_always() {
+        let cb = serde_json::json!({
+            "id": "cb_always",
+            "data": "approval:always",
+            "from": {"id": 42, "first_name": "Ishan", "username": "ishanp"},
+            "message": {
+                "chat": {"id": -100123, "type": "supergroup"},
+                "message_id": 88,
+                "message_thread_id": 91609
+            }
+        });
+        let msg = TelegramAdapter::approval_message_from_callback(&cb).expect("callback parsed");
+        assert_eq!(msg.content, "/approve always");
+        assert_eq!(msg.thread_id, Some(91609));
+        assert!(msg.is_group_chat);
+        let marker = msg
+            .raw
+            .get("approval_callback")
+            .expect("edit marker present");
+        assert_eq!(marker["chat_id"], "-100123");
+        assert_eq!(marker["message_id"], 88);
+        assert_eq!(marker["action"], "always");
+        assert_eq!(marker["user"], "Ishan");
     }
 
     /// Echo handler that optionally blocks inside `handle` until released

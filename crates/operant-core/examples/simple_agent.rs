@@ -168,6 +168,8 @@ Use the echo tool to repeat information and the calculate tool for math."
         fallback_models: vec![],
         fallback_on_errors: false,
         approval_mode: "smart".to_string(),
+        approval_allowlist: Vec::new(),
+        approval_allowlist_path: None,
         record_trajectories: false,
         skill_nudge_interval: 10,
         memory_review_interval: 5,

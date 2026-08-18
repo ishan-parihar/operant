@@ -129,9 +129,12 @@ impl App {
 
         let response = match selected_key {
             Some('y') => operant_core::agent::ToolPermissionResponse::AllowOnce,
-            Some('Y') | Some('p') | Some('P') => {
-                operant_core::agent::ToolPermissionResponse::AllowSession
-            }
+            // 'Y' (session) and 'P' (bash prefix rule) — session-scoped.
+            Some('Y') | Some('P') => operant_core::agent::ToolPermissionResponse::AllowSession,
+            // 'p' — "Yes, always allow (persistent)": now backed by the real
+            // persistent allowlist (hermes `always` → command_allowlist), so
+            // the agent stores the tool permanently instead of session-only.
+            Some('p') => operant_core::agent::ToolPermissionResponse::AllowAlways,
             // 'n' (deny), None (no options), or any unmatched key → Deny.
             Some('n') | None => operant_core::agent::ToolPermissionResponse::Deny,
             Some(_) => operant_core::agent::ToolPermissionResponse::Deny,

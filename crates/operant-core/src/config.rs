@@ -47,6 +47,14 @@ pub struct AppConfig {
     /// fallback is driven by `agent.fallback_models`.
     #[serde(default)]
     pub providers: operant_config::providers::ProvidersConfig,
+    /// Tool-approval allowlist patterns (hermes `command_allowlist` parity).
+    /// Patterns match tool names exactly or via `*`/`?` globs (e.g.
+    /// `"file_*"`). A matching tool skips the permission prompt in every
+    /// session. `Always allow` choices made interactively are appended here
+    /// (via the sidecar `approval_allowlist.json`) and honored across
+    /// restarts.
+    #[serde(default)]
+    pub command_allowlist: Vec<String>,
 }
 
 impl Default for AppConfig {
@@ -78,6 +86,7 @@ impl Default for AppConfig {
             moa: MoaSettings::default(),
             database_path,
             providers: operant_config::providers::ProvidersConfig::default(),
+            command_allowlist: Vec::new(),
         }
     }
 }
