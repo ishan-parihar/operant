@@ -689,7 +689,12 @@ pub struct CheckpointsSettings {
 impl Default for CheckpointsSettings {
     fn default() -> Self {
         Self {
-            enabled: false,
+            // On by default: the checkpoint tool is registered for every
+            // agent, and an inert-by-default tool confused the live loop
+            // ("Disabled in config"). Snapshots live in an isolated shadow
+            // git store under ~/.operant/checkpoints — zero git-state leak
+            // into the user's project — so the safety net costs nothing.
+            enabled: true,
             base_dir: None,
             max_snapshots: 20,
         }

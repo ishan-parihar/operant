@@ -61,10 +61,15 @@ impl KanbanTool {
                 Ok(serde_json::to_string_pretty(&result).expect("kanban result is serializable"))
             }
             "show" => {
-                let tid = args
-                    .task_id
-                    .clone()
-                    .ok_or_else(|| Error::Agent("task_id is required".into()))?;
+                // `kanban show` without a task_id is treated as a list — the
+                // agent frequently interprets "show" as "show me all tasks"
+                // and previously hit a hard "task_id is required" error (the
+                // live loop reported "task_id required even for list action").
+                let Some(tid) = args.task_id.clone() else {
+                    let tasks = self.db.list_tasks()?;
+                    return Ok(serde_json::to_string_pretty(&json!({ "tasks": tasks }))
+                        .expect("kanban result is serializable"));
+                };
                 let task = self
                     .db
                     .get_task(&tid)?
@@ -202,7 +207,11 @@ impl OperantTool for KanbanTool {
     }
 
     fn description(&self) -> &str {
-        "Structured tool-call surface for Kanban task management. Supports showing, completing, blocking, heartbeating, commenting, creating, and linking tasks."
+        "Structured tool-call surface for Kanban task management. \
+         Actions: 'list' — all tasks (no task_id needed); 'show' — task detail \
+         (show without task_id lists all tasks); 'create' — new task; \
+         'complete'/'block'/'heartbeat'/'comment' — require task_id; 'link' — \
+         parent_id + child_id."
     }
 
     fn schema(&self) -> ToolSchema {
@@ -232,5 +241,19 @@ mod tests {
         let json = serde_json::to_value(&schema).unwrap();
         assert!(json.is_object());
         assert_eq!(json["name"], "kanban");
+    }
+
+    #[test]
+    fn test_kanban_show_without_task_id_lists_tasks() {
+        // Regression: the live loop reported "task_id required even for list
+        // action" — the model calls `kanban show` expecting a listing. Show
+        // without a task_id must fall back to listing, never error.
+        let db = Arc::new(
+            KanbanDb::init(std::path::PathBuf::from("test_kanban_show_fallback.db")).unwrap(),
+        );
+        let tool = KanbanTool::new(db);
+        let args: KanbanToolArgs = serde_json::from_value(json!({"action": "show"})).unwrap();
+        let out = tool.handle(args).unwrap();
+        assert!(out.contains("tasks"), "show-without-id must return a task list");
     }
 }

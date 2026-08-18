@@ -459,6 +459,23 @@ fn is_interactive_tool(name: &str) -> bool {
     matches!(name, "clarify" | "approval_request")
 }
 
+/// Long-running tools that legitimately run far beyond the generic tool
+/// timeout (default 30s): `delegate_task` spawns an isolated child agent with
+/// its own timeout (default 600s). Wrapping it in the generic timeout kills
+/// the delegation mid-flight (the live loop reported "Timed out after 30s") —
+/// the child's own timeout must govern, so these get a generous backstop
+/// instead.
+fn is_long_running_tool(name: &str) -> bool {
+    matches!(name, "delegate_task")
+}
+
+/// Defensive wrapper for tools exempt from the generic tool timeout.
+/// Interactive dialogs self-timeout via the user-question receiver (120s);
+/// delegation governs itself via the child timeout (default 600s). 1800s is
+/// only a backstop against a wedged receiver/child — never the governing
+/// timeout.
+const LONG_RUNNING_TOOL_TIMEOUT: Duration = Duration::from_secs(1800);
+
 /// Load the persistent tool-approval allowlist: config seeds + patterns
 /// persisted on disk (hermes `load_permanent_allowlist` parity). Best-effort
 /// — a missing or malformed file yields just the config seeds.
@@ -4221,12 +4238,14 @@ If nothing needs updating, say 'Nothing to save.' and stop.\n\n{}",
                     .execute(&name, &tool_call.id, args, ToolContext::default());
             // Interactive tools (clarify / approval_request) block waiting
             // for a human — the generic tool timeout (30s) would kill the
-            // dialog before the user can respond. They get a generous
-            // defensive wrapper instead: the user-question receiver resolves
-            // them on its own (120s timeout reply), so the wrapper is only a
-            // backstop against a wedged receiver.
-            let result = if is_interactive_tool(&name) {
-                timeout(Duration::from_secs(600), tool_future).await
+            // dialog before the user can respond. Long-running tools
+            // (delegate_task) spawn a child agent with its own timeout. Both
+            // get a generous defensive wrapper instead: the user-question
+            // receiver resolves dialogs on their own (120s timeout reply),
+            // and the child timeout governs delegation — the wrapper is only
+            // a backstop against a wedged receiver/child.
+            let result = if is_interactive_tool(&name) || is_long_running_tool(&name) {
+                timeout(LONG_RUNNING_TOOL_TIMEOUT, tool_future).await
             } else {
                 timeout(self.config.tool_timeout, tool_future).await
             };
@@ -4282,11 +4301,14 @@ If nothing needs updating, say 'Nothing to save.' and stop.\n\n{}",
                         let exec =
                             registry.execute(&name, &tool_call.id, args, ToolContext::default());
                         // Interactive tools exempt from the generic tool
-                        // timeout (see is_interactive_tool); the 600s wrapper
-                        // is only a backstop — the user-question receiver
-                        // resolves the dialog on its own 120s timeout.
-                        let result = if is_interactive_tool(&name) {
-                            timeout(Duration::from_secs(600), exec).await
+                        // timeout (see is_interactive_tool); long-running
+                        // tools like delegate_task carry their own child
+                        // timeout. Both get the generous backstop — the
+                        // user-question receiver resolves dialogs on their
+                        // own 120s timeout and the child timeout governs
+                        // delegation.
+                        let result = if is_interactive_tool(&name) || is_long_running_tool(&name) {
+                            timeout(LONG_RUNNING_TOOL_TIMEOUT, exec).await
                         } else {
                             timeout(tool_timeout, exec).await
                         };
@@ -5579,6 +5601,13 @@ mod tests {
         // could tap). Everything else keeps the hard timeout.
         assert!(is_interactive_tool("clarify"));
         assert!(is_interactive_tool("approval_request"));
+        // Long-running tools (delegate_task spawns a child agent with its own
+        // 600s default timeout) must not be killed by the 30s generic tool
+        // timeout — the live loop reported "Timed out after 30s" on
+        // delegation before the exemption existed.
+        assert!(is_long_running_tool("delegate_task"));
+        assert!(!is_long_running_tool("terminal"));
+        assert!(!is_long_running_tool("web_search"));
         assert!(!is_interactive_tool("bash"));
         assert!(!is_interactive_tool("code_execution"));
         assert!(!is_interactive_tool("web_search"));

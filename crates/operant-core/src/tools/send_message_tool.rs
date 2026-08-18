@@ -45,6 +45,11 @@ struct SendMessageArgs {
 
     /// Optional media reference: "MEDIA:<path>" format or a URL
     media: Option<String>,
+
+    /// Telegram forum-topic thread id (`message_thread_id`) to post into.
+    /// Required when `via=telegram` and the target chat is a forum supergroup
+    /// — without it Telegram returns "chat not found".
+    message_thread_id: Option<i64>,
 }
 
 // ── OperantTool trait impl ───────────────────────────────────────────────────
@@ -58,7 +63,9 @@ impl OperantTool for SendMessageTool {
     fn description(&self) -> &str {
         "Send a message to Telegram, Discord, Slack, or a generic webhook (via 'send'), \
          or list available platforms and their configuration status (via 'list'). \
-         Messages that exceed platform limits are automatically split into chunks."
+         For Telegram forum supergroups pass message_thread_id so the message lands \
+         in the right topic. Messages that exceed platform limits are automatically \
+         split into chunks."
     }
 
     fn schema(&self) -> ToolSchema {
@@ -107,9 +114,13 @@ impl SendMessageTool {
         };
 
         let media = args.get("media").and_then(|v| v.as_str());
+        let message_thread_id = args.get("message_thread_id").and_then(|v| v.as_i64());
 
         match via {
-            "telegram" => self.send_telegram(to, message, media).await,
+            "telegram" => {
+                self.send_telegram(to, message, media, message_thread_id)
+                    .await
+            }
             "discord" => self.send_discord(to, message, media).await,
             "slack" => self.send_slack(to, message, media).await,
             "webhook" => self.send_webhook(to, message, media).await,
@@ -310,7 +321,13 @@ impl SendMessageTool {
 
     // ── Platform senders ────────────────────────────────────────────────────
 
-    async fn send_telegram(&self, to: &str, message: &str, media: Option<&str>) -> ToolResult {
+    async fn send_telegram(
+        &self,
+        to: &str,
+        message: &str,
+        media: Option<&str>,
+        message_thread_id: Option<i64>,
+    ) -> ToolResult {
         let token = match std::env::var("TELEGRAM_BOT_TOKEN") {
             Ok(t) => t,
             Err(_) => {
@@ -341,6 +358,13 @@ impl SendMessageTool {
             let mut body = json!({
                 "chat_id": to,
             });
+
+            // Forum-topic support: without message_thread_id, Telegram replies
+            // "chat not found" when posting into a supergroup topic (the live
+            // loop reported exactly this for send_message).
+            if let Some(tid) = message_thread_id {
+                body["message_thread_id"] = json!(tid);
+            }
 
             if is_document {
                 body["caption"] = json!(chunk);
@@ -619,6 +643,14 @@ mod tests {
             .expect("schema should have properties");
         assert!(props.contains_key("action"), "schema must have 'action'");
         assert!(props.contains_key("via"), "schema must have 'via'");
+        // Telegram forum-topic support: the schema must expose the thread id
+        // (serialized camelCase per the args struct's rename_all) so the
+        // agent can post into a supergroup topic instead of hitting "chat
+        // not found".
+        assert!(
+            props.contains_key("messageThreadId"),
+            "schema must expose 'messageThreadId' for Telegram forum topics"
+        );
     }
 
     #[tokio::test]
