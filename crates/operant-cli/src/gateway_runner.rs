@@ -125,6 +125,50 @@ fn init_pending_permissions() {
     PENDING_USER_QUESTIONS.get_or_init(|| std::sync::Mutex::new(None));
 }
 
+/// Store the shared pending-permission map into the global.
+///
+/// NB: must OVERWRITE the inner `Option` rather than
+/// `get_or_init(|| Mutex::new(Some(..)))`: `init_pending_permissions()` has
+/// already initialized the static with `None` by the time the permission
+/// receiver builds its Arc, and `OnceLock::get_or_init` never overwrites —
+/// so the old pattern silently left the store `None` for the whole process.
+/// Every static-based lookup then failed ("Approval expired — no command
+/// was waiting" / "No pending permission request found") while the 60s
+/// timeout task — holding its own Arc clone — still found and auto-denied
+/// the entry. That is exactly what the live logs showed: a button tap 5s
+/// after the prompt found nothing, the timeout 60s later removed it.
+pub fn store_pending_permissions(
+    store: Arc<Mutex<HashMap<String, operant_core::agent::ToolPermissionRequest>>>,
+) {
+    let cell = PENDING_PERMISSIONS.get_or_init(|| std::sync::Mutex::new(None));
+    if let Ok(mut guard) = cell.lock() {
+        *guard = Some(store);
+    }
+}
+
+/// True when `channel_id` has an unresolved permission request in the
+/// shared store. Mirrors `resolve_pending_permission`'s bounded retry so a
+/// transient collision with an in-flight insert can't make a live button
+/// tap look expired.
+pub fn pending_permission_exists(channel_id: &str) -> bool {
+    let Some(cell) = PENDING_PERMISSIONS.get() else {
+        return false;
+    };
+    let Ok(guard) = cell.lock() else {
+        return false;
+    };
+    let Some(pending) = guard.as_ref() else {
+        return false;
+    };
+    for _ in 0..50 {
+        if let Ok(map) = pending.try_lock() {
+            return map.contains_key(channel_id);
+        }
+        std::thread::yield_now();
+    }
+    false
+}
+
 /// Returns the path to the gateway PID file used for cross-process status checks.
 fn pid_file_path() -> std::path::PathBuf {
     operant_core::platform::operant_home().join("gateway.pid")
@@ -1262,8 +1306,9 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
     });
 
     // Store the pending_permissions Arc so gateway_commands can access it
-    // when /approve or /deny is received.
-    PENDING_PERMISSIONS.get_or_init(|| std::sync::Mutex::new(Some(pending_permissions_for_cmd)));
+    // when /approve or /deny is received. Overwrites the `None` that
+    // `init_pending_permissions()` seeded above (see store_pending_permissions).
+    store_pending_permissions(pending_permissions_for_cmd);
 
     // Drain user-question requests from the clarify tool. When the agent
     // calls clarify(), it pushes a UserQuestionRequest and blocks. We surface
@@ -1430,17 +1475,8 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                             // the outcome is known, exactly like hermes'
                             // `query.edit_message_text` after a tap.)
                             let approval_tap = msg.raw.get("approval_callback").cloned();
-                            let approval_was_pending = approval_tap.is_some() && {
-                                let mut found = false;
-                                if let Some(cell) = crate::gateway_runner::PENDING_PERMISSIONS.get()
-                                    && let Ok(guard) = cell.lock()
-                                    && let Some(pending) = guard.as_ref()
-                                    && let Ok(map) = pending.try_lock()
-                                {
-                                    found = map.contains_key(&msg.channel_id);
-                                }
-                                found
-                            };
+                            let approval_was_pending = approval_tap.is_some()
+                                && pending_permission_exists(&msg.channel_id);
                             let is_admin = admins.is_empty() || admins.contains(&msg.user_id);
                             if let Some((cmd_def, cmd_args)) = resolve_command(&msg.content) {
                                 tracing::info!(
@@ -2650,5 +2686,109 @@ mod turn_state_tests {
             "normal-channel_123"
         );
         assert_eq!(sanitize_channel_id(""), "");
+    }
+}
+
+#[cfg(test)]
+mod pending_permissions_tests {
+    use super::*;
+    use operant_core::agent::ToolPermissionRequest;
+    use operant_core::agent::ToolPermissionResponse;
+
+    fn make_request() -> ToolPermissionRequest {
+        let (tx, _rx) = tokio::sync::oneshot::channel();
+        ToolPermissionRequest {
+            tool_name: "code_execution".into(),
+            tool_id: "t-1".into(),
+            description: "Execute code".into(),
+            danger_explanation: "Runs arbitrary code".into(),
+            input_preview: None,
+            response_tx: tx,
+        }
+    }
+
+    /// Regression: `init_pending_permissions()` seeds the static with `None`
+    /// BEFORE the permission receiver builds its Arc. The old code then did
+    /// `PENDING_PERMISSIONS.get_or_init(|| Mutex::new(Some(arc)))`, which is a
+    /// no-op on an already-initialized OnceLock — the store stayed `None` for
+    /// the whole process, so every button tap reported "Approval expired — no
+    /// command was waiting" while the 60s timeout (own Arc clone) still
+    /// auto-denied. `store_pending_permissions` must OVERWRITE the inner
+    /// Option so the static reflects the live store.
+    #[test]
+    fn store_overwrites_early_none_init_and_taps_see_entries() {
+        // Reproduce the production init order: seed the globals first.
+        init_pending_permissions();
+
+        let store: Arc<Mutex<HashMap<String, ToolPermissionRequest>>> =
+            Arc::new(Mutex::new(HashMap::new()));
+        store
+            .blocking_lock()
+            .insert("ch_91838".into(), make_request());
+
+        // The fix: overwrite, not get_or_init.
+        store_pending_permissions(store);
+
+        // A button tap / /approve lookup on the waiting channel finds it...
+        assert!(
+            pending_permission_exists("ch_91838"),
+            "pending tap lookup must see the stored request"
+        );
+        // ...and an unrelated channel does not.
+        assert!(!pending_permission_exists("other_channel"));
+
+        // Cleanup: leave the global with an empty live store so other tests
+        // in this binary aren't affected.
+        store_pending_permissions(Arc::new(Mutex::new(HashMap::new())));
+        assert!(!pending_permission_exists("ch_91838"));
+    }
+
+    #[test]
+    fn exists_returns_false_when_store_never_seeded() {
+        // A store that was never installed (or was seeded but never
+        // overwritten by the receiver) must read as "no pending" rather
+        // than panicking or looping.
+        assert!(!pending_permission_exists("whatever"));
+    }
+
+    #[test]
+    fn response_tx_resolves_from_stored_request() {
+        // End-to-end of the resolution contract: the request stored in the
+        // shared map must deliver its ToolPermissionResponse when resolved.
+        let (tx, mut rx) = tokio::sync::oneshot::channel();
+        let req = ToolPermissionRequest {
+            tool_name: "process".into(),
+            tool_id: "t-2".into(),
+            description: "Run a process".into(),
+            danger_explanation: "Spawns a process".into(),
+            input_preview: None,
+            response_tx: tx,
+        };
+        let store: Arc<Mutex<HashMap<String, ToolPermissionRequest>>> =
+            Arc::new(Mutex::new(HashMap::new()));
+        store.blocking_lock().insert("dm_5297486612".into(), req);
+        store_pending_permissions(store);
+
+        assert!(pending_permission_exists("dm_5297486612"));
+        let cell = PENDING_PERMISSIONS.get().unwrap();
+        let guard = cell.lock().unwrap();
+        let pending = guard.as_ref().unwrap();
+        let removed = pending
+            .blocking_lock()
+            .remove("dm_5297486612")
+            .expect("entry must be present");
+        removed
+            .response_tx
+            .send(ToolPermissionResponse::AllowSession)
+            .ok();
+        drop(guard);
+
+        // oneshot delivery is synchronous — no runtime needed to observe it.
+        let response = rx
+            .try_recv()
+            .expect("response must be delivered synchronously");
+        assert!(matches!(response, ToolPermissionResponse::AllowSession));
+
+        store_pending_permissions(Arc::new(Mutex::new(HashMap::new())));
     }
 }

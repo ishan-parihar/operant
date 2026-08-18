@@ -254,6 +254,9 @@ mod tests {
         let tool = KanbanTool::new(db);
         let args: KanbanToolArgs = serde_json::from_value(json!({"action": "show"})).unwrap();
         let out = tool.handle(args).unwrap();
-        assert!(out.contains("tasks"), "show-without-id must return a task list");
+        assert!(
+            out.contains("tasks"),
+            "show-without-id must return a task list"
+        );
     }
 }
