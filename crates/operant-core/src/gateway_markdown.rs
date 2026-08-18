@@ -112,7 +112,14 @@ fn render_table_block(table_block: &[String]) -> String {
 /// emits flow through the regular bold conversion and pipes never reach
 /// Telegram raw.
 fn convert_table_to_bullets(text: &str) -> String {
-    if !text.contains('|') || !text.contains('-') {
+    // Early-out when there is neither a pipe (table) nor a standalone
+    // `---` line (horizontal rule) to rewrite. Must not skip the hrule case:
+    // a pipe-less message still needs its `---` dividers converted.
+    let has_hrule = text.lines().any(|l| {
+        let t = l.trim();
+        t.len() >= 3 && t.chars().all(|c| c == '-')
+    });
+    if !text.contains('|') && !has_hrule {
         return text.to_string();
     }
     let lines: Vec<&str> = text.split('\n').collect();
@@ -142,6 +149,16 @@ fn convert_table_to_bullets(text: &str) -> String {
             }
             out.push(render_table_block(&table_block));
             i = j;
+            continue;
+        }
+        // Standalone horizontal rule (`---` alone on a line) → divider.
+        // Telegram has no HR entity, so render an em-dash rule. Runs after
+        // the table branch so a `| … |` / `|---|` table separator is never
+        // mistaken for an HR (tables are consumed above; fences are skipped).
+        let hr_stripped = line.trim();
+        if hr_stripped.len() >= 3 && hr_stripped.chars().all(|c| c == '-') {
+            out.push("──────────────".to_string());
+            i += 1;
             continue;
         }
         out.push(line.to_string());
@@ -186,9 +203,14 @@ impl MarkdownConverter {
     )]
     /// Extract fenced code blocks (` ``` … ``` `) and replace them with
     /// sentinel-bounded placeholders. The optional language tag (e.g.
-    /// `rust`) is discarded.
+    /// `rust`) is discarded. The opener may be followed by an optional
+    /// newline OR content on the same line (a model occasionally emits
+    /// ` ```rust code ``` ` inline) — tolerating both prevents stray
+    /// backticks from reaching the inline-code pass, which would otherwise
+    /// fabricate unbalanced `<code>` tags (→ Telegram 400 → whole message
+    /// falls back to raw markdown).
     fn extract_code_blocks(&mut self, text: &str) -> String {
-        static RE: LazyLock<Regex> = LazyLock::new(|| rx(r"```(\w*)\n([\s\S]*?)```"));
+        static RE: LazyLock<Regex> = LazyLock::new(|| rx(r"```(\w*)[ \t]*\n?([\s\S]*?)```"));
         let mut result = String::with_capacity(text.len());
         let mut last = 0;
         for caps in RE.captures_iter(text) {
@@ -371,6 +393,31 @@ fn convert_markdown(text: &str) -> String {
 /// This ordering guarantees that markdown inside code fences or backtick
 /// spans is never accidentally converted, and that literal characters like
 /// `"` in code blocks reach the final output unescaped inside `<pre>`.
+/// Validate that every open tag in the converted HTML has a matching close
+/// tag (simple depth-stack, no nesting-type checks). Telegram rejects a
+/// message wholesale with HTTP 400 on unbalanced entities, which would flip
+/// the whole message to the plain-text fallback (raw markdown). This is the
+/// last line of defense: if a converter edge case ever produces unbalanced
+/// tags, we bail to fully-escaped plain text instead of sending invalid HTML.
+fn telegram_html_balanced(html: &str) -> bool {
+    static TAG_RE: LazyLock<Regex> =
+        LazyLock::new(|| rx(r"<(/)?([a-zA-Z][a-zA-Z0-9]*)(?:\s[^<>]*)?/?>"));
+    let mut stack: Vec<&str> = Vec::new();
+    for caps in TAG_RE.captures_iter(html) {
+        let closing = caps.get(1).is_some();
+        let name = caps.get(2).expect("tag regex defines group 2").as_str();
+        if closing {
+            match stack.pop() {
+                Some(open) if open == name => {}
+                _ => return false,
+            }
+        } else {
+            stack.push(name);
+        }
+    }
+    stack.is_empty()
+}
+
 pub fn markdown_to_telegram_html(text: &str) -> String {
     if text.is_empty() {
         return String::new();
@@ -397,7 +444,15 @@ pub fn markdown_to_telegram_html(text: &str) -> String {
     // 4. Reinsert protected content wrapped in `<pre>` / `<code>`.
     //    The raw code content is HTML-escaped here so that `<`, `>`, `&`
     //    inside code blocks/spans are safe for Telegram's HTML parser.
-    conv.reinsert_all_escaped(&html)
+    let html = conv.reinsert_all_escaped(&html);
+
+    // 5. Balance check — never hand Telegram unbalanced tags (400 → the
+    //    entire message degrades to raw markdown).
+    if telegram_html_balanced(&html) {
+        html
+    } else {
+        escape_html(text)
+    }
 }
 
 #[cfg(test)]
@@ -560,6 +615,88 @@ mod tests {
         assert!(
             result.contains("• Status: ✅"),
             "bullet must be present: {result}"
+        );
+    }
+
+    /// A full multi-line markdown message (the shape the agent produces and
+    /// that the gateway must render) converts to valid, balanced HTML with
+    /// headers, table bullets, code, and blockquote — the regression that
+    /// broke when streamed newlines were collapsed to spaces.
+    #[test]
+    fn test_full_markdown_message_renders_and_is_balanced() {
+        let input = "# **Operant Tool Test Results** ✅\n\n## Core Tools Status\n\n| Tool | Status |\n|------|--------|\n| Skills | ✅ Working |\n| Memory | ✅ Working |\n\n## Formatting\n\n**Bold** — *italic* — `inline`\n\n```rust\nfn main() {\n    println!(\"hi\");\n}\n```\n\n> **Blockquote**: works\n";
+        let html = markdown_to_telegram_html(input);
+        assert!(
+            telegram_html_balanced(&html),
+            "converted HTML must be balanced: {html}"
+        );
+        assert!(
+            html.contains("<b>Skills</b>") && html.contains("• Status: ✅ Working"),
+            "table must convert to bullets: {html}"
+        );
+        assert!(
+            html.contains("<pre>"),
+            "code fence must become <pre>: {html}"
+        );
+        assert!(
+            html.contains("<blockquote>"),
+            "blockquote must be preserved: {html}"
+        );
+        assert!(
+            html.contains("<b>Operant Tool Test Results</b>"),
+            "header must be bold: {html}"
+        );
+    }
+
+    /// A fence whose language tag is not followed by a newline (the model
+    /// emitted ` ```rust code ``` ` inline) must still extract cleanly instead
+    /// of leaking stray backticks into the inline-code pass (which previously
+    /// fabricated unbalanced `<code>` tags → Telegram 400 → raw-markdown
+    /// fallback).
+    #[test]
+    fn test_fence_without_newline_after_lang() {
+        let input = "text ```rust fn main() { println!(1); } ``` more";
+        let html = markdown_to_telegram_html(input);
+        assert!(
+            html.contains("<pre>fn main() { println!(1); }"),
+            "inline fence must extract to <pre>: {html}"
+        );
+        assert!(
+            telegram_html_balanced(&html),
+            "converted HTML must be balanced: {html}"
+        );
+    }
+
+    /// A stray opening backtick with no closing partner (a fence fragment)
+    /// must not produce unbalanced tags — the balance guard falls back to
+    /// fully-escaped plain text so Telegram never receives invalid HTML.
+    #[test]
+    fn test_unbalanced_input_falls_back_to_escaped_text() {
+        let input = "hello `world\nsecond line";
+        let html = markdown_to_telegram_html(input);
+        assert!(
+            telegram_html_balanced(&html),
+            "fallback output must be balanced: {html}"
+        );
+        assert!(
+            !html.contains("<code>"),
+            "no unclosed <code> may reach Telegram: {html}"
+        );
+    }
+
+    /// Standalone `---` horizontal rules become a divider line instead of
+    /// literal dashes; table separators and code fences are untouched.
+    #[test]
+    fn test_horizontal_rule_and_fence_untouched() {
+        let input = "a\n---\nb\n\n```\n---\n```\n";
+        let html = markdown_to_telegram_html(input);
+        assert!(
+            html.contains("──────────────"),
+            "standalone --- must become a divider: {html}"
+        );
+        assert!(
+            html.contains("<pre>---"),
+            "--- inside a fence must stay verbatim: {html}"
         );
     }
 }
