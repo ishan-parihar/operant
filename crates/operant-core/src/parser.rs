@@ -463,6 +463,163 @@ impl ToolCallParser {
             });
         }
 
+        // ── Plain-text heuristic (nemotron parity) ───────────────────
+        // Some models (e.g. nemotron) emit tool calls as plain text inside
+        // XML <tool_calls> blocks instead of proper JSON. Detect common
+        // patterns and map them to known tool invocations.
+        self.plain_text_fallback(content)
+    }
+
+    /// Heuristic mapping for plain-text tool call output from models that
+    /// don't natively support function calling (e.g. nemotron-free).
+    /// Converts patterns like `cron list`, `echo "hello"`, shell commands,
+    /// and Python imports into proper ToolCall structs.
+    fn plain_text_fallback(&self, content: &str) -> Option<ToolCall> {
+        let trimmed = content.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+
+        let lower = trimmed.to_lowercase();
+
+        // Shell commands → `process` tool
+        if trimmed.starts_with("cd ")
+            || trimmed.starts_with("git ")
+            || trimmed.starts_with("cargo ")
+            || trimmed.starts_with("npm ")
+            || trimmed.starts_with("./")
+            || trimmed.contains(" && ")
+            || trimmed.contains(" | ")
+        {
+            return Some(ToolCall {
+                id: format!("call_{}", generate_id()),
+                function: ToolCallFunction {
+                    name: "process".to_string(),
+                    arguments: format!(
+                        "{{\"command\": \"{}\"}}",
+                        trimmed.replace('\\', "\\\\").replace('"', "\\\"")
+                    ),
+                },
+            });
+        }
+
+        // Python-style imports → `code_execution` tool
+        if lower.starts_with("import ") || lower.starts_with("from ") {
+            return Some(ToolCall {
+                id: format!("call_{}", generate_id()),
+                function: ToolCallFunction {
+                    name: "code_execution".to_string(),
+                    arguments: format!(
+                        "{{\"code\": \"{}\"}}",
+                        trimmed.replace('\\', "\\\\").replace('"', "\\\"")
+                    ),
+                },
+            });
+        }
+
+        // `echo "..."` → `echo` tool
+        if lower.starts_with("echo ") {
+            let text = trimmed.strip_prefix("echo ").unwrap_or(trimmed);
+            let text = text.trim_matches(|c| c == '"' || c == '\'');
+            return Some(ToolCall {
+                id: format!("call_{}", generate_id()),
+                function: ToolCallFunction {
+                    name: "echo".to_string(),
+                    arguments: format!(
+                        "{{\"text\": \"{}\"}}",
+                        text.replace('\\', "\\\\").replace('"', "\\\"")
+                    ),
+                },
+            });
+        }
+
+        // `date` or `timestamp` → `datetime` tool
+        if lower == "date" || lower == "datetime" || lower == "timestamp" {
+            return Some(ToolCall {
+                id: format!("call_{}", generate_id()),
+                function: ToolCallFunction {
+                    name: "datetime".to_string(),
+                    arguments: "{}".to_string(),
+                },
+            });
+        }
+
+        // Known tool names as bare words: `list`, `cron`, `skills_list`, etc.
+        let known_tools = [
+            "cron",
+            "list",
+            "list_containers",
+            "list_databases",
+            "list_repos",
+            "list_servers",
+            "skills_list",
+            "skill_view",
+            "config_manage",
+            "kanban",
+            "todo",
+            "checkpoint",
+            "web_search",
+            "web_fetch",
+            "memory_search",
+            "memory_store",
+            "memory_recall",
+            "notify",
+            "session_search",
+            "process",
+            "delegate_task",
+            "approval_request",
+            "browser",
+            "code_execution",
+            "debug_env",
+            "debug_system",
+        ];
+        for tool in known_tools {
+            if lower == tool {
+                // `cron` alone → cron list; `list` alone → skills_list
+                let (name, args) = match tool {
+                    "cron" => ("cron", "{\"action\": \"list\"}"),
+                    "list" => ("skills_list", "{}"),
+                    _ => (tool, "{}"),
+                };
+                return Some(ToolCall {
+                    id: format!("call_{}", generate_id()),
+                    function: ToolCallFunction {
+                        name: name.to_string(),
+                        arguments: args.to_string(),
+                    },
+                });
+            }
+        }
+
+        // `tool_name arg1 arg2` patterns: try first word as tool name
+        if let Some((first, rest)) = trimmed.split_once(char::is_whitespace) {
+            let first_lower = first.to_lowercase();
+            for tool in known_tools {
+                if first_lower == tool {
+                    let args = if rest.trim().is_empty() {
+                        "{}".to_string()
+                    } else {
+                        format!(
+                            "{{\"args\": \"{}\"}}",
+                            rest.trim().replace('\\', "\\\\").replace('"', "\\\"")
+                        )
+                    };
+                    let name = match first_lower.as_str() {
+                        "cron" => "cron",
+                        "list" => "skills_list",
+                        _ => tool,
+                    };
+                    return Some(ToolCall {
+                        id: format!("call_{}", generate_id()),
+                        function: ToolCallFunction {
+                            name: name.to_string(),
+                            arguments: args,
+                        },
+                    });
+                }
+            }
+        }
+
         None
     }
 

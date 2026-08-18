@@ -87,6 +87,13 @@ impl IterationBudget {
     pub fn max_total(&self) -> usize {
         self.max_total
     }
+
+    /// Reset the counter to zero so the next `run()` call gets a fresh
+    /// per-turn budget.  Called at the start of each agent turn (hermes
+    /// parity: `api_call_count = 0` in conversation_loop.py).
+    pub fn reset(&self) {
+        self.used.store(0, Ordering::SeqCst);
+    }
 }
 
 #[cfg(test)]
@@ -253,5 +260,24 @@ mod tests {
         assert_eq!(successes, 10);
         assert_eq!(budget.used(), 10);
         assert_eq!(budget.remaining(), 0);
+    }
+
+    #[test]
+    fn test_budget_reset() {
+        let budget = IterationBudget::new(5);
+        // Exhaust the budget
+        for _ in 0..5 {
+            assert!(budget.consume());
+        }
+        assert!(!budget.consume());
+        assert_eq!(budget.used(), 5);
+        assert_eq!(budget.remaining(), 0);
+
+        // Reset — should get a fresh budget
+        budget.reset();
+        assert_eq!(budget.used(), 0);
+        assert_eq!(budget.remaining(), 5);
+        assert!(budget.consume());
+        assert_eq!(budget.used(), 1);
     }
 }

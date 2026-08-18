@@ -1576,6 +1576,14 @@ impl OperantAgent {
             .lock()
             .expect("tool_guardrails lock poisoned")
             .reset();
+
+        // ── Iteration budget reset (hermes parity) ─────────────────────
+        // Each user turn gets a fresh per-turn budget.  Without this,
+        // gateway turns that share one agent instance see the budget
+        // permanently exhausted after the first turn exhausts it, causing
+        // every subsequent turn to short-circuit to a grace call.
+        self.iteration_budget.reset();
+
         let mut messages = turn_ctx.messages;
 
         // ── TurnStart lifecycle hook ─────────────────────────────────────
