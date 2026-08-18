@@ -56,6 +56,12 @@ impl OperantTool for CamofoxStateTool {
         "browser_camofox_state"
     }
 
+    fn is_available(&self) -> bool {
+        // Only available when Camofox is configured (CAMOFOX_URL env var)
+        // or the state directory already has saved states.
+        std::env::var("CAMOFOX_URL").is_ok() || state_dir().exists()
+    }
+
     fn description(&self) -> &str {
         "Manage persistent browser state for the Camofox browser tool. \
          Supports operations: save_state (save cookies/localStorage to disk), \

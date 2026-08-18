@@ -326,7 +326,7 @@ pub struct OperantAgent {
     /// Shared interrupt flag for graceful Ctrl-C cancellation.
     /// When triggered, the agent loop exits at the next iteration boundary
     /// and tool execution is aborted via `flag.check()`.
-    interrupt_flag: crate::interrupt::InterruptFlag,
+    pub(crate) interrupt_flag: crate::interrupt::InterruptFlag,
     /// R2: set when a stream error on a known reasoning model fired with no
     /// content arrived yet (upstream idle-killed the thinking phase). The run
     /// loop appends thinking-timeout guidance to the final error message once
@@ -551,10 +551,19 @@ impl OperantAgent {
             .persistent_allowlist
             .read()
             .unwrap_or_else(|e| e.into_inner());
-        session
+        let matched = session
             .iter()
             .chain(persistent.iter())
-            .any(|pat| allowlist_pattern_matches(pat, tool_name))
+            .any(|pat| allowlist_pattern_matches(pat, tool_name));
+        tracing::debug!(
+            tool = %tool_name,
+            session_count = session.len(),
+            persistent_count = persistent.len(),
+            persistent_items = ?persistent.iter().collect::<Vec<_>>(),
+            matched,
+            "allowlist check"
+        );
+        matched
     }
 
     /// Create a new Operant agent
@@ -819,6 +828,11 @@ impl OperantAgent {
     /// their own copy.
     pub fn interrupt_flag(&self) -> crate::interrupt::InterruptFlag {
         self.interrupt_flag.clone()
+    }
+
+    /// Convenience check: has the interrupt flag been triggered?
+    pub fn interrupt_triggered(&self) -> bool {
+        self.interrupt_flag.is_triggered()
     }
 
     /// /steer directive (iter-65). Queue a steer message that will be

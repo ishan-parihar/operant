@@ -1338,15 +1338,18 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                 // approve/deny buttons via their send_approval_prompt
                 // override; the rest fall back to the plain-text /approve
                 // /deny prompt. (hermes send_exec_approval parity.)
-                if let Some(adapter) = gw_for_perm.adapter_for(platform) {
-                    let _ = adapter
+                let prompt_msg_id: Option<String> = if let Some(adapter) =
+                    gw_for_perm.adapter_for(platform)
+                {
+                    adapter
                         .send_approval_prompt(
                             channel_id,
                             *thread_id,
                             &req.tool_name,
                             &req.description,
                         )
-                        .await;
+                        .await
+                        .unwrap_or(None)
                 } else {
                     let prompt = format!(
                         "🔧 Permission required: {} — {}\nReply /approve to allow, /deny to cancel (60s timeout)",
@@ -1356,7 +1359,10 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                         .no_markdown()
                         .with_thread_id(*thread_id);
                     let _ = gw_for_perm.send_to_platform(platform, msg).await;
-                }
+                    None
+                };
+
+                let timeout_tool_name = req.tool_name.clone();
 
                 // Store the pending request keyed by channel_id
                 pending_permissions_for_perm
@@ -1364,9 +1370,13 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                     .await
                     .insert(channel_id.clone(), req);
 
-                // Spawn a timeout task — auto-deny after 60s
+                // Spawn a timeout task — auto-deny after 60s, then edit
+                // the prompt to remove stale buttons (hermes parity).
                 let pending_for_timeout = pending_permissions_for_perm.clone();
                 let timeout_channel = channel_id.clone();
+                let timeout_gw = gw_for_perm.clone();
+                let timeout_platform = platform.clone();
+                let timeout_thread_id = *thread_id;
                 tokio::spawn(async move {
                     tokio::time::sleep(std::time::Duration::from_secs(60)).await;
                     let mut pending = pending_for_timeout.lock().await;
@@ -1378,6 +1388,22 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                         let _ = req
                             .response_tx
                             .send(operant_core::agent::ToolPermissionResponse::Deny);
+                    }
+                    // Edit the prompt to remove stale buttons and show
+                    // expiry — prevents confusing stale-button taps.
+                    if let Some(ref msg_id) = prompt_msg_id {
+                        let expiry_msg = OutgoingMessage::new(
+                            &timeout_channel,
+                            format!(
+                                "⏱️ Permission for `{}` timed out (auto-denied).",
+                                timeout_tool_name
+                            ),
+                        )
+                        .no_markdown()
+                        .with_thread_id(timeout_thread_id);
+                        let _ = timeout_gw
+                            .edit_message(&timeout_platform, &timeout_channel, msg_id, expiry_msg)
+                            .await;
                     }
                 });
             } else {

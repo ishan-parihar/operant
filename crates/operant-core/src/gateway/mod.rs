@@ -720,7 +720,7 @@ pub trait PlatformAdapter: Send + Sync {
         thread_id: Option<i64>,
         tool_name: &str,
         description: &str,
-    ) -> Result<()> {
+    ) -> Result<Option<String>> {
         let prompt = format!(
             "🔧 Permission required: {tool_name} — {description}\nReply /approve to allow, /deny to cancel (60s timeout)"
         );
@@ -729,7 +729,8 @@ pub trait PlatformAdapter: Send + Sync {
                 .no_markdown()
                 .with_thread_id(thread_id),
         )
-        .await
+        .await?;
+        Ok(None)
     }
 
     /// Ask the operator to pick from a list of choices (the `clarify` tool).
@@ -1744,7 +1745,7 @@ impl PlatformAdapter for TelegramAdapter {
         thread_id: Option<i64>,
         tool_name: &str,
         description: &str,
-    ) -> Result<()> {
+    ) -> Result<Option<String>> {
         let prompt = format!(
             "🔧 Permission required: {tool_name} — {description}\nTap a button to allow (once / always) or cancel (60s timeout), or reply /approve, /approve always, /deny."
         );
@@ -1768,12 +1769,20 @@ impl PlatformAdapter for TelegramAdapter {
         if let Some(tid) = thread_id {
             body["message_thread_id"] = serde_json::json!(tid);
         }
-        self.client
+        let resp: serde_json::Value = self
+            .client
             .post(format!("{}/sendMessage", self.api_url()))
             .json(&body)
             .send()
+            .await?
+            .json()
             .await?;
-        Ok(())
+        let msg_id = resp
+            .get("result")
+            .and_then(|r| r.get("message_id"))
+            .and_then(|m| m.as_i64())
+            .map(|id| id.to_string());
+        Ok(msg_id)
     }
 
     async fn send_choice_prompt(
