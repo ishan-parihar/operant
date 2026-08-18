@@ -51,7 +51,10 @@ use tokio::sync::mpsc;
 /// Pending permission requests, keyed by channel_id: outer std Mutex guards
 /// the inner tokio Mutex<HashMap>, shared via Arc so multiple tasks can
 /// insert/remove while the gateway runner holds the store.
-type PendingPermissions = std::sync::Mutex<
+///
+/// `pub(crate)` so gateway_commands can type the resolve helper that
+/// borrows the Arc (never `.take()`s it).
+pub(crate) type PendingPermissions = std::sync::Mutex<
     Option<Arc<Mutex<HashMap<String, operant_core::agent::ToolPermissionRequest>>>>,
 >;
 

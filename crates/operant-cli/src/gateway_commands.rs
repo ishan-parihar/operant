@@ -528,6 +528,44 @@ fn build_help_text() -> String {
     text
 }
 
+/// Resolve a pending permission request for `channel_id` by sending
+/// `response` and removing it from the shared store. Returns true when a
+/// request was actually waiting.
+///
+/// Borrows the store's Arc (never `.take()`s the `Option`) so repeated
+/// `/approve` / `/deny` commands keep working for the lifetime of the
+/// process. Regression: the handler previously did `guard.take()`, which
+/// permanently emptied `PENDING_PERMISSIONS` after the FIRST approval or
+/// denial — every later button tap reported "No pending permission request
+/// found" (while the timeout path, holding its own Arc clone, still found
+/// the entry).
+fn resolve_pending_permission(
+    store: &crate::gateway_runner::PendingPermissions,
+    channel_id: &str,
+    response: operant_core::agent::ToolPermissionResponse,
+) -> bool {
+    let Ok(guard) = store.lock() else {
+        return false;
+    };
+    let Some(pending) = guard.as_ref() else {
+        return false;
+    };
+    // Bounded retry: the permission receiver holds the inner tokio mutex
+    // only for the brief insert window — yield instead of failing on a
+    // transient collision with an in-flight insert.
+    for _ in 0..50 {
+        if let Ok(mut map) = pending.try_lock() {
+            if let Some(req) = map.remove(channel_id) {
+                let _ = req.response_tx.send(response);
+                return true;
+            }
+            return false;
+        }
+        std::thread::yield_now();
+    }
+    false
+}
+
 /// Handle a known command and return an optional response string.
 ///
 /// The caller is expected to have already resolved the command name via
@@ -1764,24 +1802,16 @@ pub fn handle_command(cmd_name: &str, _args: &str, ctx: &CommandContext<'_>) -> 
             } else {
                 String::from("✅ **Action approved.**")
             };
+            let response = if always {
+                operant_core::agent::ToolPermissionResponse::AllowAlways
+            } else {
+                operant_core::agent::ToolPermissionResponse::AllowSession
+            };
             let resolved = crate::gateway_runner::PENDING_PERMISSIONS
                 .get()
-                .and_then(|s| s.lock().ok())
-                .and_then(|mut guard| guard.take())
-                .and_then(|pending| {
-                    // Try to resolve the pending permission for this channel
-                    pending.try_lock().ok().and_then(|mut pending_map| {
-                        pending_map.remove(ctx.channel_id).and_then(|req| {
-                            let response = if always {
-                                operant_core::agent::ToolPermissionResponse::AllowAlways
-                            } else {
-                                operant_core::agent::ToolPermissionResponse::AllowSession
-                            };
-                            req.response_tx.send(response).ok()
-                        })
-                    })
-                });
-            if resolved.is_some() {
+                .map(|store| resolve_pending_permission(store, ctx.channel_id, response))
+                .unwrap_or(false);
+            if resolved {
                 msg.push_str(if always {
                     "\nTool execution resumed; the tool is now in the permanent allowlist."
                 } else {
@@ -1797,18 +1827,15 @@ pub fn handle_command(cmd_name: &str, _args: &str, ctx: &CommandContext<'_>) -> 
             let mut msg = String::from("❌ **Action denied.**");
             let resolved = crate::gateway_runner::PENDING_PERMISSIONS
                 .get()
-                .and_then(|s| s.lock().ok())
-                .and_then(|mut guard| guard.take())
-                .and_then(|pending| {
-                    pending.try_lock().ok().and_then(|mut pending_map| {
-                        pending_map.remove(ctx.channel_id).and_then(|req| {
-                            req.response_tx.send(
-                                operant_core::agent::ToolPermissionResponse::Deny,
-                            ).ok()
-                        })
-                    })
-                });
-            if resolved.is_some() {
+                .map(|store| {
+                    resolve_pending_permission(
+                        store,
+                        ctx.channel_id,
+                        operant_core::agent::ToolPermissionResponse::Deny,
+                    )
+                })
+                .unwrap_or(false);
+            if resolved {
                 msg.push_str("\nThe pending action has been cancelled.");
             } else {
                 msg.push_str("\n(No pending permission request found.)");
@@ -1988,5 +2015,91 @@ mod tests {
                 cmd.name
             );
         }
+    }
+
+    #[test]
+    fn test_approve_resolves_without_draining_store() {
+        use std::sync::Arc;
+        use tokio::sync::oneshot;
+
+        // Seed a store with two pending requests on different channels —
+        // the shape of PENDING_PERMISSIONS after the first approval prompt.
+        let map = {
+            let mut m = std::collections::HashMap::new();
+            for (ch, tool) in [("chan-a", "code_execution"), ("chan-b", "bash")] {
+                let (tx, _rx) = oneshot::channel();
+                m.insert(
+                    ch.to_string(),
+                    operant_core::agent::ToolPermissionRequest {
+                        tool_name: tool.to_string(),
+                        tool_id: String::new(),
+                        description: String::new(),
+                        danger_explanation: String::new(),
+                        input_preview: None,
+                        response_tx: tx,
+                    },
+                );
+            }
+            m
+        };
+        let store: crate::gateway_runner::PendingPermissions =
+            std::sync::Mutex::new(Some(Arc::new(tokio::sync::Mutex::new(map))));
+
+        // First /approve resolves chan-a.
+        assert!(resolve_pending_permission(
+            &store,
+            "chan-a",
+            operant_core::agent::ToolPermissionResponse::AllowSession
+        ));
+        // The store must STILL be usable — resolving one channel must not
+        // drain the Option out of the shared static. (Regression: guard.take()
+        // permanently blinded PENDING_PERMISSIONS after the first /approve or
+        // /deny, so every later tap reported "No pending permission request
+        // found".)
+        assert!(resolve_pending_permission(
+            &store,
+            "chan-b",
+            operant_core::agent::ToolPermissionResponse::AllowAlways
+        ));
+        // Already-resolved channel now reports nothing pending.
+        assert!(!resolve_pending_permission(
+            &store,
+            "chan-a",
+            operant_core::agent::ToolPermissionResponse::Deny
+        ));
+    }
+
+    #[test]
+    fn test_approve_and_deny_share_the_same_store() {
+        use std::sync::Arc;
+        use tokio::sync::oneshot;
+
+        let (tx, _rx) = oneshot::channel();
+        let mut m = std::collections::HashMap::new();
+        m.insert(
+            "chan-c".to_string(),
+            operant_core::agent::ToolPermissionRequest {
+                tool_name: "process".to_string(),
+                tool_id: String::new(),
+                description: String::new(),
+                danger_explanation: String::new(),
+                input_preview: None,
+                response_tx: tx,
+            },
+        );
+        let store: crate::gateway_runner::PendingPermissions =
+            std::sync::Mutex::new(Some(Arc::new(tokio::sync::Mutex::new(m))));
+
+        // Deny resolves the request; the store stays alive for the next one.
+        assert!(resolve_pending_permission(
+            &store,
+            "chan-c",
+            operant_core::agent::ToolPermissionResponse::Deny
+        ));
+        assert!(!resolve_pending_permission(
+            &store,
+            "chan-c",
+            operant_core::agent::ToolPermissionResponse::AllowSession
+        ));
     }
 }
