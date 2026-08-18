@@ -43,10 +43,78 @@ type ThreadKey = (String, String, Option<i64>);
 type StreamDeliveryMap = Arc<Mutex<HashMap<ThreadKey, String>>>;
 
 /// (platform, channel_id, thread_id) -> (message_id, tool_lines) for the
-/// single-message chronological tool-progress timeline.
+/// per-segment tool-progress timeline. Each TOOL GROUP (a run of tool calls
+/// with no intervening text) owns one message; the group is closed when the
+/// agent emits text, finishes an iteration, or the turn ends, so the next
+/// group starts a fresh chronological message (hermes parity — tool calls
+/// never pile into a single ever-growing dumping-ground message).
 type ProgressMap = HashMap<ThreadKey, (String, Vec<String>)>;
 use tokio::sync::Mutex;
 use tokio::sync::mpsc;
+
+/// What the event receiver must do with a tool line on `ToolStart`.
+#[derive(Debug, PartialEq, Eq)]
+enum ProgressAction {
+    /// No message exists for this tool group yet — send `body` as a NEW
+    /// message, then call [`ToolProgressTracker::attach_message_id`] with
+    /// the returned id so subsequent tool starts append to it.
+    New { body: String },
+    /// A message exists for this group — edit `msg_id` to `body` (the full
+    /// group so far).
+    Edit { msg_id: String, body: String },
+}
+
+/// Tracks per-thread tool-progress messages so tool groups are split into
+/// separate chronological messages when the agent emits text between them
+/// (hermes `on_segment_break` parity: each segment is its own message, and
+/// a mid-stream text response gets its own message instead of everything
+/// piling into the first tool message).
+struct ToolProgressTracker {
+    msgs: ProgressMap,
+}
+
+impl ToolProgressTracker {
+    fn new() -> Self {
+        Self {
+            msgs: HashMap::new(),
+        }
+    }
+
+    /// Record a tool line for `key`. Returns `New` when this starts a fresh
+    /// group (no message yet — the previous group was closed by an
+    /// intervening text/iteration/turn boundary), or `Edit` with the full
+    /// accumulated group when the group already has a message.
+    fn on_tool_start(&mut self, key: &ThreadKey, line: &str) -> ProgressAction {
+        match self.msgs.get_mut(key) {
+            Some((msg_id, lines)) => {
+                lines.push(line.to_string());
+                let body = lines.join("\n");
+                ProgressAction::Edit {
+                    msg_id: msg_id.clone(),
+                    body,
+                }
+            }
+            None => ProgressAction::New {
+                body: line.to_string(),
+            },
+        }
+    }
+
+    /// After a `New` send succeeds, attach the message id + first line so
+    /// the next tool start edits that message. Called only on success — on
+    /// failure the group is left untracked (the old code did the same).
+    fn attach_message_id(&mut self, key: &ThreadKey, msg_id: String, first_line: &str) {
+        self.msgs
+            .insert(key.clone(), (msg_id, vec![first_line.to_string()]));
+    }
+
+    /// Close the current tool group for `key`. The already-sent message
+    /// stays in the chat; the NEXT `on_tool_start` for this key returns
+    /// `New` and starts a fresh message. Idempotent.
+    fn close_group(&mut self, key: &ThreadKey) {
+        self.msgs.remove(key);
+    }
+}
 
 /// Pending permission requests, keyed by channel_id: outer std Mutex guards
 /// the inner tokio Mutex<HashMap>, shared via Arc so multiple tasks can
@@ -909,17 +977,19 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
             || (text.starts_with("⚠ Tool '") && text.contains("identical arguments"))
     }
 
-    // Spawn tool progress event receiver — appends tool calls to a single
-    // chronological message by editing in-place. This gives users a clean
-    // single-message timeline of all tool calls (like the operant-agent does).
-    // Also drains AgentEvent::Content for streaming progressive-edit
-    // (iter-100 — closes Bug #12 from iter-98 audit).
+    // Spawn tool progress event receiver — tool calls stream into a
+    // per-group chronological message, and the group is CLOSED whenever the
+    // agent emits text, finishes an iteration, or the turn ends, so the
+    // next tool group (and every mid-stream text response) arrives as its
+    // OWN message in chronological order (hermes `on_segment_break`
+    // parity). Also drains AgentEvent::Content for streaming
+    // progressive-edit (iter-100 — closes Bug #12 from iter-98 audit).
     let gw_for_events = gw.clone();
     let current_channel_for_events = current_channel.clone();
     let stream_delivery_for_events = stream_delivery.clone();
     tokio::spawn(async move {
-        // (platform, channel_id, thread_id) -> (message_id, tool_lines)
-        let mut progress_msgs: ProgressMap = HashMap::new();
+        // Per-segment tool-progress messages (closed on text boundaries).
+        let mut progress_tracker = ToolProgressTracker::new();
         // Streaming state: accumulated text + message_id for progressive edit.
         let mut stream_text = String::new();
         let mut stream_msg_id: Option<String> = None;
@@ -937,6 +1007,7 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                         continue;
                     }
                 };
+            let key = (platform.clone(), channel_id.clone(), thread_id);
 
             match event {
                 AgentEvent::ToolStart {
@@ -945,7 +1016,6 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                     arguments,
                 } => {
                     let line = tool_preview_line(&name, &arguments);
-                    let key = (platform.clone(), channel_id.clone(), thread_id);
 
                     // Segment break (hermes `on_segment_break` parity): when
                     // the model pivots to tools, FINALIZE the active stream
@@ -971,32 +1041,33 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                         map.remove(&(platform.clone(), channel_id.clone(), thread_id));
                     }
 
-                    if let Some((msg_id, lines)) = progress_msgs.get_mut(&key) {
-                        // Append line to existing chronological message
-                        lines.push(line);
-                        let body = lines.join("\n");
-                        let msg = OutgoingMessage::new(&channel_id, &body)
-                            .no_markdown()
-                            .with_thread_id(thread_id);
-                        let _ = gw_for_events
-                            .edit_message(&platform, &channel_id, msg_id, msg)
-                            .await;
-                    } else {
-                        // First tool — send new message
-                        let body = line.clone();
-                        let msg = OutgoingMessage::new(&channel_id, &body)
-                            .no_markdown()
-                            .with_thread_id(thread_id);
-                        match gw_for_events.send_message_return_id(&platform, msg).await {
-                            Ok(msg_id) => {
-                                progress_msgs.insert(key, (msg_id, vec![line]));
+                    match progress_tracker.on_tool_start(&key, &line) {
+                        ProgressAction::New { body } => {
+                            // First tool of a group — send a NEW message.
+                            let msg = OutgoingMessage::new(&channel_id, &body)
+                                .no_markdown()
+                                .with_thread_id(thread_id);
+                            match gw_for_events.send_message_return_id(&platform, msg).await {
+                                Ok(msg_id) => {
+                                    progress_tracker.attach_message_id(&key, msg_id, &line);
+                                }
+                                Err(e) => {
+                                    tracing::warn!(
+                                        error = %redact_err(&e),
+                                        "Failed to send first progress message"
+                                    );
+                                }
                             }
-                            Err(e) => {
-                                tracing::warn!(
-                                    error = %redact_err(&e),
-                                    "Failed to send first progress message"
-                                );
-                            }
+                        }
+                        ProgressAction::Edit { msg_id, body } => {
+                            // Append to the group's existing chronological
+                            // message (only while no text intervened).
+                            let msg = OutgoingMessage::new(&channel_id, &body)
+                                .no_markdown()
+                                .with_thread_id(thread_id);
+                            let _ = gw_for_events
+                                .edit_message(&platform, &channel_id, &msg_id, msg)
+                                .await;
                         }
                     }
                 }
@@ -1055,6 +1126,14 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                         // thinking between tool calls arrive as separate
                         // chronological messages instead of piling into the
                         // first one.
+                        //
+                        // A text segment after tools CLOSES the tool group:
+                        // the group's message stays in the chat as-is, and
+                        // the next tool call starts a FRESH message — so a
+                        // mid-stream text response and the tool calls around
+                        // it are separate chronological messages (hermes
+                        // parity) instead of one ever-growing tool dump.
+                        progress_tracker.close_group(&key);
                         stream_text.push_str(&text);
                         // Debounce: only edit if 500ms have passed since the last edit.
                         if last_edit_time.elapsed() > std::time::Duration::from_millis(500) {
@@ -1143,6 +1222,9 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                         stream_text.clear();
                         stream_msg_id = None;
                     }
+                    // Turn ended — close the tool group so the next turn
+                    // starts a fresh chronological message.
+                    progress_tracker.close_group(&key);
                 }
                 AgentEvent::IterationComplete { .. } => {
                     // A writing block ended. Finalize the block's message
@@ -1163,6 +1245,9 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                         stream_text.clear();
                         stream_msg_id = None;
                     }
+                    // The writing block ended — close the tool group so the
+                    // next iteration's tools start a fresh message.
+                    progress_tracker.close_group(&key);
                 }
                 AgentEvent::Usage { .. } => {
                     // Usage events are not surfaced to the user in gateway
@@ -1180,6 +1265,7 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                     // dispatch loop isn't left suppressing a future send.
                     stream_text.clear();
                     stream_msg_id = None;
+                    progress_tracker.close_group(&key);
                     let mut map = stream_delivery_for_events.lock().await;
                     map.remove(&(platform.clone(), channel_id.clone(), thread_id));
                 }
@@ -2790,5 +2876,132 @@ mod pending_permissions_tests {
         assert!(matches!(response, ToolPermissionResponse::AllowSession));
 
         store_pending_permissions(Arc::new(Mutex::new(HashMap::new())));
+    }
+}
+
+#[cfg(test)]
+mod tool_progress_tests {
+    use super::*;
+
+    fn key() -> ThreadKey {
+        ("telegram".into(), "-100abc".into(), Some(91738))
+    }
+
+    #[test]
+    fn consecutive_tool_starts_append_to_one_message() {
+        let mut tracker = ToolProgressTracker::new();
+        let k = key();
+
+        // First tool of the group: New (send a fresh message).
+        assert_eq!(
+            tracker.on_tool_start(&k, "⚙️ session_search: 5"),
+            ProgressAction::New {
+                body: "⚙️ session_search: 5".into()
+            }
+        );
+        // After the message id is attached, the next tool appends.
+        tracker.attach_message_id(&k, "msg_1".into(), "⚙️ session_search: 5");
+        assert_eq!(
+            tracker.on_tool_start(&k, "⚙️ echo: hi"),
+            ProgressAction::Edit {
+                msg_id: "msg_1".into(),
+                body: "⚙️ session_search: 5\n⚙️ echo: hi".into(),
+            }
+        );
+        assert_eq!(
+            tracker.on_tool_start(&k, "🧠 memory_store: fact"),
+            ProgressAction::Edit {
+                msg_id: "msg_1".into(),
+                body: "⚙️ session_search: 5\n⚙️ echo: hi\n🧠 memory_store: fact".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn text_boundary_closes_group_and_next_tool_starts_fresh() {
+        let mut tracker = ToolProgressTracker::new();
+        let k = key();
+
+        tracker.on_tool_start(&k, "⚙️ tool_a");
+        tracker.attach_message_id(&k, "msg_1".into(), "⚙️ tool_a");
+        tracker.on_tool_start(&k, "⚙️ tool_b");
+
+        // A mid-stream text response arrives → the group is closed. The
+        // already-sent message stays in the chat; the next tool call must
+        // start a NEW message (hermes parity: separate chronological
+        // messages around the text).
+        tracker.close_group(&k);
+        assert_eq!(
+            tracker.on_tool_start(&k, "⚙️ tool_c"),
+            ProgressAction::New {
+                body: "⚙️ tool_c".into()
+            },
+            "tool call after text must start a fresh message, not append"
+        );
+    }
+
+    #[test]
+    fn close_group_is_idempotent() {
+        let mut tracker = ToolProgressTracker::new();
+        let k = key();
+
+        tracker.close_group(&k);
+        tracker.close_group(&k);
+        assert_eq!(
+            tracker.on_tool_start(&k, "⚙️ tool_a"),
+            ProgressAction::New {
+                body: "⚙️ tool_a".into()
+            }
+        );
+    }
+
+    #[test]
+    fn failed_first_send_leaves_group_untracked() {
+        let mut tracker = ToolProgressTracker::new();
+        let k = key();
+
+        // Simulate a failed first send: on_tool_start returned New but
+        // attach_message_id was never called. The next tool start must
+        // retry a fresh send rather than editing a phantom message.
+        assert_eq!(
+            tracker.on_tool_start(&k, "⚙️ tool_a"),
+            ProgressAction::New {
+                body: "⚙️ tool_a".into()
+            }
+        );
+        assert_eq!(
+            tracker.on_tool_start(&k, "⚙️ tool_b"),
+            ProgressAction::New {
+                body: "⚙️ tool_b".into()
+            },
+            "group must stay untracked until attach_message_id succeeds"
+        );
+    }
+
+    #[test]
+    fn different_threads_are_isolated() {
+        let mut tracker = ToolProgressTracker::new();
+        let k1 = key();
+        let k2: ThreadKey = ("telegram".into(), "-100abc".into(), Some(91739));
+
+        tracker.on_tool_start(&k1, "⚙️ a");
+        tracker.attach_message_id(&k1, "m1".into(), "⚙️ a");
+        // Topic 2 starts its own group.
+        assert_eq!(
+            tracker.on_tool_start(&k2, "⚙️ b"),
+            ProgressAction::New {
+                body: "⚙️ b".into()
+            }
+        );
+        // Closing topic 1 does not affect topic 2.
+        tracker.close_group(&k1);
+        tracker.attach_message_id(&k2, "m2".into(), "⚙️ b");
+        assert_eq!(
+            tracker.on_tool_start(&k2, "⚙️ c"),
+            ProgressAction::Edit {
+                msg_id: "m2".into(),
+                body: "⚙️ b\n⚙️ c".into(),
+            }
+        );
     }
 }
