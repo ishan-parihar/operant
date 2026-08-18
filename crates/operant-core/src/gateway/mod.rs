@@ -696,22 +696,60 @@ pub trait PlatformAdapter: Send + Sync {
 
     /// Ask the operator to approve/deny a tool permission prompt.
     ///
-    /// Default implementation sends a plain-text prompt instructing the
-    /// operator to reply `/approve` or `/deny`. Platforms that support
+    /// `thread_id` is the forum topic (Telegram message_thread_id) so the
+    /// prompt lands in the same topic the discussion is in, not the general
+    /// chat. Default implementation sends a plain-text prompt instructing
+    /// the operator to reply `/approve` or `/deny`. Platforms that support
     /// interactive components (e.g. Telegram inline keyboards) override this
     /// to render tappable buttons; the resulting tap must resolve the same
     /// way a text reply would (hermes `send_exec_approval` parity).
     async fn send_approval_prompt(
         &self,
         channel_id: &str,
+        thread_id: Option<i64>,
         tool_name: &str,
         description: &str,
     ) -> Result<()> {
         let prompt = format!(
             "🔧 Permission required: {tool_name} — {description}\nReply /approve to allow, /deny to cancel (60s timeout)"
         );
-        self.send_message(OutgoingMessage::new(channel_id, &prompt).no_markdown())
-            .await
+        self.send_message(
+            OutgoingMessage::new(channel_id, &prompt)
+                .no_markdown()
+                .with_thread_id(thread_id),
+        )
+        .await
+    }
+
+    /// Ask the operator to pick from a list of choices (the `clarify` tool).
+    ///
+    /// `thread_id` is the forum topic so the question lands in the ongoing
+    /// thread. Default implementation sends a plain-text numbered list;
+    /// platforms with interactive components override this to render
+    /// tappable buttons, and a tap must resolve the pending question the
+    /// same way a typed reply would (hermes `send_clarify` parity).
+    async fn send_choice_prompt(
+        &self,
+        channel_id: &str,
+        thread_id: Option<i64>,
+        question: &str,
+        choices: &[String],
+    ) -> Result<()> {
+        let body = format!(
+            "❓ {question}\n\n{}",
+            choices
+                .iter()
+                .enumerate()
+                .map(|(i, c)| format!("{}. {c}", i + 1))
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+        self.send_message(
+            OutgoingMessage::new(channel_id, &body)
+                .no_markdown()
+                .with_thread_id(thread_id),
+        )
+        .await
     }
 }
 
@@ -855,7 +893,8 @@ impl Gateway {
             return Ok(OutgoingMessage::new(
                 &message.channel_id,
                 "⏳ Still working on your previous message — I'll reply as soon as it's done.",
-            ));
+            )
+            .with_thread_id(message.thread_id));
         };
 
         self.stall_tracker.touch(session_key).await;
@@ -986,10 +1025,13 @@ impl Gateway {
         // Check if user is admin
         if !self.config.admins.is_empty() && !self.config.admins.contains(&message.user_id) {
             debug!(user = %message.user_id, "User not authorized");
-            return Ok(Some(OutgoingMessage::new(
-                &message.channel_id,
-                "You are not authorized to use this bot.",
-            )));
+            return Ok(Some(
+                OutgoingMessage::new(
+                    &message.channel_id,
+                    "You are not authorized to use this bot.",
+                )
+                .with_thread_id(message.thread_id),
+            ));
         }
 
         let handler = match &self.message_handler {
@@ -1017,10 +1059,13 @@ impl Gateway {
                 .map(|r| format!(" ({r})"))
                 .unwrap_or_default();
             info!("Gateway turn rejected: ESTOP engaged{reason}");
-            return Ok(Some(OutgoingMessage::new(
-                &message.channel_id,
-                format!("⏸️ Operant is paused{reason}. Resume with `operant resume`."),
-            )));
+            return Ok(Some(
+                OutgoingMessage::new(
+                    &message.channel_id,
+                    format!("⏸️ Operant is paused{reason}. Resume with `operant resume`."),
+                )
+                .with_thread_id(message.thread_id),
+            ));
         }
 
         // Active-session cap (hermes `max_concurrent_sessions` parity): a
@@ -1037,10 +1082,15 @@ impl Gateway {
                     max,
                     "Gateway session refused: concurrency cap reached"
                 );
-                return Ok(Some(OutgoingMessage::new(
-                    &message.channel_id,
-                    format!("Too many concurrent sessions (limit {max}). Please try again later."),
-                )));
+                return Ok(Some(
+                    OutgoingMessage::new(
+                        &message.channel_id,
+                        format!(
+                            "Too many concurrent sessions (limit {max}). Please try again later."
+                        ),
+                    )
+                    .with_thread_id(message.thread_id),
+                ));
             }
             let result = self
                 .handle_with_lifecycle(handler, message, &session_key)
@@ -1601,11 +1651,16 @@ impl PlatformAdapter for TelegramAdapter {
     ) -> Result<String> {
         let url = format!("{}/editMessageText", self.api_url());
         let html = markdown_to_telegram_html(&message.content);
+        // An explicit empty inline keyboard clears any buttons on the edited
+        // message — this is how approval/clarify prompts lose their buttons
+        // once resolved (hermes `query.edit_message_text(reply_markup=None)`
+        // parity). Harmless for plain stream edits (no keyboard to clear).
         let body = serde_json::json!({
             "chat_id": channel_id,
             "message_id": message_id,
             "text": html,
             "parse_mode": "HTML",
+            "reply_markup": { "inline_keyboard": [] },
         });
         let resp = self.client.post(&url).json(&body).send().await?;
         if resp.status().as_u16() == 400 {
@@ -1637,53 +1692,18 @@ impl PlatformAdapter for TelegramAdapter {
     }
 
     async fn handle_update(&self, update: serde_json::Value) -> Result<Option<IncomingMessage>> {
-        // Route callback_query approval taps before delegating to parse_update:
-        // a tap resolves the pending permission the same way a `/approve` or
-        // `/deny` text reply would, but the tap must also be answered so the
-        // inline keyboard stops showing its spinner. (hermes
-        // `send_exec_approval` parity — the tap and the text reply share the
-        // resolution path.)
-        if let Some(cb) = update.get("callback_query")
-            && let Some(action) = cb
-                .get("data")
-                .and_then(serde_json::Value::as_str)
-                .and_then(|d| d.strip_prefix("approval:"))
+        // Shared callback-query routing (inline keyboard taps) first, then
+        // the regular message parser. The polling loop uses the same static
+        // helper so button taps work on every Telegram transport.
+        if let Some(msg) = Self::handle_callback_update(
+            &self.client,
+            self.token.as_deref().unwrap_or_default(),
+            &runtime_config().gateway.telegram_api_base,
+            update.clone(),
+        )
+        .await
         {
-            let channel_id = cb
-                .get("message")
-                .and_then(|m| m.get("chat"))
-                .and_then(|c| c.get("id"))
-                .and_then(serde_json::Value::as_i64)
-                .map(|i| i.to_string());
-            let cb_id = cb
-                .get("id")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or_default();
-
-            // Answer the callback to dismiss the spinner (best-effort).
-            if channel_id.is_some() {
-                let answer = serde_json::json!({
-                    "callback_query_id": cb_id,
-                    "text": match action {
-                        "approve" => "✅ Approved",
-                        "deny" => "❌ Denied",
-                        _ => "⚠️ Unknown action",
-                    },
-                });
-                if let Err(e) = self
-                    .client
-                    .post(format!("{}/answerCallbackQuery", self.api_url()))
-                    .json(&answer)
-                    .send()
-                    .await
-                {
-                    tracing::warn!("answerCallbackQuery failed: {e}");
-                }
-
-                // Synthesize the equivalent text command so the shared
-                // gateway_commands resolver handles the tap.
-                return Ok(Self::approval_message_from_callback(cb));
-            }
+            return Ok(Some(msg));
         }
 
         // Parse Telegram update — delegates to the static parse_update
@@ -1693,6 +1713,7 @@ impl PlatformAdapter for TelegramAdapter {
     async fn send_approval_prompt(
         &self,
         channel_id: &str,
+        thread_id: Option<i64>,
         tool_name: &str,
         description: &str,
     ) -> Result<()> {
@@ -1701,8 +1722,8 @@ impl PlatformAdapter for TelegramAdapter {
         );
         // Inline keyboard with tappable approve/deny buttons (hermes
         // `send_exec_approval` parity). Callback data uses the `approval:`
-        // prefix handled in `handle_update` above.
-        let body = serde_json::json!({
+        // prefix handled in `handle_callback_update` below.
+        let mut body = serde_json::json!({
             "chat_id": channel_id,
             "text": prompt,
             "reply_markup": {
@@ -1712,6 +1733,48 @@ impl PlatformAdapter for TelegramAdapter {
                 ]]
             }
         });
+        // Route the prompt into the same forum topic the discussion is in —
+        // without message_thread_id it lands in the general chat instead.
+        if let Some(tid) = thread_id {
+            body["message_thread_id"] = serde_json::json!(tid);
+        }
+        self.client
+            .post(format!("{}/sendMessage", self.api_url()))
+            .json(&body)
+            .send()
+            .await?;
+        Ok(())
+    }
+
+    async fn send_choice_prompt(
+        &self,
+        channel_id: &str,
+        thread_id: Option<i64>,
+        question: &str,
+        choices: &[String],
+    ) -> Result<()> {
+        // One tappable button per choice (hermes `send_clarify` parity).
+        // Index-based callback_data (`choice:<idx>`) stays under Telegram's
+        // 64-byte payload limit; the dispatch layer maps the index back to
+        // the option text when resolving the pending question.
+        let rows: Vec<Vec<serde_json::Value>> = choices
+            .iter()
+            .enumerate()
+            .map(|(i, c)| {
+                vec![serde_json::json!({
+                    "text": c,
+                    "callback_data": format!("choice:{i}"),
+                })]
+            })
+            .collect();
+        let mut body = serde_json::json!({
+            "chat_id": channel_id,
+            "text": format!("❓ {question}"),
+            "reply_markup": { "inline_keyboard": rows },
+        });
+        if let Some(tid) = thread_id {
+            body["message_thread_id"] = serde_json::json!(tid);
+        }
         self.client
             .post(format!("{}/sendMessage", self.api_url()))
             .json(&body)
@@ -1868,9 +1931,24 @@ impl PlatformAdapter for TelegramAdapter {
                                         continue;
                                     }
                                     offset = update_id + 1;
-                                    if let Ok(Some(mut msg)) =
-                                        TelegramAdapter::parse_update(update.clone())
+                                    // Route inline-keyboard taps (approval /
+                                    // clarify buttons) before the regular
+                                    // message parser — parse_update drops
+                                    // callback_query updates entirely.
+                                    let parsed = if let Some(m) =
+                                        TelegramAdapter::handle_callback_update(
+                                            &client,
+                                            &media_token,
+                                            &media_base,
+                                            update.clone(),
+                                        )
+                                        .await
                                     {
+                                        Some(m)
+                                    } else {
+                                        TelegramAdapter::parse_update(update.clone()).ok().flatten()
+                                    };
+                                    if let Some(mut msg) = parsed {
                                         // Download attachments (photos, documents,
                                         // voice/audio/video) into the local media
                                         // cache so the agent can inspect them with
@@ -1997,40 +2075,192 @@ impl PlatformAdapter for TelegramAdapter {
 }
 
 impl TelegramAdapter {
+    /// Process a Telegram `callback_query` update (inline keyboard tap) and
+    /// synthesize the equivalent inbound message, if any.
+    ///
+    /// Two tap families are supported, mirroring hermes' button contract:
+    ///
+    /// 1. `approval:<action>` — tool-permission Approve/Deny buttons. The tap
+    ///    is answered (spinner dismissed) and synthesized into a `/approve`
+    ///    or `/deny` text command that flows through the shared command
+    ///    resolver — identical to a typed reply. The prompt message's
+    ///    chat/message ids ride in `IncomingMessage.raw["approval_callback"]`
+    ///    so the dispatch layer can edit the prompt to show the outcome
+    ///    (hermes `resolve_gateway_approval` + `query.edit_message_text`
+    ///    parity).
+    /// 2. `choice:<idx>` — clarify() multiple-choice buttons. Synthesized
+    ///    with a `choice_callback` raw marker; the dispatch layer resolves
+    ///    the pending user question with the selected option text and edits
+    ///    the prompt message.
+    ///
+    /// Returns `None` for non-callback updates (delegate to `parse_update`).
+    /// Shared by `handle_update` and the Telegram polling loop so button
+    /// taps work on every transport.
+    async fn handle_callback_update(
+        client: &reqwest::Client,
+        token: &str,
+        base: &str,
+        update: serde_json::Value,
+    ) -> Option<IncomingMessage> {
+        let cb = update.get("callback_query")?;
+        let data = cb.get("data").and_then(serde_json::Value::as_str)?;
+        let cb_id = cb
+            .get("id")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        let api = format!("{}/bot{}", base.trim_end_matches('/'), token);
+
+        // ── Tool-permission approve/deny taps ────────────────────────────
+        if let Some(action) = data.strip_prefix("approval:") {
+            let label = match action {
+                "approve" => "✅ Approved",
+                "deny" => "❌ Denied",
+                _ => "⚠️ Unknown action",
+            };
+            // Answer the callback so the inline keyboard stops its spinner
+            // (best-effort; a failure must not drop the tap).
+            let _ = client
+                .post(format!("{api}/answerCallbackQuery"))
+                .json(&serde_json::json!({ "callback_query_id": cb_id, "text": label }))
+                .send()
+                .await;
+            // Synthesize the equivalent text command so the shared
+            // gateway_commands resolver handles the tap identically to a
+            // typed reply.
+            return Self::approval_message_from_callback(cb);
+        }
+
+        // ── clarify() multiple-choice taps ───────────────────────────────
+        if data.starts_with("choice:") {
+            let _ = client
+                .post(format!("{api}/answerCallbackQuery"))
+                .json(&serde_json::json!({
+                    "callback_query_id": cb_id,
+                    "text": "✅ Selected",
+                }))
+                .send()
+                .await;
+            return Self::choice_message_from_callback(cb);
+        }
+
+        None
+    }
+
     /// Synthesize the `/approve` / `/deny` text command that an inline-keyboard
     /// tap resolves to, so taps and text replies share the gateway_commands
     /// resolution path (hermes `send_exec_approval` parity). Pure — no I/O —
-    /// so it is unit-testable without a live client.
+    /// so it is unit-testable without a live client. Carries the thread_id
+    /// and an `approval_callback` raw marker (prompt chat/message ids, tap
+    /// user and action) so the dispatch layer can edit the prompt message to
+    /// reflect the outcome.
     fn approval_message_from_callback(cb: &serde_json::Value) -> Option<IncomingMessage> {
         let action = cb
             .get("data")
             .and_then(serde_json::Value::as_str)
             .and_then(|d| d.strip_prefix("approval:"))?;
-        let channel_id = cb
-            .get("message")
-            .and_then(|m| m.get("chat"))
-            .and_then(|c| c.get("id"))
+        let message = cb.get("message")?;
+        let chat = message.get("chat")?;
+        let channel_id = chat
+            .get("id")
             .and_then(serde_json::Value::as_i64)
             .map(|i| i.to_string())?;
-        Some(IncomingMessage::new(
-            "telegram",
-            cb.get("from")
-                .and_then(|f| f.get("id"))
-                .and_then(serde_json::Value::as_i64)
-                .map(|i| i.to_string())
-                .unwrap_or_default(),
-            cb.get("from")
-                .and_then(|f| f.get("username"))
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("unknown")
-                .to_string(),
-            channel_id,
-            match action {
-                "approve" => "/approve".to_string(),
-                "deny" => "/deny".to_string(),
-                other => format!("/approve-unknown-{other}"),
-            },
-        ))
+        let thread_id = message.get("message_thread_id").and_then(|t| t.as_i64());
+        let is_group = matches!(
+            chat.get("type").and_then(|t| t.as_str()),
+            Some("group" | "supergroup")
+        );
+        let user_name = cb
+            .get("from")
+            .and_then(|f| f.get("first_name"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("User")
+            .to_string();
+        Some(
+            IncomingMessage::new(
+                "telegram",
+                cb.get("from")
+                    .and_then(|f| f.get("id"))
+                    .and_then(serde_json::Value::as_i64)
+                    .map(|i| i.to_string())
+                    .unwrap_or_default(),
+                cb.get("from")
+                    .and_then(|f| f.get("username"))
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("unknown")
+                    .to_string(),
+                channel_id.clone(),
+                match action {
+                    "approve" => "/approve".to_string(),
+                    "deny" => "/deny".to_string(),
+                    other => format!("/approve-unknown-{other}"),
+                },
+            )
+            .with_thread_id(thread_id)
+            .with_group_chat(is_group)
+            .with_raw(serde_json::json!({
+                "approval_callback": {
+                    "chat_id": channel_id,
+                    "message_id": message.get("message_id").and_then(serde_json::Value::as_i64),
+                    "thread_id": thread_id,
+                    "user": user_name,
+                    "action": action,
+                }
+            })),
+        )
+    }
+
+    /// Synthesize the inbound message a clarify() button tap produces. Pure —
+    /// no I/O — so it is unit-testable. The message carries a `choice_callback`
+    /// raw marker (prompt chat/message ids, tap user and selected index) so
+    /// the dispatch layer can resolve the pending question with the option
+    /// text and edit the prompt message.
+    fn choice_message_from_callback(cb: &serde_json::Value) -> Option<IncomingMessage> {
+        let idx_str = cb
+            .get("data")
+            .and_then(serde_json::Value::as_str)
+            .and_then(|d| d.strip_prefix("choice:"))?;
+        let message = cb.get("message")?;
+        let chat = message.get("chat")?;
+        let channel_id = chat
+            .get("id")
+            .and_then(serde_json::Value::as_i64)
+            .map(|i| i.to_string())?;
+        let thread_id = message.get("message_thread_id").and_then(|t| t.as_i64());
+        let is_group = matches!(
+            chat.get("type").and_then(|t| t.as_str()),
+            Some("group" | "supergroup")
+        );
+        let user_name = cb
+            .get("from")
+            .and_then(|f| f.get("first_name"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("User")
+            .to_string();
+        let idx = idx_str.parse::<usize>().unwrap_or(0);
+        Some(
+            IncomingMessage::new(
+                "telegram",
+                cb.get("from")
+                    .and_then(|f| f.get("id"))
+                    .and_then(serde_json::Value::as_i64)
+                    .map(|i| i.to_string())
+                    .unwrap_or_default(),
+                user_name.clone(),
+                channel_id.clone(),
+                format!("__choice__{idx}"),
+            )
+            .with_thread_id(thread_id)
+            .with_group_chat(is_group)
+            .with_raw(serde_json::json!({
+                "choice_callback": {
+                    "chat_id": channel_id,
+                    "message_id": message.get("message_id").and_then(serde_json::Value::as_i64),
+                    "thread_id": thread_id,
+                    "user": user_name,
+                    "idx": idx,
+                }
+            })),
+        )
     }
 }
 
@@ -4496,6 +4726,77 @@ mod tests {
             "from": {"id": 444}
         });
         assert!(TelegramAdapter::approval_message_from_callback(&cb).is_none());
+    }
+
+    /// An approval tap in a forum topic must carry the thread_id (so the
+    /// `/approve` resolution reply lands in the same topic, not the general
+    /// chat) and the `approval_callback` raw marker (so the dispatch layer
+    /// can edit the prompt message to show the outcome — hermes
+    /// `query.edit_message_text` parity).
+    #[test]
+    fn approval_callback_carries_thread_and_edit_marker() {
+        let cb = serde_json::json!({
+            "id": "cb_5",
+            "data": "approval:approve",
+            "from": {"id": 555, "first_name": "Ishan", "username": "ishan"},
+            "message": {
+                "chat": {"id": -100123, "type": "supergroup"},
+                "message_id": 42,
+                "message_thread_id": 91609,
+                "text": "🔧 Permission required: terminal"
+            }
+        });
+        let msg = TelegramAdapter::approval_message_from_callback(&cb).expect("callback parsed");
+        assert_eq!(msg.thread_id, Some(91609));
+        assert!(msg.is_group_chat);
+        let marker = msg
+            .raw
+            .get("approval_callback")
+            .expect("edit marker present");
+        assert_eq!(marker["chat_id"], "-100123");
+        assert_eq!(marker["message_id"], 42);
+        assert_eq!(marker["thread_id"], 91609);
+        assert_eq!(marker["user"], "Ishan");
+        assert_eq!(marker["action"], "approve");
+    }
+
+    /// A clarify() button tap must synthesize a message carrying the
+    /// `choice_callback` raw marker (prompt chat/message ids, tap user and
+    /// the selected index) so the dispatch layer resolves the pending
+    /// question with the option text and edits the prompt message.
+    #[test]
+    fn choice_callback_synthesizes_marked_message() {
+        let cb = serde_json::json!({
+            "id": "cb_6",
+            "data": "choice:1",
+            "from": {"id": 666, "first_name": "Ishan"},
+            "message": {
+                "chat": {"id": -100123, "type": "supergroup"},
+                "message_id": 77,
+                "message_thread_id": 91609,
+                "text": "❓ Which approach?"
+            }
+        });
+        let msg = TelegramAdapter::choice_message_from_callback(&cb).expect("callback parsed");
+        assert_eq!(msg.thread_id, Some(91609));
+        assert!(msg.is_group_chat);
+        assert_eq!(msg.content, "__choice__1");
+        let marker = msg.raw.get("choice_callback").expect("edit marker present");
+        assert_eq!(marker["chat_id"], "-100123");
+        assert_eq!(marker["message_id"], 77);
+        assert_eq!(marker["user"], "Ishan");
+        assert_eq!(marker["idx"], 1);
+    }
+
+    #[test]
+    fn non_choice_callback_is_ignored() {
+        let cb = serde_json::json!({
+            "id": "cb_7",
+            "data": "approval:deny",
+            "from": {"id": 777},
+            "message": {"chat": {"id": 1}}
+        });
+        assert!(TelegramAdapter::choice_message_from_callback(&cb).is_none());
     }
 
     /// Echo handler that optionally blocks inside `handle` until released

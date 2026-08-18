@@ -41,8 +41,12 @@ type PendingPermissions = std::sync::Mutex<
 
 /// Pending user-question reply senders, keyed by channel_id (same shape as
 /// PendingPermissions).
+/// Pending clarify() question entry: the reply oneshot plus the original
+/// choice list (so a button tap can map its index back to the option text).
+type PendingUserQuestion = (tokio::sync::oneshot::Sender<String>, Option<Vec<String>>);
+
 type PendingUserQuestions =
-    std::sync::Mutex<Option<Arc<Mutex<HashMap<String, tokio::sync::oneshot::Sender<String>>>>>>;
+    std::sync::Mutex<Option<Arc<Mutex<HashMap<String, PendingUserQuestion>>>>>;
 
 /// Global store of pending permission requests, keyed by channel_id.
 pub static PENDING_PERMISSIONS: OnceLock<PendingPermissions> = OnceLock::new();
@@ -151,7 +155,7 @@ impl MessageHandler for GatewayMessageHandler {
                 let mut pending = pending_map.lock().await;
                 pending.remove(&channel_key)
             };
-            if let Some(reply_tx) = reply_tx {
+            if let Some((reply_tx, _choices)) = reply_tx {
                 tracing::info!(
                     channel = %channel_key,
                     "Routing message as user-question reply (intercepted)"
@@ -1158,7 +1162,12 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                 // /deny prompt. (hermes send_exec_approval parity.)
                 if let Some(adapter) = gw_for_perm.adapter_for(platform) {
                     let _ = adapter
-                        .send_approval_prompt(channel_id, &req.tool_name, &req.description)
+                        .send_approval_prompt(
+                            channel_id,
+                            *thread_id,
+                            &req.tool_name,
+                            &req.description,
+                        )
                         .await;
                 } else {
                     let prompt = format!(
@@ -1219,7 +1228,9 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
     // View, Slack Block Kit, WhatsApp native poll).
     let gw_for_uq = gw.clone();
     let current_channel_for_uq = current_channel.clone();
-    let pending_uq: Arc<Mutex<HashMap<String, tokio::sync::oneshot::Sender<String>>>> =
+    // Pending clarify() questions, keyed by `platform:channel_id` (the same
+    // key the message handler uses to intercept replies).
+    let pending_uq: Arc<Mutex<HashMap<String, PendingUserQuestion>>> =
         Arc::new(Mutex::new(HashMap::new()));
     // Store in the global so GatewayMessageHandler can check it
     if let Some(global_uq) = PENDING_USER_QUESTIONS.get()
@@ -1236,42 +1247,57 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
             if let Some((platform, channel_id, thread_id)) =
                 current_channel_for_uq.lock().await.as_ref()
             {
-                let body = if let Some(ref choices) = req.choices {
-                    format!(
-                        "❓ {}\n\n{}",
-                        req.question,
-                        choices
-                            .iter()
-                            .enumerate()
-                            .map(|(i, c)| format!("{}. {}", i + 1, c))
-                            .collect::<Vec<_>>()
-                            .join("\n")
-                    )
+                let channel_key = format!("{platform}:{channel_id}");
+                // Platforms with interactive components render tappable
+                // choice buttons (hermes `send_clarify` parity); the rest
+                // fall back to a plain-text numbered list. Either way the
+                // question is threaded into the ongoing topic.
+                if let (Some(adapter), Some(choices)) =
+                    (gw_for_uq.adapter_for(platform), req.choices.as_ref())
+                {
+                    let _ = adapter
+                        .send_choice_prompt(channel_id, *thread_id, &req.question, choices)
+                        .await;
                 } else {
-                    format!("❓ {}", req.question)
-                };
-                let msg = OutgoingMessage::new(channel_id, &body)
-                    .no_markdown()
-                    .with_thread_id(*thread_id);
-                let _ = gw_for_uq.send_to_platform(platform, msg).await;
+                    let body = if let Some(ref choices) = req.choices {
+                        format!(
+                            "❓ {}\n\n{}",
+                            req.question,
+                            choices
+                                .iter()
+                                .enumerate()
+                                .map(|(i, c)| format!("{}. {}", i + 1, c))
+                                .collect::<Vec<_>>()
+                                .join("\n")
+                        )
+                    } else {
+                        format!("❓ {}", req.question)
+                    };
+                    let msg = OutgoingMessage::new(channel_id, &body)
+                        .no_markdown()
+                        .with_thread_id(*thread_id);
+                    let _ = gw_for_uq.send_to_platform(platform, msg).await;
+                }
 
-                // Store the reply_tx so the next message from this channel
-                // is routed as the reply. (iter-161 — replaces the hardcoded
+                // Store the reply_tx (plus the original choices, so a button
+                // tap can map its index back to the option text) keyed by the
+                // same `platform:channel_id` key the message handler uses to
+                // intercept replies. (iter-161 — replaces the hardcoded
                 // placeholder string with real reply interception.)
                 pending_uq_for_task
                     .lock()
                     .await
-                    .insert(channel_id.clone(), req.reply_tx);
+                    .insert(channel_key.clone(), (req.reply_tx, req.choices));
 
                 // Spawn a timeout — if no reply in 120s, send a timeout message
                 let pending_uq_for_timeout = pending_uq_for_task.clone();
-                let timeout_channel = channel_id.clone();
+                let timeout_channel_key = channel_key.clone();
                 tokio::spawn(async move {
                     tokio::time::sleep(std::time::Duration::from_secs(120)).await;
                     let mut pending = pending_uq_for_timeout.lock().await;
-                    if let Some(reply_tx) = pending.remove(&timeout_channel) {
+                    if let Some((reply_tx, _choices)) = pending.remove(&timeout_channel_key) {
                         tracing::warn!(
-                            channel = %timeout_channel,
+                            channel = %timeout_channel_key,
                             "User question timed out — sending timeout reply"
                         );
                         let _ =
@@ -1313,19 +1339,38 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                     let response = OutgoingMessage::new(
                         &msg.channel_id,
                         "You are not authorized to use this bot.",
-                    );
+                    )
+                    .with_thread_id(msg.thread_id);
                     gw.send_to_platform(&platform, response).await?;
                     return Ok(());
                 }
                 tracing::info!("Message from {} passed admin allowlist check", msg.user_id);
 
                 // ── 1.5 Command interception ──────────────────────────────────
+                // (Approval button taps are synthesized as `/approve` /
+                // `/deny` commands — see handle_callback_update in core. The
+                // tap also carries an `approval_callback` raw marker so we can
+                // edit the prompt message once the outcome is known, exactly
+                // like hermes' `query.edit_message_text` after a tap.)
+                let approval_tap = msg.raw.get("approval_callback").cloned();
+                let approval_was_pending = approval_tap.is_some() && {
+                    let mut found = false;
+                    if let Some(cell) = crate::gateway_runner::PENDING_PERMISSIONS.get()
+                        && let Ok(guard) = cell.lock()
+                        && let Some(pending) = guard.as_ref()
+                        && let Ok(map) = pending.try_lock()
+                    {
+                        found = map.contains_key(&msg.channel_id);
+                    }
+                    found
+                };
                 let is_admin = admins.is_empty() || admins.contains(&msg.user_id);
                 if let Some((cmd_def, cmd_args)) = resolve_command(&msg.content) {
                     tracing::info!("User {} ran command /{}", msg.user_id, cmd_def.name);
                     if cmd_def.admin_only && !is_admin {
                         let response =
-                            OutgoingMessage::new(&msg.channel_id, "This command is admin-only.");
+                            OutgoingMessage::new(&msg.channel_id, "This command is admin-only.")
+                                .with_thread_id(msg.thread_id);
                         gw.send_to_platform(&platform, response).await?;
                     } else {
                         let ctx = CommandContext::new(
@@ -1337,9 +1382,70 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                             &msg.channel_id,
                         );
                         if let Some(response_text) = handle_command(cmd_def.name, cmd_args, &ctx) {
-                            let response = OutgoingMessage::new(&msg.channel_id, response_text);
+                            let response = OutgoingMessage::new(&msg.channel_id, response_text)
+                                .with_thread_id(msg.thread_id);
                             gw.send_to_platform(&platform, response).await?;
                         }
+                    }
+                    // Reflect the tap outcome on the prompt message itself
+                    // (hermes parity: "✅ Approved by X" / "⌛ expired").
+                    if let Some(cb) = approval_tap {
+                        edit_approval_prompt_message(&gw, &platform, &cb, approval_was_pending)
+                            .await;
+                    }
+                    return Ok(());
+                }
+
+                // ── 1.6 Clarify choice taps ──────────────────────────────────
+                // A `choice:` inline-button tap resolves the pending
+                // clarify() question with the selected option. The adapter
+                // synthesized this message with a raw `choice_callback`
+                // marker — resolve it here so it never reaches the agent as
+                // a stray message, and edit the prompt to show the selection
+                // (hermes `send_clarify` tap parity).
+                if let Some(cc) = msg.raw.get("choice_callback").cloned() {
+                    let pending_map_clone = {
+                        let global_uq = crate::gateway_runner::PENDING_USER_QUESTIONS.get();
+                        global_uq
+                            .and_then(|g| g.lock().ok())
+                            .and_then(|mut guard| guard.take())
+                    };
+                    let mut selected: Option<String> = None;
+                    if let Some(pending_map) = pending_map_clone {
+                        let key = format!("{platform}:{channel_id}");
+                        let idx = cc.get("idx").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+                        if let Some((reply_tx, choices)) = pending_map.lock().await.remove(&key) {
+                            let text = choices
+                                .and_then(|c| c.get(idx).cloned())
+                                .unwrap_or_else(|| format!("option {}", idx + 1));
+                            let _ = reply_tx.send(text.clone());
+                            selected = Some(text);
+                        }
+                        if let Some(g) = crate::gateway_runner::PENDING_USER_QUESTIONS.get()
+                            && let Ok(mut guard) = g.lock()
+                        {
+                            *guard = Some(pending_map);
+                        }
+                    }
+                    // Edit the question message to show the selection and
+                    // remove the buttons.
+                    if let (Some(adapter), Some(chat), Some(mid)) = (
+                        gw.adapter_for(&platform),
+                        cc.get("chat_id").and_then(|v| v.as_str()),
+                        cc.get("message_id").and_then(|v| v.as_i64()),
+                    ) {
+                        let text = match selected {
+                            Some(t) => format!("✅ Selected: {t}"),
+                            None => "⌛ This question has already been answered or timed out."
+                                .to_string(),
+                        };
+                        let _ = adapter
+                            .edit_message(
+                                chat,
+                                &mid.to_string(),
+                                &OutgoingMessage::new(chat, &text).no_markdown(),
+                            )
+                            .await;
                     }
                     return Ok(());
                 }
@@ -1376,7 +1482,8 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                 tracing::info!("Message pipeline action: {:?}", action);
                 match action {
                     PipelineAction::Block(reason) => {
-                        let response = OutgoingMessage::new(&msg.channel_id, reason);
+                        let response = OutgoingMessage::new(&msg.channel_id, reason)
+                            .with_thread_id(msg.thread_id);
                         gw.send_to_platform(&platform, response).await?;
                         return Ok(());
                     }
@@ -1654,6 +1761,51 @@ pub async fn is_running() -> bool {
         Some(gw) => gw.is_running().await,
         None => false,
     }
+}
+
+/// After an approval button tap is resolved, edit the original prompt
+/// message to show which choice was made and by whom, and remove the inline
+/// keyboard (hermes `query.edit_message_text` parity — `"✅ Approved by X"`
+/// with `reply_markup=None`). `was_pending` reflects whether a permission
+/// request was actually waiting for this channel when the tap arrived; a
+/// stale tap (already timed out or resolved elsewhere) gets an honest
+/// "expired" note instead of a false "approved".
+async fn edit_approval_prompt_message(
+    gw: &Gateway,
+    platform: &str,
+    cb: &serde_json::Value,
+    was_pending: bool,
+) {
+    let Some(adapter) = gw.adapter_for(platform) else {
+        return;
+    };
+    let Some(chat_id) = cb.get("chat_id").and_then(|v| v.as_str()) else {
+        return;
+    };
+    let Some(message_id) = cb.get("message_id").and_then(|v| v.as_i64()) else {
+        return;
+    };
+    let user = cb.get("user").and_then(|v| v.as_str()).unwrap_or("User");
+    let action = cb.get("action").and_then(|v| v.as_str()).unwrap_or("");
+    let text = if was_pending {
+        match action {
+            "approve" => format!("✅ Approved by {user} (button tap)"),
+            "deny" => format!("❌ Denied by {user} (button tap)"),
+            _ => "⚠️ Unknown action".to_string(),
+        }
+    } else {
+        "⌛ Approval expired — no command was waiting (already timed out or resolved elsewhere)."
+            .to_string()
+    };
+    // edit_message also clears the inline keyboard (Telegram impl sends an
+    // empty InlineKeyboardMarkup), so the buttons disappear on resolution.
+    let _ = adapter
+        .edit_message(
+            chat_id,
+            &message_id.to_string(),
+            &OutgoingMessage::new(chat_id, &text).no_markdown(),
+        )
+        .await;
 }
 
 // ── Message enrichment helpers ──────────────────────────────────────────────
