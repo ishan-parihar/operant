@@ -881,21 +881,82 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
 
     fn tool_emoji(name: &str) -> &'static str {
         match name {
-            "terminal" | "bash" | "shell" => "\u{1F4BB}",
-            "web_search" | "web_search_" | "tavily" | "tavily_search" => "\u{1F50D}",
-            "web_fetch" | "web_scrape" | "tavily_extract" | "tavily_crawl" => "\u{1F310}",
+            // ── Terminal / Code ──
+            "terminal" | "bash" | "shell" | "aft_bash" | "process" | "docker" => "\u{1F4BB}",
+            "code_execution" | "echo" | "local" | "slow" | "fast" => "\u{1F4BB}",
+            // ── Web / Search ──
+            "web_search" | "web_search_" | "tavily" | "tavily_search" | "igs" => "\u{1F50D}",
+            "web_fetch" | "web_scrape" | "tavily_extract" | "tavily_crawl" | "web_extract"
+            | "web_crawl" => "\u{1F310}",
+            "search" | "find" | "file_search" => "\u{1F50E}",
+            // ── File I/O ──
             "read" | "glob" | "grep" | "ast_grep" | "look_at" => "\u{1F4D6}",
-            "write" | "edit" | "create" => "\u{270F}\u{FE0F}",
-            "memory" | "memory_search" | "memory_store" => "\u{1F9E0}",
+            "file_read"
+            | "file_list"
+            | "aft_read"
+            | "aft_outline"
+            | "aft_grep"
+            | "aft_glob"
+            | "aft_search"
+            | "aft_inspect"
+            | "aft_status"
+            | "aft_callers"
+            | "aft_zoom"
+            | "aft_ast_search"
+            | "aft_checkpoint_paths"
+            | "aft_list_checkpoints" => "\u{1F4D6}",
+            "write" | "edit" | "create" | "patch" => "\u{270F}\u{FE0F}",
+            "file_write" | "aft_write" | "aft_edit" | "aft_apply_patch" | "aft_ast_replace" => {
+                "\u{270F}\u{FE0F}"
+            }
+            // ── Memory ──
+            "memory" | "memory_search" | "memory_store" | "memory_recall" => "\u{1F9E0}",
+            // ── LCM (Lossless Context Memory) ──
+            "lcm_recall" | "lcm_stats" | "lcm_load_session" | "lcm_recent"
+            | "lcm_vector_recall" | "lcm_recall_round" | "lcm_assert" | "lcm_doctor" => "\u{1F9E0}",
+            // ── Skills ──
+            "skills_list" | "skill_view" | "skill_manage" | "learning_manage" => "\u{1F4DA}",
+            // ── Session ──
+            "session_search" | "session_insights" => "\u{1F4CB}",
+            // ── Config ──
+            "config_manage" => "\u{2699}\u{FE0F}",
+            // ── Cron / Scheduling ──
+            "cron" | "todo" | "kanban" => "\u{23F0}",
+            // ── Browser ──
+            "browser" | "browser_dialog" | "browser_cdp" | "browser_camofox_state" => {
+                "\u{1F5A5}\u{FE0F}"
+            }
+            // ── Approval / Clarify ──
+            "approval_request" | "clarify" | "verify_task" => "\u{2753}",
+            // ── Communication ──
+            "chat" | "send_message" | "message" | "notify" | "react_to_message" => "\u{1F4AC}",
+            "discord" | "discord_admin" | "homeassistant" => "\u{1F4AC}",
+            // ── HTTP / API ──
+            "http_request" | "xai_http_request" | "openrouter_query" => "\u{1F310}",
+            // ── Image / Media ──
+            "image" | "screenshot" | "draw" | "image_generate" | "vision_analyze"
+            | "video_analyze" => "\u{1F5BC}\u{FE0F}",
+            "transcribe_audio" | "text_to_speech" | "neutts_synthesize" => "\u{1F3A4}",
+            // ── Spotify ──
+            "spotify_playback" | "spotify_search" | "spotify_devices" | "spotify_albums"
+            | "spotify_playlists" | "spotify_library" | "spotify_queue" => "\u{1F3B5}",
+            // ── SSH / Remote ──
+            "ssh" => "\u{1F510}",
+            // ── Checkpoint / Git ──
+            "checkpoint" | "aft_checkpoint" | "aft_restore_checkpoint" | "aft_undo" => "\u{1F4BE}",
             "github" | "gh" | "git" => "\u{1F5A5}\u{FE0F}",
+            // ── Thinking ──
             "think" | "reason" | "sequentialthinking" => "\u{1F4AD}",
             "plan" | "strategy" => "\u{1F9F0}",
-            "sql" | "database" | "db" | "postgres" => "\u{1F4BE}",
-            "image" | "screenshot" | "draw" => "\u{1F5BC}\u{FE0F}",
-            "chat" | "send_message" | "message" | "notify" => "\u{1F4AC}",
+            // ── Debug / Env ──
+            "debug_env" | "debug_system" | "env_probe" | "osv_check" | "tool_backend" => {
+                "\u{1F527}"
+            }
+            // ── Feishu / Notes ──
+            "feishu_doc_read" | "feishu_drive" => "\u{1F4DD}",
+            // ── Errors / Done ──
             "error" | "fail" => "\u{274C}",
             "done" | "complete" | "finish" => "\u{2705}",
-            "search" | "find" => "\u{1F50E}",
             _ => "\u{2699}\u{FE0F}",
         }
     }
@@ -903,21 +964,84 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
     fn extract_tool_arg(name: &str, args: &str) -> Option<String> {
         if let Ok(json) = serde_json::from_str::<serde_json::Value>(args) {
             let keys: &[&str] = match name {
-                "terminal" | "bash" | "shell" => &["command"],
-                "web_search" | "web_search_" | "tavily" | "tavily_search" => &["query"],
-                "tavily_extract" | "web_fetch" | "tavily_crawl" => &["url"],
-                "read" | "look_at" => &["file_path", "path", "pattern"],
-                "glob" => &["pattern", "file_path"],
-                "grep" | "search" | "ast_grep" => &["pattern", "query", "file_path"],
-                "write" | "create" => &["file_path", "path", "content"],
-                "edit" => &["file_path", "path", "old_string"],
-                "memory" | "memory_search" => &["query", "text"],
-                "memory_store" => &["content", "text"],
-                "image" | "screenshot" => &["path", "url"],
-                "chat" | "send_message" | "notify" => &["message", "content", "text"],
+                // Terminal / Code
+                "terminal" | "bash" | "shell" | "aft_bash" | "code_execution" | "process"
+                | "echo" | "docker" => &["command"],
+                // Web / Search
+                "web_search" | "web_search_" | "tavily" | "tavily_search" | "igs" => &["query"],
+                "web_fetch" | "web_scrape" | "tavily_extract" | "tavily_crawl" | "web_extract"
+                | "web_crawl" | "http_request" | "xai_http_request" => &["url"],
+                // File read
+                "read" | "look_at" | "file_read" | "aft_read" | "aft_outline" | "aft_inspect"
+                | "aft_status" => &["file_path", "path", "pattern"],
+                "glob"
+                | "file_list"
+                | "aft_glob"
+                | "aft_list_checkpoints"
+                | "aft_checkpoint_paths" => &["pattern", "file_path"],
+                // File search
+                "grep" | "search" | "ast_grep" | "file_search" | "aft_grep" | "aft_search"
+                | "aft_callers" | "aft_zoom" | "aft_ast_search" => {
+                    &["pattern", "query", "file_path"]
+                }
+                // File write
+                "write" | "create" | "file_write" | "aft_write" | "patch" | "aft_apply_patch"
+                | "aft_ast_replace" => &["file_path", "path", "content"],
+                "edit" | "aft_edit" => &["file_path", "path", "old_string"],
+                // Memory
+                "memory" | "memory_search" | "memory_recall" | "lcm_recall"
+                | "lcm_vector_recall" | "lcm_recall_round" => &["query", "text"],
+                "memory_store" | "lcm_assert" => &["content", "text"],
+                // LCM
+                "lcm_stats" | "lcm_load_session" | "lcm_recent" | "lcm_doctor" => {
+                    &["session_id", "action"]
+                }
+                // Session
+                "session_search" | "session_insights" => &["query", "session_id"],
+                // Skills
+                "skills_list" | "skill_view" | "skill_manage" | "learning_manage" => {
+                    &["action", "skill_name", "name"]
+                }
+                // Config
+                "config_manage" => &["action", "key", "path"],
+                // Cron / Tasks
+                "cron" => &["action", "schedule", "command"],
+                "todo" | "kanban" => &["action", "task_id", "title"],
+                // Browser
+                "browser" => &["action", "url", "command"],
+                "browser_dialog" | "browser_cdp" | "browser_camofox_state" => {
+                    &["action", "command"]
+                }
+                // Approval / Clarify
+                "approval_request" | "verify_task" => &["tool_name", "description"],
+                "clarify" => &["question", "choices"],
+                // Communication
+                "chat" | "send_message" | "notify" | "react_to_message" => {
+                    &["message", "content", "text"]
+                }
+                // Image / Media
+                "image" | "screenshot" | "image_generate" | "vision_analyze" => {
+                    &["path", "url", "prompt"]
+                }
+                "video_analyze" | "transcribe_audio" | "text_to_speech" | "neutts_synthesize" => {
+                    &["path", "url", "text"]
+                }
+                // Spotify
+                "spotify_playback" | "spotify_search" | "spotify_devices" | "spotify_albums"
+                | "spotify_playlists" | "spotify_library" | "spotify_queue" => &["query", "action"],
+                // Checkpoint / Git
+                "checkpoint" | "aft_checkpoint" | "aft_restore_checkpoint" | "aft_undo" => {
+                    &["action", "path"]
+                }
                 "github" | "gh" => &["query", "command", "repo"],
+                // Thinking
                 "think" | "sequentialthinking" | "reason" => &["thought"],
-                "sql" | "database" | "postgres" => &["query", "sql"],
+                // Debug
+                "debug_env" | "debug_system" | "env_probe" | "osv_check" | "tool_backend" => {
+                    &["variable", "key"]
+                }
+                // SSH
+                "ssh" => &["command", "host"],
                 _ => &[
                     "query",
                     "command",

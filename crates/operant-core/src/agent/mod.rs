@@ -1686,6 +1686,8 @@ impl OperantAgent {
         let mut empty_content_retries: usize = 0;
         // Truncation-continuation retries (T1 — hermes caps at 4).
         let mut length_continue_retries: usize = 0;
+        // Whether we've already tried a fallback model after empty retries.
+        let mut fallback_attempted = false;
 
         // Reset provider registry to primary at turn start.
         // Matches hermes-agent's restore_primary_runtime() pattern —
@@ -2142,19 +2144,35 @@ impl OperantAgent {
                             "Empty assistant response — retrying ({}/{})",
                             empty_content_retries, self.config.max_retries
                         );
-                        self.emit(AgentEvent::Content {
-                            text: format!(
-                                "Empty assistant response — retrying ({}/{})",
-                                empty_content_retries, self.config.max_retries
-                            ),
-                        })
-                        .await;
+                        // Log the retry but do NOT emit as a visible Content
+                        // event — these retry messages should not clutter the
+                        // user's Telegram chat. They are operational signals,
+                        // not assistant output.
                         // Append the empty assistant turn so the model sees its
                         // own empty reply and is nudged to actually respond.
                         messages.push(Message::assistant(""));
                         self.add_message(Message::assistant("")).await;
                         // Refund the consumed iteration — the LLM call was
                         // wasted on an empty turn.
+                        self.iteration_budget.refund();
+                        continue;
+                    }
+                    // After retries exhausted on empty content, try fallback
+                    // models before giving up (hermes fallback_on_errors parity).
+                    if tool_calls.is_empty()
+                        && !has_visible_text
+                        && !has_reasoning
+                        && !self.config.fallback_models.is_empty()
+                        && self.config.fallback_on_errors
+                        && !fallback_attempted
+                    {
+                        fallback_attempted = true;
+                        let next_model = &self.config.fallback_models[0];
+                        warn!(
+                            "Empty response after {} retries — switching to fallback model: {}",
+                            self.config.max_retries, next_model
+                        );
+                        self.set_model(next_model.clone());
                         self.iteration_budget.refund();
                         continue;
                     }
