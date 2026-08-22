@@ -805,3 +805,31 @@ Executed the deferred orchestrator surgery (`scripts/split_orchestrator.py`):
 Note: tests/live_parity.rs fails under bare `-p operant-channels --all-targets`
 (default features) because it imports the cfg-gated telegram module without a
 feature gate — pre-existing, masked by workspace feature unification.
+
+### Full-scale module split — schema/core.rs residual + audit (dedup pass 4)
+1. **core.rs (13,118 → 1,600 lines)**: misplaced blocks relocated to their
+   proper homes — proxy I/O helpers (AsyncReadWrite/BoxedIo/
+   resolve_ws_proxy_url/find_header_end) merged into `proxy.rs` where their
+   only consumers live; 13 channel configs (Mattermost, Webhook, Linq,
+   NextcloudTalk, Lark, Line, WeCom, WeChat, Twitter, Reddit, Bluesky,
+   VoiceDuplex/Wake, Nostr) merged into `channels_cfg.rs`; new modules:
+   `platform_cfg.rs` (memory/search/observability/hooks/runtime/reliability/
+   routes/cron), `tunnels.rs`, `security_cfg.rs` (security/OTP/sandbox/audit),
+   `ops_cfg.rs` (CloudOps/ConversationalAi/SecurityOps), `config_impl.rs`
+   (impl Config ~1.9K lines + Default + resolution-source helpers). Inline
+   test mod (7.4K) → `core/core_tests.rs`. mod.rs re-exports keep all
+   schema:: paths stable.
+2. Splitter lesson (scripts/split_core.py): when a target filename equals an
+   existing module (proxy.rs), APPEND — do not open("w") (clobbered once,
+   restored from git and re-merged). Non-mod.rs child modules resolve to a
+   subdirectory named after the parent file (schema/core/core_tests.rs).
+3. Audit findings recorded for follow-up arcs:
+   - Remaining monoliths: telegram.rs 7.2K; core/agent/mod.rs 6.3K;
+     core/gateway/mod.rs 5.8K; slack.rs 5.3K; providers compatible.rs 4.9K;
+     loop_ mod.rs residual 4.9K; runtime agent.rs 4.7K; matrix.rs 4.6K.
+   - Production `.unwrap()` census (~450 total, most in tests): cron/mod.rs
+     51, memory/lucid.rs 32, skills/mod.rs 27, tool-call-parser 22,
+     wechat.rs 15, service/mod.rs 8.
+   - 8 untracked TODO comments (no issue links).
+4. Gates: fmt, workspace check/clippy(-D warnings all-targets+features),
+   36/36 suites, fresh release deployed both paths, gateway active.

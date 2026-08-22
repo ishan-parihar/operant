@@ -1712,3 +1712,597 @@ impl Default for JiraConfig {
         }
     }
 }
+
+// ── Channels ─────────────────────────────────────────────────────
+
+pub(crate) struct ConfigWrapper<T: ChannelConfig>(std::marker::PhantomData<T>);
+
+impl<T: ChannelConfig> ConfigWrapper<T> {
+    pub(crate) fn new(_: Option<&T>) -> Self {
+        Self(std::marker::PhantomData)
+    }
+}
+
+impl<T: ChannelConfig> crate::traits::ConfigHandle for ConfigWrapper<T> {
+    fn name(&self) -> &'static str {
+        T::name()
+    }
+    fn desc(&self) -> &'static str {
+        T::desc()
+    }
+}
+
+/// Streaming mode for channels that support progressive message updates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[cfg_attr(feature = "schema-export", derive(schemars::JsonSchema))]
+#[serde(rename_all = "lowercase")]
+pub enum StreamMode {
+    /// No streaming -- send the complete response as a single message (default).
+    #[default]
+    Off,
+    /// Update a draft message with every flush interval.
+    Partial,
+    /// Send the response as multiple separate messages at paragraph boundaries.
+    #[serde(rename = "multi_message")]
+    MultiMessage,
+}
+
+/// Mattermost bot channel configuration.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Configurable)]
+#[cfg_attr(feature = "schema-export", derive(schemars::JsonSchema))]
+#[prefix = "channels.mattermost"]
+pub struct MattermostConfig {
+    /// Whether this channel is active (must be explicitly enabled). Default: false.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Mattermost server URL (e.g. `"https://mattermost.example.com"`).
+    pub url: String,
+    /// Mattermost bot access token.
+    #[secret]
+    pub bot_token: String,
+    /// Optional channel ID to restrict the bot to a single channel.
+    pub channel_id: Option<String>,
+    /// Allowed Mattermost user IDs. Empty = deny all.
+    #[serde(default)]
+    pub allowed_users: Vec<String>,
+    /// When true (default), replies thread on the original post.
+    /// When false, replies go to the channel root.
+    #[serde(default)]
+    pub thread_replies: Option<bool>,
+    /// When true, only respond to messages that @-mention the bot.
+    /// Other messages in the channel are silently ignored.
+    #[serde(default)]
+    pub mention_only: Option<bool>,
+    /// When true, a newer Mattermost message from the same sender in the same channel
+    /// cancels the in-flight request and starts a fresh response with preserved history.
+    #[serde(default)]
+    pub interrupt_on_new_message: bool,
+    /// Per-channel proxy URL (http, https, socks5, socks5h).
+    /// Overrides the global `[proxy]` setting for this channel only.
+    #[serde(default)]
+    pub proxy_url: Option<String>,
+}
+
+impl ChannelConfig for MattermostConfig {
+    fn name() -> &'static str {
+        "Mattermost"
+    }
+    fn desc() -> &'static str {
+        "connect to your bot"
+    }
+}
+
+/// Webhook channel configuration.
+///
+/// Receives messages via HTTP POST and sends replies to a configurable outbound URL.
+/// This is the "universal adapter" for any system that supports webhooks.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Configurable)]
+#[cfg_attr(feature = "schema-export", derive(schemars::JsonSchema))]
+#[prefix = "channels.webhook"]
+pub struct WebhookConfig {
+    /// Whether this channel is active (must be explicitly enabled). Default: false.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Port to listen on for incoming webhooks.
+    pub port: u16,
+    /// URL path to listen on (default: `/webhook`).
+    #[serde(default)]
+    pub listen_path: Option<String>,
+    /// URL to POST/PUT outbound messages to.
+    #[serde(default)]
+    pub send_url: Option<String>,
+    /// HTTP method for outbound messages (`POST` or `PUT`). Default: `POST`.
+    #[serde(default)]
+    pub send_method: Option<String>,
+    /// Optional `Authorization` header value for outbound requests.
+    #[serde(default)]
+    pub auth_header: Option<String>,
+    /// Optional shared secret for webhook signature verification (HMAC-SHA256).
+    #[secret]
+    pub secret: Option<String>,
+}
+
+impl ChannelConfig for WebhookConfig {
+    fn name() -> &'static str {
+        "Webhook"
+    }
+    fn desc() -> &'static str {
+        "HTTP endpoint"
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Configurable)]
+#[cfg_attr(feature = "schema-export", derive(schemars::JsonSchema))]
+#[prefix = "channels.linq"]
+/// Linq SMS channel configuration.
+pub struct LinqConfig {
+    /// Whether this channel is active (must be explicitly enabled). Default: false.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Linq Partner API token (Bearer auth)
+    #[secret]
+    pub api_token: String,
+    /// Phone number to send from (E.164 format)
+    pub from_phone: String,
+    /// Webhook signing secret for signature verification
+    #[serde(default)]
+    #[secret]
+    pub signing_secret: Option<String>,
+    /// Allowed sender handles (phone numbers) or "*" for all
+    #[serde(default)]
+    pub allowed_senders: Vec<String>,
+}
+
+impl ChannelConfig for LinqConfig {
+    fn name() -> &'static str {
+        "Linq"
+    }
+    fn desc() -> &'static str {
+        "iMessage/RCS/SMS via Linq API"
+    }
+}
+
+/// Nextcloud Talk bot configuration (webhook receive + OCS send API).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Configurable)]
+#[cfg_attr(feature = "schema-export", derive(schemars::JsonSchema))]
+#[prefix = "channels.nextcloud-talk"]
+pub struct NextcloudTalkConfig {
+    /// Whether this channel is active (must be explicitly enabled). Default: false.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Nextcloud base URL (e.g. `"https://cloud.example.com"`).
+    pub base_url: String,
+    /// Bot app token used for OCS API bearer auth.
+    #[secret]
+    pub app_token: String,
+    /// Shared secret for webhook signature verification.
+    ///
+    /// Can also be set via `OPERANT_NEXTCLOUD_TALK_WEBHOOK_SECRET`.
+    #[serde(default)]
+    #[secret]
+    pub webhook_secret: Option<String>,
+    /// Allowed Nextcloud actor IDs (`[]` = deny all, `"*"` = allow all).
+    #[serde(default)]
+    pub allowed_users: Vec<String>,
+    /// Per-channel proxy URL (http, https, socks5, socks5h).
+    /// Overrides the global `[proxy]` setting for this channel only.
+    #[serde(default)]
+    pub proxy_url: Option<String>,
+    /// Display name of the bot in Nextcloud Talk (e.g. "operant").
+    /// Used to filter out the bot's own messages and prevent feedback loops.
+    /// If not set, defaults to an empty string (no self-message filtering by name).
+    #[serde(default)]
+    pub bot_name: Option<String>,
+    /// Controls whether and how streaming draft updates are delivered.
+    ///
+    /// - `"off"` (default) — responses are sent as a single final message.
+    /// - `"partial"` — a placeholder is posted first and edited incrementally
+    ///   as tokens arrive, making long responses visible in real time.
+    #[serde(default)]
+    pub stream_mode: StreamMode,
+    /// Minimum interval in milliseconds between consecutive OCS edit calls per
+    /// room when `stream_mode = "partial"`. Default: 1000 ms.
+    #[serde(default = "default_draft_update_interval_ms")]
+    pub draft_update_interval_ms: u64,
+}
+
+impl ChannelConfig for NextcloudTalkConfig {
+    fn name() -> &'static str {
+        "NextCloud Talk"
+    }
+    fn desc() -> &'static str {
+        "NextCloud Talk platform"
+    }
+}
+
+/// How Operant receives events from Feishu / Lark.
+///
+/// - `websocket` (default) — persistent WSS long-connection; no public URL required.
+/// - `webhook`             — HTTP callback server; requires a public HTTPS endpoint.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[cfg_attr(feature = "schema-export", derive(schemars::JsonSchema))]
+#[serde(rename_all = "lowercase")]
+pub enum LarkReceiveMode {
+    #[default]
+    /// Persistent WebSocket long-connection; no public URL required.
+    Websocket,
+    /// HTTP callback server; requires a public HTTPS endpoint.
+    Webhook,
+}
+
+/// Lark/Feishu configuration for messaging integration.
+/// Lark is the international version; Feishu is the Chinese version.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Configurable)]
+#[cfg_attr(feature = "schema-export", derive(schemars::JsonSchema))]
+#[prefix = "channels.lark"]
+pub struct LarkConfig {
+    /// Whether this channel is active (must be explicitly enabled). Default: false.
+    #[serde(default)]
+    pub enabled: bool,
+    /// App ID from Lark/Feishu developer console
+    pub app_id: String,
+    /// App Secret from Lark/Feishu developer console
+    #[secret]
+    pub app_secret: String,
+    /// Encrypt key for webhook message decryption (optional)
+    #[serde(default)]
+    #[secret]
+    pub encrypt_key: Option<String>,
+    /// Verification token for webhook validation (optional)
+    #[serde(default)]
+    #[secret]
+    pub verification_token: Option<String>,
+    /// Allowed user IDs or union IDs (empty = deny all, "*" = allow all)
+    #[serde(default)]
+    pub allowed_users: Vec<String>,
+    /// When true, only respond to messages that @-mention the bot in groups.
+    /// Direct messages are always processed.
+    #[serde(default)]
+    pub mention_only: bool,
+    /// Whether to use the Feishu (Chinese) endpoint instead of Lark (International)
+    #[serde(default)]
+    pub use_feishu: bool,
+    /// Event receive mode: "websocket" (default) or "webhook"
+    #[serde(default)]
+    pub receive_mode: LarkReceiveMode,
+    /// HTTP port for webhook mode only. Must be set when receive_mode = "webhook".
+    /// Not required (and ignored) for websocket mode.
+    #[serde(default)]
+    pub port: Option<u16>,
+    /// Per-channel proxy URL (http, https, socks5, socks5h).
+    /// Overrides the global `[proxy]` setting for this channel only.
+    #[serde(default)]
+    pub proxy_url: Option<String>,
+}
+
+impl ChannelConfig for LarkConfig {
+    fn name() -> &'static str {
+        "Lark"
+    }
+    fn desc() -> &'static str {
+        "Lark Bot"
+    }
+}
+
+/// DM (1:1 chat) access policy for the LINE channel.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema-export", derive(schemars::JsonSchema))]
+#[serde(rename_all = "lowercase")]
+pub enum LineDmPolicy {
+    /// Respond to every DM regardless of who sent it.
+    Open,
+    /// Require a one-time `/bind <code>` handshake before responding (default).
+    /// Operant prints the bind code on startup; send it once to unlock access.
+    #[default]
+    Pairing,
+    /// Respond only to LINE user IDs listed in `allowed_users`.
+    Allowlist,
+}
+
+/// Group / multi-person chat policy for the LINE channel.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema-export", derive(schemars::JsonSchema))]
+#[serde(rename_all = "lowercase")]
+pub enum LineGroupPolicy {
+    /// Respond to every message in group/room chats.
+    Open,
+    /// Respond only when the bot is @mentioned (default).
+    #[default]
+    Mention,
+    /// Ignore all messages in group/room chats.
+    Disabled,
+}
+
+/// LINE Messaging API channel configuration.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Configurable)]
+#[cfg_attr(feature = "schema-export", derive(schemars::JsonSchema))]
+#[prefix = "channels.line"]
+pub struct LineConfig {
+    /// Whether this channel is active (must be explicitly enabled). Default: false.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Long-lived channel access token (from LINE Developers Console).
+    /// Used for both the Reply API and the Push API fallback.
+    /// Falls back to the `LINE_CHANNEL_ACCESS_TOKEN` environment variable if empty.
+    #[serde(default)]
+    #[secret]
+    pub channel_access_token: String,
+    /// Channel secret (from LINE Developers Console).
+    /// Used to verify the `X-Line-Signature` header on incoming webhooks.
+    /// Falls back to the `LINE_CHANNEL_SECRET` environment variable if empty.
+    #[serde(default)]
+    #[secret]
+    pub channel_secret: String,
+    /// DM (1:1 chat) access policy. Default: `pairing`.
+    ///
+    /// - `open`      — respond to everyone
+    /// - `pairing`   — require one-time `/bind <code>` handshake on first contact
+    /// - `allowlist` — respond only to user IDs listed in `allowed_users`
+    #[serde(default)]
+    pub dm_policy: LineDmPolicy,
+    /// Group / multi-person chat policy. Default: `mention`.
+    ///
+    /// - `open`     — respond to every message
+    /// - `mention`  — respond only when @mentioned
+    /// - `disabled` — ignore all group messages
+    #[serde(default)]
+    pub group_policy: LineGroupPolicy,
+    /// LINE user IDs that are allowed to interact with the bot.
+    /// Used when `dm_policy = allowlist`. `["*"]` accepts everyone.
+    #[serde(default)]
+    pub allowed_users: Vec<String>,
+    /// TCP port the embedded webhook server listens on. Default: `8443`.
+    #[serde(default = "default_line_webhook_port")]
+    pub webhook_port: u16,
+    /// Per-channel proxy URL (http, https, socks5, socks5h).
+    /// Overrides the global `[proxy]` setting for this channel only.
+    #[serde(default)]
+    pub proxy_url: Option<String>,
+}
+
+impl ChannelConfig for LineConfig {
+    fn name() -> &'static str {
+        "LINE"
+    }
+    fn desc() -> &'static str {
+        "connect your LINE bot"
+    }
+}
+
+/// WeCom (WeChat Enterprise) Bot Webhook configuration
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Configurable)]
+#[cfg_attr(feature = "schema-export", derive(schemars::JsonSchema))]
+#[prefix = "channels.wecom"]
+pub struct WeComConfig {
+    /// Whether this channel is active (must be explicitly enabled). Default: false.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Webhook key from WeCom Bot configuration
+    #[secret]
+    pub webhook_key: String,
+    /// Allowed user IDs. Empty = deny all, "*" = allow all
+    #[serde(default)]
+    pub allowed_users: Vec<String>,
+}
+
+impl ChannelConfig for WeComConfig {
+    fn name() -> &'static str {
+        "WeCom"
+    }
+    fn desc() -> &'static str {
+        "WeCom Bot Webhook"
+    }
+}
+
+/// WeChat personal iLink Bot channel configuration.
+///
+/// Uses the iLink Bot API (`ilinkai.weixin.qq.com`) with QR-code login.
+/// The bot token is obtained by scanning a QR code and persisted to disk
+/// so subsequent restarts do not require re-scanning.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Configurable)]
+#[cfg_attr(feature = "schema-export", derive(schemars::JsonSchema))]
+#[prefix = "channels.wechat"]
+pub struct WeChatConfig {
+    /// Whether this channel is active (must be explicitly enabled). Default: false.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Allowed WeChat user IDs (e.g. `"xxx@im.wechat"`).
+    /// `"*"` = allow all. Empty = require pairing (`/bind <code>` from WeChat);
+    /// the QR-login user is auto-added at first connect.
+    #[serde(default)]
+    pub allowed_users: Vec<String>,
+    /// Override the iLink API base URL. Default: `https://ilinkai.weixin.qq.com`.
+    #[serde(default)]
+    pub api_base_url: Option<String>,
+    /// Override the CDN base URL. Default: `https://novac2c.cdn.weixin.qq.com/c2c`.
+    #[serde(default)]
+    pub cdn_base_url: Option<String>,
+    /// Directory to persist bot token and sync cursor.
+    /// Default: `~/.operant/wechat/`.
+    #[serde(default)]
+    pub state_dir: Option<String>,
+}
+
+impl ChannelConfig for WeChatConfig {
+    fn name() -> &'static str {
+        "WeChat"
+    }
+    fn desc() -> &'static str {
+        "WeChat iLink Bot"
+    }
+}
+
+/// X/Twitter channel configuration (Twitter API v2)
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Configurable)]
+#[cfg_attr(feature = "schema-export", derive(schemars::JsonSchema))]
+#[prefix = "channels.twitter"]
+pub struct TwitterConfig {
+    /// Whether this channel is active (must be explicitly enabled). Default: false.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Twitter API v2 Bearer Token (OAuth 2.0)
+    #[secret]
+    pub bearer_token: String,
+    /// Allowed usernames or user IDs. Empty = deny all, "*" = allow all
+    #[serde(default)]
+    pub allowed_users: Vec<String>,
+}
+
+impl ChannelConfig for TwitterConfig {
+    fn name() -> &'static str {
+        "X/Twitter"
+    }
+    fn desc() -> &'static str {
+        "X/Twitter Bot via API v2"
+    }
+}
+
+/// Reddit channel configuration (OAuth2 bot).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Configurable)]
+#[cfg_attr(feature = "schema-export", derive(schemars::JsonSchema))]
+#[prefix = "channels.reddit"]
+pub struct RedditConfig {
+    /// Whether this channel is active (must be explicitly enabled). Default: false.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Reddit OAuth2 client ID.
+    pub client_id: String,
+    /// Reddit OAuth2 client secret.
+    #[secret]
+    pub client_secret: String,
+    /// Reddit OAuth2 refresh token for persistent access.
+    #[secret]
+    pub refresh_token: String,
+    /// Reddit bot username (without `u/` prefix).
+    pub username: String,
+    /// Optional subreddit to filter messages (without `r/` prefix).
+    /// When set, only messages from this subreddit are processed.
+    #[serde(default)]
+    pub subreddit: Option<String>,
+}
+
+impl ChannelConfig for RedditConfig {
+    fn name() -> &'static str {
+        "Reddit"
+    }
+    fn desc() -> &'static str {
+        "Reddit bot (OAuth2)"
+    }
+}
+
+/// Bluesky channel configuration (AT Protocol).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Configurable)]
+#[cfg_attr(feature = "schema-export", derive(schemars::JsonSchema))]
+#[prefix = "channels.bluesky"]
+pub struct BlueskyConfig {
+    /// Whether this channel is active (must be explicitly enabled). Default: false.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Bluesky handle (e.g. `"mybot.bsky.social"`).
+    pub handle: String,
+    /// App-specific password (from Bluesky settings).
+    #[secret]
+    pub app_password: String,
+}
+
+impl ChannelConfig for BlueskyConfig {
+    fn name() -> &'static str {
+        "Bluesky"
+    }
+    fn desc() -> &'static str {
+        "AT Protocol"
+    }
+}
+
+/// Voice duplex configuration (`[channels.voice_duplex]`).
+///
+/// Enables full-duplex voice event handling over WebSocket.
+/// When disabled (default), voice events are rejected as unknown types.
+#[derive(Debug, Clone, Serialize, Deserialize, Configurable, Default)]
+#[cfg_attr(feature = "schema-export", derive(schemars::JsonSchema))]
+pub struct VoiceDuplexConfig {
+    /// Enable full-duplex voice event handling over WebSocket.
+    /// Default: false. When false, voice events are rejected as unknown types.
+    #[serde(default)]
+    pub enabled: bool,
+}
+
+/// Voice wake word detection channel configuration.
+///
+/// Listens on the default microphone for a configurable wake word,
+/// then captures the following utterance and transcribes it via the
+/// existing transcription API.
+#[cfg(feature = "voice-wake")]
+#[derive(Debug, Clone, Serialize, Deserialize, operant_macros::Configurable)]
+#[cfg_attr(feature = "schema-export", derive(schemars::JsonSchema))]
+#[prefix = "voice-wake"]
+pub struct VoiceWakeConfig {
+    /// Wake word phrase to listen for (case-insensitive substring match).
+    /// Default: `"hey operant"`.
+    #[serde(default = "default_voice_wake_word")]
+    pub wake_word: String,
+    /// Silence timeout in milliseconds — how long to wait after the last
+    /// energy spike before finalizing a capture window. Default: `2000`.
+    #[serde(default = "default_voice_wake_silence_timeout_ms")]
+    pub silence_timeout_ms: u32,
+    /// RMS energy threshold for voice activity detection. Samples below
+    /// this level are treated as silence. Default: `0.01`.
+    #[serde(default = "default_voice_wake_energy_threshold")]
+    pub energy_threshold: f32,
+    /// Maximum capture duration in seconds before forcing transcription.
+    /// Default: `30`.
+    #[serde(default = "default_voice_wake_max_capture_secs")]
+    pub max_capture_secs: u32,
+}
+
+#[cfg(feature = "voice-wake")]
+impl Default for VoiceWakeConfig {
+    fn default() -> Self {
+        Self {
+            wake_word: default_voice_wake_word(),
+            silence_timeout_ms: default_voice_wake_silence_timeout_ms(),
+            energy_threshold: default_voice_wake_energy_threshold(),
+            max_capture_secs: default_voice_wake_max_capture_secs(),
+        }
+    }
+}
+
+#[cfg(feature = "voice-wake")]
+impl ChannelConfig for VoiceWakeConfig {
+    fn name() -> &'static str {
+        "VoiceWake"
+    }
+    fn desc() -> &'static str {
+        "voice wake word detection"
+    }
+}
+
+/// Nostr channel configuration (NIP-04 + NIP-17 private messages)
+#[cfg(feature = "channel-nostr")]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Configurable)]
+#[cfg_attr(feature = "schema-export", derive(schemars::JsonSchema))]
+#[prefix = "channels.nostr"]
+pub struct NostrConfig {
+    /// Whether this channel is active. Default: false.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Private key in hex or nsec bech32 format
+    #[secret]
+    pub private_key: String,
+    /// Relay URLs (wss://). Defaults to popular public relays if omitted.
+    #[serde(default = "default_nostr_relays")]
+    pub relays: Vec<String>,
+    /// Allowed sender public keys (hex or npub). Empty = deny all, "*" = allow all
+    #[serde(default)]
+    pub allowed_pubkeys: Vec<String>,
+}
+
+#[cfg(feature = "channel-nostr")]
+impl ChannelConfig for NostrConfig {
+    fn name() -> &'static str {
+        "Nostr"
+    }
+    fn desc() -> &'static str {
+        "Nostr DMs"
+    }
+}

@@ -177,7 +177,10 @@ pub(crate) fn sender_memory_session_ids(
 /// or native tool-call JSON to collect tool names used.
 /// Returns an empty string when no tools were invoked.
 #[cfg(test)]
-pub(crate) fn extract_tool_context_summary(history: &[operant_providers::ChatMessage], start_index: usize) -> String {
+pub(crate) fn extract_tool_context_summary(
+    history: &[operant_providers::ChatMessage],
+    start_index: usize,
+) -> String {
     fn push_unique_tool_name(tool_names: &mut Vec<String>, name: &str) {
         let candidate = name.trim();
         if candidate.is_empty() {
