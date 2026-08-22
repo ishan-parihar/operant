@@ -1693,6 +1693,12 @@ impl OperantAgent {
         // validation errors). Live incident: 4397 guardrail skips in one turn
         // as the model re-emitted identical `process` calls for 21 minutes.
         let mut consecutive_failed_iters: usize = 0;
+        // Cross-iteration repetition guard (R35): consecutive iterations
+        // whose executed calls are IDENTICAL (same name + args signature).
+        // Live incident: 408 unrepairable `process` calls repaired to `{}`
+        // succeeded one after another for 73 iterations — the all-failure
+        // breaker above never fired because each call "succeeded".
+        let (mut last_call_sig, mut identical_streak): (Option<u64>, usize) = (None, 0);
 
         // Reset provider registry to primary at turn start.
         // Matches hermes-agent's restore_primary_runtime() pattern —
@@ -2476,10 +2482,20 @@ impl OperantAgent {
                         );
                     }
 
+                    // Capture the executed-call signature BEFORE the batch is
+                    // moved into execute_tools (repetition guard below).
+                    let executed_sig: Option<u64> = tool_calls.first().map(|tc| {
+                        use std::hash::{Hash, Hasher};
+                        let mut h = std::collections::hash_map::DefaultHasher::new();
+                        tc.function.name.hash(&mut h);
+                        tc.function.arguments.hash(&mut h);
+                        h.finish()
+                    });
+
                     // Execute tools and add results
                     let tool_results = self.execute_tools(tool_calls).await?;
 
-                    // ── Degenerate-loop circuit breaker ────────────────────
+                    // ── Degenerate-loop circuit breaker ────────────────
                     // When EVERY tool call in several consecutive iterations
                     // fails (guardrail skip / malformed args / execution
                     // error), the model is in a repetition loop: nudging once,
@@ -2488,6 +2504,50 @@ impl OperantAgent {
                         consecutive_failed_iters += 1;
                     } else {
                         consecutive_failed_iters = 0;
+                    }
+
+                    // ── Cross-iteration repetition guard (R35) ─────────
+                    // Identical (name + args) calls repeated across
+                    // consecutive iterations are pathological even when they
+                    // succeed — nudge, then force-end the turn.
+                    match executed_sig {
+                        Some(sig) if last_call_sig == Some(sig) => {
+                            identical_streak += 1;
+                        }
+                        Some(sig) => {
+                            last_call_sig = Some(sig);
+                            identical_streak = 1;
+                        }
+                        None => {
+                            identical_streak = 0;
+                        }
+                    }
+                    if identical_streak >= 6 {
+                        warn!(
+                            identical_streak,
+                            "Identical tool call repeated across iterations — ending turn"
+                        );
+                        let abort_msg = Message::assistant(format!(
+                            "⚠️ I stopped early: I repeated the same tool call {} times in a \
+                             row. Partial work may be complete — ask me to continue if needed.",
+                            identical_streak
+                        ));
+                        self.add_message(abort_msg.clone()).await;
+                        return Ok(abort_msg);
+                    }
+                    if identical_streak == 4 {
+                        warn!(
+                            identical_streak,
+                            "Identical tool call repeated — nudging model to stop"
+                        );
+                        let nudge = Message::user(
+                            "[System: You have repeated the exact same tool call 4 times in a \
+                             row with the same arguments. It will keep returning the same \
+                             result. Stop calling tools and produce your final answer as \
+                             plain text now.]",
+                        );
+                        messages.push(nudge.clone());
+                        self.add_message(nudge).await;
                     }
                     if consecutive_failed_iters == 3 {
                         warn!(

@@ -701,3 +701,24 @@ oversized segments seal head chunks at the platform limit.
 
 Degenerate-loop containment now rests on the R33 circuit breaker + dedup +
 line cap instead of merging all output into one bubble.
+
+### R35 — delegation interleaving, mid-word seals, identical-call storm (FIXED)
+Second live "test all tools" session (2026-08-22 10:54–11:11 IST) surfaced three
+distinct bugs:
+1. **Child-event interleaving** — `sub_agent_tool` forwarded the child agent's
+   full event stream (Content/ToolStart/IterationComplete/Done) onto the
+   parent's channel. The gateway runner treated a CHILD's Done as turn-end
+   mid-parent-turn (finalizing/closing bubbles at the wrong time), which is
+   what broke chronological rendering around `delegate_task`. Fix: children
+   now run HEADLESS (no event forwarding) — hermes parity where a delegation
+   is one tool line + its result text; the parent narrates the result.
+2. **Mid-word seal splits** ("Recent se" / "ssions (3 shown)") — the 3500-char
+   overflow seal cut at an arbitrary byte. Fix: split at the last newline
+   within budget (hermes `_safe_limit` rfind parity), char-boundary-safe hard
+   cut as fallback (`seal_split_point`, unit-tested).
+3. **Identical-call repetition storm** — 408 unrepairable `process` calls were
+   repaired to `{}` and each "succeeded", so the R33 all-failure breaker never
+   fired: 73 iterations, 480 tool turns, summary regenerated 4×. Fix: new
+   cross-iteration guard — same (name + args) signature repeated across
+   iterations nudges at 4 and force-ends the turn at 6 (hermes
+   repetition-guard parity for the tool loop).

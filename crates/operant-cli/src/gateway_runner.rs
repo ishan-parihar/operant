@@ -178,6 +178,21 @@ impl ToolProgressTracker {
     }
 }
 
+/// Byte offset to split an oversized streaming bubble at: last newline
+/// within `budget` (hermes `_safe_limit` rfind parity) so sealed heads never
+/// cut mid-word/mid-table-row; hard cut at a char boundary as fallback.
+fn seal_split_point(text: &str, budget: usize) -> usize {
+    let byte_budget = text
+        .char_indices()
+        .nth(budget)
+        .map(|(i, _)| i)
+        .unwrap_or(text.len());
+    text[..byte_budget]
+        .rfind('\n')
+        .filter(|&i| i > budget / 2)
+        .unwrap_or(byte_budget)
+}
+
 /// Pending permission requests, keyed by channel_id: outer std Mutex guards
 /// the inner tokio Mutex<HashMap>, shared via Arc so multiple tasks can
 /// insert/remove while the gateway runner holds the store.
@@ -1327,18 +1342,24 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                         stream_text.push_str(&text);
                         // Length guard: Telegram edits cap at 4096 chars —
                         // seal the current bubble and start a fresh one when
-                        // the accumulated text approaches the limit.
-                        if stream_text.len() > 3500
-                            && let Some(ref msg_id) = stream_msg_id
-                        {
-                            let msg = OutgoingMessage::new(&channel_id, &stream_text)
-                                .with_thread_id(thread_id);
-                            let _ = gw_for_events
-                                .edit_message(&platform, &channel_id, msg_id, msg)
-                                .await;
-                            stream_text.clear();
+                        // the accumulated text approaches the limit. Split at
+                        // the last newline inside the budget (hermes
+                        // `_safe_limit` rfind parity) so sealed heads never
+                        // cut mid-word/mid-table-row.
+                        if stream_text.len() > 3500 {
+                            let split_at = seal_split_point(&stream_text, 3500);
+                            if let Some(ref msg_id) = stream_msg_id {
+                                let head = stream_text[..split_at].to_string();
+                                let msg = OutgoingMessage::new(&channel_id, &head)
+                                    .with_thread_id(thread_id);
+                                let _ = gw_for_events
+                                    .edit_message(&platform, &channel_id, msg_id, msg)
+                                    .await;
+                                last_stream_sent = head;
+                            }
+                            stream_text =
+                                stream_text[split_at..].trim_start_matches('\n').to_string();
                             stream_msg_id = None;
-                            last_stream_sent.clear();
                             // A sealed head is delivered content below any
                             // tool chrome — same __reset__ rule as a fresh
                             // content bubble.
@@ -3216,6 +3237,22 @@ mod tool_progress_tests {
                 body: "⚙️ tool_a".into()
             }
         );
+    }
+
+    #[test]
+    fn seal_split_point_prefers_newline_and_is_char_safe() {
+        // Newline inside budget → split there.
+        let text = format!("{}\n{}", "a".repeat(2000), "b".repeat(2000));
+        assert_eq!(seal_split_point(&text, 3500), 2000);
+        // No newline → hard cut at a char boundary (multibyte-safe).
+        // "a"*3000 + "é"*1000: the 3501st char is the 501st 'é' at
+        // byte 3000 + 500*2 = 4000.
+        let text = format!("{}{}", "a".repeat(3000), "é".repeat(1000));
+        assert_eq!(seal_split_point(&text, 3500), 4000);
+        assert!(text.is_char_boundary(seal_split_point(&text, 3500)));
+        // Newline too early (< half budget) → ignored, hard cut.
+        let text = format!("x\n{}", "y".repeat(4000));
+        assert_eq!(seal_split_point(&text, 3500), 3500);
     }
 
     #[test]

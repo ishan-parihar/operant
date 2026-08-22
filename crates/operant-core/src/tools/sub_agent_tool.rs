@@ -340,18 +340,14 @@ impl SubAgentTool {
         // Register tools based on child toolsets (filtered)
         self.register_child_tools(&registry, &child_toolsets).await;
 
-        let agent = if let Some(ref parent_tx) = self.event_tx {
-            let (child_tx, mut child_rx) = tokio::sync::mpsc::channel::<AgentEvent>(128);
-            let parent_tx = parent_tx.clone();
-            tokio::spawn(async move {
-                while let Some(event) = child_rx.recv().await {
-                    let _ = parent_tx.send(event).await;
-                }
-            });
-            OperantAgent::with_events(config, client, registry, self.database.clone(), child_tx)
-        } else {
-            OperantAgent::new(config, client, registry, self.database.clone())
-        };
+        // Child agents run HEADLESS: their events are NOT forwarded to the
+        // parent channel. Forwarding interleaved the child's Content/Done/
+        // IterationComplete into the parent's event stream — the gateway
+        // runner treated a child's Done as turn-end mid-parent-turn,
+        // breaking chronological rendering around delegations (R35). The
+        // delegation result still returns to the parent as the tool result
+        // text (hermes parity: delegation = one tool line + result).
+        let agent = OperantAgent::new(config, client, registry, self.database.clone());
 
         // Run with timeout
         let timeout_duration = Duration::from_secs(timeout_seconds.max(30));
