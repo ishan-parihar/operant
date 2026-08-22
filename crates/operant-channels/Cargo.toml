@@ -112,3 +112,6 @@ channel-line = []
 whatsapp-web = []
 voice-wake = []
 channel-full = []
+
+[lints]
+workspace = true

@@ -833,3 +833,18 @@ feature gate — pre-existing, masked by workspace feature unification.
    - 8 untracked TODO comments (no issue links).
 4. Gates: fmt, workspace check/clippy(-D warnings all-targets+features),
    36/36 suites, fresh release deployed both paths, gateway active.
+
+### Tracked TODO index (rust-best-practices audit, pass 6)
+Untracked in-code TODOs retagged `TODO(BUGS.md)`; tracked here per
+chapter-1 guidance ("TODOs are not comments"):
+- tui/app/commands.rs:1300 — MCP server list placeholder needs live
+  core_mcp_manager wiring.
+- config/pairing.rs:41 — parking_lot works today; evaluate flume/tokio
+  async mutex migration.
+- config/pairing.rs:196 — pairing function should become primary without
+  task spawn.
+- gateway/voice_duplex.rs:70 — wire into session abort mechanism (ref
+  upstream PR #5705).
+- plugins/wasm_channel.rs:30,41 — WASM plugin send/receive not wired.
+- runtime/skills/mod.rs:34 — update registry URL when repo rebranded to
+  operant-labs.

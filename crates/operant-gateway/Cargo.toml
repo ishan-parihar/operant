@@ -118,3 +118,6 @@ plugins-wasm = ["dep:operant-plugins"]
 observability-prometheus = ["operant-runtime/observability-prometheus"]
 embedded-web = ["dep:include_dir"]
 schema-export = ["operant-config/schema-export", "dep:schemars"]
+
+[lints]
+workspace = true

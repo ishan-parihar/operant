@@ -27,7 +27,7 @@ impl Channel for WasmChannel {
     }
 
     async fn send(&self, message: &SendMessage) -> anyhow::Result<()> {
-        // TODO: Wire to WASM plugin send function
+        // TODO(BUGS.md): Wire to WASM plugin send function
         tracing::warn!(
             "WasmChannel '{}' (plugin: {}) send not yet connected: {}",
             self.name,
@@ -38,7 +38,7 @@ impl Channel for WasmChannel {
     }
 
     async fn listen(&self, _tx: tokio::sync::mpsc::Sender<ChannelMessage>) -> anyhow::Result<()> {
-        // TODO: Wire to WASM plugin receive/listen function
+        // TODO(BUGS.md): Wire to WASM plugin receive/listen function
         tracing::warn!(
             "WasmChannel '{}' (plugin: {}) listen not yet connected",
             self.name,

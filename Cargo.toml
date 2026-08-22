@@ -122,3 +122,10 @@ lto = true
 strip = true
 panic = "abort"
 codegen-units = 1
+
+# Advisory lints wired workspace-wide (see BUGS.md audit notes).
+# redundant_clone intentionally excluded: 136 nursery-level hits require a
+# dedicated sweep arc; adding it at warn would fail the -D warnings gate.
+[workspace.lints.clippy]
+clone_on_copy = "warn"
+needless_borrow = "warn"

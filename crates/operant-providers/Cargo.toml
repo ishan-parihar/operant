@@ -39,3 +39,6 @@ tracing-subscriber = { version = "0.3", default-features = false, features = ["f
 axum = { workspace = true, features = ["json", "ws", "macros", "tokio", "query", "http1"] }
 scopeguard = "1.2"
 wiremock = "0.6"
+
+[lints]
+workspace = true

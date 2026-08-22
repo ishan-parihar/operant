@@ -1297,7 +1297,7 @@ impl App {
                 true
             }
             CommandResult::OpenMcp => {
-                // TODO: populate with live MCP server data from core_mcp_manager.
+                // TODO(BUGS.md): populate with live MCP server data from core_mcp_manager.
                 self.mcp_view.open(vec![]);
                 true
             }

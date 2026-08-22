@@ -67,7 +67,7 @@ pub fn handle_voice_event(event: VoiceEvent) -> Option<serde_json::Value> {
         }
         VoiceEvent::BargeIn => {
             tracing::debug!("voice duplex: barge_in received");
-            // TODO: wire into session abort mechanism (ref upstream PR #5705)
+            // TODO(BUGS.md): wire into session abort mechanism (ref upstream PR #5705)
             None
         }
         VoiceEvent::TtsCancel | VoiceEvent::TtsChunk { .. } => {

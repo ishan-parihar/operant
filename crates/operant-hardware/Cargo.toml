@@ -31,3 +31,6 @@ default = []
 hardware = []
 probe = []
 peripheral-rpi = []
+
+[lints]
+workspace = true

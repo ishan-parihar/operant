@@ -62,3 +62,6 @@ tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 tokio-test = "0.4"
 wiremock = "0.6"
 scopeguard = "1.2"
+
+[lints]
+workspace = true

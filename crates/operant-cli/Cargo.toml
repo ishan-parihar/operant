@@ -163,3 +163,6 @@ ci-all = [
 ]
 
 [dev-dependencies]
+
+[lints]
+workspace = true

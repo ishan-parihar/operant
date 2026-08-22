@@ -103,3 +103,6 @@ wiremock = "0.6"
 rcgen = "0.13"
 scopeguard = "1.2"
 axum = "0.8"
+
+[lints]
+workspace = true

@@ -30,3 +30,6 @@ memory-postgres = ["dep:postgres"]
 [dev-dependencies]
 tempfile = "3.10"
 tokio = { version = "1.36", features = ["rt-multi-thread", "macros"] }
+
+[lints]
+workspace = true

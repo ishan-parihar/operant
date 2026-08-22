@@ -31,7 +31,7 @@ const CLAWHUB_DOWNLOAD_API: &str = "https://clawhub.ai/api/v1/download";
 const MAX_CLAWHUB_ZIP_BYTES: u64 = 50 * 1024 * 1024; // 50 MiB
 
 // ─── Skills registry (operant-skills) ────────────────────────────────────────
-// TODO: update to operant-labs repo when the registry is rebranded
+// TODO(BUGS.md): update to operant-labs repo when the registry is rebranded
 const SKILLS_REGISTRY_REPO_URL: &str = "https://github.com/zeroclaw-labs/operant-skills";
 const SKILLS_REGISTRY_DIR_NAME: &str = "skills-registry";
 const SKILLS_REGISTRY_SYNC_MARKER: &str = ".operant-skills-registry-sync";

@@ -436,21 +436,43 @@ fn build_base_info() -> serde_json::Value {
     })
 }
 
-#[expect(
-    clippy::unwrap_used,
-    reason = "invariant guaranteed by surrounding validation"
-)]
+/// Compiled once; the send path used to rebuild all nine per call.
+static MARKDOWN_REGEXES: std::sync::LazyLock<MarkdownRegexes> =
+    std::sync::LazyLock::new(|| MarkdownRegexes {
+        code_block: regex::Regex::new(r"```[^\n]*\n?([\s\S]*?)```").expect("static regex"),
+        image: regex::Regex::new(r"!\[[^\]]*\]\([^)]*\)").expect("static regex"),
+        link: regex::Regex::new(r"\[([^\]]+)\]\([^)]*\)").expect("static regex"),
+        heading: regex::Regex::new(r"(?m)^\s{0,3}#{1,6}\s+").expect("static regex"),
+        blockquote: regex::Regex::new(r"(?m)^>\s?").expect("static regex"),
+        bullet: regex::Regex::new(r"(?m)^\s*[-*+]\s+").expect("static regex"),
+        emphasis: regex::Regex::new(r"(\*\*|__|~~|`|\*)").expect("static regex"),
+        table_separator: regex::Regex::new(r"^\|[\s:|-]+\|$").expect("static regex"),
+        table_row: regex::Regex::new(r"^\|(.+)\|$").expect("static regex"),
+    });
+
+struct MarkdownRegexes {
+    code_block: regex::Regex,
+    image: regex::Regex,
+    link: regex::Regex,
+    heading: regex::Regex,
+    blockquote: regex::Regex,
+    bullet: regex::Regex,
+    emphasis: regex::Regex,
+    table_separator: regex::Regex,
+    table_row: regex::Regex,
+}
+
 fn markdown_to_plain_text(text: &str) -> String {
-    // TODO: Cache these Regex values instead of compiling them on every send path.
-    let code_block_re = regex::Regex::new(r"```[^\n]*\n?([\s\S]*?)```").unwrap();
-    let image_re = regex::Regex::new(r"!\[[^\]]*\]\([^)]*\)").unwrap();
-    let link_re = regex::Regex::new(r"\[([^\]]+)\]\([^)]*\)").unwrap();
-    let heading_re = regex::Regex::new(r"(?m)^\s{0,3}#{1,6}\s+").unwrap();
-    let blockquote_re = regex::Regex::new(r"(?m)^>\s?").unwrap();
-    let bullet_re = regex::Regex::new(r"(?m)^\s*[-*+]\s+").unwrap();
-    let emphasis_re = regex::Regex::new(r"(\*\*|__|~~|`|\*)").unwrap();
-    let table_separator_re = regex::Regex::new(r"^\|[\s:|-]+\|$").unwrap();
-    let table_row_re = regex::Regex::new(r"^\|(.+)\|$").unwrap();
+    let re = &*MARKDOWN_REGEXES;
+    let code_block_re = &re.code_block;
+    let image_re = &re.image;
+    let link_re = &re.link;
+    let heading_re = &re.heading;
+    let blockquote_re = &re.blockquote;
+    let bullet_re = &re.bullet;
+    let emphasis_re = &re.emphasis;
+    let table_separator_re = &re.table_separator;
+    let table_row_re = &re.table_row;
 
     let mut result = code_block_re.replace_all(text, "$1").into_owned();
     result = image_re.replace_all(&result, "").into_owned();
