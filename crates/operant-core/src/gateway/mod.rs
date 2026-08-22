@@ -1424,10 +1424,14 @@ impl TelegramAdapter {
 
         // If HTML parsing fails (400 Bad Request), retry as plain text
         if status.as_u16() == 400 {
-            warn!("Telegram HTML parse failed, retrying as plain text");
-            tracing::warn!(
-                "HTML send failed (400), falling back to plain text for chat {}",
-                channel_id
+            let html_err = serde_json::from_str::<serde_json::Value>(&response.text().await?)
+                .ok()
+                .and_then(|d| d["description"].as_str().map(String::from))
+                .unwrap_or_else(|| "unknown".to_string());
+            warn!(
+                error = %html_err,
+                len = text.len(),
+                "HTML send failed (400), falling back to plain text"
             );
             let mut plain_body = serde_json::json!({
                 "chat_id": channel_id,
@@ -1446,11 +1450,55 @@ impl TelegramAdapter {
                 .send()
                 .await?;
             if !resp.status().is_success() {
+                let plain_status = resp.status();
+                let plain_err = serde_json::from_str::<serde_json::Value>(&resp.text().await?)
+                    .ok()
+                    .and_then(|d| d["description"].as_str().map(String::from))
+                    .unwrap_or_default();
                 tracing::error!(
-                    "Send failed for chat {}: HTTP {}",
+                    error = %plain_err,
+                    "Plain-text send also failed for chat {}: HTTP {}",
                     channel_id,
-                    resp.status()
+                    plain_status
                 );
+                // Last resort (usually message-too-long): deliver a
+                // truncated head so the answer is never fully lost.
+                const MAX_TELEGRAM: usize = 4096;
+                if text.len() > MAX_TELEGRAM - 100 {
+                    let cut = text
+                        .char_indices()
+                        .nth(MAX_TELEGRAM - 200)
+                        .map(|(i, _)| i)
+                        .unwrap_or(text.len());
+                    let mut truncated = text[..cut].to_string();
+                    truncated.push_str("\n… [truncated]");
+                    let resp2 = self
+                        .client
+                        .post(format!("{}/sendMessage", self.api_url()))
+                        .json(&serde_json::json!({
+                            "chat_id": channel_id,
+                            "text": truncated,
+                        }))
+                        .send()
+                        .await;
+                    match resp2 {
+                        Ok(r) if r.status().is_success() => {
+                            tracing::info!("Truncated fallback delivered for chat {}", channel_id);
+                            return Ok(String::new());
+                        }
+                        _ => {
+                            tracing::error!("All send attempts failed for chat {}", channel_id);
+                            return Err(crate::error::Error::Agent(format!(
+                                "Telegram rejected all send attempts ({})",
+                                plain_err
+                            )));
+                        }
+                    }
+                }
+                return Err(crate::error::Error::Agent(format!(
+                    "Telegram rejected send: {}",
+                    plain_err
+                )));
             }
             let data: serde_json::Value = resp.json().await?;
             tracing::info!(

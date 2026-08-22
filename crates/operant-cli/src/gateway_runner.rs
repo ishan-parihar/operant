@@ -45,19 +45,65 @@ type StreamDeliveryMap = Arc<Mutex<HashMap<ThreadKey, String>>>;
 
 /// (platform, channel_id, thread_id) -> (message_id, tool_lines) for the
 /// per-segment tool-progress timeline. Each TOOL GROUP (a run of tool calls
-/// with no intervening text) owns one message; the group is closed when the
-/// agent emits text, finishes an iteration, or the turn ends, so the next
-/// group starts a fresh chronological message.
+/// with no intervening text) owns one message; the group is closed when a
+/// content bubble lands on the platform or the turn ends, so the next
+/// group starts a fresh chronological message BELOW the content (hermes
+/// `__reset__` linearization parity).
 ///
 /// The per-turn status bubble is CAPPED: during degenerate model loops the
 /// same tool can start thousands of times; keeping every line would blow
 /// past Telegram's edit limit and turn one status message into a wall of
 /// repeated lines. Beyond [`MAX_STATUS_LINES`] the oldest lines roll off
-/// and a `… +N earlier` header counts them.
-type ProgressMap = HashMap<ThreadKey, (String, Vec<String>, usize)>;
+/// and a `… +N earlier` header counts them; identical consecutive calls
+/// collapse into `(×N)` counters first.
+type ProgressMap = HashMap<ThreadKey, GroupState>;
 
 /// Max tool lines kept in the live status bubble before older ones roll off.
 const MAX_STATUS_LINES: usize = 15;
+
+/// State of the live tool-status bubble for one thread.
+struct GroupState {
+    msg_id: String,
+    /// (line, ×count) — count >= 1. Repeated identical tool lines collapse
+    /// into a ×N counter on the last line (hermes `__dedup__` parity)
+    /// instead of piling duplicate rows during repetitive tool loops.
+    lines: Vec<(String, usize)>,
+    /// Lines rolled off the top by the MAX_STATUS_LINES cap.
+    dropped: usize,
+}
+
+impl GroupState {
+    fn push(&mut self, line: &str) {
+        if let Some((l, n)) = self.lines.last_mut()
+            && l == line
+        {
+            *n += 1;
+            return;
+        }
+        self.lines.push((line.to_string(), 1));
+        if self.lines.len() > MAX_STATUS_LINES {
+            self.lines.remove(0);
+            self.dropped += 1;
+        }
+    }
+
+    fn render(&self) -> String {
+        let mut out = String::new();
+        if self.dropped > 0 {
+            out.push_str(&format!("… +{} earlier\n", self.dropped));
+        }
+        for (i, (line, n)) in self.lines.iter().enumerate() {
+            if i > 0 {
+                out.push('\n');
+            }
+            out.push_str(line);
+            if *n > 1 {
+                out.push_str(&format!(" (×{})", n));
+            }
+        }
+        out
+    }
+}
 use tokio::sync::Mutex;
 use tokio::sync::mpsc;
 
@@ -73,11 +119,13 @@ enum ProgressAction {
     Edit { msg_id: String, body: String },
 }
 
-/// Tracks per-thread tool-progress messages so tool groups are split into
-/// separate chronological messages when the agent emits text between them
-/// (hermes `on_segment_break` parity: each segment is its own message, and
-/// a mid-stream text response gets its own message instead of everything
-/// piling into the first tool message).
+/// Tracks per-thread tool-progress messages with hermes' linearization
+/// rules (`send_progress_messages` + `__reset__` parity):
+///   * one status bubble per TOOL GROUP — a group closes when a content
+///     bubble lands on the platform, so the next tool opens a fresh bubble
+///     BELOW the content instead of editing the stale bubble above it;
+///   * repeated identical tool lines collapse into `(×N)` counters;
+///   * the line cap keeps degenerate loops from growing the bubble forever.
 struct ToolProgressTracker {
     msgs: ProgressMap,
 }
@@ -95,20 +143,11 @@ impl ToolProgressTracker {
     /// accumulated group when the group already has a message.
     fn on_tool_start(&mut self, key: &ThreadKey, line: &str) -> ProgressAction {
         match self.msgs.get_mut(key) {
-            Some((msg_id, lines, dropped)) => {
-                if lines.len() >= MAX_STATUS_LINES {
-                    lines.remove(0);
-                    *dropped += 1;
-                }
-                lines.push(line.to_string());
-                let body = if *dropped > 0 {
-                    format!("… +{} earlier\n{}", dropped, lines.join("\n"))
-                } else {
-                    lines.join("\n")
-                };
+            Some(g) => {
+                g.push(line);
                 ProgressAction::Edit {
-                    msg_id: msg_id.clone(),
-                    body,
+                    msg_id: g.msg_id.clone(),
+                    body: g.render(),
                 }
             }
             None => ProgressAction::New {
@@ -121,8 +160,14 @@ impl ToolProgressTracker {
     /// the next tool start edits that message. Called only on success — on
     /// failure the group is left untracked (the old code did the same).
     fn attach_message_id(&mut self, key: &ThreadKey, msg_id: String, first_line: &str) {
-        self.msgs
-            .insert(key.clone(), (msg_id, vec![first_line.to_string()], 0));
+        self.msgs.insert(
+            key.clone(),
+            GroupState {
+                msg_id,
+                lines: vec![(first_line.to_string(), 1)],
+                dropped: 0,
+            },
+        );
     }
 
     /// Close the current tool group for `key`. The already-sent message
@@ -1267,6 +1312,9 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                             stream_msg_id = None;
                             last_stream_sent.clear();
                         }
+                        // Meta notices land between content — reset the tool
+                        // group so subsequent tools open below them too.
+                        progress_tracker.close_group(&key);
                         let notice =
                             OutgoingMessage::new(&channel_id, &text).with_thread_id(thread_id);
                         let _ = gw_for_events.send_to_platform(&platform, notice).await;
@@ -1291,6 +1339,10 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                             stream_text.clear();
                             stream_msg_id = None;
                             last_stream_sent.clear();
+                            // A sealed head is delivered content below any
+                            // tool chrome — same __reset__ rule as a fresh
+                            // content bubble.
+                            progress_tracker.close_group(&key);
                         }
                         // Debounce: only edit if 500ms have passed since the
                         // last edit, and skip no-op edits (hermes
@@ -1319,6 +1371,13 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                                             (platform.clone(), channel_id.clone(), thread_id),
                                             msg_id,
                                         );
+                                        drop(map);
+                                        // Hermes `__reset__` linearization: a
+                                        // content bubble just landed — close the
+                                        // current tool-progress bubble so the
+                                        // next tool opens a fresh bubble BELOW
+                                        // the content, not the stale one above.
+                                        progress_tracker.close_group(&key);
                                     }
                                     Err(e) => {
                                         tracing::warn!(
@@ -1405,12 +1464,27 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                     progress_tracker.close_group(&key);
                 }
                 AgentEvent::IterationComplete { .. } => {
-                    // Single-bubble-per-turn rendering: an iteration boundary
-                    // no longer finalizes the content bubble or closes the
-                    // tool-status bubble — both persist across the whole turn
-                    // and are edited in place (hermes stream_consumer parity).
-                    // The old per-block reset is what shredded alternating
-                    // text/tool output into dozens of separate messages.
+                    // Segment break (hermes MessageStop/_NEW_SEGMENT parity):
+                    // finalize this writing block as its own message and
+                    // reset stream state, so post-tool text starts a fresh
+                    // message BELOW the tool chrome instead of being edited
+                    // into the block above it. Chronological interleaving:
+                    // [text] [tools] [text] [tools] … [final]. The R33
+                    // single-bubble merge destroyed this ordering; the R33
+                    // shredding it fixed is now contained by the circuit
+                    // breaker + ×N dedup + line cap instead.
+                    if !stream_text.is_empty() {
+                        if let Some(ref msg_id) = stream_msg_id {
+                            let msg = OutgoingMessage::new(&channel_id, &stream_text)
+                                .with_thread_id(thread_id);
+                            let _ = gw_for_events
+                                .edit_message(&platform, &channel_id, msg_id, msg)
+                                .await;
+                        }
+                        stream_text.clear();
+                        stream_msg_id = None;
+                        last_stream_sent.clear();
+                    }
                 }
                 AgentEvent::Usage { .. } => {
                     // Usage events are not surfaced to the user in gateway
@@ -3142,6 +3216,55 @@ mod tool_progress_tests {
                 body: "⚙️ tool_a".into()
             }
         );
+    }
+
+    #[test]
+    fn repeated_identical_lines_collapse_to_x_counter() {
+        // Hermes `__dedup__` parity: identical consecutive tool lines
+        // collapse into a ×N counter on the last line instead of piling
+        // duplicate rows (degenerate-loop spam containment).
+        let mut tracker = ToolProgressTracker::new();
+        let k = key();
+
+        let _ = tracker.on_tool_start(&k, "⏰ todo");
+        tracker.attach_message_id(&k, "m".into(), "⏰ todo");
+        for _ in 0..4 {
+            assert!(matches!(
+                tracker.on_tool_start(&k, "⏰ todo"),
+                ProgressAction::Edit { .. }
+            ));
+        }
+        if let ProgressAction::Edit { msg_id, body } = tracker.on_tool_start(&k, "⏰ todo") {
+            assert_eq!(msg_id, "m");
+            assert_eq!(body, "⏰ todo (×6)");
+        } else {
+            panic!("expected Edit");
+        }
+        // A different tool breaks the streak and renders normally.
+        if let ProgressAction::Edit { body, .. } = tracker.on_tool_start(&k, "🔧 debug_env") {
+            assert!(body.ends_with("\n🔧 debug_env"));
+        } else {
+            panic!("expected Edit");
+        }
+    }
+
+    #[test]
+    fn status_bubble_caps_at_max_lines() {
+        let mut tracker = ToolProgressTracker::new();
+        let k = key();
+
+        tracker.on_tool_start(&k, "t0");
+        tracker.attach_message_id(&k, "m".into(), "t0");
+        for i in 1..(MAX_STATUS_LINES + 5) {
+            tracker.on_tool_start(&k, &format!("t{}", i));
+        }
+        if let ProgressAction::Edit { body, .. } = tracker.on_tool_start(&k, "final") {
+            assert!(body.starts_with("… +6 earlier\n"));
+            assert!(body.lines().count() == MAX_STATUS_LINES + 1);
+            assert!(body.ends_with("\nfinal"));
+        } else {
+            panic!("expected Edit");
+        }
     }
 
     #[test]

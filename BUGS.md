@@ -670,3 +670,34 @@ Live Telegram session (2026-08-22 08:06 IST) exposed the worst-case agentic-loop
   3. IterationComplete no longer resets stream state.
 - **Hermes contrast**: hermes `stream_consumer.py` is single-bubble by design with redundant-edit skipping and final seal — operant now matches that shape; hermes `repetition_guard.py` detects repeated-text domination in truncation continuations, operant now has the tool-loop equivalent (text-domination detection remains future work).
 - Live-verified: rebuilt + redeployed + restarted; workspace check/test/clippy clean.
+
+### R34 — single-bubble merge broke chronological interleaving (FIXED)
+R33's turn-wide single content bubble over-corrected: the initial message was
+edited forever and post-tool text (e.g. the delegation result) merged into it
+instead of appearing as a fresh message BELOW the tool chrome. Live session
+(2026-08-22 09:50 IST, "test all tools") also exposed:
+- 90-iteration budget burn on mostly-repeated tool calls (todo×7, cron×5,
+  kanban×5) — display showed them as stacked duplicate lines;
+- final-answer loss cascade: HTML 400 → plain-text 400 → nothing delivered,
+  with no error description logged.
+
+**Hermes reference** (`stream_consumer.py` + `send_progress_messages`): each
+contiguous text segment is its own bubble, finalized at tool boundaries
+(`MessageStop`/`_NEW_SEGMENT`); when a content bubble lands, `__reset__`
+closes the tool-progress bubble so the next tool opens a fresh one BELOW the
+content; identical repeated tool lines collapse into `(×N)` (`__dedup__`);
+oversized segments seal head chunks at the platform limit.
+
+**Fixes** (hermes parity restored):
+1. Segment breaks re-enabled: IterationComplete finalizes the current content
+   bubble + resets stream state — post-tool text starts fresh below.
+2. `__reset__` linearization: creating/sealing a content bubble closes the
+   live tool group; next ToolStart opens a new status bubble below it.
+3. ×N dedup: identical consecutive tool lines collapse into counters.
+4. Line cap retained (… +N earlier header).
+5. Final-send hardening: Telegram 400s now log the API error description;
+   plain-text fallback failure retries once more truncated to fit 4096 so
+   an oversized/undeliverable answer can never be silently dropped.
+
+Degenerate-loop containment now rests on the R33 circuit breaker + dedup +
+line cap instead of merging all output into one bubble.
