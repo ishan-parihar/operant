@@ -1,5 +1,0 @@
-id: cache-marker
-prompt: "Repeat the same question twice; the second answer should reference the cached result."
-golden_actions: []
-expect_keywords:
-  - cached

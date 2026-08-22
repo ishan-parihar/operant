@@ -17,8 +17,6 @@ members = [
     "crates/operant-hardware",
     "crates/operant-tool-call-parser",
     "crates/operant-tool-planning",
-    "crates/operant-eval",
-    "crates/robot-kit",
 ]
 
 [workspace.package]
@@ -44,8 +42,6 @@ operant-runtime = { path = "crates/operant-runtime" }
 operant-hardware = { path = "crates/operant-hardware" }
 operant-tool-call-parser = { path = "crates/operant-tool-call-parser" }
 operant-tool-planning = { path = "crates/operant-tool-planning" }
-operant-eval = { path = "crates/operant-eval" }
-operant-robot-kit = { path = "crates/robot-kit" }
 
 # Async runtime
 tokio = { version = "1.36", features = ["full"] }
@@ -74,7 +70,6 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 
 # Utilities
 futures = "0.3"
-pin-project = "1.1"
 bytes = "1.6"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
 futures-util = "0.3"

@@ -17,7 +17,6 @@ async-trait = { workspace = true }
 futures = { workspace = true }
 futures-util = { workspace = true }
 axum = { workspace = true }
-pin-project = { workspace = true }
 
 # Networking
 reqwest = { workspace = true }

@@ -722,3 +722,25 @@ distinct bugs:
    cross-iteration guard — same (name + args) signature repeated across
    iterations nudges at 4 and force-ends the turn at 6 (hermes
    repetition-guard parity for the tool loop).
+
+### Dedup pass — over-engineering audit executed (corrected findings)
+The full-tree audit's #1 finding ("17.7K-line dead RuntimeAgent stack") did not
+survive contact with the call graph: operant-channels' orchestrator (live via
+the default `agent-runtime` feature) imports loop_::{run_tool_call_loop, run,
+process_message, agent_turn}, and gateway/cron/daemon call them too. The old
+"RuntimeAgent is dead-linked" note was stale — RuntimeAgent no longer exists.
+Executed cuts (verified against callers before each deletion):
+- Deleted orphan crates: operant-eval (492 lines) + robot-kit (473 lines);
+  zero dependents, removed from workspace members/dependencies.
+- Deleted provably-dead context_analyzer.rs (161 lines; only its own mod decl
+  referenced it).
+- Removed pin-project workspace dependency (zero usages).
+- Extracted loop_.rs's stateless support layer into agent/loop_support.rs
+  (~230 lines: tool filtering, task-local scoping, credential scrubbing,
+  tool-instruction rendering), with compat re-exports so all existing
+  `loop_::` import paths keep working. loop_.rs shrinks 8415 → ~8190 lines;
+  further splits (streaming / run / process_message) remain possible but are
+  live-code surgery with regression risk — deferred until a reason exists.
+Kept deliberately: loop_detector.rs (LIVE circuit breaker inside
+run_tool_call_loop), memory_loader/dispatcher traits (AgentBuilder API
+surface), thinking/eval modules (heavy internal use).

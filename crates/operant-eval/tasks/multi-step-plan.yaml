@@ -1,7 +1,0 @@
-id: multi-step-plan
-prompt: "Research the Apollo Rust best-practices handbook and summarize the error-handling chapter."
-golden_actions:
-  - web_search
-  - web_extract
-expect_keywords:
-  - summary

@@ -4817,7 +4817,6 @@ dependencies = [
  "kokoro-tiny",
  "mockito",
  "operant-config",
- "pin-project",
  "regex",
  "reqwest",
  "rusqlite",
@@ -4842,17 +4841,6 @@ dependencies = [
  "url",
  "uuid",
  "which 6.0.3",
-]
-
-[[package]]
-name = "operant-eval"
-version = "0.2.0"
-dependencies = [
- "serde",
- "serde_json",
- "serde_yaml",
- "tempfile",
- "thiserror 1.0.69",
 ]
 
 [[package]]
@@ -5033,18 +5021,6 @@ dependencies = [
  "tracing-subscriber",
  "uuid",
  "wiremock",
-]
-
-[[package]]
-name = "operant-robot-kit"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
 ]
 
 [[package]]
