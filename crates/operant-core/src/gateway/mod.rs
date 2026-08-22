@@ -943,6 +943,12 @@ impl Gateway {
                 info!(platform = %name, "Starting platform adapter");
                 if let Err(e) = adapter.start().await {
                     error!(platform = %name, error = %e, "Failed to start adapter");
+                    Self::supervise_adapter_start(
+                        self.running.clone(),
+                        name.clone(),
+                        Arc::clone(adapter),
+                        None,
+                    );
                 }
             }
         }
@@ -976,10 +982,65 @@ impl Gateway {
                 info!(platform = %name, "Starting platform adapter with channel");
                 if let Err(e) = adapter.start_with_channel(message_tx.clone()).await {
                     error!(platform = %name, error = %e, "Failed to start adapter with channel");
+                    Self::supervise_adapter_start(
+                        self.running.clone(),
+                        name.clone(),
+                        Arc::clone(adapter),
+                        Some(message_tx.clone()),
+                    );
                 }
             }
         }
         Ok(())
+    }
+
+    /// Supervise a failed adapter start in the background: transient failures
+    /// (boot-time network race, DNS hiccup, provider outage) must not leave a
+    /// platform permanently dead for the life of the process — systemd only
+    /// restarts on process exit, and the gateway process stays up. Retries
+    /// with capped exponential backoff until the adapter starts or the
+    /// gateway stops. Telegram's getMe gate fires before any listen task is
+    /// spawned, so retrying after Err cannot double-start an adapter.
+    fn supervise_adapter_start(
+        running: Arc<RwLock<bool>>,
+        name: String,
+        adapter: Arc<dyn PlatformAdapter>,
+        message_tx: Option<mpsc::UnboundedSender<IncomingMessage>>,
+    ) {
+        tokio::spawn(async move {
+            let mut delay_secs: u64 = 5;
+            loop {
+                tokio::time::sleep(Duration::from_secs(delay_secs)).await;
+                delay_secs = (delay_secs.saturating_mul(2)).min(300);
+                if !*running.read().await {
+                    debug!(platform = %name, "Gateway stopped — abandoning adapter restart");
+                    return;
+                }
+                if !adapter.is_enabled() {
+                    debug!(platform = %name, "Adapter disabled — abandoning adapter restart");
+                    return;
+                }
+                info!(platform = %name, delay_secs, "Retrying platform adapter start");
+                let result = match &message_tx {
+                    Some(tx) => adapter.start_with_channel(tx.clone()).await,
+                    None => adapter.start().await,
+                };
+                match result {
+                    Ok(()) => {
+                        info!(platform = %name, "Platform adapter started after retry");
+                        return;
+                    }
+                    Err(e) => {
+                        error!(
+                            platform = %name,
+                            error = %e,
+                            next_retry_secs = delay_secs,
+                            "Adapter start retry failed"
+                        );
+                    }
+                }
+            }
+        });
     }
 
     /// Check if the gateway is running

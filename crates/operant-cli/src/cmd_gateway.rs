@@ -323,25 +323,41 @@ fn cmd_install(_config: &AppConfig, force: bool, system: bool) -> Result<()> {
 
     std::fs::create_dir_all(&unit_dir).context("Failed to create systemd unit directory")?;
 
+    // User units get a WorkingDirectory (~/.operant); system units run as
+    // root with a different HOME, so omit it there rather than point at a
+    // directory that may not exist (systemd refuses to start then).
+    let workdir_line = if system {
+        String::new()
+    } else {
+        format!(
+            "WorkingDirectory={}/.operant\n",
+            std::env::var("HOME").unwrap_or_default()
+        )
+    };
+
     let unit_content = format!(
         r#"[Unit]
 Description=Operant Multi-Platform Gateway
 After=network-online.target
 Wants=network-online.target
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
 ExecStart={bin} gateway run
-Restart=on-failure
+{workdir}Restart=always
 RestartSec=5
-RestartSteps=3
-RestartMaxDelaySec=30
-TimeoutStopSec=30
+TimeoutStopSec=90
+KillMode=mixed
+KillSignal=SIGTERM
+StandardOutput=journal
+StandardError=journal
 
 [Install]
 WantedBy=default.target
 "#,
-        bin = operant_bin.display()
+        bin = operant_bin.display(),
+        workdir = workdir_line,
     );
 
     std::fs::write(&unit_path, unit_content.as_bytes())
