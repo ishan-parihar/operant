@@ -1688,6 +1688,11 @@ impl OperantAgent {
         let mut length_continue_retries: usize = 0;
         // Whether we've already tried a fallback model after empty retries.
         let mut fallback_attempted = false;
+        // Degenerate-loop circuit breaker: consecutive iterations whose tool
+        // batch produced ONLY failures (guardrail skips, malformed args,
+        // validation errors). Live incident: 4397 guardrail skips in one turn
+        // as the model re-emitted identical `process` calls for 21 minutes.
+        let mut consecutive_failed_iters: usize = 0;
 
         // Reset provider registry to primary at turn start.
         // Matches hermes-agent's restore_primary_runtime() pattern —
@@ -2473,6 +2478,43 @@ impl OperantAgent {
 
                     // Execute tools and add results
                     let tool_results = self.execute_tools(tool_calls).await?;
+
+                    // ── Degenerate-loop circuit breaker ────────────────────
+                    // When EVERY tool call in several consecutive iterations
+                    // fails (guardrail skip / malformed args / execution
+                    // error), the model is in a repetition loop: nudging once,
+                    // then force-ending the turn with partial results.
+                    if !tool_results.is_empty() && tool_results.iter().all(|r| !r.success) {
+                        consecutive_failed_iters += 1;
+                    } else {
+                        consecutive_failed_iters = 0;
+                    }
+                    if consecutive_failed_iters == 3 {
+                        warn!(
+                            consecutive_failed_iters,
+                            "Degenerate tool-call loop — nudging model to stop repeating"
+                        );
+                        let nudge = Message::user(
+                            "[System: Your last 3 tool-call iterations ALL failed or repeated \
+                             identical calls. Do not call this tool again. Produce your final \
+                             answer as plain text now.]",
+                        );
+                        messages.push(nudge.clone());
+                        self.add_message(nudge).await;
+                    } else if consecutive_failed_iters >= 6 {
+                        warn!(
+                            consecutive_failed_iters,
+                            "Degenerate tool-call loop persists — ending turn with partial results"
+                        );
+                        let abort_msg = Message::assistant(format!(
+                            "⚠️ I stopped early: my last {} tool iterations kept failing or \
+                             repeating identically. Partial work may be complete — ask me to \
+                             continue if needed.",
+                            consecutive_failed_iters
+                        ));
+                        self.add_message(abort_msg.clone()).await;
+                        return Ok(abort_msg);
+                    }
 
                     // Add tool results to messages and persist them (truncated)
                     for result in tool_results {

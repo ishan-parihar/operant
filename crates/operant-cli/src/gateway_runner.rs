@@ -47,9 +47,17 @@ type StreamDeliveryMap = Arc<Mutex<HashMap<ThreadKey, String>>>;
 /// per-segment tool-progress timeline. Each TOOL GROUP (a run of tool calls
 /// with no intervening text) owns one message; the group is closed when the
 /// agent emits text, finishes an iteration, or the turn ends, so the next
-/// group starts a fresh chronological message (hermes parity — tool calls
-/// never pile into a single ever-growing dumping-ground message).
-type ProgressMap = HashMap<ThreadKey, (String, Vec<String>)>;
+/// group starts a fresh chronological message.
+///
+/// The per-turn status bubble is CAPPED: during degenerate model loops the
+/// same tool can start thousands of times; keeping every line would blow
+/// past Telegram's edit limit and turn one status message into a wall of
+/// repeated lines. Beyond [`MAX_STATUS_LINES`] the oldest lines roll off
+/// and a `… +N earlier` header counts them.
+type ProgressMap = HashMap<ThreadKey, (String, Vec<String>, usize)>;
+
+/// Max tool lines kept in the live status bubble before older ones roll off.
+const MAX_STATUS_LINES: usize = 15;
 use tokio::sync::Mutex;
 use tokio::sync::mpsc;
 
@@ -87,9 +95,17 @@ impl ToolProgressTracker {
     /// accumulated group when the group already has a message.
     fn on_tool_start(&mut self, key: &ThreadKey, line: &str) -> ProgressAction {
         match self.msgs.get_mut(key) {
-            Some((msg_id, lines)) => {
+            Some((msg_id, lines, dropped)) => {
+                if lines.len() >= MAX_STATUS_LINES {
+                    lines.remove(0);
+                    *dropped += 1;
+                }
                 lines.push(line.to_string());
-                let body = lines.join("\n");
+                let body = if *dropped > 0 {
+                    format!("… +{} earlier\n{}", dropped, lines.join("\n"))
+                } else {
+                    lines.join("\n")
+                };
                 ProgressAction::Edit {
                     msg_id: msg_id.clone(),
                     body,
@@ -106,7 +122,7 @@ impl ToolProgressTracker {
     /// failure the group is left untracked (the old code did the same).
     fn attach_message_id(&mut self, key: &ThreadKey, msg_id: String, first_line: &str) {
         self.msgs
-            .insert(key.clone(), (msg_id, vec![first_line.to_string()]));
+            .insert(key.clone(), (msg_id, vec![first_line.to_string()], 0));
     }
 
     /// Close the current tool group for `key`. The already-sent message
@@ -1145,6 +1161,7 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
         let mut stream_text = String::new();
         let mut stream_msg_id: Option<String> = None;
         let mut last_edit_time = std::time::Instant::now();
+        let mut last_stream_sent = String::new();
         tracing::info!("Tool progress + streaming event receiver started");
         while let Some(event) = event_rx.recv().await {
             let (platform, channel_id, thread_id) =
@@ -1168,29 +1185,14 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                 } => {
                     let line = tool_preview_line(&name, &arguments);
 
-                    // Segment break (hermes `on_segment_break` parity): when
-                    // the model pivots to tools, FINALIZE the active stream
-                    // message with its complete preamble text and reset the
-                    // stream state. Tool progress then lives in its own
-                    // message(s), and any post-tool output starts a FRESH
-                    // message — nothing piles into the first writing block.
-                    if let Some(ref msg_id) = stream_msg_id {
-                        if !stream_text.is_empty() {
-                            let msg = OutgoingMessage::new(&channel_id, &stream_text)
-                                .with_thread_id(thread_id);
-                            let _ = gw_for_events
-                                .edit_message(&platform, &channel_id, msg_id, msg)
-                                .await;
-                        }
-                        stream_text.clear();
-                        stream_msg_id = None;
-                        // The finalized preamble is NOT the final answer —
-                        // drop the dedup marker so the dispatch loop still
-                        // delivers the real final response (a later Content
-                        // block re-inserts the marker when it streams).
-                        let mut map = stream_delivery_for_events.lock().await;
-                        map.remove(&(platform.clone(), channel_id.clone(), thread_id));
-                    }
+                    // Single-bubble-per-turn rendering (hermes
+                    // stream_consumer parity): the content bubble stays open
+                    // across the whole turn and is progressively edited;
+                    // tool progress lives in ONE status bubble per turn,
+                    // edited in place. The old segment-break behavior
+                    // (finalize text + fresh message per tool group) is what
+                    // shredded alternating text/tool output into dozens of
+                    // fragments during degenerate model loops.
 
                     match progress_tracker.on_tool_start(&key, &line) {
                         ProgressAction::New { body } => {
@@ -1263,31 +1265,40 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                             }
                             stream_text.clear();
                             stream_msg_id = None;
+                            last_stream_sent.clear();
                         }
                         let notice =
                             OutgoingMessage::new(&channel_id, &text).with_thread_id(thread_id);
                         let _ = gw_for_events.send_to_platform(&platform, notice).await;
                     } else {
                         // Streaming progressive edit (iter-100 — closes Bug #12).
-                        // Accumulate text and edit the message in-place every
-                        // 500ms so the user sees tokens as they arrive. Each
-                        // writing block (iteration) owns its own message: the
-                        // block is finalized on IterationComplete and the next
-                        // block starts a fresh message, so post-tool output and
-                        // thinking between tool calls arrive as separate
-                        // chronological messages instead of piling into the
-                        // first one.
-                        //
-                        // A text segment after tools CLOSES the tool group:
-                        // the group's message stays in the chat as-is, and
-                        // the next tool call starts a FRESH message — so a
-                        // mid-stream text response and the tool calls around
-                        // it are separate chronological messages (hermes
-                        // parity) instead of one ever-growing tool dump.
-                        progress_tracker.close_group(&key);
+                        // ONE bubble per turn, edited in place every 500ms
+                        // (hermes stream_consumer parity). The old per-block
+                        // finalize made alternating text/tool output shred
+                        // into dozens of messages.
                         stream_text.push_str(&text);
-                        // Debounce: only edit if 500ms have passed since the last edit.
-                        if last_edit_time.elapsed() > std::time::Duration::from_millis(500) {
+                        // Length guard: Telegram edits cap at 4096 chars —
+                        // seal the current bubble and start a fresh one when
+                        // the accumulated text approaches the limit.
+                        if stream_text.len() > 3500
+                            && let Some(ref msg_id) = stream_msg_id
+                        {
+                            let msg = OutgoingMessage::new(&channel_id, &stream_text)
+                                .with_thread_id(thread_id);
+                            let _ = gw_for_events
+                                .edit_message(&platform, &channel_id, msg_id, msg)
+                                .await;
+                            stream_text.clear();
+                            stream_msg_id = None;
+                            last_stream_sent.clear();
+                        }
+                        // Debounce: only edit if 500ms have passed since the
+                        // last edit, and skip no-op edits (hermes
+                        // `_last_sent_text` parity — identical bodies are
+                        // rejected as "message is not modified" anyway).
+                        if last_edit_time.elapsed() > std::time::Duration::from_millis(500)
+                            && last_stream_sent != stream_text
+                        {
                             last_edit_time = std::time::Instant::now();
                             let msg = OutgoingMessage::new(&channel_id, &stream_text)
                                 .with_thread_id(thread_id);
@@ -1300,6 +1311,7 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                                 match gw_for_events.send_message_return_id(&platform, msg).await {
                                     Ok(msg_id) => {
                                         stream_msg_id = Some(msg_id.clone());
+                                        last_stream_sent = stream_text.clone();
                                         // Record delivery so the dispatch loop
                                         // skips the duplicate final send.
                                         let mut map = stream_delivery_for_events.lock().await;
@@ -1315,6 +1327,9 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                                         );
                                     }
                                 }
+                            }
+                            if stream_msg_id.is_some() {
+                                last_stream_sent = stream_text.clone();
                             }
                         }
                     }
@@ -1390,27 +1405,12 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                     progress_tracker.close_group(&key);
                 }
                 AgentEvent::IterationComplete { .. } => {
-                    // A writing block ended. Finalize the block's message
-                    // with its complete text, then reset the stream state so
-                    // the NEXT block (post-tool output, thinking between
-                    // tool calls) creates a NEW message. The stream content
-                    // itself is preserved — this is purely a Telegram
-                    // message-boundary decision, keeping the chronological
-                    // order the agent produced.
-                    if !stream_text.is_empty() {
-                        if let Some(ref msg_id) = stream_msg_id {
-                            let msg = OutgoingMessage::new(&channel_id, &stream_text)
-                                .with_thread_id(thread_id);
-                            let _ = gw_for_events
-                                .edit_message(&platform, &channel_id, msg_id, msg)
-                                .await;
-                        }
-                        stream_text.clear();
-                        stream_msg_id = None;
-                    }
-                    // The writing block ended — close the tool group so the
-                    // next iteration's tools start a fresh message.
-                    progress_tracker.close_group(&key);
+                    // Single-bubble-per-turn rendering: an iteration boundary
+                    // no longer finalizes the content bubble or closes the
+                    // tool-status bubble — both persist across the whole turn
+                    // and are edited in place (hermes stream_consumer parity).
+                    // The old per-block reset is what shredded alternating
+                    // text/tool output into dozens of separate messages.
                 }
                 AgentEvent::Usage { .. } => {
                     // Usage events are not surfaced to the user in gateway

@@ -659,3 +659,14 @@ Live Telegram tool-test (2026-08-22 06:09–06:31 IST, nvidia free tier) exposed
 - Known residual: free-tier SSE streams can drop mid-token; operant accepts the partial block as complete (the observed "tool cate|gories" mid-word message split). Full parity would need finish_reason-less truncation detection — deferred until it recurs on the hardened build.
 - Hermes contrast (gateway/stream_consumer.py): single-bubble progressive edit + redundant-edit skip + final seal; operant's per-block editing matches chronologically but lacks `_last_sent_text` dedupe — candidate future polish.
 - Live-verified: rebuilt + redeployed + service restarted; workspace tests/clippy clean.
+
+### R33 — degenerate tool-call loop shredded chat output (FIXED)
+Live Telegram session (2026-08-22 08:06 IST) exposed the worst-case agentic-loop pathology:
+- **Root cause**: the free-tier model entered a repetition loop — **4,397 within-batch duplicate `process` calls skipped**, 1,145 malformed-argument calls repaired to `{}`, repeats up to 17× across iterations, 21+ minutes elapsed. The per-call guardrails (R4) skipped every duplicate but never terminated the turn, so each iteration still cost an LLM call and rendered another text fragment + status bubble.
+- **Renderer amplification**: the segment-break design (each writing block = its own message; each tool group = its own message) faithfully shredded alternating text/tool output into dozens of fragments — the "output split by tool messages" symptom.
+- **Fixes**:
+  1. Turn-level circuit breaker (`agent/mod.rs`): ≥3 consecutive all-failure tool iterations → forced stop-repeating nudge; ≥6 → turn ends with a partial-results notice (hermes repetition-guard parity).
+  2. Single-bubble-per-turn rendering (`gateway_runner.rs`): ONE content bubble progressively edited across the whole turn (segment breaks removed), sealed only at >3500 chars (Telegram 4096 edit limit); ONE tool-status bubble per turn edited in place, capped at last 15 lines with a `… +N earlier` header; redundant-edit skip (`_last_sent_text` hermes parity).
+  3. IterationComplete no longer resets stream state.
+- **Hermes contrast**: hermes `stream_consumer.py` is single-bubble by design with redundant-edit skipping and final seal — operant now matches that shape; hermes `repetition_guard.py` detects repeated-text domination in truncation continuations, operant now has the tool-loop equivalent (text-domination detection remains future work).
+- Live-verified: rebuilt + redeployed + restarted; workspace check/test/clippy clean.
