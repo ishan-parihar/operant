@@ -744,3 +744,29 @@ Executed cuts (verified against callers before each deletion):
 Kept deliberately: loop_detector.rs (LIVE circuit breaker inside
 run_tool_call_loop), memory_loader/dispatcher traits (AgentBuilder API
 surface), thinking/eval modules (heavy internal use).
+
+### Full-scale module split — schema + agent loop monoliths (dedup pass 2)
+Executed the rust-best-practices split assessment end-to-end:
+1. **schema.rs (19,816 lines) → `config/src/schema/` — 25 domain modules**
+   (`agent_cfg, backup, channels_cfg, core, cost, delegate, gateway, hardware,
+   helpers, mcp, media, memory_store, plugins_cfg, providers_cfg, proxy,
+   runners, scheduler, skills, sop, stt, tts, trace, vi, web_tools,
+   workspace_cfg`). Script-driven verbatim extraction
+   (`scripts/split_schema.py`); top-level decls widened to pub(crate) so
+   cross-domain globs resolve; mod.rs glob-re-exports everything → every
+   existing `schema::X` path unchanged. Generic serde `default_*` helpers
+   centralized in `helpers.rs`.
+2. **loop_.rs (8,196) → `agent/loop_/` directory** — `context.rs`,
+   `streaming.rs`, `turn.rs`, `tool_loop.rs`, `run.rs`, `messages.rs`
+   extracted verbatim with compat re-exports in loop_ mod; loop_support.rs
+   unchanged from pass 1. Lint attributes stripped by the splitter's tail
+   trim were detected by clippy and restored (`too_many_arguments` ×2,
+   `too_many_lines`); StreamedChatOutcome visibility widened to match its
+   now-pub consumer.
+3. Verification: workspace check 0/0, clippy -D warnings clean, 36 test
+   suites green, release binary rebuilt/deployed, gateway active.
+**Deferred deliberately:** orchestrator/mod.rs (14.1K) — same mechanical
+pattern applies but it is live code for every messaging platform; do it as a
+focused follow-up arc using concern markers already identified (timeout
+budgets, interruption handling, runtime-config store, command parsing,
+prompt building).
