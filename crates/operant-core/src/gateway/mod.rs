@@ -1334,7 +1334,14 @@ impl TelegramAdapter {
             token,
             enabled,
             running: Arc::new(AtomicBool::new(false)),
-            client: reqwest::Client::new(),
+            // Bounded timeouts: a wedged TCP connection must surface as an
+            // error (and hit the poll-loop retry) instead of hanging
+            // `getUpdates`/`sendMessage` forever. 30s long-poll fits in 60s.
+            client: reqwest::Client::builder()
+                .connect_timeout(Duration::from_secs(10))
+                .timeout(Duration::from_secs(60))
+                .build()
+                .unwrap_or_else(|_| reqwest::Client::new()),
         }
     }
 
@@ -1356,6 +1363,8 @@ impl TelegramAdapter {
             }
         }
         let client = client_builder
+            .connect_timeout(Duration::from_secs(10))
+            .timeout(Duration::from_secs(60))
             .build()
             .unwrap_or_else(|_| reqwest::Client::new());
 
@@ -1913,208 +1922,241 @@ impl PlatformAdapter for TelegramAdapter {
         let media_token = token.clone();
 
         tracing::info!("Telegram polling task spawned");
+        // Panic-supervisor wrapper: a polling epoch that panics must be
+        // respawned — a dead poll task inside a live gateway process is the
+        // silent-death failure mode this adapter must never have. Clean
+        // epochs (shutdown) exit here; 409-style recovery stays inside the
+        // epoch's own 'restart loop.
         tokio::spawn(async move {
-            // ── OUTER SUPERVISED RESTART LOOP ──
-            // On 409 Conflict the inner loop breaks here, triggering a fresh
-            // startup probe (timeout=0) before re-entering the polling loop.
-            'restart: while running.load(Ordering::SeqCst) {
-                let mut offset: i64 = 0;
-
-                // === STARTUP PROBE: claim any pending updates before long-poll starts ===
-                if let Ok(resp) = client
-                    .post(&url)
-                    .json(&serde_json::json!({
-                        "offset": 0,
-                        "timeout": 0,
-                    }))
-                    .send()
-                    .await
-                    && let Ok(data) = resp.json::<serde_json::Value>().await
-                    && let Some(updates) = data["result"].as_array()
-                {
-                    for update in updates {
-                        if let Some(update_id) = update["update_id"].as_i64() {
-                            offset = update_id + 1;
-                        }
-                    }
+            loop {
+                if !running.load(Ordering::SeqCst) || message_tx.is_closed() {
+                    return;
                 }
-                tracing::info!("Startup probe completed, initial offset: {}", offset);
+                let handle = tokio::spawn({
+                    let running = running.clone();
+                    let client = client.clone();
+                    let url = url.clone();
+                    let message_tx = message_tx.clone();
+                    let media_base = media_base.clone();
+                    let media_token = media_token.clone();
+                    async move {
+                        // ── OUTER SUPERVISED RESTART LOOP ──
+                        // On 409 Conflict the inner loop breaks here, triggering a fresh
+                        // startup probe (timeout=0) before re-entering the polling loop.
+                        'restart: while running.load(Ordering::SeqCst) {
+                            let mut offset: i64 = 0;
 
-                // === LOAD SAVED OFFSET (persist across restarts) ===
-                let offset_path = get_offset_path();
-                if offset_path.exists()
-                    && let Ok(saved) = tokio::fs::read_to_string(&offset_path).await
-                    && let Ok(n) = saved.trim().parse::<i64>()
-                    && n > offset
-                {
-                    offset = n;
-                }
-                tracing::info!("Loaded saved offset: {}", offset);
-
-                // ── INNER POLLING LOOP ──
-                let mut retry_delay: u64 = 1;
-                let mut last_heartbeat = Instant::now();
-
-                // Defensive dedup window: remember recently processed
-                // update_ids so a duplicate delivery (offset-file race,
-                // restart edge case) can never double-process the same
-                // update and double-reply. Telegram guarantees no dupes
-                // when offset handling is correct — this is belt-and-braces.
-                const RECENT_UPDATE_WINDOW: usize = 256;
-                let mut recent_updates: std::collections::VecDeque<i64> =
-                    std::collections::VecDeque::new();
-
-                tracing::info!("Entering main polling loop");
-                while running.load(Ordering::SeqCst) {
-                    // Early exit if the gateway receiver has been dropped (clean shutdown).
-                    if message_tx.is_closed() {
-                        info!("Telegram: message channel closed, stopping poll loop");
-                        running.store(false, Ordering::SeqCst);
-                        break;
-                    }
-
-                    // Heartbeat: log every 60s without receiving updates
-                    if last_heartbeat.elapsed() >= Duration::from_secs(60) {
-                        info!("Polling active, last update offset: {}", offset);
-                        last_heartbeat = Instant::now();
-                    }
-
-                    let response = client
-                        .post(&url)
-                        .json(&serde_json::json!({
-                            "offset": offset,
-                            "timeout": 30,
-                        }))
-                        .send()
-                        .await;
-
-                    let mut had_updates = false;
-
-                    match response {
-                        Ok(resp) => {
-                            let status = resp.status();
-
-                            // Handle 409 Conflict — break to outer loop for a clean re-probe
-                            if status.as_u16() == 409 {
-                                tracing::warn!(
-                                    "Telegram 409 Conflict (another instance?), restarting from probe in 35s"
-                                );
-                                tokio::time::sleep(Duration::from_secs(35)).await;
-                                break;
-                            }
-
-                            // Any other successful HTTP response resets the retry delay.
-                            retry_delay = 1;
-
-                            if let Ok(data) = resp.json::<serde_json::Value>().await
+                            // === STARTUP PROBE: claim any pending updates before long-poll starts ===
+                            if let Ok(resp) = client
+                                .post(&url)
+                                .json(&serde_json::json!({
+                                    "offset": 0,
+                                    "timeout": 0,
+                                }))
+                                .send()
+                                .await
+                                && let Ok(data) = resp.json::<serde_json::Value>().await
                                 && let Some(updates) = data["result"].as_array()
                             {
-                                had_updates = !updates.is_empty();
-                                if had_updates {
-                                    tracing::info!(
-                                        "Received {} update(s) from Telegram",
-                                        updates.len()
-                                    );
+                                for update in updates {
+                                    if let Some(update_id) = update["update_id"].as_i64() {
+                                        offset = update_id + 1;
+                                    }
+                                }
+                            }
+                            tracing::info!("Startup probe completed, initial offset: {}", offset);
+
+                            // === LOAD SAVED OFFSET (persist across restarts) ===
+                            let offset_path = get_offset_path();
+                            if offset_path.exists()
+                                && let Ok(saved) = tokio::fs::read_to_string(&offset_path).await
+                                && let Ok(n) = saved.trim().parse::<i64>()
+                                && n > offset
+                            {
+                                offset = n;
+                            }
+                            tracing::info!("Loaded saved offset: {}", offset);
+
+                            // ── INNER POLLING LOOP ──
+                            let mut retry_delay: u64 = 1;
+                            let mut last_heartbeat = Instant::now();
+
+                            // Defensive dedup window: remember recently processed
+                            // update_ids so a duplicate delivery (offset-file race,
+                            // restart edge case) can never double-process the same
+                            // update and double-reply. Telegram guarantees no dupes
+                            // when offset handling is correct — this is belt-and-braces.
+                            const RECENT_UPDATE_WINDOW: usize = 256;
+                            let mut recent_updates: std::collections::VecDeque<i64> =
+                                std::collections::VecDeque::new();
+
+                            tracing::info!("Entering main polling loop");
+                            while running.load(Ordering::SeqCst) {
+                                // Early exit if the gateway receiver has been dropped (clean shutdown).
+                                if message_tx.is_closed() {
+                                    info!("Telegram: message channel closed, stopping poll loop");
+                                    running.store(false, Ordering::SeqCst);
+                                    break;
+                                }
+
+                                // Heartbeat: log every 60s without receiving updates
+                                if last_heartbeat.elapsed() >= Duration::from_secs(60) {
+                                    info!("Polling active, last update offset: {}", offset);
                                     last_heartbeat = Instant::now();
                                 }
-                                for update in updates {
-                                    let Some(update_id) = update["update_id"].as_i64() else {
-                                        continue;
-                                    };
-                                    // Skip anything already processed (defense
-                                    // against duplicate delivery).
-                                    if recent_updates.contains(&update_id) {
-                                        tracing::warn!(
-                                            update_id,
-                                            "Skipping duplicate Telegram update (already processed)"
-                                        );
-                                        continue;
-                                    }
-                                    offset = update_id + 1;
-                                    // Route inline-keyboard taps (approval /
-                                    // clarify buttons) before the regular
-                                    // message parser — parse_update drops
-                                    // callback_query updates entirely.
-                                    let parsed = if let Some(m) =
-                                        TelegramAdapter::handle_callback_update(
-                                            &client,
-                                            &media_token,
-                                            &media_base,
-                                            update.clone(),
-                                        )
-                                        .await
-                                    {
-                                        Some(m)
-                                    } else {
-                                        TelegramAdapter::parse_update(update.clone()).ok().flatten()
-                                    };
-                                    if let Some(mut msg) = parsed {
-                                        // Download attachments (photos, documents,
-                                        // voice/audio/video) into the local media
-                                        // cache so the agent can inspect them with
-                                        // native tools (hermes parity). Best-effort:
-                                        // a failed download keeps the placeholder
-                                        // text and still delivers the message.
-                                        let media = download_telegram_attachments(
-                                            &client,
-                                            &media_token,
-                                            &media_base,
-                                            update,
-                                        )
-                                        .await;
-                                        if !media.is_empty() {
-                                            msg = msg.with_media_urls(media);
-                                        }
-                                        tracing::info!(
-                                            "Sent message to gateway handler (chat: {}, content: {:.50}, media: {})",
-                                            msg.channel_id,
-                                            msg.content,
-                                            msg.media_urls.len()
-                                        );
-                                        if let Err(e) = message_tx.send(msg) {
-                                            tracing::error!(
-                                                "Failed to send message to gateway handler: {}",
-                                                e
+
+                                let response = client
+                                    .post(&url)
+                                    .json(&serde_json::json!({
+                                        "offset": offset,
+                                        "timeout": 30,
+                                    }))
+                                    .send()
+                                    .await;
+
+                                let mut had_updates = false;
+
+                                match response {
+                                    Ok(resp) => {
+                                        let status = resp.status();
+
+                                        // Handle 409 Conflict — break to outer loop for a clean re-probe
+                                        if status.as_u16() == 409 {
+                                            tracing::warn!(
+                                                "Telegram 409 Conflict (another instance?), restarting from probe in 35s"
                                             );
-                                            // Receiver dropped — likely shutting down.
-                                            running.store(false, Ordering::SeqCst);
+                                            tokio::time::sleep(Duration::from_secs(35)).await;
                                             break;
                                         }
+
+                                        // Any other successful HTTP response resets the retry delay.
+                                        retry_delay = 1;
+
+                                        if let Ok(data) = resp.json::<serde_json::Value>().await
+                                            && let Some(updates) = data["result"].as_array()
+                                        {
+                                            had_updates = !updates.is_empty();
+                                            if had_updates {
+                                                tracing::info!(
+                                                    "Received {} update(s) from Telegram",
+                                                    updates.len()
+                                                );
+                                                last_heartbeat = Instant::now();
+                                            }
+                                            for update in updates {
+                                                let Some(update_id) = update["update_id"].as_i64()
+                                                else {
+                                                    continue;
+                                                };
+                                                // Skip anything already processed (defense
+                                                // against duplicate delivery).
+                                                if recent_updates.contains(&update_id) {
+                                                    tracing::warn!(
+                                                        update_id,
+                                                        "Skipping duplicate Telegram update (already processed)"
+                                                    );
+                                                    continue;
+                                                }
+                                                offset = update_id + 1;
+                                                // Route inline-keyboard taps (approval /
+                                                // clarify buttons) before the regular
+                                                // message parser — parse_update drops
+                                                // callback_query updates entirely.
+                                                let parsed = if let Some(m) =
+                                                    TelegramAdapter::handle_callback_update(
+                                                        &client,
+                                                        &media_token,
+                                                        &media_base,
+                                                        update.clone(),
+                                                    )
+                                                    .await
+                                                {
+                                                    Some(m)
+                                                } else {
+                                                    TelegramAdapter::parse_update(update.clone())
+                                                        .ok()
+                                                        .flatten()
+                                                };
+                                                if let Some(mut msg) = parsed {
+                                                    // Download attachments (photos, documents,
+                                                    // voice/audio/video) into the local media
+                                                    // cache so the agent can inspect them with
+                                                    // native tools (hermes parity). Best-effort:
+                                                    // a failed download keeps the placeholder
+                                                    // text and still delivers the message.
+                                                    let media = download_telegram_attachments(
+                                                        &client,
+                                                        &media_token,
+                                                        &media_base,
+                                                        update,
+                                                    )
+                                                    .await;
+                                                    if !media.is_empty() {
+                                                        msg = msg.with_media_urls(media);
+                                                    }
+                                                    tracing::info!(
+                                                        "Sent message to gateway handler (chat: {}, content: {:.50}, media: {})",
+                                                        msg.channel_id,
+                                                        msg.content,
+                                                        msg.media_urls.len()
+                                                    );
+                                                    if let Err(e) = message_tx.send(msg) {
+                                                        tracing::error!(
+                                                            "Failed to send message to gateway handler: {}",
+                                                            e
+                                                        );
+                                                        // Receiver dropped — likely shutting down.
+                                                        running.store(false, Ordering::SeqCst);
+                                                        break;
+                                                    }
+                                                }
+                                                recent_updates.push_back(update_id);
+                                                if recent_updates.len() > RECENT_UPDATE_WINDOW {
+                                                    recent_updates.pop_front();
+                                                }
+                                            }
+                                        }
+
+                                        // Persist offset to disk when updates were received
+                                        if had_updates {
+                                            let _ =
+                                                std::fs::write(&offset_path, offset.to_string());
+                                        }
                                     }
-                                    recent_updates.push_back(update_id);
-                                    if recent_updates.len() > RECENT_UPDATE_WINDOW {
-                                        recent_updates.pop_front();
+                                    Err(e) => {
+                                        tracing::error!(
+                                            "Telegram polling error (retrying in {}s): {}",
+                                            retry_delay,
+                                            e
+                                        );
+                                        tokio::time::sleep(Duration::from_secs(retry_delay)).await;
+                                        retry_delay = (retry_delay * 2).min(30);
+                                        continue; // Stay in inner loop, skip the 2s pause below
                                     }
+                                }
+
+                                // Only sleep when no updates arrived (long-poll timed out)
+                                // so we don't add latency between receiving updates and polling again.
+                                if !had_updates {
+                                    tokio::time::sleep(Duration::from_secs(2)).await;
                                 }
                             }
 
-                            // Persist offset to disk when updates were received
-                            if had_updates {
-                                let _ = std::fs::write(&offset_path, offset.to_string());
+                            // Before re-probing, check if we should shut down cleanly.
+                            if !running.load(Ordering::SeqCst) || message_tx.is_closed() {
+                                break 'restart;
                             }
                         }
-                        Err(e) => {
-                            tracing::error!(
-                                "Telegram polling error (retrying in {}s): {}",
-                                retry_delay,
-                                e
-                            );
-                            tokio::time::sleep(Duration::from_secs(retry_delay)).await;
-                            retry_delay = (retry_delay * 2).min(30);
-                            continue; // Stay in inner loop, skip the 2s pause below
-                        }
+                    } // async move (polling epoch)
+                });
+                match handle.await {
+                    // Clean epoch exit — gateway is shutting down.
+                    Ok(()) => return,
+                    // Panicked epoch — log loudly and respawn.
+                    Err(join_err) => {
+                        error!("Telegram polling task panicked: {join_err} — respawning in 5s");
+                        tokio::time::sleep(Duration::from_secs(5)).await;
                     }
-
-                    // Only sleep when no updates arrived (long-poll timed out)
-                    // so we don't add latency between receiving updates and polling again.
-                    if !had_updates {
-                        tokio::time::sleep(Duration::from_secs(2)).await;
-                    }
-                }
-
-                // Before re-probing, check if we should shut down cleanly.
-                if !running.load(Ordering::SeqCst) || message_tx.is_closed() {
-                    break 'restart;
                 }
             }
         });

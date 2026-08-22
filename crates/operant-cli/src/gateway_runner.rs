@@ -25,6 +25,7 @@ use operant_core::tools::{OperantTool, ToolContext, TranscriptionTool};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use std::sync::OnceLock;
+use std::time::Duration;
 
 /// The active gateway turn's target: (platform, channel_id, telegram
 /// thread_id). Thread id is None for non-forum platforms/chat.
@@ -853,26 +854,48 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
         let api_base = "https://api.telegram.org";
         let cmd_url = format!("{}/bot{}/setMyCommands", api_base, token);
         let cmd_body = format!(r#"{{"commands":{}}}"#, telegram_bot_commands());
-        let client = reqwest::Client::new();
-        match client
-            .post(&cmd_url)
-            .header("Content-Type", "application/json")
-            .body(cmd_body)
-            .send()
-            .await
-        {
-            Ok(resp) => {
-                if resp.status().is_success() {
-                    tracing::info!("Telegram bot commands registered successfully");
-                } else {
+        // Bounded retry: this fires once during boot — exactly when the
+        // network may still be settling (the same race that kills adapter
+        // starts). Without retries the command menu silently stays
+        // unregistered until the next full gateway restart.
+        let client = reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(10))
+            .timeout(Duration::from_secs(60))
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new());
+        const MAX_ATTEMPTS: u32 = 5;
+        for attempt in 1..=MAX_ATTEMPTS {
+            match client
+                .post(&cmd_url)
+                .header("Content-Type", "application/json")
+                .body(cmd_body.clone())
+                .send()
+                .await
+            {
+                Ok(resp) => {
+                    if resp.status().is_success() {
+                        tracing::info!("Telegram bot commands registered successfully");
+                        break;
+                    } else {
+                        tracing::warn!(
+                            "Failed to register Telegram commands: HTTP {} (attempt {}/{}),",
+                            resp.status(),
+                            attempt,
+                            MAX_ATTEMPTS
+                        );
+                    }
+                }
+                Err(e) => {
                     tracing::warn!(
-                        "Failed to register Telegram commands: HTTP {}",
-                        resp.status()
+                        "Failed to register Telegram commands: {} (attempt {}/{}),",
+                        redact_err(&e),
+                        attempt,
+                        MAX_ATTEMPTS
                     );
                 }
             }
-            Err(e) => {
-                tracing::warn!("Failed to register Telegram commands: {}", redact_err(&e));
+            if attempt < MAX_ATTEMPTS {
+                tokio::time::sleep(Duration::from_secs(u64::from(attempt) * 5)).await;
             }
         }
     }
