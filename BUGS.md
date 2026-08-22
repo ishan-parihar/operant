@@ -770,3 +770,38 @@ pattern applies but it is live code for every messaging platform; do it as a
 focused follow-up arc using concern markers already identified (timeout
 budgets, interruption handling, runtime-config store, command parsing,
 prompt building).
+
+### Full-scale module split — orchestrator/mod.rs (dedup pass 3)
+Executed the deferred orchestrator surgery (`scripts/split_orchestrator.py`):
+1. **orchestrator/mod.rs (14,106 lines) → 15 concern modules + tests file**
+   - `consts.rs` (all tunables), `runtime_types.rs` (ChannelRuntimeContext,
+     route/model-cache/runtime-defaults state), `history.rs` (sender history,
+     compaction, rollback, overflow detection), `commands.rs` (/stop +
+     runtime command parsing/handling), `routing.rs` (provider aliasing,
+     defaults loading/reload, route selection, provider construction),
+     `prompts.rs` (delivery instructions, system-prompt assembly, help/config
+     responses), `memory_ctx.rs` (memory-context building/formatting),
+     `sanitize.rs` (reply-intent classification, think-tag/tool-artifact
+     stripping), `supervision.rs` (timeout budgets, supervised listeners,
+     typing tasks, in-flight caps), `dispatch.rs` (process_channel_message,
+     dispatch_worker, dispatch loop), `identity.rs` (telegram identity bind,
+     daemon restart), `factory.rs` (build_channel_by_id, send_channel_message),
+     `health.rs` (health classification, collect_configured_channels,
+     doctor), `startup.rs` (start_channels). Inline `mod tests` (~7.5K lines)
+     → `tests.rs`.
+   - mod.rs reduced to ~340 lines (observer wiring, deliver_announcement,
+     decls/re-exports).
+2. Splitter hardening lessons (vs pass 2): brace-counting depth tracking is
+   unreliable in string-heavy code (JSON literals poison depth) — replaced
+   with indentation-based state machine for field/method/item widening;
+   multi-line `use` statements must be captured whole in generated headers;
+   classify item kind BEFORE the widening continue.
+3. Verification: channels lib 0 warnings/errors; workspace all-targets 0;
+   clippy --workspace --all-targets --all-features -D warnings clean;
+   36/36 test suites green; fresh release deployed to both install paths;
+   gateway restarted (new PID) with Telegram platform up; live `gateway
+   status/channels/sessions` verified against the new binary including a
+   pre-existing session row (no data regression).
+Note: tests/live_parity.rs fails under bare `-p operant-channels --all-targets`
+(default features) because it imports the cfg-gated telegram module without a
+feature gate — pre-existing, masked by workspace feature unification.
