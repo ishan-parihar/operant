@@ -1187,6 +1187,14 @@ pub(crate) async fn build_registry(
         }
     }
 
+    // Interactive tools block on HUMAN input (inline-keyboard taps / button
+    // answers), not compute — the generic 30s cap killed real interactions
+    // mid-prompt in live gateway testing (clarify timed out while the user
+    // was still reading the question). Grant a 5-minute window; the channel
+    // layer's own timeouts still bound the worst case.
+    registry.set_tool_timeout("clarify", std::time::Duration::from_secs(300));
+    registry.set_tool_timeout("approval_request", std::time::Duration::from_secs(300));
+
     let mut disabled_tools: std::collections::HashSet<String> =
         config.tools.disabled_tools.iter().cloned().collect();
     let disabled_toolsets: std::collections::HashSet<String> =

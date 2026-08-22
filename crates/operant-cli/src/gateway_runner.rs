@@ -443,11 +443,15 @@ impl MessageHandler for GatewayMessageHandler {
                             reasoning.clone()
                         } else {
                             tracing::warn!("Agent returned empty response, no reasoning available");
-                            "I've completed the tool calls you requested.".to_string()
+                            "⚠️ My model provider returned an empty response after retries \
+                             (provider overload). Reply 'continue' to resume the task."
+                                .to_string()
                         }
                     } else {
                         tracing::warn!("Agent returned empty response, no reasoning available");
-                        "I've completed the tool calls you requested.".to_string()
+                        "⚠️ My model provider returned an empty response after retries \
+                         (provider overload). Reply 'continue' to resume the task."
+                            .to_string()
                     }
                 } else {
                     response.content
@@ -1368,6 +1372,18 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                         // Reset streaming state for the next turn.
                         stream_text.clear();
                         stream_msg_id = None;
+                    } else {
+                        // Final writing block was EMPTY (provider returned an
+                        // empty completion after the mid-turn blocks already
+                        // finalized): nothing user-visible was delivered for
+                        // the actual answer. Drop the stream-delivery marker
+                        // so dispatch sends the fallback/response instead of
+                        // suppressing it — suppressing here is what produced
+                        // the silent-stall failure mode (R31 follow-up).
+                        stream_text.clear();
+                        stream_msg_id = None;
+                        let mut map = stream_delivery_for_events.lock().await;
+                        map.remove(&(platform.clone(), channel_id.clone(), thread_id));
                     }
                     // Turn ended — close the tool group so the next turn
                     // starts a fresh chronological message.

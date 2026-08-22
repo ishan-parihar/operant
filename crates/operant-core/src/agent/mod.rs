@@ -2176,6 +2176,41 @@ impl OperantAgent {
                         self.iteration_budget.refund();
                         continue;
                     }
+                    // Reasoning-only turn (hermes _CODEX_INCOMPLETE_NUDGE
+                    // parity): the model produced reasoning but no visible
+                    // answer and no tool calls — reasoning models on loaded
+                    // free-tier endpoints stop after thinking. Ending the turn
+                    // here hands the user an empty reply; nudge instead,
+                    // bounded by the same retry budget.
+                    if tool_calls.is_empty()
+                        && !has_visible_text
+                        && has_reasoning
+                        && empty_content_retries < self.config.max_retries
+                    {
+                        empty_content_retries += 1;
+                        self.metrics.record_empty_content_retry();
+                        warn!(
+                            "Reasoning-only response — nudging for a visible answer ({}/{})",
+                            empty_content_retries, self.config.max_retries
+                        );
+                        // Persist the reasoning-only assistant turn so the
+                        // conversation stays coherent, then ask for the answer.
+                        messages
+                            .push(Message::assistant("").with_reasoning(reasoning_text.clone()));
+                        self.add_message(
+                            Message::assistant("").with_reasoning(reasoning_text.clone()),
+                        )
+                        .await;
+                        let nudge = Message::user(
+                            "[System: Your previous response contained only internal reasoning \
+                             and never produced a visible answer or tool call. Do not keep \
+                             thinking. Produce your final answer as plain text now.]",
+                        );
+                        messages.push(nudge.clone());
+                        self.add_message(nudge).await;
+                        self.iteration_budget.refund();
+                        continue;
+                    }
                     // Add assistant message to conversation
                     // When tool calls are present, any text before them is typically
                     // model thinking/planning that shouldn't be shown to the user.

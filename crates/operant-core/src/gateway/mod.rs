@@ -1464,7 +1464,7 @@ impl TelegramAdapter {
                 .unwrap_or_default());
         }
 
-        tracing::info!("Message sent to chat {}", channel_id);
+        tracing::debug!("Sending message to chat {}", channel_id);
         let data: serde_json::Value = response.json().await?;
         tracing::info!(
             "Message sent to chat {}, message_id: {:?}",

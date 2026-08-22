@@ -17,7 +17,7 @@ use reqwest::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use tracing::{debug, error, info, instrument, warn};
+use tracing::{debug, error, instrument, warn};
 
 use crate::config::{ClientSettings, runtime_config};
 use crate::error::{Error, Result};
@@ -411,7 +411,7 @@ impl OpenAIClient {
 
             let status = response.status();
             if status.is_success() {
-                info!("Streaming connection established");
+                debug!("Streaming connection established");
                 let stream = response.bytes_stream();
                 return Ok(ChatStreamResponse::new(stream));
             }
