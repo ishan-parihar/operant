@@ -848,3 +848,21 @@ chapter-1 guidance ("TODOs are not comments"):
 - plugins/wasm_channel.rs:30,41 — WASM plugin send/receive not wired.
 - runtime/skills/mod.rs:34 — update registry URL when repo rebranded to
   operant-labs.
+
+### Full-scale module split — loop_ residual, gateway adapters, telegram dir (passes 5–7)
+1. **core/agent/mod.rs (6.3K → 2.1K)**: 4.1K-line `impl OperantAgent` split
+   into five reopened impl blocks (builders/events/run/prompting/compress/stream).
+2. **gateway/mod.rs (5.8K → 1.8K)**: per-platform adapter files (telegram,
+   discord, slack, webhook, whatsapp, email, sms, admin) + types.rs.
+3. **loop_.rs residual (4.9K → 239)**: inline tests extracted to loop_/tests.rs.
+4. **channels/telegram.rs (7.2K) → telegram/ directory**: mod.rs (struct +
+   Channel trait impl + Drop + poll watchdogs), helpers.rs (consts,
+   attachments, poll-recovery state), channel_impl.rs (inherent methods),
+   tests.rs. External path operant_channels::telegram::TelegramChannel stable.
+5. **Splitter hardening**: col0 continuation lines inside multi-line string
+   literals must NOT reset the widen state machine — whitelist known Rust
+   item starters instead of else-resetting. Test-mod extraction: slice after
+   the `mod tests {` line, not after the cfg attr.
+Gates each pass: fmt, workspace check/clippy(-D warnings), full test suites
+(known flakes: iteration_budget Barrier race test, network-dependent DDG
+tests - pass in isolation), fresh release deployed both paths, gateway active.
