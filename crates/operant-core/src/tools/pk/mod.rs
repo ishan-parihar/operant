@@ -17,6 +17,8 @@ pub mod sidecar;
 pub mod tool_bridge;
 use std::sync::{Arc, OnceLock};
 
+use serde_json::Value;
+
 pub use runtime::PkRuntime;
 
 /// Process-wide runtime handle installed by [`register`] so non-tool callers
@@ -26,6 +28,52 @@ static GLOBAL_RUNTIME: OnceLock<Arc<PkRuntime>> = OnceLock::new();
 
 pub fn global_runtime() -> Option<&'static Arc<PkRuntime>> {
     GLOBAL_RUNTIME.get()
+}
+
+/// Feed-forward injection lane (phase 4): bounded `[continual harness]` text
+/// for the per-turn volatile prompt suffix. Local(session)-scope entries come
+/// first, then global lessons; empty state renders NOTHING so prompts stay
+/// byte-stable when the kernel is off or the store is empty.
+pub async fn injection_block(session_id: Option<&str>, max_chars: usize) -> Option<String> {
+    let rt = global_runtime()?;
+    if !rt.settings().enabled {
+        return None;
+    }
+    const EMPTY_MARKERS: [&str; 2] = ["(empty harness)", "(empty"];
+    let mut block = String::from("[continual harness]\n");
+    let mut budget = max_chars.max(200);
+    for scope in ["local", "global"] {
+        let params = serde_json::json!({
+            "scope": scope,
+            "session_key": session_id.unwrap_or("default"),
+        });
+        let Ok(v) = rt.request("harness_overview", params).await else {
+            continue;
+        };
+        let Some(text) = v.get("overview").and_then(Value::as_str) else {
+            continue;
+        };
+        let trimmed = text.trim();
+        if trimmed.is_empty() || EMPTY_MARKERS.iter().any(|m| trimmed.starts_with(m)) {
+            continue;
+        }
+        let section = format!("({scope}) {trimmed}\n");
+        let taken: String = section.chars().take(budget).collect();
+        let cut = taken.trim_end();
+        if cut.is_empty() || cut == "(local)" || cut == "(global)" {
+            break;
+        }
+        budget = budget.saturating_sub(cut.chars().count() + 1);
+        block.push_str(cut);
+        block.push('\n');
+        if budget <= 40 {
+            break;
+        }
+    }
+    if block == "[continual harness]\n" {
+        return None;
+    }
+    Some(block)
 }
 
 /// Register the three model-facing tools under the gated `prime_kernel`
@@ -51,7 +99,9 @@ pub async fn register(
     registry
         .register(harness_tools::PkHarnessGetTool::new(rt.clone()))
         .await?;
-    registry.register(harness_tools::PkRefineTool::new(rt)).await?;
+    registry
+        .register(harness_tools::PkRefineTool::new(rt))
+        .await?;
     Ok(GLOBAL_RUNTIME.get().cloned())
 }
 
@@ -66,12 +116,14 @@ mod tests {
     use serde_json::json;
 
     fn test_settings(state_root: &std::path::Path) -> PrimeKernelSettings {
-        let mut s = PrimeKernelSettings::default();
-        s.enabled = true;
-        s.state_dir = Some(state_root.to_path_buf());
-        // Keep the idle reaper out of test timing.
-        s.sidecar_idle_secs = 0;
-        s.request_timeout_secs = 30;
+        let s = PrimeKernelSettings {
+            enabled: true,
+            state_dir: Some(state_root.to_path_buf()),
+            // Keep the idle reaper out of test timing.
+            sidecar_idle_secs: 0,
+            request_timeout_secs: 30,
+            ..PrimeKernelSettings::default()
+        };
         // PK_SIDECAR_DIR resolution: in-tree builds fall back to the
         // compile-time CARGO_MANIFEST_DIR path (../../pk-sidecar), which is
         // exactly this repo layout — no env mutation needed (edition-2024
@@ -99,10 +151,7 @@ mod tests {
         .await
         .expect("exec 1");
         let v = rt
-            .request(
-                "exec",
-                json!({"session_key": "t1", "code": "print(x + 1)"}),
-            )
+            .request("exec", json!({"session_key": "t1", "code": "print(x + 1)"}))
             .await
             .expect("exec 2");
         assert_eq!(v["stdout"], json!("42\n"));
@@ -119,7 +168,10 @@ mod tests {
         tokio::time::sleep(std::time::Duration::from_millis(300)).await;
         // Next request must transparently respawn and still work.
         let v = rt
-            .request("exec", json!({"session_key": "r1", "code": "print('back')"}))
+            .request(
+                "exec",
+                json!({"session_key": "r1", "code": "print('back')"}),
+            )
             .await
             .expect("post-restart exec");
         assert_eq!(v["stdout"], json!("back\n"));
@@ -179,7 +231,10 @@ mod tests {
             )
             .await
             .expect("bridged exec");
-        assert!(v["stdout"].as_str().unwrap().contains("bridge_ok True"), "{v}");
+        assert!(
+            v["stdout"].as_str().unwrap().contains("bridge_ok True"),
+            "{v}"
+        );
         assert_eq!(rt.cell_calls(), 1);
 
         // Non-allowlisted tool returns an error VALUE (cell still succeeds).
@@ -213,7 +268,10 @@ mod tests {
             .expect("apply");
         let event_id = applied["refinement_id"].as_str().unwrap().to_string();
         let rolled = rt
-            .request("refine_rollback", json!({"event_id": event_id, "scope": "local"}))
+            .request(
+                "refine_rollback",
+                json!({"event_id": event_id, "scope": "local"}),
+            )
             .await
             .expect("rollback");
         assert!(rolled["rolled_back"].is_string());

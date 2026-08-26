@@ -126,18 +126,20 @@ class SidecarServer:
     # Harness store IO is blocking (json file CRUD) — off the event loop.
     def _harness_sync(self, method: str, p: dict[str, Any]) -> Any:
         scope = str(p.get("scope") or "local")
+        sk_raw = p.get("session_key")
+        sk = str(sk_raw) if sk_raw else None
         if method == "harness_list":
             kind = p.get("kind")
             out: dict[str, Any] = {}
             for k in (("prompt", "subagent") if kind in (None, "") else (kind,)):
-                entries: list[dict] = []
-                overview = self.harness.overview(scope=scope)
+                overview = self.harness.overview(scope=scope, session_key=sk)
                 out[k] = {"overview_present": bool(overview.strip() and
                           overview.strip() != "(empty harness)")}
-            out["overview"] = self.harness.overview(scope=scope)
+            out["overview"] = self.harness.overview(scope=scope, session_key=sk)
             return out
         if method == "harness_get":
-            entry = self.harness.get(str(p["kind"]), str(p["id"]), scope=scope)
+            entry = self.harness.get(str(p["kind"]), str(p["id"]),
+                                     scope=scope, session_key=sk)
             if entry is None:
                 raise HarnessError(f"no {p['kind']} entry {p['id']}")
             return {"entry": entry}
@@ -145,27 +147,30 @@ class SidecarServer:
             return {"entry": self.harness.upsert(
                 str(p["kind"]), str(p["title"]), str(p.get("content", "")),
                 scope=scope, entry_id=p.get("id"),
-                metadata=p.get("metadata"))}
+                metadata=p.get("metadata"), session_key=sk)}
         if method == "harness_delete":
             return {"deleted": self.harness.delete(
-                str(p["kind"]), str(p["id"]), scope=scope)}
+                str(p["kind"]), str(p["id"]), scope=scope, session_key=sk)}
         if method == "harness_overview":
-            return {"overview": self.harness.overview(scope=scope)}
+            return {"overview": self.harness.overview(scope=scope, session_key=sk)}
         if method == "refine_record":
             return self.harness.record_manual(
                 str(p.get("evidence", "")), str(p.get("trigger") or "manual"),
-                scope=scope)
+                scope=scope, session_key=sk)
         if method == "refine_apply":
             edits = p.get("edits")
             if not isinstance(edits, list):
                 raise HarnessError("refine_apply requires edits[]")
             return self.harness.apply_edits(
                 edits, trigger=str(p.get("trigger") or "auto"),
-                evidence=str(p.get("evidence", "")), scope=scope)
+                evidence=str(p.get("evidence", "")), scope=scope,
+                session_key=sk)
         if method == "refine_rollback":
-            return self.harness.rollback(str(p["event_id"]), scope=scope)
+            return self.harness.rollback(str(p["event_id"]), scope=scope,
+                                          session_key=sk)
         if method == "refine_history":
-            return {"events": self.harness.history(int(p.get("limit") or 10), scope=scope)}
+            return {"events": self.harness.history(int(p.get("limit") or 10),
+                                                    scope=scope, session_key=sk)}
         raise AssertionError("unreachable")
 
     # -- framing ------------------------------------------------------------

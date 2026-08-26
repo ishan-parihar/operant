@@ -96,7 +96,12 @@ pub async fn register_builtin_tools(
     // harness. Registered only when [tools.prime_kernel] enabled; pk::register
     // also installs the phase-2.5 bridged executor against this registry clone
     // (shared internals) and spawns the bridge drainer.
-    if let Err(e) = super::pk::register(registry, &crate::config::runtime_config().tools.prime_kernel).await {
+    if let Err(e) = super::pk::register(
+        registry,
+        &crate::config::runtime_config().tools.prime_kernel,
+    )
+    .await
+    {
         tracing::warn!(target: "pk", error = %e, "prime kernel tool registration failed");
     }
     registry.register(ConfigManageTool).await?;

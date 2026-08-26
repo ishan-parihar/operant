@@ -1468,6 +1468,15 @@ impl OperantAgent {
         }
 
         // Memory provider: per-turn semantic recall (prefetch).
+
+        // Plan 015 phase 4: continual-harness feed-forward lane. Bounded,
+        // empty-safe; renders nothing when the prime kernel is disabled.
+        if let Some(harness_block) =
+            crate::tools::pk::injection_block(self.persistent_session_id.as_deref(), 1200).await
+        {
+            volatile_suffix.push_str("\n\n");
+            volatile_suffix.push_str(&harness_block);
+        }
         // Runs with an 8s timeout — matches hermes-agent's prefetch
         // timeout pattern. Results land under <memory_context> tags
         // (distinct from the file-backed <long_term_memory> block).

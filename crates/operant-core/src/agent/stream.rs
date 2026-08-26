@@ -819,9 +819,7 @@ impl OperantAgent {
                     .clone()
                     .unwrap_or_else(|| "default".to_string()),
             );
-            let tool_future =
-                self.registry
-                    .execute(&name, &tool_call.id, args, tool_ctx);
+            let tool_future = self.registry.execute(&name, &tool_call.id, args, tool_ctx);
             // Interactive tools (clarify / approval_request) block waiting
             // for a human — the generic tool timeout (30s) would kill the
             // dialog before the user can respond. Long-running tools
@@ -891,8 +889,7 @@ impl OperantAgent {
                                 .clone()
                                 .unwrap_or_else(|| "default".to_string()),
                         );
-                        let exec =
-                            registry.execute(&name, &tool_call.id, args, tool_ctx);
+                        let exec = registry.execute(&name, &tool_call.id, args, tool_ctx);
                         // Interactive tools exempt from the generic tool
                         // timeout (see is_interactive_tool); long-running
                         // tools like delegate_task carry their own child

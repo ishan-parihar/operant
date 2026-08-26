@@ -58,14 +58,21 @@ pub(super) fn spawn_drainer(rt: Arc<PkRuntime>) {
                 }
                 rt.record_bridge_call();
                 #[cfg(test)]
-                eprintln!("[pk-bridge] dispatching {} for session {}", name, session_key);
+                eprintln!(
+                    "[pk-bridge] dispatching {} for session {}",
+                    name, session_key
+                );
                 let ctx = ToolContext::default()
                     .with_metadata("session_id", session_key.clone())
                     .with_metadata("origin", "pk_bridge");
                 tracing::debug!(target: "pk", tool = %name, session = %session_key, "bridged call");
                 let outcome = executor.execute_bridged(&name, args, ctx).await;
                 #[cfg(test)]
-                eprintln!("[pk-bridge] outcome for {}: {:?}", bridge_id, outcome.as_ref().map(|_| "ok"));
+                eprintln!(
+                    "[pk-bridge] outcome for {}: {:?}",
+                    bridge_id,
+                    outcome.as_ref().map(|_| "ok")
+                );
                 reply(&handle.writer, &bridge_id, outcome).await;
                 #[cfg(test)]
                 eprintln!("[pk-bridge] reply written for {}", bridge_id);
@@ -75,7 +82,11 @@ pub(super) fn spawn_drainer(rt: Arc<PkRuntime>) {
     });
 }
 
-async fn reply(writer: &SidecarWriter, bridge_id: &str, outcome: Result<serde_json::Value, String>) {
+async fn reply(
+    writer: &SidecarWriter,
+    bridge_id: &str,
+    outcome: Result<serde_json::Value, String>,
+) {
     let frame = match outcome {
         Ok(result) => json!({"reply_for": bridge_id, "ok": true, "result": result}),
         Err(error) => json!({"reply_for": bridge_id, "ok": false, "error": error}),

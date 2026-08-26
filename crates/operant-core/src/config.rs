@@ -1309,6 +1309,10 @@ pub struct PrimeKernelSettings {
     /// Phase 4 cutover: route code_execution python requests through the
     /// persistent kernel (stateless subprocess stays as fallback).
     pub route_python_to_kernel: bool,
+    /// Phase 5: when true AND prime_kernel.enabled, the existing background
+    /// review fork may additionally emit prompt/subagent harness edits via
+    /// pk_refine. Default off until soaked.
+    pub harness_auto_learn: bool,
     pub tool_bridge: PrimeKernelToolBridge,
 }
 
@@ -1323,6 +1327,7 @@ impl Default for PrimeKernelSettings {
             request_timeout_secs: 120,
             max_output_bytes: 200_000,
             route_python_to_kernel: false,
+            harness_auto_learn: false,
             tool_bridge: PrimeKernelToolBridge::default(),
         }
     }

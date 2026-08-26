@@ -38,6 +38,11 @@ def default_state_root(repo_data_home: Path | None = None) -> Path:
     return base / "pk" / "harness"
 
 
+def _slugify(raw: str) -> str:
+    normalized = "".join(ch.lower() if ch.isalnum() else "_" for ch in raw.strip())
+    return "_".join(p for p in normalized.split("_") if p)[:80]
+
+
 def _now_iso() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
@@ -48,13 +53,21 @@ class HarnessService:
         self._stores: dict[tuple[Path, bool], Any] = {}
 
     # -- store binding ----------------------------------------------------
-    def _ensure(self, scope: str = "local"):
+    def _ensure(self, scope: str = "local", session_key: str | None = None):
         if scope not in SCOPES:
             raise HarnessError(f"scope must be one of {SCOPES}, got {scope!r}")
         if not vendor._HAS_PRIME_RUNTIME:
             raise HarnessError(vendor._SUBMODULE_MISSING_HINT)
         global_ = scope == "global"
-        state_dir = self._root / scope
+        if global_:
+            state_dir = self._root / "global"
+        elif session_key:
+            # prime-agent semantics: local scope is PER-SESSION so lessons
+            # never leak across sessions; global stays shared.
+            slug = _slugify(session_key) or "session"
+            state_dir = self._root / "sessions" / slug / "local"
+        else:
+            state_dir = self._root / "local"
         key = (state_dir.resolve(), global_)
         store = self._stores.get(key)
         if store is None:
@@ -79,9 +92,10 @@ class HarnessService:
             )
 
     def upsert(self, kind: str, title: str, content: str, *, scope: str = "local",
-               entry_id: str | None = None, metadata: dict | None = None) -> dict:
+               entry_id: str | None = None, metadata: dict | None = None,
+               session_key: str | None = None) -> dict:
         self._check_kind(kind)
-        store = self._ensure(scope)
+        store = self._ensure(scope, session_key)
         kw: dict[str, Any] = {}
         if metadata is not None:
             kw["metadata"] = metadata
@@ -91,22 +105,25 @@ class HarnessService:
         store.save()
         return _entry_dict(entry)
 
-    def get(self, kind: str, entry_id: str, *, scope: str = "local") -> dict | None:
+    def get(self, kind: str, entry_id: str, *, scope: str = "local",
+                session_key: str | None = None) -> dict | None:
         self._check_kind(kind)
-        store = self._ensure(scope)
+        store = self._ensure(scope, session_key)
         entry = store.get(kind, entry_id)
         return _entry_dict(entry) if entry else None
 
-    def delete(self, kind: str, entry_id: str, *, scope: str = "local") -> bool:
+    def delete(self, kind: str, entry_id: str, *, scope: str = "local",
+                   session_key: str | None = None) -> bool:
         self._check_kind(kind)
-        store = self._ensure(scope)
+        store = self._ensure(scope, session_key)
         existed = store.delete(kind=kind, id=entry_id)
         if existed:
             store.save()
         return bool(existed)
 
-    def overview(self, *, scope: str = "local") -> str:
-        store = self._ensure(scope)
+    def overview(self, *, scope: str = "local",
+                  session_key: str | None = None) -> str:
+        store = self._ensure(scope, session_key)
         try:
             ov = store.overview(max_entries_per_kind=20)
             return ov if isinstance(ov, str) else json.dumps(ov, ensure_ascii=False)
@@ -117,30 +134,36 @@ class HarnessService:
             ) or "(empty harness)"
 
     # -- refinement ledger --------------------------------------------------
-    def _ledger_path(self, scope: str) -> Path:
-        return self._root / scope / _LEDGER_FILE
+    def _ledger_path(self, scope: str, session_key: str | None = None) -> Path:
+        if scope == "global":
+            return self._root / "global" / _LEDGER_FILE
+        if session_key:
+            return (self._root / "sessions" / (_slugify(session_key) or "session")
+                    / "local" / _LEDGER_FILE)
+        return self._root / "local" / _LEDGER_FILE
 
-    def record_manual(self, evidence: str, trigger: str, *, scope: str = "local") -> dict:
+    def record_manual(self, evidence: str, trigger: str, *, scope: str = "local",
+                      session_key: str | None = None) -> dict:
         """Record a manual refinement event with a before-snapshot (manual pk_refine)."""
-        store = self._ensure(scope)
+        store = self._ensure(scope, session_key)
         before = store.snapshot()
         event_id = f"rf-{uuid.uuid4().hex[:12]}"
         self._append_ledger(scope, {
             "id": event_id, "ts": _now_iso(), "trigger": trigger or "manual",
             "evidence": evidence[:4000], "applied_edits": [],
             "before": before, "status": "recorded",
-        })
+        }, session_key)
         return {"refinement_id": event_id, "scope": scope,
                 "snapshot_entry_count": _snapshot_count(before)}
 
     def apply_edits(self, edits: list[dict], *, trigger: str, evidence: str,
-                    scope: str = "local") -> dict:
+                    scope: str = "local", session_key: str | None = None) -> dict:
         """All-or-nothing CRUD pass. Snapshot first; rollback to it on any failure."""
         if not edits:
             raise HarnessError("edits[] must be non-empty")
         if len(edits) > 12:
             raise HarnessError("max_edits_per_pass exceeded (12)")
-        store = self._ensure(scope)
+        store = self._ensure(scope, session_key)
         before = store.snapshot()
         applied: list[dict] = []
         try:
@@ -177,16 +200,17 @@ class HarnessService:
             "id": event_id, "ts": _now_iso(), "trigger": trigger or "auto",
             "evidence": evidence[:4000], "applied_edits": applied,
             "before": before, "status": "applied",
-        })
+        }, session_key)
         return {"refinement_id": event_id, "scope": scope, "applied": applied,
                 "entry_count": _snapshot_count(store.snapshot())}
 
-    def rollback(self, event_id: str, *, scope: str = "local") -> dict:
-        ledger = self._read_ledger(scope)
+    def rollback(self, event_id: str, *, scope: str = "local",
+                     session_key: str | None = None) -> dict:
+        ledger = self._read_ledger(scope, session_key)
         target = next((e for e in ledger if e.get("id") == event_id), None)
         if target is None:
             raise HarnessError(f"no refinement event {event_id} in scope {scope}")
-        store = self._ensure(scope)
+        store = self._ensure(scope, session_key)
         current = store.snapshot()
         self._restore_snapshot(store, target["before"])
         store.save()
@@ -195,26 +219,27 @@ class HarnessService:
             "trigger": "rollback", "evidence": f"rollback of {event_id}",
             "applied_edits": [], "before": current, "status": "rolled_back",
             "rolled_back_event": event_id,
-        })
+        }, session_key)
         return {"rolled_back": event_id, "restored_entry_count":
                 _snapshot_count(target["before"])}
 
-    def history(self, limit: int = 10, *, scope: str = "local") -> list[dict]:
-        rows = self._read_ledger(scope)[-limit:]
+    def history(self, limit: int = 10, *, scope: str = "local",
+                    session_key: str | None = None) -> list[dict]:
+        rows = self._read_ledger(scope, session_key)[-limit:]
         slim = [{k: v for k, v in row.items() if k != "before"} for row in rows]
         for row, full in zip(slim, rows[-limit:]):
             row["entry_count_before"] = _snapshot_count(full.get("before"))
         return slim
 
     # -- ledger IO ----------------------------------------------------------
-    def _append_ledger(self, scope: str, row: dict) -> None:
-        path = self._ledger_path(scope)
+    def _append_ledger(self, scope: str, row: dict, session_key: str | None = None) -> None:
+        path = self._ledger_path(scope, session_key)
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(row, ensure_ascii=False, default=str) + "\n")
 
-    def _read_ledger(self, scope: str) -> list[dict]:
-        path = self._ledger_path(scope)
+    def _read_ledger(self, scope: str, session_key: str | None = None) -> list[dict]:
+        path = self._ledger_path(scope, session_key)
         if not path.exists():
             return []
         rows: list[dict] = []

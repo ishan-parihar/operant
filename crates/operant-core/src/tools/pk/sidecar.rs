@@ -13,19 +13,22 @@
 use std::collections::HashMap;
 use std::process::Stdio;
 use std::sync::{
-    atomic::{AtomicU64, Ordering},
     Arc, Mutex,
+    atomic::{AtomicU64, Ordering},
 };
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin};
-use tokio::sync::{mpsc, oneshot, Mutex as AsyncMutex};
+use tokio::sync::{Mutex as AsyncMutex, mpsc, oneshot};
 
 use super::runtime::PkRuntime;
 
 const MAX_CONSECUTIVE_FAILURES: u32 = 2;
+
+/// In-flight request map: request id → oneshot responder.
+type PendingMap = Arc<Mutex<HashMap<String, oneshot::Sender<Result<Value, String>>>>>;
 const MAX_LINE_BYTES: usize = 8 * 1024 * 1024;
 
 #[derive(Debug)]
@@ -54,14 +57,16 @@ impl SidecarWriter {
             return Err("sidecar frame exceeds MAX_LINE_BYTES".into());
         }
         w.write_all(&buf).await.map_err(|e| e.to_string())?;
-        w.flush().await.map_err(|e| format!("sidecar flush failed: {e}"))
+        w.flush()
+            .await
+            .map_err(|e| format!("sidecar flush failed: {e}"))
     }
 }
 
 pub struct SidecarHandle {
     pub writer: SidecarWriter,
     child: Arc<AsyncMutex<Child>>,
-    pending: Arc<Mutex<HashMap<String, oneshot::Sender<Result<Value, String>>>>>,
+    pending: PendingMap,
     /// Bridged tool-call requests awaiting host execution (phase 2.5).
     #[allow(dead_code)] // consumed by tool_bridge drain loop (phase 2.5 wiring)
     pub bridge_rx: AsyncMutex<mpsc::UnboundedReceiver<Inbound>>,
@@ -88,9 +93,7 @@ impl SidecarHandle {
         let _ = child.start_kill();
     }
 
-    pub(super) fn pending_map(
-        &self,
-    ) -> &Arc<Mutex<HashMap<String, oneshot::Sender<Result<Value, String>>>>> {
+    pub(super) fn pending_map(&self) -> &PendingMap {
         &self.pending
     }
 }
@@ -105,7 +108,7 @@ fn now_secs() -> u64 {
 #[allow(clippy::too_many_arguments)]
 fn spawn_reader(
     stdout: tokio::process::ChildStdout,
-    pending: Arc<Mutex<HashMap<String, oneshot::Sender<Result<Value, String>>>>>,
+    pending: PendingMap,
     bridge_tx: mpsc::UnboundedSender<Inbound>,
     last_activity: Arc<AtomicU64>,
 ) {
@@ -147,10 +150,10 @@ fn spawn_reader(
                         .unwrap_or("unknown sidecar error")
                         .to_string())
                 };
-                if let Ok(mut map) = pending.lock() {
-                    if let Some(tx) = map.remove(id) {
-                        let _ = tx.send(payload);
-                    }
+                if let Ok(mut map) = pending.lock()
+                    && let Some(tx) = map.remove(id)
+                {
+                    let _ = tx.send(payload);
                 }
             }
         }
@@ -186,17 +189,17 @@ fn sidecar_cwd() -> std::path::PathBuf {
 pub(super) async fn ensure_handle(rt: &PkRuntime) -> Result<Arc<SidecarHandle>, String> {
     {
         let guard = rt.handle_cell().lock().await;
-        if let Some(h) = guard.as_ref() {
-            if h.is_alive().await {
-                return Ok(h.clone());
-            }
+        if let Some(h) = guard.as_ref()
+            && h.is_alive().await
+        {
+            return Ok(h.clone());
         }
     }
     let mut guard = rt.handle_cell().lock().await;
-    if let Some(h) = guard.as_ref() {
-        if h.is_alive().await {
-            return Ok(h.clone());
-        }
+    if let Some(h) = guard.as_ref()
+        && h.is_alive().await
+    {
+        return Ok(h.clone());
     }
     let handle = spawn_handle(rt)?;
     *guard = Some(handle.clone());
@@ -215,10 +218,10 @@ fn spawn_handle(rt: &PkRuntime) -> Result<Arc<SidecarHandle>, String> {
     if let Some(root) = settings.state_dir.as_ref() {
         cmd.arg("--state-root").arg(root);
     }
-    if let Some(vendor_root) = settings.vendor_dir.as_ref() {
-        if let Some(parent) = vendor_root.parent() {
-            cmd.env("PK_SIDECAR_REPO_ROOT", parent);
-        }
+    if let Some(vendor_root) = settings.vendor_dir.as_ref()
+        && let Some(parent) = vendor_root.parent()
+    {
+        cmd.env("PK_SIDECAR_REPO_ROOT", parent);
     }
     cmd.stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -239,8 +242,7 @@ fn spawn_handle(rt: &PkRuntime) -> Result<Arc<SidecarHandle>, String> {
     let writer = SidecarWriter {
         stdin: Arc::new(AsyncMutex::new(stdin)),
     };
-    let pending: Arc<Mutex<HashMap<String, oneshot::Sender<Result<Value, String>>>>> =
-        Arc::new(Mutex::new(HashMap::new()));
+    let pending: PendingMap = Arc::new(Mutex::new(HashMap::new()));
     let (bridge_tx, bridge_rx) = mpsc::unbounded_channel::<Inbound>();
     let last_activity = Arc::new(AtomicU64::new(now_secs()));
     spawn_reader(stdout, pending.clone(), bridge_tx, last_activity.clone());
@@ -254,11 +256,7 @@ fn spawn_handle(rt: &PkRuntime) -> Result<Arc<SidecarHandle>, String> {
 }
 
 /// One request/response round-trip with crash-transparent single retry.
-pub(super) async fn request(
-    rt: &PkRuntime,
-    method: &str,
-    params: Value,
-) -> Result<Value, String> {
+pub(super) async fn request(rt: &PkRuntime, method: &str, params: Value) -> Result<Value, String> {
     let budget = Duration::from_secs(rt.settings().request_timeout_secs.max(1));
     let mut consecutive_failures = 0u32;
     loop {
@@ -318,12 +316,13 @@ pub(super) fn spawn_idle_reaper(rt: Arc<PkRuntime>) {
             if idle_limit == 0 {
                 continue; // disabled
             }
-            if let Some(h) = rt.handle_snapshot().await {
-                if h.idle_secs() >= idle_limit && h.is_alive().await {
-                    tracing::info!(target: "pk", "idle timeout reached; stopping sidecar");
-                    h.kill().await;
-                    rt.drop_handle().await;
-                }
+            if let Some(h) = rt.handle_snapshot().await
+                && h.idle_secs() >= idle_limit
+                && h.is_alive().await
+            {
+                tracing::info!(target: "pk", "idle timeout reached; stopping sidecar");
+                h.kill().await;
+                rt.drop_handle().await;
             }
         }
     });

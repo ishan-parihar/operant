@@ -9,14 +9,13 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::config::runtime_config;
 use crate::schema::ToolSchema;
 use crate::tools::{OperantTool, ToolContext, ToolResult};
 
 use super::runtime::PkRuntime;
-use super::tool_bridge;
 
 #[derive(Debug, Clone, JsonSchema, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -65,7 +64,9 @@ impl OperantTool for PkKernelExecTool {
     async fn execute(&self, args: Value, context: ToolContext) -> ToolResult {
         let args: PkKernelExecArgs = match serde_json::from_value(args) {
             Ok(a) => a,
-            Err(e) => return ToolResult::error("pk_kernel_exec", format!("Invalid arguments: {e}")),
+            Err(e) => {
+                return ToolResult::error("pk_kernel_exec", format!("Invalid arguments: {e}"));
+            }
         };
         if args.code.trim().is_empty() {
             return ToolResult::error("pk_kernel_exec", "'code' is required");

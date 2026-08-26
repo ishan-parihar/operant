@@ -3,8 +3,8 @@
 
 use std::collections::HashSet;
 use std::sync::{
-    atomic::{AtomicU32, AtomicU64, Ordering},
     Arc, OnceLock,
+    atomic::{AtomicU32, AtomicU64, Ordering},
 };
 use std::time::Duration;
 
@@ -14,7 +14,7 @@ use tokio::sync::Mutex as AsyncMutex;
 use crate::config::{PrimeKernelSettings, PrimeKernelToolBridge};
 use crate::tools::{ToolContext, ToolRegistry};
 
-use super::sidecar::{request as sc_request, spawn_idle_reaper, SidecarHandle};
+use super::sidecar::{SidecarHandle, request as sc_request, spawn_idle_reaper};
 
 /// Host-side executor for kernel-initiated tool calls (phase 2.5).
 ///
@@ -56,7 +56,7 @@ impl BridgeExecutor {
                         .as_ref()
                         .map(|r| format!(" ({r})"))
                         .unwrap_or_default()
-                ))
+                ));
             }
         }
         let fut = self.registry.execute(name, "pk-bridge", args, ctx);

@@ -9,7 +9,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::schema::ToolSchema;
 use crate::tools::{OperantTool, ToolContext, ToolResult};
@@ -34,7 +34,7 @@ struct PkHarnessGetArgs {
     kind: Option<String>,
     /// Entry id — omit to list that kind's entries via overview.
     id: Option<String>,
-    /// "local" (default) | "global".
+    /// "local" (default) | "global". Local is scoped to the CURRENT session.
     scope: Option<String>,
 }
 
@@ -68,15 +68,22 @@ impl OperantTool for PkHarnessGetTool {
         "prime_kernel"
     }
 
-    async fn execute(&self, args: Value, _context: ToolContext) -> ToolResult {
+    async fn execute(&self, args: Value, context: ToolContext) -> ToolResult {
         let args: PkHarnessGetArgs = match serde_json::from_value(args) {
             Ok(a) => a,
-            Err(e) => return ToolResult::error("pk_harness_get", format!("Invalid arguments: {e}")),
+            Err(e) => {
+                return ToolResult::error("pk_harness_get", format!("Invalid arguments: {e}"));
+            }
         };
         let scope = scope_of(args.scope.as_deref());
+        let session_key = context
+            .get("session_id")
+            .map(str::to_string)
+            .unwrap_or_else(|| "default".to_string());
         let method = match (args.kind.as_deref(), args.id.as_deref()) {
             (Some(kind), Some(id)) => {
-                let params = json!({"kind": kind, "id": id, "scope": scope});
+                let params = json!({"kind": kind, "id": id, "scope": scope,
+                                    "session_key": session_key});
                 return match self.rt.request("harness_get", params).await {
                     Ok(v) => ToolResult::success("pk_harness_get", v.to_string()),
                     Err(e) => ToolResult::error("pk_harness_get", e),
@@ -87,7 +94,10 @@ impl OperantTool for PkHarnessGetTool {
         };
         match self
             .rt
-            .request(method, json!({ "scope": scope }))
+            .request(
+                method,
+                json!({ "scope": scope, "session_key": session_key }),
+            )
             .await
         {
             Ok(v) => ToolResult::success("pk_harness_get", v.to_string()),
@@ -137,6 +147,13 @@ impl PkRefineTool {
     }
 }
 
+fn refine_session_key(context: &ToolContext) -> String {
+    context
+        .get("session_id")
+        .map(str::to_string)
+        .unwrap_or_else(|| "default".to_string())
+}
+
 #[async_trait]
 impl OperantTool for PkRefineTool {
     fn name(&self) -> &str {
@@ -158,12 +175,13 @@ impl OperantTool for PkRefineTool {
         "prime_kernel"
     }
 
-    async fn execute(&self, args: Value, _context: ToolContext) -> ToolResult {
+    async fn execute(&self, args: Value, context: ToolContext) -> ToolResult {
         let args: PkRefineArgs = match serde_json::from_value(args) {
             Ok(a) => a,
             Err(e) => return ToolResult::error("pk_refine", format!("Invalid arguments: {e}")),
         };
         let scope = scope_of(args.scope.as_deref());
+        let sk = refine_session_key(&context);
         let (method, params) = match args.edits {
             Some(edits) => {
                 let payload: Vec<Value> = edits
@@ -182,6 +200,7 @@ impl OperantTool for PkRefineTool {
                         "trigger": args.trigger.unwrap_or_else(|| "manual".into()),
                         "evidence": args.evidence.unwrap_or_default(),
                         "scope": scope,
+                        "session_key": sk,
                     }),
                 )
             }
@@ -199,6 +218,7 @@ impl OperantTool for PkRefineTool {
                         "evidence": evidence,
                         "trigger": args.trigger.unwrap_or_else(|| "manual".into()),
                         "scope": scope,
+                        "session_key": sk,
                     }),
                 )
             }
