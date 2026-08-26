@@ -169,36 +169,55 @@ class SidecarServer:
         raise AssertionError("unreachable")
 
     # -- framing ------------------------------------------------------------
-    async def route_line(self, raw: bytes) -> None:
-        """Route one inbound NDJSON line (request OR bridge reply)."""
-        try:
-            frame = json.loads(raw.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError):
-            return
-        if "reply_for" in frame:
-            fut = self._bridge_futures.pop(str(frame["reply_for"]), None)
-            if fut is not None and not fut.done():
-                if frame.get("ok"):
-                    fut.set_result(frame.get("result") or {})
-                else:
-                    fut.set_result({"_bridge_error": str(frame.get("error", "unknown"))})
+    def _resolve_reply(self, frame: dict) -> bool:
+        """If frame is a bridge reply, resolve its future; True when handled."""
+        if "reply_for" not in frame:
+            return False
+        fut = self._bridge_futures.pop(str(frame["reply_for"]), None)
+        if fut is not None and not fut.done():
+            if frame.get("ok"):
+                fut.set_result(frame.get("result") or {})
+            else:
+                fut.set_result({"_bridge_error": str(frame.get("error", "unknown"))})
+        return True
+
+    async def route_line(self, raw: bytes | None = None, *, frame: dict | None = None):
+        """Route one inbound NDJSON frame (request OR bridge reply).
+
+        Direct-caller semantics (tests): request frames are handled to
+        COMPLETION before returning; bridge replies resolve inline.
+        """
+        if frame is None:
+            try:
+                frame = json.loads(raw.decode("utf-8"))  # type: ignore[union-attr]
+            except (UnicodeDecodeError, json.JSONDecodeError, AttributeError):
+                return
+        if self._resolve_reply(frame):
             return
         if not isinstance(frame, dict) or "method" not in frame:
             return
         await self.handle(frame)
 
-    # -- main loop ----------------------------------------------------------
     async def serve(self) -> int:
         loop = asyncio.get_running_loop()
-        reader = await loop.connect_read_pipe(
-            lambda: asyncio.streams.StreamReaderProtocol(asyncio.streams.StreamReader(limit=MAX_LINE_BYTES)),
-            sys.stdin.buffer,
-        )
+        reader: asyncio.StreamReader = asyncio.streams.StreamReader(limit=MAX_LINE_BYTES)
+        protocol = asyncio.streams.StreamReaderProtocol(reader)
+        await loop.connect_read_pipe(lambda: protocol, sys.stdin.buffer)
         while not self._stopping:
             line = await reader.readline()
             if not line:
                 break  # EOF: supervisor died or closed — exit promptly
-            await self.route_line(line)
+            try:
+                frame = json.loads(line.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                continue
+            if self._resolve_reply(frame):
+                continue  # inline: unblocks an awaiting cell immediately
+            if not isinstance(frame, dict) or "method" not in frame:
+                continue
+            # Fire-and-forget: a cell awaiting a bridged call blocks only its
+            # own handler task; the loop stays free to read reply lines.
+            asyncio.create_task(self.handle(frame))
         return 0
 
 

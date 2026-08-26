@@ -35,6 +35,7 @@ pub mod learning_mutation_tool;
 pub mod mcp_tool;
 pub mod memory_tools;
 pub mod neutts_synth;
+pub mod pk;
 pub mod notification_tool;
 pub mod openrouter_client;
 pub mod osv_check;

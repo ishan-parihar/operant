@@ -756,6 +756,9 @@ pub struct ToolSettings {
     pub http: HttpToolSettings,
     pub terminal: TerminalSettings,
     pub code_execution: CodeExecutionSettings,
+    /// Prime Kernel (plan 015): persistent stateful Python kernel + continual
+    /// harness, hosted in the pk-sidecar subprocess over NDJSON stdio.
+    pub prime_kernel: PrimeKernelSettings,
     pub stt: SttSettings,
     pub disabled_tools: Vec<String>,
     pub disabled_toolsets: Vec<String>,
@@ -895,6 +898,7 @@ impl Default for ToolSettings {
             http: HttpToolSettings::default(),
             terminal: TerminalSettings::default(),
             code_execution: CodeExecutionSettings::default(),
+            prime_kernel: PrimeKernelSettings::default(),
             stt: SttSettings::default(),
             disabled_tools: Vec::new(),
             disabled_toolsets: Vec::new(),
@@ -1240,6 +1244,86 @@ impl Default for CodeExecutionSettings {
         Self {
             default_timeout_secs: 60,
             max_timeout_secs: 300,
+        }
+    }
+}
+
+/// Phase-2.5 tool bridge: which tools model-authored kernel programs may call.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct PrimeKernelToolBridge {
+    /// Master switch for `operant_tool()` availability inside kernel cells.
+    pub enabled: bool,
+    /// Deny-by-default allowlist of tool names callable from kernel programs.
+    /// Bridged calls re-enter `check_tool_approval` with the TARGET tool's
+    /// name/args — a program can never launder permissions a direct call
+    /// would not have. Blocked/requires-approval verdicts return an error
+    /// VALUE to the kernel (no human-in-loop channel mid-cell in v1).
+    pub allowlist: Vec<String>,
+    /// Hard cap on bridged calls per executed cell; excess yields structured
+    /// partial results so long sweeps degrade instead of hanging.
+    pub max_calls_per_exec: usize,
+    pub per_call_timeout_secs: u64,
+}
+
+impl Default for PrimeKernelToolBridge {
+    fn default() -> Self {
+        // Read-only discovery set first; writes are deliberate opt-ins.
+        let allowlist = vec![
+            "file_list".into(),
+            "file_read".into(),
+            "file_search".into(),
+            "web_search".into(),
+            "web_scrape".into(),
+            "http_request".into(),
+            "datetime".into(),
+            "session_insights".into(),
+        ];
+        Self {
+            enabled: false,
+            allowlist,
+            max_calls_per_exec: 64,
+            per_call_timeout_secs: 60,
+        }
+    }
+}
+
+/// Persistent-kernel sidecar configuration (plan 015). Everything defaults
+/// OFF/dark until Phase 4 flips `enabled` + `route_python_to_kernel`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct PrimeKernelSettings {
+    pub enabled: bool,
+    /// Python ≥3.11 for the sidecar. None ⇒ platform::find_python() then PATH.
+    pub python: Option<PathBuf>,
+    /// prime-agent submodule root containing prime-agent-runtime/src/rlm.
+    /// None ⇒ <repo>/vendor/prime-agent resolved from CARGO_MANIFEST_DIR at
+    /// build time with a ./vendor fallback.
+    pub vendor_dir: Option<PathBuf>,
+    /// Harness store root (<state_dir>/<scope>/). None ⇒
+    /// ~/.local/share/operant/pk/harness.
+    pub state_dir: Option<PathBuf>,
+    pub sidecar_idle_secs: u64,
+    pub request_timeout_secs: u64,
+    pub max_output_bytes: usize,
+    /// Phase 4 cutover: route code_execution python requests through the
+    /// persistent kernel (stateless subprocess stays as fallback).
+    pub route_python_to_kernel: bool,
+    pub tool_bridge: PrimeKernelToolBridge,
+}
+
+impl Default for PrimeKernelSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            python: None,
+            vendor_dir: None,
+            state_dir: None,
+            sidecar_idle_secs: 1800,
+            request_timeout_secs: 120,
+            max_output_bytes: 200_000,
+            route_python_to_kernel: false,
+            tool_bridge: PrimeKernelToolBridge::default(),
         }
     }
 }
