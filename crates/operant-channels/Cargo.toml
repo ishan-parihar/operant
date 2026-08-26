@@ -113,5 +113,12 @@ whatsapp-web = []
 voice-wake = []
 channel-full = []
 
+# live_parity exercises the Telegram channel module, which is feature-gated
+# (channel-telegram) and no longer in default — skip the target unless the
+# feature is on (cargo test -p operant-channels --features channel-telegram).
+[[test]]
+name = "live_parity"
+required-features = ["channel-telegram"]
+
 [lints]
 workspace = true

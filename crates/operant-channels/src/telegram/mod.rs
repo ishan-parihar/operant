@@ -106,7 +106,7 @@ pub struct TelegramChannel {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum EditMessageResult {
+pub(crate) enum EditMessageResult {
     Success,
     NotModified,
     Failed(reqwest::StatusCode),

@@ -69,6 +69,8 @@ R40 = 005 · R41 = 007+013 · R42 = 014. Adjust to reality; keep the dependency 
 | 012-parity-security-approvals | P1 | ⬜ planned |
 | 013-integration-tests | P2 | ⬜ planned |
 | 014-docs-truthfulness | P2 | ⬜ planned |
+| 015-pk-persistent-kernel-harness | P1 | ⬜ planned |
+| 016-harness-kernel-paradigm | P1-strategic | ⬜ planned |
 
 Executor updates the Status column after each plan ships.
 

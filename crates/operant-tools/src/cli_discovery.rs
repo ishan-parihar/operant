@@ -1,7 +1,15 @@
 //! CLI tool auto-discovery — scans PATH for known CLI tools.
 //! Zero external dependencies (uses `std::process::Command` + `std::env`).
 
+use std::io::Read;
 use std::path::PathBuf;
+use std::process::{Command, Output, Stdio};
+use std::time::{Duration, Instant};
+
+/// Max time to wait for a `which` lookup.
+const WHICH_TIMEOUT: Duration = Duration::from_secs(2);
+/// Max time to wait for a `<tool> --version` probe.
+const VERSION_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// Category of a discovered CLI tool.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
@@ -177,6 +185,52 @@ fn probe_cli(name: &str, version_args: &[&str], category: CliCategory) -> Option
     })
 }
 
+/// Run a command with stdin closed and a hard timeout.
+/// Returns `None` if it fails to spawn or does not exit in time.
+fn run_with_timeout(name: &str, args: &[&str], timeout: Duration) -> Option<Output> {
+    let mut child = Command::new(name)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .ok()?;
+
+    let deadline = Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) => {
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return None;
+                }
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            Err(_) => return None,
+        }
+    }
+
+    // Version/banner output is small, so reading after exit cannot deadlock
+    // on pipe-buffer backpressure in practice.
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    if let Some(mut io) = child.stdout.take() {
+        let _ = io.read_to_end(&mut stdout);
+    }
+    if let Some(mut io) = child.stderr.take() {
+        let _ = io.read_to_end(&mut stderr);
+    }
+    let status = child.wait().ok()?;
+
+    Some(Output {
+        status,
+        stdout,
+        stderr,
+    })
+}
+
 /// Find an executable on PATH.
 fn find_executable(name: &str) -> Option<PathBuf> {
     #[cfg(target_os = "windows")]
@@ -184,12 +238,7 @@ fn find_executable(name: &str) -> Option<PathBuf> {
     #[cfg(not(target_os = "windows"))]
     let which_cmd = "which";
 
-    let output = std::process::Command::new(which_cmd)
-        .arg(name)
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .output()
-        .ok()?;
+    let output = run_with_timeout(which_cmd, &[name], WHICH_TIMEOUT)?;
 
     if !output.status.success() {
         return None;
@@ -205,12 +254,7 @@ fn find_executable(name: &str) -> Option<PathBuf> {
 
 /// Get the version string of a CLI tool.
 fn get_version(name: &str, args: &[&str]) -> Option<String> {
-    let output = std::process::Command::new(name)
-        .args(args)
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .output()
-        .ok()?;
+    let output = run_with_timeout(name, args, VERSION_TIMEOUT)?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
