@@ -778,6 +778,13 @@ fn build_session_context(
 ) -> String {
     let mut ctx = String::new();
     ctx.push_str(&format!("Connected platform: {}\n", platform));
+    // Temporal grounding: without the wall-clock time the model cannot
+    // resolve relative scheduling requests ("in 2 minutes") — R38 live-test
+    // observed a cron job scheduled a YEAR out because 'now' was unknown.
+    ctx.push_str(&format!(
+        "Current time: {} UTC\n",
+        chrono::Utc::now().format("%Y-%m-%d %H:%M:%S")
+    ));
     ctx.push_str(&format!(
         "Channel: {}\n",
         operant_core::pii::redact_chat_id(channel_id)
@@ -2228,6 +2235,16 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                     let ctx =
                         build_session_context(&platform, &channel_id, msg_thread, &app_config_clone);
                     msg.content = format!("[context: {}]\n{}", ctx.trim(), msg.content);
+
+                    // Expose the REAL delivery target to tools that need it
+                    // (cron job origin — R39). Prompts only carry redacted ids.
+                    operant_core::tools::cron_tool::set_cron_origin(Some(
+                        operant_core::tools::cron_tool::CronOrigin {
+                            platform: platform.clone(),
+                            chat_id: channel_id.clone(),
+                            thread_id: msg.thread_id.map(|t| t.to_string()),
+                        },
+                    ));
 
                     // ── 6. Route message ──────────────────────────────────────────
                     match gw.route_message(msg).await {

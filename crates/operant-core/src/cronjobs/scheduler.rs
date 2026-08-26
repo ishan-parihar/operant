@@ -5,7 +5,7 @@ use std::sync::Arc;
 use tokio::process::Command;
 use tokio::sync::mpsc;
 use tokio::time::{Duration, sleep};
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 use crate::agent::OperantAgent;
 use crate::cronjobs::db::{CronDb, CronJob};
@@ -206,7 +206,10 @@ impl CronScheduler {
                 content: format!("{}{}", header, content),
             });
         } else {
-            debug!(
+            // R39: silent debug-level drops hid broken cron delivery for
+            // months — a job created without origin fields simply never
+            // delivered and last_status still read ok.
+            warn!(
                 "No delivery target for job {} (deliver={})",
                 job.id, job.deliver
             );

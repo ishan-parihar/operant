@@ -7,12 +7,38 @@ use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{Value, json};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::cronjobs::db::CronDb;
 use crate::error::{Error, Result};
 use crate::schema::ToolSchema;
 use crate::tools::{OperantTool, ToolContext, ToolResult};
+
+/// Delivery origin captured from the live execution surface (gateway turn,
+/// ACP session, …) so jobs the model creates can deliver their results back
+/// to the requesting chat. The gateway sets this before routing a turn and
+/// clears it after; prompts only ever see PII-redacted channel ids, so the
+/// model itself CANNOT supply a usable delivery target (R39).
+pub static CRON_ORIGIN: OnceLock<Mutex<Option<CronOrigin>>> = OnceLock::new();
+
+#[derive(Debug, Clone)]
+pub struct CronOrigin {
+    pub platform: String,
+    pub chat_id: String,
+    pub thread_id: Option<String>,
+}
+
+pub fn set_cron_origin(origin: Option<CronOrigin>) {
+    let cell = CRON_ORIGIN.get_or_init(|| Mutex::new(None));
+    if let Ok(mut guard) = cell.lock() {
+        *guard = origin;
+    }
+}
+
+fn current_cron_origin() -> Option<CronOrigin> {
+    let cell = CRON_ORIGIN.get_or_init(|| Mutex::new(None));
+    cell.lock().ok().and_then(|g| g.clone())
+}
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -75,6 +101,10 @@ impl CronTool {
             details: "Missing 'prompt' for job creation".to_string(),
         })?;
 
+        // Capture where this job was created from so the scheduler can
+        // deliver its result back to the requesting chat (R39). Prompts only
+        // carry redacted channel ids, so `args.deliver` alone is unusable.
+        let origin = current_cron_origin();
         let id = self.db.create_job(crate::cronjobs::db::CreateJobParams {
             name: name.clone(),
             prompt: prompt.clone(),
@@ -82,9 +112,9 @@ impl CronTool {
             schedule_display: display.clone(),
             repeat_times: None,
             deliver: args.deliver.clone().unwrap_or_else(|| "local".to_string()),
-            origin_platform: None,
-            origin_chat_id: None,
-            origin_thread_id: None,
+            origin_platform: origin.as_ref().map(|o| o.platform.clone()),
+            origin_chat_id: origin.as_ref().map(|o| o.chat_id.clone()),
+            origin_thread_id: origin.as_ref().and_then(|o| o.thread_id.clone()),
             skill: None,
             skills: None,
             model: None,

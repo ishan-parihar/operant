@@ -293,6 +293,9 @@ impl OperantAgent {
 conversation above and update skills and/or memory as needed. \
 You have access to memory_store, memory_search, memory_recall, \
 skill_manage, and skill_view tools only — do not attempt other tools. \
+NEVER continue, execute, or complete the user's task from the conversation — \
+scheduling, coding, messaging and similar actions belong exclusively to the main agent. \
+Your only outputs are memory/skill updates. \
 Be ACTIVE — most sessions produce at least one update. \
 If nothing needs updating, say 'Nothing to save.' and stop.\n\n{}",
                         prompt
@@ -306,6 +309,9 @@ If nothing needs updating, say 'Nothing to save.' and stop.\n\n{}",
 conversation above and update skills and/or memory as needed. \
 You have access to memory_store, memory_search, memory_recall, \
 skill_manage, and skill_view tools only — do not attempt other tools. \
+NEVER continue, execute, or complete the user's task from the conversation — \
+scheduling, coding, messaging and similar actions belong exclusively to the main agent. \
+Your only outputs are memory/skill updates. \
 Be ACTIVE — most sessions produce at least one update. \
 If nothing needs updating, say 'Nothing to save.' and stop.\n\n{}",
                         prompt

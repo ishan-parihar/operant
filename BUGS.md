@@ -897,3 +897,40 @@ delivered it. Slow/streamed turns were unaffected (marker inserted mid-stream).
   full window only before falling back to the legacy full send.
 - Live-verified: two consecutive turns each delivered exactly ONE reply with
   `Stream already delivered response … skipping duplicate send` logged.
+
+### R38 — live cron test: no temporal grounding + background review overreach (FIXED)
+Found via live Telegram loop-testing (2026-08-26, "schedule a one-time job 2
+minutes from now"):
+1. **No wall-clock context** — the gateway turn prefix (`build_session_context`)
+   told the model the platform and channel but never the current time. The
+   free-tier model computed "+2 minutes" as a date a YEAR out and the tool
+   dutifully created `next_run_at = 2027-08-26`. **Fix**: `Current time: <UTC>`
+   line injected into every gateway turn's session context.
+2. **Background review overreach** — at the skill-nudge interval boundary the
+   spawned background-review agent saw the pending cron conversation and tried
+   to execute the user's task itself (`Background review attempted
+   non-whitelisted tool, tool: cron`). The whitelist correctly BLOCKED it, but
+   the review then burned 7 API calls / 6 tool turns invisibly attempting the
+   task instead of reviewing. The prompt already said "tools only"; it now also
+   says NEVER to continue/execute the user's task (both frozen-prefix and
+   standalone branches).
+3. Working-as-designed confirmations from the same turn: degenerate tool-call
+   circuit breaker fired at 3 consecutive failed iterations (R33), ×N dedup
+   rendered `⏰ cron... (×3)`, whitelist denial returned a typed error to the
+   reviewer.
+
+### R39 — cron jobs never delivered their results: origin fields never recorded (FIXED)
+Found via live Telegram loop-testing immediately after R38's time-grounding fix:
+the t22b job fired on schedule (`Executing cron job`, `Delivering result` logged,
+`last_status=ok`) but NOTHING reached the chat.
+- **Root cause chain**: `CronTool::handle_create` hardcoded
+  `origin_platform/origin_chat_id/origin_thread_id = None`; prompts only ever see
+  PII-redacted channel ids (`chat_636bbfc5f7ee`), so even a model-supplied
+  `deliver` string was unusable as a target; at fire time `deliver_result`
+  fell into its `debug!`-level "No delivery target" branch and silently dropped
+  the result while `last_status` still read ok.
+- **Fix**: new `cron_tool::CRON_ORIGIN` process-global (the established
+  ACTIVE_MEMORY_MANAGER hook pattern) — the gateway dispatch loop sets it to the
+  real `(platform, chat_id, thread_id)` before routing every turn and cron job
+  creation reads it into the origin fields; `deliver_result`'s silent drop
+  demoted from `debug!` to `warn!` so a broken delivery is visible in INFO logs.
