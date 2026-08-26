@@ -250,6 +250,12 @@ impl Gateway {
         &self,
         message_tx: mpsc::UnboundedSender<IncomingMessage>,
     ) -> Result<()> {
+        // Mark the gateway running here too: callers that boot exclusively
+        // through the channel path (gateway_runner) never invoked `start`, so
+        // supervise_adapter_start's `running` gate and `stop` both depended on
+        // this flag being set. Starting an adapter twice (once via each entry
+        // point) double-delivers every outbound message — see R36.
+        *self.running.write().await = true;
         for (name, adapter) in &self.adapters {
             if adapter.is_enabled() {
                 info!(platform = %name, "Starting platform adapter with channel");

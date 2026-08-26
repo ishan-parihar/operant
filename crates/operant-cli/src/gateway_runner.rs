@@ -914,7 +914,6 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
 
     // Check for interrupted turns from previous session
     check_interrupted_turns();
-    gateway.start().await.context("Failed to start gateway")?;
 
     let (message_tx, mut message_rx) = mpsc::unbounded_channel::<IncomingMessage>();
     // Clone kept by the dispatch loop so a queued message can be re-injected
@@ -2241,11 +2240,26 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                             // progressive-edited message (AgentEvent::Content →
                             // AgentEvent::Done), skip the duplicate full send.
                             // (Kills the double-reply bug on gateway turns.)
-                            let streamed = {
-                                let mut map = stream_delivery_for_dispatch.lock().await;
-                                map.remove(&(platform.clone(), channel_id.clone(), msg_thread))
-                                    .is_some()
-                            };
+                            // R37: the event-consumer task drains queued events
+                            // (ToolStart/Usage/Content…) BEFORE Done, so its
+                            // marker insert can lag the routed return by
+                            // hundreds of ms on fast turns — an instant check
+                            // raced it and both paths delivered (duplicate
+                            // replies). Poll briefly for the marker before
+                            // falling back to the full send.
+                            let marker_key = (platform.clone(), channel_id.clone(), msg_thread);
+                            let mut streamed = false;
+                            for _ in 0..40 {
+                                let hit = {
+                                    let mut map = stream_delivery_for_dispatch.lock().await;
+                                    map.remove(&marker_key).is_some()
+                                };
+                                if hit {
+                                    streamed = true;
+                                    break;
+                                }
+                                tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+                            }
                             if streamed {
                                 tracing::info!(
                                     "Stream already delivered response to {}; skipping duplicate send",

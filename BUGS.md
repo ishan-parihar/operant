@@ -866,3 +866,34 @@ chapter-1 guidance ("TODOs are not comments"):
 Gates each pass: fmt, workspace check/clippy(-D warnings), full test suites
 (known flakes: iteration_budget Barrier race test, network-dependent DDG
 tests - pass in isolation), fresh release deployed both paths, gateway active.
+
+### R36 — gateway booted every adapter TWICE: duplicate outbound delivery (FIXED)
+Found via live Telegram loop-testing (2026-08-26): every bot reply arrived as TWO
+identical DM messages. Log showed `Starting platform adapter` (from
+`Gateway::start`) immediately followed by `Starting platform adapter with channel`
+(from `Gateway::start_with_channel`) and two `Telegram bot started successfully`
+lines — `gateway_runner.rs` called the legacy `gateway.start()` boot line AND then
+`start_with_channel(message_tx)`; both iterate ALL enabled adapters, so telegram
+was started twice (two senders; only one poll task survived).
+- **Fix**: removed the redundant `gateway.start()` call from the runner (the
+  channel path is the sole canonical boot), and made `start_with_channel` set
+  `self.running = true` itself — previously only `start()` set the flag, so a
+  channel-only boot left `running=false`, which would have made
+  `supervise_adapter_start` abandon retries and made `stop()` a no-op.
+- Tests: 64 core gateway tests pass; live-verified post-fix that each reply is
+  delivered exactly once with a single `bot started successfully` boot line.
+
+### R37 — fast turns still double-delivered: dispatch raced the event consumer's stream marker (FIXED)
+Found via live Telegram loop-testing immediately after R36 (2026-08-26): a 2-char
+turn still produced TWO identical DM messages. `route_message` returned at
+T+0ms and the dispatch loop checked the shared `stream_delivery` map instantly,
+but the spawned event-consumer task drains queued events (ToolStart/Usage/
+Content…) BEFORE `Done`, so its marker insert landed ~500ms later — dispatch
+found no marker and sent the full response itself while the consumer also
+delivered it. Slow/streamed turns were unaffected (marker inserted mid-stream).
+- **Fix** (`gateway_runner.rs` dispatch arm): replaced the instant marker check
+  with a bounded settle-window poll (25ms × 40 = ≤1s) — check-first so already-
+  marked turns add zero latency; unmarked (non-streaming) platforms pay the
+  full window only before falling back to the legacy full send.
+- Live-verified: two consecutive turns each delivered exactly ONE reply with
+  `Stream already delivered response … skipping duplicate send` logged.
