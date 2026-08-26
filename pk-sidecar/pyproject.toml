@@ -1,0 +1,20 @@
+[project]
+name = "pk-sidecar"
+version = "0.1.0"
+description = "Persistent-kernel sidecar for operant's Prime Kernel tools (vendored live upstream rlm)"
+requires-python = ">=3.11"
+dependencies = []
+
+[dependency-groups]
+dev = ["pytest>=8", "pytest-asyncio>=0.24"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["pk_sidecar"]
+
+[tool.pytest.ini_options]
+testpaths = ["test"]
+asyncio_mode = "auto"
