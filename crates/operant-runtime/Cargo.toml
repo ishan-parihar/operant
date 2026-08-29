@@ -8,6 +8,7 @@ publish = false
 
 [dependencies]
 operant-api.workspace = true
+operant-core = { path = "../operant-core" }
 operant-infra.workspace = true
 operant-config.workspace = true
 operant-providers.workspace = true

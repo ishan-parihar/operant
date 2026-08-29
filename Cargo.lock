@@ -5058,6 +5058,7 @@ dependencies = [
  "opentelemetry_sdk",
  "operant-api",
  "operant-config",
+ "operant-core",
  "operant-infra",
  "operant-macros",
  "operant-memory",

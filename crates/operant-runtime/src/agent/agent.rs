@@ -24,10 +24,11 @@ use std::time::Instant;
 // Re-export TurnEvent from operant-types for backwards compatibility.
 pub use operant_api::agent::TurnEvent;
 
-/// Maximum retries for empty assistant responses (no text, no reasoning,
-/// no tool calls) before giving up and returning the empty answer.
-/// Parity with `run_tool_call_loop`'s ladder (loop_.rs).
-const EMPTY_RESPONSE_MAX_RETRIES: usize = 3;
+// Plan 006: the empty-response ladder now lives in the shared
+// operant-core::agent::turn_rules module. Use it from both agents so
+// the cap + decision logic stay in lockstep. The local constant is
+// kept as a re-export for any downstream imports.
+pub use operant_core::agent::turn_rules::EMPTY_RESPONSE_MAX_RETRIES;
 
 pub struct Agent {
     provider: Box<dyn Provider>,
@@ -1519,12 +1520,9 @@ impl Agent {
 
         let effective_model = self.classify_model(user_message);
 
-        // Empty-response retry ladder (parity with `run_tool_call_loop` R23):
-        // the free-tier model occasionally returns an empty assistant turn
-        // with no text/reasoning/tool calls; retry up to N times with an
-        // empty assistant nudge. `real_iterations` keeps `max_tool_iterations`
-        // as the true real-work budget — retry passes refund their slot.
-        let mut empty_response_retries = 0usize;
+        // Plan 006: shared retry counter — same struct the live OperantAgent
+        // uses. Counter starts at 0; `should_retry` decides + increments.
+        let mut empty_response_retries = operant_core::agent::turn_rules::EmptyResponseCounter::new(EMPTY_RESPONSE_MAX_RETRIES);
         let mut real_iterations = 0usize;
         for _ in 0..self
             .config
@@ -1616,16 +1614,16 @@ impl Agent {
 
                 // Empty assistant response (no text, no reasoning, no tools):
                 // nudge and retry instead of returning an empty answer.
-                if final_text.trim().is_empty()
-                    && response
-                        .reasoning_content
-                        .as_deref()
-                        .is_none_or(|r| r.trim().is_empty())
-                    && empty_response_retries < EMPTY_RESPONSE_MAX_RETRIES
-                {
-                    empty_response_retries += 1;
+                // Plan 006: shared decision surface — same rule the live
+                // OperantAgent uses for the same nudge.
+                let turn = operant_core::agent::turn_rules::AssistantTurn {
+                    final_text: &final_text,
+                    reasoning: response.reasoning_content.as_deref(),
+                    has_tool_calls: false,
+                };
+                if empty_response_retries.should_retry(turn) {
                     tracing::warn!(
-                        retry = empty_response_retries,
+                        retry = empty_response_retries.count,
                         "Empty assistant response — retrying"
                     );
                     self.history
@@ -1762,12 +1760,9 @@ impl Agent {
         });
 
         // ── Turn loop ──────────────────────────────────────────────────
-        // Empty-response retry ladder (parity with `run_tool_call_loop` R23):
-        // the free-tier model occasionally returns an empty assistant turn
-        // with no text/reasoning/tool calls; retry up to N times with an
-        // empty assistant nudge. `real_iterations` keeps `max_tool_iterations`
-        // as the true real-work budget — retry passes refund their slot.
-        let mut empty_response_retries = 0usize;
+        // Plan 006: shared retry counter — same struct the live OperantAgent
+        // uses. Counter starts at 0; `should_retry` decides + increments.
+        let mut empty_response_retries = operant_core::agent::turn_rules::EmptyResponseCounter::new(EMPTY_RESPONSE_MAX_RETRIES);
         let mut real_iterations = 0usize;
         for _ in 0..self
             .config
@@ -2129,16 +2124,16 @@ impl Agent {
 
                 // Empty assistant response (no text, no reasoning, no tools):
                 // nudge and retry instead of returning an empty answer.
-                if final_text.trim().is_empty()
-                    && response
-                        .reasoning_content
-                        .as_deref()
-                        .is_none_or(|r| r.trim().is_empty())
-                    && empty_response_retries < EMPTY_RESPONSE_MAX_RETRIES
-                {
-                    empty_response_retries += 1;
+                // Plan 006: shared decision surface — same rule the live
+                // OperantAgent uses for the same nudge.
+                let turn = operant_core::agent::turn_rules::AssistantTurn {
+                    final_text: &final_text,
+                    reasoning: response.reasoning_content.as_deref(),
+                    has_tool_calls: false,
+                };
+                if empty_response_retries.should_retry(turn) {
                     tracing::warn!(
-                        retry = empty_response_retries,
+                        retry = empty_response_retries.count,
                         "Empty assistant response — retrying"
                     );
                     self.history

@@ -4,6 +4,7 @@ use self::turn_finalizer::{
     PREFLIGHT_DECAY_CONSTANT, PREFLIGHT_DECAY_H50, PREFLIGHT_THRESHOLD_PERCENT, TurnDiagnostics,
     TurnExitReason, file_mutation_verifier_footer,
 };
+use self::turn_rules::{AssistantTurn, EmptyResponseCounter};
 use crate::client::{Message, Role};
 use crate::error::{Error, Result};
 use crate::observer::{Observer, ObserverEvent, ObserverMetric};
@@ -264,12 +265,10 @@ impl OperantAgent {
         }
 
         let mut retry_state = turn_retry_state::TurnRetryState::new(Some(self.config.max_retries));
-        // Empty-content retry counter. Mirrors hermes-agent's
-        // `empty_content_retries` / hermes-agent-ultra's inner_empty loop:
-        // when the model returns no visible text, no reasoning, and no tool
-        // calls, nudge it to continue instead of silently accepting an empty
-        // reply as the final answer.
-        let mut empty_content_retries: usize = 0;
+        // Plan 006: empty-content retry counter is the shared
+        // EmptyResponseCounter from agent/turn_rules.rs — same logic the
+        // runtime Agent uses (no more silent divergence on max_retries).
+        let mut empty_content_retries = EmptyResponseCounter::new(self.config.max_retries);
         // Truncation-continuation retries (T1 — hermes caps at 4).
         let mut length_continue_retries: usize = 0;
         // Whether we've already tried a fallback model after empty retries.
@@ -727,19 +726,24 @@ impl OperantAgent {
                     // to the conversation, exactly like hermes-agent's
                     // conversation_loop.py empty-retry loop and
                     // hermes-agent-ultra's methods_run_stream.rs inner_empty
-                    // loop.
                     let has_visible_text = !response_text.trim().is_empty();
                     let has_reasoning = !reasoning_text.trim().is_empty();
-                    if tool_calls.is_empty()
-                        && !has_visible_text
-                        && !has_reasoning
-                        && empty_content_retries < self.config.max_retries
-                    {
-                        empty_content_retries += 1;
+                    // Plan 006: route the empty-response decision through
+                    // the shared rule so core and runtime stay in lockstep.
+                    let turn = AssistantTurn {
+                        final_text: &response_text,
+                        reasoning: if has_reasoning {
+                            Some(reasoning_text.as_str())
+                        } else {
+                            None
+                        },
+                        has_tool_calls: !tool_calls.is_empty(),
+                    };
+                    if empty_content_retries.should_retry(turn) {
                         self.metrics.record_empty_content_retry();
                         warn!(
                             "Empty assistant response — retrying ({}/{})",
-                            empty_content_retries, self.config.max_retries
+                            empty_content_retries.count, empty_content_retries.max
                         );
                         // Log the retry but do NOT emit as a visible Content
                         // event — these retry messages should not clutter the
@@ -779,16 +783,21 @@ impl OperantAgent {
                     // free-tier endpoints stop after thinking. Ending the turn
                     // here hands the user an empty reply; nudge instead,
                     // bounded by the same retry budget.
+                    // Plan 006: this case is *not* an empty turn (reasoning
+                    // is present and non-blank) — the shared `should_retry`
+                    // returns false for it. We handle the nudge manually
+                    // here, but still bound the retries via the same
+                    // counter so the budget is shared.
                     if tool_calls.is_empty()
                         && !has_visible_text
                         && has_reasoning
-                        && empty_content_retries < self.config.max_retries
+                        && empty_content_retries.count < empty_content_retries.max
                     {
-                        empty_content_retries += 1;
+                        empty_content_retries.count += 1;
                         self.metrics.record_empty_content_retry();
                         warn!(
                             "Reasoning-only response — nudging for a visible answer ({}/{})",
-                            empty_content_retries, self.config.max_retries
+                            empty_content_retries.count, empty_content_retries.max
                         );
                         // Persist the reasoning-only assistant turn so the
                         // conversation stays coherent, then ask for the answer.
