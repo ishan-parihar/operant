@@ -808,14 +808,7 @@ fn prometheus_observer_from_state(
 }
 
 /// GET /metrics — Prometheus text exposition format
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "superseded by the api.rs router surface; retained pending removal (tracked in RUST_BEST_PRACTICES_PLAN Phase 10)"
-    )
-)]
-async fn handle_metrics(State(state): State<AppState>) -> impl IntoResponse {
+pub async fn handle_metrics(State(state): State<AppState>) -> impl IntoResponse {
     let body = {
         #[cfg(feature = "observability-prometheus")]
         {

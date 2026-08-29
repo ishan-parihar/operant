@@ -1504,20 +1504,6 @@ fn build_api_routes() -> axum::Router<super::AppState> {
         .route("/cli/tools", get(handle_api_cli_tools))
         // Channels
         .route("/channels", get(handle_api_channels))
-        // Webhooks
-        .route("/webhooks/github", post(handle_api_github_webhook))
-        .route("/webhooks/gmail", post(handle_api_gmail_webhook))
-        .route("/webhooks/gmail/push", post(handle_api_gmail_push))
-        .route("/webhooks/linq", post(handle_api_linq_webhook))
-        .route(
-            "/webhooks/nextcloud-talk",
-            post(handle_api_nextcloud_talk_webhook),
-        )
-        .route("/webhooks/wati", post(handle_api_wati_webhook))
-        // Pairing
-        .route("/pair", post(handle_api_pair))
-        .route("/pair", get(handle_api_pair_status))
-        .route("/pair/code", post(handle_api_pair_generate_code))
         // Hardware
         .route("/hardware", get(handle_api_hardware))
         // OpenAPI
@@ -1525,8 +1511,8 @@ fn build_api_routes() -> axum::Router<super::AppState> {
         // SSE event stream (global + per-session events, pairing-auth guarded)
         .route("/events", get(crate::sse::handle_sse_events))
         .route("/events/history", get(crate::sse::handle_events_history))
-        // Prometheus metrics
-        .route("/metrics", get(handle_metrics))
+        // Prometheus metrics — real handler from lib (not the legacy 501 stub)
+        .route("/metrics", get(crate::handle_metrics))
 }
 
 pub fn cron_router(config: operant_config::schema::Config) -> axum::Router {
@@ -1655,69 +1641,14 @@ pub fn cron_router(config: operant_config::schema::Config) -> axum::Router {
         .with_state(state)
 }
 
-// Stubs for missing handlers - to be implemented
-async fn handle_api_github_webhook() -> impl axum::response::IntoResponse {
-    (
-        axum::http::StatusCode::NOT_IMPLEMENTED,
-        "GitHub webhook not implemented",
-    )
-}
-
-async fn handle_api_gmail_webhook() -> impl axum::response::IntoResponse {
-    (
-        axum::http::StatusCode::NOT_IMPLEMENTED,
-        "Gmail webhook not implemented",
-    )
-}
-
-async fn handle_api_gmail_push() -> impl axum::response::IntoResponse {
-    (
-        axum::http::StatusCode::NOT_IMPLEMENTED,
-        "Gmail push not implemented",
-    )
-}
-
-async fn handle_api_linq_webhook() -> impl axum::response::IntoResponse {
-    (
-        axum::http::StatusCode::NOT_IMPLEMENTED,
-        "Linq webhook not implemented",
-    )
-}
-
-async fn handle_api_nextcloud_talk_webhook() -> impl axum::response::IntoResponse {
-    (
-        axum::http::StatusCode::NOT_IMPLEMENTED,
-        "Nextcloud Talk webhook not implemented",
-    )
-}
-
-async fn handle_api_wati_webhook() -> impl axum::response::IntoResponse {
-    (
-        axum::http::StatusCode::NOT_IMPLEMENTED,
-        "Wati webhook not implemented",
-    )
-}
-
-async fn handle_api_pair() -> impl axum::response::IntoResponse {
-    (
-        axum::http::StatusCode::NOT_IMPLEMENTED,
-        "Pair endpoint not implemented",
-    )
-}
-
-async fn handle_api_pair_status() -> impl axum::response::IntoResponse {
-    (
-        axum::http::StatusCode::NOT_IMPLEMENTED,
-        "Pair status not implemented",
-    )
-}
-
-async fn handle_api_pair_generate_code() -> impl axum::response::IntoResponse {
-    (
-        axum::http::StatusCode::NOT_IMPLEMENTED,
-        "Generate pair code not implemented",
-    )
-}
+// Plan 003: removed 9 501 stub handlers (webhooks: github/gmail/gmail-push/
+// linq/nextcloud-talk/wati + pair/pair-status/pair-code). The routes are
+// unmounted (see build_api_routes) — a 404 is honest, a 501 was a lie.
+// hardware + openapi stubs kept until real implementations land.
+//
+// `handle_metrics` here was a 501 shadowing crate::handle_metrics (the
+// real Prometheus exporter at lib.rs:818). The router now mounts the
+// real one.
 
 async fn handle_api_hardware() -> impl axum::response::IntoResponse {
     (
@@ -1730,13 +1661,6 @@ async fn handle_api_openapi() -> impl axum::response::IntoResponse {
     (
         axum::http::StatusCode::NOT_IMPLEMENTED,
         "OpenAPI spec not implemented",
-    )
-}
-
-async fn handle_metrics() -> impl axum::response::IntoResponse {
-    (
-        axum::http::StatusCode::NOT_IMPLEMENTED,
-        "Metrics not implemented",
     )
 }
 
@@ -2713,6 +2637,91 @@ mod tests {
             )
             .await
             .expect("events request served");
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    /// Plan 003: the 9 dead-501 endpoints (6 webhooks + 3 pair) were removed
+    /// from the router. Each must now return 404 (honest miss) instead of 501
+    /// (a lie that looked like a configured-but-unfinished integration). The
+    /// real /metrics route is wired to the live Prometheus exporter.
+    #[tokio::test]
+    async fn plan_003_removed_routes_return_404_and_metrics_returns_200() {
+        use tower::ServiceExt;
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        let config = operant_config::schema::Config {
+            workspace_dir: tmp.path().join("workspace"),
+            config_path: tmp.path().join("config.toml"),
+            ..operant_config::schema::Config::default()
+        };
+        let (event_tx, _rx) = tokio::sync::broadcast::channel::<serde_json::Value>(16);
+        let (_, shutdown_rx) = tokio::sync::watch::channel(false);
+        let pairing = std::sync::Arc::new(operant_config::pairing::PairingGuard::new(false, &[]));
+
+        let app = crate::api::router(
+            config.clone(),
+            pairing.clone(),
+            shutdown_rx.clone(),
+            event_tx.clone(),
+            None,
+            None,
+            None,
+        )
+        .with_state(crate::AppState::new(
+            config,
+            pairing,
+            shutdown_rx,
+            event_tx,
+            None,
+            None,
+            None,
+        ));
+
+        // 9 dead routes — expect 404 (honest miss)
+        let dead: Vec<(axum::http::Method, String)> = vec![
+            (axum::http::Method::POST, "/webhooks/github".to_string()),
+            (axum::http::Method::POST, "/webhooks/gmail".to_string()),
+            (axum::http::Method::POST, "/webhooks/gmail/push".to_string()),
+            (axum::http::Method::POST, "/webhooks/linq".to_string()),
+            (
+                axum::http::Method::POST,
+                "/webhooks/nextcloud-talk".to_string(),
+            ),
+            (axum::http::Method::POST, "/webhooks/wati".to_string()),
+            (axum::http::Method::POST, "/pair".to_string()),
+            (axum::http::Method::GET, "/pair".to_string()),
+            (axum::http::Method::POST, "/pair/code".to_string()),
+        ];
+        for (method, path) in &dead {
+            let response = app
+                .clone()
+                .oneshot(
+                    axum::http::Request::builder()
+                        .method(method)
+                        .uri(path)
+                        .body(axum::body::Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap_or_else(|e| panic!("{method} {path} request failed: {e}"));
+            assert_eq!(
+                response.status(),
+                StatusCode::NOT_FOUND,
+                "{method} {path} must be 404 after plan 003 (was a 501 stub)"
+            );
+        }
+
+        // /api/metrics — the real Prometheus exporter must serve 200, not 501.
+        let response = app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/api/metrics")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("/api/metrics request served");
         assert_eq!(response.status(), StatusCode::OK);
     }
 
