@@ -109,16 +109,7 @@ pub fn save_env_value(key: &str, value: &str) -> Result<()> {
     out.sync_all()?;
     fs::rename(&tmp_path, &path).context("Failed to atomically replace .env file")?;
 
-    // Set restrictive permissions (Unix only)
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        if let Ok(meta) = fs::metadata(&path) {
-            let mut perms = meta.permissions();
-            perms.set_mode(0o600); // owner read/write only
-            let _ = fs::set_permissions(&path, perms);
-        }
-    }
+    operant_core::fs_secrets::set_secret_perms(&path).ok();
 
     Ok(())
 }
@@ -154,6 +145,8 @@ pub fn remove_env_value(key: &str) -> Result<()> {
     out.flush()?;
     out.sync_all()?;
     fs::rename(&tmp_path, &path).context("Failed to atomically replace .env file")?;
+
+    operant_core::fs_secrets::set_secret_perms(&path).ok();
 
     Ok(())
 }

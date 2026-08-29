@@ -55,7 +55,7 @@ R40 = 005 · R41 = 007+013 · R42 = 014. Adjust to reality; keep the dependency 
 
 | Plan | Priority | Status |
 |------|----------|--------|
-| 001-local-quality-baseline | P0 | ⬜ planned |
+| 001-local-quality-baseline | P0 | ✅ landed (c5dc8f43 — clippy -D warnings workspace green) |
 | 002-config-secret-permissions | P0 | ⬜ planned |
 | 003-gateway-stub-surface | P0 | ⬜ planned |
 | 004-db-migration-framework | P0 | ⬜ planned |

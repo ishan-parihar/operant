@@ -1283,7 +1283,11 @@ pub fn load_app_config(explicit: Option<&Path>) -> Result<LoadedConfig> {
             }
         }
         match found {
-            Some(path) => (parse_config_file(&path)?, Some(path)),
+            Some(path) => {
+                // Plan 002: auto-tighten pre-R42 loose config files on read.
+                let _ = crate::fs_secrets::tighten_if_loose(&path);
+                (parse_config_file(&path)?, Some(path))
+            }
             None => {
                 // Nothing exists yet: fall back to defaults, but when
                 // OPERANT_CONFIG_DIR is set, still claim that isolated path

@@ -1313,7 +1313,7 @@ fn persist_config(config: &AppConfig) -> Result<()> {
     let toml_str =
         toml::to_string_pretty(config).context("Failed to serialise configuration as TOML")?;
 
-    std::fs::write(&config_path, &toml_str)
+    operant_core::fs_secrets::write_secret_file(&config_path, toml_str.as_bytes())
         .with_context(|| format!("Failed to write config to '{}'", config_path.display()))?;
 
     println!(

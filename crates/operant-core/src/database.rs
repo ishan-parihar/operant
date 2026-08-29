@@ -138,6 +138,11 @@ impl Database {
         let conn = Connection::open(&path)
             .map_err(|e| Error::Agent(format!("Failed to open database: {}", e)))?;
 
+        // Plan 002: tighten DB file perms to 0o600 — the schema carries
+        // session metadata, approval decisions, tool state, and may grow to
+        // include tokens; keep it owner-only even on shared hosts.
+        crate::fs_secrets::set_secret_perms(&path)?;
+
         // Enable WAL mode for better concurrent read/write performance
         conn.execute_batch(
             "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON;",
@@ -148,6 +153,16 @@ impl Database {
                 e
             );
         });
+
+        // Plan 002: WAL/SHM siblings inherit umask 022 by default — tighten
+        // them to 0o600 so the entire DB family is owner-only. The main
+        // path itself is already tightened above (set_secret_perms).
+        if let (Some(name), Some(parent)) =
+            (path.file_name().and_then(|n| n.to_str()), path.parent())
+        {
+            crate::fs_secrets::set_secret_perms(&parent.join(format!("{name}-wal"))).ok();
+            crate::fs_secrets::set_secret_perms(&parent.join(format!("{name}-shm"))).ok();
+        }
 
         let db = Self {
             conn: Arc::new(Mutex::new(conn)),

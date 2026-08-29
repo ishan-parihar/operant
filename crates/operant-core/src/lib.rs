@@ -69,6 +69,7 @@ pub mod gateway;
 pub mod gateway_markdown;
 pub mod gateway_pipeline;
 pub use gateway_pipeline::{HookContext, HookEvent, HookRegistry, MessagePipeline, PipelineAction};
+pub mod fs_secrets;
 pub mod gateway_session;
 pub mod interrupt;
 pub mod kanban;

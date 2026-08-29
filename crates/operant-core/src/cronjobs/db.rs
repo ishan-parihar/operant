@@ -105,8 +105,13 @@ impl CronDb {
     }
 
     pub fn init(path: PathBuf) -> Result<Self, Error> {
-        let conn = Connection::open(path)
+        // Plan 002: tighten cron db perms (may carry cron job payloads with
+        // user content + delivery targets) — set 0o600 idempotently before
+        // SQLite honours umask on the open call below.
+        crate::fs_secrets::tighten_if_loose(&path).ok();
+        let conn = Connection::open(&path)
             .map_err(|e| Error::Agent(format!("Failed to open cron database: {}", e)))?;
+        crate::fs_secrets::set_secret_perms(&path).ok();
 
         let db = Self {
             conn: Arc::new(Mutex::new(conn)),
