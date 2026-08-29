@@ -1,12 +1,10 @@
 //! Inherent methods on `TelegramChannel` extracted verbatim.
 
 use anyhow::Context;
-use async_trait::async_trait;
 use directories::UserDirs;
 use operant_api::channel::{Channel, ChannelMessage, SendMessage};
 use operant_config::schema::{Config, StreamMode};
 use operant_runtime::security::pairing::PairingGuard;
-use parking_lot::Mutex;
 use reqwest::multipart::{Form, Part};
 use std::fmt::Write as _;
 use std::path::Path;

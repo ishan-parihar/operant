@@ -1,5 +1,7 @@
 //! Telegram channel tests (verbatim body of the former inline `mod tests`).
 use super::*;
+use std::fmt::Write as _;
+use std::path::Path;
 
 #[test]
 fn telegram_channel_name() {

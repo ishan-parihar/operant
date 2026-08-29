@@ -1,21 +1,9 @@
 //! Helpers, tunables, attachment parsing, and poll-recovery state extracted
 //! verbatim from the former telegram.rs monolith.
 
-use anyhow::Context;
-use async_trait::async_trait;
-use directories::UserDirs;
-use operant_api::channel::{Channel, ChannelMessage, SendMessage};
-use operant_config::schema::{Config, StreamMode};
-use operant_runtime::security::pairing::PairingGuard;
-use parking_lot::Mutex;
-use reqwest::multipart::{Form, Part};
-use std::fmt::Write as _;
 use std::path::Path;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use std::time::Duration;
-use tokio::fs;
-
-use super::*;
 
 /// Telegram's maximum message length for text messages
 pub(crate) const TELEGRAM_MAX_MESSAGE_LENGTH: usize = 4096;
