@@ -125,6 +125,11 @@ pub struct Database {
 }
 
 impl Database {
+    /// Plan 004 — append-only migrations. v1 freezes the current
+    /// DESIRED_SCHEMA_SQL + DEFERRED_INDEX_SQL verbatim; future
+    /// schema changes append a new entry. Never edit a past entry.
+    const DATABASE_MIGRATIONS: &[&str] = &[DESIRED_SCHEMA_SQL, DEFERRED_INDEX_SQL];
+
     /// Initialize a new database at the specified path.
     /// Creates parent directories and runs migrations automatically.
     pub fn init(path: PathBuf) -> Result<Self> {
@@ -199,16 +204,21 @@ impl Database {
         conn.execute("PRAGMA foreign_keys = ON", [])
             .map_err(|e| Error::Agent(format!("Failed to enable foreign keys: {}", e)))?;
 
-        // Create tables using desired schema SQL
-        conn.execute_batch(DESIRED_SCHEMA_SQL)
-            .map_err(|e| Error::Agent(format!("Failed to create tables: {}", e)))?;
-
-        // Reconcile columns — add any missing columns to existing tables
+        // Plan 004 — run reconcile_columns FIRST so a legacy DB
+        // gets the columns it needs BEFORE the migration's
+        // DESIRED_SCHEMA_SQL is executed (some entries reference
+        // columns that the reconciler may need to ADD on a
+        // pre-framework live DB). reconcile_columns is idempotent
+        // (it diffs live columns against DESIRED_SCHEMA_SQL) so a
+        // fresh DB costs nothing.
         Self::reconcile_columns(&conn)?;
 
-        // Deferred indexes referencing reconciler-added columns
-        conn.execute_batch(DEFERRED_INDEX_SQL)
-            .map_err(|e| Error::Agent(format!("Failed to create deferred indexes: {}", e)))?;
+        // Plan 004 — run the append-only migration runner. v1
+        // freezes DESIRED_SCHEMA_SQL + DEFERRED_INDEX_SQL verbatim.
+        // Future schema changes append a new entry to
+        // DATABASE_MIGRATIONS; they NEVER edit v1.
+        crate::migrations::migrate(&conn, "sessions", Self::DATABASE_MIGRATIONS)
+            .map_err(|e| Error::Agent(format!("sessions migration failed: {e}")))?;
 
         // Additional tables that weren't in original DESIRED_SCHEMA_SQL
         self.create_checkpoints_table(&conn)?;

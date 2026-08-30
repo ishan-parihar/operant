@@ -121,10 +121,13 @@ impl CronDb {
         Ok(db)
     }
 
-    fn setup_schema(&self) -> Result<(), Error> {
-        let conn = self.lock_conn()?;
-
-        let schema = r#"
+    /// Plan 004 — append-only migrations. v1 freezes the current
+    /// schema verbatim; future changes append a new entry. The
+    /// `IF NOT EXISTS` guards are kept inside each entry so the
+    /// entries remain idempotent at the SQL level (a crash between
+    /// the SQL batch and the user_version bump is recoverable by
+    /// re-running migrate()).
+    const MIGRATIONS: &[&str] = &[r#"
             CREATE TABLE IF NOT EXISTS cron_jobs (
                 id                   TEXT PRIMARY KEY,
                 name                 TEXT NOT NULL,
@@ -160,11 +163,17 @@ impl CronDb {
             );
             CREATE INDEX IF NOT EXISTS idx_cron_next_run ON cron_jobs(next_run_at);
             CREATE INDEX IF NOT EXISTS idx_cron_enabled ON cron_jobs(enabled);
-        "#;
+    "#];
 
-        conn.execute_batch(schema)
-            .map_err(|e| Error::Agent(format!("Failed to initialize cron schema: {}", e)))?;
-
+    fn setup_schema(&self) -> Result<(), Error> {
+        let conn = self.lock_conn()?;
+        // Plan 004: run the append-only migration framework. For a
+        // fresh DB this lands at v1; for a live DB that pre-dates
+        // the framework (also at v0 by PRAGMA default) this also
+        // lands at v1 — the IF NOT EXISTS guards make the v1 SQL
+        // safe to apply on a DB that already has the tables.
+        crate::migrations::migrate(&conn, "cron", Self::MIGRATIONS)
+            .map_err(|e| Error::Agent(format!("cron migration failed: {e}")))?;
         Ok(())
     }
 

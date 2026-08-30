@@ -162,10 +162,9 @@ impl KanbanDb {
         &self.conn
     }
 
-    fn setup_schema(&self) -> Result<(), Error> {
-        let conn = self.lock_conn()?;
-
-        let schema = r#"
+    /// Plan 004 — append-only migrations. v1 freezes the current
+    /// schema verbatim; future changes append a new entry.
+    const MIGRATIONS: &[&str] = &[r#"
             CREATE TABLE IF NOT EXISTS tasks (
                 id                   TEXT PRIMARY KEY,
                 title                TEXT NOT NULL,
@@ -273,11 +272,17 @@ impl KanbanDb {
                 PRIMARY KEY (task_id, assignee),
                 FOREIGN KEY(task_id) REFERENCES tasks(id)
             );
-        "#;
+    "#];
 
-        conn.execute_batch(schema)
-            .map_err(|e| Error::Agent(format!("Failed to initialize kanban schema: {}", e)))?;
-
+    fn setup_schema(&self) -> Result<(), Error> {
+        let conn = self.lock_conn()?;
+        // Plan 004: run the append-only migration framework. v1
+        // stamps the current schema; future changes append. The
+        // IF NOT EXISTS guards make the SQL safe to apply on a
+        // live DB that pre-dates the framework (also at v0 by
+        // PRAGMA default).
+        crate::migrations::migrate(&conn, "kanban", Self::MIGRATIONS)
+            .map_err(|e| Error::Agent(format!("kanban migration failed: {e}")))?;
         Ok(())
     }
 
