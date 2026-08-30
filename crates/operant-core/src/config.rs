@@ -44,6 +44,11 @@ pub struct AppConfig {
     /// user opts in. Phase 2+ wires the kernel into the live
     /// `ToolRegistry` / `HookRunner` behind this flag.
     pub harness: HarnessSettings,
+    /// Plan 015 / Phase 0 config surface for the Prime Kernel sidecar.
+    /// Dark-merged: `enabled` defaults to `false`; the sidecar is not
+    /// even spawned until a Phase 1+ rollout flips this and provides
+    /// a working `sidecar_script` path.
+    pub pk: PkSettings,
     pub database_path: PathBuf,
     /// Provider profiles + ordered cross-provider fallback chain
     /// (`[providers]`, hermes `fallback_providers` parity). Consumed by the
@@ -88,6 +93,7 @@ impl Default for AppConfig {
             terminal_backend: TerminalBackend::Local,
             checkpoints: CheckpointsSettings::default(),
             harness: HarnessSettings::default(),
+            pk: PkSettings::default(),
             auxiliary_models: AuxiliaryModels::default(),
             moa: MoaSettings::default(),
             database_path,
@@ -720,6 +726,43 @@ impl Default for HarnessSettings {
             enabled: false,
             architecture_toml: None,
             max_active_providers: 64,
+        }
+    }
+}
+
+/// Plan 015 / Phase 0 config surface for the Prime Kernel sidecar.
+/// Dark-merged: `enabled` defaults to `false`; the sidecar is not even
+/// spawned until a Phase 1+ rollout flips this and provides a working
+/// `sidecar_script` path. The fields are independent so Phase 1 can
+/// light up one knob at a time (e.g. just `enabled` first, the
+/// `ndjson_socket` later when the supervisor lands).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct PkSettings {
+    /// Master switch. When `false` (the default), the sidecar is
+    /// never spawned; the existing `code_execution` tempfile path is
+    /// the only Python surface.
+    pub enabled: bool,
+    /// Path to the sidecar entrypoint (the supervisor / NDJSON server).
+    /// Defaults to `pk-sidecar/main.py` relative to the operant repo
+    /// root. Phase 1 will switch this to a vendored python venv.
+    pub sidecar_script: Option<PathBuf>,
+    /// Unix socket path the supervisor binds to (Phase 1). When `None`,
+    /// the supervisor picks a default under `~/.operant/run/pk.sock`.
+    pub ndjson_socket: Option<PathBuf>,
+    /// Maximum wall-clock seconds an `exec` call may take before the
+    /// supervisor kills the kernel. Default 30. Per the 015 plan the
+    /// kernel reuses this; we expose it for the operator.
+    pub exec_timeout_secs: u64,
+}
+
+impl Default for PkSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            sidecar_script: None,
+            ndjson_socket: None,
+            exec_timeout_secs: 30,
         }
     }
 }
@@ -1711,6 +1754,71 @@ wonderful_unknown_key = 42
         assert!(
             err.is_err(),
             "deny_unknown_fields must reject unknown [harness] keys"
+        );
+    }
+
+    /// Plan 015 / Phase 0: prove the [pk] TOML section round-trips
+    /// through parse_config_str, that the dark-merge default is
+    /// `enabled = false`, and that deny_unknown_fields catches typos.
+    #[test]
+    fn pk_settings_roundtrip_and_default_is_dark() {
+        // Section present: enabled=true + an override script + cap.
+        let toml = r#"
+[pk]
+enabled = true
+sidecar_script = "/opt/operant/pk/main.py"
+ndjson_socket = "/run/operant/pk.sock"
+exec_timeout_secs = 90
+"#;
+        let parsed = parse_config_str(toml, std::path::Path::new("pk.toml"))
+            .expect("valid TOML with [pk] section");
+        assert!(parsed.pk.enabled, "explicit enabled=true is honored");
+        assert_eq!(
+            parsed.pk.sidecar_script.as_deref(),
+            Some(std::path::Path::new("/opt/operant/pk/main.py"))
+        );
+        assert_eq!(
+            parsed.pk.ndjson_socket.as_deref(),
+            Some(std::path::Path::new("/run/operant/pk.sock"))
+        );
+        assert_eq!(parsed.pk.exec_timeout_secs, 90);
+
+        // Re-serialize: settings survive a write/read cycle (Phase 1
+        // supervisor reads this from disk at boot).
+        let round_tripped = toml::to_string(&parsed.pk).expect("PkSettings serializes");
+        let reparsed: PkSettings =
+            toml::from_str(&round_tripped).expect("PkSettings round-trips through TOML");
+        assert!(reparsed.enabled, "round-trip preserves enabled=true");
+        assert_eq!(reparsed.exec_timeout_secs, 90);
+
+        // Section absent: dark-merge default — sidecar never spawned.
+        let no_section = r#"
+[client]
+base_url = "https://api.openai.com/v1"
+"#;
+        let parsed = parse_config_str(no_section, std::path::Path::new("default.toml"))
+            .expect("valid TOML without [pk] still parses");
+        assert!(
+            !parsed.pk.enabled,
+            "missing [pk] section defaults to enabled=false (dark-merge)"
+        );
+        assert_eq!(
+            parsed.pk.exec_timeout_secs, 30,
+            "default exec timeout is 30s per the 015 plan"
+        );
+        assert!(parsed.pk.sidecar_script.is_none());
+        assert!(parsed.pk.ndjson_socket.is_none());
+
+        // Unknown [pk] keys are rejected.
+        let bogus = r#"
+[pk]
+enabled = true
+wonderful_unknown_key = 42
+"#;
+        let err = parse_config_str(bogus, std::path::Path::new("bogus.toml"));
+        assert!(
+            err.is_err(),
+            "deny_unknown_fields must reject unknown [pk] keys"
         );
     }
 

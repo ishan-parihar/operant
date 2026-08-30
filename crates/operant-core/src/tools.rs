@@ -246,6 +246,23 @@ pub trait OperantTool: Send + Sync {
 pub struct ToolContext {
     /// Additional metadata about the execution
     pub metadata: HashMap<String, String>,
+    /// Optional session id (plan 015). Currently dormant for all tools
+    /// that don't read it — background review is the only consumer
+    /// today, and the pk-bridge in plan 015 Phase 2.5 is the
+    /// downstream user. Default `None` keeps every existing tool
+    /// build green.
+    pub session_id: Option<String>,
+}
+
+impl ToolContext {
+    /// Builder helper: copy the context with a session id attached.
+    /// Used by the gateway dispatch path to wire the active session
+    /// id into tool calls without sprinkling `.clone()` through the
+    /// call sites.
+    pub fn with_session_id(mut self, id: impl Into<String>) -> Self {
+        self.session_id = Some(id.into());
+        self
+    }
 }
 
 impl ToolContext {
@@ -733,5 +750,24 @@ mod tests {
             .await
             .unwrap();
         assert!(result.success, "override must extend the execution window");
+    }
+
+    /// Plan 015 Phase 0: `session_id` is dormant on every existing tool
+    /// (the field is `Option<String>` and defaults to `None`), but the
+    /// builder must work and the value must survive a clone. This is
+    /// the contract `pk-bridge` will rely on in Phase 2.5.
+    #[test]
+    fn tool_context_session_id_is_optional_and_settable() {
+        let ctx = crate::tools::ToolContext::default();
+        assert!(ctx.session_id.is_none(), "default session_id is None");
+
+        let with_id = ctx.clone().with_session_id("sess-abc123");
+        assert_eq!(with_id.session_id.as_deref(), Some("sess-abc123"));
+
+        // clone preserves the session id (callers need to pass the
+        // same context into the dispatch + the result-builder without
+        // the id evaporating).
+        let cloned = with_id.clone();
+        assert_eq!(cloned.session_id.as_deref(), Some("sess-abc123"));
     }
 }
