@@ -59,18 +59,15 @@ R40 = 005 · R41 = 007+013 · R42 = 014. Adjust to reality; keep the dependency 
 | 002-config-secret-permissions | P0 | ✅ landed (cb8a97ab — fs_secrets helper, .env + operant.toml + database.db all 0o600) |
 | 003-gateway-stub-surface | P0 | ✅ landed (c8bcef14 — 9 dead 501s removed, /api/metrics wired) |
 | 004-db-migration-framework | P0 | ✅ landed (c13ab341 — append-only runner + v1 stamp on 3 DBs) |
-| 005-dead-code-decommission | P1 | ⬜ planned |
+| 005-dead-code-decommission | P1 | ✅ partial landed (d6d49ac8 — wasm_channel.rs removed; 6 items audited live) |
 | 006-agent-loop-reconciliation | P1 | ✅ landed (23f33907 — turn_rules shared between OperantAgent + runtime Agent) |
 | 015-pk-persistent-kernel-harness | P1 | ✅ Phase 0 landed (c6078d5f — pk-sidecar scaffold, [pk] config, session_id on ToolContext) |
 | 016-harness-kernel-paradigm | P1 | ✅ Phase 0-1 landed (ad9b69cf — operant-harness pure crate, [harness] config, kernel core) |
-| 005-dead-code-decommission | P1 | ⬜ planned |
-| 006-agent-loop-reconciliation | P1 | ⬜ planned |
-| 007-telemetry-consolidation | P1 | ⬜ planned |
-| 008-parity-working-diff | P1 | ⬜ planned |
-| 009-parity-remote-skill-sync | P1 | ⬜ planned |
-| 010-parity-tui-niceties | P1 | ⬜ planned |
-| 011-parity-daemon-delegation | P1 | ⬜ planned |
-| 012-parity-security-approvals | P1 | ⬜ planned |
+| 007-telemetry-consolidation | P1 | ✅ landed (009b2adf — curator tracker SoT, .usage.json writer/reader removed, migrate_from_legacy one-shot) |
+| 008-parity-working-diff | P1 | ✅ landed (009b2adf — working_diff tool, 5 tests) |
+| 010-parity-tui-niceties | P1 | ✅ landed (009b2adf — terminal_hints, 8 tests, wired into TerminalTool) |
+| 011-parity-daemon-delegation | P1 | ✅ landed (009b2adf — daemon_pool, 5 tests, 3 detached tasks migrated) |
+| 012-parity-security-approvals | P1 | ✅ landed (009b2adf — write_approval gate, 12 tests, current_origin/is_background aliases) |
 | 013-integration-tests | P2 | ⬜ planned |
 | 014-docs-truthfulness | P2 | ⬜ planned |
 | 015-pk-persistent-kernel-harness | P1 | ⬜ planned |
