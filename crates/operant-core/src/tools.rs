@@ -25,6 +25,7 @@ pub mod delegation_output_schema;
 pub mod env_probe_tool;
 pub mod file_state;
 pub mod file_tools;
+pub mod harness_tools;
 pub mod http_tool;
 pub mod igs;
 pub mod image_generation_tool;
