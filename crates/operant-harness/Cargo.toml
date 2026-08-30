@@ -9,12 +9,14 @@ description = "Harness kernel: composable provider runtime (plan 016) — claims
 async-trait.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
+serde_yaml = "0.9"
 thiserror.workspace = true
 tokio = { workspace = true, features = ["sync", "macros", "rt-multi-thread", "time"] }
 toml.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+tempfile.workspace = true
 toml.workspace = true
 
 [lints]

@@ -36,6 +36,15 @@ pub enum ArchitectureSubcommand {
         #[arg(long, action = clap::ArgAction::SetTrue)]
         json: bool,
     },
+    /// Compile a hermes `_pool.yaml` into architecture rows (Phase 6).
+    PoolImport {
+        /// Path to the `_pool.yaml` file.
+        #[arg(long)]
+        path: PathBuf,
+        /// JSON output for scripting/CI.
+        #[arg(long, action = clap::ArgAction::SetTrue)]
+        json: bool,
+    },
 }
 
 pub async fn handle_architecture_command(cmd: ArchitectureSubcommand) -> Result<()> {
@@ -46,7 +55,36 @@ pub async fn handle_architecture_command(cmd: ArchitectureSubcommand) -> Result<
         ArchitectureSubcommand::Dump { file, patch, json } => {
             handle_dump_command(file, patch, json).await
         }
+        ArchitectureSubcommand::PoolImport { path, json } => {
+            handle_pool_import_command(path, json).await
+        }
     }
+}
+
+/// Compile a hermes `_pool.yaml` into architecture rows. Prints the
+/// rows as JSON (default) or text. Phase 6 — the rows are NOT yet
+/// wired to live adapters; the host's boot pass will add that.
+pub async fn handle_pool_import_command(path: PathBuf, json: bool) -> Result<()> {
+    let compiled =
+        operant_harness::load_and_compile_pool(&path).map_err(|e| anyhow!(e.to_string()))?;
+    if json {
+        let payload = json!({
+            "name": compiled.name,
+            "family_row": compiled.family_row,
+            "bundle_rows": compiled.bundle_rows,
+            "claims": compiled.claims,
+        });
+        println!("{}", serde_json::to_string_pretty(&payload)?);
+    } else {
+        println!("Pool: {}", compiled.name);
+        println!("  Family row: {}", compiled.family_row.id);
+        println!("  Claims: {:?}", compiled.claims);
+        println!("  Bundles:");
+        for r in &compiled.bundle_rows {
+            println!("    - {} ({})", r.id, r.kind.as_deref().unwrap_or("-"));
+        }
+    }
+    Ok(())
 }
 
 /// Read an architecture file, optionally apply patches, and dump the
