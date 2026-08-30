@@ -3,19 +3,19 @@ name = "operant-harness"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Plan 016: Composable provider runtime (Cordis-paradigm) with reversible effects, transactional HMR, and live self-extension. Pure library, no operant deps beyond operant-api."
-publish = false
+description = "Harness kernel: composable provider runtime (plan 016) — claims, late binding, reversible effects, transactional swap, composition"
 
 [dependencies]
-serde.workspace = true
+async-trait.workspace = true
+serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 thiserror.workspace = true
+tokio = { workspace = true, features = ["sync", "macros", "rt-multi-thread", "time"] }
+toml.workspace = true
 tracing.workspace = true
-uuid.workspace = true
-parking_lot.workspace = true
 
 [dev-dependencies]
-tempfile.workspace = true
+toml.workspace = true
 
 [lints]
 workspace = true
