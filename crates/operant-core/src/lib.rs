@@ -74,6 +74,7 @@ pub use gateway_pipeline::{HookContext, HookEvent, HookRegistry, MessagePipeline
 pub mod fs_secrets;
 pub mod gateway_session;
 pub mod harness_adapters;
+pub mod harness_seams_r3;
 pub mod interrupt;
 pub mod kanban;
 pub mod mcp;
