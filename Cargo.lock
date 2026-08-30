@@ -4817,6 +4817,7 @@ dependencies = [
  "kokoro-tiny",
  "mockito",
  "operant-config",
+ "operant-harness",
  "regex",
  "reqwest",
  "rusqlite",
@@ -4922,13 +4923,13 @@ dependencies = [
 name = "operant-harness"
 version = "0.2.0"
 dependencies = [
- "parking_lot",
+ "async-trait",
  "serde",
  "serde_json",
- "tempfile",
  "thiserror 1.0.69",
+ "tokio",
+ "toml 0.8.23",
  "tracing",
- "uuid",
 ]
 
 [[package]]
@@ -5071,7 +5072,7 @@ dependencies = [
  "opentelemetry_sdk",
  "operant-api",
  "operant-config",
- "operant-core",
+ "operant-harness",
  "operant-infra",
  "operant-macros",
  "operant-memory",

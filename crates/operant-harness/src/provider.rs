@@ -1,75 +1,206 @@
-//! Plan 016: the `Provider` trait and its source kinds.
+//! Provider model — the unit of composition.
 //!
-//! Every composable unit in the harness declares:
-//! - `id` (stable across the boot, used for ABA guard on swap),
-//! - `provides` (the string-keyed claim slots the provider occupies),
-//! - `requires` (the slots the provider needs; unmet = PENDING),
-//! - `source` (Native | Wasm | ConfigRow | Pool — what built this provider),
-//! - `apply(&mut self, ctx)` (the side effect performed on activation;
-//!   it returns an `Effect` undo handle).
-//!
-//! The trait is intentionally object-safe and synchronous — the kernel
-//! wraps async work in a blocking closure stored in the `Effect` undo
-//! handle (Phase 0/1; the async-aware variant is Phase 2+).
+//! A provider declares what it *provides* (claims) and what it *requires*
+//! (dependencies). The kernel resolves load order from requirements, never
+//! manual boot sequencing (Cordis `inject` semantics); a provider whose
+//! requirements are unmet stays PENDING and activates the moment its
+//! dependencies mount.
 
-use crate::effect::Effect;
-use std::fmt;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
-/// Where a `Provider` came from. Influences the swap/refresh policy
-/// (Phase 4+ for the WASM hot-swap path; the kernel uses this only for
-/// `dump()` introspection in Phase 0/1).
-#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum Source {
-    /// Built into the binary (e.g. the family-level built-in tool sets).
+use crate::claim::Claim;
+use crate::effect::{BoxUndoFuture, Effect};
+use crate::error::HarnessError;
+
+/// Where a provider came from — drives trust policy and reload behavior.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderSource {
+    /// Compiled into the binary; registered at boot.
     Native,
-    /// Loaded from a compiled WASM module (Phase 4+).
-    Wasm { path: String },
-    /// Materialized from a `architecture.toml` row — pure config, no code.
+    /// Extism WASM module; hot-swappable.
+    Wasm,
+    /// Pure configuration row (no code) — e.g. a file-backed prompt section.
     ConfigRow,
-    /// Compiled from a `~/.hermes/systems/<pool>/_pool.yaml` (Phase 6+).
-    Pool { name: String },
+    /// Compiled from an external governed manifest (hermes `_pool.yaml`).
+    Pool,
 }
 
-impl fmt::Display for Source {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+/// Backwards-compat alias for pk code that imports `Source`.
+pub type Source = ProviderSource;
+
+impl std::fmt::Display for ProviderSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Source::Native => f.write_str("native"),
-            Source::Wasm { path } => write!(f, "wasm({path})"),
-            Source::ConfigRow => f.write_str("config-row"),
-            Source::Pool { name } => write!(f, "pool({name})"),
+            ProviderSource::Native => f.write_str("native"),
+            ProviderSource::Wasm => f.write_str("wasm"),
+            ProviderSource::ConfigRow => f.write_str("config-row"),
+            ProviderSource::Pool => f.write_str("pool"),
         }
     }
 }
 
-/// A composable unit. The kernel calls `apply` exactly once per
-/// successful activation, then stores the returned `Effect` for LIFO
-/// unwind at unmount time.
-pub trait Provider: Send + Sync + fmt::Debug {
-    /// Stable identifier for the provider (used as the `Effect` key +
-    /// ABA generation counter). The same id MUST always represent the
-    /// same logical provider across reloads — only a swap (Phase 4)
-    /// may temporarily duplicate an id under a new generation.
+/// Provider lifecycle states (Cordis FiberState analog).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderState {
+    /// Requirements unmet; waiting for providers to appear.
+    Pending,
+    /// Currently running `activate`.
+    Activating,
+    /// Live; claims owned; effects installed.
+    Active,
+    /// Unwinding.
+    Unloading,
+    /// Fully torn down (terminal; entry kept only in dump history).
+    Disposed,
+    /// Activation failed; partial effects were unwound. Kept for observability.
+    Failed,
+}
+
+/// Object-safe declarative surface of a provider.
+pub trait ProviderSpec: Send + Sync {
+    /// Stable unique identity within this kernel instance.
     fn id(&self) -> &str;
+    fn source(&self) -> ProviderSource;
+    /// Claims owned on successful activation. Must be non-empty for providers
+    /// that own capability addresses; empty is allowed for pure side-effect
+    /// providers but they cannot be depended upon.
+    fn provides(&self) -> &[Claim];
+    /// Claims that must be ACTIVE before activation can run.
+    fn requires(&self) -> &[Claim];
+}
 
-    /// The string-keyed claim slots this provider occupies. Two
-    /// providers may not declare overlapping `provides()` keys unless
-    /// one of them has been `disabled` in `architecture.toml`.
-    fn provides(&self) -> &[String];
+/// One install request routed to a seam.
+#[derive(Debug)]
+pub struct Registration<'a> {
+    pub provider_id: &'a str,
+    pub seam: &'a str,
+    pub key: &'a str,
+    /// Opaque per-provider configuration from the composition layer.
+    pub config: &'a Value,
+    /// Typed implementation object handed from provider to adapter — e.g.
+    /// `Arc<dyn OperantTool>` or `Arc<dyn HookHandler>` boxed as
+    /// `&(dyn Any + Send + Sync)`. Seams that install pure data (config rows,
+    /// pool manifests) leave this `None` and read `config` instead.
+    pub payload: Option<&'a (dyn std::any::Any + Send + Sync)>,
+}
 
-    /// The claim slots this provider needs to be present before it
-    /// activates. The kernel keeps the provider in `Pending` state
-    /// until every key in this list is provided by some other active
-    /// provider.
-    fn requires(&self) -> &[String];
+/// A seam sink: the host-side half of a capability family. The kernel routes
+/// installs through seams; adapters (Phase 2+) translate them into real
+/// registrations against ToolRegistry / HookRunner / gateway registries.
+///
+/// Implementations MUST NOT call back into [`crate::Harness`] lifecycle
+/// methods from `install` — lifecycle ops hold the kernel write lock.
+#[async_trait::async_trait]
+pub trait Seam: Send + Sync {
+    /// Seam family name (matches `Claim.seam`).
+    fn name(&self) -> &str;
 
-    /// Where the provider came from. Affects Phase 4+ swap policy.
-    fn source(&self) -> &Source;
+    /// Install one registration and return its undo effect.
+    async fn install(&self, reg: &Registration<'_>) -> Result<Effect, HarnessError>;
+}
 
-    /// Perform the side effect (register a tool, claim a hook, install
-    /// a memory provider, etc.) and return the `Effect` undo handle.
-    /// The kernel stores the handle and calls it in LIFO order on
-    /// unmount. Returning `Effect::noop()` is legal for
-    /// `ConfigRow` providers that just claim a slot.
-    fn apply(&mut self) -> Effect;
+/// Handed to [`Provider::activate`]. Collects effects; every successful
+/// `install` pushes an undo handle that the kernel owns from then on.
+pub struct ActivateCx<'a> {
+    provider_id: &'a str,
+    config: &'a Value,
+    seams: &'a std::collections::HashMap<String, std::sync::Arc<dyn Seam>>,
+    effects: &'a mut Vec<Effect>,
+}
+
+impl<'a> ActivateCx<'a> {
+    pub(crate) fn new(
+        provider_id: &'a str,
+        config: &'a Value,
+        seams: &'a std::collections::HashMap<String, std::sync::Arc<dyn Seam>>,
+        effects: &'a mut Vec<Effect>,
+    ) -> Self {
+        Self {
+            provider_id,
+            config,
+            seams,
+            effects,
+        }
+    }
+
+    pub fn provider_id(&self) -> &str {
+        self.provider_id
+    }
+
+    /// Per-provider configuration (composition row `config`, or Null).
+    pub fn config(&self) -> &Value {
+        self.config
+    }
+
+    /// Push a manually-constructed effect (for registrations made outside
+    /// seam routing).
+    pub fn push_effect(
+        &mut self,
+        label: impl Into<String>,
+        undo: impl FnOnce() -> BoxUndoFuture + Send + Sync + 'static,
+    ) {
+        self.effects.push(Effect::new(label, undo));
+    }
+
+    /// Route one install through the named seam. On success the returned
+    /// undo effect is retained by the kernel; on failure previously collected
+    /// effects are unwound by the kernel (partial-failure containment).
+    pub async fn install(&mut self, seam: &str, key: &str) -> Result<(), HarnessError> {
+        let sink = self
+            .seams
+            .get(seam)
+            .ok_or_else(|| HarnessError::MissingSeam(seam.to_string()))?;
+        let reg = Registration {
+            provider_id: self.provider_id,
+            seam,
+            key,
+            config: self.config,
+            payload: None,
+        };
+        let effect = sink.install(&reg).await?;
+        tracing::debug!(provider = %self.provider_id, seam, key, "harness install");
+        self.effects.push(effect);
+        Ok(())
+    }
+
+    /// Route one install through the named seam, carrying a typed payload
+    /// object (see [`Registration::payload`]). Same effect bookkeeping as
+    /// [`Self::install`].
+    pub async fn install_with(
+        &mut self,
+        seam: &str,
+        key: &str,
+        payload: &(dyn std::any::Any + Send + Sync),
+    ) -> Result<(), HarnessError> {
+        let sink = self
+            .seams
+            .get(seam)
+            .ok_or_else(|| HarnessError::MissingSeam(seam.to_string()))?;
+        let reg = Registration {
+            provider_id: self.provider_id,
+            seam,
+            key,
+            config: self.config,
+            payload: Some(payload),
+        };
+        let effect = sink.install(&reg).await?;
+        tracing::debug!(provider = %self.provider_id, seam, key, "harness install (payload)");
+        self.effects.push(effect);
+        Ok(())
+    }
+}
+
+/// A composable extension unit. Implementations are stored as
+/// `Arc<dyn Provider>`; keep methods object-safe.
+#[async_trait::async_trait]
+pub trait Provider: Send + Sync {
+    fn spec(&self) -> &dyn ProviderSpec;
+
+    /// Bring the provider live by installing through the context. On `Err`,
+    /// the kernel unwinds any partially collected effects and records the
+    /// entry as Failed — the rest of the harness is untouched.
+    async fn activate(&self, cx: &mut ActivateCx<'_>) -> Result<(), HarnessError>;
 }

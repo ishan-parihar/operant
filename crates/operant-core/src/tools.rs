@@ -400,6 +400,34 @@ impl ToolRegistry {
         Ok(())
     }
 
+    /// Register a pre-boxed tool object (harness-kernel seam path). Additive:
+    /// identical bookkeeping to [`Self::register`], but accepts an already-
+    /// erased `Arc<dyn OperantTool>`.
+    #[instrument(skip(self, tool), fields(tool = %tool.name()))]
+    pub async fn register_dyn(&self, tool: Arc<dyn OperantTool>) -> Result<()> {
+        let name = tool.name().to_string();
+        let mut tools = self.tools.write().await;
+
+        if tools.contains_key(&name) {
+            warn!(tool = %name, "Tool already registered, replacing");
+        }
+
+        tools.insert(name.clone(), tool);
+        info!(tool = %name, "Tool registered successfully");
+        Ok(())
+    }
+
+    /// Remove a tool by name (harness-kernel effect-undo path). Returns true
+    /// when the tool existed and was removed.
+    pub async fn unregister_tool(&self, name: &str) -> bool {
+        let mut tools = self.tools.write().await;
+        let removed = tools.remove(name).is_some();
+        if removed {
+            tracing::info!(tool = %name, "Tool unregistered");
+        }
+        removed
+    }
+
     pub async fn disable_tool(&self, name: &str) {
         let mut disabled = self.disabled_names.write().await;
         disabled.insert(name.to_string());
