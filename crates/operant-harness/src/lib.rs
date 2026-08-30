@@ -20,6 +20,7 @@ pub mod harness;
 pub mod provider;
 pub mod report;
 pub mod row;
+pub mod swap;
 
 pub use claim::Claim;
 pub use composition::{
@@ -32,6 +33,7 @@ pub use provider::{
     ActivateCx, Provider, ProviderSource, ProviderSpec, ProviderState, Registration, Seam,
 };
 pub use report::{ClaimInfo, DumpTree, MountReport, ProviderEntryInfo};
+pub use swap::{SwapGeneration, SwapOutcome};
 
 /// Kernel version of the adopted-semantics contract. Bumped when a semantic changes.
 pub const HARNESS_SEMANTICS_VERSION: u32 = 1;
