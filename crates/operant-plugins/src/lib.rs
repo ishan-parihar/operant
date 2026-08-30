@@ -8,7 +8,6 @@ pub mod error;
 pub mod host;
 pub mod runtime;
 pub mod signature;
-pub mod wasm_channel;
 pub mod wasm_tool;
 
 pub use operant_api::tool::Tool as PluginTool;

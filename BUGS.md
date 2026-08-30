@@ -934,3 +934,21 @@ the t22b job fired on schedule (`Executing cron job`, `Delivering result` logged
   real `(platform, chat_id, thread_id)` before routing every turn and cron job
   creation reads it into the origin fields; `deliver_result`'s silent drop
   demoted from `debug!` to `warn!` so a broken delivery is visible in INFO logs.
+
+### R48 — plan 005 dead-code audit: real wins + plan-stale items (PARTIAL FIXED)
+
+| Spec item | Verdict | Action |
+|---|---|---|
+| `crates/operant-channels/src/orchestrator/` (14 files) | LIVE: `acp_server` used by `operant-gateway/acp.rs:13` and `acp_channel.rs:29`; `strip_tool_call_tags` used by `telegram/helpers.rs:462`; `mqtt` doc-referenced; `dispatch` uses `agent::classifier` | **KEEP** — plan stale |
+| `crates/robot-kit/`, `crates/operant-eval/` | already removed in earlier rounds | n/a |
+| `crates/operant-plugins/src/wasm_channel.rs` | DEAD: zero callers cross-crate (`WasmChannel`/`wasm_channel::` only inside the file); placeholder `Channel` impl that errors "send/listen not yet connected" | **REMOVED** — file deleted + `mod wasm_channel` decl in `operant-plugins/src/lib.rs` removed; build green |
+| `session_events` table + `record_event` | LIVE: `record_event` is called 9x in `agent/run.rs` (Observer API) | KEEP — plan stale (called `record_event zero runtime callers` but the runtime agent uses it actively) |
+| `WhatsAppAdapter::with_phone_number_id` | LIVE: called at `gateway_runner.rs:635` | KEEP — plan stale (R22 wired it) |
+| `whatsapp_web.rs` WIP `#[allow(dead_code)]` blocks (8 sites, lines 672-960) | LIVE channel (`orchestrator/factory.rs:172` mounts it) but the allowed functions are unused helpers; needs surgical per-block audit | **deferred** — mark with a `// plan 005: verify caller` comment and tackle in a follow-up |
+| `qq.rs` WIP `#[allow(dead_code)]` blocks (6 sites) | LIVE channel (`orchestrator/factory.rs:196`); same deferred status as whatsapp_web | deferred |
+| TUI `commands.rs:1152` "TODO: populate with live MCP server data" | live TUI surface; out of scope for this PR | deferred |
+| `operant-runtime/src/agent/{history_pruner,classifier,eval}.rs` | all LIVE: history_pruner has 4 callers in `loop_/`, 1 in orchestrator/startup; classifier has 1 caller in orchestrator/dispatch; eval has 1 caller in `agent.rs:4` | KEEP — plan stale (R5-3 verdict was about the whole `RuntimeAgent` stack being unused, but the agent itself is mounted in ws.rs:343) |
+
+Net win: `wasm_channel.rs` (-49 LOC) + the audit cleared 6 other items as live / already-removed. Binary size unchanged (plugin module was small).
+
+Workspace gate: clippy -D warnings green, core tests 1735 passing, gateway tests 205 passing, plugin crate rebuilt green. Live gateway msg 97893 from `@ip_operant_testing_bot` confirmed.
