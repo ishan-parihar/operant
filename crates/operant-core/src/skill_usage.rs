@@ -49,6 +49,11 @@ pub struct UsageRecord {
     pub last_used: DateTime<Utc>,
     /// Total usage count.
     pub use_count: u64,
+    /// Total patch/edit count (plan 007: the legacy `.usage.json`
+    /// `patch_count` field is preserved here so the existing
+    /// concurrent-write contract is observable).
+    #[serde(default)]
+    pub patch_count: u64,
     /// Whether this skill was explicitly created by the agent.
     #[serde(default)]
     pub agent_created: bool,
@@ -138,6 +143,7 @@ impl UsageTelemetry {
                 first_used: Utc::now(),
                 last_used: Utc::now(),
                 use_count: 0,
+                patch_count: 0,
                 agent_created: false,
                 lifecycle: LifecycleState::Active,
                 provenance: None,
@@ -170,6 +176,7 @@ impl UsageTelemetry {
     pub fn bump_patch(&mut self, name: &str) {
         let rec = self.ensure_record(name);
         rec.last_used = Utc::now();
+        rec.patch_count += 1;
     }
 
     /// Set the lifecycle state for a skill.
@@ -401,6 +408,23 @@ impl SkillUsageTracker {
         inner.list_active().into_iter().cloned().collect()
     }
 
+    /// Read the pinned flag for a skill. Plan 007: replaces the
+    /// legacy `.usage.json` reader in `skills_tool::is_pinned`. A
+    /// missing record returns `false` (the unpinned default) to
+    /// match the previous semantics.
+    pub fn is_pinned(&self, name: &str) -> bool {
+        let inner = self
+            .inner
+            .lock()
+            .expect("skill usage mutex poisoned — programmer error");
+        inner
+            .records
+            .iter()
+            .find(|r| r.name == name)
+            .map(|r| r.pinned)
+            .unwrap_or(false)
+    }
+
     #[expect(
         clippy::expect_used,
         reason = "poisoned lock: panic is the intended recovery"
@@ -451,6 +475,91 @@ impl SkillUsageTracker {
             .lock()
             .expect("skill usage mutex poisoned — programmer error");
         inner.bump_patch(name);
+    }
+
+    /// Add `count` to a record's `patch_count` (creating the record
+    /// if it doesn't exist), and bump `last_used`. The legacy
+    /// `.usage.json` migration uses this to merge per-skill counts
+    /// into the curator store. (Plan 007)
+    pub fn add_patch_count(&self, name: &str, count: u64) {
+        let mut inner = self
+            .inner
+            .lock()
+            .expect("skill usage mutex poisoned — programmer error");
+        let rec = inner.ensure_record(name);
+        rec.patch_count = rec.patch_count.saturating_add(count);
+        rec.last_used = Utc::now();
+    }
+
+    /// Plan 007: one-shot migration of the legacy `.usage.json` sidecar.
+    ///
+    /// Reads the legacy file at `legacy_path`, adds each entry's
+    /// `patch_count` to the corresponding record's `patch_count` in
+    /// the curator tracker, then deletes the legacy file. The
+    /// merge is additive — a record that already has
+    /// `patch_count = 5` and a legacy file reporting `3` ends at 8.
+    ///
+    /// Returns `Ok(true)` if the legacy file was found and migrated,
+    /// `Ok(false)` if no legacy file existed. A corrupt legacy
+    /// file is logged and removed; the curator store is left
+    /// untouched.
+    pub fn migrate_from_legacy(&self, legacy_path: &Path) -> std::io::Result<bool> {
+        if !legacy_path.exists() {
+            return Ok(false);
+        }
+        let raw = match std::fs::read_to_string(legacy_path) {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!(
+                    legacy = %legacy_path.display(),
+                    error = %e,
+                    "migrate_from_legacy: unreadable legacy file, removing"
+                );
+                let _ = std::fs::remove_file(legacy_path);
+                return Ok(true);
+            }
+        };
+        let parsed: std::collections::HashMap<String, serde_json::Value> =
+            match serde_json::from_str(&raw) {
+                Ok(m) => m,
+                Err(e) => {
+                    tracing::warn!(
+                        legacy = %legacy_path.display(),
+                        error = %e,
+                        "migrate_from_legacy: invalid JSON in legacy file, removing"
+                    );
+                    let _ = std::fs::remove_file(legacy_path);
+                    return Ok(true);
+                }
+            };
+        // `with_exclusive_lock` re-loads fresh state from disk under the
+        // OS file lock, then auto-saves the inner telemetry on drop.
+        let _ = self.with_exclusive_lock(|t| {
+            for (name, entry) in parsed {
+                let patch_count = entry
+                    .get("patch_count")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+                if patch_count == 0 {
+                    continue;
+                }
+                t.add_patch_count(&name, patch_count);
+            }
+            Ok(())
+        });
+        if let Err(e) = std::fs::remove_file(legacy_path) {
+            tracing::warn!(
+                legacy = %legacy_path.display(),
+                error = %e,
+                "migrate_from_legacy: curator store updated but legacy file removal failed"
+            );
+        } else {
+            tracing::info!(
+                legacy = %legacy_path.display(),
+                "migrate_from_legacy: legacy .usage.json merged into curator tracker and removed"
+            );
+        }
+        Ok(true)
     }
 
     #[expect(
@@ -850,5 +959,83 @@ mod tests {
         assert!(rec.agent_created);
         assert_eq!(rec.lifecycle, LifecycleState::Deprecated);
         assert_eq!(rec.use_count, 1);
+    }
+
+    /// Plan 007 / test plan: seed a legacy `.usage.json` and prove
+    /// the migrator merges `patch_count` additively into the curator
+    /// tracker, then removes the legacy file.
+    #[test]
+    fn migrate_from_legacy_merges_patch_counts_then_removes() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let root = tmp.path();
+        let curator_dir = root.join(".curator");
+        std::fs::create_dir_all(&curator_dir).expect("mkdir .curator");
+        let curator_path = curator_dir.join("usage.json");
+        let legacy_path = root.join(".usage.json");
+
+        // Seed a curator record with a non-zero patch_count so we can
+        // prove additive merge (not overwrite).
+        let tracker = SkillUsageTracker::new(curator_path.clone());
+        tracker.with_exclusive_lock(|t| {
+            t.bump_patch("skill-a");
+            t.bump_patch("skill-a");
+            Ok(())
+        }).expect("seed");
+        // After 2 bumps, skill-a.patch_count = 2.
+
+        // Seed the legacy file: skill-a already at 2, legacy adds 3
+        // (should become 5); skill-b is new and gets 4.
+        let legacy = serde_json::json!({
+            "skill-a": { "use_count": 0, "patch_count": 3 },
+            "skill-b": { "use_count": 0, "patch_count": 4 }
+        });
+        std::fs::write(&legacy_path, serde_json::to_string_pretty(&legacy).unwrap())
+            .expect("seed legacy");
+
+        // Run migration.
+        let did = tracker
+            .migrate_from_legacy(&legacy_path)
+            .expect("migrate ok");
+        assert!(did, "migrate must report it did something");
+        assert!(!legacy_path.exists(), "legacy file must be removed");
+
+        // Curator store carries merged counts.
+        let records: Vec<UsageRecord> = serde_json::from_str(
+            &std::fs::read_to_string(&curator_path).expect("curator readable"),
+        )
+        .expect("valid JSON");
+        let a = records.iter().find(|r| r.name == "skill-a").expect("a");
+        let b = records.iter().find(|r| r.name == "skill-b").expect("b");
+        assert_eq!(a.patch_count, 5, "skill-a: 2 (existing) + 3 (legacy) = 5");
+        assert_eq!(b.patch_count, 4, "skill-b: 0 + 4 = 4");
+    }
+
+    #[test]
+    fn migrate_from_legacy_returns_false_when_no_legacy_file() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let root = tmp.path();
+        let curator_dir = root.join(".curator");
+        std::fs::create_dir_all(&curator_dir).expect("mkdir");
+        let tracker = SkillUsageTracker::new(curator_dir.join("usage.json"));
+        let did = tracker
+            .migrate_from_legacy(&root.join(".usage.json"))
+            .expect("migrate ok");
+        assert!(!did, "no legacy file => migrate is a no-op");
+    }
+
+    #[test]
+    fn migrate_from_legacy_tolerates_corrupt_legacy_file() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let root = tmp.path();
+        let curator_dir = root.join(".curator");
+        std::fs::create_dir_all(&curator_dir).expect("mkdir");
+        let tracker = SkillUsageTracker::new(curator_dir.join("usage.json"));
+        let legacy_path = root.join(".usage.json");
+        std::fs::write(&legacy_path, b"this is not json").expect("seed corrupt");
+        let did = tracker
+            .migrate_from_legacy(&legacy_path)
+            .expect("migrate ok (corrupt input is removed, not an Err)");
+        assert!(did, "corrupt legacy must be cleaned up");
+        assert!(!legacy_path.exists(), "corrupt file must be removed");
     }
 }

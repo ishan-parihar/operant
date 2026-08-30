@@ -258,7 +258,7 @@ impl OperantAgent {
             None
         };
 
-        tokio::spawn(async move {
+        crate::daemon_pool::spawn("probe-extra", async move {
             debug!(
                 session_id = %session_id,
                 review_model = %review_model,

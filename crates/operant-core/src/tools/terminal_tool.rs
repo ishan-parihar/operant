@@ -10,6 +10,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 
 use crate::config::runtime_config;
+use crate::terminal_hints::annotate_failure;
 use crate::schema::ToolSchema;
 use crate::tools::terminal_backend::{self, CommandOutput};
 use crate::tools::{OperantTool, ToolContext, ToolResult};
@@ -90,6 +91,10 @@ impl OperantTool for TerminalTool {
                 }),
             )
         } else {
+            // Plan 010: append an actionable hint when the failure matches
+            // one of the terminal_hints heuristics. The hint becomes part
+            // of the model-visible error content so it can self-correct.
+            let hint = annotate_failure(&args.command, output.exit_code, &output.stderr);
             ToolResult::error(
                 "terminal",
                 serde_json::json!({
@@ -97,6 +102,7 @@ impl OperantTool for TerminalTool {
                     "stdout": output.stdout,
                     "stderr": output.stderr,
                     "runtime": backend.name(),
+                    "hint": hint,
                 })
                 .to_string(),
             )

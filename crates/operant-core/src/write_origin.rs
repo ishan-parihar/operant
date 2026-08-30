@@ -70,6 +70,23 @@ pub fn is_background_review() -> bool {
     *lock == "background_review"
 }
 
+/// Plan 012 alias: `current_origin()` mirrors hermes `write_approval.current_origin()`.
+/// Returns the active origin string (e.g. "user", "background_review", "gateway:telegram").
+pub fn current_origin() -> String {
+    get_write_origin()
+}
+
+/// Plan 012 alias: `is_background()` is the broader non-interactive-origin test.
+/// Returns true for origins originating from remote channels or async daemons
+/// (background_review, gateway:*, cron_*, code_execution). Interactive
+/// `user` and in-process `assistant_tool` origins bypass the gate.
+pub fn is_background() -> bool {
+    let origin = get_write_origin();
+    matches!(origin.as_str(), "background_review" | "gateway" | "cron" | "code_execution")
+        || origin.starts_with("gateway:")
+        || origin.starts_with("cron_")
+}
+
 /// Scoping guard — sets the origin on creation and resets it on drop.
 ///
 /// # Example

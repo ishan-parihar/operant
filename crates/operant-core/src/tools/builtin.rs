@@ -57,6 +57,7 @@ pub use super::terminal_tool::TerminalTool;
 pub use super::todo_tool::TodoTool;
 pub use super::tool_backend_helpers::ToolBackendTool;
 pub use super::transcription_tool::TranscriptionTool;
+pub use super::working_diff_tool::WorkingDiffTool;
 pub use super::tts_tool::TtsTool;
 pub use super::verification_tool::VerifyTaskTool;
 pub use super::video_analysis_tool::VideoAnalysisTool;
@@ -155,6 +156,7 @@ pub async fn register_builtin_tools(
     registry.register(BrowserDialogTool).await?;
     registry.register(BrowserCdpTool).await?;
     registry.register(TranscriptionTool::new()).await?;
+    registry.register(WorkingDiffTool).await?;
     registry.register(SpotifyPlaybackTool).await?;
     registry.register(SpotifyDevicesTool).await?;
     registry.register(SpotifyQueueTool).await?;
@@ -291,6 +293,7 @@ pub fn builtin_tool_names() -> Vec<&'static str> {
         "web_search",
         "web_scrape",
         "web_extract",
+        "working_diff",
         "web_crawl",
         "xai_http_request",
         "send_message",

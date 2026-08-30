@@ -21,7 +21,7 @@ use std::collections::HashSet;
 use std::sync::{LazyLock, RwLock};
 
 use crate::schema::ToolSchema;
-use crate::skill_usage::{SkillUsageTracker, with_exclusive_file_lock};
+use crate::skill_usage::SkillUsageTracker;
 use crate::tools::{OperantTool, ToolContext, ToolResult};
 use crate::write_origin::is_background_review;
 
@@ -117,11 +117,14 @@ static REVIEW_READ_SKILLS: LazyLock<RwLock<HashSet<String>>> =
     LazyLock::new(|| RwLock::new(HashSet::new()));
 
 /// Serializes `.usage.json` read-modify-write cycles. The main agent and the
-/// background-review daemon both call `skill_manage` concurrently, and other
-/// operant processes may share the same skills dir — without this, two
-/// interleaved non-atomic writes corrupt the telemetry file (silently
-/// unpinning skills and zeroing usage data). Mirrors hermes's
-/// `.usage.json.lock` (`skill_usage.py`). (R20)
+/// `USAGE_TELEMETRY_LOCK` was the in-process lock around the legacy
+/// `.usage.json` writer. Plan 007 removed the legacy writer; the
+/// curator tracker takes its own `with_exclusive_lock` (advisory OS
+/// file lock + atomic save) so this is no longer needed. Kept as
+/// dead-code with a `#[expect]` so future agents who grep for the
+/// name see the migration note rather than re-introducing the
+/// legacy writer.
+#[allow(dead_code)]
 static USAGE_TELEMETRY_LOCK: LazyLock<std::sync::Mutex<()>> =
     LazyLock::new(|| std::sync::Mutex::new(()));
 
@@ -1940,106 +1943,36 @@ impl SkillManageTool {
 
     // ── Pinned check ────────────────────────────────────────────────
     fn is_pinned(&self, name: &str) -> bool {
-        let usage_path = self.root_dir.join(".usage.json");
-        if !usage_path.exists() {
-            return false;
-        }
-        let telemetry: std::collections::HashMap<String, serde_json::Value> =
-            fs::read_to_string(&usage_path)
-                .ok()
-                .and_then(|c| serde_json::from_str(&c).ok())
-                .unwrap_or_default();
-        telemetry
-            .get(name)
-            .and_then(|v| v.get("pinned"))
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false)
+        // Plan 007: read pinned from the curator tracker (the
+        // single source of truth for skill telemetry). The legacy
+        // `.usage.json` reader was removed — see `record_usage` below
+        // for the consolidation rationale.
+        let tracker = SkillUsageTracker::new(self.root_dir.join(".curator").join("usage.json"));
+        tracker.is_pinned(name)
     }
 
     // ── Telemetry ────────────────────────────────────────────────────
     fn record_usage(&self, name: &str, action: &str) {
-        // Serialize the read-modify-write across every writer of these sidecar
-        // files: in-process (main agent task + background-review daemon) via
-        // USAGE_TELEMETRY_LOCK, and across processes sharing the skills dir
-        // (e.g. `operant curator`, concurrent agent runs) via an OS advisory
-        // lock on the sidecar files themselves. (R20: the previous direct
-        // `fs::write` could interleave two writers and corrupt `.usage.json`,
-        // silently unpinning skills and zeroing telemetry; R21: the OS lock
-        // also covers the curator-tracker write below.)
-        let _guard = USAGE_TELEMETRY_LOCK
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-
-        let usage_path = self.root_dir.join(".usage.json");
-        with_exclusive_file_lock(&usage_path, || {
-            let mut telemetry: std::collections::HashMap<String, serde_json::Value> =
-                if usage_path.exists() {
-                    fs::read_to_string(&usage_path)
-                        .ok()
-                        .and_then(|c| serde_json::from_str(&c).ok())
-                        .unwrap_or_default()
-                } else {
-                    std::collections::HashMap::new()
-                };
-            let entry = telemetry
-                .entry(name.to_string())
-                .or_insert_with(|| json!({ "use_count": 0, "patch_count": 0 }));
-            if action == "delete" {
-                telemetry.remove(name);
-            } else if action == "patch"
-                || action == "edit"
-                || action == "write_file"
-                || action == "remove_file"
-            {
-                if let Some(obj) = entry.as_object_mut() {
-                    let count = obj.get("patch_count").and_then(|v| v.as_u64()).unwrap_or(0);
-                    obj.insert("patch_count".into(), json!(count + 1));
-                }
-            } else if action == "create"
-                && let Some(obj) = entry.as_object_mut()
-            {
-                obj.insert("created_by".into(), json!("agent"));
+        // Plan 007: the curator tracker (`.curator/usage.json`) is the
+        // single source of truth for skill telemetry. R21's bridge call
+        // stays; the legacy `.usage.json` write is removed.
+        //
+        // Locking: `with_exclusive_lock` re-loads fresh state from
+        // disk inside the OS lock, so concurrent `skill_manage` actions
+        // (main agent + background-review daemon, or a separate
+        // `operant curator` process) never lose records, and a corrupt
+        // sidecar self-heals on the next save. (R20/R21 contract.)
+        let tracker = SkillUsageTracker::new(self.root_dir.join(".curator").join("usage.json"));
+        let is_bg = is_background_review();
+        let _ = tracker.with_exclusive_lock(|t| {
+            match action {
+                "create" => t.record_created(name, is_bg),
+                "delete" => t.remove(name),
+                "patch" | "edit" | "write_file" | "remove_file" => t.bump_patch(name),
+                _ => {}
             }
-            if let Some(parent) = usage_path.parent() {
-                let _ = fs::create_dir_all(parent);
-            }
-            if let Ok(content) = serde_json::to_string_pretty(&telemetry) {
-                atomic_write_json(&usage_path, &content);
-            }
-
-            // R21: bridge real agent activity into the curator tracker so the
-            // archival pipeline has data to work on (hermes
-            // skill_manager_tool.py parity — record_created / bump_patch /
-            // forget go to the same `.curator/usage.json` the curator reads).
-            // `with_exclusive_lock` re-loads fresh state from disk inside the
-            // OS lock, so concurrent skill_manage actions (main agent +
-            // background-review daemon, or a separate `operant curator`
-            // process) never lose curator records, and a corrupt sidecar
-            // self-heals on the next save.
-            let tracker = SkillUsageTracker::new(self.root_dir.join(".curator").join("usage.json"));
-            let _ = tracker.with_exclusive_lock(|t| {
-                match action {
-                    "create" => t.record_created(name, is_background_review()),
-                    "delete" => t.remove(name),
-                    "patch" | "edit" | "write_file" | "remove_file" => t.bump_patch(name),
-                    _ => {}
-                }
-                Ok(())
-            });
+            Ok(())
         });
-    }
-}
-
-/// Write a JSON file atomically: write to a sibling temp file, then rename
-/// over the target. A crash or concurrent reader never observes a
-/// partially-written file. (R20)
-fn atomic_write_json(path: &Path, content: &str) {
-    let tmp = path.with_extension("json.tmp");
-    if let Some(parent) = tmp.parent() {
-        let _ = fs::create_dir_all(parent);
-    }
-    if fs::write(&tmp, content).is_ok() {
-        let _ = fs::rename(&tmp, path);
     }
 }
 
@@ -2139,11 +2072,13 @@ mod tests {
     }
 
     #[test]
-    fn concurrent_record_usage_preserves_telemetry_file() {
+    fn concurrent_record_usage_preserves_curator_telemetry() {
         // The main agent and the background-review daemon both call
-        // `skill_manage` concurrently; a non-atomic `.usage.json` write would
-        // corrupt the file. The telemetry must remain valid JSON with intact
-        // counts after concurrent writers. (R20)
+        // `skill_manage` concurrently; a non-atomic telemetry write would
+        // corrupt the file. The curator tracker is now the single
+        // source of truth (plan 007) and the lock + atomic save in
+        // `SkillUsageTracker` must keep patch counts intact under
+        // concurrent writers. (R20 — same contract, new home.)
         let (_tmp, skills_dir) = setup_test_env();
 
         let mut handles = Vec::new();
@@ -2160,18 +2095,22 @@ mod tests {
             handle.join().unwrap();
         }
 
-        let usage_path = skills_dir.join(".usage.json");
-        let content = fs::read_to_string(&usage_path).unwrap();
-        let parsed: serde_json::Value = serde_json::from_str(&content)
-            .expect("usage telemetry must remain valid JSON after concurrent writes");
+        // The legacy `.usage.json` file is no longer written.
+        let legacy_path = skills_dir.join(".usage.json");
+        assert!(
+            !legacy_path.exists(),
+            "plan 007: legacy telemetry file must not be created (got {legacy_path:?})"
+        );
+
+        // The curator store carries every patch.
+        let curator_path = skills_dir.join(".curator").join("usage.json");
+        let content = std::fs::read_to_string(&curator_path)
+            .expect("curator usage.json must exist after concurrent writers");
+        let records: Vec<crate::skill_usage::UsageRecord> =
+            serde_json::from_str(&content).expect("self-healed to valid JSON");
         // 4 skills × 8 threads × 25 patches = 200 total patch_count.
-        let total: u64 = parsed
-            .as_object()
-            .expect("telemetry must be an object")
-            .values()
-            .filter_map(|v| v.get("patch_count").and_then(|c| c.as_u64()))
-            .sum();
-        assert_eq!(total, 200, "no patch_count may be lost to write races");
+        let total: u64 = records.iter().map(|r| r.patch_count).sum();
+        assert_eq!(total, 200, "no patch may be lost to write races");
     }
 
     #[test]

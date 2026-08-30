@@ -58,7 +58,7 @@ R40 = 005 · R41 = 007+013 · R42 = 014. Adjust to reality; keep the dependency 
 | 001-local-quality-baseline | P0 | ✅ landed (c5dc8f43 — clippy -D warnings workspace green) |
 | 002-config-secret-permissions | P0 | ✅ landed (cb8a97ab — fs_secrets helper, .env + operant.toml + database.db all 0o600) |
 | 003-gateway-stub-surface | P0 | ✅ landed (c8bcef14 — 9 dead 501s removed, /api/metrics wired) |
-| 004-db-migration-framework | P0 | ⬜ planned |
+| 004-db-migration-framework | P0 | ✅ landed (c13ab341 — append-only runner + v1 stamp on 3 DBs) |
 | 005-dead-code-decommission | P1 | ⬜ planned |
 | 006-agent-loop-reconciliation | P1 | ✅ landed (23f33907 — turn_rules shared between OperantAgent + runtime Agent) |
 | 015-pk-persistent-kernel-harness | P1 | ✅ Phase 0 landed (c6078d5f — pk-sidecar scaffold, [pk] config, session_id on ToolContext) |

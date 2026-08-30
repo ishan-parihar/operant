@@ -978,7 +978,7 @@ impl OperantAgent {
                                 let user_text = user_query.clone();
                                 let assistant_text = result.content.clone();
                                 let provider_clone = provider.clone();
-                                tokio::spawn(async move {
+                                crate::daemon_pool::spawn("memory-sync", async move {
                                     if let Err(e) =
                                         provider_clone.sync_turn(&user_text, &assistant_text).await
                                     {

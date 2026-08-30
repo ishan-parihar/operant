@@ -48,6 +48,7 @@ pub mod spotify_tool;
 pub mod sub_agent_tool;
 pub mod terminal_backend;
 pub mod terminal_tool;
+pub mod working_diff_tool;
 pub mod todo_tool;
 pub mod tool_backend_helpers;
 pub mod tool_search;

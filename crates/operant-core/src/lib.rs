@@ -59,6 +59,8 @@ pub mod credential_files;
 pub mod credential_pool;
 pub mod cronjobs;
 pub mod curator;
+pub mod daemon_pool;
+pub mod terminal_hints;
 pub mod database;
 pub mod distillation;
 pub mod env_passthrough;
@@ -109,6 +111,7 @@ pub mod turn_summary;
 pub mod user_question;
 pub mod verification;
 pub mod voice;
+pub mod write_approval;
 pub mod write_origin;
 
 pub use observer::{ConsoleObserver, Observer, ObserverEvent, ObserverMetric};
