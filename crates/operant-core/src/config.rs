@@ -39,6 +39,11 @@ pub struct AppConfig {
     pub auxiliary_models: AuxiliaryModels,
     pub moa: MoaSettings,
     pub checkpoints: CheckpointsSettings,
+    /// Plan 016 / Phase 0 config surface for `operant-harness`. Dark-merged:
+    /// `enabled` defaults to `false` and no provider is mounted unless the
+    /// user opts in. Phase 2+ wires the kernel into the live
+    /// `ToolRegistry` / `HookRunner` behind this flag.
+    pub harness: HarnessSettings,
     pub database_path: PathBuf,
     /// Provider profiles + ordered cross-provider fallback chain
     /// (`[providers]`, hermes `fallback_providers` parity). Consumed by the
@@ -82,6 +87,7 @@ impl Default for AppConfig {
             credential_pool: CredentialPoolSettings::default(),
             terminal_backend: TerminalBackend::Local,
             checkpoints: CheckpointsSettings::default(),
+            harness: HarnessSettings::default(),
             auxiliary_models: AuxiliaryModels::default(),
             moa: MoaSettings::default(),
             database_path,
@@ -684,6 +690,38 @@ pub struct CheckpointsSettings {
     pub base_dir: Option<PathBuf>,
     /// Maximum snapshots kept per working directory.
     pub max_snapshots: usize,
+}
+
+/// Plan 016 / Phase 0 config surface for the `operant-harness` kernel.
+/// Dark-merged: `enabled` defaults to `false` and no provider is mounted
+/// unless the user opts in. Phase 2+ wires the kernel into the live
+/// `ToolRegistry` / `HookRunner` behind this flag.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct HarnessSettings {
+    /// Master switch. When `false` (the default), the harness is
+    /// constructed but no provider is mounted — the live agent loop
+    /// is unaffected. Set to `true` once a Phase 2 dispatch path is
+    /// plumbed and the composition layer is loaded.
+    pub enabled: bool,
+    /// Optional path to an `architecture.toml` (Phase 3). When unset,
+    /// the kernel starts empty. The path is resolved relative to
+    /// `~/.operant/` if relative.
+    pub architecture_toml: Option<PathBuf>,
+    /// Cap on the number of simultaneously active providers. Default
+    /// 64. Mirrors the 016 plan's "kernel" guardrail; keeps a single
+    /// `Harness` instance from absorbing unbounded WASM modules.
+    pub max_active_providers: usize,
+}
+
+impl Default for HarnessSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            architecture_toml: None,
+            max_active_providers: 64,
+        }
+    }
 }
 
 impl Default for CheckpointsSettings {
@@ -1613,6 +1651,67 @@ whatsapp_token = "wa-token"
 "#;
         let parsed = parse_config_str(old, std::path::Path::new("old.toml")).expect("valid TOML");
         assert_eq!(parsed.gateway.whatsapp_phone_number_id, None);
+    }
+
+    /// Plan 016 Phase 0 / step 1: prove the [harness] TOML section
+    /// round-trips through parse_config_str, and that a missing
+    /// section produces the dark-merge default (enabled=false).
+    #[test]
+    fn harness_settings_roundtrip_and_default_is_dark() {
+        // Section present: enabled=true + an architecture path + cap.
+        let toml = r#"
+[harness]
+enabled = true
+architecture_toml = "/etc/operant/arch.toml"
+max_active_providers = 128
+"#;
+        let parsed = parse_config_str(toml, std::path::Path::new("harness.toml"))
+            .expect("valid TOML with [harness] section");
+        assert!(parsed.harness.enabled, "explicit enabled=true is honored");
+        assert_eq!(
+            parsed.harness.architecture_toml.as_deref(),
+            Some(std::path::Path::new("/etc/operant/arch.toml"))
+        );
+        assert_eq!(parsed.harness.max_active_providers, 128);
+
+        // Re-serialize: settings survive a write/read cycle (proves
+        // the surface is stable for the Phase 3 composition layer).
+        let round_tripped =
+            toml::to_string(&parsed.harness).expect("HarnessSettings serializes");
+        let reparsed: HarnessSettings = toml::from_str(&round_tripped)
+            .expect("HarnessSettings round-trips through TOML");
+        assert!(reparsed.enabled, "round-trip preserves enabled=true");
+        assert_eq!(reparsed.max_active_providers, 128);
+
+        // Section absent: dark-merge default — `enabled` is `false`,
+        // the kernel is constructed but no provider is mounted.
+        let no_section = r#"
+[client]
+base_url = "https://api.openai.com/v1"
+"#;
+        let parsed = parse_config_str(no_section, std::path::Path::new("default.toml"))
+            .expect("valid TOML without [harness] still parses");
+        assert!(
+            !parsed.harness.enabled,
+            "missing [harness] section defaults to enabled=false (dark-merge)"
+        );
+        assert_eq!(
+            parsed.harness.max_active_providers, 64,
+            "default cap is 64 per the 016 plan's kernel guardrail"
+        );
+        assert!(parsed.harness.architecture_toml.is_none());
+
+        // Unknown [harness] keys are rejected (deny_unknown_fields).
+        let bogus = r#"
+[harness]
+enabled = true
+wonderful_unknown_key = 42
+"#;
+        let err = parse_config_str(bogus, std::path::Path::new("bogus.toml"));
+        assert!(
+            err.is_err(),
+            "deny_unknown_fields must reject unknown [harness] keys"
+        );
     }
 
     #[test]

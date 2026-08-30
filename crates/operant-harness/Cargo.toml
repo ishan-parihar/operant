@@ -1,0 +1,21 @@
+[package]
+name = "operant-harness"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Plan 016: Composable provider runtime (Cordis-paradigm) with reversible effects, transactional HMR, and live self-extension. Pure library, no operant deps beyond operant-api."
+publish = false
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+parking_lot.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

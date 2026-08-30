@@ -60,6 +60,8 @@ R40 = 005 · R41 = 007+013 · R42 = 014. Adjust to reality; keep the dependency 
 | 003-gateway-stub-surface | P0 | ✅ landed (c8bcef14 — 9 dead 501s removed, /api/metrics wired) |
 | 004-db-migration-framework | P0 | ⬜ planned |
 | 005-dead-code-decommission | P1 | ⬜ planned |
+| 006-agent-loop-reconciliation | P1 | ✅ landed (23f33907 — turn_rules shared between OperantAgent + runtime Agent) |
+| 005-dead-code-decommission | P1 | ⬜ planned |
 | 006-agent-loop-reconciliation | P1 | ⬜ planned |
 | 007-telemetry-consolidation | P1 | ⬜ planned |
 | 008-parity-working-diff | P1 | ⬜ planned |

@@ -4919,6 +4919,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "operant-harness"
+version = "0.2.0"
+dependencies = [
+ "parking_lot",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "operant-infra"
 version = "0.2.0"
 dependencies = [
