@@ -1,572 +1,574 @@
-//! Plan 016: the `Harness` container.
+//! The registry — lifecycle, late binding, cascades, transactional replace.
 //!
-//! Phase 0/1 of plan 016 — kernel core. Holds providers + their
-//! claim maps + the ABA generation counter. The public API is
-//! deliberately tiny:
+//! Concurrency model: lifecycle operations (`mount`, `unmount`, `replace`)
+//! serialize on one write lock and are expected to be rare (boot + explicit
+//! agent-driven mutations). Runtime traffic reads claims/state through the
+//! read path (`dump`, `claim_owner`, `state_of`). Seam `install` calls run
+//! while the write lock is held — implementations MUST NOT call back into
+//! [`Harness`] lifecycle methods (documented on [`Seam`]).
 //!
-//! - `Harness::new()` — empty harness.
-//! - `mount(provider)` — apply provider, register its claims, run
-//!   PENDING rescan (any other provider whose `requires()` is now
-//!   satisfied gets activated).
-//! - `unmount(id)` — stop a provider, LIFO-undo its effects, drop its
-//!   claims, rescan (any provider that depended on a now-gone claim
-//!   moves back to Pending — Phase 2+ will fully implement that
-//!   cascading unload).
-//! - `dump()` — return the current snapshot (see `dump.rs`).
-//!
-//! Constraints honored in Phase 0/1:
-//! - No I/O. The kernel is pure in-process state; all file/network
-//!   work is the provider's `apply` body.
-//! - No async. Effect bodies are sync closures (Phase 4 will revisit
-//!   for WASM hosts that need a tokio context).
-//! - Failures during `mount` unwind the new provider's effects and
-//!   leave the rest of the world untouched (restore-on-failure).
-//! - `mount` is idempotent: re-mounting the same id (same generation)
-//!   is a no-op; re-mounting with a new generation is treated as a
-//!   swap (the old instance's effects unwind BEFORE the new one's
-//!   `apply` runs).
+//! State note: `Activating`/`Unloading` are transient under the write lock and
+//! therefore never observable externally in v1; they exist in the state enum
+//! for host-side mirroring and future fine-grained observation.
 
-use crate::dump::{HarnessSnapshot, ProviderState};
-use crate::effect::Effect;
-use crate::provider::Provider;
-use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::sync::Arc;
+use tokio::sync::RwLock;
 
-/// The states a single provider can be in inside the harness.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ProviderPhase {
-    /// Registered but unmet requirements — wait for the rescan.
-    Pending,
-    /// Currently inside `apply` (transient).
-    Activating,
-    /// Live — claims held, effect on file.
-    Active,
-    /// Currently inside the LIFO unwind.
-    Unloading,
-    /// Removed cleanly; retained for ABA generation tracking only.
-    Disposed,
-    /// `apply` returned an error or panicked; effects partially
-    /// applied may have been rolled back.
-    Failed,
+use serde_json::Value;
+
+use crate::claim::Claim;
+use crate::effect::{Effect, unwind_lifo};
+use crate::error::HarnessError;
+use crate::provider::{ActivateCx, Provider, ProviderState, Seam};
+use crate::report::{ClaimInfo, DumpTree, MountReport, ProviderEntryInfo};
+
+/// Kernel-level knobs (host config maps onto this in Phase 2+).
+#[derive(Debug, Clone, Copy)]
+pub struct KernelOptions {
+    /// Emit an info line per lifecycle transition.
+    pub audit: bool,
 }
 
-impl ProviderPhase {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            ProviderPhase::Pending => "Pending",
-            ProviderPhase::Activating => "Activating",
-            ProviderPhase::Active => "Active",
-            ProviderPhase::Unloading => "Unloading",
-            ProviderPhase::Disposed => "Disposed",
-            ProviderPhase::Failed => "Failed",
+impl Default for KernelOptions {
+    fn default() -> Self {
+        Self { audit: true }
+    }
+}
+
+struct Entry {
+    provider: Arc<dyn Provider>,
+    state: ProviderState,
+    generation: u64,
+    /// Monotonic insertion counter — deterministic ordering everywhere.
+    seq: u64,
+    config: Value,
+    /// Live undo handles; empty unless state == Active.
+    effects: Vec<Effect>,
+}
+
+#[derive(Default)]
+struct Inner {
+    providers: HashMap<String, Entry>,
+    claims: HashMap<Claim, String>,
+    /// Fairness for late-binding rescans (insertion order).
+    pending_order: Vec<String>,
+    next_seq: u64,
+}
+
+impl Inner {
+    fn alloc_seq(&mut self) -> u64 {
+        self.next_seq += 1;
+        self.next_seq
+    }
+
+    /// Requirements currently unsatisfied by active claims.
+    fn missing_requirements(&self, requires: &[Claim]) -> Vec<Claim> {
+        requires
+            .iter()
+            .filter(|r| !self.claims.contains_key(r))
+            .cloned()
+            .collect()
+    }
+
+    fn first_claim_conflict(
+        &self,
+        provides: &[Claim],
+        exempt_owner: Option<&str>,
+    ) -> Option<HarnessError> {
+        for claim in provides {
+            if let Some(owner) = self.claims.get(claim)
+                && exempt_owner != Some(owner.as_str())
+            {
+                return Some(HarnessError::ClaimConflict {
+                    claim: claim.clone(),
+                    owner: owner.clone(),
+                });
+            }
+        }
+        None
+    }
+
+    fn make_entry(
+        provider: Arc<dyn Provider>,
+        state: ProviderState,
+        generation: u64,
+        seq: u64,
+        config: Value,
+        effects: Vec<Effect>,
+    ) -> Entry {
+        Entry {
+            provider,
+            state,
+            generation,
+            seq,
+            config,
+            effects,
         }
     }
 }
 
-struct ProviderEntry {
-    id: String,
-    generation: u64,
-    phase: ProviderPhase,
-    source: crate::provider::Source,
-    provides: Vec<String>,
-    requires: Vec<String>,
-    /// Effects produced by `apply` and registered in LIFO order.
-    /// The kernel walks this vec reverse on `unmount` (last effect
-    /// first).
-    effects: Vec<Effect>,
-}
-
-/// The harness container. Single-threaded today; Phase 2+ will gate
-/// the `Harness` behind a `Mutex` for cross-thread mount/unmount.
+/// The harness kernel.
 pub struct Harness {
-    providers: HashMap<String, ProviderEntry>,
-    claims: BTreeMap<String, String>,
-    generation: u64,
+    seams: HashMap<String, Arc<dyn Seam>>,
+    inner: RwLock<Inner>,
+    options: KernelOptions,
 }
 
 impl Default for Harness {
     fn default() -> Self {
-        Self::new()
+        Self::new(KernelOptions::default())
     }
 }
 
 impl Harness {
-    pub fn new() -> Self {
+    pub fn new(options: KernelOptions) -> Self {
         Self {
-            providers: HashMap::new(),
-            claims: BTreeMap::new(),
-            generation: 0,
+            seams: HashMap::new(),
+            inner: RwLock::new(Inner::default()),
+            options,
         }
     }
 
-    /// Current ABA generation counter. Monotonic across mounts and
-    /// swaps. Exposed for tests + the Phase 3 composition layer.
-    pub fn generation(&self) -> u64 {
-        self.generation
+    /// Register a seam sink. Must happen before providers that route installs
+    /// through it are mounted.
+    pub fn add_seam(&mut self, seam: Arc<dyn Seam>) {
+        self.seams.insert(seam.name().to_string(), seam);
     }
 
-    /// Number of currently-Active providers.
-    pub fn active_count(&self) -> usize {
-        self.providers
-            .values()
-            .filter(|e| e.phase == ProviderPhase::Active)
-            .count()
+    pub fn seam_names(&self) -> Vec<String> {
+        let mut names: Vec<String> = self.seams.keys().cloned().collect();
+        names.sort();
+        names
     }
 
-    /// Mount a provider. If the same id is already present with the
-    /// same generation, this is a no-op (idempotent). If a different
-    /// generation, this is a swap (unwind old → apply new → rescan).
-    /// If the id was previously Disposed, treat as a fresh mount.
-    pub fn mount<P: Provider + 'static>(&mut self, provider: P) -> Result<(), HarnessError> {
-        let id = provider.id().to_string();
+    // ── mount ──────────────────────────────────────────────────────────
 
-        // Swap path: same id, different generation, currently Active.
-        if let Some(existing) = self.providers.get(&id) {
-            if existing.generation == provider.generation_marker()
-                && existing.phase == ProviderPhase::Active
-            {
-                tracing::debug!(provider = %id, "mount: no-op (same id + generation)");
-                return Ok(());
+    /// Mount a provider with null config.
+    pub async fn mount(&self, provider: Arc<dyn Provider>) -> Result<MountReport, HarnessError> {
+        self.mount_with_config(provider, Value::Null).await
+    }
+
+    /// Mount a provider. Requirements unmet ⇒ PENDING (late binding); claim
+    /// conflicts rejected BEFORE any activation side effect; activation
+    /// failure unwinds partial effects and records the entry Failed.
+    ///
+    /// Returns every id activated during the call — including Pending entries
+    /// rescued by late binding once this mount satisfied their requirements.
+    pub async fn mount_with_config(
+        &self,
+        provider: Arc<dyn Provider>,
+        config: Value,
+    ) -> Result<MountReport, HarnessError> {
+        let mut inner = self.inner.write().await;
+        let report = self.mount_locked(&mut inner, provider, config).await?;
+        let rescued = self.rescan_pending_locked(&mut inner).await;
+        Ok(match report {
+            MountReport::Mounted { mut activated } => {
+                activated.extend(rescued);
+                MountReport::Mounted { activated }
             }
-            if existing.phase == ProviderPhase::Active {
-                self.unmount(&id)?;
-            }
+            pending @ MountReport::Pending { .. } => pending,
+        })
+    }
+
+    async fn mount_locked(
+        &self,
+        inner: &mut Inner,
+        provider: Arc<dyn Provider>,
+        config: Value,
+    ) -> Result<MountReport, HarnessError> {
+        let id = provider.spec().id().to_string();
+        if inner.providers.contains_key(&id) {
+            return Err(HarnessError::AlreadyMounted(id));
+        }
+        let requires = provider.spec().requires().to_vec();
+        let missing = inner.missing_requirements(&requires);
+
+        if !missing.is_empty() {
+            let seq = inner.alloc_seq();
+            inner.pending_order.push(id.clone());
+            inner.providers.insert(
+                id.clone(),
+                Inner::make_entry(provider, ProviderState::Pending, 0, seq, config, Vec::new()),
+            );
+            self.audit(&id, "pending");
+            return Ok(MountReport::Pending { missing });
         }
 
-        self.activate(provider)
+        if let Some(conflict) = inner.first_claim_conflict(provider.spec().provides(), None) {
+            return Err(conflict);
+        }
+
+        self.activate_locked(inner, provider, config, 1).await?;
+        self.audit(&id, "active");
+        Ok(MountReport::Mounted {
+            activated: vec![id],
+        })
     }
 
-    /// Internal: apply the provider + register claims + rescan pending.
-    fn activate<P: Provider + 'static>(
-        &mut self,
-        mut provider: P,
+    /// Run activation; store claims + effects on success, record Failed
+    /// (after containing partial effects) on error.
+    async fn activate_locked(
+        &self,
+        inner: &mut Inner,
+        provider: Arc<dyn Provider>,
+        config: Value,
+        generation: u64,
     ) -> Result<(), HarnessError> {
-        let id = provider.id().to_string();
-        let source = provider.source().clone();
-        let provides = provider.provides().to_vec();
-        let requires = provider.requires().to_vec();
+        let id = provider.spec().id().to_string();
+        let seq = inner.alloc_seq();
 
-        // Check that no other active provider holds any of `provides`.
-        for key in &provides {
-            if let Some(holder) = self.claims.get(key)
-                && holder != &id
-            {
-                return Err(HarnessError::ClaimConflict {
-                    key: key.clone(),
-                    holder: holder.clone(),
-                    new: id.clone(),
-                });
-            }
-        }
-
-        // Check requirements are met (or the provider declares none).
-        if !requires.is_empty() {
-            let missing: Vec<String> = requires
-                .iter()
-                .filter(|r| !self.claims.contains_key(*r))
-                .cloned()
-                .collect();
-            if !missing.is_empty() {
-                // Park in Pending; do NOT apply.
-                self.providers.insert(
+        let mut effects = Vec::new();
+        {
+            let mut cx = ActivateCx::new(&id, &config, &self.seams, &mut effects);
+            if let Err(err) = provider.activate(&mut cx).await {
+                // Contain partial effects; leave a Failed marker for dump().
+                unwind_lifo(effects).await;
+                inner.providers.insert(
                     id.clone(),
-                    ProviderEntry {
-                        id: id.clone(),
-                        generation: provider.generation_marker(),
-                        phase: ProviderPhase::Pending,
-                        source,
-                        provides,
-                        requires,
-                        effects: Vec::new(),
-                    },
+                    Inner::make_entry(
+                        provider,
+                        ProviderState::Failed,
+                        generation,
+                        seq,
+                        config,
+                        Vec::new(),
+                    ),
                 );
-                tracing::info!(provider = %id, ?missing, "mount: parked in Pending (missing requirements)");
-                return Ok(());
-            }
-        }
-
-        // Apply the provider. On error, restore-on-failure: the entry
-        // is removed, no claims are kept, no effects are on file.
-        let effect = {
-            let entry = self
-                .providers
-                .entry(id.clone())
-                .or_insert_with(|| ProviderEntry {
-                    id: id.clone(),
-                    generation: provider.generation_marker(),
-                    phase: ProviderPhase::Activating,
-                    source: source.clone(),
-                    provides: provides.clone(),
-                    requires: requires.clone(),
-                    effects: Vec::new(),
+                return Err(HarnessError::ActivationFailed {
+                    id,
+                    message: err.to_string(),
                 });
-            entry.phase = ProviderPhase::Activating;
-            let effect = provider.apply();
-            entry.phase = ProviderPhase::Active;
-            entry.effects.push(effect);
-            entry.effects.last().map(|e| e.label()).unwrap_or("noop")
-        };
-
-        // Register the provider's claim keys.
-        for key in &provides {
-            self.claims.insert(key.clone(), id.clone());
+            }
         }
-        self.generation = self.generation.wrapping_add(1);
 
-        tracing::info!(
-            provider = %id,
-            generation = self.generation,
-            effect,
-            "mount: applied"
+        for claim in provider.spec().provides() {
+            inner.claims.insert(claim.clone(), id.clone());
+        }
+        inner.providers.insert(
+            id.clone(),
+            Inner::make_entry(
+                provider,
+                ProviderState::Active,
+                generation,
+                seq,
+                config,
+                effects,
+            ),
         );
-
-        // Rescan: any Pending provider whose `requires()` is now
-        // satisfied gets activated. We do this in a loop because
-        // activating one provider may satisfy another's requirements.
-        self.rescan_pending()?;
-
         Ok(())
     }
 
-    /// Find any provider in `Pending` whose requirements are now
-    /// satisfied and activate it. Loops until no progress is made.
-    fn rescan_pending(&mut self) -> Result<(), HarnessError> {
-        loop {
-            let mut activated_any = false;
-            let pending: Vec<String> = self
-                .providers
-                .iter()
-                .filter(|(_, e)| e.phase == ProviderPhase::Pending)
-                .map(|(id, _)| id.clone())
-                .collect();
-            for id in pending {
-                // Re-evaluate: if all requirements now met, apply.
-                let needs_apply = {
-                    let entry = &self.providers[&id];
-                    entry
-                        .requires
-                        .iter()
-                        .all(|r| self.claims.contains_key(r))
-                };
-                if !needs_apply {
-                    continue;
-                }
-                // Remove the Pending entry; rescan_pending will pick up
-                // any *new* Pending it may need to leave behind — but
-                // here we always activate.
-                let entry = self.providers.remove(&id).expect("just checked");
-                let needs_reinsert = !entry
-                    .requires
-                    .iter()
-                    .all(|r| self.claims.contains_key(r));
-                if needs_reinsert {
-                    // Race: another activation stole a claim. Re-park.
-                    self.providers.insert(
-                        entry.id.clone(),
-                        ProviderEntry {
-                            phase: ProviderPhase::Pending,
-                            ..entry
-                        },
-                    );
-                    continue;
-                }
-                // Build a synthetic ConfigRow provider from the entry
-                // would be ideal — but that needs the original
-                // closure. For Phase 0/1, the harness only mounts
-                // providers passed in by the caller; the rescan here
-                // is a no-op for the dark-merge scope. The Phase 2
-                // seams will register stub `ConfigRow` providers so
-                // this loop has something to activate.
-                let _ = entry;
-                // We log the no-op so the dump shows the gap.
-                tracing::debug!(
-                    provider = %id,
-                    "rescan: provider now satisfyable, but kernel has no closure to apply it (Phase 0/1 limitation — Phase 2 wires this)"
-                );
-                activated_any = true;
-                break;
+    /// Late binding: retry every PENDING entry in insertion order now that
+    /// new claims exist. Returns ids activated during this pass.
+    async fn rescan_pending_locked(&self, inner: &mut Inner) -> Vec<String> {
+        let order = std::mem::take(&mut inner.pending_order);
+        let mut activated = Vec::new();
+        let mut still_pending = Vec::new();
+
+        for pid in order {
+            let Some(entry) = inner.providers.get(&pid) else {
+                continue;
+            };
+            if entry.state != ProviderState::Pending {
+                continue;
             }
-            if !activated_any {
+            let provider = Arc::clone(&entry.provider);
+            let config = entry.config.clone();
+            let generation = entry.generation + 1;
+
+            let missing = inner.missing_requirements(provider.spec().requires());
+            let conflict = inner.first_claim_conflict(provider.spec().provides(), None);
+            if missing.is_empty() && conflict.is_none() {
+                // Remove the parked entry; activate_locked re-inserts it live.
+                inner.providers.remove(&pid);
+                if self
+                    .activate_locked(inner, provider, config, generation)
+                    .await
+                    .is_ok()
+                {
+                    self.audit(&pid, "active (late-bound)");
+                    activated.push(pid);
+                }
+            } else {
+                still_pending.push(pid);
+            }
+        }
+
+        inner.pending_order = still_pending;
+        activated
+    }
+
+    // ── unmount ────────────────────────────────────────────────────────
+
+    /// Unmount a provider and every active dependent whose requirements it
+    /// was satisfying (transitive). Dependents unwind first (highest seq
+    /// first). Returns ids actually torn down, in teardown order.
+    pub async fn unmount(&self, id: &str) -> Result<Vec<String>, HarnessError> {
+        let mut inner = self.inner.write().await;
+        if !inner.providers.contains_key(id) {
+            return Err(HarnessError::NotFound(id.to_string()));
+        }
+        let doomed = Self::collect_dependents(&inner, id);
+        Ok(self.teardown_many_locked(&mut inner, doomed).await)
+    }
+
+    /// Transitive closure of dependents rooted at `root` (includes root).
+    fn collect_dependents(inner: &Inner, root: &str) -> Vec<String> {
+        let mut doomed: Vec<String> = vec![root.to_string()];
+        loop {
+            let mut grew = false;
+            for (eid, entry) in &inner.providers {
+                if doomed.contains(eid) {
+                    continue;
+                }
+                for req in entry.provider.spec().requires() {
+                    if let Some(owner) = inner.claims.get(req)
+                        && doomed.contains(owner)
+                    {
+                        doomed.push(eid.clone());
+                        grew = true;
+                        break;
+                    }
+                }
+            }
+            if !grew {
                 break;
             }
         }
-        Ok(())
+        doomed
     }
 
-    /// Stop a provider. LIFO-undo its effects, drop its claims, mark
-    /// the entry Disposed. If the id isn't present, this is a no-op
-    /// (idempotent — useful for retry logic in Phase 4's hot-swap).
-    pub fn unmount(&mut self, id: &str) -> Result<(), HarnessError> {
-        let mut entry = match self.providers.remove(id) {
-            Some(e) => e,
-            None => {
-                tracing::debug!(provider = %id, "unmount: no-op (not registered)");
-                return Ok(());
+    /// Teardown: Active entries unwind LIFO (dependents first via seq desc);
+    /// Pending/Failed entries drop silently. Frees all owned claims.
+    async fn teardown_many_locked(&self, inner: &mut Inner, ids: Vec<String>) -> Vec<String> {
+        let mut ordered: Vec<(u64, String)> = ids
+            .into_iter()
+            .filter_map(|eid| inner.providers.get(&eid).map(|e| (e.seq, eid)))
+            .collect();
+        ordered.sort_by_key(|a| std::cmp::Reverse(a.0)); // youngest dependent first
+
+        let mut unloaded = Vec::new();
+        for (_, eid) in ordered {
+            let Some(mut entry) = inner.providers.remove(&eid) else {
+                continue;
+            };
+            inner.claims.retain(|_, owner| owner != &eid);
+            inner.pending_order.retain(|p| p != &eid);
+            if entry.state == ProviderState::Active {
+                self.audit(&eid, "unloading");
+                unwind_lifo(std::mem::take(&mut entry.effects)).await;
+            } else {
+                self.audit(&eid, "dropped");
+            }
+            unloaded.push(eid);
+        }
+        unloaded
+    }
+
+    // ── transactional replace ──────────────────────────────────────────
+
+    /// Hot-swap the implementation behind `next.spec().id()`.
+    ///
+    /// Transactional: the replacement activates into a STAGING area first.
+    /// Any failure leaves the previous instance fully serving. On success the
+    /// old effects unwind, claims flip atomically, and the generation counter
+    /// increments (ABA guard). Dependent providers survive iff the successor
+    /// re-provides the same claims; otherwise they cascade-unload after commit.
+    pub async fn replace(&self, next: Arc<dyn Provider>) -> Result<String, HarnessError> {
+        let mut inner = self.inner.write().await;
+        let target = next.spec().id().to_string();
+
+        let Some(old_entry) = inner.providers.get(&target) else {
+            return Err(HarnessError::NotFound(target));
+        };
+
+        if old_entry.state != ProviderState::Active {
+            // Pending/Failed targets: drop and do a plain mount.
+            let config = old_entry.config.clone();
+            inner.providers.remove(&target);
+            inner.pending_order.retain(|p| p != &target);
+            let report = self.mount_locked(&mut inner, next, config).await?;
+            let rescued = self.rescan_pending_locked(&mut inner).await;
+            return Ok(match report {
+                MountReport::Mounted { mut activated } => {
+                    activated.extend(rescued);
+                    activated.join(",")
+                }
+                MountReport::Pending { missing } => format!("pending (missing {missing:?})"),
+            });
+        }
+
+        // Precondition: post-swap requirement satisfaction.
+        for req in next.spec().requires() {
+            let covered_by_next = next.spec().provides().contains(req);
+            let owner_ok = match inner.claims.get(req) {
+                Some(owner) => owner != &target,
+                None => false,
+            };
+            if !covered_by_next && !owner_ok {
+                return Err(HarnessError::ReplaceBreaksRequirement {
+                    id: target.clone(),
+                    requirement: req.clone(),
+                });
+            }
+        }
+        // Precondition: successor claims must not collide with survivors.
+        if let Some(conflict) =
+            inner.first_claim_conflict(next.spec().provides(), Some(target.as_str()))
+        {
+            return Err(conflict);
+        }
+
+        let old_generation = old_entry.generation;
+        let old_config = old_entry.config.clone();
+
+        // Stage: activate successor WITHOUT touching live claims/effects.
+        let staged = match self.stage_activation(&next, &old_config).await {
+            Ok(staged) => staged,
+            Err(message) => {
+                return Err(HarnessError::ActivationFailed {
+                    id: target,
+                    message,
+                });
             }
         };
-        entry.phase = ProviderPhase::Unloading;
 
-        // LIFO unwind: walk the effects vec in reverse.
-        while let Some(effect) = entry.effects.pop() {
-            tracing::debug!(provider = %id, label = effect.label(), "unmount: undoing effect");
-            effect.run();
+        // Commit point.
+        let Some(mut old_entry) = inner.providers.remove(&target) else {
+            return Err(HarnessError::NotFound(target)); // unreachable under lock
+        };
+        old_entry.state = ProviderState::Unloading;
+        unwind_lifo(std::mem::take(&mut old_entry.effects)).await;
+        let old_provides = old_entry.provider.spec().provides().to_vec();
+        drop(old_entry);
+
+        for claim in old_provides {
+            if inner.claims.get(&claim).map(String::as_str) == Some(target.as_str()) {
+                inner.claims.remove(&claim);
+            }
+        }
+        for claim in next.spec().provides() {
+            inner.claims.insert(claim.clone(), target.clone());
+        }
+        let seq = inner.alloc_seq();
+        inner.providers.insert(
+            target.clone(),
+            Inner::make_entry(
+                next,
+                ProviderState::Active,
+                old_generation + 1,
+                seq,
+                old_config,
+                staged,
+            ),
+        );
+        self.audit(&target, "replaced");
+
+        // Cascade: anything left with a vanished dependency unwinds AFTER commit.
+        let orphaned: Vec<String> = inner
+            .providers
+            .iter()
+            .filter(|(eid, e)| {
+                e.state == ProviderState::Active
+                    && eid.as_str() != target
+                    && e.provider
+                        .spec()
+                        .requires()
+                        .iter()
+                        .any(|r| !inner.claims.contains_key(r))
+            })
+            .map(|(eid, _)| eid.clone())
+            .collect();
+        if !orphaned.is_empty() {
+            self.teardown_many_locked(&mut inner, orphaned).await;
         }
 
-        // Release the provider's claim keys.
-        entry.provides.retain(|k| {
-            self.claims.get(k).map(|h| h == id).unwrap_or(false)
-        });
-        for key in &entry.provides {
-            self.claims.remove(key);
-        }
-
-        entry.phase = ProviderPhase::Disposed;
-        // ABA guard: the generation is NOT bumped on unmount — only on
-        // mount/swap. A re-mount of the same id with the same gen is
-        // a no-op; with a higher gen it counts as a swap.
-        tracing::info!(provider = %id, "unmount: complete");
-
-        // Note (Phase 2+): any other provider whose `requires()`
-        // referenced one of the released claims will move back to
-        // Pending. Not implemented in Phase 0/1 — the dark-merge
-        // scope only mounts providers directly, not the cascade
-        // unload that a real composition layer needs.
-        Ok(())
+        let rescued = self.rescan_pending_locked(&mut inner).await;
+        Ok(if rescued.is_empty() {
+            target
+        } else {
+            format!("{target} (+late-bound {})", rescued.join(","))
+        })
     }
 
-    /// Return a stable snapshot of the harness for `dump()`.
-    pub fn dump(&self) -> HarnessSnapshot {
-        let providers: Vec<ProviderState> = self
+    /// Activation into a detached buffer — no claims, no entry mutation.
+    async fn stage_activation(
+        &self,
+        provider: &Arc<dyn Provider>,
+        config: &Value,
+    ) -> Result<Vec<Effect>, String> {
+        let id = provider.spec().id().to_string();
+        let mut effects = Vec::new();
+        let mut cx = ActivateCx::new(&id, config, &self.seams, &mut effects);
+        match provider.activate(&mut cx).await {
+            Ok(()) => Ok(effects),
+            Err(err) => {
+                unwind_lifo(effects).await;
+                Err(err.to_string())
+            }
+        }
+    }
+
+    // ── read paths ─────────────────────────────────────────────────────
+
+    pub async fn state_of(&self, id: &str) -> Option<ProviderState> {
+        self.inner.read().await.providers.get(id).map(|e| e.state)
+    }
+
+    pub async fn generation_of(&self, id: &str) -> Option<u64> {
+        self.inner
+            .read()
+            .await
+            .providers
+            .get(id)
+            .map(|e| e.generation)
+    }
+
+    pub async fn claim_owner(&self, claim: &Claim) -> Option<String> {
+        self.inner.read().await.claims.get(claim).cloned()
+    }
+
+    /// Serializable resolved tree (sorted deterministically).
+    pub async fn dump(&self) -> DumpTree {
+        let inner = self.inner.read().await;
+        let mut providers: Vec<ProviderEntryInfo> = inner
             .providers
             .values()
-            .map(|e| ProviderState {
-                id: e.id.clone(),
-                state: e.phase.as_str().to_string(),
+            .map(|e| ProviderEntryInfo {
+                id: e.provider.spec().id().to_string(),
+                source: e.provider.spec().source(),
+                state: e.state,
                 generation: e.generation,
-                source: e.source.clone(),
-                provides: e.provides.clone(),
-                requires: e.requires.clone(),
+                seq: e.seq,
+                provides: e.provider.spec().provides().to_vec(),
+                requires: e.provider.spec().requires().to_vec(),
+                effects: e.effects.len(),
             })
             .collect();
-        HarnessSnapshot {
+        providers.sort_by_key(|p| p.seq);
+
+        let mut claims: Vec<ClaimInfo> = inner
+            .claims
+            .iter()
+            .map(|(claim, owner)| ClaimInfo {
+                claim: claim.clone(),
+                owner: owner.clone(),
+            })
+            .collect();
+        claims.sort_by(|a, b| (&a.claim.seam, &a.claim.key).cmp(&(&b.claim.seam, &b.claim.key)));
+
+        DumpTree {
+            semantics_version: crate::HARNESS_SEMANTICS_VERSION,
             providers,
-            claims: self.claims.clone(),
-            generation: self.generation,
-        }
-    }
-}
-
-/// Errors the harness can surface to the caller. Plan 016 calls these
-/// out explicitly (no panics for control flow).
-#[derive(Debug, thiserror::Error)]
-pub enum HarnessError {
-    #[error("claim conflict: {key} already held by {holder}, cannot grant to {new}")]
-    ClaimConflict {
-        key: String,
-        holder: String,
-        new: String,
-    },
-    #[error("provider {provider} apply failed: {message}")]
-    ApplyFailed { provider: String, message: String },
-}
-
-/// Extension trait that lets `Provider` declarations carry an
-/// ABA-generation marker. Defaults to 0 for Phase 0/1 (the kernel
-/// doesn't yet swap). Phase 4 will read the marker from the WASM
-/// manifest signature.
-pub trait ProviderGeneration {
-    fn generation_marker(&self) -> u64 {
-        0
-    }
-}
-
-impl<T: Provider + ?Sized> ProviderGeneration for T {}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::provider::{Provider, Source};
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
-    /// Test provider: claims a key, no requirements, effect is a
-    /// counter increment.
-    #[derive(Debug)]
-    struct TestProvider {
-        id: String,
-        provides: Vec<String>,
-        counter: Arc<AtomicUsize>,
-    }
-    impl Provider for TestProvider {
-        fn id(&self) -> &str {
-            &self.id
-        }
-        fn provides(&self) -> &[String] {
-            &self.provides
-        }
-        fn requires(&self) -> &[String] {
-            &[]
-        }
-        fn source(&self) -> &Source {
-            &Source::Native
-        }
-        fn apply(&mut self) -> Effect {
-            self.counter.fetch_add(1, Ordering::SeqCst);
-            Effect::new("test-effect", || {})
+            claims,
         }
     }
 
-    /// Provider that requires a key another provider gives.
-    #[derive(Debug)]
-    struct DependentProvider {
-        id: String,
-        provides: Vec<String>,
-        requires: Vec<String>,
-        counter: Arc<AtomicUsize>,
-    }
-    impl Provider for DependentProvider {
-        fn id(&self) -> &str {
-            &self.id
-        }
-        fn provides(&self) -> &[String] {
-            &self.provides
-        }
-        fn requires(&self) -> &[String] {
-            &self.requires
-        }
-        fn source(&self) -> &Source {
-            &Source::Native
-        }
-        fn apply(&mut self) -> Effect {
-            self.counter.fetch_add(1, Ordering::SeqCst);
-            Effect::new("dependent-effect", || {})
-        }
-    }
-
-    use std::sync::Arc;
-
-    #[test]
-    fn mount_activates_and_registers_claim() {
-        let counter = Arc::new(AtomicUsize::new(0));
-        let mut h = Harness::new();
-        h.mount(TestProvider {
-            id: "browser".into(),
-            provides: vec!["tool:browser".into()],
-            counter: counter.clone(),
-        })
-        .unwrap();
-        assert_eq!(h.active_count(), 1);
-        assert_eq!(counter.load(Ordering::SeqCst), 1);
-        let snap = h.dump();
-        assert_eq!(snap.claims.get("tool:browser"), Some(&"browser".to_string()));
-    }
-
-    #[test]
-    fn duplicate_mount_is_noop() {
-        let counter = Arc::new(AtomicUsize::new(0));
-        let mut h = Harness::new();
-        let p = TestProvider {
-            id: "browser".into(),
-            provides: vec!["tool:browser".into()],
-            counter: counter.clone(),
-        };
-        h.mount(p).unwrap();
-        let p2 = TestProvider {
-            id: "browser".into(),
-            provides: vec!["tool:browser".into()],
-            counter: counter.clone(),
-        };
-        h.mount(p2).unwrap();
-        // apply ran exactly once.
-        assert_eq!(counter.load(Ordering::SeqCst), 1);
-        assert_eq!(h.active_count(), 1);
-    }
-
-    #[test]
-    fn claim_conflict_is_rejected() {
-        let c1 = Arc::new(AtomicUsize::new(0));
-        let c2 = Arc::new(AtomicUsize::new(0));
-        let mut h = Harness::new();
-        h.mount(TestProvider {
-            id: "a".into(),
-            provides: vec!["tool:foo".into()],
-            counter: c1,
-        })
-        .unwrap();
-        let err = h
-            .mount(TestProvider {
-                id: "b".into(),
-                provides: vec!["tool:foo".into()],
-                counter: c2,
-            })
-            .unwrap_err();
-        assert!(matches!(err, HarnessError::ClaimConflict { .. }));
-    }
-
-    #[test]
-    fn unmount_releases_claim_and_lifo_unwinds() {
-        let counter = Arc::new(AtomicUsize::new(0));
-        let undo_counter = Arc::new(AtomicUsize::new(0));
-        let uc = undo_counter.clone();
-        let mut h = Harness::new();
-        h.mount(TestProviderWithUndo {
-            id: "browser".into(),
-            provides: vec!["tool:browser".into()],
-            apply_counter: counter.clone(),
-            undo_counter: uc,
-        })
-        .unwrap();
-        h.unmount("browser").unwrap();
-        assert_eq!(h.active_count(), 0);
-        assert_eq!(undo_counter.load(Ordering::SeqCst), 1);
-        let snap = h.dump();
-        assert!(!snap.claims.contains_key("tool:browser"));
-    }
-
-    #[test]
-    fn pending_provider_waits_for_requirement() {
-        let counter = Arc::new(AtomicUsize::new(0));
-        let mut h = Harness::new();
-        // Mount the dependent first — its requires "tool:fs" is not
-        // yet met, so it parks in Pending and apply() does NOT run.
-        h.mount(DependentProvider {
-            id: "search".into(),
-            provides: vec!["tool:search".into()],
-            requires: vec!["tool:fs".into()],
-            counter: counter.clone(),
-        })
-        .unwrap();
-        assert_eq!(h.active_count(), 0);
-        assert_eq!(counter.load(Ordering::SeqCst), 0);
-        let snap = h.dump();
-        assert_eq!(snap.providers[0].state, "Pending");
-    }
-
-    #[derive(Debug)]
-    struct TestProviderWithUndo {
-        id: String,
-        provides: Vec<String>,
-        apply_counter: Arc<AtomicUsize>,
-        undo_counter: Arc<AtomicUsize>,
-    }
-    impl Provider for TestProviderWithUndo {
-        fn id(&self) -> &str {
-            &self.id
-        }
-        fn provides(&self) -> &[String] {
-            &self.provides
-        }
-        fn requires(&self) -> &[String] {
-            &[]
-        }
-        fn source(&self) -> &Source {
-            &Source::Native
-        }
-        fn apply(&mut self) -> Effect {
-            self.apply_counter.fetch_add(1, Ordering::SeqCst);
-            let uc = self.undo_counter.clone();
-            Effect::new("test-undo", move || {
-                uc.fetch_add(1, Ordering::SeqCst);
-            })
+    fn audit(&self, id: &str, event: &str) {
+        if self.options.audit {
+            tracing::info!(provider = %id, event, "[harness]");
         }
     }
 }

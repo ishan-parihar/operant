@@ -35,7 +35,7 @@ pub use pool::{
     load_and_compile as load_and_compile_pool,
 };
 pub use provider::{
-    ActivateCx, Provider, ProviderSource, ProviderSpec, ProviderState, Registration, Seam,
+    ActivateCx, Provider, ProviderSource, ProviderSpec, ProviderState, Registration, Seam, Source,
 };
 pub use report::{ClaimInfo, DumpTree, MountReport, ProviderEntryInfo};
 pub use swap::{SwapGeneration, SwapOutcome};
