@@ -1,15 +1,8 @@
-"""Live-vendor loader for prime-agent's ``rlm`` control-plane package.
+"""Live-vendor loader for rlm control-plane package (vendored submodule).
 
-Ported from hermes-prime-bridge ``bridge/vendor.py``. Upstream code is imported
-as-is from the pinned submodule (``vendor/prime-agent``), never copied, so new
-Prime Agent releases integrate via ``git submodule update --remote``.
-
-Layout::
-
-    <repo>/vendor/prime-agent/prime-agent-runtime/src/rlm/{__init__,harness,mcp_base,skill}.py
-
-If the submodule is missing we degrade with a diagnosable error instead of
-crashing the host: every harness method returns ok:false with the fix string.
+Upstream code is imported as-is from the pinned submodule
+(``vendor/prime-agent``), never copied, so updates integrate via
+``git submodule update --remote``.
 """
 
 from __future__ import annotations
@@ -21,7 +14,9 @@ from pathlib import Path
 
 _PKG_ROOT = Path(__file__).resolve().parent
 _REPO_ROOT = Path(
-    os.environ.get("PK_SIDECAR_REPO_ROOT", str(_PKG_ROOT.parent.parent))
+    os.environ.get("KERNEL_SIDECAR_REPO_ROOT")
+    or os.environ.get("PK_SIDECAR_REPO_ROOT")
+    or str(_PKG_ROOT.parent.parent)
 )
 VENDOR_DIR = _REPO_ROOT / "vendor" / "prime-agent"
 VENDOR_RUNTIME_SRC = VENDOR_DIR / "prime-agent-runtime" / "src"
@@ -40,18 +35,18 @@ if VENDOR_RUNTIME_SRC.is_dir():
         _VENDOR_IMPORT_ERROR = exc
 else:
     _VENDOR_IMPORT_ERROR = FileNotFoundError(
-        f"prime-agent submodule runtime not found at {VENDOR_RUNTIME_SRC}. "
+        f"Submodule runtime not found at {VENDOR_RUNTIME_SRC}. "
         "Run:  git submodule update --init --recursive"
     )
 
 _SUBMODULE_MISSING_HINT = (
-    "prime-agent runtime unavailable; harness store disabled. "
+    "Submodule runtime unavailable; harness store disabled. "
     "Run: git submodule update --init --recursive"
 )
 
 
 def require_rlm():
-    """Return the live prime-agent ``rlm`` module or raise a useful error."""
+    """Return the live ``rlm`` module or raise a useful error."""
     if not _HAS_PRIME_RUNTIME:
         detail = str(_VENDOR_IMPORT_ERROR) if _VENDOR_IMPORT_ERROR else "unknown"
         raise ImportError(f"{_SUBMODULE_MISSING_HINT} ({detail})")

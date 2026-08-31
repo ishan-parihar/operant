@@ -1,4 +1,4 @@
-//! Shared runtime for all pk_* tools: settings snapshot, sidecar lifecycle,
+//! Shared runtime for all kernel tools: settings snapshot, sidecar lifecycle,
 //! bridged-executor installation, and metrics.
 
 use std::collections::HashSet;
@@ -11,7 +11,7 @@ use std::time::Duration;
 use serde_json::Value;
 use tokio::sync::Mutex as AsyncMutex;
 
-use crate::config::{PrimeKernelSettings, PrimeKernelToolBridge};
+use crate::config::{KernelSettings, KernelToolBridge};
 use crate::tools::{ToolContext, ToolRegistry};
 
 use super::sidecar::{SidecarHandle, request as sc_request, spawn_idle_reaper};
@@ -41,7 +41,7 @@ impl BridgeExecutor {
         if !self.allowlist.contains(name) {
             return Err(format!(
                 "tool '{name}' is not allowlisted for kernel programs \
-                 ([tools.prime_kernel.tool_bridge.allowlist])"
+                 ([tools.kernel.tool_bridge.allowlist])"
             ));
         }
         let verdict =
@@ -73,8 +73,8 @@ impl BridgeExecutor {
     }
 }
 
-pub struct PkRuntime {
-    settings: PrimeKernelSettings,
+pub struct KernelRuntime {
+    settings: KernelSettings,
     handle: AsyncMutex<Option<Arc<SidecarHandle>>>,
     executor: OnceLock<BridgeExecutor>,
     failures: AtomicU32,
@@ -83,11 +83,11 @@ pub struct PkRuntime {
     restarts: AtomicU64,
 }
 
-impl PkRuntime {
+impl KernelRuntime {
     pub(super) fn handle_cell(&self) -> &AsyncMutex<Option<Arc<SidecarHandle>>> {
         &self.handle
     }
-    pub fn new(settings: PrimeKernelSettings) -> Arc<Self> {
+    pub fn new(settings: KernelSettings) -> Arc<Self> {
         let rt = Arc::new(Self {
             settings,
             handle: AsyncMutex::new(None),
@@ -101,7 +101,7 @@ impl PkRuntime {
         rt
     }
 
-    pub fn settings(&self) -> &PrimeKernelSettings {
+    pub fn settings(&self) -> &KernelSettings {
         &self.settings
     }
 
@@ -109,7 +109,7 @@ impl PkRuntime {
     /// later registry mutations stay visible because ToolRegistry clones
     /// share one internal tool map.
     pub fn install_executor(&self, registry: ToolRegistry) {
-        let tb: &PrimeKernelToolBridge = &self.settings.tool_bridge;
+        let tb: &KernelToolBridge = &self.settings.tool_bridge;
         let _ = self.executor.set(BridgeExecutor {
             registry,
             approval_mode: None, // Smart default; explicit modes arrive via config later.

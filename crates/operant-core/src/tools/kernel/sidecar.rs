@@ -1,6 +1,6 @@
-//! NDJSON framed client + process supervision for the pk-sidecar.
+//! NDJSON framed client + process supervision for the kernel-sidecar.
 //!
-//! Protocol (see pk-sidecar/pk_sidecar/server.py):
+//! Protocol (see kernel-sidecar/kernel_sidecar/server.py):
 //!   Rust → py : {"id","method","params"}            one object per line
 //!   py → Rust : {"id","ok":true,"result"} | {"id","ok":false,"error"}
 //!   py → Rust : {"bridge_id","method":"tool_call",params}   (bridged call out)
@@ -23,7 +23,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin};
 use tokio::sync::{Mutex as AsyncMutex, mpsc, oneshot};
 
-use super::runtime::PkRuntime;
+use super::runtime::KernelRuntime;
 
 const MAX_CONSECUTIVE_FAILURES: u32 = 2;
 
@@ -173,20 +173,20 @@ fn resolve_python(explicit: Option<&std::path::PathBuf>) -> std::path::PathBuf {
     crate::platform::find_python().unwrap_or_else(|| std::path::PathBuf::from("python3"))
 }
 
-/// Directory containing the `pk_sidecar` python package. Env override wins so
+/// Directory containing the `kernel_sidecar` python package. Env override wins so
 /// installed binaries can point at a checkout; build-time fallback keeps dev
 /// runs working from any cwd.
 fn sidecar_cwd() -> std::path::PathBuf {
-    if let Ok(dir) = std::env::var("PK_SIDECAR_DIR") {
+    if let Ok(dir) = std::env::var("KERNEL_SIDECAR_DIR").or_else(|_| std::env::var("PK_SIDECAR_DIR")) {
         return std::path::PathBuf::from(dir);
     }
     match option_env!("CARGO_MANIFEST_DIR") {
-        Some(manifest) => std::path::PathBuf::from(manifest).join("../../pk-sidecar"),
-        None => std::path::PathBuf::from("pk-sidecar"),
+        Some(manifest) => std::path::PathBuf::from(manifest).join("../../kernel-sidecar"),
+        None => std::path::PathBuf::from("kernel-sidecar"),
     }
 }
 
-pub(super) async fn ensure_handle(rt: &PkRuntime) -> Result<Arc<SidecarHandle>, String> {
+pub(super) async fn ensure_handle(rt: &KernelRuntime) -> Result<Arc<SidecarHandle>, String> {
     {
         let guard = rt.handle_cell().lock().await;
         if let Some(h) = guard.as_ref()
@@ -206,7 +206,7 @@ pub(super) async fn ensure_handle(rt: &PkRuntime) -> Result<Arc<SidecarHandle>, 
     Ok(handle)
 }
 
-fn spawn_handle(rt: &PkRuntime) -> Result<Arc<SidecarHandle>, String> {
+fn spawn_handle(rt: &KernelRuntime) -> Result<Arc<SidecarHandle>, String> {
     let settings = rt.settings();
     let python = resolve_python(settings.python.as_ref());
     let mut cmd = tokio::process::Command::new(&python);
@@ -214,14 +214,14 @@ fn spawn_handle(rt: &PkRuntime) -> Result<Arc<SidecarHandle>, String> {
     #[cfg(unix)]
     cmd.process_group(0);
     cmd.current_dir(sidecar_cwd());
-    cmd.arg("-m").arg("pk_sidecar.server");
+    cmd.arg("-m").arg("kernel_sidecar.server");
     if let Some(root) = settings.state_dir.as_ref() {
         cmd.arg("--state-root").arg(root);
     }
     if let Some(vendor_root) = settings.vendor_dir.as_ref()
         && let Some(parent) = vendor_root.parent()
     {
-        cmd.env("PK_SIDECAR_REPO_ROOT", parent);
+        cmd.env("KERNEL_SIDECAR_REPO_ROOT", parent);
     }
     cmd.stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -229,15 +229,15 @@ fn spawn_handle(rt: &PkRuntime) -> Result<Arc<SidecarHandle>, String> {
 
     let mut child = cmd
         .spawn()
-        .map_err(|e| format!("pk-sidecar spawn failed ({}): {e}", python.display()))?;
+        .map_err(|e| format!("kernel-sidecar spawn failed ({}): {e}", python.display()))?;
     let stdin = child
         .stdin
         .take()
-        .ok_or_else(|| "pk-sidecar missing stdin".to_string())?;
+        .ok_or_else(|| "kernel-sidecar missing stdin".to_string())?;
     let stdout = child
         .stdout
         .take()
-        .ok_or_else(|| "pk-sidecar missing stdout".to_string())?;
+        .ok_or_else(|| "kernel-sidecar missing stdout".to_string())?;
 
     let writer = SidecarWriter {
         stdin: Arc::new(AsyncMutex::new(stdin)),
@@ -256,7 +256,7 @@ fn spawn_handle(rt: &PkRuntime) -> Result<Arc<SidecarHandle>, String> {
 }
 
 /// One request/response round-trip with crash-transparent single retry.
-pub(super) async fn request(rt: &PkRuntime, method: &str, params: Value) -> Result<Value, String> {
+pub(super) async fn request(rt: &KernelRuntime, method: &str, params: Value) -> Result<Value, String> {
     let budget = Duration::from_secs(rt.settings().request_timeout_secs.max(1));
     let mut consecutive_failures = 0u32;
     loop {
@@ -294,7 +294,7 @@ pub(super) async fn request(rt: &PkRuntime, method: &str, params: Value) -> Resu
                 if e.contains("timed out") || consecutive_failures >= MAX_CONSECUTIVE_FAILURES {
                     return Err(e);
                 }
-                tracing::warn!(target: "pk", method, "sidecar crashed; restarting");
+                tracing::warn!(target: "kernel", method, "sidecar crashed; restarting");
                 rt.drop_handle().await;
             }
         }
@@ -308,7 +308,7 @@ fn next_id() -> u64 {
 }
 
 /// Idle reaper: stops the child after `sidecar_idle_secs` without traffic.
-pub(super) fn spawn_idle_reaper(rt: Arc<PkRuntime>) {
+pub(super) fn spawn_idle_reaper(rt: Arc<KernelRuntime>) {
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(Duration::from_secs(30)).await;
@@ -320,7 +320,7 @@ pub(super) fn spawn_idle_reaper(rt: Arc<PkRuntime>) {
                 && h.idle_secs() >= idle_limit
                 && h.is_alive().await
             {
-                tracing::info!(target: "pk", "idle timeout reached; stopping sidecar");
+                tracing::info!(target: "kernel", "idle timeout reached; stopping sidecar");
                 h.kill().await;
                 rt.drop_handle().await;
             }

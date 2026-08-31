@@ -6,7 +6,7 @@ single-threaded asyncio loop so model code can ``await`` host services:
 ``await operant_tool(name, args_json)`` round-trips one bridged tool call to
 the Rust supervisor over the NDJSON channel (Phase 2.5 tool bridge).
 
-Cells run inside an implicit ``async def __pk_cell__():`` wrapper, so both
+Cells run inside an implicit ``async def __kernel_cell__():`` wrapper, so both
 sync statements and top-level ``await`` work, matching prime-agent's REPL
 contract. User stdout/stderr are redirected into StringIO during execution so
 they can never corrupt the NDJSON protocol channel.
@@ -76,7 +76,7 @@ class SessionKernel:
         return safe
 
     def _fresh_globals(self) -> dict[str, Any]:
-        g: dict[str, Any] = {"__name__": "__pk_kernel__"}
+        g: dict[str, Any] = {"__name__": "__kernel__"}
         g["__builtins__"] = self._safe_builtins()
         return g
 
@@ -114,7 +114,7 @@ class SessionKernel:
         try:
             self._counter += 1
             exec(wrapped, self._globals)  # noqa: S102 - deliberate kernel semantics
-            coro = self._globals["__pk_cell__"]()
+            coro = self._globals["__kernel_cell__"]()
             with redirect_stdout(out), redirect_stderr(err):
                 if cell_timeout:
                     await asyncio.wait_for(coro, timeout=cell_timeout)
@@ -146,19 +146,19 @@ class SessionKernel:
         # (REPL semantics parity with bridge/kernel.py exec-into-globals).
         names = sorted(_assigned_names(tree.body))
         indented = "\n".join(("    " + line) if line.strip() else "" for line in code.splitlines())
-        header = f"async def __pk_cell__():\n"
+        header = f"async def __kernel_cell__():\n"
         if names:
             header += f"    global {', '.join(names)}\n"
-        return compile(header + indented + "\n", f"<pk_kernel:{self.session_key}>", "exec")
+        return compile(header + indented + "\n", f"<kernel:{self.session_key}>", "exec")
 
     def _compile_expr(self, code: str) -> Any:
         tree = ast.parse(code, mode="eval")
         src = (
-            "async def __pk_cell__():\n"
-            f"    __pk_result__ = eval({ast.literal_eval(compile(ast.Expression(tree.body), '<expr>', 'eval'))})\n"  # type: ignore[arg-type]
-            "    print(__pk_result__)\n"
+            "async def __kernel_cell__():\n"
+            f"    __kernel_result__ = eval({ast.literal_eval(compile(ast.Expression(tree.body), '<expr>', 'eval'))})\n"  # type: ignore[arg-type]
+            "    print(__kernel_result__)\n"
         )
-        return compile(src, f"<pk_kernel:{self.session_key}>", "exec")
+        return compile(src, f"<kernel:{self.session_key}>", "exec")
 
 
 class KernelRegistry:

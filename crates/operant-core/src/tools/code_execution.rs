@@ -347,10 +347,10 @@ async fn execute_python(code: &str, timeout: Duration) -> Result<Value, String> 
     // route_python_to_kernel is set, python runs in the persistent session
     // kernel (state survives turns). Any sidecar failure degrades to the
     // stateless subprocess path below — never fails the turn.
-    let pk_cfg = &crate::config::runtime_config().tools.prime_kernel;
-    if pk_cfg.enabled
-        && pk_cfg.route_python_to_kernel
-        && let Some(rt) = super::pk::global_runtime()
+    let kernel_cfg = &crate::config::runtime_config().tools.kernel;
+    if kernel_cfg.enabled
+        && kernel_cfg.route_python_to_kernel
+        && let Some(rt) = super::kernel::global_runtime()
     {
         match rt
             .request(
@@ -364,7 +364,7 @@ async fn execute_python(code: &str, timeout: Duration) -> Result<Value, String> 
             .await
         {
             Ok(mut v) => {
-                v["via"] = Value::String("pk_kernel".into());
+                v["via"] = Value::String("kernel".into());
                 return Ok(v);
             }
             Err(e) => {

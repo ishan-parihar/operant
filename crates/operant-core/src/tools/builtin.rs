@@ -93,16 +93,16 @@ pub async fn register_builtin_tools(
     registry.register(XaiHttpTool).await?;
     registry.register(CodeExecutionTool).await?;
     // Prime Kernel (plan 015): persistent stateful Python kernel + continual
-    // harness. Registered only when [tools.prime_kernel] enabled; pk::register
+    // harness. Registered only when [tools.kernel] enabled; kernel::register
     // also installs the phase-2.5 bridged executor against this registry clone
     // (shared internals) and spawns the bridge drainer.
-    if let Err(e) = super::pk::register(
+    if let Err(e) = super::kernel::register(
         registry,
-        &crate::config::runtime_config().tools.prime_kernel,
+        &crate::config::runtime_config().tools.kernel,
     )
     .await
     {
-        tracing::warn!(target: "pk", error = %e, "prime kernel tool registration failed");
+        tracing::warn!(target: "kernel", error = %e, "kernel tool registration failed");
     }
     registry.register(ConfigManageTool).await?;
     registry.register(CronTool::new(cron_db)).await?;

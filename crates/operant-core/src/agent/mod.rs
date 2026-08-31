@@ -462,7 +462,7 @@ fn is_long_running_tool(name: &str) -> bool {
     matches!(
         name,
         "delegate_task"
-            | "pk_kernel_exec" // plan 015: cells run up to request_timeout_secs (120s default)
+            | "kernel_exec" // plan 015: cells run up to request_timeout_secs (120s default)
             | "aft_bash"
             | "aft_read"
             | "aft_write"

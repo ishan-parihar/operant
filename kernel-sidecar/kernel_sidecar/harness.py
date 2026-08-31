@@ -35,7 +35,7 @@ class HarnessError(RuntimeError):
 
 def default_state_root(repo_data_home: Path | None = None) -> Path:
     base = repo_data_home or Path.home() / ".local" / "share" / "operant"
-    return base / "pk" / "harness"
+    return base / "kernel" / "harness"
 
 
 def _slugify(raw: str) -> str:
@@ -144,7 +144,7 @@ class HarnessService:
 
     def record_manual(self, evidence: str, trigger: str, *, scope: str = "local",
                       session_key: str | None = None) -> dict:
-        """Record a manual refinement event with a before-snapshot (manual pk_refine)."""
+        """Record a manual refinement event with a before-snapshot (manual kernel_refine)."""
         store = self._ensure(scope, session_key)
         before = store.snapshot()
         event_id = f"rf-{uuid.uuid4().hex[:12]}"

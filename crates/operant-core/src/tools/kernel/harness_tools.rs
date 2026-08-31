@@ -1,4 +1,4 @@
-//! `pk_harness_get` / `pk_refine` — continual-harness read + manual refine.
+//! `kernel_state` / `kernel_refine` — continual-harness read + manual refine.
 //!
 //! The store carries ONLY `prompt` and `subagent` kinds × local/global scopes
 //! (skills/memories remain owned by curator/skills/MEMORY.md lanes). Refinement
@@ -14,7 +14,7 @@ use serde_json::{Value, json};
 use crate::schema::ToolSchema;
 use crate::tools::{OperantTool, ToolContext, ToolResult};
 
-use super::runtime::PkRuntime;
+use super::runtime::KernelRuntime;
 
 fn scope_of(v: Option<&str>) -> String {
     match v {
@@ -24,12 +24,12 @@ fn scope_of(v: Option<&str>) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// pk_harness_get
+// kernel_state
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, JsonSchema, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct PkHarnessGetArgs {
+struct KernelStateArgs {
     /// "prompt" | "subagent" | "overview" (default overview).
     kind: Option<String>,
     /// Entry id — omit to list that kind's entries via overview.
@@ -38,20 +38,20 @@ struct PkHarnessGetArgs {
     scope: Option<String>,
 }
 
-pub struct PkHarnessGetTool {
-    rt: Arc<PkRuntime>,
+pub struct KernelStateTool {
+    rt: Arc<KernelRuntime>,
 }
 
-impl PkHarnessGetTool {
-    pub fn new(rt: Arc<PkRuntime>) -> Self {
+impl KernelStateTool {
+    pub fn new(rt: Arc<KernelRuntime>) -> Self {
         Self { rt }
     }
 }
 
 #[async_trait]
-impl OperantTool for PkHarnessGetTool {
+impl OperantTool for KernelStateTool {
     fn name(&self) -> &str {
-        "pk_harness_get"
+        "kernel_state"
     }
 
     fn description(&self) -> &str {
@@ -61,18 +61,18 @@ impl OperantTool for PkHarnessGetTool {
     }
 
     fn schema(&self) -> ToolSchema {
-        ToolSchema::from_type::<PkHarnessGetArgs>("pk_harness_get", "Continual harness read")
+        ToolSchema::from_type::<KernelStateArgs>("kernel_state", "Continual harness read")
     }
 
     fn toolset(&self) -> &str {
-        "prime_kernel"
+        "kernel"
     }
 
     async fn execute(&self, args: Value, context: ToolContext) -> ToolResult {
-        let args: PkHarnessGetArgs = match serde_json::from_value(args) {
+        let args: KernelStateArgs = match serde_json::from_value(args) {
             Ok(a) => a,
             Err(e) => {
-                return ToolResult::error("pk_harness_get", format!("Invalid arguments: {e}"));
+                return ToolResult::error("kernel_state", format!("Invalid arguments: {e}"));
             }
         };
         let scope = scope_of(args.scope.as_deref());
@@ -85,8 +85,8 @@ impl OperantTool for PkHarnessGetTool {
                 let params = json!({"kind": kind, "id": id, "scope": scope,
                                     "session_key": session_key});
                 return match self.rt.request("harness_get", params).await {
-                    Ok(v) => ToolResult::success("pk_harness_get", v.to_string()),
-                    Err(e) => ToolResult::error("pk_harness_get", e),
+                    Ok(v) => ToolResult::success("kernel_state", v.to_string()),
+                    Err(e) => ToolResult::error("kernel_state", e),
                 };
             }
             (Some("overview"), _) | (None, _) => "harness_overview",
@@ -100,14 +100,14 @@ impl OperantTool for PkHarnessGetTool {
             )
             .await
         {
-            Ok(v) => ToolResult::success("pk_harness_get", v.to_string()),
-            Err(e) => ToolResult::error("pk_harness_get", e),
+            Ok(v) => ToolResult::success("kernel_state", v.to_string()),
+            Err(e) => ToolResult::error("kernel_state", e),
         }
     }
 }
 
 // ---------------------------------------------------------------------------
-// pk_refine
+// kernel_refine
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, JsonSchema, Deserialize)]
@@ -125,7 +125,7 @@ struct RefineEditArgs {
 
 #[derive(Debug, Clone, JsonSchema, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct PkRefineArgs {
+struct KernelRefineArgs {
     /// Short evidence summary of what happened (required when edits omitted).
     evidence: Option<String>,
     #[serde(default)]
@@ -137,12 +137,12 @@ struct PkRefineArgs {
     scope: Option<String>,
 }
 
-pub struct PkRefineTool {
-    rt: Arc<PkRuntime>,
+pub struct KernelRefineTool {
+    rt: Arc<KernelRuntime>,
 }
 
-impl PkRefineTool {
-    pub fn new(rt: Arc<PkRuntime>) -> Self {
+impl KernelRefineTool {
+    pub fn new(rt: Arc<KernelRuntime>) -> Self {
         Self { rt }
     }
 }
@@ -155,9 +155,9 @@ fn refine_session_key(context: &ToolContext) -> String {
 }
 
 #[async_trait]
-impl OperantTool for PkRefineTool {
+impl OperantTool for KernelRefineTool {
     fn name(&self) -> &str {
-        "pk_refine"
+        "kernel_refine"
     }
 
     fn description(&self) -> &str {
@@ -168,17 +168,17 @@ impl OperantTool for PkRefineTool {
     }
 
     fn schema(&self) -> ToolSchema {
-        ToolSchema::from_type::<PkRefineArgs>("pk_refine", "Continual harness refinement")
+        ToolSchema::from_type::<KernelRefineArgs>("kernel_refine", "Continual harness refinement")
     }
 
     fn toolset(&self) -> &str {
-        "prime_kernel"
+        "kernel"
     }
 
     async fn execute(&self, args: Value, context: ToolContext) -> ToolResult {
-        let args: PkRefineArgs = match serde_json::from_value(args) {
+        let args: KernelRefineArgs = match serde_json::from_value(args) {
             Ok(a) => a,
-            Err(e) => return ToolResult::error("pk_refine", format!("Invalid arguments: {e}")),
+            Err(e) => return ToolResult::error("kernel_refine", format!("Invalid arguments: {e}")),
         };
         let scope = scope_of(args.scope.as_deref());
         let sk = refine_session_key(&context);
@@ -208,7 +208,7 @@ impl OperantTool for PkRefineTool {
                 let evidence = args.evidence.unwrap_or_default();
                 if evidence.trim().is_empty() {
                     return ToolResult::error(
-                        "pk_refine",
+                        "kernel_refine",
                         "'evidence' is required (or provide edits[])",
                     );
                 }
@@ -224,8 +224,8 @@ impl OperantTool for PkRefineTool {
             }
         };
         match self.rt.request(method, params).await {
-            Ok(v) => ToolResult::success("pk_refine", v.to_string()),
-            Err(e) => ToolResult::error("pk_refine", e),
+            Ok(v) => ToolResult::success("kernel_refine", v.to_string()),
+            Err(e) => ToolResult::error("kernel_refine", e),
         }
     }
 }

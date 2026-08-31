@@ -14,11 +14,11 @@ use std::sync::Arc;
 
 use serde_json::json;
 
-use super::runtime::PkRuntime;
+use super::runtime::KernelRuntime;
 use super::sidecar::{Inbound, SidecarWriter};
 use crate::tools::ToolContext;
 
-pub(super) fn spawn_drainer(rt: Arc<PkRuntime>) {
+pub(super) fn spawn_drainer(rt: Arc<KernelRuntime>) {
     tokio::spawn(async move {
         loop {
             let Some(handle) = rt.handle_snapshot().await else {
@@ -39,7 +39,7 @@ pub(super) fn spawn_drainer(rt: Arc<PkRuntime>) {
                     reply(
                         &handle.writer,
                         &bridge_id,
-                        Err("tool bridge disabled ([tools.prime_kernel.tool_bridge])".into()),
+                        Err("tool bridge disabled ([tools.kernel.tool_bridge])".into()),
                     )
                     .await;
                     continue;
@@ -64,8 +64,8 @@ pub(super) fn spawn_drainer(rt: Arc<PkRuntime>) {
                 );
                 let ctx = ToolContext::default()
                     .with_metadata("session_id", session_key.clone())
-                    .with_metadata("origin", "pk_bridge");
-                tracing::debug!(target: "pk", tool = %name, session = %session_key, "bridged call");
+                    .with_metadata("origin", "kernel_bridge");
+                tracing::debug!(target: "kernel", tool = %name, session = %session_key, "bridged call");
                 let outcome = executor.execute_bridged(&name, args, ctx).await;
                 #[cfg(test)]
                 eprintln!(
@@ -92,6 +92,6 @@ async fn reply(
         Err(error) => json!({"reply_for": bridge_id, "ok": false, "error": error}),
     };
     if let Err(e) = writer.send_line(&frame.to_string()).await {
-        tracing::warn!(target: "pk", "bridge reply write failed: {e}");
+        tracing::warn!(target: "kernel", "bridge reply write failed: {e}");
     }
 }

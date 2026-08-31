@@ -2,7 +2,7 @@
 
 import pytest
 
-from pk_sidecar.kernel import SessionKernel
+from kernel_sidecar.kernel import SessionKernel
 
 
 @pytest.mark.asyncio

@@ -1,4 +1,4 @@
-"""NDJSON JSON-RPC stdio server for the pk-sidecar.
+"""NDJSON JSON-RPC stdio server for the kernel-sidecar.
 
 Framing contract with the Rust supervisor (operant-core/src/tools/pk/sidecar.rs):
 
@@ -64,10 +64,10 @@ class SidecarServer:
 
     def _kernel_for(self, key: str):
         k = self.kernels.get(key)
-        if not hasattr(k, "_pk_operant_tool"):
+        if not hasattr(k, "_kernel_operant_tool"):
             shim = make_operant_tool(k.session_key, self._bridged_call)
             k.install("operant_tool", shim)
-            k._pk_operant_tool = shim  # type: ignore[attr-defined]
+            k._kernel_operant_tool = shim  # type: ignore[attr-defined]
         return k
 
     async def _bridged_call(self, session_key: str, name: str, args: dict) -> dict:
@@ -100,7 +100,7 @@ class SidecarServer:
     async def _dispatch(self, method: Any, p: dict[str, Any]) -> Any:
         if method == "ping":
             return {"pong": True, "prime_upstream_rev": self.harness.upstream_rev(),
-                    "has_prime_runtime": self.harness.available()}
+                    "has_runtime": self.harness.available()}
         if method == "exec":
             key = str(p.get("session_key") or "default")
             code = p.get("code")

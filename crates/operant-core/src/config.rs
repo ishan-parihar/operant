@@ -757,8 +757,9 @@ pub struct ToolSettings {
     pub terminal: TerminalSettings,
     pub code_execution: CodeExecutionSettings,
     /// Prime Kernel (plan 015): persistent stateful Python kernel + continual
-    /// harness, hosted in the pk-sidecar subprocess over NDJSON stdio.
-    pub prime_kernel: PrimeKernelSettings,
+    /// harness, hosted in the kernel-sidecar subprocess over NDJSON stdio.
+    #[serde(alias = "prime_kernel")]
+    pub kernel: KernelSettings,
     pub stt: SttSettings,
     pub disabled_tools: Vec<String>,
     pub disabled_toolsets: Vec<String>,
@@ -898,7 +899,7 @@ impl Default for ToolSettings {
             http: HttpToolSettings::default(),
             terminal: TerminalSettings::default(),
             code_execution: CodeExecutionSettings::default(),
-            prime_kernel: PrimeKernelSettings::default(),
+            kernel: KernelSettings::default(),
             stt: SttSettings::default(),
             disabled_tools: Vec::new(),
             disabled_toolsets: Vec::new(),
@@ -1251,7 +1252,7 @@ impl Default for CodeExecutionSettings {
 /// Phase-2.5 tool bridge: which tools model-authored kernel programs may call.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
-pub struct PrimeKernelToolBridge {
+pub struct KernelToolBridge {
     /// Master switch for `operant_tool()` availability inside kernel cells.
     pub enabled: bool,
     /// Deny-by-default allowlist of tool names callable from kernel programs.
@@ -1266,7 +1267,7 @@ pub struct PrimeKernelToolBridge {
     pub per_call_timeout_secs: u64,
 }
 
-impl Default for PrimeKernelToolBridge {
+impl Default for KernelToolBridge {
     fn default() -> Self {
         // Read-only discovery set first; writes are deliberate opt-ins.
         let allowlist = vec![
@@ -1292,16 +1293,16 @@ impl Default for PrimeKernelToolBridge {
 /// OFF/dark until Phase 4 flips `enabled` + `route_python_to_kernel`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
-pub struct PrimeKernelSettings {
+pub struct KernelSettings {
     pub enabled: bool,
     /// Python ≥3.11 for the sidecar. None ⇒ platform::find_python() then PATH.
     pub python: Option<PathBuf>,
-    /// prime-agent submodule root containing prime-agent-runtime/src/rlm.
+    /// vendored submodule root containing rlm runtime/src/rlm.
     /// None ⇒ <repo>/vendor/prime-agent resolved from CARGO_MANIFEST_DIR at
     /// build time with a ./vendor fallback.
     pub vendor_dir: Option<PathBuf>,
     /// Harness store root (<state_dir>/<scope>/). None ⇒
-    /// ~/.local/share/operant/pk/harness.
+    /// ~/.local/share/operant/kernel/harness.
     pub state_dir: Option<PathBuf>,
     pub sidecar_idle_secs: u64,
     pub request_timeout_secs: u64,
@@ -1309,14 +1310,14 @@ pub struct PrimeKernelSettings {
     /// Phase 4 cutover: route code_execution python requests through the
     /// persistent kernel (stateless subprocess stays as fallback).
     pub route_python_to_kernel: bool,
-    /// Phase 5: when true AND prime_kernel.enabled, the existing background
+    /// Phase 5: when true AND kernel.enabled, the existing background
     /// review fork may additionally emit prompt/subagent harness edits via
-    /// pk_refine. Default off until soaked.
+    /// kernel_refine. Default off until soaked.
     pub harness_auto_learn: bool,
-    pub tool_bridge: PrimeKernelToolBridge,
+    pub tool_bridge: KernelToolBridge,
 }
 
-impl Default for PrimeKernelSettings {
+impl Default for KernelSettings {
     fn default() -> Self {
         Self {
             enabled: false,
@@ -1328,7 +1329,7 @@ impl Default for PrimeKernelSettings {
             max_output_bytes: 200_000,
             route_python_to_kernel: false,
             harness_auto_learn: false,
-            tool_bridge: PrimeKernelToolBridge::default(),
+            tool_bridge: KernelToolBridge::default(),
         }
     }
 }

@@ -5,7 +5,7 @@ import json
 
 import pytest
 
-from pk_sidecar.server import SidecarServer
+from kernel_sidecar.server import SidecarServer
 
 
 class Captured:
@@ -25,7 +25,7 @@ class Captured:
 @pytest.fixture
 async def server(tmp_path, monkeypatch):
     cap = Captured()
-    monkeypatch.setattr("pk_sidecar.server._send", cap)
+    monkeypatch.setattr("kernel_sidecar.server._send", cap)
     s = SidecarServer(state_root=str(tmp_path / "harness-root"))
     return s, cap
 

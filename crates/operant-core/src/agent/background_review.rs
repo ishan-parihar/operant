@@ -306,13 +306,13 @@ pub fn build_review_prompt(review_memory: bool, review_skills: bool) -> String {
     };
     // Plan 015 phase 5: opt-in continual-harness lane. When auto_learn is on,
     // the SAME review fork may also emit prompt-note / subagent-spec lessons
-    // through pk_refine (all-or-nothing, snapshot-rollbackable). No second
+    // through kernel_refine (all-or-nothing, snapshot-rollbackable). No second
     // review loop is spawned — this extends the existing one.
     if crate::config::runtime_config()
         .tools
-        .prime_kernel
+        .kernel
         .harness_auto_learn
-        && crate::tools::pk::global_runtime().is_some()
+        && crate::tools::kernel::global_runtime().is_some()
     {
         base.push_str(
             "
@@ -322,7 +322,7 @@ pub fn build_review_prompt(review_memory: bool, review_skills: bool) -> String {
 ",
         );
         base.push_str(
-            "You may ALSO call `pk_refine` ONCE with small evidence-backed \
+            "You may ALSO call `kernel_refine` ONCE with small evidence-backed \
              edits[] over kinds `prompt` (behavioral policy addendums) or \
              `subagent` (reusable delegation specs), scope local by default. \
              Skip entirely when nothing durable emerged — a noisy lesson is \

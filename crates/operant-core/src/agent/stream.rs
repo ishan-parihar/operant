@@ -812,7 +812,7 @@ impl OperantAgent {
                 .next()
                 .expect("pending non-empty in single-tool branch");
             let name = tool_call.function.name.clone();
-            // Plan 015: pk_* tools key kernels/harness by session id.
+            // Plan 015: kernel tools key kernels/harness by session id.
             let tool_ctx = ToolContext::default().with_metadata(
                 "session_id",
                 self.persistent_session_id
@@ -882,7 +882,7 @@ impl OperantAgent {
                         }
 
                         let name = tool_call.function.name.clone();
-                        // Plan 015: session-keyed ToolContext for pk_* tools.
+                        // Plan 015: session-keyed ToolContext for kernel tools.
                         let tool_ctx = ToolContext::default().with_metadata(
                             "session_id",
                             self.persistent_session_id

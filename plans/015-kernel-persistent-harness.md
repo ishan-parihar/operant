@@ -47,7 +47,7 @@ surface — never duplicating it.
 ## Architecture
 
 ```
- model ──▶ pk_kernel_exec / pk_harness_get / pk_refine        Rust tools, gated "prime_kernel" toolset
+ model ──▶ kernel_exec / kernel_state / kernel_refine        Rust tools, gated "kernel" toolset
    ▲                │ NDJSON JSON-RPC over stdio (id-correlated, per-request timeout)
    │                ▼
    │        PkSidecarSupervisor (Rust, operant-core/src/tools/pk/)
@@ -55,7 +55,7 @@ surface — never duplicating it.
    │          idle auto-exit · process-group teardown · serialization per session_key
    │                │ spawns
    │                ▼
-   │        pk-sidecar (Python ≥3.11, ./pk-sidecar/, uv-managed)
+   │        kernel-sidecar (Python ≥3.11, ./kernel-sidecar/, uv-managed)
    │          SessionKernel  — persistent namespace/session_key + awaitable operant_tool() shim
    │          HarnessService — live import vendor/prime-agent .../rlm (HarnessState CRUD,
    │            snapshot(), record_refinement(); diagnosable degrade when submodule absent)
@@ -88,7 +88,7 @@ background_review.rs, violates replace-never-duplicate**.
 | 3 | Background review (post-turn skill/memory writer) | **Reused, extended**: gains an opt-in harness pass emitting prompt-note/subagent-spec edits into the ledger. Its prompts, aux-routing, and cadence remain authoritative. |
 | 4 | Curator + SkillImprover + learning graph + SkillForge | Untouched. They own the skill/memory lanes end-to-end. Harness store deliberately carries NO skill/memory kinds. |
 | 5 | `agentmemory` + MEMORY.md + LCM | Untouched. Harness is a third, separate lane (own root, own schema, own injection block); tests assert agentmemory bytes unchanged. |
-| 6 | `SubAgentTool` / delegation runtime | Untouched. Harness may hold *specs* (reusable role descriptions consumed as prompt material), never a second spawn engine. In-kernel recursion into pk_*/delegate is depth-guarded off. |
+| 6 | `SubAgentTool` / delegation runtime | Untouched. Harness may hold *specs* (reusable role descriptions consumed as prompt material), never a second spawn engine. In-kernel recursion into kernel_*/delegate is depth-guarded off. |
 | 7 | Skills system (SKILL.toml/SKILL.md, creator, improver) | Extended in Phase 6: executable `reference` field → kernel-loaded Python callable. Prose skills keep working identically. |
 
 ## Self-learning loop completeness contract (grounded)
@@ -105,7 +105,7 @@ background_review.rs, violates replace-never-duplicate**.
 ## Files in scope
 
 New:
-- `pk-sidecar/` — `pyproject.toml` (uv), `pk_sidecar/{__init__,server,kernel,harness,vendor}.py`,
+- `kernel-sidecar/` — `pyproject.toml` (uv), `kernel_sidecar/{__init__,server,kernel,harness,vendor}.py`,
   `test/`. Methods: `ping`, `exec{session_key,code}`, `reset{session_key}`,
   `harness_{list,get,upsert,delete}{scope,...}` (kinds: `prompt`,`subagent` only),
   `refine_record{scope,evidence,trigger}`, `refine_apply{scope,edits[]}` (snapshot→apply→record,
@@ -118,7 +118,7 @@ New:
 
 Modified:
 - `crates/operant-core/src/tools/builtin.rs` — register tools behind config gate.
-- `crates/operant-core/src/config.rs` — `[tools.prime_kernel]`: enabled(false until P4),
+- `crates/operant-core/src/config.rs` — `[tools.kernel]`: enabled(false until P4),
   python, vendor_dir, state_dir(`<home>/pk/harness`), sidecar_idle_secs(1800),
   request_timeout_secs(120), max_output_bytes(200_000), route_python_to_kernel(false→true P4),
   tool_bridge{enabled, allowlist(default read-only set), max_calls_per_exec(64),
@@ -138,8 +138,8 @@ Modified:
   best-effort before compression (small timeout, never blocks compression).
 - `crates/operant-core/src/memory_provider.rs` or `agent_memory.rs` injection site —
   append `[continual harness]` block (budget default 1200 chars; local-first; empty renders nothing).
-- `crates/operant-config/src/policy.rs` — permission-list entries for `pk_kernel_exec`,
-  `pk_refine`; bridged calls inherit target-tool gating.
+- `crates/operant-config/src/policy.rs` — permission-list entries for `kernel_exec`,
+  `kernel_refine`; bridged calls inherit target-tool gating.
 - `README.md` — count + paragraph.
 
 Out of scope: `code_execution.rs` internals (doc note only), curator/improver internals,
@@ -149,8 +149,8 @@ subagents, any new skill/memory store.
 ## Steps
 
 ### Phase 0 — terrain (dark merge)
-Submodule pin @v0.8.1 (+gate assert when enabled); `pk-sidecar` scaffold +
-`scripts/check-pk-sidecar.sh`; config surface in BOTH copies, all default-off;
+Submodule pin @v0.8.1 (+gate assert when enabled); `kernel-sidecar` scaffold +
+`scripts/check-kernel-sidecar.sh`; config surface in BOTH copies, all default-off;
 `session_id` metadata wiring (independent value: background review scoping benefits too).
 **Accept:** workspace green dark; sidecar pings standalone.
 
@@ -159,22 +159,22 @@ SessionKernel port (RLock, safe-builtins-with-`__import__`, vars echo, 200KB hea
 NDJSON server; supervisor (health/restart/idle/process-group teardown).
 **Accept:** state survives across execs; reset clears; kill -9 mid-request recovers; idle exit fires.
 
-### Phase 2 — `pk_kernel_exec`
+### Phase 2 — `kernel_exec`
 Args `{code, namespace?=session_id|"default"}`; gated registration; permission entry.
 **Accept:** cross-turn persistence in TUI; independent namespaces; code_execution byte-identical behavior.
 
 ### Phase 2.5 — tool bridge (RLM-lite) ⚠️ core architectural upgrade
 Kernel builtin `await operant_tool(name, args_json)`; host-side dispatch into
-`ToolRegistry::execute` with ToolContext `{origin:"pk_bridge", session_id}`.
+`ToolRegistry::execute` with ToolContext `{origin:"kernel_bridge", session_id}`.
 Hard invariants: allowlist deny-by-default (read-only set first); **bridged calls pass the
 same approval gate as direct calls**; max_calls_per_exec(64) + per-call timeout → structured
-partial results; no pk_*/delegate re-entrancy; audit line per call; oversized results
+partial results; no kernel_*/delegate re-entrancy; audit line per call; oversized results
 truncated with marker; errors returned as values, never transport failures.
 **Accept:** 40-call repo sweep completes in one turn; denied tool returns permission-error
 value; call-cap yields partial-result payload; slow bridged tool cannot deadlock the kernel.
 
 ### Phase 3 — harness store (two kinds, scoped, ledgered)
-Tools `pk_harness_get` / `pk_refine` (manual). Store carries ONLY `prompt` and `subagent`
+Tools `kernel_state` / `kernel_refine` (manual). Store carries ONLY `prompt` and `subagent`
 kinds × local/global scopes + refinement event ledger w/ snapshots (vendored HarnessState;
 unused upstream kinds left dormant, not surfaced). Storage `<home>/pk/harness/<scope>/`.
 **Accept:** roundtrip persists across restart; agentmemory DB + skills dir + MEMORY.md
@@ -183,7 +183,7 @@ bytes provably unchanged after operations; rollback restores byte-identical prio
 ### Phase 4 — feed-forward + python-routing cutover
 `[continual harness]` injection block (bounded, local-first, empty-safe); flip
 `route_python_to_kernel` (transparent kernel execution for python code_execution calls,
-`"via":"pk_kernel"` marker, stateless fallback when sidecar down); session-end teardown;
+`"via":"kernel"` marker, stateless fallback when sidecar down); session-end teardown;
 `/pk reset|harness|rollback` command surface (discovery: confirm slash registry location);
 docs truthfulness pass (plan-014 rules).
 **Accept:** learned entry appears in next-turn prompt block; python code_execution persists
@@ -214,7 +214,7 @@ cargo fmt --all && cargo fmt --all --check
 export LIBCLANG_PATH=/usr/lib/llvm21/lib
 cargo clippy -p operant-core --all-targets -- -D warnings
 cargo test  -p operant-core --lib
-uv run pytest pk-sidecar/test
+uv run pytest kernel-sidecar/test
 cargo test --workspace --all-features --lib   # final per-plan gate
 ```
 
@@ -222,7 +222,7 @@ cargo test --workspace --all-features --lib   # final per-plan gate
 
 1. **Stateful analysis**: CSV loaded turn 3, filters iterated turns 4–7, summary turn 8 —
    zero reloads.
-2. **Programmatic sweep**: one `pk_kernel_exec` runs a 40-tool-call scan that previously
+2. **Programmatic sweep**: one `kernel_exec` runs a 40-tool-call scan that previously
    cost ~40 model turns.
 3. **Scoped lesson**: session learns "this project pins LIBCLANG_PATH"; with auto_learn on,
    background review writes a LOCAL prompt-note; next turn's injection shows it; other

@@ -1,7 +1,7 @@
-//! Prime Kernel (plan 015): persistent stateful Python kernel + continual
-//! harness, hosted in the `pk-sidecar` subprocess over NDJSON JSON-RPC stdio.
+//! Persistent Kernel (plan 015): persistent stateful Python kernel + continual
+//! harness, hosted in the `kernel-sidecar` subprocess over NDJSON JSON-RPC stdio.
 //!
-//! Ownership mirrors upstream prime-agent's split: policy lives in this Rust
+//! Ownership mirrors upstream persistent kernel split: policy lives in this Rust
 //! host (approval gating, allowlists, caps, timeouts), state lives in the
 //! sidecar (kernel namespaces + vendored live `rlm` harness store).
 //!
@@ -19,14 +19,14 @@ use std::sync::{Arc, OnceLock};
 
 use serde_json::Value;
 
-pub use runtime::PkRuntime;
+pub use runtime::KernelRuntime;
 
 /// Process-wide runtime handle installed by [`register`] so non-tool callers
 /// (e.g. `code_execution`'s python routing cutover) can reach the sidecar
 /// without plumbing an Arc through every constructor.
-static GLOBAL_RUNTIME: OnceLock<Arc<PkRuntime>> = OnceLock::new();
+static GLOBAL_RUNTIME: OnceLock<Arc<KernelRuntime>> = OnceLock::new();
 
-pub fn global_runtime() -> Option<&'static Arc<PkRuntime>> {
+pub fn global_runtime() -> Option<&'static Arc<KernelRuntime>> {
     GLOBAL_RUNTIME.get()
 }
 
@@ -76,16 +76,16 @@ pub async fn injection_block(session_id: Option<&str>, max_chars: usize) -> Opti
     Some(block)
 }
 
-/// Register the three model-facing tools under the gated `prime_kernel`
-/// toolset. No-op unless `[tools.prime_kernel] enabled = true`.
+/// Register the three model-facing tools under the gated `kernel`
+/// toolset. No-op unless `[tools.kernel] enabled = true`.
 pub async fn register(
     registry: &crate::tools::ToolRegistry,
-    settings: &crate::config::PrimeKernelSettings,
-) -> anyhow::Result<Option<Arc<PkRuntime>>> {
+    settings: &crate::config::KernelSettings,
+) -> anyhow::Result<Option<Arc<KernelRuntime>>> {
     if !settings.enabled {
         return Ok(None);
     }
-    let rt = PkRuntime::new(settings.clone());
+    let rt = KernelRuntime::new(settings.clone());
     let _ = GLOBAL_RUNTIME.set(rt.clone());
     if settings.tool_bridge.enabled {
         // Executor holds a ToolRegistry clone sharing the live tool map, so
@@ -94,13 +94,13 @@ pub async fn register(
         tool_bridge::spawn_drainer(rt.clone());
     }
     registry
-        .register(kernel_tool::PkKernelExecTool::new(rt.clone()))
+        .register(kernel_tool::KernelExecTool::new(rt.clone()))
         .await?;
     registry
-        .register(harness_tools::PkHarnessGetTool::new(rt.clone()))
+        .register(harness_tools::KernelStateTool::new(rt.clone()))
         .await?;
     registry
-        .register(harness_tools::PkRefineTool::new(rt))
+        .register(harness_tools::KernelRefineTool::new(rt))
         .await?;
     Ok(GLOBAL_RUNTIME.get().cloned())
 }
@@ -112,20 +112,20 @@ mod tests {
     //! Skipped naturally when python>=3.11 is absent (spawn error surfaces).
 
     use super::*;
-    use crate::config::PrimeKernelSettings;
+    use crate::config::KernelSettings;
     use serde_json::json;
 
-    fn test_settings(state_root: &std::path::Path) -> PrimeKernelSettings {
-        let s = PrimeKernelSettings {
+    fn test_settings(state_root: &std::path::Path) -> KernelSettings {
+        let s = KernelSettings {
             enabled: true,
             state_dir: Some(state_root.to_path_buf()),
             // Keep the idle reaper out of test timing.
             sidecar_idle_secs: 0,
             request_timeout_secs: 30,
-            ..PrimeKernelSettings::default()
+            ..KernelSettings::default()
         };
-        // PK_SIDECAR_DIR resolution: in-tree builds fall back to the
-        // compile-time CARGO_MANIFEST_DIR path (../../pk-sidecar), which is
+        // KERNEL_SIDECAR_DIR resolution: in-tree builds fall back to the
+        // compile-time CARGO_MANIFEST_DIR path (../../kernel-sidecar), which is
         // exactly this repo layout — no env mutation needed (edition-2024
         // set_var is unsafe and racy under parallel tests).
         s
@@ -134,16 +134,16 @@ mod tests {
     #[tokio::test]
     async fn ping_roundtrip() {
         let dir = tempfile::tempdir().unwrap();
-        let rt = PkRuntime::new(test_settings(dir.path()));
+        let rt = KernelRuntime::new(test_settings(dir.path()));
         let v = rt.request("ping", json!({})).await.expect("ping");
         assert_eq!(v["pong"], json!(true));
-        assert_eq!(v["has_prime_runtime"], json!(true));
+        assert_eq!(v["has_runtime"], json!(true));
     }
 
     #[tokio::test]
     async fn exec_state_persists_across_requests() {
         let dir = tempfile::tempdir().unwrap();
-        let rt = PkRuntime::new(test_settings(dir.path()));
+        let rt = KernelRuntime::new(test_settings(dir.path()));
         rt.request(
             "exec",
             json!({"session_key": "t1", "code": "x = 41\nprint('set')"}),
@@ -155,14 +155,14 @@ mod tests {
             .await
             .expect("exec 2");
         assert_eq!(v["stdout"], json!("42\n"));
-        // (The "persistent": true marker is added by PkKernelExecTool; the
+        // (The "persistent": true marker is added by KernelExecTool; the
         // raw exec protocol returns kernel fields only.)
     }
 
     #[tokio::test]
     async fn transparent_restart_after_sidecar_exit() {
         let dir = tempfile::tempdir().unwrap();
-        let rt = PkRuntime::new(test_settings(dir.path()));
+        let rt = KernelRuntime::new(test_settings(dir.path()));
         // Ask the sidecar to stop its loop; child exits.
         rt.request("shutdown", json!({})).await.expect("shutdown");
         tokio::time::sleep(std::time::Duration::from_millis(300)).await;
@@ -182,7 +182,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut settings = test_settings(dir.path());
         settings.tool_bridge.enabled = true;
-        let rt = PkRuntime::new(settings);
+        let rt = KernelRuntime::new(settings);
         let registry = crate::tools::ToolRegistry::new(std::time::Duration::from_secs(5));
         registry
             .register(crate::tools::datetime_tool::DateTimeTool)
@@ -212,7 +212,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut settings = test_settings(dir.path());
         settings.tool_bridge.enabled = true;
-        let rt = PkRuntime::new(settings);
+        let rt = KernelRuntime::new(settings);
 
         // Executor over a registry holding one allowlisted tool (datetime).
         let registry = crate::tools::ToolRegistry::new(std::time::Duration::from_secs(10));
@@ -252,7 +252,7 @@ mod tests {
     #[tokio::test]
     async fn harness_apply_and_rollback_roundtrip() {
         let dir = tempfile::tempdir().unwrap();
-        let rt = PkRuntime::new(test_settings(dir.path()));
+        let rt = KernelRuntime::new(test_settings(dir.path()));
         let applied = rt
             .request(
                 "refine_apply",

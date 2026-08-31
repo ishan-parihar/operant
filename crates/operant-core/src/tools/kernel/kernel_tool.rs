@@ -1,6 +1,6 @@
-//! `pk_kernel_exec` — run Python against the persistent per-session kernel.
+//! `kernel_exec` — run Python against the persistent per-session kernel.
 //!
-//! Variables and imports survive across turns (prime-agent control-plane
+//! Variables and imports survive across turns (persistent kernel control-plane
 //! behavior). With the tool bridge enabled, cells may also call allowlisted
 //! operant tools via `await operant_tool(name, args)`.
 
@@ -15,30 +15,30 @@ use crate::config::runtime_config;
 use crate::schema::ToolSchema;
 use crate::tools::{OperantTool, ToolContext, ToolResult};
 
-use super::runtime::PkRuntime;
+use super::runtime::KernelRuntime;
 
 #[derive(Debug, Clone, JsonSchema, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct PkKernelExecArgs {
+struct KernelExecArgs {
     code: String,
     /// Optional explicit namespace; defaults to the current session id.
     namespace: Option<String>,
 }
 
-pub struct PkKernelExecTool {
-    rt: Arc<PkRuntime>,
+pub struct KernelExecTool {
+    rt: Arc<KernelRuntime>,
 }
 
-impl PkKernelExecTool {
-    pub fn new(rt: Arc<PkRuntime>) -> Self {
+impl KernelExecTool {
+    pub fn new(rt: Arc<KernelRuntime>) -> Self {
         Self { rt }
     }
 }
 
 #[async_trait]
-impl OperantTool for PkKernelExecTool {
+impl OperantTool for KernelExecTool {
     fn name(&self) -> &str {
-        "pk_kernel_exec"
+        "kernel_exec"
     }
 
     fn description(&self) -> &str {
@@ -50,26 +50,26 @@ impl OperantTool for PkKernelExecTool {
     }
 
     fn schema(&self) -> ToolSchema {
-        ToolSchema::from_type::<PkKernelExecArgs>("pk_kernel_exec", "Persistent kernel exec")
+        ToolSchema::from_type::<KernelExecArgs>("kernel_exec", "Persistent kernel exec")
     }
 
     fn toolset(&self) -> &str {
-        "prime_kernel"
+        "kernel"
     }
 
     fn is_available(&self) -> bool {
-        runtime_config().tools.prime_kernel.enabled
+        runtime_config().tools.kernel.enabled
     }
 
     async fn execute(&self, args: Value, context: ToolContext) -> ToolResult {
-        let args: PkKernelExecArgs = match serde_json::from_value(args) {
+        let args: KernelExecArgs = match serde_json::from_value(args) {
             Ok(a) => a,
             Err(e) => {
-                return ToolResult::error("pk_kernel_exec", format!("Invalid arguments: {e}"));
+                return ToolResult::error("kernel_exec", format!("Invalid arguments: {e}"));
             }
         };
         if args.code.trim().is_empty() {
-            return ToolResult::error("pk_kernel_exec", "'code' is required");
+            return ToolResult::error("kernel_exec", "'code' is required");
         }
         let settings = self.rt.settings();
         let session_key = context
@@ -94,13 +94,13 @@ impl OperantTool for PkKernelExecTool {
                 result["persistent"] = json!(true);
                 result["session"] = json!(session_key);
                 result["bridge_calls"] = json!(self.rt.cell_calls());
-                ToolResult::success("pk_kernel_exec", result.to_string())
+                ToolResult::success("kernel_exec", result.to_string())
             }
             Err(e) => ToolResult::error(
-                "pk_kernel_exec",
+                "kernel_exec",
                 format!(
                     "{e}. Fix: ensure python>=3.11 + uv, then run \
-                     scripts/check-pk-sidecar.sh; submodule needs \
+                     scripts/check-kernel-sidecar.sh; submodule needs \
                      'git submodule update --init --recursive'"
                 ),
             ),

@@ -660,7 +660,7 @@ fn extract_command_from_args(tool_name: &str, args: &Value) -> String {
             .to_string(),
         // Plan 015: kernel cells are model-generated Python — gate them on
         // the actual code text, same as code_execution's command.
-        "pk_kernel_exec" => args
+        "kernel_exec" => args
             .get("code")
             .and_then(|v| v.as_str())
             .unwrap_or(tool_name)

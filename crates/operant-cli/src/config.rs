@@ -63,7 +63,8 @@ pub struct CliConfig {
     pub cron: CronConfigV2,
     pub kanban: KanbanConfig,
     pub code_execution: CodeExecutionConfigV2,
-    pub prime_kernel: PrimeKernelConfigV2,
+    #[serde(alias = "prime_kernel")]
+    pub kernel: KernelConfigV2,
     pub logging: LoggingConfigV2,
     pub model_catalog: ModelCatalogConfig,
     pub sessions: SessionsConfig,
@@ -124,7 +125,7 @@ impl Default for CliConfig {
             cron: CronConfigV2::default(),
             kanban: KanbanConfig::default(),
             code_execution: CodeExecutionConfigV2::default(),
-            prime_kernel: PrimeKernelConfigV2::default(),
+            kernel: KernelConfigV2::default(),
             logging: LoggingConfigV2::default(),
             model_catalog: ModelCatalogConfig::default(),
             sessions: SessionsConfig::default(),
@@ -1164,12 +1165,12 @@ impl Default for CodeExecutionConfigV2 {
     }
 }
 
-/// Plan 015 mirror of core `PrimeKernelSettings` (Option-wrapped V2 form).
+/// Plan 015 mirror of core `KernelSettings` (Option-wrapped V2 form).
 /// Kept field-identical to the core struct; a round-trip test asserts both
 /// parse one TOML snippet consistently so the copies cannot drift.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
-pub struct PrimeKernelConfigV2 {
+pub struct KernelConfigV2 {
     pub enabled: Option<bool>,
     pub python: Option<String>,
     pub vendor_dir: Option<String>,
@@ -1184,7 +1185,7 @@ pub struct PrimeKernelConfigV2 {
     pub tool_bridge_per_call_timeout_secs: Option<u64>,
 }
 
-impl Default for PrimeKernelConfigV2 {
+impl Default for KernelConfigV2 {
     fn default() -> Self {
         Self {
             enabled: Some(false),
@@ -1965,26 +1966,26 @@ mod tests {
     use std::sync::OnceLock;
 
     /// Plan 015 drift-guard: one TOML snippet must parse consistently into the
-    /// CLI V2 mirror and core PrimeKernelSettings (values + defaults agree).
+    /// CLI V2 mirror and core KernelSettings (values + defaults agree).
     #[test]
-    fn prime_kernel_v2_and_core_parse_same_toml() {
+    fn kernel_v2_and_core_parse_same_toml() {
         let toml = r#"
             enabled = true
             route_python_to_kernel = false
             sidecar_idle_secs = 900
             request_timeout_secs = 60
         "#;
-        let v2: PrimeKernelConfigV2 = toml::from_str(toml).expect("v2 parse");
+        let v2: KernelConfigV2 = toml::from_str(toml).expect("v2 parse");
         assert_eq!(v2.enabled, Some(true));
         assert_eq!(v2.sidecar_idle_secs, Some(900));
 
-        let core: operant_core::config::PrimeKernelSettings =
+        let core: operant_core::config::KernelSettings =
             toml::from_str(toml).expect("core parse");
         assert_eq!(core.enabled, true);
         assert_eq!(core.sidecar_idle_secs, 900);
         assert_eq!(core.request_timeout_secs, 60);
         // Default agreement on untouched fields:
-        let default_core = operant_core::config::PrimeKernelSettings::default();
+        let default_core = operant_core::config::KernelSettings::default();
         assert_eq!(default_core.max_output_bytes, 200_000);
     }
 
