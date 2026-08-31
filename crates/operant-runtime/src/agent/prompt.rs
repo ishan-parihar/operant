@@ -8,6 +8,8 @@ use chrono::{Datelike, Local, Timelike};
 use operant_config::schema::IdentityConfig;
 use std::fmt::Write;
 use std::path::Path;
+use std::sync::Arc;
+use tokio::sync::RwLock;
 
 pub struct PromptContext<'a> {
     pub workspace_dir: &'a Path,
@@ -38,28 +40,50 @@ pub trait PromptSection: Send + Sync {
 
 #[derive(Default)]
 pub struct SystemPromptBuilder {
-    sections: Vec<Box<dyn PromptSection>>,
+    sections: Vec<Arc<dyn PromptSection>>,
 }
 
 impl SystemPromptBuilder {
     pub fn with_defaults() -> Self {
         Self {
             sections: vec![
-                Box::new(DateTimeSection),
-                Box::new(IdentitySection),
-                Box::new(ToolHonestySection),
-                Box::new(ToolsSection),
-                Box::new(SafetySection),
-                Box::new(SkillsSection),
-                Box::new(WorkspaceSection),
-                Box::new(RuntimeSection),
-                Box::new(ChannelMediaSection),
+                Arc::new(DateTimeSection),
+                Arc::new(IdentitySection),
+                Arc::new(ToolHonestySection),
+                Arc::new(ToolsSection),
+                Arc::new(SafetySection),
+                Arc::new(SkillsSection),
+                Arc::new(WorkspaceSection),
+                Arc::new(RuntimeSection),
+                Arc::new(ChannelMediaSection),
             ],
         }
     }
 
     pub fn add_section(mut self, section: Box<dyn PromptSection>) -> Self {
-        self.sections.push(section);
+        self.sections.push(Arc::from(section));
+        self
+    }
+
+    /// Snapshot the current children of a [`PromptSections`] kernel slot and
+    /// append them in insertion order. Cheap to call (one read-lock acquisition);
+    /// ordering is what kernel `install("prompt", key)` recorded, not the
+    /// default `with_defaults()` order. The default caller's bytes are
+    /// byte-stable when the slot is empty (no `extend_from_slot` invocation).
+    pub async fn extend_from_slot(mut self, slot: Arc<PromptSections>) -> Self {
+        for (_, section) in slot.snapshot().await {
+            self.sections.push(section);
+        }
+        self
+    }
+
+    /// Same as [`Self::extend_from_slot`] but synchronous — used by callers
+    /// that already hold a snapshot and want to avoid the async boundary in
+    /// `Agent::from_config`. Empty slot ⇒ no change.
+    pub fn extend_with_sections(mut self, sections: Vec<(String, Arc<dyn PromptSection>)>) -> Self {
+        for (_, section) in sections {
+            self.sections.push(section);
+        }
         self
     }
 
@@ -751,5 +775,53 @@ mod tests {
             output.contains("bypass oversight"),
             "supervised should include 'bypass oversight' instructions"
         );
+    }
+}
+
+/// Shared, mutable prompt-section slot for the kernel `prompt.<key>` seam.
+///
+/// Analog of [`crate::hooks::DynamicHooks`]: one shared object, kernel
+/// providers add/remove children through it, prompt assembly snapshots
+/// children at build time. Flag-off boots never construct the slot.
+#[derive(Default)]
+pub struct PromptSections {
+    entries: RwLock<Vec<(String, Arc<dyn PromptSection>)>>,
+}
+
+impl PromptSections {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Register (or replace) a section under a stable id.
+    pub async fn add(&self, id: impl Into<String>, section: Arc<dyn PromptSection>) {
+        let id = id.into();
+        let mut entries = self.entries.write().await;
+        if let Some(slot) = entries.iter_mut().find(|(eid, _)| eid == &id) {
+            slot.1 = section;
+            return;
+        }
+        entries.push((id, section));
+    }
+
+    /// Remove a section by id. Returns true when it existed.
+    pub async fn remove(&self, id: &str) -> bool {
+        let mut entries = self.entries.write().await;
+        let len_before = entries.len();
+        entries.retain(|(eid, _)| eid != id);
+        entries.len() != len_before
+    }
+
+    /// Snapshot current children in insertion order (id, section).
+    pub async fn snapshot(&self) -> Vec<(String, Arc<dyn PromptSection>)> {
+        self.entries.read().await.clone()
+    }
+
+    pub async fn len(&self) -> usize {
+        self.entries.read().await.len()
+    }
+
+    pub async fn is_empty(&self) -> bool {
+        self.entries.read().await.is_empty()
     }
 }

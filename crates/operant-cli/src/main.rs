@@ -3,6 +3,7 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 mod autonomous;
 mod cmd_acp;
+mod cmd_architecture;
 mod cmd_auth;
 mod cmd_backup;
 mod cmd_channel;
@@ -431,6 +432,11 @@ enum Commands {
     Plugins {
         #[command(subcommand)]
         cmd: cmd_plugins::PluginsSubcommand,
+    },
+    /// Inspect the resolved harness architecture (plan 016)
+    Architecture {
+        #[command(subcommand)]
+        cmd: cmd_architecture::ArchitectureSubcommand,
     },
     /// Manage communication channels (telegram, discord, slack, whatsapp)
     Channel {
@@ -2430,6 +2436,9 @@ async fn main() -> Result<()> {
         }
         Some(Commands::Debug { cmd }) => {
             cmd_debug::handle_debug_command(&loaded.config, cmd.clone()).await?;
+        }
+        Some(Commands::Architecture { cmd }) => {
+            cmd_architecture::handle_architecture_command(cmd.clone()).await?;
         }
         Some(Commands::Plugins { cmd }) => {
             cmd_plugins::handle_plugins_command(&loaded.config, cmd.clone()).await?;

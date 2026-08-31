@@ -1,55 +1,44 @@
-//! Plan 016: `operant-harness` — the composable provider runtime.
+//! Harness kernel (plan 016) — Cordis-paradigm semantics on operant's Rust substrate.
 //!
-//! The crate is intentionally a **pure library** at this phase: no dependency
-//! on `operant-core`, `operant-runtime`, or `operant-cli` beyond the
-//! `operant-api` surface. Phase 0-1 scaffolds the kernel core; Phase 2+
-//! (in the same plan) will plug the seams into the live tool/hook/memory
-//! registries via flag-gated dispatch.
+//! Five adopted semantics:
+//! 1. String-keyed claims per typed seam (`tool`, `hook.*`, `memory.provider`, …).
+//! 2. Declared requirements + PENDING late binding — providers activate the moment
+//!    their dependencies appear.
+//! 3. Reversible effects — every registration returns an undo handle; unload unwinds LIFO.
+//! 4. Transactional swap — replace-on-success, restore-on-failure, ABA-safe generation counters.
+//! 5. Composition as data — serializable dump of the resolved provider tree.
 //!
-//! The five adopted semantics (from plan 016 §"The five adopted semantics"):
-//! 1. String-keyed service claims (`Harness.claims: String -> ProviderId`).
-//! 2. `requires()` + PENDING late binding — unmet requirements stay
-//!    pending until a successful activation rescans.
-//! 3. Registrations return `Effect` undo handles; unmount unwinds LIFO.
-//! 4. Transactional HMR — atomic slot swap, restore-on-failure, ABA
-//!    generation counter guards stale-swap.
-//! 5. Composition via `architecture.toml` + `dump()` (Phase 3 — not yet).
-//!
-//! Module layout (per plan 016 §"Files in scope"):
-//! - `lib.rs` (this): module wiring + design contract.
-//! - `provider.rs`: the `Provider` trait (`id/provides/requires/source`).
-//! - `harness.rs`: the `Harness` container, state machine, mount/unmount.
-//! - `effect.rs`: the `Effect` undo-handle type + LIFO unwind.
-//! - `dump.rs`: the serializable `dump()` shape (id, state, claims,
-//!   requires, source, generation).
-//! - `composition.rs`: placeholder for Phase 3 (`architecture.toml`).
-//!
-//! Default-off integration: this crate is dark-merged. No consumer is
-//! required to enable it; the existing `ToolRegistry` / `HookRunner`
-//! continue to operate on their own clocks. Flag-on integration is a
-//! later phase that wraps (never duplicates) the existing machinery.
+//! This crate is PURE: it depends on no other operant crate. Host integration lives in
+//! operant-core/operant-runtime adapters (Phase 2+).
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
-#![forbid(unsafe_code)]
-
-pub mod dump;
+pub mod claim;
+pub mod composition;
 pub mod effect;
+pub mod error;
 pub mod harness;
+pub mod pool;
 pub mod provider;
+pub mod report;
+pub mod row;
+pub mod swap;
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+pub use claim::Claim;
+pub use composition::{
+    Architecture, ArchitectureRow, BuildError, Builder, Composition, Patch, PatchTarget,
+};
+pub use effect::Effect;
+pub use error::HarnessError;
+pub use harness::{Harness, KernelOptions};
+pub use pool::{
+    CompiledPool, PoolManifest, READ_ONLY_VERBS, compile as compile_pool,
+    load_and_compile as load_and_compile_pool,
+};
+pub use provider::{
+    ActivateCx, Provider, ProviderSource, ProviderSpec, ProviderState, Registration, Seam, Source,
+};
+pub use report::{ClaimInfo, DumpTree, MountReport, ProviderEntryInfo};
+pub use swap::{SwapGeneration, SwapOutcome};
 
-    /// Phase 0/1 acceptance: `cargo test -p operant-harness --lib` is green
-    /// dark, the crate has no dep on operant-core/runtime/cli, and
-    /// mounting a single provider into a fresh harness yields a clean
-    /// `dump()` with the provider active and its claims visible.
-    #[test]
-    fn dark_merge_scaffold_is_sound() {
-        // Empty harness → no claims, no active providers.
-        let h = harness::Harness::new();
-        let snap = h.dump();
-        assert!(snap.providers.is_empty(), "fresh harness has no providers");
-        assert!(snap.claims.is_empty(), "fresh harness has no claims");
-    }
-}
+/// Kernel version of the adopted-semantics contract. Bumped when a semantic changes.
+pub const HARNESS_SEMANTICS_VERSION: u32 = 1;

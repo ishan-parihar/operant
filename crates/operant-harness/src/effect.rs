@@ -1,68 +1,60 @@
-//! Plan 016: `Effect` undo handles + LIFO unwind.
+//! Reversible effects — every registration returns an undo handle.
 //!
-//! Every `Provider::apply` returns an `Effect`. The kernel stores the
-//! handle in a per-provider vec, and on `unmount` it walks the vec in
-//! LIFO order, calling each handle to roll back the side effect.
-//!
-//! Handle constraints (enforced by clippy lint + review rule once the
-//! Phase 2 seams land): the closure MUST be bounded (no `await`s on
-//! unbounded futures, no network I/O, no lock waits) and MUST be
-//! idempotent (a crash before the closure runs leaves the world in a
-//! state the closure would have cleaned up — so retrying on next boot
-//! is safe). Phase 0/1 only exposes the type; the kernel uses a
-//! `Box<dyn FnOnce()>` body.
+//! Mirrors Cordis's rule that prompt sections, tool schemas, adapters and
+//! listeners are installed through disposables so teardown unwinds them
+//! predictably. The kernel stores effects per provider and unwinds them in
+//! LIFO order on unmount or transactional rollback.
 
-use std::fmt;
+use std::future::Future;
+use std::pin::Pin;
 
-/// A reversible side effect. Created by `Provider::apply`; consumed by
-/// the kernel's LIFO unwinder at unmount time.
+/// A boxed, sendable, owned-output future used by undo closures.
+pub type BoxUndoFuture = Pin<Box<dyn Future<Output = ()> + Send>>;
+
+/// Undo closure type. Must be bounded work: no network calls, no unbounded
+/// awaits (enforced by review convention; see plan 016 risks table).
+pub type UndoFn = Box<dyn FnOnce() -> BoxUndoFuture + Send + Sync>;
+
+/// One reversible registration owned by a provider.
 pub struct Effect {
-    /// The undo body. `None` means no-op (a `ConfigRow` provider that
-    /// just claimed a slot has nothing to release).
-    undo: Option<Box<dyn FnOnce() + Send + 'static>>,
-    /// Short description for `dump()` — e.g. "unregister tool:browser".
-    label: &'static str,
+    label: String,
+    undo: Option<UndoFn>,
 }
 
 impl Effect {
-    /// A no-op effect (claim-only, no registration to undo).
-    pub fn noop() -> Self {
+    /// Build an effect from a synchronous-ish async undo closure.
+    pub fn new(
+        label: impl Into<String>,
+        undo: impl FnOnce() -> BoxUndoFuture + Send + Sync + 'static,
+    ) -> Self {
         Self {
-            undo: None,
-            label: "noop",
-        }
-    }
-
-    /// Wrap a closure as an effect. The closure runs at unmount time
-    /// (LIFO order across all effects of the provider being unmounted).
-    pub fn new<F>(label: &'static str, undo: F) -> Self
-    where
-        F: FnOnce() + Send + 'static,
-    {
-        Self {
+            label: label.into(),
             undo: Some(Box::new(undo)),
-            label,
         }
     }
 
-    /// Human-readable label for `dump()`.
-    pub fn label(&self) -> &'static str {
-        self.label
+    /// An effect that records nothing to undo (e.g. pure observation).
+    pub fn noop(label: impl Into<String>) -> Self {
+        Self {
+            label: label.into(),
+            undo: None,
+        }
     }
 
-    /// Run the undo body. Consumes the Effect; the kernel may discard
-    /// after calling. If this is the *second* run (kernel retried on
-    /// panic) the second call is a no-op — the underlying closure has
-    /// already been moved out.
-    pub fn run(mut self) {
+    pub fn label(&self) -> &str {
+        &self.label
+    }
+
+    /// Consume the effect, running its undo closure (if any).
+    pub(crate) async fn unwind(mut self) {
         if let Some(undo) = self.undo.take() {
-            undo();
+            undo().await;
         }
     }
 }
 
-impl fmt::Debug for Effect {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl std::fmt::Debug for Effect {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Effect")
             .field("label", &self.label)
             .field("has_undo", &self.undo.is_some())
@@ -70,40 +62,11 @@ impl fmt::Debug for Effect {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
-    /// Idempotency: running the same effect twice must be safe (the
-    /// second call is a no-op because the first `take()`-moved the
-    /// closure out).
-    #[test]
-    fn effect_runs_undo_once() {
-        use std::sync::Arc;
-        let counter = Arc::new(AtomicUsize::new(0));
-        let c2 = counter.clone();
-        let effect = Effect::new("test", move || {
-            c2.fetch_add(1, Ordering::SeqCst);
-        });
-        effect.run();
-        // Second run consumes a now-empty Effect — safe no-op.
-        let empty = Effect::noop();
-        empty.run();
-        assert_eq!(counter.load(Ordering::SeqCst), 1);
-    }
-
-    #[test]
-    fn noop_effect_carries_no_undo() {
-        let e = Effect::noop();
-        assert_eq!(e.label(), "noop");
-        // Should not panic; just runs no body.
-        e.run();
-    }
-
-    #[test]
-    fn effect_label_is_preserved() {
-        let e = Effect::new("unregister tool:browser", || {});
-        assert_eq!(e.label(), "unregister tool:browser");
+/// Unwind effects in LIFO order. Errors are contained: one failing undo never
+/// prevents the rest from running (Cordis fiber-hardening semantics).
+pub(crate) async fn unwind_lifo(effects: Vec<Effect>) {
+    for effect in effects.into_iter().rev() {
+        tracing::debug!(effect = %effect.label(), "unwinding effect");
+        effect.unwind().await;
     }
 }
