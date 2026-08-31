@@ -118,6 +118,16 @@ class SidecarServer:
                       "harness_overview", "refine_record", "refine_apply",
                       "refine_rollback", "refine_history"):
             return await asyncio.to_thread(self._harness_sync, method, p)
+        if method == "skill_bind":
+            # Plan 016, phase 6b: bind SKILL.toml [reference] into a session's globals.
+            key = str(p.get("session_key") or "default")
+            import_path = str(p.get("import") or "")
+            callable = str(p.get("callable") or "")
+            if not import_path or not callable:
+                raise ValueError("skill_bind requires 'import' and 'callable'")
+            async with self._lock_for(key):
+                kernel = self._kernel_for(key)
+                return kernel.bind_skill(import_path, callable)
         if method == "shutdown":
             self._stopping = True
             return {"bye": True}

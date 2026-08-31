@@ -39,6 +39,11 @@ pub async fn injection_block(session_id: Option<&str>, max_chars: usize) -> Opti
     if !rt.settings().enabled {
         return None;
     }
+    let sid = session_id.unwrap_or("default");
+    // Per-turn cache: avoid double sidecar roundtrip within 5s for same session+budget.
+    if let Some(cached) = rt.cached_injection(sid, max_chars).await {
+        return Some(cached);
+    }
     const EMPTY_MARKERS: [&str; 2] = ["(empty harness)", "(empty"];
     let mut block = String::from("[continual harness]\n");
     let mut budget = max_chars.max(200);
@@ -70,10 +75,149 @@ pub async fn injection_block(session_id: Option<&str>, max_chars: usize) -> Opti
             break;
         }
     }
+    // Phase 6b: executable skills section (SKILL.toml [reference]).
+    if let Some(exe) = executable_skills_section(max_chars.saturating_sub(block.len()))
+        && block.len() + exe.len() < max_chars
+    {
+        block.push_str(&exe);
+    }
     if block == "[continual harness]\n" {
         return None;
     }
+    rt.store_injection(sid, max_chars, block.clone()).await;
     Some(block)
+}
+
+/// Executable skills (plan 016, phase 6b): scan <skills_dir>/*/SKILL.toml
+/// for `[reference]` and emit a bounded "executable skills:" section.
+/// Best-effort, sync filesystem scan — budgeted so prompts stay bounded.
+fn executable_skills_section(budget: usize) -> Option<String> {
+    if budget < 80 {
+        return None;
+    }
+    let cfg = crate::config::runtime_config();
+    if !cfg.tools.kernel.pyskill.enabled {
+        return None;
+    }
+    let allowlist = &cfg.tools.kernel.pyskill.allowed_imports;
+    // Skills dir: runtime config root_dir if set, else platform default.
+    let skills_dir = if cfg.skills.root_dir.as_os_str().is_empty() {
+        crate::platform::operant_skills_dir()
+    } else {
+        cfg.skills.root_dir.clone()
+    };
+    let Ok(entries) = std::fs::read_dir(&skills_dir) else {
+        return None;
+    };
+    let mut lines: Vec<String> = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let toml_path = path.join("SKILL.toml");
+        if !toml_path.is_file() {
+            continue;
+        }
+        let Ok(content) = std::fs::read_to_string(&toml_path) else {
+            continue;
+        };
+        let Ok(val) = content.parse::<toml::Value>() else {
+            continue;
+        };
+        let Some(tbl) = val.get("reference").and_then(|v| v.as_table()) else {
+            continue;
+        };
+        let Some(import) = tbl.get("import").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        let Some(callable) = tbl.get("callable").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        if !is_import_allowed(import, allowlist) {
+            continue;
+        }
+        let call_pattern = tbl
+            .get("call_pattern")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let skill_name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("unknown");
+        let line = if call_pattern.is_empty() {
+            format!("  - {skill_name}: {import}::{callable}")
+        } else {
+            format!("  - {skill_name}: {call_pattern}  # from {import}::{callable}")
+        };
+        lines.push(line);
+        if lines.len() >= 10 {
+            break;
+        }
+    }
+    if lines.is_empty() {
+        return None;
+    }
+    let mut section = String::from("(executable skills)\n");
+    for line in &lines {
+        if section.len() + line.len() + 2 > budget {
+            break;
+        }
+        section.push_str(line);
+        section.push('\n');
+    }
+    Some(section)
+}
+
+fn is_import_allowed(import: &str, allowlist: &[String]) -> bool {
+    if allowlist.is_empty() {
+        return false;
+    }
+    for pat in allowlist {
+        if pat == "*" {
+            return true;
+        }
+        if pat.ends_with(".*") {
+            let prefix = &pat[..pat.len() - 2];
+            if import == prefix || import.starts_with(&format!("{prefix}.")) {
+                return true;
+            }
+        } else if pat.contains('*') || pat.contains('?') {
+            // Simple glob: convert to fnmatch-style check via glob crate fallback
+            // For now, handle `*` as substring wildcard.
+            let star_parts: Vec<&str> = pat.split('*').collect();
+            let mut ok = true;
+            let mut pos = 0usize;
+            for (i, part) in star_parts.iter().enumerate() {
+                if part.is_empty() {
+                    continue;
+                }
+                if i == 0 {
+                    if !import.starts_with(*part) {
+                        ok = false;
+                        break;
+                    }
+                    pos = part.len();
+                } else if i == star_parts.len() - 1 {
+                    if !import[pos..].ends_with(*part) {
+                        ok = false;
+                        break;
+                    }
+                } else if let Some(idx) = import[pos..].find(*part) {
+                    pos += idx + part.len();
+                } else {
+                    ok = false;
+                    break;
+                }
+            }
+            if ok {
+                return true;
+            }
+        } else if import == pat {
+            return true;
+        }
+    }
+    false
 }
 
 /// Register the three model-facing tools under the gated `kernel`

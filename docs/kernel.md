@@ -29,6 +29,32 @@ the sidecar. The harness imports vendored `rlm` package from the
 pinned `vendor/vendored rlm` submodule — `git submodule update --remote` pulls
 upstream improvements with no code changes here.
 
+## Session lifecycle
+
+- **Per-turn cache**: `injection_block()` caches the `[continual harness]` text for 5s per session, so concurrent tool calls within one turn pay at most one sidecar roundtrip. Any `kernel_refine`/`kernel_state` write invalidates the cache.
+- **Session GC**: `<state_dir>/sessions/<id>` dirs older than `session_gc_ttl_hours` (default 168h, 0 = disabled) are pruned at startup and every ~hour by the idle reaper. Best-effort, never blocks boot.
+
+## Executable skills (SKILL.toml `[reference]`, plan 016)
+
+When `[tools.kernel.pyskill] enabled = true` and the import is allowlisted, a skill can bind a Python callable directly into the kernel:
+
+```toml
+[skill]
+name = "pdf-extract"
+description = "Extract text from PDFs"
+
+[reference]
+type = "python"
+import = "my_pdf_lib"
+callable = "extract_text"
+call_pattern = "await extract_text(path)"
+```
+
+- `import`/`callable` are bound via `kernel.bind_skill(import, callable)` into every session's globals on first use (ImportError is captured as `_<callable>_import_error`).
+- `call_pattern` is surfaced in the volatile `[continual harness]` suffix as `executable skills:  - pdf-extract: await extract_text(path)  # from my_pdf_lib::extract_text`.
+- Audit: `audit.rs` warns when a `SKILL.toml` contains `[reference]` but the allowlist is empty or `pyskill.enabled` is false — the reference will be ignored at injection time.
+- Security: `allowed_imports` is deny-by-default (`[]`). Supports exact (`"my_pkg"`) and prefix (`"my_pkg.*"`) globs, plus `*`/`?` wildcards. No auto-authoring in 016 — only hand-curated references.
+
 ## Replaces / complements / untouched
 
 - **Replaces** interactive stateless Python execution once

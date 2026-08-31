@@ -307,11 +307,19 @@ fn next_id() -> u64 {
     COUNTER.fetch_add(1, Ordering::Relaxed)
 }
 
-/// Idle reaper: stops the child after `sidecar_idle_secs` without traffic.
+/// Idle reaper: stops the child after `sidecar_idle_secs` without traffic
+/// and periodically runs session GC.
 pub(super) fn spawn_idle_reaper(rt: Arc<KernelRuntime>) {
     tokio::spawn(async move {
+        let mut gc_ticks: u32 = 0;
         loop {
             tokio::time::sleep(Duration::from_secs(30)).await;
+            // Periodic session GC every ~1h (120 ticks × 30s).
+            gc_ticks = gc_ticks.wrapping_add(1);
+            if gc_ticks >= 120 {
+                gc_ticks = 0;
+                rt.gc_sessions().await;
+            }
             let idle_limit = rt.settings().sidecar_idle_secs;
             if idle_limit == 0 {
                 continue; // disabled

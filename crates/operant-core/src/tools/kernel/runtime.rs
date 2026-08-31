@@ -6,7 +6,7 @@ use std::sync::{
     Arc, OnceLock,
     atomic::{AtomicU32, AtomicU64, Ordering},
 };
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde_json::Value;
 use tokio::sync::Mutex as AsyncMutex;
@@ -81,6 +81,10 @@ pub struct KernelRuntime {
     bridge_calls_total: AtomicU64,
     cell_calls: AtomicU64,
     restarts: AtomicU64,
+    /// Per-turn injection cache: (session_id, max_chars, block, timestamp).
+    /// Eliminates double sidecar roundtrip when injection_block is called
+    /// multiple times within one turn (e.g. concurrent tool calls).
+    injection_cache: AsyncMutex<Option<(String, usize, String, Instant)>>,
 }
 
 impl KernelRuntime {
@@ -96,8 +100,14 @@ impl KernelRuntime {
             bridge_calls_total: AtomicU64::new(0),
             cell_calls: AtomicU64::new(0),
             restarts: AtomicU64::new(0),
+            injection_cache: AsyncMutex::new(None),
         });
         spawn_idle_reaper(rt.clone());
+        // Fire-and-forget session GC at startup (best-effort, never blocks boot).
+        let gc_rt = rt.clone();
+        tokio::spawn(async move {
+            gc_rt.gc_sessions().await;
+        });
         rt
     }
 
@@ -167,6 +177,76 @@ impl KernelRuntime {
 
     /// One request/response round-trip to the live sidecar.
     pub async fn request(&self, method: &str, params: Value) -> Result<Value, String> {
-        sc_request(self, method, params).await
+        // Invalidate injection cache on any harness write so next turn sees fresh state.
+        let is_write = matches!(method, "refine_apply" | "refine_record" | "refine_rollback" | "harness_set" | "harness_delete");
+        let res = sc_request(self, method, params).await;
+        if is_write && res.is_ok() {
+            self.invalidate_injection_cache().await;
+        }
+        res
+    }
+
+    /// Per-turn injection cache helpers (TTL 5s, keyed by session_id + max_chars).
+    pub(crate) async fn cached_injection(&self, session_id: &str, max_chars: usize) -> Option<String> {
+        let guard = self.injection_cache.lock().await;
+        if let Some((cached_sid, cached_max, block, ts)) = guard.as_ref()
+            && cached_sid == session_id
+            && *cached_max == max_chars
+            && ts.elapsed() < Duration::from_secs(5)
+        {
+            return Some(block.clone());
+        }
+        None
+    }
+
+    pub(crate) async fn store_injection(&self, session_id: &str, max_chars: usize, block: String) {
+        let mut guard = self.injection_cache.lock().await;
+        *guard = Some((session_id.to_string(), max_chars, block, Instant::now()));
+    }
+
+    pub(crate) async fn invalidate_injection_cache(&self) {
+        let mut guard = self.injection_cache.lock().await;
+        *guard = None;
+    }
+
+    /// Session GC: prune per-session harness dirs older than ttl_hours.
+    /// Scans <state_dir>/sessions/<id>/ and removes stale session subdirs.
+    /// Best-effort: logs warnings, never fails the caller.
+    pub async fn gc_sessions(&self) {
+        let ttl_hours = self.settings.session_gc_ttl_hours;
+        if ttl_hours == 0 {
+            return;
+        }
+        let Some(state_dir) = self.settings.state_dir.as_ref() else {
+            return;
+        };
+        let sessions_dir = state_dir.join("sessions");
+        let ttl = Duration::from_secs(ttl_hours * 3600);
+        let now = std::time::SystemTime::now();
+        let Ok(entries) = std::fs::read_dir(&sessions_dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            let Ok(meta) = std::fs::metadata(&path) else {
+                continue;
+            };
+            let Ok(modified) = meta.modified() else {
+                continue;
+            };
+            let Ok(age) = now.duration_since(modified) else {
+                continue;
+            };
+            if age > ttl {
+                if let Err(e) = std::fs::remove_dir_all(&path) {
+                    tracing::warn!(target: "kernel", "gc_sessions: failed to remove {}: {e}", path.display());
+                } else {
+                    tracing::info!(target: "kernel", "gc_sessions: pruned stale session {}", path.display());
+                }
+            }
+        }
     }
 }

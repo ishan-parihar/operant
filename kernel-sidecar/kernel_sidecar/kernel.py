@@ -88,6 +88,33 @@ class SessionKernel:
         """Inject/refresh a builtin into every future lookup (tool bridge shim)."""
         self._globals[name] = value
 
+    def bind_skill(self, import_path: str, callable: str) -> dict[str, object]:
+        """Plan 016, phase 6b: bind SKILL.toml [reference] into this session's globals.
+
+        Supports `import_path` as dotted module (e.g. "my_pkg.sub") with
+        `callable` as attribute, or single `import_path` containing a colon
+        like "pkg:func" for re-exported callables. Captures ImportError as
+        `_<callable>_import_error` binding so cells can inspect failure."""
+        try:
+            if ":" in import_path:
+                mod_name, attr = import_path.split(":", 1)
+                callable = attr or callable
+                import_path = mod_name
+            mod = __import__(import_path, fromlist=[callable])
+            # Handle dotted import_path like "a.b.c" — __import__ returns top-level,
+            # so walk dotted path.
+            cur: object = mod
+            for part in import_path.split(".")[1:]:
+                cur = getattr(cur, part)
+                mod = cur  # type: ignore[assignment]
+            value = getattr(mod, callable)
+            self._globals[callable] = value
+            return {"ok": True, "bound": callable, "import": import_path}
+        except BaseException as exc:  # noqa: BLE03
+            err = f"{type(exc).__name__}: {exc}"
+            self._globals[f"_{callable}_import_error"] = err
+            return {"ok": False, "error": err, "import": import_path, "callable": callable}
+
     def names(self) -> list[str]:
         user = [k for k in self._globals if not k.startswith("__")]
         return sorted(user)

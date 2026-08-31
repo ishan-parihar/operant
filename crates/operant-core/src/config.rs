@@ -1289,6 +1289,19 @@ impl Default for KernelToolBridge {
     }
 }
 
+/// Executable skills (plan 016, phase 6b): controls SKILL.toml [reference]
+/// binding into the kernel. Default-off; allowlist is deny-by-default.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default, deny_unknown_fields)]
+pub struct KernelPyskill {
+    /// Master switch for executable skill binding (default false).
+    pub enabled: bool,
+    /// Allowlist of import prefixes callable from SKILL.toml [reference].
+    /// Supports glob `*` (e.g. `"my_pkg.*"`) and exact matches.
+    /// Empty (default) ⇒ every reference is denied.
+    pub allowed_imports: Vec<String>,
+}
+
 /// Persistent-kernel sidecar configuration (plan 015). Everything defaults
 /// OFF/dark until Phase 4 flips `enabled` + `route_python_to_kernel`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1317,6 +1330,9 @@ pub struct KernelSettings {
     /// Session GC — prune per-session harness dirs older than this many hours
     /// (0 = disabled). Default 168h (7 days).
     pub session_gc_ttl_hours: u64,
+    /// Executable skills (plan 016, phase 6b): SKILL.toml [reference] binding.
+    #[serde(default)]
+    pub pyskill: KernelPyskill,
     pub tool_bridge: KernelToolBridge,
 }
 
@@ -1333,6 +1349,7 @@ impl Default for KernelSettings {
             route_python_to_kernel: false,
             harness_auto_learn: false,
             session_gc_ttl_hours: 168,
+            pyskill: KernelPyskill::default(),
             tool_bridge: KernelToolBridge::default(),
         }
     }

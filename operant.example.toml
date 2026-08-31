@@ -323,6 +323,11 @@ harness_auto_learn = false      # when true, background review may emit kernel_s
 # per_call_timeout_secs = 60
 # Session GC — prune stale per-session harness dirs
 # session_gc_ttl_hours = 168  # 7 days
+# Executable skills — SKILL.toml [reference] binding (plan 016, phase 6b)
+# [tools.kernel.pyskill]
+# enabled = false               # master switch for [reference] loading
+# allowed_imports = []          # glob allowlist, e.g. ["my_pkg.*", "pdf_tools"]
+#                               # empty = every reference denied (deny-by-default)
 
 [tools.stt]
 # groq_api_key = "..."
