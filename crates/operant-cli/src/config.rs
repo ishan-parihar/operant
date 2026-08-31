@@ -1183,6 +1183,7 @@ pub struct KernelConfigV2 {
     pub tool_bridge_allowlist: Option<Vec<String>>,
     pub tool_bridge_max_calls_per_exec: Option<usize>,
     pub tool_bridge_per_call_timeout_secs: Option<u64>,
+    pub session_gc_ttl_hours: Option<u64>,
 }
 
 impl Default for KernelConfigV2 {
@@ -1200,6 +1201,7 @@ impl Default for KernelConfigV2 {
             tool_bridge_allowlist: None,
             tool_bridge_max_calls_per_exec: Some(64),
             tool_bridge_per_call_timeout_secs: Some(60),
+            session_gc_ttl_hours: Some(168),
         }
     }
 }

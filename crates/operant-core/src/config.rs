@@ -1314,6 +1314,9 @@ pub struct KernelSettings {
     /// review fork may additionally emit prompt/subagent harness edits via
     /// kernel_refine. Default off until soaked.
     pub harness_auto_learn: bool,
+    /// Session GC — prune per-session harness dirs older than this many hours
+    /// (0 = disabled). Default 168h (7 days).
+    pub session_gc_ttl_hours: u64,
     pub tool_bridge: KernelToolBridge,
 }
 
@@ -1329,6 +1332,7 @@ impl Default for KernelSettings {
             max_output_bytes: 200_000,
             route_python_to_kernel: false,
             harness_auto_learn: false,
+            session_gc_ttl_hours: 168,
             tool_bridge: KernelToolBridge::default(),
         }
     }
