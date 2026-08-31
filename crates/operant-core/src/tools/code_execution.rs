@@ -343,6 +343,36 @@ fn result_json(
 }
 
 async fn execute_python(code: &str, timeout: Duration) -> Result<Value, String> {
+    // Plan 015 P4 cutover: when the Prime Kernel is enabled and
+    // route_python_to_kernel is set, python runs in the persistent session
+    // kernel (state survives turns). Any sidecar failure degrades to the
+    // stateless subprocess path below — never fails the turn.
+    let kernel_cfg = &crate::config::runtime_config().tools.kernel;
+    if kernel_cfg.enabled
+        && kernel_cfg.route_python_to_kernel
+        && let Some(rt) = super::kernel::global_runtime()
+    {
+        match rt
+            .request(
+                "exec",
+                serde_json::json!({
+                    "session_key": "default",
+                    "code": code,
+                    "cell_timeout_secs": timeout.as_secs().saturating_sub(1),
+                }),
+            )
+            .await
+        {
+            Ok(mut v) => {
+                v["via"] = Value::String("kernel".into());
+                return Ok(v);
+            }
+            Err(e) => {
+                tracing::warn!(target: "pk", error = %e,
+                    "kernel route failed; falling back to stateless python");
+            }
+        }
+    }
     // NamedTempFile: 0600 + O_EXCL (never follows a pre-existing symlink) and
     // auto-removed on drop, so nothing leaks even on early error paths.
     let mut script = tempfile::Builder::new()

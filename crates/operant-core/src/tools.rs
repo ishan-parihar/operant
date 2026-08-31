@@ -39,6 +39,7 @@ pub mod notification_tool;
 pub mod openrouter_client;
 pub mod osv_check;
 pub mod patch_tool;
+pub mod kernel;
 pub mod process_tool;
 pub mod reaction_tool;
 pub mod send_message_tool;

@@ -47,6 +47,7 @@ Why it is different:
 - **Only enabled, functional tools reach the model** — the registry serves the intersection of *registered ∩ available ∩ not-disabled*, so the agent never sees tools that can't run.
 - **One stealth browser for everything** — the `obscura` CDP browser and the IGS web tools (search / scrape / extract) share the same Obscura binary, auto-provisioned on first use.
 - **Local-first** — no telemetry, no account required; bring any OpenAI-compatible endpoint or a local model.
+- **Persistent Kernel (opt-in)** — a stateful Python kernel whose variables survive across turns, a continual-harness store (session-local + global prompt/subagent lessons with snapshot rollback), and a tool bridge that lets one kernel cell call allowlisted tools in a loop (RLM-lite). See [docs/kernel.md](docs/kernel.md). Disabled by default; `git submodule update --init --recursive` + `[tools.kernel] enabled = true` to adopt.
 
 ---
 

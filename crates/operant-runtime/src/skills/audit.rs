@@ -210,6 +210,20 @@ fn audit_manifest_file(root: &Path, path: &Path, report: &mut SkillAuditReport) 
         }
     }
 
+    // Plan 016, phase 6b: executable skills [reference] — informational only.
+    // Do NOT push to report.findings (which would block skill load); just warn
+    // so operators know this SKILL.toml requests executable binding and needs
+    // [tools.kernel.pyskill].allowed_imports to be effective.
+    if let Some(ref_tbl) = parsed.get("reference").and_then(|v| v.as_table()) {
+        let has_import = ref_tbl.get("import").and_then(|v| v.as_str()).is_some();
+        let has_callable = ref_tbl.get("callable").and_then(|v| v.as_str()).is_some();
+        if has_import || has_callable {
+            tracing::warn!(
+                "skill {rel}: contains [reference] executable binding (import/callable) — requires [tools.kernel.pyskill].allowed_imports or it will be ignored at injection time"
+            );
+        }
+    }
+
     Ok(())
 }
 

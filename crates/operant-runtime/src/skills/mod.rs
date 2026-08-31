@@ -84,6 +84,13 @@ struct SkillManifest {
     /// #6210 for the architectural rationale (FND-001 §4.2).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     forge: Option<ForgeMetadata>,
+    /// Executable skill reference (plan 016): optional top-level `[reference]`
+    /// table that binds a Python import+callable into the kernel. Mirrors the
+    /// `[forge]` precedent — strict (`deny_unknown_fields`) so typos fail loud.
+    /// Hand-authored SKILL.toml files omit this; only curated skills carry it.
+    /// No auto-authoring in 016 (deferred to 017).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    reference: Option<SkillReference>,
     #[serde(default)]
     tools: Vec<SkillTool>,
     #[serde(default)]
@@ -110,6 +117,32 @@ struct SkillMeta {
 /// `[skill]` so the canonical skill identity stays decoupled from the
 /// integrator's emit format. Strict by design: a typo here is just as
 /// bad as a typo in `[skill]` (silent misconfiguration of provenance).
+/// Executable skill reference (plan 016, phase 6b): binds a Python import
+/// + callable into the persistent kernel at session init.
+///
+/// Example SKILL.toml:
+/// ```toml
+/// [reference]
+/// type = "python"
+/// import = "my_pdf_lib"
+/// callable = "extract_text"
+/// call_pattern = "await extract_text(path)"
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SkillReference {
+    /// Reference type — currently only `"python"` is supported.
+    #[serde(rename = "type")]
+    ref_type: String,
+    /// Python import path (e.g. `"my_pkg.sub"` or `"my_pkg:func"`).
+    import: String,
+    /// Callable name to bind into kernel globals (e.g. `"extract_text"`).
+    callable: String,
+    /// Example call pattern for injection (e.g. `"await extract_text(path)"`).
+    #[serde(default)]
+    call_pattern: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ForgeMetadata {

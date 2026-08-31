@@ -658,6 +658,13 @@ fn extract_command_from_args(tool_name: &str, args: &Value) -> String {
             .and_then(|v| v.as_str())
             .unwrap_or(tool_name)
             .to_string(),
+        // Plan 015: kernel cells are model-generated Python — gate them on
+        // the actual code text, same as code_execution's command.
+        "kernel_exec" => args
+            .get("code")
+            .and_then(|v| v.as_str())
+            .unwrap_or(tool_name)
+            .to_string(),
         "file_write" | "patch" => {
             let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("");
             let content = args.get("content").and_then(|v| v.as_str()).unwrap_or("");

@@ -297,13 +297,40 @@ impl std::str::FromStr for NotificationMode {
 ///
 /// Returns the appropriate prompt string for the background review agent.
 pub fn build_review_prompt(review_memory: bool, review_skills: bool) -> String {
-    if review_memory && review_skills {
+    let mut base = if review_memory && review_skills {
         COMBINED_REVIEW_PROMPT.to_string()
     } else if review_memory {
         MEMORY_REVIEW_PROMPT.to_string()
     } else {
         SKILL_REVIEW_PROMPT.to_string()
+    };
+    // Plan 015 phase 5: opt-in continual-harness lane. When auto_learn is on,
+    // the SAME review fork may also emit prompt-note / subagent-spec lessons
+    // through kernel_refine (all-or-nothing, snapshot-rollbackable). No second
+    // review loop is spawned — this extends the existing one.
+    if crate::config::runtime_config()
+        .tools
+        .kernel
+        .harness_auto_learn
+        && crate::tools::kernel::global_runtime().is_some()
+    {
+        base.push_str(
+            "
+
+## Continual harness (opt-in lane)
+
+",
+        );
+        base.push_str(
+            "You may ALSO call `kernel_refine` ONCE with small evidence-backed \
+             edits[] over kinds `prompt` (behavioral policy addendums) or \
+             `subagent` (reusable delegation specs), scope local by default. \
+             Skip entirely when nothing durable emerged — a noisy lesson is \
+             worse than no lesson. Skills and memories stay in their existing \
+             lanes; never put them in the harness.",
+        );
     }
+    base
 }
 
 // ---------------------------------------------------------------------------

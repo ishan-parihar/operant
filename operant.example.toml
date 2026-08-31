@@ -303,6 +303,32 @@ max_output_bytes = 1000000
 default_timeout_secs = 60
 max_timeout_secs = 300
 
+[tools.kernel]
+# Persistent kernel — session-persistent Python execution and learned state.
+# Provision once: git submodule update --init --recursive
+# Then set enabled = true to adopt. All tools default to read-only.
+enabled = false
+# python = "/usr/bin/python3.11"  # auto-detected if omitted
+# state_dir = "~/.local/share/operant/kernel/harness"
+sidecar_idle_secs = 1800
+request_timeout_secs = 120
+max_output_bytes = 200000
+route_python_to_kernel = false  # when true, code_execution python routes to the kernel
+harness_auto_learn = false      # when true, background review may emit kernel_state lessons
+# Tool bridge — allow kernel cells to call operant tools in a loop
+# [tools.kernel.tool_bridge]
+# enabled = false
+# allowlist = ["file_list", "file_read", "web_search"]
+# max_calls_per_exec = 64
+# per_call_timeout_secs = 60
+# Session GC — prune stale per-session harness dirs
+# session_gc_ttl_hours = 168  # 7 days
+# Executable skills — SKILL.toml [reference] binding (plan 016, phase 6b)
+# [tools.kernel.pyskill]
+# enabled = false               # master switch for [reference] loading
+# allowed_imports = []          # glob allowlist, e.g. ["my_pkg.*", "pdf_tools"]
+#                               # empty = every reference denied (deny-by-default)
+
 [tools.stt]
 # groq_api_key = "..."
 # openai_api_key = "..."

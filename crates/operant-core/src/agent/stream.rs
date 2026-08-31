@@ -812,9 +812,14 @@ impl OperantAgent {
                 .next()
                 .expect("pending non-empty in single-tool branch");
             let name = tool_call.function.name.clone();
-            let tool_future =
-                self.registry
-                    .execute(&name, &tool_call.id, args, ToolContext::default());
+            // Plan 015: kernel tools key kernels/harness by session id.
+            let tool_ctx = ToolContext::default().with_metadata(
+                "session_id",
+                self.persistent_session_id
+                    .clone()
+                    .unwrap_or_else(|| "default".to_string()),
+            );
+            let tool_future = self.registry.execute(&name, &tool_call.id, args, tool_ctx);
             // Interactive tools (clarify / approval_request) block waiting
             // for a human — the generic tool timeout (30s) would kill the
             // dialog before the user can respond. Long-running tools
@@ -877,8 +882,14 @@ impl OperantAgent {
                         }
 
                         let name = tool_call.function.name.clone();
-                        let exec =
-                            registry.execute(&name, &tool_call.id, args, ToolContext::default());
+                        // Plan 015: session-keyed ToolContext for kernel tools.
+                        let tool_ctx = ToolContext::default().with_metadata(
+                            "session_id",
+                            self.persistent_session_id
+                                .clone()
+                                .unwrap_or_else(|| "default".to_string()),
+                        );
+                        let exec = registry.execute(&name, &tool_call.id, args, tool_ctx);
                         // Interactive tools exempt from the generic tool
                         // timeout (see is_interactive_tool); long-running
                         // tools like delegate_task carry their own child

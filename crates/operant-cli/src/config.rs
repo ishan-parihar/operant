@@ -63,6 +63,8 @@ pub struct CliConfig {
     pub cron: CronConfigV2,
     pub kanban: KanbanConfig,
     pub code_execution: CodeExecutionConfigV2,
+    #[serde(alias = "prime_kernel")]
+    pub kernel: KernelConfigV2,
     pub logging: LoggingConfigV2,
     pub model_catalog: ModelCatalogConfig,
     pub sessions: SessionsConfig,
@@ -123,6 +125,7 @@ impl Default for CliConfig {
             cron: CronConfigV2::default(),
             kanban: KanbanConfig::default(),
             code_execution: CodeExecutionConfigV2::default(),
+            kernel: KernelConfigV2::default(),
             logging: LoggingConfigV2::default(),
             model_catalog: ModelCatalogConfig::default(),
             sessions: SessionsConfig::default(),
@@ -1162,6 +1165,47 @@ impl Default for CodeExecutionConfigV2 {
     }
 }
 
+/// Plan 015 mirror of core `KernelSettings` (Option-wrapped V2 form).
+/// Kept field-identical to the core struct; a round-trip test asserts both
+/// parse one TOML snippet consistently so the copies cannot drift.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct KernelConfigV2 {
+    pub enabled: Option<bool>,
+    pub python: Option<String>,
+    pub vendor_dir: Option<String>,
+    pub state_dir: Option<String>,
+    pub sidecar_idle_secs: Option<u64>,
+    pub request_timeout_secs: Option<u64>,
+    pub max_output_bytes: Option<usize>,
+    pub route_python_to_kernel: Option<bool>,
+    pub tool_bridge_enabled: Option<bool>,
+    pub tool_bridge_allowlist: Option<Vec<String>>,
+    pub tool_bridge_max_calls_per_exec: Option<usize>,
+    pub tool_bridge_per_call_timeout_secs: Option<u64>,
+    pub session_gc_ttl_hours: Option<u64>,
+}
+
+impl Default for KernelConfigV2 {
+    fn default() -> Self {
+        Self {
+            enabled: Some(false),
+            python: None,
+            vendor_dir: None,
+            state_dir: None,
+            sidecar_idle_secs: Some(1800),
+            request_timeout_secs: Some(120),
+            max_output_bytes: Some(200_000),
+            route_python_to_kernel: Some(false),
+            tool_bridge_enabled: Some(false),
+            tool_bridge_allowlist: None,
+            tool_bridge_max_calls_per_exec: Some(64),
+            tool_bridge_per_call_timeout_secs: Some(60),
+            session_gc_ttl_hours: Some(168),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct LoggingConfigV2 {
@@ -1922,6 +1966,30 @@ mod tests {
     use super::*;
     use std::sync::Mutex;
     use std::sync::OnceLock;
+
+    /// Plan 015 drift-guard: one TOML snippet must parse consistently into the
+    /// CLI V2 mirror and core KernelSettings (values + defaults agree).
+    #[test]
+    fn kernel_v2_and_core_parse_same_toml() {
+        let toml = r#"
+            enabled = true
+            route_python_to_kernel = false
+            sidecar_idle_secs = 900
+            request_timeout_secs = 60
+        "#;
+        let v2: KernelConfigV2 = toml::from_str(toml).expect("v2 parse");
+        assert_eq!(v2.enabled, Some(true));
+        assert_eq!(v2.sidecar_idle_secs, Some(900));
+
+        let core: operant_core::config::KernelSettings =
+            toml::from_str(toml).expect("core parse");
+        assert_eq!(core.enabled, true);
+        assert_eq!(core.sidecar_idle_secs, 900);
+        assert_eq!(core.request_timeout_secs, 60);
+        // Default agreement on untouched fields:
+        let default_core = operant_core::config::KernelSettings::default();
+        assert_eq!(default_core.max_output_bytes, 200_000);
+    }
 
     static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
