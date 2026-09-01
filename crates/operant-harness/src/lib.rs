@@ -14,6 +14,7 @@
 
 pub mod claim;
 pub mod composition;
+pub mod discovery;
 pub mod effect;
 pub mod error;
 pub mod harness;
@@ -30,6 +31,7 @@ pub use composition::{
     Architecture, ArchitectureRow, BuildError, Builder, BuilderWithFactories, Composition, Patch,
     PatchTarget, ProviderFactory,
 };
+pub use discovery::{DEFAULT_PATCH_DIR, collect_patches, default_patch_dir, resolve_boot_architecture};
 pub use effect::Effect;
 pub use error::HarnessError;
 pub use harness::{Harness, KernelOptions};

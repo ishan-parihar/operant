@@ -1,0 +1,45 @@
+# Example architecture.toml — committed to the repo as the operator's
+# reference. Copy to ~/.operant/architecture.toml (or set
+# [harness].architecture_toml in operant.example.toml) and edit to
+# match your deployment.
+#
+# This file is read at boot; rows are mounted via the harness.
+# A `[[disable]]` overlay in ~/.operant/patches/*.toml can disable
+# rows without editing this file.
+#
+# Schema reference: crates/operant-harness/src/composition.rs.
+
+# Native rows: code compiled into the binary. `kind` is informational.
+[[rows]]
+id = "core-cli"
+source = "native"
+disabled = false
+kind = "native"
+
+# Config-row prompt.section: a file-backed prompt addendum the prompt
+# seam installs at boot. Hosts can add more rows of this kind for
+# persona / mode / tenant overlays.
+[[rows]]
+id = "policy-base"
+source = "config_row"
+disabled = false
+kind = "prompt.section"
+config = { path = "~/.operant/prompts/policy-base.md" }
+
+# WASM rows: hot-swappable Extism modules. The host plugin factory
+# (BuilderWithFactories) produces the Provider; the kernel owns the
+# lifecycle.
+# [[rows]]
+# id = "kb-search"
+# source = "wasm"
+# disabled = false
+# config = { manifest = "~/.operant/plugins/kb-search/manifest.toml" }
+
+# Pool rows: hermes _pool.yaml compiled to a family provider + bundle
+# rows. The compile_pool step in operant-harness produces one family
+# row plus one bundle row per pooled_sub_system.
+# [[rows]]
+# id = "pool.relationship-intel"
+# source = "pool"
+# disabled = false
+# config = { manifest = "~/.hermes/systems/relationship-intel/_pool.yaml" }

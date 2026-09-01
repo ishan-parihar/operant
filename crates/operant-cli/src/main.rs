@@ -1403,26 +1403,27 @@ async fn build_harness_host(
     host.add_seam(std::sync::Arc::new(ToolSeam::new(registry)));
 
     if let Some(path) = &config.harness.architecture_toml {
-        let raw = match std::fs::read_to_string(path) {
-            Ok(s) => s,
+        let patch_dir = operant_harness::default_patch_dir();
+        let arch = match operant_harness::resolve_boot_architecture(
+            path,
+            patch_dir.as_deref(),
+        ) {
+            Ok(arch) => arch,
             Err(e) => {
                 warn!(
                     path = %path.display(),
                     error = %e,
-                    "harness enabled but architecture.toml unreadable — kernel will start empty"
+                    "harness: architecture.toml + patches failed to resolve — kernel will start empty"
                 );
                 return Some(host.harness().clone());
             }
         };
-        match operant_harness::Architecture::from_toml(&raw) {
-            Ok(arch) => match host.boot(&arch).await {
-                Ok(activated) => tracing::info!(
-                    count = activated.len(),
-                    "harness: architecture.toml loaded and providers mounted"
-                ),
-                Err(e) => warn!(error = %e, "harness: boot(architecture) failed"),
-            },
-            Err(e) => warn!(error = %e, "harness: architecture.toml parse failed"),
+        match host.boot(&arch).await {
+            Ok(activated) => tracing::info!(
+                count = activated.len(),
+                "harness: architecture.toml + patches loaded and providers mounted"
+            ),
+            Err(e) => warn!(error = %e, "harness: boot(architecture) failed"),
         }
     } else {
         tracing::info!("harness: enabled but no architecture.toml configured — kernel is empty");
