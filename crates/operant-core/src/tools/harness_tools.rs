@@ -21,11 +21,21 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use operant_harness::{Harness, MountReport};
+use operant_harness::{Architecture, ArchitectureRow, Builder, BuilderWithFactories, Harness, MountReport};
 
 use crate::error::Result;
 use crate::schema::ToolSchema;
 use crate::tools::{OperantTool, ToolContext, ToolResult};
+
+/// Approval policy check. The host's approval layer sets
+/// `ToolContext::metadata["approval"] = "true"` when the user has
+/// approved the `harness.*` tool names for the current session.
+/// When unset, every mount/unmount is denied. This mirrors hermes
+/// `is_approved(session_key, pattern_key)` parity and the
+/// `operant-cli` approval allowlist semantics.
+fn has_approval(context: &ToolContext) -> bool {
+    context.metadata.get("approval").map(String::as_str) == Some("true")
+}
 
 /// `harness_dump` — print the resolved provider tree.
 ///
@@ -112,18 +122,37 @@ impl OperantTool for HarnessDumpTool {
     }
 }
 
-/// `harness_mount` — mount a config-row provider. STUB in Phase 5:
-/// the approval-policy membership check is wired in Phase 5 of the
-/// host's boot pass (see `operant-config::policy::harness_mount`).
-/// Until then this returns a structured denial so the tool is
-/// discoverable but the action is blocked.
+/// `harness_mount` — mount a config-row provider.
+///
+/// G5 — self-extension loop close. The tool parses the row, builds a
+/// provider via [`operant_harness::Builder`] (or
+/// [`BuilderWithFactories`] if the host registered wasm/pool
+/// factories), and calls `Harness::mount`. The host's approval policy
+/// layer is expected to set `ToolContext::metadata["approval"] = "true"`
+/// when the user has approved the `harness_mount` tool name; when
+/// that flag is absent, the tool returns a structured denial so the
+/// agent can prompt the user.
 pub struct HarnessMountTool {
-    _harness: Arc<Harness>,
+    harness: Arc<Harness>,
+    /// Optional pluggable factory set (e.g. for `wasm` / `pool` rows).
+    /// When `None`, the built-in `Builder` is used and only `native` /
+    /// `config_row` rows are accepted.
+    builders: Option<Arc<BuilderWithFactories>>,
 }
 
 impl HarnessMountTool {
     pub fn new(harness: Arc<Harness>) -> Self {
-        Self { _harness: harness }
+        Self {
+            harness,
+            builders: None,
+        }
+    }
+
+    /// Inject host-side factories so `wasm` / `pool` rows can be
+    /// mounted by the agent at runtime.
+    pub fn with_builders(mut self, builders: Arc<BuilderWithFactories>) -> Self {
+        self.builders = Some(builders);
+        self
     }
 }
 
@@ -141,9 +170,12 @@ impl OperantTool for HarnessMountTool {
     }
 
     fn description(&self) -> &str {
-        "Mount a config-row provider. Requires approval-policy membership; \
-         currently returns a structured denial — wire approval policy then \
-         re-enable (plan 016 Phase 5 host boot pass)."
+        "Mount a config-row provider on the running kernel. Requires the host's \
+         approval policy to have approved `harness_mount` for the current \
+         session; the host sets ToolContext.metadata[\"approval\"] = \"true\". \
+         The tool parses the row, builds a provider (via Builder or the host's \
+         BuilderWithFactories for wasm/pool), and calls Harness::mount. \
+         Returns the activated id list (or PENDING + missing claims)."
     }
 
     fn schema(&self) -> ToolSchema {
@@ -157,24 +189,87 @@ impl OperantTool for HarnessMountTool {
         "harness"
     }
 
-    async fn execute(&self, _args: Value, _context: ToolContext) -> ToolResult {
-        ToolResult::error(
+    async fn execute(&self, args: Value, context: ToolContext) -> ToolResult {
+        if !has_approval(&context) {
+            return ToolResult::error(
+                "harness_mount",
+                "harness_mount requires the host's approval policy to have \
+                 approved this tool for the current session. Ask the user to \
+                 approve `harness_mount` (e.g. via the persistent or session \
+                 allowlist), then retry.",
+            );
+        }
+        let args: HarnessMountArgs = match serde_json::from_value(args) {
+            Ok(a) => a,
+            Err(e) => return ToolResult::error("harness_mount", format!("invalid args: {e}")),
+        };
+        let row: ArchitectureRow = match serde_json::from_value(args.row) {
+            Ok(r) => r,
+            Err(e) => return ToolResult::error("harness_mount", format!("invalid row: {e}")),
+        };
+        let arch = Architecture { rows: vec![row.clone()] };
+        let providers = if let Some(b) = &self.builders {
+            match b.build_with(&arch) {
+                Ok(p) => p,
+                Err(e) => {
+                    return ToolResult::error(
+                        "harness_mount",
+                        format!("build_with failed for row `{}`: {e}", row.id),
+                    );
+                }
+            }
+        } else {
+            match Builder::build(&arch) {
+                Ok(p) => p,
+                Err(e) => {
+                    return ToolResult::error(
+                        "harness_mount",
+                        format!("build failed for row `{}`: {e}", row.id),
+                    );
+                }
+            }
+        };
+        if providers.is_empty() {
+            return ToolResult::success(
+                "harness_mount",
+                json!({ "id": row.id, "skipped": true, "reason": "row produced no provider (e.g. config_row kind=disable)" }),
+            );
+        }
+        let mut activated = Vec::new();
+        for provider in providers {
+            let id = provider.spec().id().to_string();
+            match self.harness.mount(provider).await {
+                Ok(MountReport::Mounted { activated: mut a }) => activated.append(&mut a),
+                Ok(MountReport::Pending { missing }) => {
+                    return ToolResult::success(
+                        "harness_mount",
+                        json!({ "id": id, "pending": true, "missing_claims": missing }),
+                    );
+                }
+                Err(e) => {
+                    return ToolResult::error(
+                        "harness_mount",
+                        format!("mount failed for `{id}`: {e}"),
+                    );
+                }
+            }
+        }
+        tracing::info!(row = %row.id, ?activated, "harness_mount: provider mounted via model tool");
+        ToolResult::success(
             "harness_mount",
-            "harness_mount is approval-gated; wire the host's approval policy \
-             (operant-config::policy::harness_mount) before enabling this tool. \
-             See plan 016 Phase 5 host boot pass.",
+            json!({ "id": row.id, "activated": activated }),
         )
     }
 }
 
-/// `harness_unmount` — inverse of mount. STUB in Phase 5 (same as mount).
+/// `harness_unmount` — inverse of mount. Same approval gate.
 pub struct HarnessUnmountTool {
-    _harness: Arc<Harness>,
+    harness: Arc<Harness>,
 }
 
 impl HarnessUnmountTool {
     pub fn new(harness: Arc<Harness>) -> Self {
-        Self { _harness: harness }
+        Self { harness }
     }
 }
 
@@ -192,9 +287,8 @@ impl OperantTool for HarnessUnmountTool {
     }
 
     fn description(&self) -> &str {
-        "Unmount a previously-mounted provider. Requires approval-policy \
-         membership; currently returns a structured denial (plan 016 Phase 5 \
-         host boot pass)."
+        "Unmount a previously-mounted provider. Same approval gate as \
+         harness_mount. Calls Harness::unmount which cascades to dependents."
     }
 
     fn schema(&self) -> ToolSchema {
@@ -208,13 +302,32 @@ impl OperantTool for HarnessUnmountTool {
         "harness"
     }
 
-    async fn execute(&self, _args: Value, _context: ToolContext) -> ToolResult {
-        ToolResult::error(
-            "harness_unmount",
-            "harness_unmount is approval-gated; wire the host's approval \
-             policy before enabling this tool. See plan 016 Phase 5 host \
-             boot pass.",
-        )
+    async fn execute(&self, args: Value, context: ToolContext) -> ToolResult {
+        if !has_approval(&context) {
+            return ToolResult::error(
+                "harness_unmount",
+                "harness_unmount requires the host's approval policy to have \
+                 approved this tool for the current session. Ask the user to \
+                 approve `harness_unmount`, then retry.",
+            );
+        }
+        let args: HarnessUnmountArgs = match serde_json::from_value(args) {
+            Ok(a) => a,
+            Err(e) => return ToolResult::error("harness_unmount", format!("invalid args: {e}")),
+        };
+        match self.harness.unmount(&args.id).await {
+            Ok(removed) => {
+                tracing::info!(id = %args.id, ?removed, "harness_unmount: provider(s) torn down");
+                ToolResult::success(
+                    "harness_unmount",
+                    json!({ "id": args.id, "removed": removed }),
+                )
+            }
+            Err(e) => ToolResult::error(
+                "harness_unmount",
+                format!("unmount `{id}` failed: {e}", id = args.id),
+            ),
+        }
     }
 }
 
@@ -292,22 +405,59 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn harness_mount_stub_denies() {
+    async fn harness_mount_denies_without_approval() {
         let harness = Arc::new(Harness::new(KernelOptions { audit: false }));
         let tool = HarnessMountTool::new(Arc::clone(&harness));
+        // No approval metadata on context ⇒ structured denial.
         let result = tool
-            .execute(json!({ "row": {} }), ToolContext::default())
+            .execute(
+                json!({ "row": { "id": "x", "source": "native", "config": null, "kind": "native" } }),
+                ToolContext::default(),
+            )
             .await;
-        assert!(!result.success);
+        assert!(!result.success, "expected denial without approval");
+        assert!(result.error.unwrap_or_default().contains("approval"));
     }
 
     #[tokio::test]
-    async fn harness_unmount_stub_denies() {
+    async fn harness_mount_succeeds_with_approval() {
+        let harness = Arc::new(Harness::new(KernelOptions { audit: false }));
+        let tool = HarnessMountTool::new(Arc::clone(&harness));
+        let mut ctx = ToolContext::default();
+        ctx.metadata.insert("approval".to_string(), "true".to_string());
+        let result = tool
+            .execute(
+                json!({ "row": { "id": "x", "source": "native", "config": null, "kind": "native" } }),
+                ctx,
+            )
+            .await;
+        assert!(result.success, "expected success with approval: {}", result.error.unwrap_or_default());
+        // Verify the provider is actually mounted.
+        let tree = harness.dump().await;
+        assert!(tree.providers.iter().any(|p| p.id == "x"));
+    }
+
+    #[tokio::test]
+    async fn harness_unmount_denies_without_approval() {
         let harness = Arc::new(Harness::new(KernelOptions { audit: false }));
         let tool = HarnessUnmountTool::new(Arc::clone(&harness));
         let result = tool
             .execute(json!({ "id": "noop" }), ToolContext::default())
             .await;
         assert!(!result.success);
+        assert!(result.error.unwrap_or_default().contains("approval"));
+    }
+
+    #[tokio::test]
+    async fn harness_unmount_succeeds_with_approval() {
+        let harness = Arc::new(Harness::new(KernelOptions { audit: false }));
+        harness.mount(Arc::new(Noop)).await.unwrap();
+        let tool = HarnessUnmountTool::new(Arc::clone(&harness));
+        let mut ctx = ToolContext::default();
+        ctx.metadata.insert("approval".to_string(), "true".to_string());
+        let result = tool.execute(json!({ "id": "noop" }), ctx).await;
+        assert!(result.success, "{}", result.error.clone().unwrap_or_default());
+        let tree = harness.dump().await;
+        assert!(tree.providers.is_empty());
     }
 }
