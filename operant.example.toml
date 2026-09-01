@@ -303,10 +303,19 @@ max_output_bytes = 1000000
 default_timeout_secs = 60
 max_timeout_secs = 300
 
+[harness]
+# Unified harness — single store for tool/pool/wasm/hook + prompt/subagent.
+# 018-U3: this is the single master switch. [tools.kernel].enabled is an alias
+# for this for one release (OR), then removed. Set enabled=true to adopt.
+enabled = false
+# architecture_toml = "~/.operant/architecture.toml"
+# max_active_providers = 64
+
 [tools.kernel]
 # Persistent kernel — session-persistent Python execution and learned state.
+# 018-U3: [tools.kernel].enabled is now an alias for [harness].enabled (OR).
 # Provision once: git submodule update --init --recursive
-# Then set enabled = true to adopt. All tools default to read-only.
+# Then set enabled = true (either here or in [harness]) to adopt. All tools default to read-only.
 enabled = false
 # python = "/usr/bin/python3.11"  # auto-detected if omitted
 # state_dir = "~/.local/share/operant/kernel/harness"

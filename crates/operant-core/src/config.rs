@@ -1505,6 +1505,15 @@ pub fn load_app_config(explicit: Option<&Path>) -> Result<LoadedConfig> {
     // disabled it) keep their entry untouched.
     ensure_default_mcp_servers(&mut config);
 
+    // 018-U3: single harness — [harness].enabled and [tools.kernel].enabled
+    // are now aliases for the same master switch. OR so either being true
+    // enables the unified harness (one store, one injection). One release
+    // as alias, then [tools.kernel].enabled is removed.
+    if config.harness.enabled || config.tools.kernel.enabled {
+        config.harness.enabled = true;
+        config.tools.kernel.enabled = true;
+    }
+
     Ok(LoadedConfig { config, source })
 }
 
