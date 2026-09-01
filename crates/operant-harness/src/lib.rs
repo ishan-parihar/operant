@@ -19,6 +19,7 @@ pub mod effect;
 pub mod error;
 pub mod harness;
 pub mod host;
+pub mod metrics;
 pub mod pool;
 pub mod pool_provider;
 pub mod provider;
@@ -36,6 +37,7 @@ pub use effect::Effect;
 pub use error::HarnessError;
 pub use harness::{Harness, KernelOptions};
 pub use host::{HarnessHost, HostError};
+pub use metrics::{HarnessMetrics, MetricsSnapshot};
 pub use pool::{
     CompiledPool, PoolManifest, READ_ONLY_VERBS, compile as compile_pool,
     load_and_compile as load_and_compile_pool,

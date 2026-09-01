@@ -113,6 +113,8 @@ pub struct Harness {
     seams: HashMap<String, Arc<dyn Seam>>,
     inner: RwLock<Inner>,
     options: KernelOptions,
+    /// G8 — optional metrics counters. `None` means no-op (zero-cost).
+    metrics: Option<std::sync::Arc<crate::metrics::HarnessMetrics>>,
 }
 
 impl Default for Harness {
@@ -127,7 +129,25 @@ impl Harness {
             seams: HashMap::new(),
             inner: RwLock::new(Inner::default()),
             options,
+            metrics: None,
         }
+    }
+
+    /// G8 — attach a metrics handle. When set, every lifecycle event
+    /// increments the appropriate counter. Returns a clone so the
+    /// host can read snapshots from its own task.
+    pub fn with_metrics(
+        mut self,
+        metrics: std::sync::Arc<crate::metrics::HarnessMetrics>,
+    ) -> Self {
+        self.metrics = Some(metrics);
+        self
+    }
+
+    /// G8 — return the attached metrics handle, or `None` if no
+    /// counters are wired.
+    pub fn metrics(&self) -> Option<std::sync::Arc<crate::metrics::HarnessMetrics>> {
+        self.metrics.clone()
     }
 
     /// Register a seam sink. Must happen before providers that route installs
@@ -155,6 +175,7 @@ impl Harness {
     ///
     /// Returns every id activated during the call — including Pending entries
     /// rescued by late binding once this mount satisfied their requirements.
+    #[tracing::instrument(level = "debug", skip(self, provider, config), fields(id = %provider.spec().id(), source = ?provider.spec().source()))]
     pub async fn mount_with_config(
         &self,
         provider: Arc<dyn Provider>,
@@ -305,7 +326,11 @@ impl Harness {
     /// Unmount a provider and every active dependent whose requirements it
     /// was satisfying (transitive). Dependents unwind first (highest seq
     /// first). Returns ids actually torn down, in teardown order.
+    #[tracing::instrument(level = "info", skip(self), fields(id = %id))]
     pub async fn unmount(&self, id: &str) -> Result<Vec<String>, HarnessError> {
+        if let Some(m) = &self.metrics {
+            m.unmount_calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
         let mut inner = self.inner.write().await;
         if !inner.providers.contains_key(id) {
             return Err(HarnessError::NotFound(id.to_string()));
@@ -376,6 +401,7 @@ impl Harness {
     /// old effects unwind, claims flip atomically, and the generation counter
     /// increments (ABA guard). Dependent providers survive iff the successor
     /// re-provides the same claims; otherwise they cascade-unload after commit.
+    #[tracing::instrument(level = "info", skip(self, next), fields(id = %next.spec().id()))]
     pub async fn replace(&self, next: Arc<dyn Provider>) -> Result<String, HarnessError> {
         let mut inner = self.inner.write().await;
         let target = next.spec().id().to_string();

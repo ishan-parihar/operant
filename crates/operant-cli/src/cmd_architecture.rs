@@ -35,6 +35,9 @@ pub enum ArchitectureSubcommand {
         /// JSON output for scripting/CI.
         #[arg(long, action = clap::ArgAction::SetTrue)]
         json: bool,
+        /// G8 — re-dump every N seconds (for live-loop monitoring). 0 = once.
+        #[arg(long, default_value_t = 0)]
+        watch_secs: u64,
     },
     /// Compile a hermes `_pool.yaml` into architecture rows (Phase 6).
     PoolImport {
@@ -52,8 +55,8 @@ pub async fn handle_architecture_command(cmd: ArchitectureSubcommand) -> Result<
         ArchitectureSubcommand::Validate { file, patch } => {
             handle_validate_command(file, patch).await
         }
-        ArchitectureSubcommand::Dump { file, patch, json } => {
-            handle_dump_command(file, patch, json).await
+        ArchitectureSubcommand::Dump { file, patch, json, watch_secs } => {
+            handle_dump_command(file, patch, json, watch_secs).await
         }
         ArchitectureSubcommand::PoolImport { path, json } => {
             handle_pool_import_command(path, json).await
@@ -88,9 +91,38 @@ pub async fn handle_pool_import_command(path: PathBuf, json: bool) -> Result<()>
 }
 
 /// Read an architecture file, optionally apply patches, and dump the
-/// resolved rows as JSON. Used by `operant architecture dump`.
-pub async fn handle_dump_command(file: PathBuf, patches: Vec<PathBuf>, json: bool) -> Result<()> {
-    let arch = load_and_resolve(&file, &patches)
+/// resolved rows as JSON. Used by `operant architecture dump`. When
+/// `watch_secs > 0`, re-dumps every N seconds until interrupted.
+pub async fn handle_dump_command(
+    file: PathBuf,
+    patches: Vec<PathBuf>,
+    json: bool,
+    watch_secs: u64,
+) -> Result<()> {
+    if watch_secs == 0 {
+        return dump_once(&file, &patches, json);
+    }
+    let mut stop = tokio::sync::watch::channel(false).0;
+    let interval = std::time::Duration::from_secs(watch_secs);
+    loop {
+        if *stop.borrow() {
+            return Ok(());
+        }
+        if let Err(e) = dump_once(&file, &patches, json) {
+            eprintln!("dump error: {e:#}");
+        }
+        tokio::select! {
+            _ = tokio::time::sleep(interval) => {}
+            _ = tokio::signal::ctrl_c() => {
+                tracing::info!("watch: Ctrl-C received, exiting");
+                return Ok(());
+            }
+        }
+    }
+}
+
+fn dump_once(file: &Path, patches: &[PathBuf], json: bool) -> Result<()> {
+    let arch = load_and_resolve(file, patches)
         .with_context(|| format!("loading architecture from {}", file.display()))?;
     if json {
         let rows_json: Vec<_> = arch
@@ -107,6 +139,10 @@ pub async fn handle_dump_command(file: PathBuf, patches: Vec<PathBuf>, json: boo
             })
             .collect();
         let payload = json!({
+            "ts": std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0),
             "file": file.display().to_string(),
             "patches": patches.iter().map(|p| p.display().to_string()).collect::<Vec<_>>(),
             "row_count": arch.rows.len(),
