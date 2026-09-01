@@ -272,6 +272,13 @@ pub struct OperantAgent {
     model_override: Arc<std::sync::RwLock<Option<String>>>,
     client: Arc<dyn ModelClient>,
     registry: ToolRegistry,
+    /// Plan 016 G1 — composable provider runtime (harness).
+    /// When set, the agent loop consults the harness for tool execution
+    /// after the static registry. Read-only path: never mutates the
+    /// harness from within `run()`. Constructed by the CLI when
+    /// `config.harness.enabled = true`; left `None` (the dark-merge
+    /// default) to keep the existing `ToolRegistry` path byte-identical.
+    harness: Option<Arc<operant_harness::Harness>>,
     conversation: Arc<RwLock<Vec<Message>>>,
     event_tx: Option<mpsc::Sender<AgentEvent>>,
     permission_tx: Option<mpsc::Sender<ToolPermissionRequest>>,

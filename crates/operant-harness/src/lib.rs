@@ -17,6 +17,7 @@ pub mod composition;
 pub mod effect;
 pub mod error;
 pub mod harness;
+pub mod host;
 pub mod pool;
 pub mod provider;
 pub mod report;
@@ -30,6 +31,7 @@ pub use composition::{
 pub use effect::Effect;
 pub use error::HarnessError;
 pub use harness::{Harness, KernelOptions};
+pub use host::{HarnessHost, HostError};
 pub use pool::{
     CompiledPool, PoolManifest, READ_ONLY_VERBS, compile as compile_pool,
     load_and_compile as load_and_compile_pool,

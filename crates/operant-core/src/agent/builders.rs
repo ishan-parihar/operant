@@ -59,6 +59,7 @@ impl OperantAgent {
             model_override: Arc::new(std::sync::RwLock::new(None::<String>)),
             client: Arc::from(client),
             registry,
+            harness: None,
             conversation: Arc::new(RwLock::new(Vec::new())),
             event_tx: None,
             permission_tx: None,
@@ -120,6 +121,7 @@ impl OperantAgent {
             model_override: Arc::new(std::sync::RwLock::new(None::<String>)),
             client: Arc::from(client),
             registry,
+            harness: None,
             conversation: Arc::new(RwLock::new(Vec::new())),
             event_tx: Some(event_tx),
             permission_tx: None,
@@ -255,6 +257,21 @@ impl OperantAgent {
         );
         self.memory_provider = Some(memory_provider);
         self
+    }
+
+    /// Plan 016 G1 — attach the composable provider runtime (harness).
+    /// When set, the agent loop consults the harness for tool execution
+    /// after the static registry. Default is `None` (dark-merge safe).
+    pub fn with_harness(mut self, harness: Arc<operant_harness::Harness>) -> Self {
+        self.harness = Some(harness);
+        self
+    }
+
+    /// Plan 016 G1 — read-only access to the attached harness, if any.
+    /// Used by the model tools (`harness_dump`, `harness_mount`,
+    /// `harness_unmount`) and the agent's tool-execution path.
+    pub fn harness(&self) -> Option<&Arc<operant_harness::Harness>> {
+        self.harness.as_ref()
     }
 
     /// Attach a hook registry for lifecycle events. When set, the agent

@@ -1308,6 +1308,10 @@ struct AgentCore {
     /// previously built-and-dropped (see docs/AUDIT_2026-08-02.md F1).
     memory_provider: Option<Arc<dyn MemoryProvider>>,
     skill_manager: SkillManager,
+    /// Plan 016 G1 — composable provider runtime. Constructed when
+    /// `config.harness.enabled = true`; `None` (dark-merge default) keeps
+    /// the existing `ToolRegistry` / `HookRunner` paths untouched.
+    harness: Option<Arc<operant_harness::Harness>>,
 }
 
 /// Build the shared core components needed by both agent constructors.
@@ -1351,6 +1355,15 @@ async fn build_agent_core(
         );
     }
 
+    // Plan 016 G1 — adopt the harness when [harness].enabled = true.
+    // The kernel is constructed, the tool seam is registered against the
+    // same `ToolRegistry` the agent loop already uses, and (if the
+    // operator configured a path) the `architecture.toml` is loaded and
+    // every provider in it is mounted. When `enabled = false` (default)
+    // `harness` stays None and the agent loop is byte-identical to the
+    // pre-harness path.
+    let harness = build_harness_host(config, registry.clone()).await;
+
     Ok(AgentCore {
         database,
         registry,
@@ -1358,7 +1371,65 @@ async fn build_agent_core(
         memory_manager,
         memory_provider,
         skill_manager,
+        harness,
     })
+}
+
+/// Plan 016 G1 — construct a `Harness` + `HarnessHost` when
+/// `config.harness.enabled = true`. Returns `None` when disabled (the
+/// dark-merge default) so callers can treat the harness as opt-in.
+///
+/// Currently registered seams:
+/// * `tool` — routed through the same `ToolRegistry` the agent loop
+///   already consults. This is what makes the kernel adoption
+///   transparent: harness-installed tools show up in the registry's
+///   `get_schemas()` and execute via the same `ToolRegistry::execute`
+///   path, while their lifecycle (mount/unmount/replace) is owned by
+///   the kernel.
+async fn build_harness_host(
+    config: &AppConfig,
+    registry: ToolRegistry,
+) -> Option<Arc<operant_harness::Harness>> {
+    if !config.harness.enabled {
+        return None;
+    }
+
+    use operant_core::harness_adapters::ToolSeam;
+    use operant_harness::{Harness, HarnessHost, KernelOptions};
+
+    let mut host = HarnessHost::new(KernelOptions {
+        audit: true,
+    });
+    host.add_seam(std::sync::Arc::new(ToolSeam::new(registry)));
+
+    if let Some(path) = &config.harness.architecture_toml {
+        let raw = match std::fs::read_to_string(path) {
+            Ok(s) => s,
+            Err(e) => {
+                warn!(
+                    path = %path.display(),
+                    error = %e,
+                    "harness enabled but architecture.toml unreadable — kernel will start empty"
+                );
+                return Some(host.harness().clone());
+            }
+        };
+        match operant_harness::Architecture::from_toml(&raw) {
+            Ok(arch) => match host.boot(&arch).await {
+                Ok(activated) => tracing::info!(
+                    count = activated.len(),
+                    "harness: architecture.toml loaded and providers mounted"
+                ),
+                Err(e) => warn!(error = %e, "harness: boot(architecture) failed"),
+            },
+            Err(e) => warn!(error = %e, "harness: architecture.toml parse failed"),
+        }
+    } else {
+        tracing::info!("harness: enabled but no architecture.toml configured — kernel is empty");
+    }
+
+    let _ = Harness::new(KernelOptions { audit: true }); // keep the import
+    Some(host.harness().clone())
 }
 
 pub(crate) async fn create_runtime_agent(
@@ -1417,6 +1488,11 @@ pub(crate) async fn create_runtime_agent(
             threshold_percent: config.agent.context_compression_threshold,
             ..Default::default()
         });
+        // Plan 016 G1 — attach the harness when [harness].enabled = true.
+        // Default is `None`, so this is a no-op for the dark-merge path.
+        if let Some(h) = core.harness.clone() {
+            agent = agent.with_harness(h);
+        }
         // Pluggable context engine (hermes-lcm parity): when configured
         // (agent.context_engine = "lcm"), build_messages assembles via the
         // lossless DAG + fresh-tail engine instead of lossy eviction.
@@ -1490,6 +1566,9 @@ pub(crate) async fn create_agent_without_events(
             threshold_percent: config.agent.context_compression_threshold,
             ..Default::default()
         });
+        if let Some(h) = core.harness.clone() {
+            agent = agent.with_harness(h);
+        }
         // Pluggable context engine (hermes-lcm parity) — same gate as the
         // runtime agent path. Bounded one-shot run / autonomous task → no
         // LLM-fired maintenance workers (they'd be killed at process exit;
