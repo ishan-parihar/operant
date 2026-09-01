@@ -31,11 +31,11 @@ jobs:
 
       # Live-loop integration tests for the harness kernel.
       # host_boot (G1), harness_same_name_replace (G2),
-      # builder_factories (G3), pool_bundle_e2e (G6).
+      # builder_factories (G3), pool_bundle_e2e (G6), soak (S10).
       - name: Harness integration tests
         run: |
-          cargo test -p operant-harness --test host_boot --test builder_factories
-          cargo test -p operant-core --test harness_same_name_replace --test pool_bundle_e2e
+          cargo test -p operant-harness --test host_boot --test builder_factories --test soak --test source_roundtrip --test source_alias_compat
+          cargo test -p operant-core --test harness_same_name_replace --test pool_bundle_e2e --test harness_agent_integration
 
       # Plugin watcher (G4) — 3 unit tests.
       - name: Plugin watcher tests
@@ -56,6 +56,14 @@ jobs:
       # Metrics (G8) — 1 unit test.
       - name: Metrics snapshot test
         run: cargo test -p operant-harness --lib metrics
+
+      # S7 — prompt.section config_row (now buildable).
+      - name: Prompt.section config-row test
+        run: cargo test -p operant-harness --lib composition -- composition::tests::builder_dispatches_native_and_config_row
+
+      # S10 — harness.enabled=true agent integration (S2+S7+S5).
+      - name: Harness agent integration (enabled=true)
+        run: cargo test -p operant-core --test harness_agent_integration
 
   harness-cli:
     name: Harness CLI smoke
@@ -87,3 +95,27 @@ jobs:
           EOF
           cd operant
           cargo run -p operant-cli --bin operant --all-features -- architecture pool-import --path /tmp/_pool.yaml --json
+
+      - name: operant architecture pool-import --apply + validate
+        run: |
+          cat > /tmp/_pool2.yaml <<'EOF'
+          name: test-pool-apply
+          services_offered:
+            - name: query.items
+              description: query items
+          services_consumed: []
+          pooled_sub_systems:
+            - name: items
+              path: /tmp/nonexistent-items
+          EOF
+          cd operant
+          cargo run -p operant-cli --bin operant --all-features -- architecture pool-import --path /tmp/_pool2.yaml --apply --file /tmp/arch-test.toml --json
+          cargo run -p operant-cli --bin operant --all-features -- architecture validate --file /tmp/arch-test.toml
+          cargo run -p operant-cli --bin operant --all-features -- architecture dump --file /tmp/arch-test.toml --json
+          cargo run -p operant-cli --bin operant --all-features -- architecture dump --file /tmp/arch-test.toml --live --json
+
+      - name: operant status harness line
+        run: |
+          cd operant
+          cargo run -p operant-cli --bin operant --all-features -- status --deep --json | grep -q harness
+          cargo run -p operant-cli --bin operant --all-features -- status | grep -q Harness

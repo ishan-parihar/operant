@@ -59,7 +59,7 @@ pub struct Watcher {
     pub trusted_keys: Vec<String>,
     /// Signature policy (Strict / Permissive / Disabled).
     pub signature_mode: SignatureMode,
-    last_seen: HashMap<PathBuf, (SystemTime, Option<String>)>,
+    last_seen: HashMap<PathBuf, (SystemTime, SystemTime, Option<String>)>,
 }
 
 impl Watcher {
@@ -94,7 +94,7 @@ impl Watcher {
     /// Run a single scan. Returns the list of new/changed manifests
     /// detected by this scan.
     pub fn scan_once(&mut self) -> Result<Vec<ManifestChange>, PluginError> {
-        let mut current: HashMap<PathBuf, (SystemTime, Option<String>)> = HashMap::new();
+        let mut current: HashMap<PathBuf, (SystemTime, SystemTime, Option<String>)> = HashMap::new();
         let mut changes: Vec<ManifestChange> = Vec::new();
 
         let entries = match std::fs::read_dir(self.host.plugins_dir()) {
@@ -129,6 +129,16 @@ impl Watcher {
                 Ok(m) => m,
                 Err(_) => continue,
             };
+            // S4 — also track wasm file mtime so a tampered or rebuilt .wasm
+            // triggers a swap attempt (Ed25519 re-verify happens above).
+            let wasm_mtime = manifest
+                .wasm_path
+                .as_deref()
+                .and_then(|p| {
+                    let wasm_file = path.join(p);
+                    std::fs::metadata(&wasm_file).and_then(|m| m.modified()).ok()
+                })
+                .unwrap_or(SystemTime::UNIX_EPOCH);
 
             // G4 — re-verify Ed25519 signature on every scan, not just
             // the first load. Tampered manifests are filtered out and
@@ -152,14 +162,18 @@ impl Watcher {
                 }
             };
 
-            current.insert(manifest_path.clone(), (mtime, manifest.signature.clone()));
+            current.insert(
+                manifest_path.clone(),
+                (mtime, wasm_mtime, manifest.signature.clone()),
+            );
 
             let prior = self.last_seen.get(&manifest_path);
             let is_new = prior.is_none();
-            let mtime_changed = prior.map(|(t, _)| *t != mtime).unwrap_or(false);
-            let sig_changed = prior.map(|(_, s)| s != &manifest.signature).unwrap_or(false);
+            let mtime_changed = prior.map(|(t, _, _)| *t != mtime).unwrap_or(false);
+            let wasm_changed = prior.map(|(_, w, _)| *w != wasm_mtime).unwrap_or(false);
+            let sig_changed = prior.map(|(_, _, s)| s != &manifest.signature).unwrap_or(false);
 
-            if is_new || mtime_changed || sig_changed {
+            if is_new || mtime_changed || wasm_changed || sig_changed {
                 changes.push(ManifestChange {
                     manifest_path,
                     manifest,

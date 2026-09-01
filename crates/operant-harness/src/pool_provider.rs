@@ -13,6 +13,83 @@ use crate::composition::ArchitectureRow;
 use crate::provider::{Provider, ProviderSource, ProviderSpec};
 use crate::{ActivateCx, HarnessError};
 
+/// S5 — provider that materializes a `pool.family` row as a claim
+/// holder. It owns the `pool/<service>` claims from `services_offered`
+/// and declares `requires` from `services_consumed`, so late-binding
+/// rescues dependents when the family mounts. It installs nothing via
+/// a seam — its presence is the claim itself.
+pub struct PoolFamilyProvider {
+    id: String,
+    config: serde_json::Value,
+    provides_claims: Box<[Claim]>,
+    requires_claims: Box<[Claim]>,
+}
+
+impl PoolFamilyProvider {
+    pub fn new(row: ArchitectureRow) -> Self {
+        let claims: Vec<Claim> = row
+            .config
+            .get("claims")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str())
+                    .map(|s| Claim::new("pool", s.to_string()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let requires: Vec<Claim> = row
+            .config
+            .get("requires")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str())
+                    .map(|s| Claim::new("pool", s.to_string()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        Self {
+            id: row.id,
+            provides_claims: claims.into_boxed_slice(),
+            requires_claims: requires.into_boxed_slice(),
+            config: row.config,
+        }
+    }
+}
+
+impl ProviderSpec for PoolFamilyProvider {
+    fn id(&self) -> &str {
+        &self.id
+    }
+    fn source(&self) -> ProviderSource {
+        let name = self.config.get("name").and_then(|v| v.as_str()).map(str::to_string);
+        ProviderSource::Pool { name }
+    }
+    fn provides(&self) -> &[Claim] {
+        &self.provides_claims
+    }
+    fn requires(&self) -> &[Claim] {
+        &self.requires_claims
+    }
+}
+
+#[async_trait]
+impl Provider for PoolFamilyProvider {
+    fn spec(&self) -> &dyn ProviderSpec {
+        self
+    }
+    async fn activate(&self, _cx: &mut ActivateCx<'_>) -> Result<(), HarnessError> {
+        tracing::info!(
+            id = %self.id,
+            provides = ?self.provides_claims,
+            requires = ?self.requires_claims,
+            "pool.family provider activated"
+        );
+        Ok(())
+    }
+}
+
 /// Provider that materializes a `pool.bundle` row as a read-only tool.
 ///
 /// The tool's typed implementation is provided by the host at registry

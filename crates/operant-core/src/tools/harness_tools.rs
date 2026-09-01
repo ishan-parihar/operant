@@ -332,13 +332,24 @@ impl OperantTool for HarnessUnmountTool {
 }
 
 /// All three at once — convenience for `register_harness_tools`.
-pub fn register_harness_tools(
-    registry: &Arc<crate::tools::ToolRegistry>,
+///
+/// S2 — actually registers the harness self-extension tools into the
+/// agent's `ToolRegistry` so `harness_dump`/`mount`/`unmount` appear in
+/// the model tool list. Call from `build_agent_core` when `harness.is_some()`.
+pub async fn register_harness_tools(
+    registry: &crate::tools::ToolRegistry,
     harness: Arc<Harness>,
 ) -> Result<()> {
-    // Synchronous registration via the registry's `register` API. The
-    // three tools are individually wrapped in Arc by the registry.
-    let _ = (registry, harness);
+    use crate::tools::OperantTool;
+    // HarnessDumpTool is always available; mount/unmount are approval-gated
+    // inside their `execute` (see has_approval).
+    let dump: std::sync::Arc<dyn OperantTool> = std::sync::Arc::new(HarnessDumpTool::new(harness.clone()));
+    let mount: std::sync::Arc<dyn OperantTool> = std::sync::Arc::new(HarnessMountTool::new(harness.clone()));
+    let unmount: std::sync::Arc<dyn OperantTool> = std::sync::Arc::new(HarnessUnmountTool::new(harness));
+    registry.register_dyn(dump).await?;
+    registry.register_dyn(mount).await?;
+    registry.register_dyn(unmount).await?;
+    tracing::info!("harness tools registered (harness_dump/mount/unmount)");
     Ok(())
 }
 

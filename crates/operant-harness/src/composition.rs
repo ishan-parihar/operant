@@ -332,6 +332,13 @@ impl BuilderWithFactories {
                         "disable" => {
                             tracing::info!(id = %row.id, "config_row kind=disable (no provider)");
                         }
+                        "prompt.section" => {
+                            // S7 — prompt.section rows are now buildable; the
+                            // provider reads content/path at activate time.
+                            providers.push(std::sync::Arc::new(crate::row::ConfigRowProvider::new(
+                                row.clone(),
+                            )));
+                        }
                         _ => {
                             return Err(BuildError::NoConfigRowHandler(
                                 row.id.clone(),
@@ -397,6 +404,11 @@ impl Builder {
                         "disable" => {
                             // Pure side-effect: log + skip.
                             tracing::info!(id = %row.id, "config_row kind=disable (no provider)");
+                        }
+                        "prompt.section" => {
+                            providers.push(std::sync::Arc::new(crate::row::ConfigRowProvider::new(
+                                row.clone(),
+                            )));
                         }
                         _ => {
                             return Err(BuildError::NoConfigRowHandler(

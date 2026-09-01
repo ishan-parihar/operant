@@ -12,6 +12,40 @@ pub async fn handle_status_command(config: &AppConfig, deep: bool, json: bool) -
     // (iter-135 — closes the ponytail-audit gap "no --json output flag
     // on any command".)
     let estop = operant_core::estop::state();
+    // S6 — harness summary for operator visibility.
+    let harness_status = {
+        let enabled = config.harness.enabled;
+        let arch_path = config
+            .harness
+            .architecture_toml
+            .as_ref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "architecture.toml (default)".to_string());
+        let mut hs = json!({
+            "enabled": enabled,
+            "architecture_file": arch_path,
+            "max_active_providers": config.harness.max_active_providers,
+        });
+        if enabled {
+            // Try to resolve the architecture file to count rows (best-effort).
+            let file = config
+                .harness
+                .architecture_toml
+                .clone()
+                .unwrap_or_else(|| std::path::PathBuf::from("architecture.toml"));
+            let arch_path_exists = file.exists()
+                || std::path::PathBuf::from("architecture.toml").exists()
+                || std::path::PathBuf::from("architecture.toml.example").exists();
+            hs["config_exists"] = json!(arch_path_exists);
+            if let Ok(raw) = std::fs::read_to_string(&file) {
+                if let Ok(arch) = operant_harness::Architecture::from_toml(&raw) {
+                    hs["row_count"] = json!(arch.rows.len());
+                    hs["active_count"] = json!(arch.active().count());
+                }
+            }
+        }
+        hs
+    };
     let mut status = json!({
         "version": env!("CARGO_PKG_VERSION"),
         "os": info.os,
@@ -22,6 +56,7 @@ pub async fn handle_status_command(config: &AppConfig, deep: bool, json: bool) -
             "engaged": estop.engaged,
             "reason": estop.reason,
         },
+        "harness": harness_status,
     });
 
     match Database::init(config.database_path.clone()) {
@@ -120,6 +155,18 @@ pub async fn handle_status_command(config: &AppConfig, deep: bool, json: bool) -
             );
         }
 
+        // S6 — harness line (always shown, not just --deep).
+        if let Some(h) = status.get("harness") {
+            let enabled = h["enabled"].as_bool().unwrap_or(false);
+            if enabled {
+                let arch = h["architecture_file"].as_str().unwrap_or("architecture.toml");
+                let rows = h.get("row_count").and_then(|v| v.as_u64()).unwrap_or(0);
+                let active = h.get("active_count").and_then(|v| v.as_u64()).unwrap_or(0);
+                println!("Harness: enabled ({}: {} rows, {} active)", arch, rows, active);
+            } else {
+                println!("Harness: disabled (set [harness].enabled=true to adopt)");
+            }
+        }
         if deep {
             if let Some(key) = status.get("api_key") {
                 println!("API key: {}", key);

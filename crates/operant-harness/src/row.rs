@@ -108,11 +108,48 @@ impl Provider for ConfigRowProvider {
     fn spec(&self) -> &dyn ProviderSpec {
         self
     }
-    async fn activate(&self, _cx: &mut ActivateCx<'_>) -> Result<(), HarnessError> {
-        // Future: read self.config (e.g. { path = "/etc/prompt.md" }) and
-        // install a file-backed PromptSection. Phase 3 logs only.
-        tracing::debug!(id = %self.id, kind = %self.kind, "ConfigRowProvider activated");
-        Ok(())
+    async fn activate(&self, cx: &mut ActivateCx<'_>) -> Result<(), HarnessError> {
+        match self.kind.as_str() {
+            "prompt.section" => {
+                // S7 — materialize a prompt section from config.
+                // Config shapes: { content = "..." } or { path = "/tmp/p.md" }
+                // or { text = "..." }. File read is best-effort at activate time;
+                // on failure we surface ActivationFailed so boot fails loudly.
+                let content = if let Some(s) = self.config.get("content").and_then(|v| v.as_str()) {
+                    s.to_string()
+                } else if let Some(s) = self.config.get("text").and_then(|v| v.as_str()) {
+                    s.to_string()
+                } else if let Some(path) = self.config.get("path").and_then(|v| v.as_str()) {
+                    std::fs::read_to_string(path).map_err(|e| HarnessError::ActivationFailed {
+                        id: self.id.clone(),
+                        message: format!("prompt.section path `{path}` unreadable: {e}"),
+                    })?
+                } else {
+                    // No content/path — treat as empty section (still install so dump shows it).
+                    String::new()
+                };
+                // Install as Arc<String> payload; PromptSectionSeam in runtime
+                // knows how to wrap String into a PromptSection.
+                let payload: std::sync::Arc<dyn std::any::Any + Send + Sync> =
+                    std::sync::Arc::new(content);
+                cx.install_with("prompt", &self.id, payload.as_ref()).await?;
+                tracing::info!(id = %self.id, kind = %self.kind, "prompt.section installed");
+                Ok(())
+            }
+            "disable" => {
+                tracing::info!(id = %self.id, "config_row kind=disable (no provider)");
+                Ok(())
+            }
+            other => {
+                // Unknown kind — let Builder surface NoConfigRowHandler; this
+                // provider should not have been constructed for unknown kinds.
+                tracing::warn!(id = %self.id, kind = %other, "ConfigRowProvider unknown kind");
+                Err(HarnessError::CompositionError(format!(
+                    "config_row `{}` kind `{other}` has no handler",
+                    self.id
+                )))
+            }
+        }
     }
 }
 

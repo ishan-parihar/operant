@@ -42,7 +42,7 @@ pub use pool::{
     CompiledPool, PoolManifest, READ_ONLY_VERBS, compile as compile_pool,
     load_and_compile as load_and_compile_pool,
 };
-pub use pool_provider::PoolBundleProvider;
+pub use pool_provider::{PoolBundleProvider, PoolFamilyProvider};
 pub use provider::{
     ActivateCx, Provider, ProviderSource, ProviderSpec, ProviderState, Registration, Seam, Source,
 };

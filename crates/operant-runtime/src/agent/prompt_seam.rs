@@ -10,7 +10,7 @@ use async_trait::async_trait;
 
 use operant_harness::{Effect, HarnessError, Registration, Seam};
 
-use super::prompt::{PromptSection, PromptSections};
+use super::prompt::{PromptContext, PromptSection, PromptSections};
 
 /// Prompt-section seam: claims look like `prompt/<stable-id>`; payloads are
 /// `Arc<dyn PromptSection>` (the `Arc` allows cheap clone-out from the
@@ -31,6 +31,19 @@ impl PromptSectionSeam {
     }
 }
 
+struct StringPromptSection {
+    id: String,
+    content: String,
+}
+impl PromptSection for StringPromptSection {
+    fn name(&self) -> &str {
+        &self.id
+    }
+    fn build(&self, _ctx: &PromptContext<'_>) -> anyhow::Result<String> {
+        Ok(self.content.clone())
+    }
+}
+
 #[async_trait]
 impl Seam for PromptSectionSeam {
     fn name(&self) -> &str {
@@ -38,17 +51,30 @@ impl Seam for PromptSectionSeam {
     }
 
     async fn install(&self, reg: &Registration<'_>) -> Result<Effect, HarnessError> {
-        let section: Arc<dyn PromptSection> = reg
+        // S7 — accept both typed PromptSection and plain String content
+        // (installed by ConfigRowProvider for prompt.section rows).
+        let section: Arc<dyn PromptSection> = if let Some(s) =
+            reg.payload.and_then(|p| p.downcast_ref::<Arc<dyn PromptSection>>()).cloned()
+        {
+            s
+        } else if let Some(s) = reg.payload.and_then(|p| p.downcast_ref::<String>()).cloned() {
+            Arc::new(StringPromptSection { id: reg.key.to_string(), content: s })
+        } else if let Some(s) = reg
             .payload
-            .and_then(|p| p.downcast_ref::<Arc<dyn PromptSection>>())
+            .and_then(|p| p.downcast_ref::<Arc<String>>())
             .cloned()
-            .ok_or_else(|| HarnessError::ActivationFailed {
+        {
+            let content = (*s).clone();
+            Arc::new(StringPromptSection { id: reg.key.to_string(), content }) as Arc<dyn PromptSection>
+        } else {
+            return Err(HarnessError::ActivationFailed {
                 id: reg.provider_id.to_string(),
                 message: format!(
-                    "prompt seam install `{}` requires an Arc<dyn PromptSection> payload",
+                    "prompt seam install `{}` requires an Arc<dyn PromptSection> or String payload",
                     reg.key
                 ),
-            })?;
+            });
+        };
 
         // Slot owns an `Arc<dyn PromptSection>`; prompt builder snapshots
         // Arc::clone per build.

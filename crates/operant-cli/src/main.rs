@@ -1363,6 +1363,13 @@ async fn build_agent_core(
     // `harness` stays None and the agent loop is byte-identical to the
     // pre-harness path.
     let harness = build_harness_host(config, registry.clone()).await;
+    // S2 — make harness_dump/mount/unmount visible to the model. The
+    // tools themselves gate mount/unmount on approval (ToolContext.metadata["approval"]).
+    if let Some(h) = &harness {
+        if let Err(e) = operant_core::tools::harness_tools::register_harness_tools(&registry, h.clone()).await {
+            warn!(error = %e, "harness: tool registration failed");
+        }
+    }
 
     Ok(AgentCore {
         database,
@@ -1395,20 +1402,57 @@ async fn build_harness_host(
     }
 
     use operant_core::harness_adapters::ToolSeam;
-    use operant_harness::{Harness, HarnessHost, KernelOptions};
+    use operant_core::harness_seams_r3::{GatewayCommandSeam, MemoryProviderSeam};
+    use operant_harness::{
+        BuilderWithFactories, Harness, HarnessHost, HarnessMetrics, KernelOptions,
+        PoolBundleProvider, PoolFamilyProvider,
+    };
 
-    let mut host = HarnessHost::new(KernelOptions {
-        audit: true,
-    });
+    // S6 — metrics. Host can read snapshot; we keep the Arc for the harness.
+    let metrics = std::sync::Arc::new(HarnessMetrics::new());
+    let harness = std::sync::Arc::new(
+        Harness::new(KernelOptions { audit: true }).with_metrics(metrics.clone()),
+    );
+    let mut host = HarnessHost::with_harness(harness);
     host.add_seam(std::sync::Arc::new(ToolSeam::new(registry)));
+    // S1 — R3 seams (tool-adjacent families) — additive, no host required.
+    host.add_seam(std::sync::Arc::new(MemoryProviderSeam::new()));
+    host.add_seam(std::sync::Arc::new(GatewayCommandSeam::new()));
+    // Hook/prompt/channel seams require runtime hosts (HookRunner, PromptSections, Gateway)
+    // and are wired in operant-runtime's Agent builder; the harness slot is valid
+    // for them even when not mounted here (late binding will rescue if they appear).
 
-    if let Some(path) = &config.harness.architecture_toml {
-        let patch_dir = operant_harness::default_patch_dir();
-        let arch = match operant_harness::resolve_boot_architecture(
-            path,
-            patch_dir.as_deref(),
-        ) {
-            Ok(arch) => arch,
+    // S1+S5 — factories for wasm/pool. Pool dispatches by kind so family
+    // late-binding and bundle tool materialization both work.
+    let mut builder = BuilderWithFactories::new();
+    builder.register_factory(
+        "pool",
+        std::sync::Arc::new(|row: operant_harness::ArchitectureRow| {
+            match row.kind.as_deref() {
+                Some("pool.bundle") => Ok(std::sync::Arc::new(PoolBundleProvider::new(row))
+                    as std::sync::Arc<dyn operant_harness::Provider>),
+                Some("pool.family") | None => {
+                    // pool rows without kind (or family) are family claims holders.
+                    Ok(std::sync::Arc::new(PoolFamilyProvider::new(row))
+                        as std::sync::Arc<dyn operant_harness::Provider>)
+                }
+                Some(other) => Err(operant_harness::BuildError::NoConfigRowHandler(
+                    row.id.clone(),
+                    other.to_string(),
+                )),
+            }
+        }),
+    );
+    // WASM rows without a host Extism factory fall back to NativeRowStub
+    // (preserves dump shape); a real Extism host can replace this factory.
+
+    // S3 — resolve architecture. If the user configured an explicit path, use it.
+    // Otherwise try default locations: ./architecture.toml, ~/.operant/architecture.toml,
+    // then fall back to the example file if it exists. Empty is still valid (dark merge).
+    let patch_dir = operant_harness::default_patch_dir();
+    let arch = if let Some(path) = &config.harness.architecture_toml {
+        match operant_harness::resolve_boot_architecture(path, patch_dir.as_deref()) {
+            Ok(a) => a,
             Err(e) => {
                 warn!(
                     path = %path.display(),
@@ -1417,19 +1461,61 @@ async fn build_harness_host(
                 );
                 return Some(host.harness().clone());
             }
-        };
-        match host.boot(&arch).await {
-            Ok(activated) => tracing::info!(
-                count = activated.len(),
-                "harness: architecture.toml + patches loaded and providers mounted"
-            ),
-            Err(e) => warn!(error = %e, "harness: boot(architecture) failed"),
         }
     } else {
-        tracing::info!("harness: enabled but no architecture.toml configured — kernel is empty");
+        // Try default file locations before giving up.
+        let candidates = [
+            std::path::PathBuf::from("architecture.toml"),
+            dirs::home_dir()
+                .map(|h| h.join(".operant").join("architecture.toml"))
+                .unwrap_or_else(|| std::path::PathBuf::from(".operant/architecture.toml")),
+            std::path::PathBuf::from("operant/architecture.toml"),
+        ];
+        let mut resolved: Option<operant_harness::Architecture> = None;
+        for cand in &candidates {
+            if cand.exists() {
+                match operant_harness::resolve_boot_architecture(cand, patch_dir.as_deref()) {
+                    Ok(a) => {
+                        tracing::info!(path = %cand.display(), "harness: resolved default architecture.toml");
+                        resolved = Some(a);
+                        break;
+                    }
+                    Err(e) => {
+                        warn!(path = %cand.display(), error = %e, "harness: default architecture.toml parse failed");
+                    }
+                }
+            }
+        }
+        if let Some(a) = resolved {
+            a
+        } else {
+            // Also try architecture.toml.example as a last resort (so the
+            // example file is useful without a copy step).
+            let example = std::path::PathBuf::from("architecture.toml.example");
+            if example.exists() {
+                match operant_harness::resolve_boot_architecture(&example, patch_dir.as_deref()) {
+                    Ok(a) => {
+                        tracing::info!("harness: using architecture.toml.example (copy to architecture.toml to customize)");
+                        a
+                    }
+                    Err(_) => operant_harness::Architecture::default(),
+                }
+            } else {
+                tracing::info!("harness: enabled but no architecture.toml found — kernel is empty (create one or set [harness].architecture_toml)");
+                operant_harness::Architecture::default()
+            }
+        }
+    };
+
+    match host.boot_with_factories(&builder, &arch).await {
+        Ok(activated) => tracing::info!(
+            count = activated.len(),
+            total = arch.rows.len(),
+            "harness: architecture + patches loaded and providers mounted"
+        ),
+        Err(e) => warn!(error = %e, "harness: boot_with_factories failed"),
     }
 
-    let _ = Harness::new(KernelOptions { audit: true }); // keep the import
     Some(host.harness().clone())
 }
 

@@ -182,15 +182,34 @@ impl Harness {
         config: Value,
     ) -> Result<MountReport, HarnessError> {
         let mut inner = self.inner.write().await;
-        let report = self.mount_locked(&mut inner, provider, config).await?;
+        let report = match self.mount_locked(&mut inner, provider, config).await {
+            Ok(r) => r,
+            Err(e) => {
+                if let Some(m) = &self.metrics {
+                    m.mount_failed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                }
+                return Err(e);
+            }
+        };
         let rescued = self.rescan_pending_locked(&mut inner).await;
-        Ok(match report {
+        let final_report = match report {
             MountReport::Mounted { mut activated } => {
                 activated.extend(rescued);
                 MountReport::Mounted { activated }
             }
             pending @ MountReport::Pending { .. } => pending,
-        })
+        };
+        if let Some(m) = &self.metrics {
+            match &final_report {
+                MountReport::Mounted { .. } => {
+                    m.mount_success.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                }
+                MountReport::Pending { .. } => {
+                    m.mount_pending.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                }
+            };
+        }
+        Ok(final_report)
     }
 
     async fn mount_locked(
@@ -245,7 +264,11 @@ impl Harness {
             let mut cx = ActivateCx::new(&id, &config, &self.seams, &mut effects);
             if let Err(err) = provider.activate(&mut cx).await {
                 // Contain partial effects; leave a Failed marker for dump().
+                let count = effects.len() as u64;
                 unwind_lifo(effects).await;
+                if let Some(m) = &self.metrics {
+                    m.unwind_invocations.fetch_add(count, std::sync::atomic::Ordering::Relaxed);
+                }
                 inner.providers.insert(
                     id.clone(),
                     Inner::make_entry(
@@ -383,7 +406,11 @@ impl Harness {
             inner.pending_order.retain(|p| p != &eid);
             if entry.state == ProviderState::Active {
                 self.audit(&eid, "unloading");
+                let count = entry.effects.len() as u64;
                 unwind_lifo(std::mem::take(&mut entry.effects)).await;
+                if let Some(m) = &self.metrics {
+                    m.unwind_invocations.fetch_add(count, std::sync::atomic::Ordering::Relaxed);
+                }
             } else {
                 self.audit(&eid, "dropped");
             }
@@ -403,10 +430,14 @@ impl Harness {
     /// re-provides the same claims; otherwise they cascade-unload after commit.
     #[tracing::instrument(level = "info", skip(self, next), fields(id = %next.spec().id()))]
     pub async fn replace(&self, next: Arc<dyn Provider>) -> Result<String, HarnessError> {
+        let metrics = self.metrics.clone();
         let mut inner = self.inner.write().await;
         let target = next.spec().id().to_string();
 
         let Some(old_entry) = inner.providers.get(&target) else {
+            if let Some(m) = &metrics {
+                m.replace_failed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
             return Err(HarnessError::NotFound(target));
         };
 
@@ -417,6 +448,9 @@ impl Harness {
             inner.pending_order.retain(|p| p != &target);
             let report = self.mount_locked(&mut inner, next, config).await?;
             let rescued = self.rescan_pending_locked(&mut inner).await;
+            if let Some(m) = &metrics {
+                m.replace_success.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
             return Ok(match report {
                 MountReport::Mounted { mut activated } => {
                     activated.extend(rescued);
@@ -434,6 +468,9 @@ impl Harness {
                 None => false,
             };
             if !covered_by_next && !owner_ok {
+                if let Some(m) = &metrics {
+                    m.replace_failed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                }
                 return Err(HarnessError::ReplaceBreaksRequirement {
                     id: target.clone(),
                     requirement: req.clone(),
@@ -444,6 +481,9 @@ impl Harness {
         if let Some(conflict) =
             inner.first_claim_conflict(next.spec().provides(), Some(target.as_str()))
         {
+            if let Some(m) = &metrics {
+                m.replace_failed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
             return Err(conflict);
         }
 
@@ -454,6 +494,9 @@ impl Harness {
         let staged = match self.stage_activation(&next, &old_config).await {
             Ok(staged) => staged,
             Err(message) => {
+                if let Some(m) = &metrics {
+                    m.replace_failed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                }
                 return Err(HarnessError::ActivationFailed {
                     id: target,
                     message,
@@ -466,7 +509,11 @@ impl Harness {
             return Err(HarnessError::NotFound(target)); // unreachable under lock
         };
         old_entry.state = ProviderState::Unloading;
+        let old_effects_len = old_entry.effects.len() as u64;
         unwind_lifo(std::mem::take(&mut old_entry.effects)).await;
+        if let Some(m) = &metrics {
+            m.unwind_invocations.fetch_add(old_effects_len, std::sync::atomic::Ordering::Relaxed);
+        }
         let old_provides = old_entry.provider.spec().provides().to_vec();
         drop(old_entry);
 
@@ -512,6 +559,9 @@ impl Harness {
         }
 
         let rescued = self.rescan_pending_locked(&mut inner).await;
+        if let Some(m) = &metrics {
+            m.replace_success.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
         Ok(if rescued.is_empty() {
             target
         } else {
@@ -531,7 +581,12 @@ impl Harness {
         match provider.activate(&mut cx).await {
             Ok(()) => Ok(effects),
             Err(err) => {
+                let count = effects.len() as u64;
                 unwind_lifo(effects).await;
+                if let Some(m) = &self.metrics {
+                    m.unwind_invocations
+                        .fetch_add(count, std::sync::atomic::Ordering::Relaxed);
+                }
                 Err(err.to_string())
             }
         }
