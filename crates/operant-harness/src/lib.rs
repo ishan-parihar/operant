@@ -26,7 +26,8 @@ pub mod swap;
 
 pub use claim::Claim;
 pub use composition::{
-    Architecture, ArchitectureRow, BuildError, Builder, Composition, Patch, PatchTarget,
+    Architecture, ArchitectureRow, BuildError, Builder, BuilderWithFactories, Composition, Patch,
+    PatchTarget, ProviderFactory,
 };
 pub use effect::Effect;
 pub use error::HarnessError;

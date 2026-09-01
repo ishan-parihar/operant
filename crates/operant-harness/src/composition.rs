@@ -264,11 +264,102 @@ pub enum BuildError {
         "row `{0}` (kind={1}) is a config_row; no built-in handler (Phase 5 self-extension provides the registry)"
     )]
     NoConfigRowHandler(String, String),
+    #[error("row `{0}` (source={1}) has no registered factory (host plugins)")]
+    NoFactory(String, String),
 }
 
 impl From<BuildError> for HarnessError {
     fn from(e: BuildError) -> Self {
         HarnessError::CompositionError(e.to_string())
+    }
+}
+
+/// Factory used by [`BuilderWithFactories`] to produce a `Provider` from a
+/// row whose source requires host-side dispatch (e.g. `wasm` for Extism
+/// host instantiation, `pool` for hermes `_pool.yaml` compilation).
+///
+/// Registered at boot by the host. The kernel itself never knows how to
+/// build a WASM or pool provider — it only knows the factory exists when
+/// one is plugged in via `register_factory(source, factory)`.
+pub type ProviderFactory = std::sync::Arc<
+    dyn Fn(crate::composition::ArchitectureRow) -> Result<std::sync::Arc<dyn crate::Provider>, BuildError>
+        + Send
+        + Sync,
+>;
+
+/// Builder with pluggable source factories. Default [`Builder::build`] is
+/// the no-factory path that only handles `native`/`wasm`/`config_row`
+/// rows; [`BuilderWithFactories::build_with`] lets the host plug in
+/// dispatchers for `wasm` and `pool` rows.
+pub struct BuilderWithFactories {
+    factories: HashMap<String, ProviderFactory>,
+}
+
+impl BuilderWithFactories {
+    pub fn new() -> Self {
+        Self {
+            factories: HashMap::new(),
+        }
+    }
+
+    /// Register a factory for a source string. Multiple calls for the same
+    /// source replace the prior factory (last writer wins).
+    pub fn register_factory(&mut self, source: impl Into<String>, factory: ProviderFactory) {
+        self.factories.insert(source.into(), factory);
+    }
+
+    /// Build providers for the active rows of `arch`, consulting
+    /// `factories` for sources that the built-in `Builder` does not know
+    /// how to handle (`wasm`/`pool`).
+    pub fn build_with(
+        &self,
+        arch: &Architecture,
+    ) -> Result<Vec<std::sync::Arc<dyn crate::Provider>>, BuildError> {
+        let mut providers: Vec<std::sync::Arc<dyn crate::Provider>> = Vec::new();
+        for row in arch.active() {
+            row.validate()
+                .map_err(|e| BuildError::InvalidRow(row.id.clone(), e.to_string()))?;
+            match row.source.as_str() {
+                "native" | "wasm" if !self.factories.contains_key(row.source.as_str()) => {
+                    // Built-in stub for sources the host did not register.
+                    providers.push(std::sync::Arc::new(crate::row::NativeRowStub::new(
+                        row.clone(),
+                    )));
+                }
+                "config_row" => {
+                    let kind = row.kind.as_deref().unwrap_or("");
+                    match kind {
+                        "disable" => {
+                            tracing::info!(id = %row.id, "config_row kind=disable (no provider)");
+                        }
+                        _ => {
+                            return Err(BuildError::NoConfigRowHandler(
+                                row.id.clone(),
+                                kind.to_string(),
+                            ));
+                        }
+                    }
+                }
+                source_key => {
+                    if let Some(factory) = self.factories.get(source_key) {
+                        let provider = factory(row.clone())?;
+                        providers.push(provider);
+                    } else {
+                        return Err(BuildError::UnknownSource(
+                            row.id.clone(),
+                            source_key.to_string(),
+                        ));
+                    }
+                }
+            }
+        }
+        Ok(providers)
+    }
+}
+
+impl Default for BuilderWithFactories {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
