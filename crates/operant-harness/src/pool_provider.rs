@@ -4,6 +4,7 @@
 //! defined in the host crate. This provider's only job is to install
 //! that tool through the `tool` seam at activate time.
 
+#[allow(unused_imports)]
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -175,6 +176,7 @@ pub fn build_pool_bundle_tool_for(
     use crate::provider::SeamToolPayload;
     use std::sync::Arc;
 
+    #[allow(dead_code)]
     struct PoolBundlePayload {
         tool_name: String,
         path: String,

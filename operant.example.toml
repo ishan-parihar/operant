@@ -313,7 +313,7 @@ enabled = false
 sidecar_idle_secs = 1800
 request_timeout_secs = 120
 max_output_bytes = 200000
-route_python_to_kernel = false  # when true, code_execution python routes to the kernel
+# route_python_to_kernel = false  # deprecated since 017-A: `enabled` is the sole gate now; this flag is ignored
 harness_auto_learn = false      # when true, background review may emit kernel_state lessons
 # Tool bridge — allow kernel cells to call operant tools in a loop
 # [tools.kernel.tool_bridge]

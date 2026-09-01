@@ -1384,7 +1384,9 @@ pub struct KernelPyskill {
 }
 
 /// Persistent-kernel sidecar configuration (plan 015). Everything defaults
-/// OFF/dark until Phase 4 flips `enabled` + `route_python_to_kernel`.
+/// 017-A: `enabled` is the single gate for the unified python path.
+/// `route_python_to_kernel` is deprecated (kept as alias so old configs
+/// parse, but no longer gates anything).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct KernelSettings {
@@ -1401,8 +1403,10 @@ pub struct KernelSettings {
     pub sidecar_idle_secs: u64,
     pub request_timeout_secs: u64,
     pub max_output_bytes: usize,
-    /// Phase 4 cutover: route code_execution python requests through the
-    /// persistent kernel (stateless subprocess stays as fallback).
+    /// Deprecated since 017-A: no longer gates anything. Kept so old
+    /// `route_python_to_kernel = true` configs still parse. `enabled`
+    /// is the sole gate since 017-A.
+    #[serde(default)]
     pub route_python_to_kernel: bool,
     /// Phase 5: when true AND kernel.enabled, the existing background
     /// review fork may additionally emit prompt/subagent harness edits via

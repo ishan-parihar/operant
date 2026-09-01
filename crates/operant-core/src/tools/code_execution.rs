@@ -53,6 +53,7 @@ impl OperantTool for CodeExecutionTool {
 
     fn description(&self) -> &str {
         "Execute code in various programming languages (python, javascript, rust, shell). \
+        Python runs via the persistent kernel when [tools.kernel].enabled=true (state survives turns), else stateless subprocess. \
         Returns stdout, stderr, and execution time."
     }
 
@@ -343,14 +344,13 @@ fn result_json(
 }
 
 async fn execute_python(code: &str, timeout: Duration) -> Result<Value, String> {
-    // Plan 015 P4 cutover: when the Prime Kernel is enabled and
-    // route_python_to_kernel is set, python runs in the persistent session
-    // kernel (state survives turns). Any sidecar failure degrades to the
-    // stateless subprocess path below — never fails the turn.
+    // 017-A unified python path: kernel is the single python runtime when
+    // enabled (persistent namespace, state survives turns). Stateless
+    // subprocess is fallback only when kernel is off or the sidecar fails —
+    // never fails the turn. `route_python_to_kernel` is deleted; `enabled`
+    // is the sole gate.
     let kernel_cfg = &crate::config::runtime_config().tools.kernel;
-    if kernel_cfg.enabled
-        && kernel_cfg.route_python_to_kernel
-        && let Some(rt) = super::kernel::global_runtime()
+    if kernel_cfg.enabled && let Some(rt) = super::kernel::global_runtime()
     {
         match rt
             .request(

@@ -5,10 +5,11 @@
 //! host (approval gating, allowlists, caps, timeouts), state lives in the
 //! sidecar (kernel namespaces + vendored live `rlm` harness store).
 //!
-//! Replaces-not-duplicates: the kernel is the default interactive Python path
-//! once `route_python_to_kernel` flips; the harness store carries ONLY the two
-//! kinds operant lacks (`prompt`, `subagent`) — skills/memories stay owned by
-//! curator/skills/MEMORY.md lanes.
+//! 017-A: the kernel IS the Python path when `[tools.kernel].enabled=true`
+//! (persistent namespace, state survives turns); stateless subprocess is
+//! fallback only when kernel is off or the sidecar fails. The harness store
+//! carries ONLY the two kinds operant lacks (`prompt`, `subagent`) — skills
+//! and memories stay owned by curator/skills/MEMORY.md lanes.
 
 pub mod harness_tools;
 pub mod kernel_tool;
