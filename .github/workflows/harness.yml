@@ -1,0 +1,89 @@
+name: Harness Integration
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  harness-tests:
+    name: Harness live-loop (G10)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      # Build all dependent crates to surface API drift.
+      - name: Build
+        run: cargo build -p operant-harness -p operant-core -p operant-runtime -p operant-cli -p operant-plugins --all-features
+
+      # Live-loop integration tests for the harness kernel.
+      # host_boot (G1), harness_same_name_replace (G2),
+      # builder_factories (G3), pool_bundle_e2e (G6).
+      - name: Harness integration tests
+        run: |
+          cargo test -p operant-harness --test host_boot --test builder_factories
+          cargo test -p operant-core --test harness_same_name_replace --test pool_bundle_e2e
+
+      # Plugin watcher (G4) — 3 unit tests.
+      - name: Plugin watcher tests
+        run: cargo test -p operant-plugins --lib watcher
+
+      # Self-extension tools (G5) — 6 lib tests in harness_tools.
+      - name: Harness self-extension tool tests
+        run: cargo test -p operant-core --lib harness_tools
+
+      # Effect timeout (G9) — 1 unit test.
+      - name: Effect timeout test
+        run: cargo test -p operant-harness --lib effect
+
+      # Discovery + boot (G7) — 3 unit tests.
+      - name: Architecture discovery tests
+        run: cargo test -p operant-harness --lib discovery
+
+      # Metrics (G8) — 1 unit test.
+      - name: Metrics snapshot test
+        run: cargo test -p operant-harness --lib metrics
+
+  harness-cli:
+    name: Harness CLI smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build CLI
+        run: cargo build -p operant-cli --bin operant --all-features
+
+      - name: operant architecture dump --json
+        run: |
+          cd operant
+          cargo run -p operant-cli --bin operant --all-features -- architecture dump --json
+
+      - name: operant architecture pool-import (sample)
+        run: |
+          cat > /tmp/_pool.yaml <<'EOF'
+          name: research-engine
+          services_offered:
+            - name: search.kb
+              description: search the knowledge base
+          services_consumed: []
+          pooled_sub_systems:
+            - name: kb
+              path: /nonexistent
+          EOF
+          cd operant
+          cargo run -p operant-cli --bin operant --all-features -- architecture pool-import --path /tmp/_pool.yaml --json
