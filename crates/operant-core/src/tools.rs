@@ -429,6 +429,37 @@ impl ToolRegistry {
         removed
     }
 
+    /// Remove a tool only when the live value is the same `Arc` as
+    /// `expected`. G2 — fixes the same-name replace race: a staging
+    /// provider with id `echo` mounting a new `Arc<EchoTool>` while the
+    /// old `echo` is still registered would otherwise have its
+    /// effect-undo delete the new value. By comparing `Arc` identity
+    /// the old undo is a no-op when the live value has been swapped.
+    /// Returns true when the live value matched and was removed.
+    pub async fn unregister_tool_if(
+        &self,
+        name: &str,
+        expected: &std::sync::Arc<dyn OperantTool>,
+    ) -> bool {
+        let mut tools = self.tools.write().await;
+        let live = tools.get(name);
+        let same_identity = match live {
+            Some(live_arc) => std::sync::Arc::ptr_eq(live_arc, expected),
+            None => false,
+        };
+        if same_identity {
+            tools.remove(name);
+            tracing::info!(tool = %name, "Tool unregistered (identity match)");
+            true
+        } else {
+            tracing::debug!(
+                tool = %name,
+                "Tool unregister skipped — live value differs (G2 same-name replace race guard)"
+            );
+            false
+        }
+    }
+
     pub async fn disable_tool(&self, name: &str) {
         let mut disabled = self.disabled_names.write().await;
         disabled.insert(name.to_string());

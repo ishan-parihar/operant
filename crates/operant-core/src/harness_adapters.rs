@@ -44,18 +44,22 @@ impl Seam for ToolSeam {
                 ),
             })?;
         self.registry
-            .register_dyn(tool)
+            .register_dyn(tool.clone())
             .await
             .map_err(|e| HarnessError::ActivationFailed {
                 id: reg.provider_id.to_string(),
                 message: e.to_string(),
             })?;
 
+        // G2 — capture the Arc identity for the effect-undo. Comparing
+        // Arc::ptr_eq at unwind time means staging `echo` (new Arc) then
+        // unwinding old `echo` (old Arc) is a no-op for the new value.
         let registry = self.registry.clone();
         let name = reg.key.to_string();
+        let installed_arc = tool;
         Ok(Effect::new(format!("tool:{name}"), move || {
             Box::pin(async move {
-                registry.unregister_tool(&name).await;
+                registry.unregister_tool_if(&name, &installed_arc).await;
             })
         }))
     }
