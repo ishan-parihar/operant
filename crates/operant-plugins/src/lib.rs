@@ -9,6 +9,7 @@ pub mod host;
 pub mod runtime;
 pub mod signature;
 pub mod wasm_tool;
+pub mod watcher;
 
 pub use operant_api::tool::Tool as PluginTool;
 
