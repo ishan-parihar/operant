@@ -31,7 +31,7 @@ impl ProviderSpec for TagProvider {
         &self.id
     }
     fn source(&self) -> ProviderSource {
-        self.source
+        self.source.clone()
     }
     fn provides(&self) -> &[Claim] {
         &[]
@@ -58,7 +58,7 @@ fn tag_factory(source: ProviderSource) -> operant_harness::ProviderFactory {
     Arc::new(move |row: ArchitectureRow| {
         Ok(Arc::new(TagProvider {
             id: row.id,
-            source,
+            source: source.clone(),
         }) as Arc<dyn Provider>)
     })
 }
@@ -66,28 +66,28 @@ fn tag_factory(source: ProviderSource) -> operant_harness::ProviderFactory {
 #[tokio::test]
 async fn factory_dispatches_wasm_row() {
     let mut b = BuilderWithFactories::new();
-    b.register_factory("wasm", tag_factory(ProviderSource::Wasm));
+    b.register_factory("wasm", tag_factory(ProviderSource::wasm()));
 
     let arch = Architecture {
         rows: vec![row("wasm-row", "wasm", json!({}))],
     };
     let providers = b.build_with(&arch).expect("build_with wasm");
     assert_eq!(providers.len(), 1);
-    assert_eq!(providers[0].spec().source(), ProviderSource::Wasm);
+    assert_eq!(providers[0].spec().source(), ProviderSource::Wasm { path: None });
     assert_eq!(providers[0].spec().id(), "wasm-row");
 }
 
 #[tokio::test]
 async fn factory_dispatches_pool_row() {
     let mut b = BuilderWithFactories::new();
-    b.register_factory("pool", tag_factory(ProviderSource::Pool));
+    b.register_factory("pool", tag_factory(ProviderSource::pool()));
 
     let arch = Architecture {
         rows: vec![row("pool-row", "pool", json!({}))],
     };
     let providers = b.build_with(&arch).expect("build_with pool");
     assert_eq!(providers.len(), 1);
-    assert_eq!(providers[0].spec().source(), ProviderSource::Pool);
+    assert_eq!(providers[0].spec().source(), ProviderSource::Pool { name: None });
 }
 
 #[tokio::test]
@@ -101,7 +101,7 @@ async fn no_factory_falls_back_to_native_stub() {
     let providers = b.build_with(&arch).expect("build_with fallback");
     assert_eq!(providers.len(), 1);
     assert_eq!(providers[0].spec().id(), "fallback");
-    assert_eq!(providers[0].spec().source(), ProviderSource::Wasm);
+    assert_eq!(providers[0].spec().source(), ProviderSource::Wasm { path: None });
 }
 
 #[tokio::test]
@@ -133,7 +133,7 @@ pooled_sub_systems:
             // the real pool compilation is exercised at the seam level.
             Ok(Arc::new(TagProvider {
                 id: row.id,
-                source: ProviderSource::Pool,
+                source: ProviderSource::Pool { name: None },
             }) as Arc<dyn Provider>)
         }),
     );
@@ -143,7 +143,7 @@ pooled_sub_systems:
     };
     let providers = b.build_with(&arch).expect("build_with pool e2e");
     assert_eq!(providers.len(), 1);
-    assert_eq!(providers[0].spec().source(), ProviderSource::Pool);
+    assert_eq!(providers[0].spec().source(), ProviderSource::Pool { name: None });
 }
 
 #[allow(dead_code)]

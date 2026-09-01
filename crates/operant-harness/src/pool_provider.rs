@@ -49,7 +49,14 @@ impl ProviderSpec for PoolBundleProvider {
         &self.id
     }
     fn source(&self) -> ProviderSource {
-        ProviderSource::Pool
+        // G11 — round-trip the pool name from the row config so the
+        // dump tree preserves the per-row identity.
+        let name = self
+            .config
+            .get("name")
+            .and_then(|v| v.as_str())
+            .map(str::to_string);
+        ProviderSource::Pool { name }
     }
     fn provides(&self) -> &[Claim] {
         &self.provides_claim

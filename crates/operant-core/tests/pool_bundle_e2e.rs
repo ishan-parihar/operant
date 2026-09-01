@@ -58,7 +58,7 @@ async fn pool_bundle_registers_as_readonly_tool() {
     };
     let providers = b.build_with(&arch).expect("build_with");
     assert_eq!(providers.len(), 1);
-    assert_eq!(providers[0].spec().source(), operant_harness::ProviderSource::Pool);
+    assert_eq!(providers[0].spec().source(), operant_harness::ProviderSource::Pool { name: None });
 
     // Mount through a Harness wired with the ToolSeam, threading the
     // row's config so the seam can read the path field.

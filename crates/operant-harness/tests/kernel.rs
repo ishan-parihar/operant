@@ -118,7 +118,7 @@ impl ProviderSpec for FakeProvider {
         &self.id
     }
     fn source(&self) -> ProviderSource {
-        self.source
+        self.source.clone()
     }
     fn provides(&self) -> &[Claim] {
         &self.provides

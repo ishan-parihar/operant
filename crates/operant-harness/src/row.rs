@@ -22,7 +22,7 @@ pub struct NativeRowStub {
 impl NativeRowStub {
     pub fn new(row: ArchitectureRow) -> Self {
         let source = match row.source.as_str() {
-            "wasm" => ProviderSource::Wasm,
+            "wasm" => ProviderSource::wasm(),
             // `pool` not handled at this layer (Phase 6); default to Native.
             _ => ProviderSource::Native,
         };
@@ -39,7 +39,7 @@ impl ProviderSpec for NativeRowStub {
         &self.id
     }
     fn source(&self) -> ProviderSource {
-        self.source
+        self.source.clone()
     }
     fn provides(&self) -> &[Claim] {
         &[]
@@ -187,7 +187,7 @@ mod tests {
     #[test]
     fn native_row_stub_uses_wasm_source() {
         let stub = NativeRowStub::new(row("b", "wasm", None));
-        assert_eq!(stub.source(), ProviderSource::Wasm);
+        assert_eq!(stub.source(), ProviderSource::Wasm { path: None });
     }
 
     #[test]

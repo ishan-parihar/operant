@@ -14,32 +14,78 @@ use crate::effect::{BoxUndoFuture, Effect};
 use crate::error::HarnessError;
 
 /// Where a provider came from — drives trust policy and reload behavior.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// G11 — `Wasm` and `Pool` carry an optional payload so the source
+/// round-trips through the composition layer. The pk `Source` alias
+/// remains a unit-only enum for backwards compat; new code can use
+/// `ProviderSource::Wasm { path }` / `Pool { name }` to preserve
+/// the per-row metadata across dumps.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProviderSource {
     /// Compiled into the binary; registered at boot.
     Native,
-    /// Extism WASM module; hot-swappable.
-    Wasm,
+    /// Extism WASM module; hot-swappable. The `path` is the on-disk
+    /// path to the `.wasm` file (or the manifest path).
+    Wasm { path: Option<String> },
     /// Pure configuration row (no code) — e.g. a file-backed prompt section.
     ConfigRow,
     /// Compiled from an external governed manifest (hermes `_pool.yaml`).
-    Pool,
+    /// The `name` is the pool's display name.
+    Pool { name: Option<String> },
 }
 
-/// Backwards-compat alias for pk code that imports `Source`.
-pub type Source = ProviderSource;
+impl ProviderSource {
+    /// String-form for serialization to a row's `source` field.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ProviderSource::Native => "native",
+            ProviderSource::Wasm { .. } => "wasm",
+            ProviderSource::ConfigRow => "config_row",
+            ProviderSource::Pool { .. } => "pool",
+        }
+    }
+}
 
 impl std::fmt::Display for ProviderSource {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ProviderSource::Native => f.write_str("native"),
-            ProviderSource::Wasm => f.write_str("wasm"),
+            ProviderSource::Wasm { path } => match path {
+                Some(p) => write!(f, "wasm({p})"),
+                None => f.write_str("wasm"),
+            },
             ProviderSource::ConfigRow => f.write_str("config-row"),
-            ProviderSource::Pool => f.write_str("pool"),
+            ProviderSource::Pool { name } => match name {
+                Some(n) => write!(f, "pool({n})"),
+                None => f.write_str("pool"),
+            },
         }
     }
 }
+
+// Manual PartialEq + Eq impls because the struct variants are not
+// Copy, and serde's auto-derive is what we want for the wire form.
+// (We get PartialEq + Eq from #[derive] above; this block just
+// re-states that the unit-from-struct conversion preserves equality.)
+impl ProviderSource {
+    /// Construct a unit-style Wasm source (no path) for callers that
+    /// don't have the path at hand.
+    pub fn wasm() -> Self {
+        ProviderSource::Wasm { path: None }
+    }
+    /// Construct a unit-style Pool source (no name) for callers that
+    /// don't have the name at hand.
+    pub fn pool() -> Self {
+        ProviderSource::Pool { name: None }
+    }
+}
+
+/// Backwards-compat alias for code (e.g. operant-pk) that imported the
+/// `Source` type. Maps to the unit-style `ProviderSource`. G11
+/// recommends new code use the explicit `ProviderSource` variants so
+/// the source payload round-trips through the composition layer.
+pub type Source = ProviderSource;
 
 /// Provider lifecycle states (Cordis FiberState analog).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
