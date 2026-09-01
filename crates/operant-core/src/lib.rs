@@ -91,6 +91,7 @@ pub mod parser;
 pub mod pii;
 pub mod platform;
 pub mod plugins;
+pub mod pool_adapter;
 pub mod process_registry;
 pub mod profile;
 pub mod rate_limiter;

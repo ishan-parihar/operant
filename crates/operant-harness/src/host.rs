@@ -69,10 +69,42 @@ impl HarnessHost {
     /// active (excluding `Pending`).
     pub async fn boot(&self, arch: &Architecture) -> Result<Vec<String>, HostError> {
         let providers = Builder::build(arch)?;
+        self.mount_all(providers.into_iter().map(|p| (p, serde_json::Value::Null)))
+            .await
+    }
+
+    /// G6 — boot a `BuilderWithFactories` result with each row's
+    /// config threaded to `mount_with_config` so seams can read the
+    /// per-row config during install.
+    pub async fn boot_with_factories(
+        &self,
+        builder: &crate::BuilderWithFactories,
+        arch: &Architecture,
+    ) -> Result<Vec<String>, HostError> {
+        let mut pairs: Vec<(std::sync::Arc<dyn Provider>, serde_json::Value)> = Vec::new();
+        for row in arch.active() {
+            // Build via factory if the source needs one; else fall
+            // back to the built-in Builder for native/config_row rows.
+            let provider = match builder.build_with(&Architecture {
+                rows: vec![row.clone()],
+            }) {
+                Ok(mut ps) if !ps.is_empty() => ps.pop().unwrap(),
+                Ok(_) => continue, // row produced no provider
+                Err(e) => return Err(e.into()),
+            };
+            pairs.push((provider, row.config.clone()));
+        }
+        self.mount_all(pairs.into_iter()).await
+    }
+
+    async fn mount_all(
+        &self,
+        providers: impl Iterator<Item = (std::sync::Arc<dyn Provider>, serde_json::Value)>,
+    ) -> Result<Vec<String>, HostError> {
         let mut activated = Vec::new();
-        for provider in providers {
+        for (provider, config) in providers {
             let id = provider.spec().id().to_string();
-            match self.harness.mount(provider).await {
+            match self.harness.mount_with_config(provider, config).await {
                 Ok(crate::MountReport::Mounted { activated: mut a }) => {
                     activated.append(&mut a);
                 }

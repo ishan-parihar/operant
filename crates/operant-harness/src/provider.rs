@@ -102,6 +102,15 @@ pub trait Seam: Send + Sync {
     async fn install(&self, reg: &Registration<'_>) -> Result<Effect, HarnessError>;
 }
 
+/// G6 — typed payload that a provider installs through the `tool` seam.
+/// The host's `ToolSeam` (or any tool seam) calls `tool_name()` to
+/// register the underlying `Arc<dyn OperantTool>` under that name in
+/// the `ToolRegistry`. The payload's `path`/`read_only` fields are
+/// used by the `PoolBundleProvider` adapter.
+pub trait SeamToolPayload: Send + Sync {
+    fn tool_name(&self) -> &str;
+}
+
 /// Handed to [`Provider::activate`]. Collects effects; every successful
 /// `install` pushes an undo handle that the kernel owns from then on.
 pub struct ActivateCx<'a> {

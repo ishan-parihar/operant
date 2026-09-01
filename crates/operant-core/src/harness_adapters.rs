@@ -8,20 +8,42 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use serde_json::Value;
 
 use operant_harness::{Effect, HarnessError, Registration, Seam};
 
+use crate::pool_adapter;
 use crate::tools::{OperantTool, ToolRegistry};
+
+/// Optional factory for `pool.bundle` rows. When set, the seam uses it
+/// to materialize a typed `OperantTool` from the row's config; when
+/// unset, a `pool.bundle` row that calls `install` without a payload
+/// still registers a `PoolBundleTool` built from the key + an empty
+/// config (G6 default).
+pub type PoolToolFactory = Arc<dyn Fn(&str, &Value) -> Option<Arc<dyn OperantTool>> + Send + Sync>;
 
 /// Tool-family seam: claims look like `tool/<name>`; payloads are
 /// `Arc<dyn OperantTool>`.
 pub struct ToolSeam {
     registry: ToolRegistry,
+    pool_tool_factory: Option<PoolToolFactory>,
 }
 
 impl ToolSeam {
     pub fn new(registry: ToolRegistry) -> Self {
-        Self { registry }
+        Self {
+            registry,
+            pool_tool_factory: None,
+        }
+    }
+
+    /// G6 — install a custom factory for `pool.bundle` rows. The
+    /// factory takes `(tool_name, row_config)` and returns a typed
+    /// `OperantTool` or `None` to fall through to the default
+    /// `PoolBundleTool`.
+    pub fn with_pool_factory(mut self, factory: PoolToolFactory) -> Self {
+        self.pool_tool_factory = Some(factory);
+        self
     }
 }
 
@@ -32,17 +54,65 @@ impl Seam for ToolSeam {
     }
 
     async fn install(&self, reg: &Registration<'_>) -> Result<Effect, HarnessError> {
-        let tool = reg
+        // Three install paths:
+        // (a) explicit `Arc<dyn OperantTool>` payload — preferred for
+        //     in-process providers that already have the tool.
+        // (b) G6 `Arc<dyn SeamToolPayload>` payload — the provider
+        //     knows the tool name; the seam materializes the host-
+        //     side `OperantTool` from the payload + the pool adapter.
+        // (c) G6 row-config fallback for `pool.*` rows whose provider
+        //     didn't ship a payload (the row's `cx.config()` is read).
+        let tool: Arc<dyn OperantTool> = if let Some(p) = reg
             .payload
             .and_then(|p| p.downcast_ref::<Arc<dyn OperantTool>>())
             .cloned()
-            .ok_or_else(|| HarnessError::ActivationFailed {
+        {
+            p
+        } else if let Some(payload) = reg
+            .payload
+            .and_then(|p| p.downcast_ref::<Arc<dyn operant_harness::provider::SeamToolPayload>>())
+            .cloned()
+        {
+            // G6 — materialization from typed payload.
+            let tool_name = payload.tool_name().to_string();
+            let config = reg.config.clone();
+            let tool = if let Some(f) = &self.pool_tool_factory {
+                f(&tool_name, &config)
+            } else {
+                pool_adapter::build_pool_bundle_tool(&tool_name, &config)
+            };
+            tool.ok_or_else(|| HarnessError::ActivationFailed {
+                id: reg.provider_id.to_string(),
+                message: format!(
+                    "SeamToolPayload install `{}` could not materialize a tool (no path in config?)",
+                    reg.key
+                ),
+            })?
+        } else if reg.provider_id.starts_with("pool.") {
+            // G6 — row-config fallback (when the provider used
+            // `install` instead of `install_with`).
+            let config = reg.config.clone();
+            let tool = if let Some(f) = &self.pool_tool_factory {
+                f(reg.key, &config)
+            } else {
+                pool_adapter::build_pool_bundle_tool(reg.key, &config)
+            };
+            tool.ok_or_else(|| HarnessError::ActivationFailed {
+                id: reg.provider_id.to_string(),
+                message: format!(
+                    "pool.bundle install `{}` could not materialize a tool (no path in config?)",
+                    reg.key
+                ),
+            })?
+        } else {
+            return Err(HarnessError::ActivationFailed {
                 id: reg.provider_id.to_string(),
                 message: format!(
                     "tool seam install `{}` requires an Arc<dyn OperantTool> payload",
                     reg.key
                 ),
-            })?;
+            });
+        };
         self.registry
             .register_dyn(tool.clone())
             .await
