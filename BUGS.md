@@ -952,3 +952,23 @@ the t22b job fired on schedule (`Executing cron job`, `Delivering result` logged
 Net win: `wasm_channel.rs` (-49 LOC) + the audit cleared 6 other items as live / already-removed. Binary size unchanged (plugin module was small).
 
 Workspace gate: clippy -D warnings green, core tests 1735 passing, gateway tests 205 passing, plugin crate rebuilt green. Live gateway msg 97893 from `@ip_operant_testing_bot` confirmed.
+
+## Round 39 (2026-09-25) — deployment audit (harness-era)
+
+### R39-1 — lib-test build broken at HEAD 6b25a46e (FIXED 4ade6f51)
+`persistence_seam.rs` test module used `Arc` without `use std::sync::Arc` — `cargo test --workspace` could not compile operant-core (lib test) at all. Same commit repointed `.cargo/config.toml` native-lib path from the removed operant-pk worktree to `local/lib`.
+- **Verify**: `cargo check -p operant-core --tests` 0 errors; linked suite runs (1787/2).
+
+### R39-2 — doctest linking broken (FIXED 0c722992)
+`cargo build.rustflags` never reach rustdoc, so the `approval.rs` doctest linked `-lsonic` with no search path. build.rs now emits `cargo:rustc-link-search=native=<payload>` (repo-local `local/lib`, gitignored, or `$OPERANT_NATIVE_LIB_DIR`), which covers rustc AND rustdoc. `.cargo/config.toml` carries no rustflags.
+- **Verify**: `cargo test -p operant-core --doc` green (was 0/1 link failure).
+
+### R39-3 — persistence seam dark-safe test fails at HEAD (OPEN — blocks deployment)
+`persistence_seam::tests::persistence_seam_pends_when_kernel_off` (persistence_seam.rs:160) asserts `mount` returns `MissingSeam` and entry stays `Pending`. At HEAD, `activate_locked` wraps every install error as `ActivationFailed` + state `Failed`, so the dark-safe "lessons wait, never lost" contract (file header lines 10–12) is unimplemented. The in-flight C6 WIP (`harness.rs:250,289`) adds a MissingSeam→Pending rescue but its guard (`!self.seams.contains_key(seam)`) cannot fire here: the `prompt` seam IS registered, only the kernel runtime is off. Needs a distinct inactive-seam error or MissingSeam provenance, not a textual heuristic.
+- **Status**: OPEN — part of user's 018 WIP; not fixed by the audit.
+
+### R39-4 — write_approval recency test is order-dependent (OPEN — flake)
+`write_approval::tests::list_pending_orders_by_recency` (write_approval.rs:242) passes in isolation (`--test-threads=1`), fails in the parallel full-suite run (0 vs 2 pending orders). Shared global state in the write-approval module leaks between tests despite `reset()`; needs per-test isolation or a serial lock.
+- **Status**: OPEN — flake, not a functional bug.
+
+Deployment verdict this round: NOT DEPLOYABLE until R39-3 (and ideally R39-4) close — `cargo test --workspace --no-fail-fast` = operant-core lib 1787 passed / 2 failed; every other crate green.
