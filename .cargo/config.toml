@@ -1,6 +1,8 @@
-# Native library search path for locally provisioned payloads (e.g. libsonic
-# for operant-tts). NOT tracked in this repo: provision the payload locally
-# (see local/), or set this path on each machine. An absent directory is
-# harmless unless a crate actually links against something inside it.
-[build]
-rustflags = ["-L", "native=local/lib"]
+# Native library search path (libsonic for operant-tts) is a machine-local
+# deployment prerequisite and is NOT configured here: rustflags are passed
+# verbatim (no path expansion), and a relative path breaks rustdoc doctests
+# (they link with CWD in a temp dir). Provision the payload under `local/`
+# (gitignored) and set the -L flag in ~/.cargo/config.toml on each machine:
+#
+#   [build]
+#   rustflags = ["-L", "native=<repo>/local/lib"]
